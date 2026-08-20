@@ -38,8 +38,8 @@ clusters, DGX Cloud / Lepton, and Kubernetes clusters.
 
 | file | description |
 |---|---|
-| [`assets/hero.png`](assets/hero.png) | 2000 &times; 1560 — the image used above |
-| [`assets/hero@2x.png`](assets/hero%402x.png) | 4000 &times; 3120 — retina / print master |
+| [`assets/hero.png`](assets/hero.png) | 2000 &times; 2242 — the image used above |
+| [`assets/hero@2x.png`](assets/hero%402x.png) | 4000 &times; 4484 — retina / print master |
 | [`assets/hero.html`](assets/hero.html) | Self-contained source (system fonts, inline SVG, no external requests) |
 
 The poster is rendered from `hero.html`, which has no network dependencies — open
@@ -47,6 +47,6 @@ it in any browser, or re-render it headlessly at any resolution:
 
 ```bash
 chrome --headless=new --disable-gpu --hide-scrollbars \
-       --window-size=2000,1560 --force-device-scale-factor=2 \
+       --window-size=2000,2242 --force-device-scale-factor=2 \
        --screenshot=hero@2x.png file://$PWD/assets/hero.html
 ```

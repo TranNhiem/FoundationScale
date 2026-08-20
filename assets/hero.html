@@ -19,7 +19,7 @@
   html,body{margin:0;padding:0;background:#05070d;overflow:hidden}
   *{box-sizing:border-box}
   #poster{
-    position:relative;width:2000px;height:1560px;overflow:hidden;
+    position:relative;width:2000px;height:2242px;overflow:hidden;
     padding:26px;display:flex;flex-direction:column;
     background:linear-gradient(180deg,#05070d 0%,#0a1020 100%);
     font-family:var(--font);color:var(--ink);
@@ -36,115 +36,115 @@
     background:radial-gradient(1050px 720px at 50% 40%,rgba(18,48,90,.09),rgba(18,48,90,0) 70%);
   }
   #poster > *{position:relative;z-index:1}
-  .wires{position:absolute;inset:0;width:2000px;height:1560px;z-index:2;pointer-events:none}
+  .wires{position:absolute;inset:0;width:2000px;height:2242px;z-index:2;pointer-events:none}
 
   .ico{width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 
   .panel{
     background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.015)),#0b1220;
-    border:1px solid var(--line);border-radius:16px;
+    border:1px solid var(--line);border-radius:18px;
     box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
   }
-  .micro{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
-  .num{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:.06em;
-       padding:3px 7px;border:1px solid;border-radius:6px;line-height:1.4}
+  .micro{font-family:var(--mono);font-size:20px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
+  .num{font-family:var(--mono);font-size:20px;font-weight:700;letter-spacing:.06em;
+       padding:5px 11px;border:1px solid;border-radius:8px;line-height:1.3}
   .num.g{color:var(--green2);border-color:rgba(118,185,0,.45);background:rgba(118,185,0,.08)}
   .num.c{color:var(--cyan);border-color:rgba(61,220,255,.40);background:rgba(61,220,255,.07)}
 
-  /* ============ HEADER (138) ============ */
-  .head{height:138px;flex:0 0 auto;margin-bottom:20px;display:flex;flex-direction:column;justify-content:center}
-  .wordmark{width:620px}
+  /* ============ HEADER (200) ============ */
+  .head{height:200px;flex:0 0 auto;margin-bottom:24px;display:flex;flex-direction:column;justify-content:center}
+  .wordmark{width:800px}
   .wordmark svg{display:block;width:100%;height:auto}
-  .head-row{margin-top:12px;display:flex;align-items:center;justify-content:space-between;gap:24px}
-  .head-line2{font-size:19px;line-height:1.4;white-space:nowrap}
-  .head-line2 strong{font-weight:700;letter-spacing:.05em;color:var(--ink)}
-  .head-line2 .sep{margin:0 12px;color:var(--ink3)}
+  .head-row{margin-top:18px;display:flex;align-items:center;justify-content:space-between;gap:24px}
+  .head-line2{font-size:24px;line-height:1.4;white-space:nowrap}
+  .head-line2 strong{font-size:26px;font-weight:700;letter-spacing:.05em;color:var(--ink)}
+  .head-line2 .sep{margin:0 14px;color:var(--ink3)}
   .head-line2 .light{color:#c7d4e2}
   .kicker{
-    display:flex;align-items:center;gap:11px;white-space:nowrap;
-    font-family:var(--mono);font-size:14px;letter-spacing:.04em;color:#d6efa9;
+    display:flex;align-items:center;gap:13px;white-space:nowrap;
+    font-family:var(--mono);font-size:23px;letter-spacing:.04em;color:#d6efa9;
     border:1px solid rgba(118,185,0,.55);background:rgba(118,185,0,.09);
-    border-radius:999px;padding:11px 20px;
+    border-radius:999px;padding:14px 26px;
     box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
   }
-  .kicker::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green)}
+  .kicker::before{content:"";width:10px;height:10px;border-radius:50%;background:var(--green)}
 
-  /* ============ STACK PANEL (212) ============ */
-  .stack{height:212px;flex:0 0 auto;margin-bottom:0;padding:16px}
+  /* ============ STACK PANEL (460) ============ */
+  .stack{height:460px;flex:0 0 auto;margin-bottom:0;padding:26px}
   .stack-grid{
     height:100%;display:grid;
-    grid-template-columns:280px 150px repeat(4,1fr);
-    grid-template-rows:26px 68px 68px;
-    column-gap:14px;row-gap:9px;
+    grid-template-columns:340px 200px 279px 279px 278px 420px;
+    grid-template-rows:40px 154px 154px;
+    column-gap:20px;row-gap:30px;
     grid-template-areas:
       "secno .   ph1 ph1 ph1 ph2"
       "rail  rl1 rec rec rec rl"
       "rail  rl2 meg brg aut rl";
   }
-  .cell-secno{grid-area:secno;display:flex;align-items:center;gap:10px}
+  .cell-secno{grid-area:secno;display:flex;align-items:center;gap:12px}
   .phase{
     display:flex;align-items:center;gap:14px;white-space:nowrap;
-    font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--ink2);
+    font-family:var(--mono);font-size:22px;letter-spacing:.02em;color:var(--ink2);
   }
   .phase::before,.phase::after{content:"";flex:1;border-top:1px dashed rgba(159,176,195,.30)}
   .ph1{grid-area:ph1}
   .ph2{grid-area:ph2}
   .rail{
     grid-area:rail;display:flex;flex-direction:column;justify-content:center;
-    padding:10px 16px;border-radius:14px;
+    padding:16px 22px;border-radius:16px;
     background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));
-    border:1px solid var(--line);border-left:3px solid var(--green);
+    border:1px solid var(--line);border-left:4px solid var(--green);
     box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
   }
-  .rail .ico{font-size:22px;color:var(--green);margin-bottom:7px}
-  .rail-title{font-size:19px;font-weight:700;line-height:1.25;color:var(--ink)}
-  .rail-cap{margin-top:6px;font-size:12px;line-height:1.4;color:var(--ink2)}
-  .rowlab{display:flex;align-items:center;gap:10px;padding-left:4px;
-          font-size:14px;font-weight:600;line-height:1.3;color:var(--ink2)}
-  .rowlab .ico{font-size:20px;flex:0 0 auto;align-self:center}
+  .rail .ico{font-size:34px;color:var(--green);margin-bottom:12px}
+  .rail-title{font-size:31px;font-weight:700;line-height:1.25;color:var(--ink)}
+  .rail-cap{margin-top:10px;font-size:21px;line-height:1.35;color:var(--ink2)}
+  .rowlab{display:flex;align-items:center;gap:12px;padding-left:4px;
+          font-size:25px;font-weight:600;line-height:1.3;color:var(--ink2)}
+  .rowlab .ico{font-size:32px;flex:0 0 auto;align-self:center}
   .rl1{grid-area:rl1}.rl1 .ico{color:var(--green)}
   .rl2{grid-area:rl2}.rl2 .ico{color:var(--green2)}
-  .recipes{grid-area:rec;display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .recipes{grid-area:rec;display:grid;grid-template-columns:1fr 1fr;gap:20px}
   .box{
-    display:flex;align-items:center;justify-content:center;gap:10px;
-    font-size:16px;font-weight:600;color:var(--ink);
-    border:1px solid;border-radius:12px;
+    display:flex;align-items:center;justify-content:center;gap:14px;
+    font-size:30px;font-weight:600;color:var(--ink);
+    border:1px solid;border-radius:16px;
     box-shadow:inset 0 1px 0 rgba(255,255,255,.05);
   }
-  .box::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--bc);flex:0 0 auto}
+  .box::before{content:"";width:12px;height:12px;border-radius:50%;background:var(--bc);flex:0 0 auto}
   .b-vfm {--bc:#76b900;border-color:rgba(118,185,0,.38);background:rgba(118,185,0,.08)}
   .b-llm {--bc:#76b900;border-color:rgba(118,185,0,.38);background:rgba(118,185,0,.08)}
   .b-meg {grid-area:meg;--bc:#a3d857;border-color:rgba(163,216,87,.34);background:rgba(163,216,87,.07)}
   .b-brg {grid-area:brg;--bc:#a3d857;border-color:rgba(163,216,87,.34);background:rgba(163,216,87,.07)}
   .b-aut {grid-area:aut;--bc:#c5e8a0;border-color:rgba(197,232,160,.30);background:rgba(197,232,160,.06)}
   .b-rl  {grid-area:rl;--bc:#a3d857;border-color:rgba(163,216,87,.34);background:rgba(163,216,87,.07);
-          flex-direction:column;gap:8px}
-  .b-rl .t{font-size:24px;font-weight:700;letter-spacing:.08em;line-height:1.1;color:var(--ink)}
-  .b-rl .c{font-size:12px;font-weight:500;letter-spacing:.06em;line-height:1.3;color:var(--ink2)}
+          flex-direction:column;gap:12px}
+  .b-rl .t{font-size:42px;font-weight:700;letter-spacing:.08em;line-height:1.1;color:var(--ink)}
+  .b-rl .c{font-size:22px;font-weight:500;letter-spacing:.06em;line-height:1.3;color:var(--ink2)}
 
-  /* ============ CONVERGENCE FAN (50) ============ */
-  .fan{height:50px;flex:0 0 auto;position:relative}
-  .fan svg{position:absolute;left:-26px;top:0;width:2000px;height:50px;display:block;pointer-events:none}
+  /* ============ CONVERGENCE FAN (56) ============ */
+  .fan{height:56px;flex:0 0 auto;position:relative}
+  .fan svg{position:absolute;left:-26px;top:0;width:2000px;height:56px;display:block;pointer-events:none}
 
-  /* ============ PARALLELISM PANEL (900) ============ */
-  .parallel{height:900px;flex:0 0 auto;margin-bottom:18px;padding:20px;display:flex;flex-direction:column}
-  .p-title{height:66px;flex:0 0 auto;display:flex;align-items:center;gap:16px}
-  .p-title h2{margin:0;font-size:28px;font-weight:700;letter-spacing:.01em;line-height:1.2}
-  .p-title p{margin:5px 0 0;font-size:15px;line-height:1.3;color:var(--ink2)}
+  /* ============ PARALLELISM PANEL (1180) ============ */
+  .parallel{height:1180px;flex:0 0 auto;margin-bottom:24px;padding:20px;display:flex;flex-direction:column}
+  .p-title{height:74px;flex:0 0 auto;display:flex;align-items:center;gap:18px}
+  .p-title h2{margin:0;font-size:46px;font-weight:700;letter-spacing:.01em;line-height:1}
+  .p-title p{margin:2px 0 0;font-size:26px;line-height:1;color:var(--ink2)}
   .quad-grid{
-    flex:0 0 auto;margin-top:14px;
-    display:grid;grid-template-columns:945px 945px;grid-template-rows:347px 347px;gap:18px;
+    flex:0 0 auto;margin-top:16px;
+    display:grid;grid-template-columns:945px 945px;grid-template-rows:472px 472px;gap:18px;
   }
   .quad{
-    position:relative;overflow:hidden;border-radius:14px;
+    position:relative;overflow:hidden;border-radius:16px;
     background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.015));
     border:1px solid var(--line);
     box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
-    padding:16px 16px 15px;
-    display:grid;grid-template-rows:30px 19px 215px 32px;row-gap:10px;
+    padding:20px;
+    display:flex;flex-direction:column;
   }
   .quad::before{
-    content:"";position:absolute;top:0;left:0;right:0;height:3px;
+    content:"";position:absolute;top:0;left:0;right:0;height:4px;
     background:linear-gradient(90deg,var(--qc) 0%,var(--qc) 45%,rgba(0,0,0,0) 92%);
     opacity:.95;
   }
@@ -152,74 +152,75 @@
   .q2{--qc:#76b900}
   .q3{--qc:#a855f7}
   .q4{--qc:#f59e0b}
-  .q-head{display:flex;align-items:center;gap:12px;height:30px}
+  .q-head{display:flex;align-items:center;gap:14px;height:40px;flex:0 0 auto}
   .badge{
-    width:28px;height:28px;flex:0 0 auto;border-radius:50%;
+    width:40px;height:40px;flex:0 0 auto;border-radius:50%;
     display:flex;align-items:center;justify-content:center;
-    border:1.5px solid var(--qc);color:var(--qc);
-    font-family:var(--mono);font-size:14px;font-weight:700;line-height:1;
+    border:2px solid var(--qc);color:var(--qc);
+    font-family:var(--mono);font-size:20px;font-weight:700;line-height:1;
   }
-  .q-head h3{margin:0;font-size:21px;font-weight:700;line-height:1;letter-spacing:.01em}
+  .q-head h3{margin:0;font-size:34px;font-weight:700;line-height:1;letter-spacing:.01em}
   .qtag{
-    margin-left:auto;font-family:var(--mono);font-size:12px;font-weight:700;
+    margin-left:auto;font-family:var(--mono);font-size:20px;font-weight:700;
     letter-spacing:.1em;color:var(--qc);
     border:1px solid;border-color:color-mix(in srgb,var(--qc) 45%,transparent);
     background:color-mix(in srgb,var(--qc) 9%,transparent);
-    border-radius:999px;padding:3px 10px;line-height:1.4;
+    border-radius:999px;padding:5px 14px;line-height:1.3;
   }
-  .q-sub{margin:0;height:19px;font-size:15px;line-height:19px;color:var(--ink2);white-space:nowrap}
-  .q-diag{height:215px}
-  .q-diag svg{display:block}
+  .q-sub{margin:0;height:28px;flex:0 0 auto;font-size:25px;line-height:28px;color:var(--ink2);white-space:nowrap}
+  .q-diag{margin-top:12px;height:298px;width:905px;flex:0 0 auto}
+  .q-diag svg{display:block;width:100%;height:100%}
   .q-foot{
-    display:flex;align-items:center;gap:10px;height:32px;padding:0 12px;
-    border-radius:8px;border-left:3px solid var(--qc);
+    margin-top:12px;flex:0 0 auto;
+    display:flex;align-items:center;gap:12px;height:42px;padding:0 16px;
+    border-radius:10px;border-left:4px solid var(--qc);
     background:color-mix(in srgb,var(--qc) 9%,transparent);
-    font-size:15px;line-height:1;color:#d7e2ee;
+    font-size:25px;line-height:1;color:#d7e2ee;
   }
-  .q-foot .ico{font-size:15px;color:var(--qc);flex:0 0 auto}
+  .q-foot .ico{font-size:24px;color:var(--qc);flex:0 0 auto}
 
   .takeaway{
-    flex:0 0 auto;margin-top:16px;height:52px;border-radius:12px;
-    display:flex;align-items:center;gap:12px;padding:0 18px;
+    flex:0 0 auto;margin-top:20px;height:68px;border-radius:14px;
+    display:flex;align-items:center;gap:14px;padding:0 24px;
     background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));
     border:1px solid var(--line);
     box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
   }
-  .tk-key{font-size:15px;font-weight:700;color:var(--green2);white-space:nowrap}
-  .tk-text{font-size:15px;color:#d7e2ee;white-space:nowrap}
+  .tk-key{font-size:26px;font-weight:700;color:var(--green2);white-space:nowrap}
+  .tk-text{font-size:26px;color:#d7e2ee;white-space:nowrap}
   .tk-spacer{flex:1}
   .pill{
-    display:flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap;
-    height:32px;padding:0 15px;
-    font-size:14px;font-weight:600;line-height:1;color:#dbe6f0;
+    display:flex;align-items:center;justify-content:center;gap:10px;white-space:nowrap;
+    height:46px;padding:0 22px;
+    font-size:26px;font-weight:600;line-height:1;color:#dbe6f0;
     border:1px solid rgba(255,255,255,.14);border-radius:999px;
     background:rgba(255,255,255,.03);
     box-shadow:inset 0 1px 0 rgba(255,255,255,.05);
   }
-  .pill .ico{font-size:15px;color:var(--pc);flex:0 0 auto}
+  .pill .ico{font-size:24px;color:var(--pc);flex:0 0 auto}
 
-  /* ============ INFRASTRUCTURE BAND (98) ============ */
-  .infra{height:98px;flex:0 0 auto;margin-bottom:12px;display:flex;align-items:center;padding:0 24px}
-  .infra-title{width:360px;flex:0 0 auto;display:flex;align-items:center;gap:13px}
+  /* ============ INFRASTRUCTURE BAND (140) ============ */
+  .infra{height:140px;flex:0 0 auto;margin-bottom:16px;display:flex;align-items:center;padding:0 30px}
+  .infra-title{width:640px;flex:0 0 auto;display:flex;align-items:center;gap:16px}
   .infra-title h4{
-    margin:0;font-size:15px;font-weight:700;letter-spacing:.12em;color:var(--cyan);white-space:nowrap;
+    margin:0;font-size:28px;font-weight:700;letter-spacing:.09em;color:var(--cyan);white-space:nowrap;
   }
   .infra-items{flex:1;display:flex;align-items:center}
   .infra-item{
-    flex:1;display:flex;align-items:center;justify-content:center;gap:12px;height:56px;
+    flex:1;display:flex;align-items:center;justify-content:center;gap:14px;height:80px;
     border-left:1px solid rgba(255,255,255,.09);
-    font-size:15px;font-weight:600;color:#dbe6f0;white-space:nowrap;
+    font-size:27px;font-weight:600;color:#dbe6f0;white-space:nowrap;
   }
-  .infra-item .ico{font-size:22px;color:var(--cyan);flex:0 0 auto}
+  .infra-item .ico{font-size:32px;color:var(--cyan);flex:0 0 auto}
 
-  /* ============ LEGEND (36) + FOOTER (18) ============ */
-  .legend{height:36px;flex:0 0 auto;margin-bottom:6px;display:flex;align-items:center;gap:26px}
-  .legend-item{display:flex;align-items:center;gap:9px;font-size:14px;color:var(--ink2);white-space:nowrap}
-  .sw{width:14px;height:14px;flex:0 0 auto;border-radius:4px;background:var(--c);
+  /* ============ LEGEND (52) + FOOTER (28) ============ */
+  .legend{height:52px;flex:0 0 auto;margin-bottom:10px;display:flex;align-items:center;gap:30px}
+  .legend-item{display:flex;align-items:center;gap:12px;font-size:21px;color:var(--ink2);white-space:nowrap}
+  .sw{width:20px;height:20px;flex:0 0 auto;border-radius:5px;background:var(--c);
       box-shadow:inset 0 0 0 1px rgba(0,0,0,.45),
                  inset 0 1px 0 rgba(255,255,255,.25),
                  0 0 0 1px rgba(255,255,255,.12)}
-  .foot{height:18px;flex:0 0 auto;display:flex;align-items:center;font-size:12px;color:var(--ink3)}
+  .foot{height:28px;flex:0 0 auto;display:flex;align-items:center;font-size:21px;color:var(--ink3)}
 </style>
 </head>
 <body>
@@ -320,7 +321,7 @@
 <div id="poster">
 
   <!-- hairline connectors, junction dots, phase guides (fixed poster coordinates) -->
-  <svg class="wires" viewBox="0 0 2000 1560" aria-hidden="true">
+  <svg class="wires" viewBox="0 0 2000 2242" aria-hidden="true">
     <defs>
       <marker id="arw" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
         <path d="M1.5 1.5 L8.5 5 L1.5 8.5" fill="none" stroke="#8fa3b8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
@@ -328,21 +329,21 @@
     </defs>
     <g fill="none" stroke-linecap="round">
       <!-- dashed phase guide lines -->
-      <line x1="493"  y1="232" x2="493"  y2="388" stroke="rgba(159,176,195,.22)" stroke-width="1" stroke-dasharray="4 6"/>
-      <line x1="1597" y1="232" x2="1597" y2="388" stroke="rgba(159,176,195,.22)" stroke-width="1" stroke-dasharray="4 6"/>
-      <line x1="1964" y1="232" x2="1964" y2="388" stroke="rgba(159,176,195,.22)" stroke-width="1" stroke-dasharray="4 6"/>
+      <line x1="622"  y1="330" x2="622"  y2="678" stroke="rgba(159,176,195,.22)" stroke-width="1" stroke-dasharray="4 6"/>
+      <line x1="1518" y1="330" x2="1518" y2="678" stroke="rgba(159,176,195,.22)" stroke-width="1" stroke-dasharray="4 6"/>
+      <line x1="1958" y1="330" x2="1958" y2="678" stroke="rgba(159,176,195,.22)" stroke-width="1" stroke-dasharray="4 6"/>
       <!-- rail -> row labels -->
-      <path d="M322 269 H334" stroke="rgba(159,176,195,.5)" stroke-width="1.2"/>
-      <path d="M322 346 H334" stroke="rgba(159,176,195,.5)" stroke-width="1.2"/>
+      <path d="M392 423 H404" stroke="rgba(159,176,195,.5)" stroke-width="1.2"/>
+      <path d="M392 607 H404" stroke="rgba(159,176,195,.5)" stroke-width="1.2"/>
       <!-- row 1 chain: VFM -> LLM & VLM -> RL -->
-      <path d="M854 269 H864"  stroke="rgba(159,176,195,.5)" stroke-width="1.2" marker-end="url(#arw)"/>
-      <path d="M1222 269 H1600" stroke="rgba(159,176,195,.5)" stroke-width="1.2" marker-end="url(#arw)"/>
+      <path d="M1060 423 H1072" stroke="rgba(159,176,195,.5)" stroke-width="1.2" marker-end="url(#arw)"/>
+      <path d="M1508 423 H1520" stroke="rgba(159,176,195,.5)" stroke-width="1.2" marker-end="url(#arw)"/>
     </g>
     <g stroke="none">
-      <circle cx="322"  cy="269" r="2.4" fill="#76b900"/>
-      <circle cx="322"  cy="346" r="2.4" fill="#76b900"/>
-      <circle cx="854"  cy="269" r="2.4" fill="#8fa3b8"/>
-      <circle cx="1222" cy="269" r="2.4" fill="#8fa3b8"/>
+      <circle cx="392"  cy="423" r="3" fill="#76b900"/>
+      <circle cx="392"  cy="607" r="3" fill="#76b900"/>
+      <circle cx="1060" cy="423" r="3" fill="#8fa3b8"/>
+      <circle cx="1508" cy="423" r="3" fill="#8fa3b8"/>
     </g>
   </svg>
 
@@ -418,20 +419,20 @@
 
   <!-- ============ CONVERGENCE FAN: stack boxes -> Model Parallelism panel ============ -->
   <div class="fan">
-    <svg viewBox="0 0 2000 50" aria-hidden="true">
+    <svg viewBox="0 0 2000 56" aria-hidden="true">
       <defs>
         <marker id="arwG" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto">
           <path d="M1.5 1.5 L8.5 5 L1.5 8.5" fill="none" stroke="#76b900" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
         </marker>
       </defs>
       <g fill="none" stroke="rgba(118,185,0,.45)" stroke-width="1" stroke-linecap="round">
-        <path d="M677 2 C677 6, 682 8, 692 8 H1105 C1150 8, 1198 14, 1229 30"/>
-        <path d="M1045 2 C1045 3, 1048 3, 1058 3 H1112 C1158 3, 1204 11, 1229 30"/>
-        <path d="M1413 2 C1413 3, 1410 3, 1400 3 H1346 C1300 3, 1254 11, 1229 30"/>
-        <path d="M1781 2 C1781 6, 1776 8, 1766 8 H1353 C1308 8, 1260 14, 1229 30"/>
-        <path d="M1229 33 L1229 49" marker-end="url(#arwG)"/>
+        <path d="M772 2 C772 6, 777 8, 787 8 H1113 C1158 8, 1206 18, 1237 35"/>
+        <path d="M1071 2 C1071 3, 1074 3, 1081 3 H1120 C1166 3, 1212 15, 1237 35"/>
+        <path d="M1369 2 C1369 3, 1366 3, 1359 3 H1354 C1310 3, 1264 15, 1237 35"/>
+        <path d="M1738 2 C1738 6, 1733 8, 1723 8 H1361 C1316 8, 1268 18, 1237 35"/>
+        <path d="M1237 38 L1237 53" marker-end="url(#arwG)"/>
       </g>
-      <circle cx="1229" cy="30" r="2.6" fill="#76b900" stroke="none"/>
+      <circle cx="1237" cy="35" r="3" fill="#76b900" stroke="none"/>
     </svg>
   </div>
 
@@ -450,7 +451,7 @@
         <div class="q-head"><span class="badge">1</span><h3>Data Parallelism</h3><span class="qtag">DP</span></div>
         <p class="q-sub">Same model replicated on each GPU, different data on each GPU</p>
         <div class="q-diag">
-<svg viewBox="0 0 900 212" role="img"
+<svg viewBox="0 0 900 294" role="img"
      xmlns="http://www.w3.org/2000/svg"
      font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', Helvetica, Arial, sans-serif" width="100%" height="100%" style="display:block" preserveAspectRatio="xMidYMid meet">
   <title>Data Parallelism: GPU 0, GPU 1 and GPU 2 each hold a complete replica of the same three-layer neural network, while each GPU processes a different shard of data.</title>
@@ -459,95 +460,95 @@
     <!-- one full network replica: 3 layers x 3 nodes, fully connected -->
     <g id="dp-net">
       <!-- edges: layer 1 -> layer 2 -->
-      <g stroke="#9fb0c3" stroke-width="1" opacity="0.30">
-        <line x1="-34" y1="-33" x2="-34" y2="-9"/>
-        <line x1="-34" y1="-33" x2="0"   y2="-9"/>
-        <line x1="-34" y1="-33" x2="34"  y2="-9"/>
-        <line x1="0"   y1="-33" x2="-34" y2="-9"/>
-        <line x1="0"   y1="-33" x2="0"   y2="-9"/>
-        <line x1="0"   y1="-33" x2="34"  y2="-9"/>
-        <line x1="34"  y1="-33" x2="-34" y2="-9"/>
-        <line x1="34"  y1="-33" x2="0"   y2="-9"/>
-        <line x1="34"  y1="-33" x2="34"  y2="-9"/>
+      <g stroke="#9fb0c3" stroke-width="2.2" opacity="0.30" fill="none" stroke-linecap="round">
+        <line x1="-46" y1="-41.5" x2="-46" y2="-12.5"/>
+        <line x1="-46" y1="-41.5" x2="0"   y2="-12.5"/>
+        <line x1="-46" y1="-41.5" x2="46"  y2="-12.5"/>
+        <line x1="0"   y1="-41.5" x2="-46" y2="-12.5"/>
+        <line x1="0"   y1="-41.5" x2="0"   y2="-12.5"/>
+        <line x1="0"   y1="-41.5" x2="46"  y2="-12.5"/>
+        <line x1="46"  y1="-41.5" x2="-46" y2="-12.5"/>
+        <line x1="46"  y1="-41.5" x2="0"   y2="-12.5"/>
+        <line x1="46"  y1="-41.5" x2="46"  y2="-12.5"/>
         <!-- edges: layer 2 -> layer 3 -->
-        <line x1="-34" y1="9" x2="-34" y2="33"/>
-        <line x1="-34" y1="9" x2="0"   y2="33"/>
-        <line x1="-34" y1="9" x2="34"  y2="33"/>
-        <line x1="0"   y1="9" x2="-34" y2="33"/>
-        <line x1="0"   y1="9" x2="0"   y2="33"/>
-        <line x1="0"   y1="9" x2="34"  y2="33"/>
-        <line x1="34"  y1="9" x2="-34" y2="33"/>
-        <line x1="34"  y1="9" x2="0"   y2="33"/>
-        <line x1="34"  y1="9" x2="34"  y2="33"/>
+        <line x1="-46" y1="12.5" x2="-46" y2="41.5"/>
+        <line x1="-46" y1="12.5" x2="0"   y2="41.5"/>
+        <line x1="-46" y1="12.5" x2="46"  y2="41.5"/>
+        <line x1="0"   y1="12.5" x2="-46" y2="41.5"/>
+        <line x1="0"   y1="12.5" x2="0"   y2="41.5"/>
+        <line x1="0"   y1="12.5" x2="46"  y2="41.5"/>
+        <line x1="46"  y1="12.5" x2="-46" y2="41.5"/>
+        <line x1="46"  y1="12.5" x2="0"   y2="41.5"/>
+        <line x1="46"  y1="12.5" x2="46"  y2="41.5"/>
       </g>
       <!-- nodes -->
-      <g fill="#0b1220" stroke-width="1.6">
-        <circle cx="-34" cy="-42" r="9" stroke="#f59e0b"/>
-        <circle cx="0"   cy="-42" r="9" stroke="#f59e0b"/>
-        <circle cx="34"  cy="-42" r="9" stroke="#f59e0b"/>
-        <circle cx="-34" cy="0"   r="9" stroke="#3b82f6"/>
-        <circle cx="0"   cy="0"   r="9" stroke="#3b82f6"/>
-        <circle cx="34"  cy="0"   r="9" stroke="#3b82f6"/>
-        <circle cx="-34" cy="42"  r="9" stroke="#ec4899"/>
-        <circle cx="0"   cy="42"  r="9" stroke="#ec4899"/>
-        <circle cx="34"  cy="42"  r="9" stroke="#ec4899"/>
+      <g fill="#0b1220" stroke-width="2.2">
+        <circle cx="-46" cy="-54" r="12.5" stroke="#f59e0b"/>
+        <circle cx="0"   cy="-54" r="12.5" stroke="#f59e0b"/>
+        <circle cx="46"  cy="-54" r="12.5" stroke="#f59e0b"/>
+        <circle cx="-46" cy="0"   r="12.5" stroke="#3b82f6"/>
+        <circle cx="0"   cy="0"   r="12.5" stroke="#3b82f6"/>
+        <circle cx="46"  cy="0"   r="12.5" stroke="#3b82f6"/>
+        <circle cx="-46" cy="54"  r="12.5" stroke="#ec4899"/>
+        <circle cx="0"   cy="54"  r="12.5" stroke="#ec4899"/>
+        <circle cx="46"  cy="54"  r="12.5" stroke="#ec4899"/>
       </g>
     </g>
 
     <!-- thin rounded replica container -->
-    <rect id="dp-cell" width="116" height="112" rx="12"
-          fill="rgba(59,130,246,0.04)" stroke="#3b82f6" stroke-opacity="0.35" stroke-width="1.2"/>
+    <rect id="dp-cell" width="156" height="134" rx="16"
+          fill="rgba(59,130,246,0.04)" stroke="#3b82f6" stroke-opacity="0.35" stroke-width="2.2"/>
 
     <!-- green activation spark -->
-    <g id="dp-spark" fill="none" stroke="#a3d857" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M0 -9 L2.2 -2.2 L9 0 L2.2 2.2 L0 9 L-2.2 2.2 L-9 0 L-2.2 -2.2 Z"/>
+    <g id="dp-spark" fill="none" stroke="#a3d857" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M0 -12 L3 -3 L12 0 L3 3 L0 12 L-3 3 L-12 0 L-3 -3 Z"/>
     </g>
 
     <!-- data-shard stack icon (tinted via currentColor) -->
-    <g id="dp-shard">
-      <rect x="0"   y="0"  width="36" height="22" rx="3" fill="currentColor" fill-opacity="0.10" stroke="currentColor" stroke-width="1.6" opacity="0.55"/>
-      <rect x="-5"  y="7"  width="36" height="22" rx="3" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-width="1.6" opacity="0.8"/>
-      <rect x="-10" y="14" width="36" height="22" rx="3" fill="currentColor" fill-opacity="0.30" stroke="currentColor" stroke-width="1.6"/>
-      <line x1="-4" y1="21" x2="12" y2="21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-      <line x1="-4" y1="27" x2="6"  y2="27" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    <g id="dp-shard" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="0"    y="0"    width="54" height="33" rx="4.5" fill="currentColor" fill-opacity="0.10" stroke="currentColor" stroke-width="2.2" opacity="0.55"/>
+      <rect x="-7.5" y="10.5" width="54" height="33" rx="4.5" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-width="2.2" opacity="0.8"/>
+      <rect x="-15"  y="21"   width="54" height="33" rx="4.5" fill="currentColor" fill-opacity="0.30" stroke="currentColor" stroke-width="2.2"/>
+      <line x1="-6" y1="31.5" x2="18" y2="31.5" stroke="currentColor" stroke-width="2.2"/>
+      <line x1="-6" y1="40.5" x2="9"  y2="40.5" stroke="currentColor" stroke-width="2.2"/>
     </g>
   </defs>
 
   <!-- Layers bracket -->
-  <path d="M46 48 H38 V160 H46" fill="none" stroke="#9fb0c3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="20" y="104" transform="rotate(-90 20 104)" text-anchor="middle" font-size="12" letter-spacing="1" fill="#9fb0c3">Layers</text>
+  <path d="M48 92 H40 V210 H48" fill="none" stroke="#9fb0c3" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="24" y="151" transform="rotate(-90 24 151)" text-anchor="middle" font-size="22" letter-spacing="1.5" fill="#9fb0c3">Layers</text>
 
   <!-- column dividers -->
-  <g stroke="#9fb0c3" stroke-width="1" opacity="0.18" stroke-dasharray="2 5">
-    <line x1="330.5" y1="16" x2="330.5" y2="204"/>
-    <line x1="611.5" y1="16" x2="611.5" y2="204"/>
+  <g stroke="#9fb0c3" stroke-width="2.2" opacity="0.18" stroke-dasharray="3 7" fill="none" stroke-linecap="round">
+    <line x1="330.5" y1="14" x2="330.5" y2="280"/>
+    <line x1="611.5" y1="14" x2="611.5" y2="280"/>
   </g>
 
   <!-- ===== GPU 0 column ===== -->
-  <use href="#dp-spark" x="190" y="17"/>
-  <text x="190" y="40" text-anchor="middle" font-size="13" font-weight="700" fill="#3b82f6">GPU 0</text>
-  <use href="#dp-cell" x="132" y="48"/>
-  <use href="#dp-net" x="190" y="104"/>
-  <use href="#dp-shard" x="148" y="168" color="#3b82f6"/>
-  <text x="196" y="190" font-size="12" font-weight="600" fill="#8ab4f8"
+  <use href="#dp-spark" x="190" y="24"/>
+  <text x="190" y="60" text-anchor="middle" font-size="26" font-weight="600" fill="#3b82f6">GPU 0</text>
+  <use href="#dp-cell" x="112" y="84"/>
+  <use href="#dp-net" x="190" y="151"/>
+  <use href="#dp-shard" x="115.5" y="226" color="#3b82f6"/>
+  <text x="183.5" y="261" font-size="22" font-weight="600" fill="#8ab4f8"
         font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">shard 0</text>
 
   <!-- ===== GPU 1 column ===== -->
-  <use href="#dp-spark" x="471" y="17"/>
-  <text x="471" y="40" text-anchor="middle" font-size="13" font-weight="700" fill="#3b82f6">GPU 1</text>
-  <use href="#dp-cell" x="413" y="48"/>
-  <use href="#dp-net" x="471" y="104"/>
-  <use href="#dp-shard" x="429" y="168" color="#a3d857"/>
-  <text x="477" y="190" font-size="12" font-weight="600" fill="#c5e8a0"
+  <use href="#dp-spark" x="471" y="24"/>
+  <text x="471" y="60" text-anchor="middle" font-size="26" font-weight="600" fill="#3b82f6">GPU 1</text>
+  <use href="#dp-cell" x="393" y="84"/>
+  <use href="#dp-net" x="471" y="151"/>
+  <use href="#dp-shard" x="396.5" y="226" color="#a3d857"/>
+  <text x="464.5" y="261" font-size="22" font-weight="600" fill="#c5e8a0"
         font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">shard 1</text>
 
   <!-- ===== GPU 2 column ===== -->
-  <use href="#dp-spark" x="752" y="17"/>
-  <text x="752" y="40" text-anchor="middle" font-size="13" font-weight="700" fill="#3b82f6">GPU 2</text>
-  <use href="#dp-cell" x="694" y="48"/>
-  <use href="#dp-net" x="752" y="104"/>
-  <use href="#dp-shard" x="710" y="168" color="#a855f7"/>
-  <text x="758" y="190" font-size="12" font-weight="600" fill="#d8b4fe"
+  <use href="#dp-spark" x="752" y="24"/>
+  <text x="752" y="60" text-anchor="middle" font-size="26" font-weight="600" fill="#3b82f6">GPU 2</text>
+  <use href="#dp-cell" x="674" y="84"/>
+  <use href="#dp-net" x="752" y="151"/>
+  <use href="#dp-shard" x="677.5" y="226" color="#a855f7"/>
+  <text x="745.5" y="261" font-size="22" font-weight="600" fill="#d8b4fe"
         font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">shard 2</text>
 </svg>
         </div>
@@ -558,109 +559,109 @@
         <div class="q-head"><span class="badge">2</span><h3>Tensor Parallelism</h3><span class="qtag">TP</span></div>
         <p class="q-sub">Each GPU holds a slice of every layer (tensor / hidden dimension split)</p>
         <div class="q-diag">
-<svg viewBox="0 0 900 212"
+<svg viewBox="0 0 900 294"
      role="img" xmlns="http://www.w3.org/2000/svg"
      font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', Helvetica, Arial, sans-serif" width="100%" height="100%" style="display:block" preserveAspectRatio="xMidYMid meet">
   <title>Tensor Parallelism: each of the three GPUs holds exactly one slice of every layer — left slice on GPU 0, middle on GPU 1, right on GPU 2 — so the three GPUs together tile one complete layer, with identical data replicated on every GPU.</title>
 
   <!-- subtle device tints -->
-  <rect x="64" y="36" width="252" height="166" rx="10" fill="rgba(118,185,0,.055)" stroke="rgba(118,185,0,.10)" stroke-width="1"/>
-  <rect x="340" y="36" width="252" height="166" rx="10" fill="rgba(118,185,0,.055)" stroke="rgba(118,185,0,.10)" stroke-width="1"/>
-  <rect x="616" y="36" width="252" height="166" rx="10" fill="rgba(118,185,0,.055)" stroke="rgba(118,185,0,.10)" stroke-width="1"/>
+  <rect id="tp-tint-0" x="64" y="52" width="252" height="196" rx="12" fill="rgba(118,185,0,.055)" stroke="rgba(118,185,0,.10)" stroke-width="1.4"/>
+  <rect id="tp-tint-1" x="340" y="52" width="252" height="196" rx="12" fill="rgba(118,185,0,.055)" stroke="rgba(118,185,0,.10)" stroke-width="1.4"/>
+  <rect id="tp-tint-2" x="616" y="52" width="252" height="196" rx="12" fill="rgba(118,185,0,.055)" stroke="rgba(118,185,0,.10)" stroke-width="1.4"/>
 
   <!-- vertical dividers between columns -->
-  <line x1="328" y1="44" x2="328" y2="176" stroke="rgba(255,255,255,.08)" stroke-width="1"/>
-  <line x1="604" y1="44" x2="604" y2="176" stroke="rgba(255,255,255,.08)" stroke-width="1"/>
+  <line x1="328" y1="60" x2="328" y2="240" stroke="rgba(255,255,255,.08)" stroke-width="1.4"/>
+  <line x1="604" y1="60" x2="604" y2="240" stroke="rgba(255,255,255,.08)" stroke-width="1.4"/>
 
   <!-- Layers bracket -->
-  <path d="M50 56 H42 V170 H50" fill="none" stroke="#6b7c90" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="22" y="113" transform="rotate(-90 22 113)" text-anchor="middle"
-        font-size="12" letter-spacing=".08em" fill="#9fb0c3">Layers</text>
+  <path d="M58 76 H48 V240 H58" fill="none" stroke="#6b7c90" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="26" y="158" transform="rotate(-90 26 158)" text-anchor="middle"
+        font-size="22" letter-spacing=".08em" fill="#9fb0c3">Layers</text>
 
   <!-- GPU column labels -->
-  <text x="190" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#76b900">GPU 0</text>
-  <text x="466" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#76b900">GPU 1</text>
-  <text x="742" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#76b900">GPU 2</text>
+  <text x="190" y="34" text-anchor="middle" font-size="26" font-weight="600" fill="#76b900">GPU 0</text>
+  <text x="466" y="34" text-anchor="middle" font-size="26" font-weight="600" fill="#76b900">GPU 1</text>
+  <text x="742" y="34" text-anchor="middle" font-size="26" font-weight="600" fill="#76b900">GPU 2</text>
 
   <!-- ============ GPU 0 (filled slice: LEFT) ============ -->
-  <g>
+  <g id="tp-gpu-0">
     <!-- row 1: amber -->
-    <rect x="76" y="56" width="228" height="34" rx="6" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="152" y1="56" x2="152" y2="90" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="228" y1="56" x2="228" y2="90" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <rect x="78" y="58" width="72" height="30" rx="4" fill="#f59e0b" fill-opacity=".85" stroke="#f59e0b" stroke-width="1.6"/>
+    <rect x="76" y="76" width="228" height="48" rx="8" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="152" y1="76" x2="152" y2="124" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="228" y1="76" x2="228" y2="124" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <rect x="78" y="79" width="72" height="42" rx="6" fill="#f59e0b" fill-opacity=".85" stroke="#f59e0b" stroke-width="2.2"/>
     <!-- row 2: blue -->
-    <rect x="76" y="96" width="228" height="34" rx="6" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="152" y1="96" x2="152" y2="130" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="228" y1="96" x2="228" y2="130" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <rect x="78" y="98" width="72" height="30" rx="4" fill="#3b82f6" fill-opacity=".85" stroke="#3b82f6" stroke-width="1.6"/>
+    <rect x="76" y="134" width="228" height="48" rx="8" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="152" y1="134" x2="152" y2="182" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="228" y1="134" x2="228" y2="182" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <rect x="78" y="137" width="72" height="42" rx="6" fill="#3b82f6" fill-opacity=".85" stroke="#3b82f6" stroke-width="2.2"/>
     <!-- row 3: pink -->
-    <rect x="76" y="136" width="228" height="34" rx="6" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="152" y1="136" x2="152" y2="170" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="228" y1="136" x2="228" y2="170" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <rect x="78" y="138" width="72" height="30" rx="4" fill="#ec4899" fill-opacity=".85" stroke="#ec4899" stroke-width="1.6"/>
+    <rect x="76" y="192" width="228" height="48" rx="8" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="152" y1="192" x2="152" y2="240" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="228" y1="192" x2="228" y2="240" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <rect x="78" y="195" width="72" height="42" rx="6" fill="#ec4899" fill-opacity=".85" stroke="#ec4899" stroke-width="2.2"/>
   </g>
 
   <!-- ============ GPU 1 (filled slice: MIDDLE) ============ -->
-  <g>
+  <g id="tp-gpu-1">
     <!-- row 1: amber -->
-    <rect x="352" y="56" width="228" height="34" rx="6" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="428" y1="56" x2="428" y2="90" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="504" y1="56" x2="504" y2="90" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <rect x="430" y="58" width="72" height="30" rx="4" fill="#f59e0b" fill-opacity=".85" stroke="#f59e0b" stroke-width="1.6"/>
+    <rect x="352" y="76" width="228" height="48" rx="8" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="428" y1="76" x2="428" y2="124" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="504" y1="76" x2="504" y2="124" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <rect x="430" y="79" width="72" height="42" rx="6" fill="#f59e0b" fill-opacity=".85" stroke="#f59e0b" stroke-width="2.2"/>
     <!-- row 2: blue -->
-    <rect x="352" y="96" width="228" height="34" rx="6" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="428" y1="96" x2="428" y2="130" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="504" y1="96" x2="504" y2="130" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <rect x="430" y="98" width="72" height="30" rx="4" fill="#3b82f6" fill-opacity=".85" stroke="#3b82f6" stroke-width="1.6"/>
+    <rect x="352" y="134" width="228" height="48" rx="8" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="428" y1="134" x2="428" y2="182" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="504" y1="134" x2="504" y2="182" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <rect x="430" y="137" width="72" height="42" rx="6" fill="#3b82f6" fill-opacity=".85" stroke="#3b82f6" stroke-width="2.2"/>
     <!-- row 3: pink -->
-    <rect x="352" y="136" width="228" height="34" rx="6" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="428" y1="136" x2="428" y2="170" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="504" y1="136" x2="504" y2="170" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <rect x="430" y="138" width="72" height="30" rx="4" fill="#ec4899" fill-opacity=".85" stroke="#ec4899" stroke-width="1.6"/>
+    <rect x="352" y="192" width="228" height="48" rx="8" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="428" y1="192" x2="428" y2="240" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="504" y1="192" x2="504" y2="240" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <rect x="430" y="195" width="72" height="42" rx="6" fill="#ec4899" fill-opacity=".85" stroke="#ec4899" stroke-width="2.2"/>
   </g>
 
   <!-- ============ GPU 2 (filled slice: RIGHT) ============ -->
-  <g>
+  <g id="tp-gpu-2">
     <!-- row 1: amber -->
-    <rect x="628" y="56" width="228" height="34" rx="6" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="704" y1="56" x2="704" y2="90" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="780" y1="56" x2="780" y2="90" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <rect x="782" y="58" width="72" height="30" rx="4" fill="#f59e0b" fill-opacity=".85" stroke="#f59e0b" stroke-width="1.6"/>
+    <rect x="628" y="76" width="228" height="48" rx="8" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="704" y1="76" x2="704" y2="124" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="780" y1="76" x2="780" y2="124" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <rect x="782" y="79" width="72" height="42" rx="6" fill="#f59e0b" fill-opacity=".85" stroke="#f59e0b" stroke-width="2.2"/>
     <!-- row 2: blue -->
-    <rect x="628" y="96" width="228" height="34" rx="6" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="704" y1="96" x2="704" y2="130" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="780" y1="96" x2="780" y2="130" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <rect x="782" y="98" width="72" height="30" rx="4" fill="#3b82f6" fill-opacity=".85" stroke="#3b82f6" stroke-width="1.6"/>
+    <rect x="628" y="134" width="228" height="48" rx="8" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="704" y1="134" x2="704" y2="182" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="780" y1="134" x2="780" y2="182" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <rect x="782" y="137" width="72" height="42" rx="6" fill="#3b82f6" fill-opacity=".85" stroke="#3b82f6" stroke-width="2.2"/>
     <!-- row 3: pink -->
-    <rect x="628" y="136" width="228" height="34" rx="6" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="704" y1="136" x2="704" y2="170" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <line x1="780" y1="136" x2="780" y2="170" stroke="rgba(255,255,255,.18)" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <rect x="782" y="138" width="72" height="30" rx="4" fill="#ec4899" fill-opacity=".85" stroke="#ec4899" stroke-width="1.6"/>
+    <rect x="628" y="192" width="228" height="48" rx="8" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="704" y1="192" x2="704" y2="240" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <line x1="780" y1="192" x2="780" y2="240" stroke="rgba(255,255,255,.18)" stroke-width="2.2" stroke-dasharray="7 6"/>
+    <rect x="782" y="195" width="72" height="42" rx="6" fill="#ec4899" fill-opacity=".85" stroke="#ec4899" stroke-width="2.2"/>
   </g>
 
   <!-- replicated data-stack icons (identical on every GPU) -->
-  <g stroke="#9fb0c3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <g id="tp-data" stroke="#9fb0c3" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
     <g>
-      <path d="M175 182 v13 a15 4.5 0 0 0 30 0 v-13" fill="rgba(159,176,195,.10)"/>
-      <ellipse cx="190" cy="182" rx="15" ry="4.5" fill="rgba(159,176,195,.22)"/>
-      <path d="M175 188.5 a15 4.5 0 0 0 30 0" fill="none"/>
+      <path d="M166 260 v16 a24 7 0 0 0 48 0 v-16" fill="rgba(159,176,195,.10)"/>
+      <ellipse cx="190" cy="260" rx="24" ry="7" fill="rgba(159,176,195,.22)"/>
+      <path d="M166 268 a24 7 0 0 0 48 0" fill="none"/>
     </g>
     <g>
-      <path d="M451 182 v13 a15 4.5 0 0 0 30 0 v-13" fill="rgba(159,176,195,.10)"/>
-      <ellipse cx="466" cy="182" rx="15" ry="4.5" fill="rgba(159,176,195,.22)"/>
-      <path d="M451 188.5 a15 4.5 0 0 0 30 0" fill="none"/>
+      <path d="M442 260 v16 a24 7 0 0 0 48 0 v-16" fill="rgba(159,176,195,.10)"/>
+      <ellipse cx="466" cy="260" rx="24" ry="7" fill="rgba(159,176,195,.22)"/>
+      <path d="M442 268 a24 7 0 0 0 48 0" fill="none"/>
     </g>
     <g>
-      <path d="M727 182 v13 a15 4.5 0 0 0 30 0 v-13" fill="rgba(159,176,195,.10)"/>
-      <ellipse cx="742" cy="182" rx="15" ry="4.5" fill="rgba(159,176,195,.22)"/>
-      <path d="M727 188.5 a15 4.5 0 0 0 30 0" fill="none"/>
+      <path d="M718 260 v16 a24 7 0 0 0 48 0 v-16" fill="rgba(159,176,195,.10)"/>
+      <ellipse cx="742" cy="260" rx="24" ry="7" fill="rgba(159,176,195,.22)"/>
+      <path d="M718 268 a24 7 0 0 0 48 0" fill="none"/>
     </g>
   </g>
 
   <!-- identity marks between replicated data stacks -->
-  <text x="328" y="191" text-anchor="middle" font-size="15" font-weight="700" fill="#6b7c90">=</text>
-  <text x="604" y="191" text-anchor="middle" font-size="15" font-weight="700" fill="#6b7c90">=</text>
+  <text x="328" y="276" text-anchor="middle" font-size="26" font-weight="700" fill="#6b7c90">=</text>
+  <text x="604" y="276" text-anchor="middle" font-size="26" font-weight="700" fill="#6b7c90">=</text>
 </svg>
         </div>
         <div class="q-foot"><svg class="ico"><use href="#ic-database"/></svg><span>Same data replicated on all GPUs</span></div>
@@ -670,121 +671,121 @@
         <div class="q-head"><span class="badge">3</span><h3>Pipeline Parallelism</h3><span class="qtag">PP</span></div>
         <p class="q-sub">Different layers (stages) on different GPUs, executed sequentially</p>
         <div class="q-diag">
-<svg viewBox="0 0 900 212" role="img" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', Helvetica, Arial, sans-serif" width="100%" height="100%" style="display:block" preserveAspectRatio="xMidYMid meet">
+<svg viewBox="0 0 900 294" role="img" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', Helvetica, Arial, sans-serif" width="100%" height="100%" style="display:block" preserveAspectRatio="xMidYMid meet">
   <title>Pipeline Parallelism: different layers (stages) run on GPU 0, GPU 1 and GPU 2 sequentially — solid Forward arrows flow right, dashed Backward arrows flow left, with micro-batches queued under each GPU</title>
   <defs>
-    <marker id="pp-m-fwd" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M1,1 L9,5 L1,9 Z" fill="#a855f7"/>
+    <marker id="pp-m-fwd" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#a855f7"/>
     </marker>
-    <marker id="pp-m-bwd" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
-      <path d="M1.5,1.5 L8.5,5 L1.5,8.5" fill="none" stroke="#9fb0c3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <marker id="pp-m-bwd" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M2.5,2.5 L9.5,6 L2.5,9.5" fill="none" stroke="#9fb0c3" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
 
   <!-- subtle pipeline rail -->
-  <line x1="56" y1="90" x2="892" y2="90" fill="none" stroke="#a855f7" stroke-opacity=".14" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 9"/>
+  <line x1="60" y1="136" x2="884" y2="136" fill="none" stroke="#a855f7" stroke-opacity=".12" stroke-width="4" stroke-linecap="round" stroke-dasharray="1 12"/>
 
   <!-- left bracket: stages -->
-  <path d="M34 46 H26 V134 H34" fill="none" stroke="#a855f7" stroke-opacity=".55" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="20" y="90" text-anchor="middle" font-size="11" letter-spacing=".08em" fill="#9fb0c3" transform="rotate(-90 20 90)">Stages</text>
+  <path d="M54 70 H46 V202 H54" fill="none" stroke="#a855f7" stroke-opacity=".55" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="30" y="136" text-anchor="middle" font-size="22" letter-spacing=".08em" fill="#9fb0c3" transform="rotate(-90 30 136)">Stages</text>
 
   <!-- column dividers, segmented clear of the arrow band -->
-  <g stroke="#ffffff" stroke-opacity=".10" stroke-width="1">
-    <line x1="330" y1="36" x2="330" y2="56"/>
-    <line x1="330" y1="144" x2="330" y2="176"/>
-    <line x1="618" y1="36" x2="618" y2="56"/>
-    <line x1="618" y1="144" x2="618" y2="176"/>
+  <g stroke="#ffffff" stroke-opacity=".10" stroke-width="1.5">
+    <line x1="339" y1="50" x2="339" y2="56"/>
+    <line x1="339" y1="208" x2="339" y2="222"/>
+    <line x1="633" y1="50" x2="633" y2="56"/>
+    <line x1="633" y1="208" x2="633" y2="222"/>
   </g>
 
   <!-- ===== Stage tile: GPU 0 (pink), 2-3-1 ===== -->
-  <rect x="111" y="46" width="150" height="88" rx="14" fill="#ec4899" fill-opacity=".08" stroke="#ec4899" stroke-opacity=".55" stroke-width="1.6"/>
-  <g stroke="#ec4899" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round">
-    <line x1="139" y1="78" x2="186" y2="66" fill="none"/>
-    <line x1="139" y1="78" x2="186" y2="90" fill="none"/>
-    <line x1="139" y1="78" x2="186" y2="114" fill="none"/>
-    <line x1="139" y1="102" x2="186" y2="66" fill="none"/>
-    <line x1="139" y1="102" x2="186" y2="90" fill="none"/>
-    <line x1="139" y1="102" x2="186" y2="114" fill="none"/>
-    <line x1="186" y1="66" x2="233" y2="90" fill="none"/>
-    <line x1="186" y1="90" x2="233" y2="90" fill="none"/>
-    <line x1="186" y1="114" x2="233" y2="90" fill="none"/>
+  <rect x="108" y="70" width="168" height="132" rx="18" fill="#ec4899" fill-opacity=".08" stroke="#ec4899" stroke-opacity=".55" stroke-width="2.2"/>
+  <g stroke="#ec4899" stroke-opacity=".45" stroke-width="2.2" stroke-linecap="round">
+    <line x1="140" y1="119" x2="192" y2="102" fill="none"/>
+    <line x1="140" y1="119" x2="192" y2="136" fill="none"/>
+    <line x1="140" y1="119" x2="192" y2="170" fill="none"/>
+    <line x1="140" y1="153" x2="192" y2="102" fill="none"/>
+    <line x1="140" y1="153" x2="192" y2="136" fill="none"/>
+    <line x1="140" y1="153" x2="192" y2="170" fill="none"/>
+    <line x1="192" y1="102" x2="244" y2="136" fill="none"/>
+    <line x1="192" y1="136" x2="244" y2="136" fill="none"/>
+    <line x1="192" y1="170" x2="244" y2="136" fill="none"/>
   </g>
   <g fill="#ec4899">
-    <circle cx="139" cy="78" r="4.5"/>
-    <circle cx="139" cy="102" r="4.5"/>
-    <circle cx="186" cy="66" r="4.5"/>
-    <circle cx="186" cy="90" r="4.5"/>
-    <circle cx="186" cy="114" r="4.5"/>
-    <circle cx="233" cy="90" r="4.5"/>
+    <circle cx="140" cy="119" r="7"/>
+    <circle cx="140" cy="153" r="7"/>
+    <circle cx="192" cy="102" r="7"/>
+    <circle cx="192" cy="136" r="7"/>
+    <circle cx="192" cy="170" r="7"/>
+    <circle cx="244" cy="136" r="7"/>
   </g>
 
   <!-- ===== Stage tile: GPU 1 (blue), 3-2 ===== -->
-  <rect x="399" y="46" width="150" height="88" rx="14" fill="#3b82f6" fill-opacity=".08" stroke="#3b82f6" stroke-opacity=".55" stroke-width="1.6"/>
-  <g stroke="#3b82f6" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round">
-    <line x1="427" y1="66" x2="521" y2="78" fill="none"/>
-    <line x1="427" y1="66" x2="521" y2="102" fill="none"/>
-    <line x1="427" y1="90" x2="521" y2="78" fill="none"/>
-    <line x1="427" y1="90" x2="521" y2="102" fill="none"/>
-    <line x1="427" y1="114" x2="521" y2="78" fill="none"/>
-    <line x1="427" y1="114" x2="521" y2="102" fill="none"/>
+  <rect x="402" y="70" width="168" height="132" rx="18" fill="#3b82f6" fill-opacity=".08" stroke="#3b82f6" stroke-opacity=".55" stroke-width="2.2"/>
+  <g stroke="#3b82f6" stroke-opacity=".45" stroke-width="2.2" stroke-linecap="round">
+    <line x1="434" y1="102" x2="538" y2="119" fill="none"/>
+    <line x1="434" y1="102" x2="538" y2="153" fill="none"/>
+    <line x1="434" y1="136" x2="538" y2="119" fill="none"/>
+    <line x1="434" y1="136" x2="538" y2="153" fill="none"/>
+    <line x1="434" y1="170" x2="538" y2="119" fill="none"/>
+    <line x1="434" y1="170" x2="538" y2="153" fill="none"/>
   </g>
   <g fill="#3b82f6">
-    <circle cx="427" cy="66" r="4.5"/>
-    <circle cx="427" cy="90" r="4.5"/>
-    <circle cx="427" cy="114" r="4.5"/>
-    <circle cx="521" cy="78" r="4.5"/>
-    <circle cx="521" cy="102" r="4.5"/>
+    <circle cx="434" cy="102" r="7"/>
+    <circle cx="434" cy="136" r="7"/>
+    <circle cx="434" cy="170" r="7"/>
+    <circle cx="538" cy="119" r="7"/>
+    <circle cx="538" cy="153" r="7"/>
   </g>
 
   <!-- ===== Stage tile: GPU 2 (amber), 2-2-2 ===== -->
-  <rect x="687" y="46" width="150" height="88" rx="14" fill="#f59e0b" fill-opacity=".08" stroke="#f59e0b" stroke-opacity=".55" stroke-width="1.6"/>
-  <g stroke="#f59e0b" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round">
-    <line x1="715" y1="78" x2="762" y2="78" fill="none"/>
-    <line x1="715" y1="78" x2="762" y2="102" fill="none"/>
-    <line x1="715" y1="102" x2="762" y2="78" fill="none"/>
-    <line x1="715" y1="102" x2="762" y2="102" fill="none"/>
-    <line x1="762" y1="78" x2="809" y2="78" fill="none"/>
-    <line x1="762" y1="78" x2="809" y2="102" fill="none"/>
-    <line x1="762" y1="102" x2="809" y2="78" fill="none"/>
-    <line x1="762" y1="102" x2="809" y2="102" fill="none"/>
+  <rect x="696" y="70" width="168" height="132" rx="18" fill="#f59e0b" fill-opacity=".08" stroke="#f59e0b" stroke-opacity=".55" stroke-width="2.2"/>
+  <g stroke="#f59e0b" stroke-opacity=".45" stroke-width="2.2" stroke-linecap="round">
+    <line x1="728" y1="119" x2="780" y2="119" fill="none"/>
+    <line x1="728" y1="119" x2="780" y2="153" fill="none"/>
+    <line x1="728" y1="153" x2="780" y2="119" fill="none"/>
+    <line x1="728" y1="153" x2="780" y2="153" fill="none"/>
+    <line x1="780" y1="119" x2="832" y2="119" fill="none"/>
+    <line x1="780" y1="119" x2="832" y2="153" fill="none"/>
+    <line x1="780" y1="153" x2="832" y2="119" fill="none"/>
+    <line x1="780" y1="153" x2="832" y2="153" fill="none"/>
   </g>
   <g fill="#f59e0b">
-    <circle cx="715" cy="78" r="4.5"/>
-    <circle cx="715" cy="102" r="4.5"/>
-    <circle cx="762" cy="78" r="4.5"/>
-    <circle cx="762" cy="102" r="4.5"/>
-    <circle cx="809" cy="78" r="4.5"/>
-    <circle cx="809" cy="102" r="4.5"/>
+    <circle cx="728" cy="119" r="7"/>
+    <circle cx="728" cy="153" r="7"/>
+    <circle cx="780" cy="119" r="7"/>
+    <circle cx="780" cy="153" r="7"/>
+    <circle cx="832" cy="119" r="7"/>
+    <circle cx="832" cy="153" r="7"/>
   </g>
 
   <!-- ===== Flow arrows: gap 1 ===== -->
-  <text x="330" y="64" text-anchor="middle" font-size="12" letter-spacing=".08em" fill="#a855f7">Forward</text>
-  <line x1="275" y1="80" x2="385" y2="80" fill="none" stroke="#a855f7" stroke-width="2" stroke-linecap="round" marker-end="url(#pp-m-fwd)"/>
-  <line x1="385" y1="106" x2="275" y2="106" fill="none" stroke="#9fb0c3" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="5 4" marker-end="url(#pp-m-bwd)"/>
-  <text x="330" y="124" text-anchor="middle" font-size="12" letter-spacing=".08em" fill="#9fb0c3">Backward</text>
+  <text x="339" y="80" text-anchor="middle" font-size="22" letter-spacing=".08em" fill="#a855f7">Forward</text>
+  <line x1="296" y1="108" x2="382" y2="108" fill="none" stroke="#a855f7" stroke-width="3" stroke-linecap="round" marker-end="url(#pp-m-fwd)"/>
+  <line x1="382" y1="164" x2="296" y2="164" fill="none" stroke="#9fb0c3" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="7 6" marker-end="url(#pp-m-bwd)"/>
+  <text x="339" y="196" text-anchor="middle" font-size="22" letter-spacing=".08em" fill="#9fb0c3">Backward</text>
 
   <!-- ===== Flow arrows: gap 2 ===== -->
-  <text x="618" y="64" text-anchor="middle" font-size="12" letter-spacing=".08em" fill="#a855f7">Forward</text>
-  <line x1="563" y1="80" x2="673" y2="80" fill="none" stroke="#a855f7" stroke-width="2" stroke-linecap="round" marker-end="url(#pp-m-fwd)"/>
-  <line x1="673" y1="106" x2="563" y2="106" fill="none" stroke="#9fb0c3" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="5 4" marker-end="url(#pp-m-bwd)"/>
-  <text x="618" y="124" text-anchor="middle" font-size="12" letter-spacing=".08em" fill="#9fb0c3">Backward</text>
+  <text x="633" y="80" text-anchor="middle" font-size="22" letter-spacing=".08em" fill="#a855f7">Forward</text>
+  <line x1="586" y1="108" x2="680" y2="108" fill="none" stroke="#a855f7" stroke-width="3" stroke-linecap="round" marker-end="url(#pp-m-fwd)"/>
+  <line x1="680" y1="164" x2="586" y2="164" fill="none" stroke="#9fb0c3" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="7 6" marker-end="url(#pp-m-bwd)"/>
+  <text x="633" y="196" text-anchor="middle" font-size="22" letter-spacing=".08em" fill="#9fb0c3">Backward</text>
 
   <!-- ===== GPU labels, shared baseline ===== -->
-  <text x="186" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#a855f7">GPU 0</text>
-  <text x="474" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#a855f7">GPU 1</text>
-  <text x="762" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#a855f7">GPU 2</text>
+  <text x="192" y="42" text-anchor="middle" font-size="26" font-weight="600" fill="#a855f7">GPU 0</text>
+  <text x="486" y="42" text-anchor="middle" font-size="26" font-weight="600" fill="#a855f7">GPU 1</text>
+  <text x="780" y="42" text-anchor="middle" font-size="26" font-weight="600" fill="#a855f7">GPU 2</text>
 
   <!-- ===== Micro-batch stack icons, shared baseline ===== -->
-  <g fill="none" stroke="#9fb0c3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="164" y="156" width="44" height="7" rx="3"/>
-    <rect x="164" y="166" width="44" height="7" rx="3"/>
-    <rect x="164" y="176" width="44" height="7" rx="3"/>
-    <rect x="452" y="156" width="44" height="7" rx="3"/>
-    <rect x="452" y="166" width="44" height="7" rx="3"/>
-    <rect x="452" y="176" width="44" height="7" rx="3"/>
-    <rect x="740" y="156" width="44" height="7" rx="3"/>
-    <rect x="740" y="166" width="44" height="7" rx="3"/>
-    <rect x="740" y="176" width="44" height="7" rx="3"/>
+  <g fill="none" stroke="#9fb0c3" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="160" y="224" width="64" height="12" rx="6"/>
+    <rect x="160" y="242" width="64" height="12" rx="6"/>
+    <rect x="160" y="260" width="64" height="12" rx="6"/>
+    <rect x="454" y="224" width="64" height="12" rx="6"/>
+    <rect x="454" y="242" width="64" height="12" rx="6"/>
+    <rect x="454" y="260" width="64" height="12" rx="6"/>
+    <rect x="748" y="224" width="64" height="12" rx="6"/>
+    <rect x="748" y="242" width="64" height="12" rx="6"/>
+    <rect x="748" y="260" width="64" height="12" rx="6"/>
   </g>
 </svg>
         </div>
@@ -795,106 +796,106 @@
         <div class="q-head"><span class="badge">4</span><h3>Expert Parallelism (Mixture-of-Experts)</h3><span class="qtag">EP</span></div>
         <p class="q-sub">Different experts on different GPUs, a router selects which experts run</p>
         <div class="q-diag">
-<svg viewBox="0 0 900 212" role="img" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', Helvetica, Arial, sans-serif" width="100%" height="100%" style="display:block" preserveAspectRatio="xMidYMid meet">
+<svg viewBox="0 0 900 294" role="img" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', Helvetica, Arial, sans-serif" width="100%" height="100%" style="display:block" preserveAspectRatio="xMidYMid meet">
   <title>Expert Parallelism (Mixture-of-Experts): three GPU columns each hold two experts; a router at the right connects with dashed lines to each column's expert group, activating Expert 1 on GPU 0 and Expert N on GPU 2.</title>
   <defs>
-    <marker id="ep-arr-a" viewBox="0 0 8 8" refX="6.6" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
-      <path d="M1.2 1.4 L6.6 4 L1.2 6.6" fill="none" stroke="#f59e0b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    <marker id="ep-arr-a" viewBox="0 0 8 8" refX="6.6" refY="4" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1.2 1.4 L6.6 4 L1.2 6.6" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
-    <marker id="ep-arr-m" viewBox="0 0 8 8" refX="6.6" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
-      <path d="M1.2 1.4 L6.6 4 L1.2 6.6" fill="none" stroke="#6b7c90" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <marker id="ep-arr-m" viewBox="0 0 8 8" refX="6.6" refY="4" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1.2 1.4 L6.6 4 L1.2 6.6" fill="none" stroke="#6b7c90" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
 
   <g id="ep-links" fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M804 88 C776 88 748 86 717.5 86" stroke="#f59e0b" stroke-width="2.2" stroke-dasharray="6 5" marker-end="url(#ep-arr-a)"/>
-    <path d="M804 88 C784 92 770 142.5 758 142.5 L512 142.5 Q502 142.5 502 132.5 L502 96 Q502 87 493.5 87" stroke="#6b7c90" stroke-width="1.6" stroke-dasharray="5 5" marker-end="url(#ep-arr-m)"/>
-    <path d="M804 88 C788 94 778 142.5 768 142.5 L288 142.5 Q278 142.5 278 132.5 L278 96 Q278 87 269.5 87" stroke="#f59e0b" stroke-width="2.2" stroke-dasharray="6 5" marker-end="url(#ep-arr-a)"/>
+    <path d="M794 118 C780 142 772 172 764 198 Q760 206 750 206 L736 206 Q726 206 726 196 L726 120 Q726 110 716 110" stroke="#f59e0b" stroke-width="3" stroke-dasharray="7 6" marker-end="url(#ep-arr-a)"/>
+    <path d="M794 118 C784 146 778 178 770 202 Q766 213 756 213 L512 213 Q502 213 502 203 L502 120 Q502 110 492 110" stroke="#6b7c90" stroke-width="2.2" stroke-dasharray="6 6" marker-end="url(#ep-arr-m)"/>
+    <path d="M794 118 C788 150 782 184 774 208 Q770 220 760 220 L288 220 Q278 220 278 210 L278 120 Q278 110 268 110" stroke="#f59e0b" stroke-width="3" stroke-dasharray="7 6" marker-end="url(#ep-arr-a)"/>
   </g>
 
   <g id="ep-bracket">
-    <path d="M52 58 L46 58 L46 116 L52 116" fill="none" stroke="#f59e0b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-    <text x="24" y="87" transform="rotate(-90 24 87)" text-anchor="middle" font-size="11" letter-spacing=".1em" fill="#f59e0b">Experts</text>
+    <path d="M52 78 L46 78 L46 158 L52 158" fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="24" y="118" transform="rotate(-90 24 118)" text-anchor="middle" font-size="22" letter-spacing=".08em" fill="#f59e0b">Experts</text>
   </g>
 
   <g id="ep-gpu0">
-    <text x="166" y="20" text-anchor="middle" font-size="12" font-weight="700" letter-spacing=".08em" fill="#f59e0b">GPU 0</text>
-    <rect x="64" y="30" width="96" height="22" rx="7" fill="#ec4899" fill-opacity=".1" stroke="#ec4899" stroke-width="2"/>
-    <rect x="172" y="30" width="96" height="22" rx="7" fill="#ec4899" fill-opacity=".1" stroke="#ec4899" stroke-width="1.6" stroke-opacity=".8"/>
-    <text x="112" y="45" text-anchor="middle" font-size="11" fill="#e8eef5">Expert 1</text>
-    <text x="220" y="45" text-anchor="middle" font-size="11" fill="#e8eef5">Expert 2</text>
-    <rect x="64" y="58" width="96" height="58" rx="8" fill="#ec4899" fill-opacity=".06" stroke="#ec4899" stroke-width="2"/>
-    <rect x="172" y="58" width="96" height="58" rx="8" fill="#ec4899" fill-opacity=".06" stroke="#ec4899" stroke-width="1.6" stroke-opacity=".5"/>
-    <g fill="none" stroke="#ec4899" stroke-opacity=".55" stroke-width="1.2">
-      <path d="M92 76 L132 76 M92 76 L132 98 M92 98 L132 76 M92 98 L132 98"/>
-      <path d="M200 76 L240 76 M200 76 L240 98 M200 98 L240 76 M200 98 L240 98"/>
+    <text x="166" y="30" text-anchor="middle" font-size="26" font-weight="600" letter-spacing=".08em" fill="#f59e0b">GPU 0</text>
+    <rect x="64" y="40" width="98" height="30" rx="9" fill="#ec4899" fill-opacity=".1" stroke="#ec4899" stroke-width="3"/>
+    <rect x="170" y="40" width="98" height="30" rx="9" fill="#ec4899" fill-opacity=".1" stroke="#ec4899" stroke-width="2.2" stroke-opacity=".8"/>
+    <text x="113" y="62" text-anchor="middle" font-size="22" fill="#e8eef5">Expert 1</text>
+    <text x="219" y="62" text-anchor="middle" font-size="22" fill="#e8eef5">Expert 2</text>
+    <rect x="64" y="78" width="98" height="80" rx="10" fill="#ec4899" fill-opacity=".06" stroke="#ec4899" stroke-width="3"/>
+    <rect x="170" y="78" width="98" height="80" rx="10" fill="#ec4899" fill-opacity=".06" stroke="#ec4899" stroke-width="2.2" stroke-opacity=".5"/>
+    <g fill="none" stroke="#ec4899" stroke-opacity=".55" stroke-width="1.6">
+      <path d="M91 104 L135 104 M91 104 L135 132 M91 132 L135 104 M91 132 L135 132"/>
+      <path d="M197 104 L241 104 M197 104 L241 132 M197 132 L241 104 M197 132 L241 132"/>
     </g>
     <g fill="#ec4899">
-      <circle cx="92" cy="76" r="3.2"/><circle cx="92" cy="98" r="3.2"/><circle cx="132" cy="76" r="3.2"/><circle cx="132" cy="98" r="3.2"/>
-      <circle cx="200" cy="76" r="3.2"/><circle cx="200" cy="98" r="3.2"/><circle cx="240" cy="76" r="3.2"/><circle cx="240" cy="98" r="3.2"/>
+      <circle cx="91" cy="104" r="4.5"/><circle cx="91" cy="132" r="4.5"/><circle cx="135" cy="104" r="4.5"/><circle cx="135" cy="132" r="4.5"/>
+      <circle cx="197" cy="104" r="4.5"/><circle cx="197" cy="132" r="4.5"/><circle cx="241" cy="104" r="4.5"/><circle cx="241" cy="132" r="4.5"/>
     </g>
-    <path d="M150 61.5 V74.5 M143.5 68 H156.5 M145.4 63.4 L154.6 72.6 M154.6 63.4 L145.4 72.6" fill="none" stroke="#f59e0b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-    <rect x="64" y="122" width="204" height="9" rx="4.5" fill="none" stroke="#ec4899" stroke-width="1.2" stroke-opacity=".45" stroke-dasharray="3 4"/>
-    <text x="166" y="129.5" text-anchor="middle" font-size="11" fill="#9fb0c3">…</text>
+    <path d="M162 70 V90 M152 80 H172 M154.9 72.9 L169.1 87.1 M169.1 72.9 L154.9 87.1" fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="64" y="168" width="204" height="24" rx="9" fill="none" stroke="#ec4899" stroke-width="1.8" stroke-opacity=".45" stroke-dasharray="4 5"/>
+    <text x="166" y="187" text-anchor="middle" font-size="22" fill="#9fb0c3">…</text>
     <g fill="#ec4899" fill-opacity=".8">
-      <circle cx="86" cy="164" r="3"/><circle cx="126" cy="164" r="3"/><circle cx="166" cy="164" r="3"/><circle cx="206" cy="164" r="3"/><circle cx="246" cy="164" r="3"/>
+      <circle cx="86" cy="245" r="4.5"/><circle cx="126" cy="245" r="4.5"/><circle cx="166" cy="245" r="4.5"/><circle cx="206" cy="245" r="4.5"/><circle cx="246" cy="245" r="4.5"/>
     </g>
   </g>
 
   <g id="ep-gpu1">
-    <text x="390" y="20" text-anchor="middle" font-size="12" font-weight="700" letter-spacing=".08em" fill="#f59e0b">GPU 1</text>
-    <rect x="288" y="30" width="96" height="22" rx="7" fill="#3b82f6" fill-opacity=".1" stroke="#3b82f6" stroke-width="1.6" stroke-opacity=".8"/>
-    <rect x="396" y="30" width="96" height="22" rx="7" fill="#3b82f6" fill-opacity=".1" stroke="#3b82f6" stroke-width="1.6" stroke-opacity=".8"/>
-    <text x="336" y="45" text-anchor="middle" font-size="11" fill="#e8eef5">Expert 3</text>
-    <text x="444" y="45" text-anchor="middle" font-size="11" fill="#e8eef5">Expert 4</text>
-    <rect x="288" y="58" width="96" height="58" rx="8" fill="#3b82f6" fill-opacity=".06" stroke="#3b82f6" stroke-width="1.6" stroke-opacity=".5"/>
-    <rect x="396" y="58" width="96" height="58" rx="8" fill="#3b82f6" fill-opacity=".06" stroke="#3b82f6" stroke-width="1.6" stroke-opacity=".5"/>
-    <g fill="none" stroke="#3b82f6" stroke-opacity=".55" stroke-width="1.2">
-      <path d="M316 76 L356 76 M316 76 L356 98 M316 98 L356 76 M316 98 L356 98"/>
-      <path d="M424 76 L464 76 M424 76 L464 98 M424 98 L464 76 M424 98 L464 98"/>
+    <text x="390" y="30" text-anchor="middle" font-size="26" font-weight="600" letter-spacing=".08em" fill="#f59e0b">GPU 1</text>
+    <rect x="288" y="40" width="98" height="30" rx="9" fill="#3b82f6" fill-opacity=".1" stroke="#3b82f6" stroke-width="2.2" stroke-opacity=".8"/>
+    <rect x="394" y="40" width="98" height="30" rx="9" fill="#3b82f6" fill-opacity=".1" stroke="#3b82f6" stroke-width="2.2" stroke-opacity=".8"/>
+    <text x="337" y="62" text-anchor="middle" font-size="22" fill="#e8eef5">Expert 3</text>
+    <text x="443" y="62" text-anchor="middle" font-size="22" fill="#e8eef5">Expert 4</text>
+    <rect x="288" y="78" width="98" height="80" rx="10" fill="#3b82f6" fill-opacity=".06" stroke="#3b82f6" stroke-width="2.2" stroke-opacity=".5"/>
+    <rect x="394" y="78" width="98" height="80" rx="10" fill="#3b82f6" fill-opacity=".06" stroke="#3b82f6" stroke-width="2.2" stroke-opacity=".5"/>
+    <g fill="none" stroke="#3b82f6" stroke-opacity=".55" stroke-width="1.6">
+      <path d="M315 104 L359 104 M315 104 L359 132 M315 132 L359 104 M315 132 L359 132"/>
+      <path d="M421 104 L465 104 M421 104 L465 132 M421 132 L465 104 M421 132 L465 132"/>
     </g>
     <g fill="#3b82f6">
-      <circle cx="316" cy="76" r="3.2"/><circle cx="316" cy="98" r="3.2"/><circle cx="356" cy="76" r="3.2"/><circle cx="356" cy="98" r="3.2"/>
-      <circle cx="424" cy="76" r="3.2"/><circle cx="424" cy="98" r="3.2"/><circle cx="464" cy="76" r="3.2"/><circle cx="464" cy="98" r="3.2"/>
+      <circle cx="315" cy="104" r="4.5"/><circle cx="315" cy="132" r="4.5"/><circle cx="359" cy="104" r="4.5"/><circle cx="359" cy="132" r="4.5"/>
+      <circle cx="421" cy="104" r="4.5"/><circle cx="421" cy="132" r="4.5"/><circle cx="465" cy="104" r="4.5"/><circle cx="465" cy="132" r="4.5"/>
     </g>
-    <rect x="288" y="122" width="204" height="9" rx="4.5" fill="none" stroke="#3b82f6" stroke-width="1.2" stroke-opacity=".45" stroke-dasharray="3 4"/>
-    <text x="390" y="129.5" text-anchor="middle" font-size="11" fill="#9fb0c3">…</text>
+    <rect x="288" y="168" width="204" height="24" rx="9" fill="none" stroke="#3b82f6" stroke-width="1.8" stroke-opacity=".45" stroke-dasharray="4 5"/>
+    <text x="390" y="187" text-anchor="middle" font-size="22" fill="#9fb0c3">…</text>
     <g fill="#3b82f6" fill-opacity=".8">
-      <circle cx="310" cy="164" r="3"/><circle cx="350" cy="164" r="3"/><circle cx="390" cy="164" r="3"/><circle cx="430" cy="164" r="3"/><circle cx="470" cy="164" r="3"/>
+      <circle cx="310" cy="245" r="4.5"/><circle cx="350" cy="245" r="4.5"/><circle cx="390" cy="245" r="4.5"/><circle cx="430" cy="245" r="4.5"/><circle cx="470" cy="245" r="4.5"/>
     </g>
   </g>
 
   <g id="ep-gpu2">
-    <text x="614" y="20" text-anchor="middle" font-size="12" font-weight="700" letter-spacing=".08em" fill="#f59e0b">GPU 2</text>
-    <rect x="512" y="30" width="96" height="22" rx="7" fill="#76b900" fill-opacity=".1" stroke="#76b900" stroke-width="1.6" stroke-opacity=".8"/>
-    <rect x="620" y="30" width="96" height="22" rx="7" fill="#76b900" fill-opacity=".1" stroke="#76b900" stroke-width="2"/>
-    <text x="560" y="45" text-anchor="middle" font-size="11" fill="#e8eef5">Expert K</text>
-    <text x="668" y="45" text-anchor="middle" font-size="11" fill="#e8eef5">Expert N</text>
-    <rect x="512" y="58" width="96" height="58" rx="8" fill="#76b900" fill-opacity=".06" stroke="#76b900" stroke-width="1.6" stroke-opacity=".5"/>
-    <rect x="620" y="58" width="96" height="58" rx="8" fill="#76b900" fill-opacity=".06" stroke="#76b900" stroke-width="2"/>
-    <g fill="none" stroke="#76b900" stroke-opacity=".55" stroke-width="1.2">
-      <path d="M540 76 L580 76 M540 76 L580 98 M540 98 L580 76 M540 98 L580 98"/>
-      <path d="M648 76 L688 76 M648 76 L688 98 M648 98 L688 76 M648 98 L688 98"/>
+    <text x="614" y="30" text-anchor="middle" font-size="26" font-weight="600" letter-spacing=".08em" fill="#f59e0b">GPU 2</text>
+    <rect x="512" y="40" width="98" height="30" rx="9" fill="#76b900" fill-opacity=".1" stroke="#76b900" stroke-width="2.2" stroke-opacity=".8"/>
+    <rect x="618" y="40" width="98" height="30" rx="9" fill="#76b900" fill-opacity=".1" stroke="#76b900" stroke-width="3"/>
+    <text x="561" y="62" text-anchor="middle" font-size="22" fill="#e8eef5">Expert K</text>
+    <text x="667" y="62" text-anchor="middle" font-size="22" fill="#e8eef5">Expert N</text>
+    <rect x="512" y="78" width="98" height="80" rx="10" fill="#76b900" fill-opacity=".06" stroke="#76b900" stroke-width="2.2" stroke-opacity=".5"/>
+    <rect x="618" y="78" width="98" height="80" rx="10" fill="#76b900" fill-opacity=".06" stroke="#76b900" stroke-width="3"/>
+    <g fill="none" stroke="#76b900" stroke-opacity=".55" stroke-width="1.6">
+      <path d="M539 104 L583 104 M539 104 L583 132 M539 132 L583 104 M539 132 L583 132"/>
+      <path d="M645 104 L689 104 M645 104 L689 132 M645 132 L689 104 M645 132 L689 132"/>
     </g>
     <g fill="#76b900">
-      <circle cx="540" cy="76" r="3.2"/><circle cx="540" cy="98" r="3.2"/><circle cx="580" cy="76" r="3.2"/><circle cx="580" cy="98" r="3.2"/>
-      <circle cx="648" cy="76" r="3.2"/><circle cx="648" cy="98" r="3.2"/><circle cx="688" cy="76" r="3.2"/><circle cx="688" cy="98" r="3.2"/>
+      <circle cx="539" cy="104" r="4.5"/><circle cx="539" cy="132" r="4.5"/><circle cx="583" cy="104" r="4.5"/><circle cx="583" cy="132" r="4.5"/>
+      <circle cx="645" cy="104" r="4.5"/><circle cx="645" cy="132" r="4.5"/><circle cx="689" cy="104" r="4.5"/><circle cx="689" cy="132" r="4.5"/>
     </g>
-    <path d="M706 61.5 V74.5 M699.5 68 H712.5 M701.4 63.4 L710.6 72.6 M710.6 63.4 L701.4 72.6" fill="none" stroke="#f59e0b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-    <rect x="512" y="122" width="204" height="9" rx="4.5" fill="none" stroke="#76b900" stroke-width="1.2" stroke-opacity=".45" stroke-dasharray="3 4"/>
-    <text x="614" y="129.5" text-anchor="middle" font-size="11" fill="#9fb0c3">…</text>
+    <path d="M716 70 V90 M706 80 H726 M708.9 72.9 L723.1 87.1 M723.1 72.9 L708.9 87.1" fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="512" y="168" width="204" height="24" rx="9" fill="none" stroke="#76b900" stroke-width="1.8" stroke-opacity=".45" stroke-dasharray="4 5"/>
+    <text x="614" y="187" text-anchor="middle" font-size="22" fill="#9fb0c3">…</text>
     <g fill="#76b900" fill-opacity=".8">
-      <circle cx="534" cy="164" r="3"/><circle cx="574" cy="164" r="3"/><circle cx="614" cy="164" r="3"/><circle cx="654" cy="164" r="3"/><circle cx="694" cy="164" r="3"/>
+      <circle cx="534" cy="245" r="4.5"/><circle cx="574" cy="245" r="4.5"/><circle cx="614" cy="245" r="4.5"/><circle cx="654" cy="245" r="4.5"/><circle cx="694" cy="245" r="4.5"/>
     </g>
   </g>
 
   <g id="ep-router">
-    <text x="832" y="52" text-anchor="middle" font-size="12" font-weight="600" letter-spacing=".04em" fill="#f59e0b">Router</text>
-    <polygon points="804,88 818,112.25 846,112.25 860,88 846,63.75 818,63.75" fill="#f59e0b" fill-opacity=".08" stroke="#f59e0b" stroke-width="1.6" stroke-linejoin="round"/>
-    <g fill="none" stroke="#f59e0b" stroke-width="1.6" stroke-linecap="round">
-      <path d="M832 84 L832 79 M828.5 90 L824.2 92.5 M835.5 90 L839.8 92.5"/>
+    <text x="832" y="72" text-anchor="middle" font-size="22" font-weight="600" letter-spacing=".04em" fill="#f59e0b">Router</text>
+    <polygon points="794,118 813,85 851,85 870,118 851,151 813,151" fill="#f59e0b" fill-opacity=".08" stroke="#f59e0b" stroke-width="2.2" stroke-linejoin="round"/>
+    <g fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round">
+      <path d="M832 112 L832 104 M826.5 121.5 L820.5 125.5 M837.5 121.5 L843.5 125.5"/>
     </g>
-    <circle cx="832" cy="88" r="2.5" fill="#f59e0b"/>
+    <circle cx="832" cy="118" r="3.5" fill="#f59e0b"/>
   </g>
 </svg>
         </div>
