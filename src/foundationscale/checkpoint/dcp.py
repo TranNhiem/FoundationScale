@@ -400,12 +400,17 @@ class DcpReader:
         storage: dict[str, dict[tuple[int, ...], Any]] = {}
         skipped_blobs = 0
         for index, sinfo in metadata.storage_data.items():
-            fqn = getattr(index, "fqn", None)
+            # Not `fqn`: that name is already bound to `str` by the loop above, and
+            # rebinding it to `Any | None` is a mypy error — but only when torch is
+            # installed, because without it MetadataIndex is untyped and everything
+            # collapses to Any. The type checker was running against a different
+            # program than CI was.
+            index_fqn = getattr(index, "fqn", None)
             offsets = getattr(index, "offset", None)
-            if fqn is None or offsets is None:
+            if index_fqn is None or offsets is None:
                 skipped_blobs += 1
                 continue
-            storage.setdefault(fqn, {})[tuple(int(o) for o in offsets)] = sinfo
+            storage.setdefault(index_fqn, {})[tuple(int(o) for o in offsets)] = sinfo
 
         self._tensor_md = tensor_md
         self._nontensor_keys = tuple(sorted(nontensor))

@@ -34,6 +34,14 @@ dependencies = []
 checkpoint = [
     "torch>=2.1",
     "safetensors>=0.4",
+    # safetensors does NOT declare numpy, but `safetensors.torch` imports it at
+    # module load. A developer machine almost always has numpy pulled in by
+    # something else, so the omission is invisible locally; the first clean CI
+    # runner collapsed 9 tests with ModuleNotFoundError. Declared here rather
+    # than left to luck — an undeclared dependency is the same class of defect
+    # as the one that made this CI green without torch, differing only in that
+    # it fails loudly. FS_FORBID_SKIPS is what keeps it loud.
+    "numpy>=1.24",
 ]
 dev = [
     "pytest>=8.0",
@@ -94,8 +102,30 @@ warn_unreachable = true
 # exist, so the module could not be imported at all while mypy reported success. Scope
 # the exemption to the third-party names that actually need it.
 [[tool.mypy.overrides]]
-module = ["torch.*", "safetensors.*", "numpy.*"]
+module = ["torch.*", "safetensors.*"]
 ignore_missing_imports = true
+
+# numpy needs more than ignore_missing_imports: it SHIPS stubs, and the problem is
+# parsing them. python_version is pinned to 3.10 above so our own code is checked
+# against the oldest Python this package supports — but the matrix also runs 3.12,
+# where pip resolves a numpy whose .pyi files use `type X = ...` statements. mypy
+# then reports "Type statement is only supported in Python 3.12 and greater" inside
+# numpy/__init__.pyi and stops before checking anything of ours: a typecheck step
+# that fails for a reason unrelated to this repository, or worse, one that a future
+# `|| true` would turn into a step that checks nothing at all.
+#
+# follow_imports = "skip" makes numpy an opaque Any at the boundary. We import it
+# nowhere; it arrives only because safetensors.torch does. Nothing of ours loses
+# coverage, and the pinned python_version keeps doing its job.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+# follow_imports alone is not enough and the reason is easy to lose: mypy does not
+# apply it to .pyi files, and numpy's problem IS its .pyi. follow_imports_for_stubs
+# extends the skip to stubs, which is the only combination that keeps the parse from
+# happening at all.
+follow_imports_for_stubs = true
 
 [[tool.mypy.overrides]]
 module = "tests.*"

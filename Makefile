@@ -40,6 +40,12 @@ fmt:
 	ruff check --fix src tests tools
 	ruff format src tests tools
 
+# Run this in the SAME environment as `install` creates — one with [checkpoint].
+# mypy without torch checks a different program: MetadataIndex becomes Any, and an
+# `Any | None` assigned over a variable already bound to `str` stops being an error.
+# A torch-free typecheck passed this tree; CI, which installs torch, failed it on all
+# three Pythons. Same command, same source, different answer, because the environment
+# differed. That is the repository's own thesis pointed at its Makefile.
 typecheck:
 	mypy src
 
