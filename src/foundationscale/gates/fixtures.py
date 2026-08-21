@@ -264,8 +264,14 @@ __all__ = [
     "bloated_extra_state_ctx",
     "empty_expert_set_ctx",
     "healthy_fused_moe_ctx",
+    "healthy_sharded_moe_ctx",
     "missing_shard_ctx",
+    "mixed_expert_layout_ctx",
     "right_count_aliased_storage_ctx",
+    "stacked_aliased_layers_ctx",
+    "stacked_hf_moe_ctx",
+    "stacked_underfilled_ctx",
+    "unknown_expert_layout_ctx",
 ]
 
 _CONTEXT_ORIGIN_ROOT = "fixture://checkpoint-gates"
@@ -297,7 +303,7 @@ def _one_expert_weight_bytes() -> int:
         fqn="fixture.declared_one_expert_weight",
         shape=_EXPERT_INNER_SHAPE,
         dtype=_EXPERT_DTYPE,
-    ).nbytes
+    ).implied_nbytes
 
 
 def _declared_expert_bytes(num_experts: int, num_layers: int) -> int:
@@ -481,7 +487,7 @@ def healthy_fused_moe_ctx(
         declared_fqns=tuple(meta.fqn for meta in context_tensors),
         num_experts=num_experts,
         num_moe_layers=num_layers,
-        expected_expert_bytes=sum(meta.nbytes for meta in context_tensors),
+        expected_expert_bytes=sum(meta.implied_nbytes for meta in context_tensors),
     )
 
 
@@ -561,4 +567,276 @@ def bloated_extra_state_ctx() -> CheckpointGateContext:
         num_experts=0,
         num_moe_layers=0,
         expected_expert_bytes=0,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Layout fixtures beyond the Megatron family
+#
+# The real-artifact probe found the selector underneath these gates matched only
+# Megatron-Core naming. The builders below cover the other two families the gates
+# now see: the PER-EXPERT layout done correctly (healthy counterpart of the
+# incident), and the STACKED layout (every expert of a layer on dim 0 of one
+# tensor), including its two metadata-visible corruption signatures and the
+# fail-closed unknown family. Naming mirrors the probed Gemma-4 checkpoint.
+
+
+def healthy_sharded_moe_ctx(
+    num_experts: int = 8,
+    *,
+    num_layers: int = 2,
+) -> CheckpointGateContext:
+    """A known-good PER-EXPERT checkpoint: one FQN and one storage span per expert.
+
+    Same local-name SHAPE as the incident fixture (``...linear_fc1.weight<i>``),
+    but at the full declared count with a distinct storage per shard — the only
+    layout family in which expert distinctness can fully verify from metadata,
+    and therefore the healthy fixture for any composite that must reach 3/3.
+    """
+    tensors: list[TensorMeta] = []
+    for layer in range(num_layers):
+        for parameter in _PER_EXPERT_PARAMS:
+            for expert in range(num_experts):
+                tensors.append(
+                    TensorMeta(
+                        fqn=_sharded_expert_fqn(layer, parameter, expert),
+                        shape=(1, *_EXPERT_INNER_SHAPE),
+                        dtype=_EXPERT_DTYPE,
+                        storage_id=_storage_id(
+                            "healthy-sharded-expert",
+                            layer,
+                            parameter,
+                            expert,
+                        ),
+                    )
+                )
+    context_tensors = tuple(tensors)
+    return _make_context(
+        name=f"healthy-sharded-{num_layers}x{num_experts}",
+        tensors=context_tensors,
+        declared_fqns=tuple(meta.fqn for meta in context_tensors),
+        num_experts=num_experts,
+        num_moe_layers=num_layers,
+        expected_expert_bytes=sum(meta.implied_nbytes for meta in context_tensors),
+    )
+
+
+_STACKED_PROJECTIONS: tuple[tuple[str, tuple[int, int]], ...] = (
+    ("gate_up_proj", (16, 32)),
+    ("down_proj", (32, 16)),
+)
+
+
+def _stacked_expert_fqn(layer: int, projection: str) -> str:
+    return f"model.language_model.layers.{layer}.experts.{projection}"
+
+
+def _stacked_declared_volume(num_experts: int, num_layers: int) -> int:
+    """The volume a correct run would declare: experts x per-slice bytes x weights."""
+    return sum(
+        TensorMeta(
+            fqn=f"fixture.stacked-declared.{layer}.{projection}",
+            shape=(num_experts, *inner),
+            dtype=_EXPERT_DTYPE,
+        ).implied_nbytes
+        for layer in range(num_layers)
+        for projection, inner in _STACKED_PROJECTIONS
+    )
+
+
+def stacked_hf_moe_ctx(
+    num_experts: int = 8,
+    *,
+    num_layers: int = 2,
+) -> CheckpointGateContext:
+    """A clean STACKED MoE checkpoint in HF naming — the probed artifact's layout.
+
+    One ``gate_up_proj`` and one ``down_proj`` per layer with every expert on dim 0,
+    each tensor on its own storage span, and the declared volume matching the
+    implied bytes exactly. Nothing metadata can flag, and nothing metadata can
+    prove: the distinctness gate must abstain (SKIP, never "distinct"), the byte
+    gate must reach a real verdict, and completeness must match.
+    """
+    tensors: list[TensorMeta] = []
+    for layer in range(num_layers):
+        for projection, inner in _STACKED_PROJECTIONS:
+            tensors.append(
+                TensorMeta(
+                    fqn=_stacked_expert_fqn(layer, projection),
+                    shape=(num_experts, *inner),
+                    dtype=_EXPERT_DTYPE,
+                    storage_id=_storage_id(
+                        "stacked-hf-expert",
+                        layer,
+                        projection,
+                        num_experts,
+                    ),
+                )
+            )
+    context_tensors = tuple(tensors)
+    return _make_context(
+        name=f"stacked-hf-{num_layers}x{num_experts}",
+        tensors=context_tensors,
+        declared_fqns=tuple(meta.fqn for meta in context_tensors),
+        num_experts=num_experts,
+        num_moe_layers=num_layers,
+        expected_expert_bytes=sum(meta.implied_nbytes for meta in context_tensors),
+    )
+
+
+def stacked_aliased_layers_ctx(num_experts: int = 8) -> CheckpointGateContext:
+    """Two stacked tensors in DIFFERENT layers pointing at one storage span.
+
+    Whole-tensor, cross-layer aliasing is the only aliasing signature that
+    survives stacking: every leading dim is correct, every sibling ratio is
+    consistent, and yet the two layers' down projections are the same bytes. The
+    distinctness gate must fire on the shared span.
+    """
+    layers = 2
+    shared_down_proj_storage = _storage_id("stacked-aliased-down-proj", num_experts)
+    tensors: list[TensorMeta] = []
+    for layer in range(layers):
+        for projection, inner in _STACKED_PROJECTIONS:
+            tensors.append(
+                TensorMeta(
+                    fqn=_stacked_expert_fqn(layer, projection),
+                    shape=(num_experts, *inner),
+                    dtype=_EXPERT_DTYPE,
+                    storage_id=(
+                        shared_down_proj_storage
+                        if projection == "down_proj"
+                        else _storage_id("stacked-aliased-ok", layer, projection)
+                    ),
+                )
+            )
+    context_tensors = tuple(tensors)
+    return _make_context(
+        name="stacked-cross-layer-alias",
+        tensors=context_tensors,
+        declared_fqns=tuple(meta.fqn for meta in context_tensors),
+        num_experts=num_experts,
+        num_moe_layers=layers,
+        expected_expert_bytes=_stacked_declared_volume(num_experts, layers),
+    )
+
+
+def stacked_underfilled_ctx(num_experts: int = 8) -> CheckpointGateContext:
+    """One stacked tensor holds 1/8 of a layer's experts; its siblings hold them all.
+
+    Layer 0's down_proj has leading dim ``num_experts // 8`` while every other
+    stacked weight carries the full declared count — the incident's exact 0.125
+    ratio in stacked clothing, visible twice to metadata: leading dim vs declared
+    count, and implied bytes vs sibling projections across layers.
+    """
+    layers = 2
+    tensors: list[TensorMeta] = []
+    for layer in range(layers):
+        for projection, inner in _STACKED_PROJECTIONS:
+            # Exactly one projection in one layer is starved to 1/8 of the
+            # declared count — the incident's 0.125 ratio, in stacked clothing.
+            starved = layer == 0 and projection == "down_proj"
+            leading = num_experts // 8 if starved else num_experts
+            tensors.append(
+                TensorMeta(
+                    fqn=_stacked_expert_fqn(layer, projection),
+                    shape=(leading, *inner),
+                    dtype=_EXPERT_DTYPE,
+                    storage_id=_storage_id(
+                        "stacked-underfilled",
+                        layer,
+                        projection,
+                        leading,
+                    ),
+                )
+            )
+    context_tensors = tuple(tensors)
+    return _make_context(
+        name="stacked-a-fraction-of-experts",
+        tensors=context_tensors,
+        declared_fqns=tuple(meta.fqn for meta in context_tensors),
+        num_experts=num_experts,
+        num_moe_layers=layers,
+        expected_expert_bytes=_stacked_declared_volume(num_experts, layers),
+    )
+
+
+def unknown_expert_layout_ctx(num_experts: int = 8) -> CheckpointGateContext:
+    """Expert-named tensors matching no layout family: the gates must block.
+
+    ``weight_bank`` under an ``experts`` segment might be a perfectly fine
+    format — but no code in this repo knows its per-expert semantics, so both
+    treating it as verified and treating the model as dense would be claims
+    without evidence. Fail-closed is the only honest answer.
+    """
+    layers = 2
+    tensors = tuple(
+        TensorMeta(
+            fqn=f"model.layers.{layer}.mlp.experts.weight_bank",
+            shape=(num_experts, *_EXPERT_INNER_SHAPE),
+            dtype=_EXPERT_DTYPE,
+            storage_id=_storage_id("unknown-expert-layout", layer),
+        )
+        for layer in range(layers)
+    )
+    return _make_context(
+        name="unknown-expert-layout",
+        tensors=tensors,
+        declared_fqns=tuple(meta.fqn for meta in tensors),
+        num_experts=num_experts,
+        num_moe_layers=layers,
+        expected_expert_bytes=sum(meta.implied_nbytes for meta in tensors),
+    )
+
+
+def mixed_expert_layout_ctx(num_experts: int = 8) -> CheckpointGateContext:
+    """Per-expert shards and stacked tensors inside ONE checkpoint: a MIXED layout.
+
+    Layer 0 carries the full declared expert count as one FQN and one storage span
+    per expert (the per-expert family); both layers also carry Gemma-style stacked
+    projections with every expert on leading dim 0 (the stacked family). Each
+    family on its own would verify clean, which is precisely the trap: examined
+    independently they report full denominators over their own subsets while
+    nothing examined the checkpoint as a whole. Whether this is a heterogeneous
+    model or a half-converted artifact is not decidable from layout metadata, so
+    the distinctness gate must block on the mixture itself, not fold either
+    family into the other's count.
+    """
+    layers = 2
+    tensors: list[TensorMeta] = []
+    for layer in range(layers):
+        for projection, inner in _STACKED_PROJECTIONS:
+            tensors.append(
+                TensorMeta(
+                    fqn=_stacked_expert_fqn(layer, projection),
+                    shape=(num_experts, *inner),
+                    dtype=_EXPERT_DTYPE,
+                    storage_id=_storage_id(
+                        "mixed-stacked-expert",
+                        layer,
+                        projection,
+                    ),
+                )
+            )
+    for parameter in _PER_EXPERT_PARAMS:
+        for expert in range(num_experts):
+            tensors.append(
+                TensorMeta(
+                    fqn=_sharded_expert_fqn(0, parameter, expert),
+                    shape=(1, *_EXPERT_INNER_SHAPE),
+                    dtype=_EXPERT_DTYPE,
+                    storage_id=_storage_id(
+                        "mixed-per-expert-shard",
+                        parameter,
+                        expert,
+                    ),
+                )
+            )
+    context_tensors = tuple(tensors)
+    return _make_context(
+        name="mixed-expert-layout",
+        tensors=context_tensors,
+        declared_fqns=tuple(meta.fqn for meta in context_tensors),
+        num_experts=num_experts,
+        num_moe_layers=layers,
+        expected_expert_bytes=sum(meta.implied_nbytes for meta in context_tensors),
     )

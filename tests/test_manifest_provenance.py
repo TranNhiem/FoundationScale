@@ -32,8 +32,12 @@ with plain directories so it runs regardless.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -44,6 +48,31 @@ from foundationscale.provenance import manifest
 requires_git = pytest.mark.skipif(
     shutil.which("git") is None,
     reason="no git binary on PATH: this test captures provenance from a real repository",
+)
+
+
+def _git_version() -> tuple[int, ...] | None:
+    """The installed git's version, or ``None`` when git is absent."""
+    if shutil.which("git") is None:
+        return None
+    probe = subprocess.run(
+        ["git", "--version"], capture_output=True, text=True, timeout=30, check=False
+    )
+    words = probe.stdout.split()
+    numbers: list[int] = []
+    for token in words[2].split(".") if len(words) >= 3 else []:
+        digits = "".join(ch for ch in token if ch.isdigit())
+        if not digits:
+            break
+        numbers.append(int(digits))
+    return tuple(numbers)
+
+
+_GIT_VERSION = _git_version()
+
+requires_git_config_env = pytest.mark.skipif(
+    _GIT_VERSION is None or _GIT_VERSION < (2, 31),
+    reason="GIT_CONFIG_COUNT/GIT_CONFIG_KEY_n environment injection requires git >= 2.31",
 )
 
 _SUBMIT_ENV: dict[str, str] = {
@@ -60,8 +89,11 @@ _SUBMIT_ENV: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
-def _run_git(repo: Path, *args: str) -> None:
-    """Run a git command against ``repo`` and fail the test loudly on any error."""
+def _run_git(repo: Path, *args: str) -> str:
+    """Run a git command against ``repo`` and fail the test loudly on any error.
+
+    Returns stdout so tests can pin claims (HEAD hashes) against git's own view.
+    """
     proc = subprocess.run(
         ["git", "-C", str(repo), *args],
         capture_output=True,
@@ -70,6 +102,7 @@ def _run_git(repo: Path, *args: str) -> None:
         check=False,
     )
     assert proc.returncode == 0, f"git {' '.join(args)} failed: {proc.stderr.strip()}"
+    return proc.stdout
 
 
 @pytest.fixture
@@ -356,6 +389,143 @@ def test_diff_hash_tracks_the_actual_bytes_being_captured(repo: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Hermetic capture — the recorded root, not the caller's shell, answers the probes
+# ---------------------------------------------------------------------------
+
+_CAPTURE_SNIPPET = (
+    "import json, sys;"
+    "from foundationscale.provenance.manifest import capture_code_provenance;"
+    "p = capture_code_provenance(sys.argv[1]);"
+    "print(json.dumps({'commit': p.commit, 'status': p.status.value,"
+    " 'diff_sha256': p.diff_sha256, 'diff_bytes': p.diff_bytes}))"
+)
+
+
+def _capture_in_subprocess(root: Path, env: Mapping[str, str]) -> dict[str, object]:
+    """Run one capture in a fresh interpreter under exactly ``env``.
+
+    Hermeticity is a property of the process boundary: it must hold against
+    whatever the *launcher's* environment contains, so the capture runs where a
+    launcher would run it — a new interpreter handed a real, hostile ``env=``.
+    Asserting at that boundary, rather than against ``_git`` internals, is what
+    keeps these tests controls on the behaviour users depend on.
+    """
+    child_env = dict(env)
+    src_root = str(Path(manifest.__file__).resolve().parents[2])
+    pythonpath = child_env.get("PYTHONPATH")
+    child_env["PYTHONPATH"] = src_root + (os.pathsep + pythonpath if pythonpath else "")
+    out = subprocess.run(
+        [sys.executable, "-c", _CAPTURE_SNIPPET, str(root)],
+        env=child_env,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
+    )
+    return json.loads(out.stdout)
+
+
+def _init_repo(root: Path) -> Path:
+    """Create (but do not populate) a git repository with commit identity configured."""
+    root.mkdir()
+    _run_git(root, "init", "-q")
+    _run_git(root, "config", "user.email", "probes@foundationscale.test")
+    _run_git(root, "config", "user.name", "Provenance Probe")
+    return root
+
+
+@requires_git
+def test_git_env_cannot_redirect_probe(tmp_path: Path) -> None:
+    """``GIT_DIR``/``GIT_WORK_TREE`` outrank ``-C`` in git's resolution order.
+
+    Inherited by the probes, they make every interrogation answer under the
+    direction of a decoy repository while the manifest records ``target`` as the
+    root — the module's central attestation ("this code, at this commit")
+    falsified by env-var alone, with the record still reading as coherent.
+    """
+    decoy = _init_repo(tmp_path / "decoy")
+    target = _init_repo(tmp_path / "target")
+    _commit_file(decoy, "decoy.py", "DECOY = True\n")
+    _commit_file(target, "train.py", "print('the code that actually ran')\n")
+    decoy_head = _run_git(decoy, "rev-parse", "HEAD").strip()
+    target_head = _run_git(target, "rev-parse", "HEAD").strip()
+    assert decoy_head != target_head
+
+    hostile = dict(os.environ)
+    hostile["GIT_DIR"] = str(decoy / ".git")
+    hostile["GIT_WORK_TREE"] = str(decoy)
+    prov = _capture_in_subprocess(target, hostile)
+
+    # The record names `target`; the commit it attests must be target's HEAD.
+    # Unscrubbed, the probes answered as the decoy directed.
+    assert prov["commit"] == target_head
+
+    # Negative control: the scrub must leave an honest capture intact — a probe
+    # that cannot answer clean questions is the mirror image of fail-open.
+    control = _capture_in_subprocess(target, dict(os.environ))
+    assert control["commit"] == target_head
+    assert control["status"] == "clean"
+
+
+@requires_git_config_env
+def test_git_config_cannot_shape_the_diff(tmp_path: Path) -> None:
+    """Config injected via ``GIT_CONFIG_*`` must not alter the bytes ``diff_sha256`` attests.
+
+    The ``git diff`` porcelain runs configured textconv filters *by default*, so
+    an injected ``diff.<driver>.textconv`` rewrites the very bytes being hashed —
+    and ``GIT_CONFIG_COUNT``/``GIT_CONFIG_KEY_n``/``GIT_CONFIG_VALUE_n`` deliver
+    that config through the environment alone, leaving the repository itself
+    untouched. The byte count even survives the rewrite; only the hash does not.
+    """
+    root = _init_repo(tmp_path / "repo")
+    _commit_file(root, ".gitattributes", "*.py diff=shout\n")
+    tracked = _commit_file(root, "src/train.py", "print('v1: quietly lowercase')\n")
+    tracked.write_text("print('v2: still quietly lowercase')\n", encoding="utf-8")
+
+    # The untransformed reference bytes come from an explicit, scrubbed command —
+    # never from asking the module under test to hash its own output.
+    scrubbed_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    scrubbed_env["LC_ALL"] = "C"
+    raw = subprocess.run(
+        [
+            "git",
+            "-c",
+            "core.quotepath=false",
+            "-C",
+            str(root),
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--binary",
+            "HEAD",
+            "--",
+            ".",
+        ],
+        capture_output=True,
+        env=scrubbed_env,
+        check=True,
+        timeout=60,
+    ).stdout
+    expected_sha = hashlib.sha256(raw).hexdigest()
+
+    hostile = dict(os.environ)
+    hostile.update(
+        {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "diff.shout.textconv",
+            "GIT_CONFIG_VALUE_0": "tr a-z A-Z",
+        }
+    )
+    prov = _capture_in_subprocess(root, hostile)
+
+    assert prov["status"] == "captured"
+    # Unscrubbed, the injected textconv uppercased every hunk before hashing, so
+    # the manifest attested a rewriting of the diff rather than the diff.
+    assert prov["diff_sha256"] == expected_sha
+    assert prov["diff_bytes"] == len(raw)
+
+
+# ---------------------------------------------------------------------------
 # capture_environment — the unrecorded variable that split 24 runs 12/12
 # ---------------------------------------------------------------------------
 
@@ -546,6 +716,152 @@ def test_freeze_returns_a_deterministically_sorted_mapping() -> None:
     resolver.record_effective("mu.lr", "3", "cli")
 
     assert list(resolver.freeze()) == ["alpha.lr", "mu.lr", "zeta.lr"]
+
+
+# ---------------------------------------------------------------------------
+# load() — the version acceptance matrix, and tolerated-never-invisible extras
+# ---------------------------------------------------------------------------
+
+
+def _write_manifest_payload(
+    tmp_path: Path, payload: Mapping[str, object], name: str = "run_manifest.json"
+) -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("declared_version", [0, -1, 2, "1", 1.0, True, None])
+def test_schema_version_acceptance_matrix_refuses_what_it_cannot_interpret(
+    tmp_path: Path, declared_version: object
+) -> None:
+    """Refusal happens at the version boundary, with the facts attached.
+
+    JSON ``true`` and ``1.0`` equal ``1`` in Python, so the old
+    ``!= SCHEMA_VERSION`` check waved them past the boundary to die later as a
+    field-shape ``ManifestError`` inside ``_expect_int`` — one failure class, two
+    taxonomies, and callers could not route it. Every refusal now comes from the
+    version path and carries ``found``/``supported`` so routing never means
+    parsing a message.
+    """
+    payload = json.loads(_manifest().to_json())
+    if declared_version is None:
+        del payload["schema_version"]
+    else:
+        payload["schema_version"] = declared_version
+    path = _write_manifest_payload(tmp_path, payload)
+
+    with pytest.raises(manifest.ManifestVersionError) as excinfo:
+        manifest.load(path)
+
+    if declared_version is None:
+        assert excinfo.value.found is None
+    else:
+        assert excinfo.value.found == declared_version
+        assert type(excinfo.value.found) is type(declared_version)
+    assert excinfo.value.supported == manifest.SUPPORTED_SCHEMA_VERSIONS
+
+
+def test_schema_version_acceptance_matrix_loads_v1_unchanged(tmp_path: Path) -> None:
+    """The matrix's positive arm: the version this module writes loads.
+
+    Asserted as value identity, not merely "no exception" — a refusal taxonomy
+    that also refused the one honest version would fail its own positive control.
+    This is also the golden-fixture load and the round-trip property
+    ``from_dict(to_dict(m)) == m``.
+    """
+    resolver = manifest.ConfigResolver(environ={})
+    resolver.record_effective("optimizer.lr", "3e-05", "cli")
+    original = _manifest(config=resolver.freeze())
+    payload = json.loads(original.to_json())
+
+    assert manifest.RunManifest.from_dict(payload) == original
+    assert manifest.load(_write_manifest_payload(tmp_path, payload)) == original
+
+
+def test_upgrade_seam_refuses_a_version_it_has_no_lift_for() -> None:
+    """The lift checks what it is lifting *from*, or it is the identity in costume.
+
+    ``load`` rejects unknown versions at the boundary today, so this arm is not
+    reachable through the public API — which is exactly why it is pinned here.
+    The failure it guards against is a future one: a v2 accepted at the boundary
+    while this function still returns ``data`` unchanged would pass foreign
+    fields through under a v1 reader's interpretation, and nothing would say so.
+    """
+    payload: dict[str, object] = {"schema_version": manifest.SCHEMA_VERSION}
+
+    assert manifest._upgrade_to_current(payload, from_version=manifest.SCHEMA_VERSION) is payload
+
+    with pytest.raises(manifest.ManifestVersionError, match="no upgrade path"):
+        manifest._upgrade_to_current(payload, from_version=manifest.SCHEMA_VERSION + 1)
+
+
+def _holder(payload: dict, level: str) -> dict:
+    """The nested dict an unknown key is injected into, resolved for one level only.
+
+    Resolved lazily rather than as a six-entry dict: ``paths`` is empty at every
+    level except ``code_path``, so building all six holders up front indexes an
+    empty list and the other five parametrisations die before they assert anything.
+    """
+    if level == "top":
+        return payload
+    if level == "code_path":
+        return payload["code"]["paths"][0]
+    if level == "config_entry":
+        return payload["config"]["optimizer.lr"]
+    return payload[level]
+
+
+@pytest.mark.parametrize(
+    "level", ["top", "code", "code_path", "environment", "topology", "config_entry"]
+)
+def test_unknown_keys_surface_as_findings_not_silence(tmp_path: Path, level: str) -> None:
+    """A field from a newer writer must be tolerated in view, never in secret.
+
+    Within an accepted version, outright refusal would orphan shared append-only
+    stores beside any slightly newer writer — but silent dropping is how the
+    checkpoint gates' ``declared_fqns`` would vanish on an un-upgraded reader
+    while everyone swears the denominators were written. The load must therefore
+    name the key exactly once, keep it out of the reserialization, and let the
+    fingerprint attest only what was actually interpreted.
+    """
+    resolver = manifest.ConfigResolver(environ={})
+    resolver.record_effective("optimizer.lr", "3e-05", "cli")
+    original = _manifest(config=resolver.freeze())
+    payload = json.loads(original.to_json())
+    if level == "code_path":
+        payload["code"]["paths"] = [
+            {
+                "path": "src",
+                "exists": True,
+                "tracked_files": 1,
+                "modified_tracked_files": 0,
+                "untracked_files": 0,
+                "captured_files": 0,
+                "captured_bytes": 0,
+                "status": "clean",
+            }
+        ]
+
+    clean = manifest.load(_write_manifest_payload(tmp_path, payload, "clean.json"))
+    assert clean.findings == ()
+
+    injected_key = "unexpected_from_newer_writer"
+    _holder(payload, level)[injected_key] = "present in the file, absent from the schema"
+    loaded = manifest.load(_write_manifest_payload(tmp_path, payload))
+
+    loader_findings = [f for f in loaded.findings if "loader ignored unknown" in f]
+    assert len(loader_findings) == 1, loaded.findings
+    assert injected_key in loader_findings[0]
+    # Toleration must not manufacture any other finding.
+    assert loaded.findings == tuple(loader_findings)
+
+    # The field is not resurrected by reserialization ...
+    serialized = loaded.to_dict()
+    assert injected_key not in _holder(serialized, level)
+    # ... and forms no part of the semantic claim: the fingerprint of the loaded
+    # record equals the clean load's, because both attest the interpreted content.
+    assert loaded.fingerprint() == clean.fingerprint()
 
 
 # ---------------------------------------------------------------------------

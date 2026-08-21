@@ -171,7 +171,7 @@ A verification framework whose own checks cannot fail would be the thing it exis
 to prevent. So the framework's test infrastructure is part of the claim, and it is
 measured, not asserted:
 
-* **412 tests, 0 skipped**, 93.6% line coverage — and CI is configured to fail on *any*
+* **582 tests, 0 skipped**, 94.2% line coverage — and CI is configured to fail on *any*
   skip at all. How it acquired that policy is the last item in the next section.
 * **A mutation battery** ([`tools/mutate.py`](tools/mutate.py)): 42 rules of the
   contract deliberately broken — one mutant per rule — with the suite required to
@@ -181,6 +181,18 @@ measured, not asserted:
   They were recorded as gaps, then closed by writing the tests that kill them. That
   history is the point — a battery is worth having because it finds survivors, not
   because it reports none.
+* **That 42-of-42 is printed beside a negative control, and it did not used to be.**
+  The table carries a `must_survive` row — a comment-only edit that changes no
+  behaviour, so a sound suite cannot detect it. If the battery reports killing it,
+  the run is voided at exit 2: a harness that can manufacture kills has nothing to
+  say about the ones it printed. This is not decoration. An earlier revision of this
+  repository published `42 killed, 100% caught` from a harness that scored exactly
+  that inert edit as `[killed]` — the meta-tests were driving the battery against the
+  live mutation table, so any mutant that disturbed an anchor was killed on contact
+  regardless of behaviour. A run whose table configures *no* control row now says so
+  in words and exits 2 rather than printing a tally with its negative half missing.
+  The full retraction, with the before-and-after measurement, is in
+  [`docs/SELF_AUDIT.md`](docs/SELF_AUDIT.md) §3.10.
 * **A survivor and an unapplied mutation exit differently from a clean run.** If an
   anchor no longer matches its module, that mutation did not run, and the battery
   exits nonzero rather than counting it as caught. This is not hypothetical either: a
@@ -239,7 +251,7 @@ git clone <this-repository> && cd foundationscale
 # CI now, but on a laptop the suite would simply be quieter and smaller.
 python -m pip install -e ".[checkpoint,dev]"
 
-# 1. The unit and gate suite — 412 tests, 0 skipped. Every skip is named in the
+# 1. The unit and gate suite — 582 tests, 0 skipped. Every skip is named in the
 #    summary with its reason; in CI (FS_FORBID_SKIPS=1) each one fails the build.
 python -m pytest
 
@@ -294,16 +306,18 @@ today.
 
 What is still missing, stated rather than implied:
 
-* **Coverage is 93.6% overall, but it is not evenly earned.** The weakest module is
-  `checkpoint/dcp_meta.py` at 72%, followed by `gates/checkpoint_gates.py` at 91% —
-  and `checkpoint_gates.py` is the module that encodes the incident, so its 9% is the
-  9% that matters most. The enforced floor is a total, which means a well-covered
+* **Coverage is 94.2% overall, but it is not evenly earned.** The weakest module is
+  `checkpoint/dcp_meta.py` at 74%, followed by `gates/checkpoint_gates.py` at 94% —
+  and `checkpoint_gates.py` is the module that encodes the incident, so its 6% is the
+  6% that matters most. The enforced floor is a total, which means a well-covered
   module can subsidise a thin one; per-module floors are not yet in place.
 * **The mutation battery measures the rules someone thought to write down.** 42 of 42
   are killed, which says every listed rule has a test behind it. It says nothing
   about a rule nobody listed, and the table is hand-maintained: if a module is
   refactored, its anchors go stale, and the battery reports that rather than hiding
-  it, but re-deriving them is still manual work.
+  it, but re-deriving them is still manual work. The negative control is likewise
+  *one* row: it proves the harness can still say "no", not that the suite's
+  attribution is sound for every mutant it scored.
 * **No gate has run against a real distributed checkpoint in this repository's CI.**
   The suite writes real checkpoints to disk and reads them back, single-process. The
   audited estate's failures were multi-rank; the shapes are reproduced from the

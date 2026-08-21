@@ -779,6 +779,7 @@ class WeightParityGate(Gate):
         "fact, vacuity blocks, and statistics pass an impossible-value guard"
     )
     events = (Lifecycle.FIRST_SAVE, Lifecycle.SAVE, Lifecycle.EXPORT, Lifecycle.PROMOTE)
+    context_type = ParityGateContext
 
     def check(self, ctx: ParityGateContext) -> GateResult:
         report = compare_sources(

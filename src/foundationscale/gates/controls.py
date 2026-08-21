@@ -15,9 +15,10 @@ This module is the runner. It exists to close two holes that ``verify_controls``
 alone cannot see:
 
 1. **The registry.** Gates self-register at import time. If the gate package is
-   never imported, ``verify_controls()`` iterates an empty registry and returns an
-   empty failure list — "all clear" over nothing, the vacuous pass one level up.
-   ``main()`` populates the registry first and exits 1 if it ends up empty.
+   never imported, the registry is empty and there is nothing to verify —
+   ``verify_controls`` itself now refuses a zero-gate target set, and
+   ``main()`` goes further on the likely cause: it populates the registry
+   first, prints its own "registry is empty" line, and exits 1.
 2. **The import boundary.** A gate module that raises at import time is a gate
    that never registered and therefore never verified anything. That is recorded
    as a failure here rather than allowing a partial registry to look whole.
@@ -33,9 +34,33 @@ import importlib
 import pkgutil
 import sys
 
-from foundationscale.gates.core import REGISTRY, GateRegistry, verify_controls
+from foundationscale.gates.core import REGISTRY, Gate, GateRegistry, verify_controls
 
 _THIS_MODULE = "foundationscale.gates.controls"
+
+_NO_CONTEXT_TYPE_MARKER = "<no context_type declared — legacy untyped dispatch>"
+"""The listing's explicit stand-in when a gate declares no ``context_type``.
+
+The gate listing is the one surface where a human reads the whole gate
+population's dispatch declarations at once, and the doctrine is that coverage
+is a returned fact, never inferred from the absence of a complaint. Printing
+nothing where a declaration is absent would make a forgotten ``context_type``
+visually identical to a deliberately untyped gate — silence-as-evidence,
+inside the doctrine's own enforcement tool.
+"""
+
+
+def _context_type_label(gate: Gate) -> str:
+    """Render one gate's ``context_type`` declaration for the listing.
+
+    The declaration is a ``ClassVar``, so reading it never touches gate-author
+    runtime code (``controls()``, by contrast, can raise). The listing can
+    therefore describe every registered gate, including the ones whose controls
+    it could not run — precisely the gates the listing most needs to show.
+    """
+    if gate.context_type is None:
+        return _NO_CONTEXT_TYPE_MARKER
+    return gate.context_type.__name__
 
 
 def _import_gate_modules() -> tuple[list[str], list[str]]:
@@ -138,6 +163,12 @@ def main() -> int:
     - a gate has no MUST_FIRE control, or one of its controls produced the wrong
       verdict (per :func:`~foundationscale.gates.core.verify_controls`).
 
+    The listing printed before the verification pass states each registered
+    gate's declared :attr:`~foundationscale.gates.core.Gate.context_type`, with
+    an explicit marker where none is declared: how much of the population is
+    typed is a coverage fact, and coverage facts are stated, never implied by a
+    column the reader has to tally by hand.
+
     Exit 0 means every gate was shown, in this process, to be capable of blocking.
     """
     imported, failures = _import_gate_modules()
@@ -150,6 +181,25 @@ def main() -> int:
     for name in imported:
         print(f"  {name}")
     print(f"gates registered: {gate_count}")
+    # Every registered gate's dispatch declaration, sorted for a stable
+    # listing: each line names the declared context_type or carries the
+    # explicit no-declaration marker. An empty cell would let a forgotten
+    # declaration read as a deliberate untyped gate — silence presenting as
+    # consent, inside the tool that exists to refuse exactly that.
+    undeclared = 0
+    for gate in sorted(REGISTRY, key=lambda g: g.id):
+        if gate.context_type is None:
+            undeclared += 1
+        print(f"  {gate.id} — context_type: {_context_type_label(gate)}")
+    if gate_count:
+        # The population denominator for the column above: "7/9 typed" is a
+        # stated fact; a bare column of markers would make the reader count.
+        # Zero gates print no ratio — a 0/0 here would restate the vacuous
+        # pass that the failure below names correctly instead.
+        print(
+            f"  context_type declared: {gate_count - undeclared}/{gate_count} gates; "
+            f"{undeclared} on untyped legacy broadcast"
+        )
     print(f"controls declared: {control_count}")
 
     if gate_count == 0:

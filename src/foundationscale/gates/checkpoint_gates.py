@@ -18,6 +18,23 @@ model as VACUOUS, never as "all identity", and (c) ships fixtures proving it fir
 including the empty-expert-set fixture, which exists solely to prevent the
 detector-itself-silently-passing bug from recurring in this codebase.
 
+Layout coverage on real artifacts
+---------------------------------
+The expert selector sees three PER-EXPERT namings — Megatron local-name shards
+(``...linear_fc[12].weight<i>``; the audited incident), Megatron global names
+(``...experts.42.linear_fc1.weight``) and Mixtral/Qwen ``...experts.<i>.<proj>.weight``
+— plus the STACKED layout that dominates HF MoE (``...experts.gate_up_proj`` /
+``...experts.down_proj`` on Gemma-4; Megatron's fused, suffix-less
+``...linear_fc1.weight`` is the same thing in older spelling). Stacked changes the
+epistemics, measured on a real 48.07 GiB Gemma-4 checkpoint that selected 0 tensors
+under the old Megatron-only selector: per-expert aliasing is *not observable at all*
+from metadata, because N duplicated slices cost exactly the one storage span that N
+distinct slices cost. The distinctness gate therefore verifies everything stacking
+still permits (leading dims, cross-layer span sharing, sibling byte ratios) and then
+ABSTAINS with a stated reason rather than passing; the byte-volume gate, by contrast,
+prices stacked layouts exactly and reaches a real verdict. Expert-ish names matching
+none of these families block as an unrecognized layout — never read as a dense model.
+
 Context protocol
 ----------------
 Gates consume :class:`CheckpointGateContext`. At runtime it is built from an on-disk
@@ -36,9 +53,10 @@ import math
 import os
 import re
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from .core import (
     Control,
@@ -50,6 +68,9 @@ from .core import (
     Verdict,
     register,
 )
+
+if TYPE_CHECKING:
+    from foundationscale.provenance.manifest import DeclaredCheckpoint
 
 __all__ = [
     "TensorMeta",
@@ -79,6 +100,23 @@ _DTYPE_BYTES: dict[str, int] = {
 _EXPERT_WEIGHT_RE = re.compile(r".*experts.*linear_fc[12]\.weight\d*$")
 _SHARD_SUFFIX_RE = re.compile(r"^(?P<stem>.*linear_fc[12]\.weight)(?P<idx>\d+)$")
 
+# Per-expert family B — each expert is its own FQN carrying the global expert index
+# as a dotted path segment:
+#   ...block_sparse_moe.experts.0.w1.weight      (Mixtral)
+#   ...mlp.experts.0.gate_proj.weight            (Qwen-MoE)
+# Megatron's global spelling (...experts.42.linear_fc1.weight) also lands here.
+_PER_EXPERT_MEMBER_RE = re.compile(
+    r"^(?P<prefix>.*\.experts\.)(?P<idx>\d+)\.(?P<suffix>[A-Za-z]\w*(?:\.\w+)*)$"
+)
+
+# STACKED family — every expert of a layer inside ONE tensor on dim 0, hence one
+# storage span, so per-expert identity inside it is metadata-invisible:
+#   model.language_model.layers.3.experts.down_proj      (128, 2816, 704)  (Gemma-4)
+#   ...mlp.experts.gate_up_proj.weight                                    (GPT-OSS)
+# Megatron's fused ...linear_fc[12].weight matches _EXPERT_WEIGHT_RE first and is the
+# same stacked epistemology under an older name; the classifier folds it in.
+_STACKED_WEIGHT_RE = re.compile(r".*\.experts\.[a-z0-9_]*?(?:proj|fc\d)(?:_bias|\.bias|\.weight)?$")
+
 
 @dataclass(frozen=True)
 class TensorMeta:
@@ -100,7 +138,16 @@ class TensorMeta:
     kind: str = "tensor"  # "tensor" | "extra_state"
 
     @property
-    def nbytes(self) -> int:
+    def implied_nbytes(self) -> int:
+        """Bytes this FQN *claims* to occupy, computed from shape and dtype alone.
+
+        This is metadata-implied, not measured: 128 aliased FQNs each imply their
+        own bytes while naming one underlying storage, so summing this per FQN
+        prices the count-correct variant of the aliasing incident at exactly the
+        declared volume. Physical accounting lives in :func:`_distinct_storage_bytes`,
+        which prices each storage identity once; only a reader-supplied storage
+        map can do better.
+        """
         return math.prod(self.shape) * _DTYPE_BYTES.get(self.dtype, 4)
 
 
@@ -120,9 +167,19 @@ class CheckpointGateContext:
     num_moe_layers: int | None
     expected_expert_bytes: int | None
     origin: str
+    expert_storage_bytes: int | None = None
+    """Physical expert bytes measured from the reader's storage map, when it can
+    supply one; ``None`` means the byte gate must fall back to per-FQN implied
+    bytes and say so in its PASS. Preferred over the implied sum wherever it
+    exists — it is the one number aliasing cannot inflate."""
 
     @classmethod
-    def from_path(cls, path: str | os.PathLike[str]) -> CheckpointGateContext:
+    def from_path(
+        cls,
+        path: str | os.PathLike[str],
+        *,
+        declared: DeclaredCheckpoint | None = None,
+    ) -> CheckpointGateContext:
         """Build a context from an on-disk checkpoint.
 
         Lazily imports ``foundationscale.checkpoint`` so this package imports
@@ -130,8 +187,16 @@ class CheckpointGateContext:
         returns an object with ``.tensors: Mapping[str, TensorStorageMeta]`` where
         each meta has ``.shape``/``.dtype`` and optionally ``.storage_id`` /
         ``.is_extra_state``; ``load_manifest`` returns the run manifest (or
-        ``None``) optionally carrying ``declared_fqns``, ``num_experts``,
-        ``num_moe_layers`` and ``expected_expert_bytes``.
+        ``None``). The four denominators the gates adjudicate come from the
+        manifest's ``declared`` block (a ``DeclaredCheckpoint`` produced at
+        launch); adapters written before the block existed may instead expose
+        ``declared_fqns``, ``num_experts``, ``num_moe_layers`` and
+        ``expected_expert_bytes`` as flat attributes. ``read_metadata`` may
+        additionally expose ``.expert_storage_bytes`` — expert bytes measured
+        from the reader's storage map.
+
+        An explicit ``declared`` argument overrides the manifest's block, for
+        callers that resolved the denominators separately from manifest storage.
         """
         from foundationscale import checkpoint as fsckpt  # lazy: torch-backed
 
@@ -151,15 +216,46 @@ class CheckpointGateContext:
             )
             for fqn, tm in meta.tensors.items()
         )
+
+        block = declared if declared is not None else getattr(manifest, "declared", None)
+        if block is not None:
+            # An empty declared_fqns list inside a block normalizes to None: the
+            # block says "no list was captured", and completeness must abstain,
+            # not pass "all 0 declared tensors present".
+            declared_fqns = tuple(block.declared_fqns) or None
+            num_experts = block.num_experts
+            num_moe_layers = block.num_moe_layers
+            expected_expert_bytes = block.expected_expert_bytes
+        else:
+            # Pre-DeclaredCheckpoint adapters carry flat attributes. Absent
+            # attributes must become None here — defaulting to an empty tuple
+            # would hand the completeness gate a zero-length denominator it
+            # auto-satisfies.
+            flat_fqns = getattr(manifest, "declared_fqns", None)
+            declared_fqns = None if flat_fqns is None else (tuple(flat_fqns) or None)
+            num_experts = getattr(manifest, "num_experts", None)
+            num_moe_layers = getattr(manifest, "num_moe_layers", None)
+            expected_expert_bytes = getattr(manifest, "expected_expert_bytes", None)
+
+        expert_storage_bytes = getattr(meta, "expert_storage_bytes", None)
+        if expert_storage_bytes is None:
+            # Recognized layouts only: an unrecognized expert-ish name must not
+            # pollute the physical sum any more than it would the implied one.
+            expert_tensors = [
+                t for t in tensors if _is_real_tensor(t) and _matches_expert_family(t.fqn)
+            ]
+            if expert_tensors:
+                physical, storage_complete = _distinct_storage_bytes(expert_tensors)
+                if storage_complete:
+                    expert_storage_bytes = physical
         return cls(
             tensors=tensors,
-            declared_fqns=(tuple(getattr(manifest, "declared_fqns", ())) if manifest else None),
-            num_experts=getattr(manifest, "num_experts", None) if manifest else None,
-            num_moe_layers=(getattr(manifest, "num_moe_layers", None) if manifest else None),
-            expected_expert_bytes=(
-                getattr(manifest, "expected_expert_bytes", None) if manifest else None
-            ),
+            declared_fqns=declared_fqns,
+            num_experts=num_experts,
+            num_moe_layers=num_moe_layers,
+            expected_expert_bytes=expected_expert_bytes,
             origin=os.fspath(path),
+            expert_storage_bytes=expert_storage_bytes,
         )
 
 
@@ -177,6 +273,7 @@ def _coerce(ctx: Any) -> CheckpointGateContext:
             num_moe_layers=getattr(ctx, "num_moe_layers", None),
             expected_expert_bytes=getattr(ctx, "expected_expert_bytes", None),
             origin=getattr(ctx, "origin", repr(ctx)),
+            expert_storage_bytes=getattr(ctx, "expert_storage_bytes", None),
         )
     raise TypeError(
         f"checkpoint gates need a CheckpointGateContext or path, got {type(ctx).__name__}"
@@ -188,23 +285,202 @@ def _is_real_tensor(t: TensorMeta) -> bool:
     return t.kind == "tensor" and "_extra_state" not in t.fqn
 
 
+def _expert_named(fqn: str) -> bool:
+    """Cheap broad net: does the FQN carry an ``expert``/``experts`` path segment?
+
+    Segment-exact on purpose: a substring test would pull in names that merely
+    mention experts, like Gemma's ``router.per_expert_scale`` (a per-expert SCALING
+    vector, not an expert weight), and classifying those as expert failures would
+    accuse clean artifacts. Weird hyphenated names like ``fooexperts.bar`` are
+    caught by :func:`_matches_expert_family` below instead.
+    """
+    return any(seg in {"expert", "experts"} for seg in fqn.lower().split("."))
+
+
+def _matches_expert_family(fqn: str) -> bool:
+    """True when the name is an expert weight in any layout this module can verify."""
+    return bool(
+        _EXPERT_WEIGHT_RE.match(fqn)
+        or _PER_EXPERT_MEMBER_RE.match(fqn)
+        or _STACKED_WEIGHT_RE.match(fqn)
+    )
+
+
 def _expert_weights(ctx: CheckpointGateContext) -> list[TensorMeta]:
-    return [t for t in ctx.tensors if _is_real_tensor(t) and _EXPERT_WEIGHT_RE.match(t.fqn)]
+    """Recognized-layout expert weights — the set byte accounting may safely price."""
+    return [t for t in ctx.tensors if _is_real_tensor(t) and _matches_expert_family(t.fqn)]
 
 
-def _split_layout(
-    experts: list[TensorMeta],
-) -> tuple[list[TensorMeta], dict[str, list[TensorMeta]]]:
-    """Split expert weights into fused tensors and per-stem shard groups."""
-    fused: list[TensorMeta] = []
-    shards: dict[str, list[TensorMeta]] = defaultdict(list)
+def _expert_weight_candidates(tensors: Sequence[TensorMeta]) -> Sequence[TensorMeta]:
+    """All real tensors that look expert-related, recognized layout or not.
+
+    Selecting wider than :func:`_expert_weights` is the point: the unrecognized
+    tail must surface as a named, blocking UNKNOWN-layout verdict instead of an
+    invisible zero selection.
+    """
+    return [
+        t
+        for t in tensors
+        if _is_real_tensor(t) and (_expert_named(t.fqn) or _matches_expert_family(t.fqn))
+    ]
+
+
+def _distinct_storage_bytes(experts: list[TensorMeta]) -> tuple[int, bool]:
+    """Sum bytes over *distinct physical storages*, not over FQNs.
+
+    One ``implied_nbytes`` is counted per distinct storage identity, so 128
+    right-shaped FQNs aliased to one storage price that storage once — the
+    count-correct variant of the incident, which per-FQN summation cannot see.
+
+    Returns ``(physical_bytes, complete)``. ``complete`` is True only when every
+    tensor carried a storage identity; tensors without one fall back to their
+    FQN as the key (unique by construction), which prices each unidentifiable
+    name as its own storage and marks the result incomplete — honest about
+    being per-FQN accounting under another name.
+    """
+    seen: dict[str, int] = {}
+    complete = True
     for t in experts:
+        if t.storage_id is None:
+            complete = False
+            key = t.fqn
+        else:
+            key = t.storage_id
+        if key not in seen:
+            seen[key] = t.implied_nbytes
+    return sum(seen.values()), complete
+
+
+def _split_expert_layouts(
+    candidates: Sequence[TensorMeta],
+) -> tuple[dict[str, list[TensorMeta]], list[TensorMeta], list[TensorMeta]]:
+    """Classify expert-named tensors into shard groups, stacked tensors, and the tail.
+
+    * Per-expert shard groups: Megatron local-name shards (``...linear_fc1.weight7``)
+      AND the Mixtral/Qwen/Megatron-global form ``...experts.<i>.<proj>.weight``.
+      The group key is the shared stem with the index slot marked ``<i>``, so every
+      stem's members can be counted against the declared expert count and checked
+      for within-stem storage aliasing, exactly as the incident detector did.
+    * Stacked: one tensor holds the whole layer's experts on dim 0 (HF
+      ``...experts.gate_up_proj`` / Megatron's fused ``...linear_fc[12].weight``).
+      One FQN, one storage span: per-expert identity inside it is invisible here.
+    * Unknown: expert-named but matching no family. Returned separately so callers
+      fail closed on it; an unrecognized MoE layout is not a dense model.
+    """
+    shard_groups: dict[str, list[TensorMeta]] = defaultdict(list)
+    stacked: list[TensorMeta] = []
+    unknown: list[TensorMeta] = []
+    for t in candidates:
         m = _SHARD_SUFFIX_RE.match(t.fqn)
         if m:
-            shards[m.group("stem")].append(t)
-        else:
-            fused.append(t)
-    return fused, shards
+            shard_groups[f"{m.group('stem')}<i>"].append(t)
+            continue
+        m = _PER_EXPERT_MEMBER_RE.match(t.fqn)
+        if m:
+            shard_groups[f"{m.group('prefix')}<i>.{m.group('suffix')}"].append(t)
+            continue
+        if _EXPERT_WEIGHT_RE.match(t.fqn) or _STACKED_WEIGHT_RE.match(t.fqn):
+            stacked.append(t)
+            continue
+        unknown.append(t)
+    return dict(shard_groups), stacked, unknown
+
+
+def _layer_normalized_stem(fqn: str) -> str:
+    """Blank per-layer index segments so a projection's cross-layer siblings group.
+
+    ``model.language_model.layers.3.experts.down_proj`` and ``...layers.7...`` map
+    to one stem; indices embedded INSIDE a segment (``fc1``, ``w2``) stay put.
+    """
+    return ".".join("{}" if seg.isdigit() else seg for seg in fqn.split("."))
+
+
+def _stacked_layout_problems(
+    stacked: Sequence[TensorMeta],
+    num_experts: int | None,
+) -> tuple[list[str], list[str]]:
+    """Everything metadata can still check on a stacked MoE layout.
+
+    Three signatures, each a stacked-layout form of the incident:
+      * a leading dim that is not the declared expert count — only a fraction of
+        the layer's experts actually made it to storage;
+      * one projection pricing a fraction of its siblings across layers (1/E of
+        the bytes) — the same defect seen bottom-up, no declared denominator
+        required;
+      * two stacked tensors in different layers sharing one storage span — the
+        ONLY aliasing signature that survives stacking, since each tensor is one
+        span by construction.
+
+    Returns ``(problems, offender_fqns)``. Anything NOT caught here is not "fine";
+    per-expert slice identity inside a stacked tensor is simply unobservable from
+    metadata, and the caller's verdict wording owns that distinction — it must
+    abstain from claiming distinctness, never upgrade this list's quietness into
+    proof of it.
+    """
+    problems: list[str] = []
+    offenders: list[str] = []
+
+    for t in stacked:
+        if num_experts and (not t.shape or t.shape[0] != num_experts):
+            problems.append(
+                f"{t.fqn}: stacked expert tensor's leading dim "
+                f"{t.shape[0] if t.shape else '?'} != declared experts {num_experts} — "
+                "the stacked form of the local-name save: only a fraction of the "
+                "layer's experts was stored"
+            )
+            offenders.append(t.fqn)
+
+    # Sibling projections across layers must agree in shape and dtype: layer 3's
+    # down_proj at 1/E of the bytes of every other layer's down_proj is the
+    # local-name save signature without any declared denominator.
+    siblings: dict[str, list[TensorMeta]] = defaultdict(list)
+    for t in stacked:
+        siblings[_layer_normalized_stem(t.fqn)].append(t)
+    for stem, members in sorted(siblings.items()):
+        shapes: dict[tuple[tuple[int, ...], str], list[TensorMeta]] = defaultdict(list)
+        for t in members:
+            shapes[(t.shape, t.dtype)].append(t)
+        if len(shapes) <= 1:
+            continue
+        # On ties prefer the larger leading dim as the norm, so an underfilled
+        # minority tensor can never become the reference its siblings are accused of.
+        consistent = max(
+            shapes.values(),
+            key=lambda ts: (len(ts), ts[0].shape[0] if ts[0].shape else 0),
+        )
+        norm_shape = consistent[0].shape
+        norm_dtype = consistent[0].dtype
+        norm_bytes = consistent[0].implied_nbytes
+        for (shape, _dtype), ts in shapes.items():
+            if ts is consistent:
+                continue
+            for t in ts:
+                problems.append(
+                    f"{t.fqn}: shape {shape} implies {t.implied_nbytes:,} bytes, but "
+                    f"{len(consistent)} other layer(s) of {stem} are {norm_shape} "
+                    f"{norm_dtype} ({norm_bytes:,} bytes, ratio "
+                    f"{t.implied_nbytes / norm_bytes:.3f}) — a stacked tensor holding "
+                    "a fraction of its sibling projections is the stacked-layout "
+                    "form of the 16-of-128 save"
+                )
+                offenders.append(t.fqn)
+
+    # Whole-tensor aliasing: two FQNs priced over one span. Tensors without storage
+    # identity cannot be compared at all; the abstention wording records that gap.
+    spans: dict[str, list[TensorMeta]] = defaultdict(list)
+    for t in stacked:
+        if t.storage_id is not None:
+            spans[t.storage_id].append(t)
+    for span_members in spans.values():
+        if len(span_members) > 1:
+            fqns = sorted(t.fqn for t in span_members)
+            problems.append(
+                f"{len(fqns)} stacked expert tensors in different layers share one "
+                f"storage span ({fqns[0]} .. {fqns[-1]}): whole-tensor aliasing — "
+                "the one aliasing signature that survives stacking"
+            )
+            offenders.extend(fqns[:4])
+    return problems, offenders
 
 
 def _declared_tensor_count(ctx: CheckpointGateContext, *, sharded: bool) -> int | None:
@@ -221,20 +497,63 @@ def _declared_tensor_count(ctx: CheckpointGateContext, *, sharded: bool) -> int 
 
 @register
 class ExpertDistinctnessGate(Gate):
-    """Catches 128 experts collapsed to 16 by a local-name save.
+    """Catches expert-count and expert-identity save corruption from metadata alone.
 
-    Two signatures, both present in the real incident and checked independently:
+    PER-EXPERT layouts — one FQN per expert, each with its own storage span:
+    Megatron local-name shards (``...linear_fc1.weight0`` .. ``weight15``, the
+    incident), Megatron global names (``...experts.42.linear_fc1.weight``), Mixtral
+    (``...block_sparse_moe.experts.0.w1.weight``), Qwen-MoE
+    (``...mlp.experts.0.gate_proj.weight``). This is the layout the gate was built
+    for, and its two incident signatures are checked there exactly as they always
+    were:
 
-    1. *Count*: a sharded layout stores one tensor per expert. 16 on disk against 128
-       declared is not "checkpoint format variation"; it is 87.5% of the experts
+    1. *Count*: a per-expert layout stores one tensor per expert. 16 on disk against
+       128 declared is not "checkpoint format variation"; it is 87.5% of the experts
        missing, overwritten in place as each rank wrote its local ``weight0..15``.
     2. *Aliasing*: distinct FQNs sharing one ``storage_id`` are one tensor. If the
        count ever looks right again (a more subtle version of the same bug), this is
        the check that still fires.
 
+    STACKED layouts — every expert of a layer inside ONE tensor on dim 0, hence ONE
+    storage span: HF's dominant MoE form (``...experts.down_proj`` on Gemma-4,
+    ``...mlp.experts.gate_up_proj.weight`` on GPT-OSS), and Megatron's fused
+    ``...linear_fc[12].weight``, which is the same layout in older spelling. The
+    premise "N expert FQNs map to N storage spans" is void here. What metadata CAN
+    still see, this gate still checks and still fails on (see
+    :func:`_stacked_layout_problems`): a leading dim that is not the declared
+    count, a tensor pricing a fraction of its sibling projections across layers,
+    and two stacked tensors in different layers on one storage span.
+
+    What metadata can NEVER see under a stacked layout is the incident itself: E
+    duplicated expert-slices occupy exactly the storage span of E distinct ones.
+    So the no-defect stacked outcome is an explicit SKIP, never a PASS. Justification
+    against doctrine point (5): a claim broader than its evidence is a defect even
+    when the code is correct, and an honest, specific abstention is a first-class
+    correct outcome strictly better than a check that pretends. The gate examined
+    everything metadata can show on every stacked tensor, found nothing, and still
+    does not know whether the experts are distinct — so it says precisely that,
+    naming the layout, the tensor count, the claimed expert count, and the evidence
+    that WOULD settle it (a data-level per-slice hash comparison, which is a tensor
+    read this gate deliberately never performs). A FAIL would be false here (nothing
+    wrong was found); a PASS would pretend (distinctness is unproven). The composite
+    first-save gate counts only verified properties, so on metadata alone a stacked
+    checkpoint's distinctness is reported "not established" there — blocked for a
+    true reason instead of silently credited.
+
+    UNKNOWN layout: expert-named tensors matching no family above BLOCK. An
+    unrecognised MoE layout is not a dense model, and fail-closed beats guessing.
+
+    MIXED layout: per-expert shards and stacked tensors coexisting in one
+    checkpoint block as their own named verdict. Neither family's denominator is
+    defined over the mixture, and layout metadata cannot tell a legitimately
+    heterogeneous model (dense-MoE blocks beside stacked-MoE blocks) from a
+    half-converted checkpoint in which one family is a leftover — so the gate
+    refuses rather than folding unexamined tensors into any verified count.
+
     The empty-expert-set control is load-bearing: on a declared-MoE model, finding
-    zero expert tensors must be VACUOUS, because "no mismatches found" is what
-    ``all([])`` reported on the corrupt artifact for months.
+    zero expert tensors under ANY recognized layout must be VACUOUS, because "no
+    mismatches found" is what ``all([])`` reported on the corrupt artifact for
+    months.
     """
 
     id: ClassVar[str] = "checkpoint.expert_distinctness"
@@ -243,12 +562,27 @@ class ExpertDistinctnessGate(Gate):
         "distinct storage — the 128-experts-aliased-to-16 incident"
     )
     events: ClassVar[tuple[Lifecycle, ...]] = (Lifecycle.FIRST_SAVE, Lifecycle.SAVE)
+    context_type: ClassVar[type | None] = CheckpointGateContext
+
+    def coerce_context(self, ctx: Any) -> CheckpointGateContext | None:
+        """The module adapter (:func:`_coerce`) promoted to the dispatch contract.
+
+        Paths and ``.tensors``-shaped objects still adapt, exactly as they did when
+        the coercion lived only at the top of :meth:`check`; anything this gate
+        does not recognise returns ``None`` so a typed sweep reports it unwired
+        instead of dying on a TypeError one frame down.
+        """
+        try:
+            return _coerce(ctx)
+        except TypeError:
+            return None
 
     def check(self, ctx: Any) -> GateResult:
         c = _coerce(ctx)
-        experts = _expert_weights(c)
+        candidates = _expert_weight_candidates(c.tensors)
+        shard_groups, stacked, unknown = _split_expert_layouts(candidates)
 
-        if not experts:
+        if not candidates:
             if not c.num_experts:
                 return self.skip("context declares no experts and none are present (dense model)")
             # A MoE model whose checkpoint has zero expert tensors has not "passed an
@@ -261,41 +595,129 @@ class ExpertDistinctnessGate(Gate):
                 evidence={"origin": c.origin},
             )
 
-        fused, shards = _split_layout(experts)
+        examined = len(stacked) + sum(len(members) for members in shard_groups.values())
+
         problems: list[str] = []
         offenders: list[str] = []
 
-        for t in fused:
-            if c.num_experts and (not t.shape or t.shape[0] != c.num_experts):
-                problems.append(
-                    f"{t.fqn}: fused leading dim "
-                    f"{t.shape[0] if t.shape else '?'} != declared experts {c.num_experts}"
-                )
-                offenders.append(t.fqn)
-
-        for stem, members in sorted(shards.items()):
+        # Per-expert shard groups — the incident family, checked exactly as it always
+        # was: declared-count per stem, then storage aliasing within the stem.
+        for stem, members in sorted(shard_groups.items()):
             if c.num_experts and len(members) != c.num_experts:
                 problems.append(
-                    f"{stem}<i>: {len(members)} expert shards on disk, config declares "
+                    f"{stem}: {len(members)} expert shards on disk, config declares "
                     f"{c.num_experts} — the local-name save signature (16 of 128)"
                 )
                 offenders.extend(t.fqn for t in members[:4])
             # storage_id unknown -> fall back to the FQN, which is unique by
-            # construction; aliasing is then simply undetectable from metadata, and
-            # the byte-volume gate remains the coarse net.
+            # construction; aliasing is then undetectable from this metadata, and
+            # the PASS wording below must not claim a distinctness it never
+            # examined — the storage_identity flag governs that. The byte-volume
+            # gate prices physical storage whenever identity exists.
             storages = {t.storage_id if t.storage_id is not None else t.fqn for t in members}
             if len(storages) < len(members):
                 problems.append(
-                    f"{stem}<i>: {len(members)} expert FQNs share {len(storages)} "
+                    f"{stem}: {len(members)} expert FQNs share {len(storages)} "
                     f"distinct storages — experts are aliased to the same bytes"
                 )
                 offenders.extend(t.fqn for t in members[:4])
 
-        coverage = Coverage(
-            checked=len(experts),
-            unit="expert tensors",
-            expected=_declared_tensor_count(c, sharded=bool(shards)),
+        storage_identity = bool(shard_groups) and all(
+            t.storage_id is not None for members in shard_groups.values() for t in members
         )
+
+        stacked_problems, stacked_offenders = _stacked_layout_problems(stacked, c.num_experts)
+        problems.extend(stacked_problems)
+        offenders.extend(stacked_offenders)
+
+        if shard_groups and stacked:
+            # Both families are non-empty, so each per-family check above ran over
+            # its own subset under a full-sounding denominator: the composite of
+            # two partial verifications is not a verification of the checkpoint as
+            # a whole. The mixture is a defect of evidence, not of values — block
+            # on it directly, with the per-family findings kept as evidence.
+            shard_count = sum(len(members) for members in shard_groups.values())
+            # An unrecognized tail is reachable here — MIXED is decided before the
+            # UNKNOWN refusal below, so without this clause the detail would
+            # describe a two-family checkpoint while a third population sat in
+            # the evidence dict, unmentioned in the sentence an operator reads.
+            unknown_note = (
+                ""
+                if not unknown
+                else (
+                    f" A further {len(unknown)} expert-named tensor(s) match no "
+                    f"recognized layout at all (first: {unknown[0].fqn}) and are "
+                    "outside both denominators."
+                )
+            )
+            return self.fail(
+                f"MIXED expert layout: {shard_count} per-expert shard tensor(s) in "
+                f"{len(shard_groups)} group(s) coexist with {len(stacked)} stacked "
+                f"expert tensor(s) (first stacked: {stacked[0].fqn}; first shard "
+                f"group: {sorted(shard_groups)[0]}), and the mixture itself is the "
+                "defect: metadata cannot tell a legitimately heterogeneous model "
+                "(dense-MoE blocks beside stacked-MoE blocks) from a half-converted "
+                "checkpoint in which one family is a leftover, and getting that "
+                "wrong in either direction silently changes the denominators — "
+                "unexamined tensors fold into a verified count, or leftover "
+                "storages are priced and verified twice. What would settle it: an "
+                "explicit declared layout in the run manifest, or a per-layer "
+                "expected-layout map. Refusing to pass over the ambiguity." + unknown_note,
+                Coverage(checked=examined + len(unknown), unit="expert tensors"),
+                evidence={
+                    "per_expert_tensor_count": shard_count,
+                    "per_expert_groups": sorted(shard_groups)[:8],
+                    "stacked_tensor_count": len(stacked),
+                    "stacked_fqns": [t.fqn for t in stacked[:8]],
+                    "unrecognized_fqns": [t.fqn for t in unknown[:8]],
+                    "recognized_problems": problems[:16],
+                    "would_settle": (
+                        "a manifest-declared expert layout, or a per-layer expected-layout map"
+                    ),
+                    "origin": c.origin,
+                },
+            )
+
+        if unknown:
+            # Fail closed on the names themselves: an unrecognized MoE layout is
+            # not a dense model. What the recognized half already established is
+            # kept as evidence, not merged into the verdict.
+            return self.fail(
+                f"{len(unknown)} expert-named tensor(s) match no recognized MoE "
+                f"layout (first: {unknown[0].fqn}); an unrecognized expert layout "
+                "cannot be verified from metadata and is not a dense model — "
+                "refusing to pass over it",
+                Coverage(checked=examined + len(unknown), unit="expert tensors"),
+                evidence={
+                    "unrecognized_fqns": [t.fqn for t in unknown[:8]],
+                    "recognized_problems": problems[:16],
+                    "origin": c.origin,
+                },
+            )
+
+        if stacked:
+            # No honest single denominator exists: a pure stacked checkpoint's
+            # manifest declares experts and layers, not tensor counts, and a mixed
+            # layout has no one per-tensor count. checked is real (every matched
+            # tensor was examined); expected stays None rather than being fabricated.
+            coverage = Coverage(checked=examined, unit="expert tensors")
+        elif not storage_identity:
+            # The aliasing half of this gate compared unique names, not bytes.
+            # The coverage record carries the degraded basis so a downstream
+            # reader cannot confuse this PASS with "distinct storage verified".
+            coverage = Coverage(
+                checked=examined,
+                unit="expert tensors",
+                expected=_declared_tensor_count(c, sharded=True),
+                sampled=True,
+                sample_reason="no storage identity",
+            )
+        else:
+            coverage = Coverage(
+                checked=examined,
+                unit="expert tensors",
+                expected=_declared_tensor_count(c, sharded=True),
+            )
         if problems:
             return self.fail(
                 problems[0] + (f" (+{len(problems) - 1} more)" if len(problems) > 1 else ""),
@@ -306,33 +728,108 @@ class ExpertDistinctnessGate(Gate):
                     "origin": c.origin,
                 },
             )
-        layout = "fused" if fused and not shards else "sharded"
-        # Claim only what this branch actually checked: per-stem storage aliasing is
-        # verified only when shards exist, and a declared count exists only when the
-        # manifest supplied one.
-        if c.num_experts and shards:
+        if stacked:
+            return self._stacked_abstention(c, stacked, shard_groups, storage_identity, coverage)
+        # Only per-expert shards remain: the gate's original claims, unchanged,
+        # with the layout fixed in prose.
+        if c.num_experts and storage_identity:
             detail = (
                 f"expert shard counts match the declared {c.num_experts} experts and "
-                f"every shard group occupies distinct storage ({layout})"
+                f"every shard group occupies distinct storage (sharded)"
             )
         elif c.num_experts:
             detail = (
-                f"expert weights match the declared {c.num_experts}-expert shape "
-                f"({layout}; fused tensors carry no per-expert storages to compare)"
-            )
-        elif shards:
-            detail = (
-                "expert shard storages are distinct within every group, but no expert "
-                "count was declared — presence at the declared count could not be "
-                f"verified ({layout})"
+                f"expert shard counts match the declared {c.num_experts} experts, but "
+                f"storage distinctness could not be examined: the metadata carries "
+                f"no storage identity for these shards, so aliasing to shared bytes "
+                f"cannot be excluded (sharded)"
             )
         else:
             detail = (
-                "expert tensors are present, but the context declares no expert count "
-                "and the layout is fused, so neither count nor storage distinctness "
-                f"was verifiable here ({layout})"
+                "expert shard storages are distinct within every group, but no expert "
+                "count was declared — presence at the declared count could not be "
+                "verified (sharded)"
             )
         return self.ok(detail, coverage)
+
+    def _stacked_abstention(
+        self,
+        c: CheckpointGateContext,
+        stacked: Sequence[TensorMeta],
+        shard_groups: dict[str, list[TensorMeta]],
+        storage_identity: bool,
+        coverage: Coverage,
+    ) -> GateResult:
+        """The clean-stacked verdict: an explicit, fully reasoned SKIP, never a PASS.
+
+        ``ok()`` cannot express this outcome — PASS would claim a property the gate
+        cannot examine, and its UNDERCOVERED downgrade would describe the gap as
+        under-sampling when it is actually physics. ``skip()`` would discard the
+        coverage record of the 60-odd tensors that genuinely WERE examined. This
+        goes through ``_result`` — the same mechanism the framework itself uses for
+        framework-level abstentions — so the SKIP keeps the true examined count,
+        with the complete reasoning carried in the detail string and evidence.
+        """
+        checked_claims: list[str] = []
+        if c.num_experts:
+            checked_claims.append(
+                f"all {len(stacked)} leading dims equal the declared {c.num_experts} experts"
+            )
+        else:
+            checked_claims.append("no declared expert count, so leading dims were unchecked")
+        nameless = [t for t in stacked if t.storage_id is None]
+        if nameless:
+            checked_claims.append(
+                f"{len(nameless)} of {len(stacked)} stacked tensors carry no storage "
+                "identity, so even cross-tensor span aliasing could not be fully examined"
+            )
+        else:
+            checked_claims.append(
+                f"all {len(stacked)} stacked storage spans are distinct across layers "
+                "and projections"
+            )
+        checked_claims.append("sibling projections price consistently across layers")
+
+        shard_note = ""
+        if shard_groups:
+            sharded_examined = sum(len(m) for m in shard_groups.values())
+            basis = "count and storage" if storage_identity else "count only (no storage identity)"
+            shard_note = (
+                f"; the {sharded_examined} per-expert shard(s) also present were "
+                f"verified by {basis}"
+            )
+        logical_experts = (
+            c.num_experts * c.num_moe_layers if c.num_experts and c.num_moe_layers else None
+        )
+        return self._result(
+            Verdict.SKIP,
+            coverage,
+            detail=(
+                f"STACKED MoE layout: {len(stacked)} expert tensor(s) each hold an "
+                f"entire layer's experts on leading dim 0 (first: {stacked[0].fqn})"
+                f"{shard_note}. Everything checkpoint metadata can show WAS checked — "
+                + "; ".join(checked_claims)
+                + " — and showed nothing wrong. Per-expert identity INSIDE a stacked "
+                "tensor is unobservable from metadata by construction: N duplicated "
+                "slices occupy exactly the one storage span that N distinct slices "
+                "would, so this gate does not know whether the experts are distinct "
+                "and ABSTAINS instead of claiming it (an honest, specific abstention "
+                "is a first-class correct outcome; a PASS here would be a claim "
+                "broader than its evidence). What would settle it: a data-level "
+                "per-slice comparison (hash every expert slice within each stacked "
+                "tensor) — a tensor read this gate deliberately never performs."
+            ),
+            evidence={
+                "layout": "stacked",
+                "stacked_tensor_count": len(stacked),
+                "stacked_fqns": [t.fqn for t in stacked[:8]],
+                "declared_experts": c.num_experts,
+                "logical_experts_claimed": logical_experts,
+                "per_expert_identity": "unobservable-from-metadata",
+                "would_settle": "data-level per-slice hash of each expert slice",
+                "origin": c.origin,
+            },
+        )
 
     def controls(self) -> list[Control]:
         from . import fixtures as fx
@@ -357,10 +854,53 @@ class ExpertDistinctnessGate(Gate):
                 note="shard count matches but FQNs share storages (count check alone is blind)",
             ),
             Control(
+                "healthy-sharded",
+                ControlKind.MUST_PASS,
+                fx.healthy_sharded_moe_ctx,
+                note="per-expert FQNs with distinct storage — the only family in "
+                "which distinctness can fully verify",
+            ),
+            Control(
+                "stacked-clean",
+                ControlKind.MUST_PASS,
+                fx.stacked_hf_moe_ctx,
+                note="clean Gemma-style stacked layout: expect an explicit SKIP "
+                "abstention — non-blocking, and never a 'distinct' claim",
+            ),
+            Control(
+                "stacked-cross-layer-alias",
+                ControlKind.MUST_FIRE,
+                fx.stacked_aliased_layers_ctx,
+                note="two stacked tensors in different layers on one storage span — "
+                "the only aliasing metadata can still see",
+            ),
+            Control(
+                "stacked-a-fraction-of-experts",
+                ControlKind.MUST_FIRE,
+                fx.stacked_underfilled_ctx,
+                note="one stacked tensor at 1/8 of the declared expert count — the "
+                "incident ratio in stacked clothing",
+            ),
+            Control(
+                "unknown-expert-layout",
+                ControlKind.MUST_FIRE,
+                fx.unknown_expert_layout_ctx,
+                note="expert-named tensors matching no layout family must block — "
+                "an unrecognized MoE layout is not a dense model",
+            ),
+            Control(
+                "mixed-expert-layout",
+                ControlKind.MUST_FIRE,
+                fx.mixed_expert_layout_ctx,
+                note="per-expert shards beside stacked tensors: the mixture has no "
+                "honest single denominator and must block as its own named verdict",
+            ),
+            Control(
                 "healthy-fused",
                 ControlKind.MUST_PASS,
                 fx.healthy_fused_moe_ctx,
-                note="one fused (experts, in, out) tensor per weight per layer",
+                note="legacy Megatron fused names are the same stacked epistemology "
+                "under an older name — now expect the stated SKIP abstention",
             ),
         ]
 
@@ -372,9 +912,26 @@ class ExpertByteVolumeGate(Gate):
     The real bug's signature was 5.71 GB on disk where 45.70 GB was correct — an
     exact 1/8 ratio, catchable in milliseconds from DCP metadata alone, without
     reading a single tensor. This gate exists so that even if every semantic check
-    were bypassed, the bytes themselves disagree. A byte deficit of >=1% fails;
-    overage is not flagged here (padding/optimizer states make it ambiguous) — that
-    is distinctness' job.
+    were bypassed, the bytes themselves disagree.
+
+    Bytes are priced over *distinct storage*, not per FQN: 128 shape-correct FQNs
+    aliased to one tensor imply the full declared volume while one physical
+    tensor exists — the count-correct variant of the incident, invisible to a
+    per-FQN sum. When the metadata carries no storage identity the gate falls
+    back to per-FQN implied bytes and its PASS is labelled metadata-implied,
+    because a claim broader than its evidence is a defect. A byte deficit of
+    strictly more than 1% fails (the boundary is pinned: exactly 99% passes);
+    overage is not flagged here (padding/optimizer states make it ambiguous) —
+    that is distinctness' job.
+
+    Unlike distinctness, this gate prices STACKED layouts correctly and completely:
+    a stacked tensor holding N experts on its leading dim implies exactly the bytes
+    the manifest should declare, so on a clean stacked checkpoint (the Gemma-4
+    family) this gate reaches a real, non-vacuous PASS where the distinctness gate
+    must abstain. The denominator is still never derived from the artifact itself —
+    pricing a checkpoint against itself is the vacuity trap — so without a
+    manifest-supplied ``expected_expert_bytes`` the gate abstains and names the
+    missing denominator, exactly as before.
     """
 
     id: ClassVar[str] = "checkpoint.expert_bytes"
@@ -383,14 +940,30 @@ class ExpertByteVolumeGate(Gate):
         "was visible from metadata alone)"
     )
     events: ClassVar[tuple[Lifecycle, ...]] = (Lifecycle.FIRST_SAVE, Lifecycle.SAVE)
+    context_type: ClassVar[type | None] = CheckpointGateContext
 
     _DEFICIT_PER_MILLE: ClassVar[int] = 10  # fail if actual < expected * 99%
 
+    def coerce_context(self, ctx: Any) -> CheckpointGateContext | None:
+        """The module adapter (:func:`_coerce`) promoted to the dispatch contract.
+
+        Paths and ``.tensors``-shaped objects still adapt, exactly as they did when
+        the coercion lived only at the top of :meth:`check`; anything this gate
+        does not recognise returns ``None`` so a typed sweep reports it unwired
+        instead of dying on a TypeError one frame down.
+        """
+        try:
+            return _coerce(ctx)
+        except TypeError:
+            return None
+
     def check(self, ctx: Any) -> GateResult:
         c = _coerce(ctx)
+        candidates = _expert_weight_candidates(c.tensors)
+        shard_groups, stacked, unknown = _split_expert_layouts(candidates)
         experts = _expert_weights(c)
 
-        if not experts:
+        if not candidates:
             if not c.num_experts:
                 return self.skip("context declares no experts and none are present (dense model)")
             return self.ok(
@@ -398,36 +971,120 @@ class ExpertByteVolumeGate(Gate):
                 f"expert tensors — there is nothing to sum",
                 Coverage.none("expert tensors"),
             )
+        if unknown:
+            # Fail closed, mirroring the distinctness gate: bytes in an expert
+            # naming family this gate does not understand cannot be priced against
+            # the declared volume, and silently dropping them would price a
+            # PARTIAL set as though it were the whole.
+            return self.fail(
+                f"{len(unknown)} expert-named tensor(s) match no recognized MoE "
+                f"layout (first: {unknown[0].fqn}); the expert byte volume of an "
+                "unrecognized layout cannot be priced honestly from metadata",
+                Coverage(checked=len(experts), unit="expert tensors"),
+                evidence={
+                    "unrecognized_fqns": [t.fqn for t in unknown[:8]],
+                    "origin": c.origin,
+                },
+            )
 
         if c.expected_expert_bytes is None:
             return self.skip(
                 "run manifest does not declare expected expert byte volume; without "
                 "the denominator a byte count is an unqualified count, not a fact"
             )
+        if c.expected_expert_bytes <= 0:
+            # A non-positive denominator is malformed, not absent: "matches
+            # declared 0" would be a claim over nothing, so this takes the same
+            # enforced-VACUOUS path as every other missing-denominator branch.
+            return self.ok(
+                "declared expert byte volume is not positive "
+                f"({c.expected_expert_bytes}) — there is no denominator to "
+                "measure against",
+                Coverage.none("expert tensors"),
+                evidence={"origin": c.origin},
+            )
 
-        actual = sum(t.nbytes for t in experts)
-        _, shards = _split_layout(experts)
+        implied = sum(t.implied_nbytes for t in experts)
+        physical, storage_complete = _distinct_storage_bytes(experts)
+        if c.expert_storage_bytes is not None:
+            # The reader's storage map measured physical bytes directly; that
+            # number outranks anything summable from per-FQN metadata.
+            physical = c.expert_storage_bytes
+            storage_complete = True
+
         coverage = Coverage(
             checked=len(experts),
             unit="expert tensors",
-            expected=_declared_tensor_count(c, sharded=bool(shards)),
+            expected=_declared_tensor_count(c, sharded=bool(shard_groups)),
         )
-        if actual * 1000 < c.expected_expert_bytes * (1000 - self._DEFICIT_PER_MILLE):
+        del stacked  # priced but not individually needed beyond classification
+        expected = c.expected_expert_bytes
+        measured = physical if storage_complete else implied
+        evidence = {
+            "implied_expert_bytes": implied,
+            "physical_expert_bytes": physical if storage_complete else None,
+            "storage_identity": "complete" if storage_complete else "absent-or-partial",
+            "expected_expert_bytes": expected,
+            "origin": c.origin,
+        }
+        if measured * 1000 < expected * (1000 - self._DEFICIT_PER_MILLE):
+            basis = (
+                "measured over distinct storage"
+                if storage_complete
+                else "metadata-implied (no storage identity)"
+            )
             return self.fail(
-                f"expert bytes {actual:,} of declared {c.expected_expert_bytes:,} "
-                f"(ratio {actual / c.expected_expert_bytes:.3f}; the incident ratio "
-                f"was 0.125 = 5.71/45.70 GB)",
+                f"expert byte volume {measured:,} {basis} is below the declared "
+                f"{expected:,} (ratio {measured / expected:.3f}; the incident "
+                f"ratio was 0.125 = 5.71/45.70 GB)",
                 coverage,
-                evidence={
-                    "actual_bytes": actual,
-                    "expected_bytes": c.expected_expert_bytes,
-                    "ratio": round(actual / c.expected_expert_bytes, 4),
-                    "origin": c.origin,
-                },
+                evidence={**evidence, "ratio": round(measured / expected, 4)},
+            )
+        if storage_complete and implied > physical:
+            # Count and shape look right while storage is aliased: the FQNs price
+            # N tensors but distinct storage prices fewer. Not a volume deficit —
+            # say exactly what it is so it is never mistaken for one.
+            return self.fail(
+                f"expert FQNs imply {implied:,} bytes across {len(experts)} tensors, "
+                f"but only {physical:,} bytes exist in distinct storage — the count "
+                "looks right because multiple FQNs price one physical tensor",
+                coverage,
+                evidence=evidence,
+            )
+        if storage_complete and physical > implied:
+            # The other direction of the same disagreement. It used to share the
+            # branch above, which meant a checkpoint with MORE physical bytes
+            # than its expert names account for was reported as aliasing — a
+            # sentence stating the opposite of the measurement, and doctrine (5)
+            # counts a wrong stated reason as a defect even when blocking was
+            # the right call. The two are not the same finding: aliasing hides
+            # missing weights behind shared spans, whereas a surplus means the
+            # measured span carries bytes no expert FQN names (a reader storage
+            # map covering non-expert tensors, padding, or an FQN set that is
+            # not the whole expert population). Either way the total agreeing
+            # with the manifest does not establish that the right bytes were
+            # counted, so this blocks too — under its own description.
+            return self.fail(
+                f"expert storage measures {physical:,} bytes but the {len(experts)} "
+                f"expert FQN(s) account for only {implied:,} — {physical - implied:,} "
+                "byte(s) of the measured span are named by nothing, so this total "
+                "cannot be read as the expert volume even though it matches the "
+                "declared figure",
+                coverage,
+                evidence=evidence,
+            )
+        if storage_complete:
+            return self.ok(
+                f"expert byte volume {physical:,} measured over distinct storage "
+                f"matches declared {expected:,}",
+                coverage,
+                evidence=evidence,
             )
         return self.ok(
-            f"expert byte volume {actual:,} matches declared {c.expected_expert_bytes:,}",
+            f"metadata-implied only (no storage identity; aliasing cannot be "
+            f"excluded): expert byte volume {implied:,} matches declared {expected:,}",
             coverage,
+            evidence=evidence,
         )
 
     def controls(self) -> list[Control]:
@@ -441,6 +1098,13 @@ class ExpertByteVolumeGate(Gate):
                 note="8-way expert aliasing shrinks expert bytes to exactly 1/8",
             ),
             Control(
+                "right-count-aliased-storage",
+                ControlKind.MUST_FIRE,
+                fx.right_count_aliased_storage_ctx,
+                note="counts and shapes are right, but the FQNs share storages — "
+                "only physical byte pricing fires here; the count-correct variant",
+            ),
+            Control(
                 "no-experts-at-all",
                 ControlKind.MUST_FIRE,
                 fx.empty_expert_set_ctx,
@@ -451,6 +1115,14 @@ class ExpertByteVolumeGate(Gate):
                 ControlKind.MUST_PASS,
                 fx.healthy_fused_moe_ctx,
                 note="byte volume matches the manifest exactly",
+            ),
+            Control(
+                "stacked-clean",
+                ControlKind.MUST_PASS,
+                fx.stacked_hf_moe_ctx,
+                note="stacked layout: implied bytes == declared volume == distinct-"
+                "storage bytes — a real, non-vacuous PASS where distinctness must "
+                "abstain; the denominator comes from the manifest, not the artifact",
             ),
         ]
 
@@ -472,6 +1144,20 @@ class SaveCompletenessGate(Gate):
         "a 26B checkpoint has 8,970 metadata keys but only ~928 are tensors)"
     )
     events: ClassVar[tuple[Lifecycle, ...]] = (Lifecycle.FIRST_SAVE, Lifecycle.SAVE)
+    context_type: ClassVar[type | None] = CheckpointGateContext
+
+    def coerce_context(self, ctx: Any) -> CheckpointGateContext | None:
+        """The module adapter (:func:`_coerce`) promoted to the dispatch contract.
+
+        Paths and ``.tensors``-shaped objects still adapt, exactly as they did when
+        the coercion lived only at the top of :meth:`check`; anything this gate
+        does not recognise returns ``None`` so a typed sweep reports it unwired
+        instead of dying on a TypeError one frame down.
+        """
+        try:
+            return _coerce(ctx)
+        except TypeError:
+            return None
 
     def check(self, ctx: Any) -> GateResult:
         c = _coerce(ctx)
@@ -491,6 +1177,17 @@ class SaveCompletenessGate(Gate):
                 evidence={"origin": c.origin},
             )
         declared = sorted(f for f in c.declared_fqns if "_extra_state" not in f)
+        if not declared:
+            # An empty declaration is not a denominator: "all 0 declared tensors
+            # present" is the all([]) trap in completeness clothing. Take the
+            # same enforced-VACUOUS path as the missing-manifest branch above.
+            return self.ok(
+                "the declared tensor set is empty after excluding _extra_state "
+                "metadata blobs — there is no tensor set for the checkpoint to "
+                "be complete against",
+                Coverage.none("declared tensors"),
+                evidence={"origin": c.origin},
+            )
         missing = [f for f in declared if f not in present]
         coverage = Coverage(
             checked=len(declared) - len(missing),
@@ -519,6 +1216,26 @@ class SaveCompletenessGate(Gate):
                 ControlKind.MUST_FIRE,
                 fx.missing_shard_ctx,
                 note="shard_2 never written: 2 of 6 declared tensors absent",
+            ),
+            Control(
+                "empty-declaration",
+                ControlKind.MUST_FIRE,
+                lambda: CheckpointGateContext(
+                    tensors=(
+                        TensorMeta(
+                            "model.layers.0.mlp.experts.linear_fc1.weight",
+                            (8, 4, 4),
+                            "bfloat16",
+                        ),
+                    ),
+                    declared_fqns=(),
+                    num_experts=None,
+                    num_moe_layers=None,
+                    expected_expert_bytes=None,
+                    origin="synthetic:empty-declaration",
+                ),
+                note="a zero-length declared tensor set must block, not auto-"
+                "satisfy as 'all 0 declared tensors present'",
             ),
             Control(
                 "bloated-metadata",
@@ -554,11 +1271,25 @@ class FirstSaveGate(Gate):
         "checkpoint of a run, the cheapest place a save defect can be caught"
     )
     events: ClassVar[tuple[Lifecycle, ...]] = (Lifecycle.FIRST_SAVE,)
+    context_type: ClassVar[type | None] = CheckpointGateContext
     _subgates: ClassVar[tuple[type[Gate], ...]] = (
         ExpertDistinctnessGate,
         ExpertByteVolumeGate,
         SaveCompletenessGate,
     )
+
+    def coerce_context(self, ctx: Any) -> CheckpointGateContext | None:
+        """The module adapter (:func:`_coerce`) promoted to the dispatch contract.
+
+        Paths and ``.tensors``-shaped objects still adapt, exactly as they did when
+        the coercion lived only at the top of :meth:`check`; anything this gate
+        does not recognise returns ``None`` so a typed sweep reports it unwired
+        instead of dying on a TypeError one frame down.
+        """
+        try:
+            return _coerce(ctx)
+        except TypeError:
+            return None
 
     def check(self, ctx: Any) -> GateResult:
         sub = tuple(cls_().run(ctx) for cls_ in self._subgates)
@@ -609,9 +1340,18 @@ class FirstSaveGate(Gate):
                 note="a silent composite reproduce the all([]) detector one level up",
             ),
             Control(
+                "stacked-first-save",
+                ControlKind.MUST_FIRE,
+                fx.stacked_hf_moe_ctx,
+                note="clean stacked MoE: distinctness abstains (SKIP), so the "
+                "composite can verify only 2/3 properties and is UNDERCOVERED — "
+                "blocked for a true reason instead of silently green",
+            ),
+            Control(
                 "healthy-first-save",
                 ControlKind.MUST_PASS,
-                fx.healthy_fused_moe_ctx,
-                note="a correct first save must not be blocked",
+                fx.healthy_sharded_moe_ctx,
+                note="a correct first save must not be blocked — per-expert layout, "
+                "the only family in which every sub-gate can fully verify",
             ),
         ]

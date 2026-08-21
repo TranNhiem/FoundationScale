@@ -64,6 +64,15 @@ _PROJ_BYTES = 8 * 3 * 5 * 4  # shape x float32
 # 2 layers x 2 projections (fc1, fc2) x 480 B.
 EXPECTED_EXPERT_BYTES = 2 * 2 * _PROJ_BYTES
 
+_SHARD_EXPERT_SHAPE = (3, 5)
+_SHARD_EXPERT_BYTES = 3 * 5 * 4  # shape x float32
+# The sharded layout's declared volume, computed from its own geometry rather than
+# reused from EXPECTED_EXPERT_BYTES: 2 layers x 2 projections (fc1, fc2) x 8
+# experts x 60 B. (It happens to total the same 1920 B as the fused variant —
+# 8 fused experts x 480 B vs 32 shards x 60 B — which is precisely why the byte
+# volume gate cannot see per-expert aliasing; distinctness is the other gate.)
+EXPECTED_SHARDED_EXPERT_BYTES = 2 * 2 * _NUM_EXPERTS * _SHARD_EXPERT_BYTES
+
 
 @pytest.fixture
 def torch_mod() -> Any:
@@ -115,6 +124,36 @@ def _write_healthy_moe_checkpoint(root: Path, torch_mod: Any) -> tuple[str, ...]
     for i, fqn in enumerate(_expert_fqns()):
         blob = torch_mod.arange(120, dtype=torch_mod.float32).reshape(_EXPERT_SHAPE)
         tensors[fqn] = (_EXPERT_SHAPE, [((0, 0, 0), blob + float(i * 1000))])
+    for i, layer in enumerate(_EXPERT_LAYERS):
+        fqn = f"model.layers.{layer}.attention.qkv.weight"
+        blob = torch_mod.arange(24, dtype=torch_mod.float32).reshape(4, 6)
+        tensors[fqn] = ((4, 6), [((0, 0), blob + float(i * 10_000))])
+    _write_dcp_checkpoint(root, tensors=tensors, nontensor=["_extra_state.optimizer"])
+    return tuple(sorted(tensors))
+
+
+def _write_healthy_sharded_moe_checkpoint(root: Path, torch_mod: Any) -> tuple[str, ...]:
+    """Per-expert layout MoE checkpoint: one (in, out) tensor per expert on disk.
+
+    Same real-bytes construction as :func:`_write_healthy_moe_checkpoint`, but the
+    experts are spelled sharded — ``...linear_fc{P}.weight{E}``, one tensor (hence
+    one storage span, with distinct contents) per expert — because that is the only
+    layout family in which expert distinctness can earn a real PASS from metadata.
+    The two dense attention tensors are byte-identical to the fused variant, so the
+    two artifacts differ ONLY in how the experts are stored.
+    """
+    tensors: dict[str, tuple[tuple[int, ...], list[tuple[tuple[int, ...], Any]]]] = {}
+    for layer in _EXPERT_LAYERS:
+        for proj in (1, 2):
+            for expert in range(_NUM_EXPERTS):
+                fqn = f"model.layers.{layer}.mlp.experts.linear_fc{proj}.weight{expert}"
+                # Distinct fill value per expert: no two FQNs may own the same bytes.
+                blob = torch_mod.full(
+                    _SHARD_EXPERT_SHAPE,
+                    float(layer * 10_000 + proj * 100 + expert),
+                    dtype=torch_mod.float32,
+                )
+                tensors[fqn] = (_SHARD_EXPERT_SHAPE, [((0, 0), blob)])
     for i, layer in enumerate(_EXPERT_LAYERS):
         fqn = f"model.layers.{layer}.attention.qkv.weight"
         blob = torch_mod.arange(24, dtype=torch_mod.float32).reshape(4, 6)
@@ -231,6 +270,66 @@ def test_healthy_checkpoint_round_trips_from_disk_to_passing_gates(
     this checkpoint actually contains. If this fails, either the bytes-to-metadata
     bridge dropped data, or a gate blocks a correct save — either way the
     framework's green light means nothing everywhere else.
+
+    The artifact is deliberately per-expert (sharded): a stacked layout cannot
+    earn a PASS on distinctness — the gate abstains there by design, because
+    per-expert identity inside one fused_tensor-on-dim-0 is metadata-invisible —
+    so a round-trip test written over a stacked artifact would be asserting the
+    framework's green light over a check that established nothing.
+    """
+    declared = _write_healthy_sharded_moe_checkpoint(tmp_path, torch_mod)
+    _install_manifest(
+        monkeypatch,
+        _ManifestStub(
+            declared_fqns=declared,
+            num_experts=_NUM_EXPERTS,
+            num_moe_layers=len(_EXPERT_LAYERS),
+            expected_expert_bytes=EXPECTED_SHARDED_EXPERT_BYTES,
+        ),
+    )
+
+    ctx = CheckpointGateContext.from_path(tmp_path)
+
+    real = [t for t in ctx.tensors if t.kind == "tensor"]
+    # 32 expert shards (2 layers x 2 projections x 8 experts) + 2 dense tensors:
+    # the per-expert layout stores every expert as its own storage span on disk.
+    assert len(real) == 34
+    assert all(t.storage_id is not None for t in real)
+    assert all(t.dtype == "float32" for t in real)
+
+    results = {gid: REGISTRY.get(gid).run(ctx) for gid in _CHECKPOINT_GATE_IDS}
+
+    for gid, result in results.items():
+        assert result.verdict is Verdict.PASS, f"{gid}: {result.detail}"
+        assert result.coverage.checked > 0, f"{gid} passed over zero units"
+
+    assert results["checkpoint.expert_distinctness"].coverage.checked == 32
+    assert results["checkpoint.expert_bytes"].coverage.checked == 32
+    assert results["checkpoint.save_complete"].coverage.checked == 34
+    assert results["checkpoint.first_save"].coverage.checked == 3
+
+
+# ---------------------------------------------------------------------------
+# 1b. The identical artifact in stacked layout abstains on distinctness
+# ---------------------------------------------------------------------------
+
+
+def test_stacked_on_disk_checkpoint_abstains_instead_of_passing(
+    tmp_path: Path, torch_mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stacked on-disk artifact must report 2-of-3 examined, never clean green.
+
+    Before the layout-aware selector, this byte-for-byte fixture WAS the passing
+    round-trip: fused expert tensors on disk, every gate green. The point of this
+    test is that the same real bytes that used to be reported as a clean
+    promotable save are now reported as 2-of-3 examined, because the third
+    property — per-expert distinctness — was never observable in the stacked
+    layout: N duplicated expert slices occupy exactly the one storage span that N
+    distinct slices would. The distinctness gate must say that — a specific SKIP
+    naming the layout and the evidence that would settle it — while the byte gate,
+    whose property IS observable, must still reach a real PASS so the abstention
+    is provably scoped to distinctness and does not leak into its neighbour. A
+    future change that "fixed" the abstention into a PASS would turn this red.
     """
     declared = _write_healthy_moe_checkpoint(tmp_path, torch_mod)
     _install_manifest(
@@ -244,22 +343,30 @@ def test_healthy_checkpoint_round_trips_from_disk_to_passing_gates(
     )
 
     ctx = CheckpointGateContext.from_path(tmp_path)
-
-    real = [t for t in ctx.tensors if t.kind == "tensor"]
-    assert len(real) == 6  # 4 expert projections + 2 dense attention weights
-    assert all(t.storage_id is not None for t in real)
-    assert all(t.dtype == "float32" for t in real)
-
     results = {gid: REGISTRY.get(gid).run(ctx) for gid in _CHECKPOINT_GATE_IDS}
 
-    for gid, result in results.items():
-        assert result.verdict is Verdict.PASS, f"{gid}: {result.detail}"
-        assert result.coverage.checked > 0, f"{gid} passed over zero units"
+    distinctness = results["checkpoint.expert_distinctness"]
+    assert distinctness.verdict is Verdict.SKIP, distinctness.detail
+    assert not distinctness.blocking
+    assert distinctness.coverage.checked == 4
+    # Load-bearing claims only: the layout is named, the abstention is stated as
+    # an abstention, and the settling evidence (a per-slice comparison) is named.
+    assert "STACKED" in distinctness.detail
+    assert "ABSTAINS" in distinctness.detail
+    assert "per-slice" in distinctness.detail
 
-    assert results["checkpoint.expert_distinctness"].coverage.checked == 4
-    assert results["checkpoint.expert_bytes"].coverage.checked == 4
-    assert results["checkpoint.save_complete"].coverage.checked == 6
-    assert results["checkpoint.first_save"].coverage.checked == 3
+    byte_volume = results["checkpoint.expert_bytes"]
+    assert byte_volume.verdict is Verdict.PASS, byte_volume.detail
+    assert byte_volume.coverage.checked == 4
+
+    completeness = results["checkpoint.save_complete"]
+    assert completeness.verdict is Verdict.PASS, completeness.detail
+
+    composite = results["checkpoint.first_save"]
+    assert composite.verdict is Verdict.UNDERCOVERED, composite.detail
+    assert composite.blocking
+    assert composite.coverage.checked == 2
+    assert composite.coverage.expected == 3
 
 
 # ---------------------------------------------------------------------------

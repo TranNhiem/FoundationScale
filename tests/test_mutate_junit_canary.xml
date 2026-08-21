@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Canary for tools/mutate.py::_parse_junit: the parser is the battery's
+     only source of attribution, so a drift in how it reads pytest's report
+     must fail a test, not silently degrade scoring. Keep this file minimal
+     and stable — if real pytest's junit output changes shape, update the
+     fixture and the parser together. -->
+<testsuites>
+  <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="3" time="0.02">
+    <testcase classname="tests.test_x" name="test_y" time="0.01">
+      <failure message="AssertionError: alias went unnoticed">def test_y(): assert False</failure>
+    </testcase>
+    <testcase classname="tests.test_parity.TestFoo" name="test_cosine_guard[bf16]" time="0.01" />
+    <testcase classname="tests.test_x" name="test_z" time="0.01" />
+  </testsuite>
+</testsuites>

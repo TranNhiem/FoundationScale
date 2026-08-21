@@ -73,10 +73,26 @@ __all__ = [
     "compare_keys",
     "DCP_METADATA_FILENAME",
     "SAFETENSORS_INDEX_FILENAME",
+    "VERDICT_EXACT",
+    "VERDICT_CLOSE",
+    "VERDICT_DIFFER",
+    "VERDICT_SHAPE_MISMATCH",
+    "VERDICT_NON_FINITE",
 ]
 
 DCP_METADATA_FILENAME = ".metadata"
 SAFETENSORS_INDEX_FILENAME = "model.safetensors.index.json"
+
+# The machine-consumed vocabulary of TensorComparison.verdict. Adding a value
+# is a breaking change for downstream gates, which is exactly why NON_FINITE
+# is its own verdict instead of an overloaded DIFFER: a consumer written
+# before this fix must see a verdict it does not recognize (and fail closed
+# on it), never silently treat a poisoned artifact as ordinary divergence.
+VERDICT_EXACT = "EXACT"
+VERDICT_CLOSE = "CLOSE"
+VERDICT_DIFFER = "DIFFER"
+VERDICT_SHAPE_MISMATCH = "SHAPE_MISMATCH"
+VERDICT_NON_FINITE = "NON_FINITE"
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +232,10 @@ class TensorComparison:
 
     All norms and the dot product were accumulated in float64 over row blocks,
     so ``cosine`` is meaningful on tensors far too large to upcast at once.
-    ``verdict`` is one of ``EXACT``, ``CLOSE``, ``DIFFER``, ``SHAPE_MISMATCH``.
+    ``verdict`` is one of ``EXACT``, ``CLOSE``, ``DIFFER``, ``NON_FINITE``,
+    ``SHAPE_MISMATCH``; ``nonfinite_elements`` counts NaN/Inf on every
+    verdict, including ``EXACT`` — bitwise identity is a statement about
+    bytes, not about the finiteness of the weights those bytes encode.
     """
 
     key: str
@@ -230,15 +249,28 @@ class TensorComparison:
     max_abs_diff: float
     mean_abs_diff: float
     cosine: float | None
-    """None iff either tensor is all zeros (0/0 is a statement about nothing)."""
+    """None iff no finite, non-zero direction exists to compare: an all-zero
+    tensor on either side (0/0 is a statement about nothing) or NaN/Inf in
+    the content (an unbounded or undefined norm has no angle)."""
 
     rms_a: float
     rms_b: float
     chunks_read: int
     bytes_read: int
     verdict: str
+    nonfinite_elements: int = 0
+    """NaN/Inf elements seen across both sources, summed over blocks. Surfaced
+    even on ``EXACT``: identical ±inf bytes are parity, but the operator must
+    see the poison count rather than have it laundered into a clean verdict."""
 
     def to_dict(self) -> dict[str, Any]:
+        """Projection that survives ``json.dumps(..., allow_nan=False)``.
+
+        ``math.inf`` and ``nan`` are honest answers here ("unbounded",
+        "undefined"), but strict JSON consumers rightly reject the bare
+        tokens Python's default encoder would emit for them, so every float
+        field passes through :func:`_json_float`.
+        """
         return {
             "key": self.key,
             "elements": self.elements,
@@ -248,15 +280,30 @@ class TensorComparison:
             "dtype_b": self.dtype_b,
             "bitwise_equal": self.bitwise_equal,
             "mismatched_elements": self.mismatched_elements,
-            "max_abs_diff": self.max_abs_diff,
-            "mean_abs_diff": self.mean_abs_diff,
-            "cosine": self.cosine,
-            "rms_a": self.rms_a,
-            "rms_b": self.rms_b,
+            "max_abs_diff": _json_float(self.max_abs_diff),
+            "mean_abs_diff": _json_float(self.mean_abs_diff),
+            "cosine": None if self.cosine is None else _json_float(self.cosine),
+            "rms_a": _json_float(self.rms_a),
+            "rms_b": _json_float(self.rms_b),
             "chunks_read": self.chunks_read,
             "bytes_read": self.bytes_read,
             "verdict": self.verdict,
+            "nonfinite_elements": self.nonfinite_elements,
         }
+
+
+def _json_float(value: float) -> float | str:
+    """A float that survives ``json.dumps(..., allow_nan=False)``.
+
+    Non-finite values become their names (``"inf"``/``"-inf"``/``"nan"``):
+    the alternative is a strict encoder crashing on the report of the very
+    defect the comparison exists to surface.
+    """
+    if math.isnan(value):
+        return "nan"
+    if math.isinf(value):
+        return "inf" if value > 0 else "-inf"
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -1062,9 +1109,12 @@ def compare_keys(
     squares and the dot product in **float64**. This is the direct fix for the
     probe defect in which float32 reductions underflowed and reported a
     tensor's cosine with itself as 1.80. As a guard against that bug ever
-    returning, when the two tensors are bitwise identical this function asserts
-    the computed cosine is 1.0: if the accumulator is broken, the comparison
-    raises instead of reporting a number.
+    returning, when the two tensors are bitwise identical and finite this
+    function asserts the computed cosine is 1.0: if the accumulator is broken,
+    the comparison raises instead of reporting a number. Identical ±inf pairs
+    are bitwise equal but have no finite norm to self-check against, so they
+    report ``EXACT`` with ``nonfinite_elements`` set — parity over bytes, with
+    the poison surfaced rather than laundered into a tolerance verdict.
 
     Memory: roughly ``block_rows * row_size * (2 dtypes + float64 temporaries)``
     — about 0.5 GB for ``block_rows=4096`` on a 2816-wide tensor, versus 11.5
@@ -1080,9 +1130,12 @@ def compare_keys(
 
     Returns:
         A :class:`TensorComparison`. ``EXACT`` means bitwise identical;
-        ``CLOSE`` means within both tolerances; ``DIFFER`` otherwise;
-        ``SHAPE_MISMATCH`` means the two sources disagree on the shape (zero
-        elements compared, by design visibly so).
+        ``CLOSE`` means within both tolerances; ``DIFFER`` means finite
+        content outside both tolerances; ``NON_FINITE`` means NaN or Inf was
+        present without bitwise identity — no tolerance answer over poisoned
+        content is honest, because IEEE comparisons swallow NaN
+        (``max(0.0, nan) == 0.0``); ``SHAPE_MISMATCH`` means the two sources
+        disagree on the shape (zero elements compared, by design visibly so).
 
     Raises:
         TensorNotFoundError: If ``key`` is absent from either source.
@@ -1122,7 +1175,8 @@ def compare_keys(
             rms_b=0.0,
             chunks_read=0,
             bytes_read=0,
-            verdict="SHAPE_MISMATCH",
+            verdict=VERDICT_SHAPE_MISMATCH,
+            nonfinite_elements=0,
         )
 
     nd = len(shape_a)
@@ -1132,6 +1186,7 @@ def compare_keys(
     sum_a = sum_b = sumsq_a = sumsq_b = dot = sum_abs = 0.0
     max_abs = 0.0
     mismatched = 0
+    nonfinite = 0
     bitwise = True
     chunks_read = bytes_read = 0
 
@@ -1152,6 +1207,11 @@ def compare_keys(
             mismatched += int((ta != tb).sum().item())
         fa = ta.to(torch.float64)
         fb = tb.to(torch.float64)
+        # Count the poison before any statistic derived from it can swallow
+        # it: IEEE sum propagates NaN but max hides it (max(0.0, nan) == 0.0),
+        # so the verdict needs the non-finite tally as its own fact.
+        nonfinite += int((~torch.isfinite(fa)).sum().item())
+        nonfinite += int((~torch.isfinite(fb)).sum().item())
         diff = (fa - fb).abs()
         sum_a += float(fa.sum().item())
         sum_b += float(fb.sum().item())
@@ -1168,9 +1228,22 @@ def compare_keys(
     cosine = dot / denom if denom > 0.0 else None
     mean_abs = sum_abs / total if total else 0.0
 
+    if nonfinite:
+        # No finite angle exists over contaminated norms, and because IEEE
+        # orderings swallow NaN — max(0.0, nan) kept max_abs at 0.0 above — a
+        # poisoned, non-identical comparison must report an unbounded maximum,
+        # never a numerical 0.0 that reads as agreement. Bitwise-identical
+        # ±inf keeps its computed diff stats: on equal bytes a maximum
+        # difference of 0.0 is the truth, not a laundered number.
+        cosine = None
+        if not bitwise:
+            max_abs = math.inf
+
     # Self-check against the 1.80-cosine incident: identical bits are a ground
-    # truth the accumulator cannot legitimately contradict.
-    if bitwise and total > 0:
+    # truth the accumulator cannot legitimately contradict. Gated on finite
+    # content: identical ±inf has no cosine to contradict, and the guard must
+    # condemn broken arithmetic, not parity over poisoned bytes.
+    if bitwise and total > 0 and not nonfinite:
         if sumsq_a > 0.0:
             assert cosine is not None and abs(cosine - 1.0) <= 1e-9, (
                 f"compare_keys self-check failed on {key!r}: bitwise-identical "
@@ -1183,11 +1256,13 @@ def compare_keys(
         )
 
     if bitwise:
-        verdict = "EXACT"
+        verdict = VERDICT_EXACT
+    elif nonfinite:
+        verdict = VERDICT_NON_FINITE
     elif max_abs <= close_max_abs_diff and (cosine is None or cosine > close_min_cosine):
-        verdict = "CLOSE"
+        verdict = VERDICT_CLOSE
     else:
-        verdict = "DIFFER"
+        verdict = VERDICT_DIFFER
 
     return TensorComparison(
         key=key,
@@ -1206,6 +1281,7 @@ def compare_keys(
         chunks_read=chunks_read,
         bytes_read=bytes_read,
         verdict=verdict,
+        nonfinite_elements=nonfinite,
     )
 
 

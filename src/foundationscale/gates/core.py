@@ -65,6 +65,7 @@ __all__ = [
     "GateRegistry",
     "REGISTRY",
     "register",
+    "run_event",
     "verify_controls",
     "ControlFailure",
 ]
@@ -263,6 +264,17 @@ class GateResult:
         }
 
 
+_EMPTY_SWEEP_GATE_PREFIX = "registry.empty_sweep."
+"""Gate-id prefix for the framework-synthesized result that blocks an empty sweep.
+
+A registry run that executes zero gates appends exactly one result whose id is
+this prefix plus the event value, so a report's vacuity is identifiable from its
+own contents — :attr:`GateReport.is_vacuous` does not have to trust a bare count.
+The prefix is reserved: :meth:`GateRegistry.register` refuses author gates under
+it, so the marker cannot be spoofed.
+"""
+
+
 @dataclass(frozen=True)
 class GateReport:
     """The result of running every gate registered for one lifecycle event."""
@@ -273,7 +285,30 @@ class GateReport:
     """Gates the caller declared required that did not run. Blocks the whole report.
 
     A registry that silently ran zero gates is the same failure as a gate that
-    silently checked zero units, one level up.
+    silently checked zero units, one level up — so an empty sweep blocks on its
+    own now (see :meth:`GateRegistry.run`); ``required`` adds the named-gate leg
+    on top of that floor.
+    """
+
+    registered: int | None = None
+    """How many gates were registered for this event when the sweep ran.
+
+    The sweep-level denominator: a verdict over "3 gates" is as unqualified as a
+    gate over "3 tensors" if nobody says out of how many. The runner that produced
+    the report sets it; a hand-built report leaves it ``None``, and :meth:`render`
+    then claims no denominator rather than inventing one.
+    """
+
+    allow_empty: bool = False
+    """Whether this report's event was *declared* legitimately gateless.
+
+    The runner sets this from the registry's ``event_allow_empty`` opt-out; a
+    hand-built report gets ``False`` and so fails closed. This field is what
+    lets :attr:`ok` enforce :attr:`is_vacuous` on the type itself: a report
+    emptied by filtering, merging, or plain non-invocation blocks, and only a
+    sweep the integrator explicitly declared gateless does not. Anything
+    looser reopens the report-layer ``all([])``; anything stricter breaks the
+    one declared extension point.
     """
 
     @property
@@ -281,23 +316,67 @@ class GateReport:
         return tuple(r for r in self.results if r.blocking)
 
     @property
+    def is_vacuous(self) -> bool:
+        """True when this report records no executed gate.
+
+        Either there are no results at all — ``all([])`` is ``True``, the
+        framework's namesake bug, and here it is the right answer: a report over
+        nothing is a report over nothing — or every result is the framework's
+        synthesized empty-sweep marker from :meth:`GateRegistry.run`. A vacuous
+        report is proof of nothing whether or not the caller opted out of
+        blocking via ``GateRegistry(event_allow_empty=...)``.
+        """
+        return all(r.gate_id.startswith(_EMPTY_SWEEP_GATE_PREFIX) for r in self.results)
+
+    @property
     def ok(self) -> bool:
-        return not self.blocking and not self.missing
+        """True only when nothing blocks and the sweep examined something.
+
+        The first two clauses are the old definition. The third closes the
+        report-layer ``all([])``: over an empty report, "no blocking results"
+        and "no missing gates" are both trivially true, so a hand-built or
+        filtered-down report over zero executed gates used to read as success
+        here — the empty-comparison verdict restated one level up.
+        :attr:`is_vacuous` already named the condition; now it gates on it. The
+        sole pardon is a runner-declared :attr:`allow_empty`, where gateless
+        was a decision, not an accident.
+        """
+        return not self.blocking and not self.missing and (not self.is_vacuous or self.allow_empty)
 
     def render(self) -> str:
-        head = f"gates @ {self.event.value}: {len(self.results)} run"
+        # The empty-sweep marker is a result, not a gate that ran. The footer has
+        # always excluded it; the head once did not, rendering "1 run" directly
+        # above "0 gates ran of 0 registered". One report emitting two run counts
+        # that disagree is the audit's whole complaint in miniature, so the count
+        # is computed once, here, and shared by both lines.
+        ran = sum(1 for r in self.results if not r.gate_id.startswith(_EMPTY_SWEEP_GATE_PREFIX))
+        head = f"gates @ {self.event.value}: {ran} run"
         if self.ok:
             head += " — all clear"
+            if self.is_vacuous:
+                # Reachable only via allow_empty: "all clear" over zero gates is
+                # a claim broader than its evidence unless the declaration that
+                # permitted it is shown.
+                head += " (gateless by declaration: event_allow_empty)"
         else:
             bits = []
             if self.blocking:
                 bits.append(f"{len(self.blocking)} blocking")
+            elif self.is_vacuous:
+                # Hand-built report over zero results: nothing executed, so the
+                # blocking tuple is empty and it is the vacuity itself that must
+                # be named here — "0 blocking" would read as a near-miss.
+                bits.append("VACUOUS — no gates ran")
             if self.missing:
                 bits.append(f"{len(self.missing)} MISSING")
             head += " — " + ", ".join(bits)
         lines = [head]
         lines += ["  " + r.render() for r in self.results]
         lines += [f"  [MISSING] {g}: required but never ran" for g in self.missing]
+        if self.registered is not None:
+            lines.append(
+                f"  — {ran} gates ran of {self.registered} registered for {self.event.value}"
+            )
         return "\n".join(lines)
 
     def to_json(self, **kwargs: Any) -> str:
@@ -306,6 +385,8 @@ class GateReport:
                 "event": self.event.value,
                 "ok": self.ok,
                 "missing": list(self.missing),
+                "registered": self.registered,
+                "allow_empty": self.allow_empty,
                 "results": [r.to_dict() for r in self.results],
             },
             **kwargs,
@@ -381,7 +462,7 @@ class Gate(ABC):
 
             def check(self, ctx):
                 experts = ctx.expert_tensors()          # may be empty!
-                bad = [e for e in experts if e.nbytes != ctx.expected_nbytes(e)]
+                bad = [e for e in experts if e.implied_nbytes != ctx.expected_nbytes(e)]
                 cov = Coverage(len(experts), "expert tensors",
                                expected=ctx.declared_expert_count)
                 if bad:
@@ -402,6 +483,17 @@ class Gate(ABC):
     id: ClassVar[str]
     description: ClassVar[str]
     events: ClassVar[tuple[Lifecycle, ...]]
+    context_type: ClassVar[type | None] = None
+    """The concrete context this gate consumes, for typed sweeps.
+
+    ``None`` (the default) keeps the legacy single-context broadcast of
+    :meth:`GateRegistry.run`. Declaring a real type lets :func:`run_event` mix this
+    gate into one sweep keyed by context type, and turns "the integrator never
+    wired my context" from a raw TypeError inside :meth:`check` into a named,
+    blocking ERROR that identifies the missing type. Gates that accept more than
+    their declared type (a path, an adapter object) say so by overriding
+    :meth:`coerce_context`.
+    """
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -414,6 +506,12 @@ class Gate(ABC):
             isinstance(e, Lifecycle) for e in cls.events
         ):
             raise TypeError(f"{cls.__name__}.events must be a tuple of Lifecycle members")
+        context_type = getattr(cls, "context_type", None)
+        if context_type is not None and not isinstance(context_type, type):
+            raise TypeError(
+                f"{cls.__name__}.context_type must be a type or None (legacy "
+                f"broadcast), got {context_type!r}"
+            )
 
     # -- result constructors ------------------------------------------------------
 
@@ -527,6 +625,20 @@ class Gate(ABC):
         object.__setattr__(result, "duration_s", time.perf_counter() - t0)
         return result
 
+    def coerce_context(self, ctx: Any) -> Any | None:  # noqa: ARG002 — refusing hook
+        """Adapt a foreign context to :attr:`context_type`, or refuse by returning ``None``.
+
+        :func:`run_event` calls this when a bare (non-mapping) context is not
+        already an instance of the declared type. Return ``None`` for inputs this
+        gate does not recognise — the dispatcher turns that into a named, blocking
+        "unwired, not healthy" ERROR, so never raise ``TypeError`` here: that would
+        reproduce the opaque failure this hook exists to replace. Other exceptions
+        (I/O while adapting, a lazy import) may propagate; adaptation is gate-author
+        code and lands in the sweep's ERROR conversion exactly like a failure inside
+        :meth:`check`.
+        """
+        return None
+
 
 class GateRegistry:
     """Holds gates and runs them by lifecycle event.
@@ -537,10 +649,27 @@ class GateRegistry:
     the other, which is how a truncated export reached ``rc=0``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, event_allow_empty: Iterable[Lifecycle] = ()) -> None:
+        """The single opt-out from the empty-sweep rule lives here.
+
+        Args:
+            event_allow_empty: Lifecycle events that may legitimately run with
+                zero registered gates — a deliberate extension point, e.g. a
+                harness that populates the registry later. Every other event
+                that matches no gate produces a blocking VACUOUS report from
+                :meth:`run`. The allowed-empty report is still
+                :attr:`GateReport.is_vacuous`; only the block is lifted.
+        """
         self._gates: dict[str, Gate] = {}
+        self._event_allow_empty = frozenset(Lifecycle(e) for e in event_allow_empty)
 
     def register(self, gate: Gate) -> Gate:
+        if gate.id.startswith(_EMPTY_SWEEP_GATE_PREFIX):
+            raise ValueError(
+                f"gate id {gate.id!r} starts with {_EMPTY_SWEEP_GATE_PREFIX!r}, "
+                f"which is reserved for the framework's empty-sweep markers — "
+                f"an author-named marker could spoof GateReport.is_vacuous"
+            )
         if gate.id in self._gates:
             raise ValueError(f"duplicate gate id: {gate.id!r}")
         self._gates[gate.id] = gate
@@ -577,14 +706,49 @@ class GateRegistry:
                 registered for this event are reported in :attr:`GateReport.missing`
                 and block. Use it at sites where a missing gate is itself the bug —
                 which, on the evidence, is most of them.
+
+        If no gate is registered for ``event``, the report is blocking VACUOUS
+        by construction: a sweep that ran nothing is not an all-clear, with or
+        without ``required``. The only opt-out is the registry's
+        ``event_allow_empty`` declaration.
         """
         gates = self.for_event(event)
-        results = tuple(g.run(ctx) for g in gates)
+        results = [g.run(ctx) for g in gates]
         missing: tuple[str, ...] = ()
         if required is not None:
             ran = {g.id for g in gates}
             missing = tuple(sorted(set(required) - ran))
-        return GateReport(event=event, results=results, missing=missing)
+        if not gates and event not in self._event_allow_empty:
+            # The sweep-level all([]): zero gates ran, so this report must not
+            # be able to read as success. The synthesized result is blocking
+            # VACUOUS and records the population it drew from, so "registered
+            # 10, matched 0 at this event" is a fact in the evidence rather
+            # than an inference.
+            results.append(
+                GateResult(
+                    gate_id=f"{_EMPTY_SWEEP_GATE_PREFIX}{event.value}",
+                    verdict=Verdict.VACUOUS,
+                    coverage=Coverage.none("gates"),
+                    detail=(
+                        f"no gates ran for {event.value}; a sweep over nothing "
+                        f"proves nothing (construct GateRegistry("
+                        f"event_allow_empty=...) if gateless is deliberate)"
+                    ),
+                    evidence={
+                        "event": event.value,
+                        "registered_gates": len(self._gates),
+                    },
+                )
+            )
+        return GateReport(
+            event=event,
+            results=tuple(results),
+            missing=missing,
+            registered=len(gates),
+            # ok now enforces vacuity on the type; the declared opt-out must
+            # travel with the report or this runner's own allowance would block.
+            allow_empty=event in self._event_allow_empty,
+        )
 
 
 REGISTRY = GateRegistry()
@@ -595,6 +759,253 @@ def register(cls: type[Gate]) -> type[Gate]:
     """Class decorator: instantiate a gate and add it to :data:`REGISTRY`."""
     REGISTRY.register(cls())
     return cls
+
+
+_MISSING = object()
+"""Sentinel for "no supplied context matched the gate's declared type".
+
+Distinct from ``None`` deliberately: ``None`` is a legitimate context value and
+must never be able to impersonate *absent*.
+"""
+
+
+class _AmbiguousMatch(Exception):
+    """Several supplied contexts satisfy the gate's declared type; picking is a guess."""
+
+    def __init__(self, names: list[str]) -> None:
+        self.names = names
+        super().__init__(", ".join(names))
+
+
+def _resolve_context(gate: Gate, contexts: Mapping[type, Any]) -> Any:
+    """Pick the one context ``gate.context_type`` names, or return ``_MISSING``.
+
+    Order is exact-then-subclass: an exact type-key hit wins; a single subclass hit
+    is honoured; two or more raise :class:`_AmbiguousMatch`, because dispatch must
+    never arbitrate silently. Callers convert both outcomes into results — this
+    function must not itself decide a verdict.
+    """
+    ct = gate.context_type
+    assert ct is not None  # legacy-broadcast gates never reach the resolver
+    if ct in contexts:
+        return contexts[ct]
+    subtype_hits = [
+        (key, value)
+        for key, value in contexts.items()
+        if isinstance(key, type) and issubclass(key, ct)
+    ]
+    if len(subtype_hits) == 1:
+        return subtype_hits[0][1]
+    if subtype_hits:
+        raise _AmbiguousMatch([key.__name__ for key, _ in subtype_hits])
+    return _MISSING
+
+
+def _dispatch_error(gate: Gate, exc: BaseException, started: float) -> GateResult:
+    """An ERROR for failures *around* ``check()`` — the same conversion, one frame up.
+
+    Context adaptation and lazy context factories are gate-author code just like
+    ``check``; letting their exceptions escape the sweep would be the
+    verifier-exception-counted-as-pass failure with a new callstack.
+    """
+    return GateResult(
+        gate_id=gate.id,
+        verdict=Verdict.ERROR,
+        coverage=Coverage.none("units"),
+        detail=f"{type(exc).__name__}: {exc}",
+        evidence={"traceback": traceback.format_exc(limit=12)},
+        duration_s=time.perf_counter() - started,
+    )
+
+
+def _run_dispatched_gate(gate: Gate, contexts: Any, missing_ctx: str) -> GateResult:
+    """Resolve this gate's context and run it, converting wiring defects into results.
+
+    Nothing here can return PASS without the gate's ``check`` having run: every
+    outcome that is not "the gate received its declared context" is an ERROR (or an
+    explicitly declared SKIP), so an unwired sweep cannot read as green.
+    """
+
+    def unwired(ct_name: str) -> GateResult:
+        # Built through gate._result, not ok()/fail(): this verdict is about the
+        # sweep's wiring, and the artifact was never examined at all.
+        if missing_ctx == "report-skip":
+            return gate._result(
+                Verdict.SKIP,
+                Coverage.none(ct_name),
+                detail=(
+                    f"no context of type {ct_name} supplied for gate {gate.id}; "
+                    f"caller declared missing_ctx='report-skip', so this gate "
+                    f"established nothing and is reported as SKIP, never PASS"
+                ),
+            )
+        return gate._result(
+            Verdict.ERROR,
+            Coverage.none(ct_name),
+            detail=(
+                f"no context of type {ct_name} supplied for gate {gate.id} — unwired, not healthy"
+            ),
+        )
+
+    ct = gate.context_type
+    if ct is None:
+        # Legacy broadcast: a typed map offers several contexts and choosing one
+        # would be a guess; a bare context is handed over as-is, exactly as
+        # GateRegistry.run has always done.
+        if isinstance(contexts, Mapping):
+            return gate._result(
+                Verdict.ERROR,
+                Coverage.none("contexts"),
+                detail=(
+                    f"gate {gate.id} declares no context_type and the sweep carries "
+                    f"{len(contexts)} typed contexts — broadcasting any one of them "
+                    f"would be a guess. Declare context_type on the gate class, or "
+                    f"use GateRegistry.run with a single context."
+                ),
+            )
+        return gate.run(contexts)
+
+    ct_name = ct.__name__
+    started = time.perf_counter()
+    try:
+        if isinstance(contexts, Mapping):
+            resolved = _resolve_context(gate, contexts)
+        elif isinstance(contexts, ct):
+            resolved = contexts
+        else:
+            coerced = gate.coerce_context(contexts)
+            resolved = coerced if coerced is not None else _MISSING
+    except _AmbiguousMatch as amb:
+        return gate._result(
+            Verdict.ERROR,
+            Coverage.none(ct_name),
+            detail=(
+                f"ambiguous context for gate {gate.id}: supplied contexts "
+                f"{', '.join(amb.names)} all satisfy {ct_name}; dispatch refuses "
+                f"to pick one arbitrarily"
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — coerce_context is gate-author code
+        return _dispatch_error(gate, exc, started)
+    if resolved is _MISSING:
+        return unwired(ct_name)
+    ctx = resolved
+    if callable(ctx) and not isinstance(ctx, type):
+        # A zero-argument factory, invoked now — once per consuming gate — inside
+        # the same ERROR conversion Gate.run applies to check(). A factory for a
+        # type no gate in this sweep consumes is never invoked.
+        started = time.perf_counter()
+        try:
+            ctx = ctx()
+        except Exception as exc:  # noqa: BLE001
+            return _dispatch_error(gate, exc, started)
+    return gate.run(ctx)
+
+
+def run_event(
+    registry: GateRegistry,
+    event: Lifecycle | str,
+    contexts: Mapping[type, Any],
+    *,
+    required: Iterable[str] = (),
+    gate_ids: Iterable[str] | None = None,
+    exclude: Iterable[str] = (),
+    missing_ctx: str = "block",
+) -> GateReport:
+    """Run one lifecycle event, handing every gate the context it declared.
+
+    This is the multi-context counterpart to :meth:`GateRegistry.run`. A training
+    job registers gates from several context families — checkpoint, objective,
+    parity — whose contexts are not interchangeable. ``run`` broadcasts one object
+    to all of them and the mismatch dies inside ``check`` as a raw TypeError one
+    frame down; ``run_event`` dispatches on :attr:`Gate.context_type` and turns
+    wiring facts into verdicts:
+
+    * No matching context: blocking ERROR — ``no context of type X supplied for
+      gate Y — unwired, not healthy`` — unless the caller explicitly passes
+      ``missing_ctx="report-skip"``, which surfaces the gate as SKIP instead. The
+      default fails closed; an abstention must be declared.
+    * A legacy gate (``context_type is None``) meeting a typed context map refuses
+      to guess which entry it should get: blocking ERROR naming the fix.
+    * Two supplied contexts both satisfying the declared type is ambiguous:
+      blocking ERROR. Dispatch never picks arbitrarily.
+    * A mapping value may be a zero-argument callable, invoked lazily once per
+      consuming gate inside the sweep's ERROR conversion — a raising context
+      factory is an ERROR verdict with a traceback, never an escape, and a factory
+      for a type no gate consumes is never invoked.
+
+    Args:
+        registry: The registry to draw from.
+        event: The lifecycle event, as a member or its value string.
+        contexts: A mapping ``{context_type: context}`` covering the registered
+            gates, or (during migration) one bare context object, matched by
+            ``isinstance`` then ``coerce_context``. A ``Mapping`` is *always* read
+            as a typed context map; to broadcast a mapping-shaped context itself,
+            use :meth:`GateRegistry.run`.
+        required: Ids that MUST run; any that did not are reported in
+            :attr:`GateReport.missing` and block, as in :meth:`GateRegistry.run`.
+        gate_ids: Restrict the sweep to these ids. An id not registered for this
+            event lands in ``missing`` — silently dropping a typo would read as
+            "all selected gates clear" over fewer gates than were asked for.
+        exclude: Ids to leave out. Excluding a gate that was also required or
+            selected is a contradiction; it lands in ``missing`` and blocks.
+        missing_ctx: ``"block"`` (default) or ``"report-skip"``. Any other value
+            raises ``ValueError`` — a misspelled abstention mode must not quietly
+            weaken the sweep.
+
+    A selection that runs zero gates inherits the registry's empty-sweep rule:
+    blocking VACUOUS unless the event was declared ``event_allow_empty``. Gate
+    failures never raise from here — they are verdicts; bad sweep arguments do.
+    """
+    event = Lifecycle(event)
+    if missing_ctx not in ("block", "report-skip"):
+        raise ValueError(
+            f"missing_ctx must be 'block' or 'report-skip', got {missing_ctx!r} — "
+            f"a misspelled abstention mode must not read as consent"
+        )
+    excluded = frozenset(exclude)
+    event_gates = registry.for_event(event)
+    unmatched: set[str] = set()
+    if gate_ids is not None:
+        wanted = set(gate_ids)
+        unmatched = wanted - {g.id for g in event_gates}
+        selected = [g for g in event_gates if g.id in wanted and g.id not in excluded]
+    else:
+        selected = [g for g in event_gates if g.id not in excluded]
+
+    results = [_run_dispatched_gate(gate, contexts, missing_ctx) for gate in selected]
+
+    ran = {g.id for g in selected}
+    missing = tuple(sorted((set(required) | unmatched) - ran))
+    if not selected and event not in registry._event_allow_empty:
+        # The sweep-level all([]), as in GateRegistry.run: zero gates ran, so the
+        # report must not be able to read as success — with a hint aimed at the
+        # selection when the selection (not the registry) is what emptied it.
+        results.append(
+            GateResult(
+                gate_id=f"{_EMPTY_SWEEP_GATE_PREFIX}{event.value}",
+                verdict=Verdict.VACUOUS,
+                coverage=Coverage.none("gates"),
+                detail=(
+                    f"no gates ran for {event.value}; a sweep over nothing proves "
+                    f"nothing (broaden the gate_ids/exclude selection, or construct "
+                    f"GateRegistry(event_allow_empty=...) if gateless is deliberate)"
+                ),
+                evidence={
+                    "event": event.value,
+                    "registered_gates": len(registry._gates),
+                },
+            )
+        )
+    return GateReport(
+        event=event,
+        results=tuple(results),
+        missing=missing,
+        registered=len(event_gates),
+        # Stamped here as in GateRegistry.run: the report, not the runner, is
+        # responsible for refusing a vacuous pass.
+        allow_empty=event in registry._event_allow_empty,
+    )
 
 
 def verify_controls(
@@ -614,7 +1025,7 @@ def verify_controls(
     3. Each MUST_PASS control does not block, so gates that block unconditionally are
        caught before someone disables them.
 
-    It also enforces two things about itself, because a verifier that loses
+    It also enforces three things about itself, because a verifier that loses
     findings to its own exceptions is the ``all([])`` bug one level up:
 
     * A gate whose :meth:`Gate.controls` raises is reported as a failure naming
@@ -624,6 +1035,10 @@ def verify_controls(
       naming the id — it is not raised as ``KeyError`` and not dropped. A
       dropped id would verify nothing and return ``[]``, reporting success
       over zero work.
+    * A call that targets zero gates — an empty registry, gate modules never
+      imported, or a ``gate_ids`` selection that matched nothing — is reported
+      as a failure naming the fact. Returning ``[]`` from that call would be
+      "all controls held" over zero controls.
 
     An empty return value means all controls held.
     """
@@ -642,6 +1057,15 @@ def verify_controls(
                     f"that is not in the registry; dropping the id would let a typo "
                     f"read as 'all controls held'"
                 )
+
+    if not targets:
+        # The verifier-layer all([]): whatever the cause — empty registry,
+        # never-imported gate modules, a gate_ids selection that matched
+        # nothing — returning [] here reports success over zero verified gates.
+        failures.append(
+            "verify_controls: 0 gates targeted — verified nothing. Import the "
+            "gate package before calling, and check the gate_ids selection."
+        )
 
     for gate in targets:
         try:

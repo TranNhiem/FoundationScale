@@ -279,8 +279,12 @@ class TestSummaryArithmetic:
         assert f"controls declared: {declared}" in out
         assert f"{len(failures)} control failure(s):" in out
         # The passing controls belong to the sound gate; nothing it ran may be
-        # reported as failed, and the failures that exist must be named.
-        assert "test.controls_harness.sound" not in out
+        # reported as failed, and the failures that exist must be named. Scope
+        # this to the failure section: the dispatch listing above names every
+        # registered gate on purpose, so a whole-transcript check would read any
+        # mention of a healthy gate as an accusation against it.
+        failure_section = out.split(f"{len(failures)} control failure(s):", maxsplit=1)[1]
+        assert "test.controls_harness.sound" not in failure_section
         for failure in failures:
             assert "/" in failure.split(":", maxsplit=1)[0]
 

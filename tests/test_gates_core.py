@@ -12,8 +12,11 @@ set was empty and ``all([])`` is ``True`` in Python.
 These tests therefore attack the contract the way the estate actually failed:
 they try to get PASS out of an empty comparison, out of a partial comparison,
 out of an exception, out of a bare ``True`` return value, and out of a registry
-that ran nothing. If any of those paths ever yields success again, this suite —
-not production — must be where it is discovered.
+that ran nothing. A registry sweep over zero gates is a blocking VACUOUS report
+— a green "0 run — all clear" is ``all([])`` one level up — and the single
+opt-out is constructing the registry with ``GateRegistry(event_allow_empty=...)``
+for a deliberately gateless extension event. If any of those paths ever yields
+success again, this suite — not production — must be where it is discovered.
 """
 
 from __future__ import annotations
@@ -530,7 +533,11 @@ class TestRegistry:
         # turns that from a silent nothing into a loud block. One level up from
         # ``all([]) is True``.
         report = fresh_registry.run(Lifecycle.SAVE, ctx=None, required=["checkpoint.expert_bytes"])
-        assert report.results == ()
+        # The zero-gate sweep is itself one blocking VACUOUS result now; the
+        # required= id is reported missing alongside it.
+        (marker,) = report.results
+        assert marker.gate_id == "registry.empty_sweep.save"
+        assert marker.verdict is Verdict.VACUOUS
         assert report.missing == ("checkpoint.expert_bytes",)
         assert not report.ok
         assert "MISSING" in report.render()
@@ -549,14 +556,19 @@ class TestRegistry:
         report = fresh_registry.run(Lifecycle.DATA, ctx=None, required=["zeta.gate", "alpha.gate"])
         assert report.missing == ("alpha.gate", "zeta.gate")
 
-    def test_run_without_required_over_empty_registry_is_vacuously_ok(
+    def test_run_without_required_over_empty_registry_blocks(
         self, fresh_registry: GateRegistry
     ) -> None:
-        # Documents the asymmetry honestly: absent a required= assertion, the
-        # framework cannot know a gate was supposed to exist.
+        # Absent a required= assertion the framework still knows a sweep that
+        # ran nothing proves nothing: the report blocks. The single sanctioned
+        # opt-out is GateRegistry(event_allow_empty=...) for a deliberately
+        # gateless extension event.
         report = fresh_registry.run(Lifecycle.DATA, ctx=None)
-        assert report.results == ()
-        assert report.ok
+        assert not report.ok
+        assert report.is_vacuous
+        (only,) = report.results
+        assert only.verdict is Verdict.VACUOUS
+        assert only.coverage == Coverage.none("gates")
 
     def test_get_contains_and_len(self, fresh_registry: GateRegistry) -> None:
         gate = _PassingBuildGate()
@@ -566,6 +578,75 @@ class TestRegistry:
         assert len(fresh_registry) == 1
         with pytest.raises(KeyError):
             fresh_registry.get("nope")
+
+
+class TestEmptySweepBlocks:
+    """A registry sweep over zero gates is the ``all([])`` bug one level up:
+    it must report blocking VACUOUS, never a green "0 run — all clear"."""
+
+    def test_empty_event_sweep_is_blocking_vacuous(self, fresh_registry: GateRegistry) -> None:
+        report = fresh_registry.run(Lifecycle.SAVE, ctx=object())
+        assert not report.ok
+        assert report.is_vacuous
+        (only,) = report.results
+        assert only.verdict is Verdict.VACUOUS
+        assert only.coverage == Coverage.none("gates")
+        # The population the sweep drew from is a returned fact, not an inference.
+        assert only.evidence["registered_gates"] == 0
+
+    def test_populated_passing_event_still_ok(self, fresh_registry: GateRegistry) -> None:
+        # Negative control: the hardening must not redden a real sweep.
+        fresh_registry.register(_PassingSaveGate())
+        report = fresh_registry.run(Lifecycle.SAVE, ctx=None)
+        assert report.ok
+        assert not report.is_vacuous
+        assert [r.gate_id for r in report.results] == ["test.save_passes"]
+
+    def test_empty_sweep_records_the_registered_population(
+        self, fresh_registry: GateRegistry
+    ) -> None:
+        # Registered-but-not-for-this-event is the "not wired" shape: the
+        # denominator belongs in the evidence, not in the operator's guesswork.
+        fresh_registry.register(_PassingSaveGate())
+        report = fresh_registry.run(Lifecycle.DATA, ctx=None)
+        assert not report.ok
+        (only,) = report.results
+        assert only.verdict is Verdict.VACUOUS
+        assert only.evidence["registered_gates"] == 1
+        assert only.evidence["event"] == "data"
+
+    def test_event_allow_empty_is_the_single_opt_out(self) -> None:
+        registry = GateRegistry(event_allow_empty=(Lifecycle.DATA,))
+        report = registry.run(Lifecycle.DATA, ctx=None)
+        # The block is lifted; the report still states that zero gates ran.
+        assert report.ok
+        assert report.is_vacuous
+        assert report.results == ()
+        # The hatch does not leak to other events.
+        blocked = registry.run(Lifecycle.SAVE, ctx=None)
+        assert not blocked.ok
+
+    def test_raise_if_blocking_raises_on_vacuous_report(self, fresh_registry: GateRegistry) -> None:
+        report = fresh_registry.run(Lifecycle.EXPORT, ctx=None)
+        with pytest.raises(GateBlocked):
+            report.raise_if_blocking()
+
+    def test_marker_prefix_ids_cannot_be_registered(self, fresh_registry: GateRegistry) -> None:
+        # An author-named marker could sit in a vacuous report undetected and
+        # spoof is_vacuous; the namespace belongs to the framework.
+        class SpoofedMarker(Gate):
+            id = "registry.empty_sweep.save"
+            description = "attempts to occupy the framework's marker namespace"
+            events = (Lifecycle.SAVE,)
+
+            def check(self, ctx: Any) -> GateResult:
+                return self.ok("saw things", Coverage(1, "exports", expected=1))
+
+            def controls(self) -> list[Control]:
+                return []
+
+        with pytest.raises(ValueError, match="reserved"):
+            fresh_registry.register(SpoofedMarker())
 
 
 class TestVerifyControls:
@@ -698,16 +779,28 @@ class TestVerifyControls:
         fresh_registry.register(ExpertBytesGate())
         assert verify_controls(fresh_registry) == []
 
+    def test_verify_controls_zero_targets_is_failure(self, fresh_registry: GateRegistry) -> None:
+        """The verifier-layer ``all([])``: a call that targeted zero gates —
+        empty registry or a selection that matched nothing — verified nothing
+        and must say so; returning ``[]`` there is success over nothing."""
+        empty_registry_failures = verify_controls(fresh_registry)
+        assert empty_registry_failures
+        assert any("0 gates targeted" in f for f in empty_registry_failures)
+
+        fresh_registry.register(_PassingBuildGate())
+        empty_selection_failures = verify_controls(fresh_registry, gate_ids=[])
+        assert empty_selection_failures
+        assert any("0 gates targeted" in f for f in empty_selection_failures)
+
     def test_gate_ids_filter_limits_verification(self, fresh_registry: GateRegistry) -> None:
         fresh_registry.register(_PassingBuildGate())  # has no controls at all
         failures = verify_controls(fresh_registry, gate_ids=["test.build_passes"])
         assert len(failures) == 1
-        # Asking for a gate that has controls but filtering it out yields nothing.
-        assert (
-            verify_controls(fresh_registry, gate_ids=[]) == []
-            or True  # gate_ids empty list iterates no targets
-        )
-        assert verify_controls(fresh_registry, gate_ids=[]) == []
+        # Filtering every gate out is a run over zero targets, and a run over
+        # zero targets is a named failure — never an empty success list.
+        zero_target = verify_controls(fresh_registry, gate_ids=[])
+        assert zero_target
+        assert any("0 gates targeted" in f for f in zero_target)
 
 
 class TestGateReport:

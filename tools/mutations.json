@@ -71,8 +71,8 @@
   {
    "name": "bitwise-self-check-only-for-zeros",
    "what": "Bitwise-identical nonzero tensors would no longer force the computed cosine to be exactly 1.0; a broken reduction could assert EXACT while its own cosine contradicts the bits, laundering bad numerics into a green report.",
-   "anchor": "    if bitwise and total > 0:",
-   "replacement": "    if bitwise and total > 0 and sumsq_a <= 0.0:"
+   "anchor": "        if sumsq_a > 0.0:",
+   "replacement": "        if sumsq_a <= 0.0:"
   },
   {
    "name": "overlap-pair-scan-skips-neighbors",
@@ -229,6 +229,13 @@
    "what": "A dtype mismatch is recorded as an ordinary numeric DIFFER finding, so consumers can no longer tell 'never numerically compared \u2014 possible silent cast' apart from 'compared and outside tolerance'. Every numeric statistic for that key still shows inf/None for zero compared elements, but under a status that claims a value judgement was made.",
    "anchor": "                _metadata_entry(\n                    key,\n                    ParityStatus.DTYPE_MISMATCH,\n                    shape_left,\n                    shape_right,\n                    dtype_left,\n                    dtype_right,\n                    tolerances,\n                    reason,\n                )",
    "replacement": "                _metadata_entry(\n                    key,\n                    ParityStatus.DIFFER,\n                    shape_left,\n                    shape_right,\n                    dtype_left,\n                    dtype_right,\n                    tolerances,\n                    reason,\n                )"
+  },
+  {
+   "name": "inert-control-must-pass",
+   "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. If the battery reports this killed, its attribution machinery is proven unsound and the whole run is void — exit 2.",
+   "anchor": "        and math.isfinite(cosine)\n",
+   "replacement": "        and math.isfinite(cosine)  # inert must-pass control\n",
+   "must_survive": true
   }
  ],
  "checkpoint_gates": [

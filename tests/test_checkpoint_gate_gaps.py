@@ -76,7 +76,7 @@ def test_declared_byte_budget_blocks_checkpoint_at_incident_byte_ratio(
 
     ctx = CheckpointGateContext.from_path(tmp_path)
     present_expert_bytes = sum(
-        tensor.nbytes
+        tensor.implied_nbytes
         for tensor in ctx.tensors
         if tensor.kind == "tensor" and ".linear_fc" in tensor.fqn
     )
@@ -89,8 +89,8 @@ def test_declared_byte_budget_blocks_checkpoint_at_incident_byte_ratio(
     assert result.verdict is Verdict.FAIL, result.detail
     assert result.coverage.checked == _HEALTHY_EXPERT_TENSORS
     assert result.coverage.expected == _HEALTHY_EXPERT_TENSORS
-    assert result.evidence["actual_bytes"] == EXPECTED_EXPERT_BYTES
-    assert result.evidence["expected_bytes"] == _SCALED_DECLARED_BYTES
+    assert result.evidence["implied_expert_bytes"] == EXPECTED_EXPERT_BYTES
+    assert result.evidence["expected_expert_bytes"] == _SCALED_DECLARED_BYTES
     assert result.evidence["ratio"] == pytest.approx(_INCIDENT_BYTE_RATIO, abs=0.001)
     assert f"{EXPECTED_EXPERT_BYTES:,}" in result.detail
     assert f"{_SCALED_DECLARED_BYTES:,}" in result.detail
@@ -139,7 +139,7 @@ def test_expert_coverage_denominator_counts_both_fused_projections() -> None:
         declared_fqns=full_ctx.declared_fqns,
         num_experts=full_ctx.num_experts,
         num_moe_layers=full_ctx.num_moe_layers,
-        expected_expert_bytes=sum(tensor.nbytes for tensor in fc1_only),
+        expected_expert_bytes=sum(tensor.implied_nbytes for tensor in fc1_only),
         origin=f"{full_ctx.origin}/fc1-only",
     )
 
@@ -184,8 +184,21 @@ def test_first_save_composite_preserves_all_subgate_failures() -> None:
     for gate_id in _FIRST_SAVE_SUBGATE_IDS:
         assert f"{gate_id}={Verdict.FAIL.value}" in composite_result.detail
 
-    healthy_result = REGISTRY.get(_FIRST_SAVE_GATE_ID).run(fx.healthy_fused_moe_ctx())
+    # Per-expert layout: all three sub-gates can actually reach a verdict, so a
+    # clean artifact promotes on a full 3/3 denominator.
+    healthy_result = REGISTRY.get(_FIRST_SAVE_GATE_ID).run(fx.healthy_sharded_moe_ctx())
 
     assert healthy_result.verdict is Verdict.PASS, healthy_result.detail
     assert healthy_result.coverage.checked == len(_FIRST_SAVE_SUBGATE_IDS)
     assert healthy_result.coverage.expected == len(_FIRST_SAVE_SUBGATE_IDS)
+
+    # Stacked/fused layout: distinctness cannot be established from metadata at
+    # all, so the composite must report 2/3 and block. A composite that promoted
+    # a stacked first save would be claiming a property nothing examined — the
+    # same shape as the incident this gate exists to catch, one level up.
+    stacked_result = REGISTRY.get(_FIRST_SAVE_GATE_ID).run(fx.healthy_fused_moe_ctx())
+
+    assert stacked_result.verdict is Verdict.UNDERCOVERED, stacked_result.detail
+    assert stacked_result.blocking
+    assert stacked_result.coverage.checked == len(_FIRST_SAVE_SUBGATE_IDS) - 1
+    assert stacked_result.coverage.expected == len(_FIRST_SAVE_SUBGATE_IDS)
