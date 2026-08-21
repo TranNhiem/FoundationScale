@@ -88,8 +88,13 @@ disallow_untyped_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 warn_unreachable = true
-# Torch and friends ship incomplete stubs over many versions; missing stubs on an
-# optional dependency must not block type-checking the stdlib-only core.
+# NOT set globally. Torch and friends ship incomplete stubs, but a blanket
+# ignore_missing_imports also silences an unresolvable FIRST-PARTY import — it hid a
+# 928-line module whose `from ..core import ...` pointed at a package that does not
+# exist, so the module could not be imported at all while mypy reported success. Scope
+# the exemption to the third-party names that actually need it.
+[[tool.mypy.overrides]]
+module = ["torch.*", "safetensors.*", "numpy.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

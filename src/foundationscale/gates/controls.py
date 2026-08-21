@@ -56,7 +56,29 @@ def _import_gate_modules() -> tuple[list[str], list[str]]:
 
     imported: list[str] = []
     errors: list[str] = []
-    for info in pkgutil.walk_packages(package.__path__, prefix=f"{package.__name__}."):
+
+    def _record_walk_failure(name: str) -> None:
+        """Record a package the walk itself could not import, exactly once.
+
+        ``pkgutil.walk_packages`` re-imports every yielded package internally,
+        to descend into it; with ``onerror`` unset, a non-ImportError raised
+        there escapes :func:`main` as a traceback and the collected report is
+        never printed. The loop below always attempts (and, on failure,
+        records) its own import of the same package *first*, so a raising
+        package reaches this callback already recorded — skip it rather than
+        double-count. A raising *module* never reaches this callback at all:
+        pkgutil does not re-import non-packages. That asymmetry is why dedup
+        by name, not a blanket record, is the correct shape here.
+        """
+        if not any(error.startswith(f"{name}:") for error in errors):
+            errors.append(
+                f"{name}: import raised while pkgutil descended into the package — "
+                f"any gates defined there never registered"
+            )
+
+    for info in pkgutil.walk_packages(
+        package.__path__, prefix=f"{package.__name__}.", onerror=_record_walk_failure
+    ):
         if info.name == _THIS_MODULE:
             continue
         try:
@@ -71,20 +93,26 @@ def _import_gate_modules() -> tuple[list[str], list[str]]:
     return sorted(imported), errors
 
 
-def _count_controls(registry: GateRegistry) -> tuple[int, list[str]]:
+def _count_controls(registry: GateRegistry) -> tuple[int, list[str], list[str]]:
     """Count declared controls across the registry.
 
     ``controls()`` is gate-author code and can itself raise; a gate whose control
     list cannot even be built has no proven ability to fire, which :func:`main`
     treats as a failure (``verify_controls`` never sees it, since calling
-    ``gate.controls()`` there would raise the same exception).
+    ``gate.controls()`` there would raise the same exception — :func:`main`
+    therefore excludes its id from the verification pass, or that pass would
+    re-raise out of the audit with the whole report still unprinted).
 
     Returns:
-        A pair ``(total, errors)`` of the number of controls declared and
-        human-readable errors for gates whose ``controls()`` raised.
+        A triple ``(total, errors, unverifiable_ids)``: the number of controls
+        declared, human-readable errors for gates whose ``controls()`` raised
+        (carrying the gate id and the exception, so the finding is actionable),
+        and the ids of those gates, so :func:`main` can verify the rest without
+        handing the known-broken ones back to ``verify_controls``.
     """
     total = 0
     errors: list[str] = []
+    unverifiable_ids: list[str] = []
     for gate in registry:
         try:
             total += len(list(gate.controls()))
@@ -93,7 +121,8 @@ def _count_controls(registry: GateRegistry) -> tuple[int, list[str]]:
                 f"{gate.id}: controls() raised {type(exc).__name__}: {exc} — "
                 f"this gate has no proven controls"
             )
-    return total, errors
+            unverifiable_ids.append(gate.id)
+    return total, errors, unverifiable_ids
 
 
 def main() -> int:
@@ -104,6 +133,8 @@ def main() -> int:
     - the registry is empty (a controls run that verified nothing is the exact
       vacuous pass — ``all([]) is True`` — that this framework refuses to ship);
     - a gate module failed to import, so its gates never ran;
+    - a gate's ``controls()`` raises, so nothing about it is proven — the gate is
+      named with its exception, and the run continues over the remaining gates;
     - a gate has no MUST_FIRE control, or one of its controls produced the wrong
       verdict (per :func:`~foundationscale.gates.core.verify_controls`).
 
@@ -111,7 +142,7 @@ def main() -> int:
     """
     imported, failures = _import_gate_modules()
     gate_count = len(REGISTRY)
-    control_count, control_errors = _count_controls(REGISTRY)
+    control_count, control_errors, unverifiable_ids = _count_controls(REGISTRY)
     failures.extend(control_errors)
 
     print("foundationscale-controls — proving each gate can block before we trust it")
@@ -129,7 +160,14 @@ def main() -> int:
             "to prevent.",
         )
     else:
-        failures.extend(verify_controls(REGISTRY))
+        # Gates whose controls() could not even be built were recorded above, with
+        # gate id and exception. They must NOT be handed back to verify_controls:
+        # it calls list(gate.controls()) with no guard, the same exception would
+        # escape main() as a traceback, and every collected finding would be lost
+        # with the unprinted report. Exclude their ids and run the positive
+        # controls for exactly the gates just shown to have a buildable list.
+        verifiable_ids = [gate.id for gate in REGISTRY if gate.id not in unverifiable_ids]
+        failures.extend(verify_controls(REGISTRY, gate_ids=verifiable_ids))
 
     if failures:
         print(f"\n{len(failures)} control failure(s):")

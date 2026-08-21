@@ -37,6 +37,8 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
+from .checkpoint_gates import CheckpointGateContext, TensorMeta
+
 __all__ = [
     "ExpertSet",
     "parse_global_expert_index",
@@ -245,3 +247,318 @@ def make_empty_experts(declared_expert_count: int = 128) -> ExpertSet:
     around that.
     """
     return ExpertSet(tensors={}, declared_expert_count=declared_expert_count, expert_index={})
+
+
+# -----------------------------------------------------------------------------
+# CheckpointGateContext fixtures for the checkpoint gates
+#
+# These fixtures deliberately contain metadata only. The checkpoint gates are
+# metadata gates: they inspect names, shapes, declared counts, byte volume and
+# storage identity without reading launcher payloads. Storage identifiers are
+# therefore generated with the same deterministic hash machinery as the byte
+# fixtures above.
+
+__all__ = [
+    *__all__,
+    "aliased_local_names_ctx",
+    "bloated_extra_state_ctx",
+    "empty_expert_set_ctx",
+    "healthy_fused_moe_ctx",
+    "missing_shard_ctx",
+    "right_count_aliased_storage_ctx",
+]
+
+_CONTEXT_ORIGIN_ROOT = "fixture://checkpoint-gates"
+_EXPERT_DTYPE = "bfloat16"
+_EXPERT_INNER_SHAPE: tuple[int, int] = (16, 32)
+
+_DECLARED_EXPERT_COUNT = 128
+_DECLARED_MOE_LAYERS = 1
+_LOCAL_SHARD_COUNT = 16
+_LOCAL_ALIAS_STORAGE_COUNT = 2
+_RIGHT_COUNT_ALIAS_STORAGE_COUNT = 16
+
+
+def _storage_id(kind: str, *parts: object) -> str:
+    """Return a deterministic identifier for one synthesised byte storage."""
+    return _blob(kind, *parts, seed=SEED, nbytes=32).hex()
+
+
+def _fused_expert_fqn(layer: int, parameter: str) -> str:
+    return f"layers.{layer}.mlp.experts.experts.{parameter}"
+
+
+def _sharded_expert_fqn(layer: int, parameter: str, index: int) -> str:
+    return f"{_fused_expert_fqn(layer, parameter)}{index}"
+
+
+def _one_expert_weight_bytes() -> int:
+    return TensorMeta(
+        fqn="fixture.declared_one_expert_weight",
+        shape=_EXPERT_INNER_SHAPE,
+        dtype=_EXPERT_DTYPE,
+    ).nbytes
+
+
+def _declared_expert_bytes(num_experts: int, num_layers: int) -> int:
+    return _one_expert_weight_bytes() * num_experts * num_layers * len(_PER_EXPERT_PARAMS)
+
+
+def _make_context(
+    *,
+    name: str,
+    tensors: tuple[TensorMeta, ...],
+    declared_fqns: tuple[str, ...] | None,
+    num_experts: int,
+    num_moe_layers: int,
+    expected_expert_bytes: int,
+) -> CheckpointGateContext:
+    return CheckpointGateContext(
+        tensors=tensors,
+        declared_fqns=declared_fqns,
+        num_experts=num_experts,
+        num_moe_layers=num_moe_layers,
+        expected_expert_bytes=expected_expert_bytes,
+        origin=f"{_CONTEXT_ORIGIN_ROOT}/{name}",
+    )
+
+
+def aliased_local_names_ctx() -> CheckpointGateContext:
+    """The 16-shards-of-128 checkpoint incident, reproduced from metadata.
+
+    The run declares 128 experts, but each expert weight exists only as
+    ``weight0`` .. ``weight15``. Each stem has two distinct storages, each
+    shared by eight shards, preserving the incident's 8-way over-write. The
+    summed expert bytes are exactly one eighth of the declared volume —
+    5.71 GB against 45.70 GB in the audited checkpoint.
+    """
+    tensors: list[TensorMeta] = []
+    declared_fqns: list[str] = []
+
+    for layer in range(_DECLARED_MOE_LAYERS):
+        for parameter in _PER_EXPERT_PARAMS:
+            declared_fqns.extend(
+                _sharded_expert_fqn(layer, parameter, expert)
+                for expert in range(_DECLARED_EXPERT_COUNT)
+            )
+            for local_expert in range(_LOCAL_SHARD_COUNT):
+                tensors.append(
+                    TensorMeta(
+                        fqn=_sharded_expert_fqn(layer, parameter, local_expert),
+                        shape=(1, *_EXPERT_INNER_SHAPE),
+                        dtype=_EXPERT_DTYPE,
+                        storage_id=_storage_id(
+                            "aliased-local-shard",
+                            layer,
+                            parameter,
+                            local_expert % _LOCAL_ALIAS_STORAGE_COUNT,
+                        ),
+                    )
+                )
+
+    return _make_context(
+        name="aliased-local-names",
+        tensors=tuple(tensors),
+        declared_fqns=tuple(declared_fqns),
+        num_experts=_DECLARED_EXPERT_COUNT,
+        num_moe_layers=_DECLARED_MOE_LAYERS,
+        expected_expert_bytes=_declared_expert_bytes(
+            _DECLARED_EXPERT_COUNT,
+            _DECLARED_MOE_LAYERS,
+        ),
+    )
+
+
+def empty_expert_set_ctx() -> CheckpointGateContext:
+    """A declared-MoE checkpoint with no expert tensors: the ``all([])`` trap.
+
+    The checkpoint is otherwise coherent and contains present, declared
+    non-expert tensors, so a block cannot be attributed to an unrelated
+    malformed fixture. The missing expert set is the defect. On this input,
+    success would mean \"every expert matched\" without comparing any expert.
+    """
+    num_layers = 2
+    tensors = tuple(
+        TensorMeta(
+            fqn=f"layers.{layer}.attention.self_attention.linear_proj.weight",
+            shape=(256, 512),
+            dtype="float32",
+            storage_id=_storage_id("empty-expert-dense", layer),
+        )
+        for layer in range(num_layers)
+    )
+    return _make_context(
+        name="empty-expert-set",
+        tensors=tensors,
+        declared_fqns=tuple(meta.fqn for meta in tensors),
+        num_experts=_DECLARED_EXPERT_COUNT,
+        num_moe_layers=num_layers,
+        expected_expert_bytes=_declared_expert_bytes(
+            _DECLARED_EXPERT_COUNT,
+            num_layers,
+        ),
+    )
+
+
+def right_count_aliased_storage_ctx() -> CheckpointGateContext:
+    """The subtle aliasing variant the tensor-count check cannot see.
+
+    All 128 declared shards are present for every expert weight, so a gate
+    that only counts names is green. Every stem nevertheless contains only 16
+    distinct storages, each addressed by eight different tensor names: the
+    count is correct, but 112 expert identities are aliases.
+    """
+    tensors: list[TensorMeta] = []
+    declared_fqns: list[str] = []
+
+    for layer in range(_DECLARED_MOE_LAYERS):
+        for parameter in _PER_EXPERT_PARAMS:
+            for expert in range(_DECLARED_EXPERT_COUNT):
+                fqn = _sharded_expert_fqn(layer, parameter, expert)
+                declared_fqns.append(fqn)
+                tensors.append(
+                    TensorMeta(
+                        fqn=fqn,
+                        shape=(1, *_EXPERT_INNER_SHAPE),
+                        dtype=_EXPERT_DTYPE,
+                        storage_id=_storage_id(
+                            "right-count-aliased-storage",
+                            layer,
+                            parameter,
+                            expert % _RIGHT_COUNT_ALIAS_STORAGE_COUNT,
+                        ),
+                    )
+                )
+
+    return _make_context(
+        name="right-count-aliased-storage",
+        tensors=tuple(tensors),
+        declared_fqns=tuple(declared_fqns),
+        num_experts=_DECLARED_EXPERT_COUNT,
+        num_moe_layers=_DECLARED_MOE_LAYERS,
+        expected_expert_bytes=_declared_expert_bytes(
+            _DECLARED_EXPERT_COUNT,
+            _DECLARED_MOE_LAYERS,
+        ),
+    )
+
+
+def healthy_fused_moe_ctx(
+    num_experts: int = 8,
+    *,
+    num_layers: int = 2,
+) -> CheckpointGateContext:
+    """A non-vacuous known-good fused MoE checkpoint.
+
+    Each MoE layer has one ``linear_fc1`` and one ``linear_fc2`` weight whose
+    leading dimension is the declared expert count, with unique storage for
+    every tensor. This is the healthy counterpart of the audited incident and
+    the positive control against a checkpoint gate that blocks everything.
+    """
+    tensors: list[TensorMeta] = []
+
+    for layer in range(num_layers):
+        for parameter in _PER_EXPERT_PARAMS:
+            fqn = _fused_expert_fqn(layer, parameter)
+            tensors.append(
+                TensorMeta(
+                    fqn=fqn,
+                    shape=(num_experts, *_EXPERT_INNER_SHAPE),
+                    dtype=_EXPERT_DTYPE,
+                    storage_id=_storage_id(
+                        "healthy-fused-expert",
+                        layer,
+                        parameter,
+                        num_experts,
+                    ),
+                )
+            )
+
+    context_tensors = tuple(tensors)
+    return _make_context(
+        name=f"healthy-fused-{num_layers}x{num_experts}",
+        tensors=context_tensors,
+        declared_fqns=tuple(meta.fqn for meta in context_tensors),
+        num_experts=num_experts,
+        num_moe_layers=num_layers,
+        expected_expert_bytes=sum(meta.nbytes for meta in context_tensors),
+    )
+
+
+def missing_shard_ctx() -> CheckpointGateContext:
+    """A save in which one shard was never written while launch still exited 0.
+
+    Shards 0 and 1 contribute all four of their tensors; shard 2 contributes
+    none, leaving two of the six declared tensors absent. Filtering to real
+    tensors is essential: the defect must not disappear underneath unrelated
+    checkpoint metadata keys.
+    """
+
+    def shard_fqn(shard: int, layer: int) -> str:
+        return f"checkpoint.shards.{shard}.layers.{layer}.weight"
+
+    declared_fqns = tuple(shard_fqn(shard, layer) for shard in range(3) for layer in range(2))
+    present = tuple(
+        TensorMeta(
+            fqn=shard_fqn(shard, layer),
+            shape=(256, 256),
+            dtype="float32",
+            storage_id=_storage_id("missing-shard-present", shard, layer),
+        )
+        for shard in range(2)
+        for layer in range(2)
+    )
+    return _make_context(
+        name="missing-shard-2",
+        tensors=present,
+        declared_fqns=declared_fqns,
+        num_experts=0,
+        num_moe_layers=0,
+        expected_expert_bytes=0,
+    )
+
+
+def bloated_extra_state_ctx() -> CheckpointGateContext:
+    """64 real tensors buried under 512 ``_extra_state`` metadata blobs.
+
+    This mirrors the audited 26B checkpoint's 928 real tensors among roughly
+    8,970 metadata keys, at fixture scale. Counting every metadata entry would
+    report 576 healthy units; the fixture proves completeness is measured
+    against only the 64 tensors that actually matter.
+    """
+    real_count = 64
+    blobs_per_tensor = 8
+
+    real_tensors = tuple(
+        TensorMeta(
+            fqn=f"model.layers.{index}.linear.weight",
+            shape=(64, 64),
+            dtype="bfloat16",
+            storage_id=_storage_id("bloated-real-tensor", index),
+        )
+        for index in range(real_count)
+    )
+    metadata_blobs = tuple(
+        TensorMeta(
+            fqn=f"{real_tensors[index].fqn}._extra_state.{blob_index}",
+            shape=(8,),
+            dtype="uint8",
+            storage_id=_storage_id(
+                "bloated-extra-state",
+                index,
+                blob_index,
+            ),
+            kind="extra_state",
+        )
+        for index in range(real_count)
+        for blob_index in range(blobs_per_tensor)
+    )
+    tensors = real_tensors + metadata_blobs
+    return _make_context(
+        name="bloated-extra-state",
+        tensors=tensors,
+        declared_fqns=tuple(meta.fqn for meta in tensors),
+        num_experts=0,
+        num_moe_layers=0,
+        expected_expert_bytes=0,
+    )

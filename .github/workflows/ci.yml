@@ -1,4 +1,4 @@
-# Two jobs, on purpose.
+# Three jobs, on purpose.
 #
 # `check` is ordinary hygiene: lint, format, types, tests across supported Pythons.
 #
@@ -10,6 +10,41 @@
 # (all_identity: True over an empty tensor set — all([]) is True).
 # The entry point also exits nonzero if the registry is empty: a controls run
 # that verified nothing is the same vacuous pass one level up.
+#
+# `mutation` runs tools/mutate.py: the test suite is executed against
+# systematically mutated sources, and any mutant the suite does not kill fails
+# the job. It is deliberately NOT part of `check` — it is slower (~2 min) and it
+# asks a different question: `check` asks "does the code pass the suite",
+# mutation asks "does the suite detect wrong code". It runs on every push;
+# whether branch protection gates merges on it is a repo setting, not something
+# this file controls. What this file guarantees is that it runs and that a
+# survivor turns it red.
+#
+# The skip-hole fix, recorded so it stays fixed
+# ---------------------------------------------
+# Measured at the time it was found: with torch the suite was 387 passed / 3
+# xfailed; without torch, 346 passed / 41 skipped / 3 xfailed — and this
+# workflow, installing only .[dev], reported green. The 41 skips were the tests
+# that write a real
+# checkpoint to disk and read it back, including the bridge test that reproduces
+# the incident this repository publishes. A check that could not fail bought
+# confidence anyway. The fix has four parts:
+#
+#   1. `check` installs .[checkpoint,dev] — torch present, nothing can skip for
+#      lack of a dependency. The matrix stays at 3.10/3.11/3.12; nothing was
+#      dropped (see the matrix comment).
+#   2. FS_FORBID_SKIPS=1 is set job-wide and tests/conftest.py turns any skip
+#      into a failure that names the test and its reason. Job-wide on purpose:
+#      the probe step must see the same arming the pytest step sees.
+#   3. A MUST_FIRE probe for the guard itself: CI generates a deliberately
+#      skipped test and requires the armed guard to fail the run AND name the
+#      probe. Same discipline `controls` applies to gates, one level up.
+#   4. A coverage floor (--cov-fail-under=90) so the next mechanism for
+#      silently shrinking what the suite exercises also shows up red.
+#
+# The tree is now 412 passed / 0 skipped / 0 xfailed with torch. The numbers
+# above are kept as the measurement that motivated the fix, not as current
+# state — dating a claim is cheaper than re-deriving why it was made.
 
 name: CI
 
@@ -26,7 +61,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # torch publishes linux-x86_64 wheels for all three of these (on PyPI and
+        # on the pytorch CPU index), so installing [checkpoint] costs the matrix
+        # nothing. If a future Python or runner lacks a torch wheel, the matrix
+        # must change out loud — never by letting the tests skip: the guard below
+        # fails that build now.
         python: ["3.10", "3.11", "3.12"]
+    env:
+      # Job-wide on purpose. The probe step and the pytest step must share ONE
+      # arming: if this ever moves into a single step's `env:`, the probe can
+      # pass while the suite runs disarmed — the vacuous pass, one level up.
+      # tests/conftest.py treats exactly "1" as armed; a laptop leaves it unset.
+      FS_FORBID_SKIPS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,17 +80,78 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
       - name: Install
+        # .[checkpoint] provides torch (+ safetensors): without it 41 tests skip
+        # and this job used to report green anyway. The pytorch CPU wheel index
+        # keeps the torch download small; PyPI stays the primary index for
+        # everything else. pytest-cov is installed here because pyproject.toml's
+        # [dev] extra does not carry it and the pytest step needs --cov.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
+      - name: Skip-guard probe (MUST_FIRE — prove the armed guard can fail)
+        # The cheapest honest proof that FS_FORBID_SKIPS is wired: hand the
+        # runner a test that cannot pass-skipped-unnoticed and require (a) a
+        # nonzero exit and (b) the guard's summary naming this exact test. (a)
+        # alone would pass on any unrelated crash, hiding a dead guard; (b)
+        # alone says nothing about the exit code. The probe file is generated
+        # here, never committed, and removed by trap — and if the trap ever
+        # fails, its skip fails the armed suite below: fail closed both ways.
+        run: |
+          cat > tests/test__skip_guard_probe.py <<'PROBE'
+          """Throwaway MUST_FIRE probe for the FS_FORBID_SKIPS guard (tests/conftest.py).
+
+          Generated in CI's probe step and deleted by the same step. If this file ever
+          survives into the real suite run, the armed guard fails the build on its skip:
+          fail closed in both directions.
+          """
+
+          import pytest
+
+
+          def test_skip_guard_probe():
+              pytest.skip("deliberate skip; an armed skip guard must fail this run")
+          PROBE
+          trap 'rm -f tests/test__skip_guard_probe.py' EXIT
+          set +e
+          output=$(pytest tests/test__skip_guard_probe.py 2>&1)
+          rc=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::FS_FORBID_SKIPS is armed job-wide, yet a deliberately skipped"
+            echo "::error::test exited 0. The guard in tests/conftest.py is missing or"
+            echo "::error::has rotted into a no-op — the vacuous pass, one level up."
+            exit 1
+          fi
+          if ! printf '%s\n' "$output" | grep -q "test_skip_guard_probe"; then
+            echo "::error::The probe run failed, but the skip guard did not name the"
+            echo "::error::probe. Something else failed it — the guard may be a no-op"
+            echo "::error::hidden behind an unrelated failure. Investigate before merging."
+            exit 1
+          fi
+          echo "skip guard fired and named its probe — the guard is proven able to fail."
       - name: Ruff
-        run: ruff check src tests
+        # tools/ is included: the mutation runner is the thing that decides
+        # whether the suite is trustworthy, so it is not exempt from the checks
+        # the suite is held to.
+        run: ruff check src tests tools
       - name: Ruff format
-        run: ruff format --check src tests
+        run: ruff format --check src tests tools
       - name: Mypy
         run: mypy src
-      - name: Pytest
-        run: pytest
+      - name: Pytest (coverage floor 90; skips are failures — FS_FORBID_SKIPS)
+        # --cov-fail-under=90 against a measured 93.6% total. The floor was 70 when
+        # written, sized around gates/fixtures.py at 63% and gates/controls.py at
+        # 0%; both now sit at 98% and 97%, so 70 had become a floor nothing could
+        # touch — a gate that cannot fail, in the file that argues against them.
+        # 90 leaves ~3.6 points of headroom and still goes red on the collapse
+        # cases this defends: a new unexercised module, a quietly emptied test
+        # file, tests no longer collected.
+        #
+        # It is a TOTAL, and a total can be subsidised: the weakest module is
+        # checkpoint/dcp_meta.py at 72%, which this floor would not catch on its
+        # own. Named in the README under Status rather than left implicit.
+        run: pytest --cov=foundationscale --cov-report=term-missing --cov-fail-under=90
 
   controls:
     name: gate controls (MUST_FIRE fixtures)
@@ -61,3 +168,28 @@ jobs:
           pip install -e ".[dev]"
       - name: Run gate controls
         run: python -m foundationscale.gates.controls
+
+  mutation:
+    name: mutation testing (a surviving mutant fails this job)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Mutant trials inherit this: a mutant that flips a test into "skipped"
+      # must be killed, not scored as survived. tools/mutate.py runs the suite
+      # with the same environment CI uses.
+      FS_FORBID_SKIPS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
+      - name: Run mutation tests
+        # tools/mutate.py (task 2 of this batch) exits nonzero if any mutant
+        # survives. No continue-on-error, no filtering: the survivor count is
+        # the signal and it fails this job directly.
+        run: python tools/mutate.py

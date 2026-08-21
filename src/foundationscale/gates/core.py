@@ -614,14 +614,44 @@ def verify_controls(
     3. Each MUST_PASS control does not block, so gates that block unconditionally are
        caught before someone disables them.
 
+    It also enforces two things about itself, because a verifier that loses
+    findings to its own exceptions is the ``all([])`` bug one level up:
+
+    * A gate whose :meth:`Gate.controls` raises is reported as a failure naming
+      the gate and the exception — it is not re-raised from here and not
+      skipped. Its controls were never shown to run; that is a finding.
+    * An id in ``gate_ids`` that is not registered is reported as a failure
+      naming the id — it is not raised as ``KeyError`` and not dropped. A
+      dropped id would verify nothing and return ``[]``, reporting success
+      over zero work.
+
     An empty return value means all controls held.
     """
     reg = registry if registry is not None else REGISTRY
     failures: list[str] = []
-    targets = list(reg) if gate_ids is None else [reg.get(g) for g in gate_ids]
+    targets: list[Gate] = []
+    if gate_ids is None:
+        targets.extend(reg)
+    else:
+        for gate_id in gate_ids:
+            if gate_id in reg:
+                targets.append(reg.get(gate_id))
+            else:
+                failures.append(
+                    f"{gate_id}: not registered — asked to verify controls for a gate "
+                    f"that is not in the registry; dropping the id would let a typo "
+                    f"read as 'all controls held'"
+                )
 
     for gate in targets:
-        controls = list(gate.controls())
+        try:
+            controls = list(gate.controls())
+        except Exception as exc:  # noqa: BLE001 — controls() is gate-author code
+            failures.append(
+                f"{gate.id}: controls() raised {type(exc).__name__}: {exc} — a gate "
+                f"whose control list cannot be built has never been shown to fire"
+            )
+            continue
         if not any(c.kind is ControlKind.MUST_FIRE for c in controls):
             failures.append(
                 f"{gate.id}: declares no MUST_FIRE control — a gate that has never "
