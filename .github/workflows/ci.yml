@@ -1,0 +1,63 @@
+# Two jobs, on purpose.
+#
+# `check` is ordinary hygiene: lint, format, types, tests across supported Pythons.
+#
+# `controls` is the job this framework exists for. It runs every registered gate's
+# fixtures — each MUST_FIRE control is a deliberately defective input, e.g. the
+# 128-experts-aliased-to-16 checkpoint, and the build fails if the gate does not
+# block on it. That is how a gate is prevented from rotting into a no-op that
+# reports success on everything, which the audit watched a verification tool do
+# (all_identity: True over an empty tensor set — all([]) is True).
+# The entry point also exits nonzero if the registry is empty: a controls run
+# that verified nothing is the same vacuous pass one level up.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  check:
+    name: "lint / typecheck / test (Python ${{ matrix.python }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Ruff
+        run: ruff check src tests
+      - name: Ruff format
+        run: ruff format --check src tests
+      - name: Mypy
+        run: mypy src
+      - name: Pytest
+        run: pytest
+
+  controls:
+    name: gate controls (MUST_FIRE fixtures)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run gate controls
+        run: python -m foundationscale.gates.controls

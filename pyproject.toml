@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "foundationscale"
+version = "0.1.0"
+description = "A scalable distributed training framework for foundation models, from single-GPU experiments to large-scale multi-node training."
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["distributed-training", "checkpointing", "verification", "foundation-models"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+# CORE RUNTIME DEPENDENCIES: NONE — deliberately.
+#
+# The gate contract (foundationscale.gates.core) is pure stdlib so that the
+# verification plane runs on a login node with nothing installed. The audited
+# estate's truncated export (5.94 GB of a required 51.6 GB, rc=0) shipped
+# precisely because its byte check lived in a script on a box that had the right
+# environment, and was absent from the box that ran the export. A verifier that
+# needs a fat environment is a verifier that does not run.
+#
+# Heavy dependencies are therefore optional extras. The reference/verified
+# environment is torch 2.10.0+cpu on Python 3.12; lower bounds below are the
+# minimum supported, not the tested pin.
+dependencies = []
+
+[project.optional-dependencies]
+checkpoint = [
+    "torch>=2.1",
+    "safetensors>=0.4",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "mypy>=1.7",
+]
+all = [
+    "foundationscale[checkpoint,dev]",
+]
+
+[project.urls]
+Homepage = "https://github.com/TranNhiem/FoundationScale"
+Repository = "https://github.com/TranNhiem/FoundationScale"
+
+[project.scripts]
+# CI runs this as a separate job (see .github/workflows/ci.yml). It executes every
+# registered gate's controls and fails the build if any MUST_FIRE control does not
+# block — or if the registry is empty, which is the vacuous pass one level up.
+foundationscale-controls = "foundationscale.gates.controls:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "slow: long-running checks (large synthetic checkpoints on disk)",
+    "integration: exercises a full lifecycle path end to end",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RET", "ARG", "PTH"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ARG"]
+
+[tool.mypy]
+mypy_path = "src"
+python_version = "3.10"
+# The package ships strict; sloppy types in gate code are how an all([]) sneaks in.
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+# Torch and friends ship incomplete stubs over many versions; missing stubs on an
+# optional dependency must not block type-checking the stdlib-only core.
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
