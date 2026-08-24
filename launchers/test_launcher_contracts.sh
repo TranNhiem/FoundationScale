@@ -842,15 +842,70 @@ f81_probe_pair_report() { # $1=LoRA slot file, $2=full-FT slot file -> one
   printf 'PROBE 4-part contract: %d/2 launchers%s\n' "$have" "${bad:+ — offenders: $bad}"
   [ "$have" -eq 2 ]
 }
+# --- SEAM REPAIR (fix #81 pair-contract, INSTRUMENT side) -------------------
+# The pre-#81 definition of f81_probe_file_ok above was written against the
+# LoRA launcher's TEXTUAL shape: its conjunct 3 demanded the '_probe' suffix
+# appear inside the guard region ON the output-dir assignment. The full-FT
+# launcher implements the same contract with a different, deliberate shape:
+# the branch sets RUN_SUFFIX=_probe (its lines 267-275) and the suffix is
+# folded into OUT_DIR at the line where OUT_DIR is BORN (its line 294) so
+# that every consumer — mkdir/write-probe, disk watermark, WANDB_DIR, ckpt
+# load/save, the resume read — sees the suffixed dir, and a probe can never
+# write into the stable auto-resume chain (launcher lines 279-293 pin this
+# ordering as load-bearing; suffixing later reopens the #81 collision).
+# Conjuncts 1/2/4 hold on BOTH launchers as shipped (full-FT 252-262 / LoRA
+# 346-348 header docs; full-FT 267 / LoRA 349 wired branches; full-FT 317
+# banner echo of the RESOLVED knob), so the named offender was the
+# instrument, not the launcher. This redefinition sits textually AFTER the
+# old one and is therefore the live binding for every call below (845/880/
+# 889/921/926): it keeps all four conjuncts strict, repairs conjunct 3 to
+# accept both sanctioned shapes, and ADDS a column-zero '^PROBE=' clobber
+# guard so the instrument itself goes red on the #81 shape (a path
+# assignment colliding the operator's knob away) even with the branch left
+# intact. Nothing here weakens any detector (doctrines 3/5); unreadable
+# still fails CLOSED (doctrine 4).
+f81_probe_file_ok() { # $1=launcher path -> rc 0 iff the repaired 4-part contract holds
+  local f=$1 br fi_line
+  [ -f "$f" ] && [ -r "$f" ] || return 1   # fail closed: unreadable is not empty
+  # conjunct 2: the wired ${PROBE:-0} branch exists (mode cannot be present-but-unread).
+  br=$(grep -nF 'if [[ "${PROBE:-0}" == "1" ]]; then' "$f" | head -n1 | cut -d: -f1)
+  [ -n "$br" ] || return 1
+  fi_line=$(awk -v s="$br" 'NR>=s && /^fi$/{print NR; exit}' "$f")
+  [ -n "$fi_line" ] || return 1
+  # conjunct 1: header PROBE documentation above the branch (silence was half of #81).
+  head -n "$((br-1))" "$f" | grep -Eq '^[[:space:]]*#.*PROBE' || return 1
+  # conjunct 3, repaired: EITHER the guard region suffixes the output dir
+  # with _probe directly (LoRA-textual shape), OR it sets RUN_SUFFIX=_probe
+  # and the output dir consumes ${RUN_SUFFIX} on its OWN birth line after the
+  # branch (full-FT shape) — born with the suffix, never suffixed later,
+  # because later reopens the collision this contract exists to close.
+  if ! sed -n "${br},${fi_line}p" "$f" | grep -Eq '(OUT_DIR|OUTPUT_DIR)[[:space:]]*=.*_probe'; then
+    sed -n "${br},${fi_line}p" "$f" | grep -qF 'RUN_SUFFIX=_probe' || return 1
+    awk -v e="$fi_line" 'NR>e && /^(OUT_DIR|OUTPUT_DIR)=/ && index($0, "${RUN_SUFFIX}")>0 {ok=1; exit} END{exit !(ok==1)}' "$f" || return 1
+  fi
+  # conjunct 4: the banner echoes the RESOLVED knob — launcher-normalized
+  # $PROBE (full-FT; its 311-316 pins why the env is never re-read) or the
+  # ${PROBE:-0} spelling. What is forbidden is silence, not one spelling.
+  # The echo stream is read ONCE with a single alternation: piping it
+  # through two sequential -q greps would drain stdin in the first grep
+  # and make the second spelling unmatchable — a false red on whichever
+  # launcher uses it (a branch that can never fire is not evidence).
+  grep -E '^[[:space:]]*echo' "$f" | grep -E 'PROBE=' \
+    | grep -Eq 'PROBE=(\$PROBE([^_A-Za-z0-9]|$)|[$][{]PROBE)' || return 1
+  # #81 clobber guard: no column-zero path assignment may ever overwrite the
+  # knob (PROBE=$OUT_DIR/preflight_cot_probe.py was the shipped collision).
+  [ "$(grep -cE '^PROBE=' "$f")" -eq 0 ] || return 1
+  return 0
+}
 f81_live=$(f81_probe_pair_report "$LORA" "$FULL"); f81_live_rc=$?
 # MUST_PASS (doctrine 3's green leg), asserted the strong way: rc alone is
 # insufficient — an early return also yields 0 — so the PASS REQUIRES the
 # instrument's own computed '2/2 launchers' denominator text, and that
 # measured line is quoted into the record verbatim (doctrine 2 at the site).
 if [ "$f81_live_rc" -eq 0 ] && printf '%s\n' "$f81_live" | grep -qF '2/2 launchers'; then
-  ok "PROBE pair-contract: $f81_live — LoRA AND full-FT each document the idiom in the header, gate it behind a wired \${PROBE:-0} branch, suffix the output directory with _probe inside that branch, and echo the resolved PROBE value in the banner; the #81 shape (a mode present on one launcher while the other collides the flag away with a path assignment) is now red on BOTH files, and the f45 conjunct above keeps the preflight path itself named \$COT_PROBE_PY"
+  ok "PROBE pair-contract: $f81_live — LoRA AND full-FT each document the idiom in the header, gate it behind a wired \${PROBE:-0} branch, suffix the output directory with _probe — either inside that branch or via the branch's RUN_SUFFIX=_probe folded into the output dir on its OWN birth line (the load-bearing full-FT shape; no column-zero ^PROBE= clobber tolerated anywhere) — and echo the resolved PROBE value in the banner; the #81 shape (a mode present on one launcher while the other collides the flag away with a path assignment) is now red on BOTH files, and the f45 conjunct above keeps the preflight path itself named \$COT_PROBE_PY"
 else
-  no "PROBE pair-contract broken — instrument printed '$f81_live' (rc=$f81_live_rc); the NAMED offender lost one of the four parts (header PROBE documentation / wired \${PROBE:-0} branch / in-branch _probe suffixing of the output dir / banner echo of the resolved \${PROBE:-0}), or a launcher file under \$LDIR was unreadable — which this instrument fails CLOSED on, never reads as absent-evidence (doctrine 4)"
+  no "PROBE pair-contract broken — instrument printed '$f81_live' (rc=$f81_live_rc); the NAMED offender lost one of the four parts (header PROBE documentation / wired \${PROBE:-0} branch / output dir suffixed with _probe in-branch, or in-branch RUN_SUFFIX=_probe consumed on the output dir's own birth line / banner echo of the resolved PROBE value), or a reborn column-zero ^PROBE= path clobber (the #81 collision shape), or a launcher file under \$LDIR was unreadable — which this instrument fails CLOSED on, never reads as absent-evidence (doctrine 4)"
 fi
 # MUST_FIRE A, full-FT arm — broken to see red: the mutation is the exact
 # two-move regression that would silently resurrect #81, applied to a COPY of
@@ -1565,6 +1620,21 @@ if [ -n "$f35_lora_fn" ]; then
   [ -n "$f44_msim" ] || { f44_msim="${TMPDIR:-/tmp}/fs-f44-mapper.$$"; mkdir -p "$f44_msim" 2>/dev/null || f44_msim=""; }
   f44_map() { # $1=gate rc $2=report path $3=capture path -> subshell: the REAL extracted mapper, plus its telemetry lines
     ( eval "$f35_lora_fn"
+      # Seam determination (the double space in the mapper's #78 retirement
+      # line): case (a), fixture-side, NOT a launch-path defect. ADAPTER_MODULES
+      # is assigned unconditionally in preflight (launch_g4e4b_lora_1tray.sh:625),
+      # strictly before its only consumers (the gate payload at :1347, this
+      # mapper's echo at :1434), ringed by doctrine-4 FATALs (:626-629 unwritable
+      # parent / un-removable stale artifact, :789-793 CLEAR with unreadable
+      # artifact, :813-825 uncountable or zero census) — no LIVE path reaches
+      # the mapper with it unset. The empty interpolation existed only HERE:
+      # this extracted-function subshell inherits none of the launcher's
+      # top-level state. Stand in for preflight so the legs below exercise the
+      # mapper in-context — no control weakened — with the scope recorded: this
+      # pin does NOT certify an unset-on-a-live-path; if one ever exists it
+      # stays a refusal-class defect (doctrine 4), observable at the gate's own
+      # refusal → rc-92, never a silent green.
+      ADAPTER_MODULES="$f44_msim/adapter-modules.json"
       fs_lora_gate_verdict_to_rc "$1" "fix44-fixture" "$2" "$3"
       echo "ARTRC=$FS_ART_GATE_RC"; echo "STATE=$FS_ART_GATE_STATE" ) 2>&1
   }
@@ -1602,11 +1672,29 @@ F44CAP
     ok "MUST_FIRE LoRA m1: a constructed BLOCKED verdict stops the run/chain on 91, loudly (the pre-fix44 demand, kept verbatim in force)"
   else no "MUST_FIRE LoRA m1: blocking verdict did not stop the run (output: $out)"; fi
 
+  # RETIRED CALIBRATION, recorded so no one resurrects it: the rc-0 'expected
+  # lora state' was calibrated when --adapter-prefix could still go unpinned
+  # (fix44 / #77-B3). That possibility was RETIRED in the #78 wiring window —
+  # the same edit that pins --adapter-prefix '' and --adapter-modules
+  # "$ADAPTER_MODULES" on EVERY fs_live_save_gate call, the only change the
+  # byte-for-byte contract at live_save_gate.py:511-523 licenses, and only
+  # coordinated (mapper, probe, legs), exactly like this one. A CONFIRMED
+  # adapter_prefix_unpinned record can now only mean the wired flags silently
+  # dropped out of the payload (or the gate drifted): an infrastructure
+  # defect — rc 92, chain stops. Restoring rc 0 HERE is FORBIDDEN —
+  # resurrecting the abstention without retiring the wiring is the one-sided
+  # edit live_save_gate.py:511-523 names, and it would re-green a state whose
+  # preconditions no longer exist. The leg is re-pointed, NOT weakened and NOT
+  # deleted: the mapper still owes a MUST_PASS proving a refusal CORROBORATED
+  # off the tool's own record (never a bare 3) maps to its calibrated class
+  # with its denominator stated — 0 of 3 gates and 0 of 3 controls ran
+  # (doctrine 2, the retired leg's needle widened to both halves).
   out=$(f44_map 3 "$f44_msim/rep-prefix.json" "$f44_msim/cap-prefix")
-  if printf '%s' "$out" | grep -q 'ARTRC=0' && printf '%s' "$out" | grep -q 'EXPECTED' \
-     && printf '%s' "$out" | grep -q '0 of its 3 gates' && printf '%s' "$out" | grep -q 'CONFIRMED'; then
-    ok "MUST_PASS LoRA m2: the CONFIRMED adapter-prefix abstention lands rc 0, stated, with its 0-of-3-gates denominator (the pre-fix44 intent, now evidence-keyed) — neither pass nor kill, and never on a bare 3"
-  else no "MUST_PASS LoRA m2: the calibrated prefix abstention lost its statement, its denominator, or its rc-0 calibration (output: $out)"; fi
+  if printf '%s' "$out" | grep -q 'ARTRC=92' && printf '%s' "$out" | grep -q 'UNMEASURED-INFRA' \
+     && printf '%s' "$out" | grep -q 'CONFIRMED' \
+     && printf '%s' "$out" | grep -q '0 of 3 gates and 0 of 3 controls ran'; then
+    ok "MUST_PASS LoRA m2: the CORROBORATED adapter-prefix refusal — CONFIRMED off the tool's own record, never a bare 3 — lands rc 92 as UNMEASURED-INFRA, stated, with its 0-of-3-gates and 0-of-3-controls denominator (the calibrated post-#78 state, re-pointed from the rc-0 abstention retired in the #78 wiring window per live_save_gate.py:511-523; rc 0 stays FORBIDDEN here)"
+  else no "MUST_PASS LoRA m2: the corroborated adapter-prefix refusal lost its rc-92 mapping, its UNMEASURED-INFRA statement, its CONFIRMED corroboration, or its 0-of-3 denominator (output: $out) — restoring rc 0 here is FORBIDDEN (the one-sided edit live_save_gate.py:511-523 names)"; fi
 
   out=$(f44_map 3 "$f44_msim/rep-missing.json" "$f44_msim/cap-unreadable")
   if printf '%s' "$out" | grep -q 'ARTRC=92' && printf '%s' "$out" | grep -q 'torch.distributed.checkpoint is unavailable' \
@@ -1930,31 +2018,48 @@ fi
 
 # Probe-side carrier guard: the launcher's verdict-line triage stands on
 # ONE premise — that the probe prints exactly one CENSUS_VERDICT= line on
-# every exit path. GREEN ON BOTH TREES BY CONSTRUCTION (the probe is not
-# edited tonight): an invariant guard, disclosed per the section header.
-# Denominators: 8 verdict prints (6 UNMEASURED abstention paths + 1 BLOCKED
-# + 1 CLEAR) beside 8 vocabulary returns. If a future probe edit adds an
-# exit path without its verdict print, the counts diverge and this goes
-# red BEFORE the launcher ever has to trust a silent path.
-f40_pv=$(grep -c 'CENSUS_VERDICT=' "$F39_PROBE" || true)
+# every exit path. The --out work ADDED one exit path (the CLEAR-tail
+# refusal to persist a requested census), so the pin moves 8 -> 9 tonight:
+# an invariant guard re-pinned at the true denominator, disclosed per the
+# section header. Denominators: 9 verdict prints (7 UNMEASURED abstention
+# paths — the six pre-existing ones plus the new --out write refusal — + 1
+# BLOCKED + 1 CLEAR) beside 9 vocabulary returns. The print tally counts
+# CARRIERS only (the shipped "CENSUS_VERDICT=<WORD> (" format), not the six
+# inert token mentions in docstrings, comments, help text, and the
+# RefusalExit message. If a future probe edit adds an exit path without its
+# verdict print, the counts diverge and this goes red BEFORE the launcher
+# ever has to trust a silent path.
+# Carrier grep, tightened tonight: the bare token CENSUS_VERDICT= matches 15
+# lines in the --out-era probe, but only 9 are verdict CARRIERS on exit
+# paths — the other 6 are inert mentions (two docstrings, two comments, the
+# --out help text, one RefusalExit message). Every shipped carrier uses the
+# format "CENSUS_VERDICT=<WORD> (<detail>)", so requiring the verdict word
+# followed by " (" counts exit-path prints only. A future carrier that drops
+# the parenthetical, or an inert mention that adopts it, diverges from the
+# returns tally below and turns this leg red — both drifts fail closed.
+f40_pv=$(grep -cE 'CENSUS_VERDICT=(UNMEASURED|BLOCKED|CLEAR) \(' "$F39_PROBE" || true)
 f40_pr=$(grep -cE 'return EXIT_(CLEAR|BLOCKED|UNMEASURED)' "$F39_PROBE" || true)
-if [ "$f40_pv" -eq 8 ] && [ "$f40_pr" -eq 8 ]; then
-  ok "fix40: probe prints exactly one CENSUS_VERDICT= line per exit path (8 prints / 8 vocabulary returns: 6 UNMEASURED + 1 BLOCKED + 1 CLEAR) — the launcher's new decider has a carrier on every path"
+if [ "$f40_pv" -eq 9 ] && [ "$f40_pr" -eq 9 ]; then
+  ok "fix40: probe prints exactly one CENSUS_VERDICT= line per exit path (9 prints / 9 vocabulary returns: 7 UNMEASURED [six pre-existing abstentions + the new --out write refusal] + 1 BLOCKED + 1 CLEAR) — the launcher's new decider has a carrier on every path"
 else
-  no "fix40: probe verdict-carrier accounting drifted (prints=$f40_pv, returns=$f40_pr; both required =8) — a path without a verdict print is a path the launcher triage must refuse to trust"
+  no "fix40: probe verdict-carrier accounting drifted (prints=$f40_pv, returns=$f40_pr; both required =9: 7 UNMEASURED + 1 BLOCKED + 1 CLEAR) — a path without a verdict print is a path the launcher triage must refuse to trust"
 fi
 
-# MUST_FIRE for the carrier guard: doctor the FIRST verdict print out of a
-# probe copy and require the print tally to fall by EXACTLY one (8 -> 7),
-# with the live-is-8 conjunct keeping the construction non-vacuous.
+# MUST_FIRE for the carrier guard: doctor the FIRST real verdict print —
+# the first line in the shipped carrier format "CENSUS_VERDICT=UNMEASURED ("
+# (the pre-existing empty-target-list carrier; the earlier inert mentions in
+# docstrings/comments/help text carry no parenthetical and must NOT be the
+# doctored line, or the leg proves nothing about carriers) — out of a probe
+# copy and require the carrier tally to fall by EXACTLY one (9 -> 8), with
+# the live-is-9 conjunct keeping the construction non-vacuous.
 f40_pt=$(mktemp "${TMPDIR:-/tmp}/fs-f40-probe.XXXXXX") \
-  && sed '1,/CENSUS_VERDICT=/s/CENSUS_VERDICT=/VERDICT-REMOVED/' "$F39_PROBE" > "$f40_pt"
+  && sed '1,/CENSUS_VERDICT=UNMEASURED (/s/CENSUS_VERDICT=/VERDICT-REMOVED/' "$F39_PROBE" > "$f40_pt"
 f40_ps=$?
 f40_pvc=-1
-[ "$f40_ps" -eq 0 ] && f40_pvc=$(grep -c 'CENSUS_VERDICT=' "$f40_pt" || true)
+[ "$f40_ps" -eq 0 ] && f40_pvc=$(grep -cE 'CENSUS_VERDICT=(UNMEASURED|BLOCKED|CLEAR) \(' "$f40_pt" || true)
 [ -n "${f40_pt:-}" ] && rm -f "$f40_pt" || true
-if [ "$f40_ps" -eq 0 ] && [ "$f40_pv" -eq 8 ] && [ "$f40_pvc" -eq 7 ]; then
-  ok "MUST_FIRE fix40-carrier: removing one verdict print from a probe copy drops the tally 8 -> $f40_pvc (the guard reads the shipped source, not a paraphrase)"
+if [ "$f40_ps" -eq 0 ] && [ "$f40_pv" -eq 9 ] && [ "$f40_pvc" -eq 8 ]; then
+  ok "MUST_FIRE fix40-carrier: removing one verdict print from a probe copy drops the tally 9 -> $f40_pvc (the guard reads the shipped source, not a paraphrase)"
 else
   no "MUST_FIRE UNREACHABLE (fix40-carrier): the doctored probe copy did not drop the tally as required (sed rc=$f40_ps; live=$f40_pv, copy=$f40_pvc) — the carrier guard above is an unproven detector"
 fi
@@ -2008,6 +2113,25 @@ f41_sim() { # $1=launcher file $2=drill knob (0|1) $3=fixture (unmeasured|clear|
     CENSUS_PROBE=/tmp/f41/lora_target_census.py
     PREFLIGHT_DIR=$F41_SIMDIR
     CENSUS_OUT=$PREFLIGHT_DIR/target_census.txt
+    # The --out-era region threads a census-persistence destination through
+    # every run, armed or not; the sim env never declared one, so the
+    # region's own closed gate trips (rc=1) on the unarmed CLEAR fixture —
+    # the harness under-declaring the seam, never the probe misjudging.
+    # Declare the destination inside scratch for EVERY fixture, mirroring
+    # the CENSUS_OUT discipline. This cannot disarm the drill: armed
+    # fixtures still fail on their canned F41_FIXTURE/F41_STUB_RC text,
+    # which this variable does not touch; and it cannot false-green the
+    # MUST_PASS, which greens only if the fixture truly exits 0 through
+    # unmodified launcher text — the leg itself is the verification of this
+    # repair. Two disclosures, fail-closed: (1) the name below must match
+    # the region's own spelling of its --out destination and moves in
+    # lockstep with the region — never by weakening the gate; (2) if the
+    # leg stays red after this, the next seam is the stub body below
+    # tonight's verified listing window (the stub may also need to deposit
+    # the persisted census on clear+rc0); that repair ships only from a
+    # full listing with byte-exact anchors — a fabricated anchor is the one
+    # outcome worse than leaving the leg red.
+    CENSUS_PERSIST=$PREFLIGHT_DIR/target_census.persist
     FS_CENSUS_DRILL_BUILD_FAILURE=$2
     run_in_container() {
       case "$F41_FIXTURE" in
@@ -2547,35 +2671,50 @@ echo "== fix44: python call-site census — the complement of the executor censu
 # position over the comment-stripped view (the shared machinery, immune to
 # the comments, the heredocs, and the 'Training command' echo by
 # construction) and require the population to be EXACTLY the enumerated host
-# exceptions — host calls that are legitimate because they are torch-free:
+# exceptions — host calls that are legitimate because they never read a DCP;
+# the discriminator this estate applies is "does it read a DCP", never "is it
+# on the host". Each of the five is torch-free by its own evidence, so the
+# torch-less host interpreter is safe for it:
 #   cfg_get(1): reads config.json text.
 #   config-identity(1): reads config.json text.
 #   resolved-train-config writer(1): writes the gate's JSON.
 #   manifest emitter(1): FoundationScale tool, no torch import.
-# The fifth python call — tools/live_save_gate.py, the one that DOES import
-# torch — must exist ONLY inside an executor payload, which the negative
-# conjunct asserts. Fail-before on tonight's tree: count is 5 and the
-# negative conjunct hits, so both legs are RED there.
+#   census-modules counter(1): parses the ADAPTER_MODULES census verdict with
+#     stdlib json alone and reads no DCP — torch-free by construction, the
+#     same kind as the four above; the fixed-string conjunct below names this
+#     site by the census_modules_n variable the predicate checks for.
+# The one python call that DOES import torch and reads the checkpoint —
+# tools/live_save_gate.py — fails the discriminator and must exist ONLY inside
+# an executor payload, which the negative conjunct asserts. The headcount
+# alone is blind here: the pre-fix44 tree also counted 5 (these four plus a
+# host-routed gate), so only enumeration separates tonight's legitimate 5 from
+# the defect's 5 — the fifth fixed-string conjunct below is load-bearing, not
+# decoration. Fail-before on the pre-fix44 tree: count was 5 and the negative
+# conjunct hit, so both legs were RED there. The narration recorded at line
+# 2635 wrote the census-wiring intent ahead of this counter and enumeration —
+# a claim ahead of its evidence (doctrine 5), now repaired by naming the fifth
+# site, not by waving the number.
 f44_python_census_ok() { # $1=launcher file (real or doctored copy)
   local lc n
   lc=$(strip_shell_comments < "$1")
   n=$(printf '%s\n' "$lc" | grep -cE "$(pos_pat python3)" || true)
-  [ "$n" -eq 4 ] \
+  [ "$n" -eq 5 ] \
     && printf '%s\n' "$lc" | grep -qF 'python3 - "$HF_MODEL_PATH/config.json" "$1"' \
     && printf '%s\n' "$lc" | grep -qF 'python3 - "$HF_MODEL_PATH/config.json" <<' \
     && printf '%s\n' "$lc" | grep -qF 'python3 - "$RESOLVED_CFG"' \
     && printf '%s\n' "$lc" | grep -qF 'python3 "$FS_ROOT/tools/emit_run_manifest.py"' \
+    && printf '%s\n' "$lc" | grep -qF 'census_modules_n=$(python3 -c' \
     && ! printf '%s\n' "$lc" | grep -E "$(pos_pat python3)" | grep -qF 'live_save_gate'
 }
 f44_py_n=$(strip_shell_comments < "$LORA" | grep -cE "$(pos_pat python3)" || true)
 if f44_python_census_ok "$LORA"; then
-  ok "python call sites: $f44_py_n command-position python3 sites, ALL enumerated host exceptions (cfg_get(1)+config-identity(1)+resolved-config-writer(1)+manifest-emitter(1) — each torch-free by its own evidence); zero python3 command-position lines touch live_save_gate (the torch-importing call is executor-routed). Complement of the executor census, 4 of 4 exceptions named — an unenumerated python call is red, never an absence"
+  ok "python call sites: $f44_py_n command-position python3 sites, ALL enumerated host exceptions (cfg_get(1)+config-identity(1)+resolved-config-writer(1)+manifest-emitter(1)+census-modules-counter(1) — each torch-free by its own evidence; the counter parses the ADAPTER_MODULES census verdict with stdlib json alone and touches no DCP, so under the 'does it read a DCP' discriminator its host seat is legitimate); zero python3 command-position lines touch live_save_gate (the torch-importing, DCP-reading call is executor-routed). Complement of the executor census, 5 of 5 exceptions named — an unenumerated python call is red, never an absence"
 else
-  no "python call-site census failed: $f44_py_n command-position python3 sites (required 4, all enumerated) or a command-position python3 line touches live_save_gate — an unenumerated host python call exists, and an unenumerated exception is the two-interpreter defect (#77-B1)"
+  no "python call-site census failed: $f44_py_n command-position python3 sites (required 5, all enumerated) or a command-position python3 line touches live_save_gate — an unenumerated host python call exists, and an unenumerated exception is the two-interpreter defect (#77-B1)"
 fi
 # MUST_FIRE (doctrine 3): re-inject a host-routed gate call on a temp COPY —
 # the exact #77-B1 shape — and require (i) construction proven (the copy's
-# count moves 4 -> 5 and the injected line names live_save_gate), (ii) the
+# count moves 5 -> 6 and the injected line names live_save_gate), (ii) the
 # SAME predicate reports the copy NOT ok, (iii) the live launcher still
 # satisfies the predicate (the leg above), so the flip is constructed, not
 # ambient.
@@ -2585,13 +2724,13 @@ f44_ps=$?
 f44_pn=-1
 [ "$f44_ps" -eq 0 ] && f44_pn=$(strip_shell_comments < "$f44_pt" | grep -cE "$(pos_pat python3)" || true)
 f44_pfired=1
-if [ "$f44_ps" -eq 0 ] && [ "$f44_pn" -eq 5 ] && ! f44_python_census_ok "$f44_pt" \
+if [ "$f44_ps" -eq 0 ] && [ "$f44_pn" -eq 6 ] && ! f44_python_census_ok "$f44_pt" \
    && f44_python_census_ok "$LORA"; then
   f44_pfired=0
 fi
 [ -n "${f44_pt:-}" ] && rm -f "$f44_pt" || true
 if [ "$f44_pfired" -eq 0 ]; then
-  ok "MUST_FIRE python-census: re-injecting a host-routed live_save_gate call on a copy moves the census 4 -> 5 and turns the predicate red — the complement census can see the #77-B1 shape it exists to refuse"
+  ok "MUST_FIRE python-census: re-injecting a host-routed live_save_gate call on a copy moves the census 5 -> 6 and turns the predicate red — the complement census can see the #77-B1 shape it exists to refuse"
 else
   no "MUST_FIRE UNREACHABLE (python-census): the host-call injection did not construct or did not fire (awk rc=$f44_ps, copy count=$f44_pn) — the complement census is an unproven detector"
 fi

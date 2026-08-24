@@ -589,8 +589,11 @@ class TestLoraDiscrimination:
     def test_lora_healthy_is_clear_against_adapter_denominator(self, tmp_path):
         """[PASSES-BEFORE] The named direction: a LoRA adapter must NOT be
         judged catastrophically incomplete against the full model's
-        denominator. Denominators asserted: 24 real, 12 base, adapter set
-        derived 24. Red if: the ADAPTER-SCOPE expert-zeroing block in
+        denominator. Denominators asserted: 31 real (fail-closed physical
+        count: 24 judged adapter tensors + 7 save-state entries set aside
+        per #80 -- counted in the artifact inventory, outside the judged
+        population), 12 base, adapter set derived 24. Red if: the
+        ADAPTER-SCOPE expert-zeroing block in
         derive_declared_block is deleted (the base's expert denominator then
         reattaches to the adapter). Calibration note: if the zero-expert-scope
         gates return bare ok() instead of an explicit skip for a declared-zero
@@ -615,7 +618,12 @@ class TestLoraDiscrimination:
         assert d.exit_code == 0, f"healthy lora must be CLEAR: {d.blocking_reasons}"
         assert d.run_kind == "lora"
         inv = d.report["inventory"]
-        assert inv["real_tensors"] == 24 and inv["base_tensors"] == 12
+        # #80: the inventory stays fail-closed over the PHYSICAL artifact --
+        # 31 real entries = 24 judged adapter tensors + 7 non-adapter
+        # checkpoint-namespace entries (6 optimizer.* + 1 rng_state). The 7
+        # are set aside from the JUDGED population only ("all 24 declared
+        # tensors present"), never from the artifact count.
+        assert inv["real_tensors"] == 31 and inv["base_tensors"] == 12
         assert "24 adapter tensors" in d.declared_basis["fqns"]
         assert _control_by_prefix(d, "drop")["status"] == "fired"
 
@@ -1095,7 +1103,10 @@ class TestLoraStructuralBinding:
             adapter_prefix="base_model.model.",
             adapter_modules=_census_file(tmp_path, _lora_census_stems()))
         assert d.exit_code == 0, f"correctly-pinned prefix must be CLEAR: {d.blocking_reasons}"
-        assert d.report["inventory"]["real_tensors"] == 24
+        # #80: 31 real = 24 judged adapters + 7 set-aside save-state entries
+        # (6 optimizer.* + 1 rng_state); the inventory counts the physical
+        # artifact, the judged adapter population stays 24.
+        assert d.report["inventory"]["real_tensors"] == 31
 
     def test_mismatched_suffix_pin_blocks_as_vacuous_binding(self, tmp_path):
         """[FAILS-BEFORE: kwarg adapter_suffixes does not exist pre-patch ->
@@ -1124,7 +1135,17 @@ class TestLoraStructuralBinding:
             adapter_suffixes=(".delta_A", ".delta_B"),
             adapter_modules=_census_file(tmp_path, _lora_census_stems()))
         assert d.exit_code == 1
-        assert any("0 of 24" in r and "vacuous detector" in r
+        # #80: the vacuity sweep's denominator is the EXAMINED artifact
+        # population -- the structural name-search runs over every real
+        # entry, including the 7 set-aside save-state entries (set aside
+        # from the judged population, never from the search). "0 of 24"
+        # printed pre-#80 only because fixture-real == declared == 24
+        # coincided; re-pinning 24 now would pin that coincidence oracle
+        # into a MUST_FIRE, and narrowing the sweep's domain to make 24
+        # true again would blind the sweep to the excused namespace
+        # (fail-open). Teeth unchanged: exit 1, vacuity named, zero bound
+        # over the full 31-entry artifact.
+        assert any("0 of 31" in r and "vacuous detector" in r
                    for r in d.blocking_reasons)
 
 
@@ -2001,7 +2022,11 @@ class TestExitCodes:
         assert code == 0
         rpt = json.loads(out.read_text(encoding="utf-8"))
         assert rpt["exit_code"] == 0
-        assert rpt["inventory"]["real_tensors"] == 24
+        # #80: report inventory = physical artifact (31 real: 24 adapter +
+        # 6 optimizer.* + 1 rng_state); the judged adapter population
+        # stays 24; exit-code discrimination (0 CLEAR / 1 blocked /
+        # 3 unmeasured) is untouched.
+        assert rpt["inventory"]["real_tensors"] == 31
         assert rpt["inventory"]["base_tensors"] == 12
         assert len(rpt["controls"]) == 3
         assert rpt["declared_basis"]["run_kind"]
@@ -2908,6 +2933,21 @@ class TestAdapterPrefixDemand:
 
     def test_explicit_empty_prefix_is_an_assertion_and_clears(self, tmp_path):
         """[PASSES-BEFORE and PASSES-AFTER as a behaviour fence -- pre-patch
+        #80 repair record: the shared healthy fixture now carries the
+        measured 7 non-adapter checkpoint-namespace entries (6 optimizer.*
+        + 1 rng_state), so this fence pins 31 real in the fail-closed
+        artifact inventory against 24 judged adapter tensors. The body
+        inventory-denominator assertion migrates 24 -> 31 with the
+        fixture -- a one-line change at that assertion; the posted failure
+        dump did not expose a byte-exact anchor for it, so it is recorded
+        here for hand-application rather than fabricated, and the bare
+        string is NOT unique in this file (do not bulk-replace).
+        Discrimination is unchanged: the refusing twins pin the demand,
+        exit-0 pins the healthy path. Refused repairs: stripping the 7
+        entries back out of the fixture to restore the old literal
+        (blinds the measured-save evidence this fence exists to carry),
+        or teaching the tool to exclude the set-aside from the inventory
+        (wire lie). What follows reads:
         this call is byte-identical to the old default path; the
         DISCRIMINATION is carried by the refusing twin tests above, stated
         here per the house rule] MUST_PASS twin for the demand: an explicit

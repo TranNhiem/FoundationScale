@@ -220,15 +220,17 @@ def _atomic_write_json(out_path, payload) -> None:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp_path, out_path)
-    except BaseException:
-        try:
+    except BaseException:  # noqa: BLE001 -- purge temp for ANY raise, then re-raise.
+        try:  # noqa: SIM105 -- cleanup failure must never mask the real error.
             os.unlink(tmp_path)
-        except OSError:
+        except OSError:  # noqa: S110 -- swallow is by design (see docstring).
             pass
         raise
 
 
-def _persist_adapter_census(out_path, rows, population, hf_model_path, targets, total) -> None:
+def _persist_adapter_census(
+    out_path, rows, population, hf_model_path, targets, total
+) -> None:
     """Write the #78 launch-time attachment-parent census in exactly the shape
     tools/live_save_gate.py:_load_adapter_modules accepts, or raise
     _CensusRefusal with NO file at out_path.
@@ -345,7 +347,7 @@ def _persist_adapter_census(out_path, rows, population, hf_model_path, targets, 
     try:
         _atomic_write_json(out_path, payload)
     except Exception as exc:  # noqa: BLE001 -- any write failure refuses.
-        raise _CensusRefusal(
+        msg = (
             f"--out path {out_path!r} could not be written "
             f"({type(exc).__name__}: {exc}). --out names the destination: "
             "fix the path, its parent directory, or its permissions and "
@@ -353,7 +355,8 @@ def _persist_adapter_census(out_path, rows, population, hf_model_path, targets, 
             "may be assumed; any previous file there is untouched (the "
             "atomic writer replaces only after a fully serialised temp file "
             "survives fsync)."
-        ) from exc
+        )
+        raise _CensusRefusal(msg) from exc
 
     print(
         f"CENSUS_OUT {os.path.abspath(out_path)} attachment_parents="
@@ -365,7 +368,10 @@ def _persist_adapter_census(out_path, rows, population, hf_model_path, targets, 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="fix39 LoRA target census — oracle: the shipped ModuleMatcher itself."
+        description=(
+            "fix39 LoRA target census — oracle: the shipped "
+            "ModuleMatcher itself."
+        )
     )
     ap.add_argument("--hf_model_path", required=True)
     ap.add_argument("--ep", type=int, default=1)
