@@ -190,9 +190,61 @@ MODULE_PATHS = {
     "checkpoint_gates": "src/foundationscale/gates/checkpoint_gates.py",
     "controls": "src/foundationscale/gates/controls.py",
     "live_save_gate": "tools/live_save_gate.py",
+    # #85: the emission adjudicator becomes nameable by mutation rows.
+    "emit_run_manifest": "tools/emit_run_manifest.py",
 }
 
 _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")
+
+# tools/emit_run_manifest.py mutants (#85). Rows carry exactly _REQUIRED_KEYS;
+# binding to the module is by anchor uniqueness inside the file, which is why
+# MODULE_PATHS names the file first. Four of the six are killed by
+# tests/test_emit_run_manifest.py; the two main()-level survivors
+# (lora-count-fabricated, drill-never-arms) are named in that module's
+# docstring and stand in the tally as survivors -- stated, not hidden.
+# Measured-status caveat: the test validates shape, keys, and anchor
+# uniqueness of these rows. Whether this list is the container load_table
+# aggregates is observed by the next mutation run showing a denominator of 6
+# for this module; that is NOT asserted here, and a denominator of 0 is red,
+# never green.
+EMIT_RUN_MANIFEST_ROWS = [
+    {
+        "name": "emit_run_manifest.lora-zip-unstrict",
+        "what": "zip(..., strict=True) is the only length-pin between the producer and the on-disk verifier; strict=False lets a drifted keys tuple silently truncate the five-field record",
+        "anchor": "    return list(zip(_LORA_ABSTENTION_RECORD_KEYS, values, strict=True))",
+        "replacement": "    return list(zip(_LORA_ABSTENTION_RECORD_KEYS, values, strict=False))",
+    },
+    {
+        "name": "emit_run_manifest.lora-status-not-abstained",
+        "what": "declared.status is the field the on-disk predicate reads to call this null a DECLARED state; swapping the literal makes an abstention serialize as a non-abstention",
+        "anchor": '        "abstained",',
+        "replacement": '        "present",',
+    },
+    {
+        "name": "emit_run_manifest.lora-preexisting-key-rename",
+        "what": "producer and on-disk predicate share the keys tuple, so renaming the audited denominator key travels end-to-end with enforcement staying green; only the pinned literal key names in the tests catch it",
+        "anchor": '    "declared.preexisting_iter_dirs",',
+        "replacement": '    "declared.preexisting_save_dirs",',
+    },
+    {
+        "name": "emit_run_manifest.lora-count-plus-one",
+        "what": "inflates the observed pre-existing save-dir count by one, so the serialized record disagrees with the measured estate the predicate compares against",
+        "anchor": "        str(preexisting_saves),",
+        "replacement": "        str(preexisting_saves + 1),",
+    },
+    {
+        "name": "emit_run_manifest.lora-count-fabricated",
+        "what": "declared.preexisting_iter_dirs is the denominator an auditor checks against the estate; pinning it to 0 fabricates the count instead of measuring it",
+        "anchor": "        lora_preexisting_saves = _count_save_dirs(ckpt_dir)",
+        "replacement": "        lora_preexisting_saves = 0",
+    },
+    {
+        "name": "emit_run_manifest.drill-never-arms",
+        "what": "the bare-null drill is the observed-firing leg for the on-disk abstention control; '== \"0\"' means the drill can never arm, a quiet control",
+        "anchor": '    drill_bare_null = os.environ.get(_DRILL_BARE_NULL_ENV) == "1"',
+        "replacement": '    drill_bare_null = os.environ.get(_DRILL_BARE_NULL_ENV) == "0"',
+    },
+]
 
 
 SUITE_TIMEOUT_S = int(os.environ.get("FS_MUTATE_SUITE_TIMEOUT", "1800"))

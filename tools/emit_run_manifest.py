@@ -740,8 +740,12 @@ def _training_stack_entries() -> list[tuple[str, str]]:
                 f"interpreter ({type(exc).__name__}: {exc}); the training "
                 "stack is the container's, which a host-side emission cannot "
                 "honestly sample — recorded as an absence rather than guessed "
-                "(#83). The gate records the adjudicating torch regardless, on "
-                "every exit path including UNMEASURED.",
+                "(#83). Gate-side torch provenance is not implemented: the "
+                "adjudicating gate writes no torch field on any exit path, "
+                "UNMEASURED included (grep -c torch_record "
+                "tools/live_save_gate.py reads 0), so the cross-check "
+                "directive this entry used to carry named a record nothing "
+                "writes and was retracted.",
             )
         )
     else:
@@ -749,9 +753,12 @@ def _training_stack_entries() -> list[tuple[str, str]]:
             (
                 "training_stack.torch_record",
                 f"measured in-emitter at launch time (pre-GPU): torch "
-                f"{torch.__version__} at {torch.__file__} — cross-check against "
-                f"the gate's adjudicating-torch record; a mismatch indicts the "
-                f"measurement, never the model.",
+                f"{torch.__version__} at {torch.__file__} — this samples the "
+                f"emitting interpreter only. Gate-side torch provenance is "
+                f"not implemented (#83): the gate writes no torch field on "
+                f"any exit path, so there is no gate record to compare this "
+                f"against; a mismatch with the training container's torch "
+                f"indicts the measurement, never the model.",
             )
         )
     return entries

@@ -33,6 +33,7 @@ Output avoids the verify_summary-ingested tokens by design: no 'green',
 """
 import re
 import sys
+from pathlib import Path
 
 BLOCKER2_FIXED = "bash -lc 'python3 \"$1\"' _ \"$COT_PROBE_PY\""
 BLOCKER2_BROKEN = "bash -lc \"python3 $COT_PROBE_PY\""
@@ -40,14 +41,15 @@ BLOCKER2_BROKEN = "bash -lc \"python3 $COT_PROBE_PY\""
 
 def classify(files):
     if len(files) < 2:
-        print("BASH-LC RED: the sweep requires both launchers on argv; got %d -- a partial sweep is UNMEASURED (doctrine 1)" % len(files))
+        print(f"BASH-LC RED: the sweep requires both launchers on argv; got"
+              f" {len(files)} -- a partial sweep is UNMEASURED (doctrine 1)")
         return 1
     total = 0
     unsafe = []
     audited = []
     for fn in files:
         try:
-            with open(fn, encoding="utf-8") as f:
+            with Path(fn).open(encoding="utf-8") as f:
                 lines = f.read().splitlines()
         except OSError as e:
             print(f"BASH-LC RED: unreadable {fn}: {e} -- unreadable is not empty (doctrine 4)")
@@ -63,10 +65,12 @@ def classify(files):
             while j < len(line) and line[j] in " \t":
                 j += 1
             if j >= len(line) or line[j] not in "'\"":
-                audited.append("%s:%d [non-literal argument -- enumerated for a human, counted as examined]" % (fn, n))
+                audited.append(f"{fn}:{n} [non-literal argument -- enumerated for a human,"
+                               " counted as examined]")
                 continue
             if line[j] == "'":
-                audited.append("%s:%d [single-quoted source; expansions passed as data ($1-style)]" % (fn, n))
+                audited.append(f"{fn}:{n} [single-quoted source; expansions passed as data"
+                               " ($1-style)]")
                 continue
             k = j + 1
             body = []
@@ -89,47 +93,59 @@ def classify(files):
                     inner_single = not inner_single
                 elif ch == "$" and not inner_single:
                     if body[idx:idx + 2] == "$(":
-                        hits.append("$(...) executes in the OUTER shell and its stdout splices into inner SOURCE")
+                        hits.append("$(...) executes in the OUTER shell and its stdout"
+                                    " splices into inner SOURCE")
                         idx += 1
                     else:
                         m = re.match(r"\$\{?[A-Za-z_][A-Za-z_0-9]*\}?", body[idx:])
                         if m:
-                            hits.append(f"{m.group(0)} expanded bare -- the outer shell splices the value into the inner shell's SOURCE text (word-splits; $(...) content executes)")
+                            hits.append(f"{m.group(0)} expanded bare -- the outer shell"
+                                        " splices the value into the inner shell's SOURCE"
+                                        " text (word-splits; $(...) content executes)")
                             idx += len(m.group(0)) - 1
                 idx += 1
             if hits:
-                unsafe.append("%s:%d %s" % (fn, n, " | ".join(hits)))
+                unsafe.append(f"{fn}:{n} {' | '.join(hits)}")
             else:
-                audited.append("%s:%d [double-quoted source; every expansion nested inside inner single quotes -- the :513/:1002 idiom; a single quote in the value would reopen it]" % (fn, n))
-    print("BASH-LC sweep: examined %d 'bash -lc' site(s) across %d launcher file(s)" % (total, len(files)))
+                audited.append(f"{fn}:{n} [double-quoted source; every expansion nested"
+                               " inside inner single quotes -- the :513/:1002 idiom;"
+                               " a single quote in the value would reopen it]")
+    print(f"BASH-LC sweep: examined {total} 'bash -lc' site(s) across"
+          f" {len(files)} launcher file(s)")
     for s in audited:
         print(f"  audited: {s}")
     if total == 0:
-        print("BASH-LC RED: 0 sites found, but both launchers visibly use 'bash -lc' -- zero means the sweep broke, i.e. UNMEASURED (doctrine 1)")
+        print("BASH-LC RED: 0 sites found, but both launchers visibly use 'bash -lc'"
+              " -- zero means the sweep broke, i.e. UNMEASURED (doctrine 1)")
         return 1
     if unsafe:
-        print("BASH-LC RED: %d unsafe site(s) splice outer-shell expansions into inner SOURCE text:" % len(unsafe))
+        print(f"BASH-LC RED: {len(unsafe)} unsafe site(s) splice outer-shell"
+              " expansions into inner SOURCE text:")
         for u in unsafe:
             print(f"  RED: {u}")
         print("  pass paths as data instead:  bash -lc 'python3 \"$1\"' _ \"$VAR\"")
         return 1
-    print("BASH-LC ok: %d/%d sites audited clean, 0 unsafe" % (total, total))
+    print(f"BASH-LC ok: {total}/{total} sites audited clean, 0 unsafe")
     return 0
 
 
 def reinstate(src, dst):
     try:
-        with open(src, encoding="utf-8") as f:
+        with Path(src).open(encoding="utf-8") as f:
             t = f.read()
     except OSError as e:
-        print(f"BASH-LC MUST_FIRE SETUP RED: unreadable {src}: {e} -- unreadable is not empty (doctrine 4)")
+        print(f"BASH-LC MUST_FIRE SETUP RED: unreadable {src}: {e}"
+              " -- unreadable is not empty (doctrine 4)")
         return 1
     if t.count(BLOCKER2_FIXED) != 1:
-        print("BASH-LC MUST_FIRE SETUP RED: fixed probe line occurs %d time(s) in %s; expected exactly 1 -- cannot isolate the reinstatement; has the fix landed, or has it been reverted?" % (t.count(BLOCKER2_FIXED), src))
+        print(f"BASH-LC MUST_FIRE SETUP RED: fixed probe line occurs"
+              f" {t.count(BLOCKER2_FIXED)} time(s) in {src}; expected exactly 1"
+              " -- cannot isolate the reinstatement; has the fix landed,"
+              " or has it been reverted?")
         return 1
     t = t.replace(BLOCKER2_FIXED, BLOCKER2_BROKEN, 1)
     try:
-        with open(dst, "w", encoding="utf-8") as f:
+        with Path(dst).open("w", encoding="utf-8") as f:
             f.write(t)
     except OSError as e:
         print(f"BASH-LC MUST_FIRE SETUP RED: cannot write {dst}: {e}")

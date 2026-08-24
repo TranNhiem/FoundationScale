@@ -794,23 +794,31 @@ case "$census_verdict" in
       # Denominator, measured off the artifact (doctrine 2): the launcher
       # parses the JSON and counts what THIS file declares — 168 is tonight's
       # expectation, never a number the launcher restates from memory
-      # (doctrine 5). The sibling --out contract is a flat name->record
-      # mapping with the leading 'module.' stripped (or an array of such
-      # names), so len(root) IS the declared count; if that shape ever grows
-      # a metadata wrapper around the mapping, this count goes wrong LOUDLY
-      # at the next CLEAR and the repair lands here, not in the gate. Host
-      # python3 is safe for this read: it needs only stdlib json, so fix44's
-      # torch-less-host hazard does not apply — no torch import exists on
-      # this path.
-      census_modules_n=$(python3 -c '
-import json, sys
-with open(sys.argv[1]) as fh:
-    d = json.load(fh)
-if isinstance(d, (dict, list)):
-    print(len(d))
-else:
-    raise SystemExit("census root is %s, not an object/array of module records" % type(d).__name__)
-' "$ADAPTER_MODULES" 2>&1) || {
+      # (doctrine 5). The --out contract, measured against the WRITER of
+      # this file (launchers/lora_target_census.py, payload built at its
+      # lines ~340-352, in tree since #78 -- grep the writer, never trust
+      # this sentence): a WRAPPED object,
+      #   {"adapter_modules": [<module record>, ...], "source": "<provenance>"}
+      # each record {"fqn","out_features","in_features"} (or a bare stem
+      # string on the dims=none path). len(root) over that payload is the
+      # WRAPPER-KEY count, never the declared count. Measured (BLOCKER
+      # #88, reproduced against the live tree): a real wrapped census
+      # declaring 168 modules printed 2, and 2 cleared the numeric regex
+      # below SILENTLY; the deleted comment's "goes wrong LOUDLY" was
+      # false on both halves and is exactly what stopped the next reader
+      # checking. The counter is now tools/count_census_modules.py, the
+      # single production implementation: it reads "adapter_modules" BY
+      # NAME (a bare JSON list of records is the other accepted shape),
+      # validates every entry is a module record, and REFUSES every other
+      # root with the found shape named -- unrecognised is UNMEASURED and
+      # BLOCKS (doctrine 4), never a guess between shapes. The inline #88
+      # legs below and tools/census_denominator_control.py both drive THIS
+      # SAME file, so certified and certifying code cannot drift into
+      # paraphrases. Host python3 is safe for this read: the counter needs
+      # only stdlib json, so fix44's torch-less-host hazard does not apply
+      # — no torch import exists on this path.
+      census_counter_py="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tools/count_census_modules.py"
+      census_modules_n=$(python3 "$census_counter_py" "$ADAPTER_MODULES" 2>&1) || {
         echo "FATAL: census verdict CLEAR but ADAPTER_MODULES=$ADAPTER_MODULES is not countable JSON — a census the launcher cannot parse states no denominator (doctrine 2), and the launcher does not rest on the probe honouring its own contract. python3's own words: $census_modules_n. The launch BLOCKS." >&2
         exit 1
       }
@@ -824,6 +832,74 @@ else:
         exit 1
       }
       echo "Preflight census: $ADAPTER_MODULES declares $census_modules_n adapter modules (written-census denominator, parsed off the artifact itself — doctrine 2); this file is the --adapter-modules demand fs_live_save_gate() now receives on every gate call."
+      # ---------------------------------------------------------------
+      # BLOCKER #88 inline legs (doctrine 3: a counter repaired without an
+      # OBSERVED red is an assertion, and a control that never RUNS is not
+      # a control either). Both halves run on every CLEAR against the REAL
+      # artifact this probe just re-counted; the refusal half drives the
+      # very same tools/count_census_modules.py the production count above
+      # invoked. The standalone control tools/census_denominator_control.py
+      # adds the WIRING leg plus a fixture mode carrying the red
+      # perpetually as a doctored input.
+      blocker88_root_shape=$(python3 -c '
+import json, sys
+with open(sys.argv[1]) as fh:
+    d = json.load(fh)
+print("wrapped" if isinstance(d, dict) else ("bare_list" if isinstance(d, list) else "other"))
+' "$ADAPTER_MODULES" 2>&1) || blocker88_root_shape="unprobeable"
+      # MUST_FIRE: the frozen PRE-FIX counter (verbatim from BLOCKER #88 --
+      # transcribed, never "repaired": this snippet IS the defect and must
+      # keep behaving like it) is re-executed against the same artifact.
+      blocker88_old_n=$(python3 -c '
+import json, sys
+with open(sys.argv[1]) as fh:
+    d = json.load(fh)
+if isinstance(d, (dict, list)):
+    print(len(d))
+else:
+    raise SystemExit("census root is %s, not an object/array of module records" % type(d).__name__)
+' "$ADAPTER_MODULES" 2>&1) || {
+        echo "FATAL: BLOCKER #88 MUST_FIRE leg failed to RUN its frozen pre-fix counter over ADAPTER_MODULES=$ADAPTER_MODULES — a leg that cannot run is not a control (doctrine 3). python3's own words: $blocker88_old_n. The launch BLOCKS." >&2
+        exit 1
+      }
+      if [[ "$blocker88_root_shape" == "wrapped" && "$blocker88_old_n" != "$census_modules_n" ]]; then
+        echo "BLOCKER #88 MUST_FIRE leg, OBSERVED RED: the frozen pre-fix len(root) counter examined the 1 root object of $ADAPTER_MODULES and reported $blocker88_old_n — the wrapper-KEY count — while tools/count_census_modules.py examined the same artifact's 'adapter_modules' list and reported $census_modules_n module records. Denominators: $blocker88_old_n wrapper keys vs $census_modules_n module records, over 1 file. The old reading passes the ^[1-9][0-9]*\$ guard — the silent false denominator #88 measured — and tonight that guard never sees it, because the contracted counter already counted the LIST."
+      elif [[ "$blocker88_root_shape" == "wrapped" && "$census_modules_n" == "2" ]]; then
+        echo "BLOCKER #88 MUST_FIRE leg: tonight's wrapped census declares EXACTLY 2 module records, so pre-fix and contracted readings coincide arithmetically — the firing is vacuous TONIGHT by arithmetic, named not hidden (doctrine 1's mirror for controls); the red stays observable via tools/census_denominator_control.py fixture mode, whose payload declares 168."
+      elif [[ "$blocker88_root_shape" == "wrapped" ]]; then
+        echo "FATAL: BLOCKER #88 MUST_FIRE leg cannot reproduce its own red: the frozen pre-fix counter reported $blocker88_old_n, EQUAL to the contracted count $census_modules_n, over a wrapped census declaring more than 2 module records — impossible unless the frozen snippet drifted from the pre-fix behavior it documents. A control whose red is no longer observable is not a control (doctrine 3). The launch BLOCKS." >&2
+        exit 1
+      else
+        echo "BLOCKER #88 MUST_FIRE leg: root shape is '$blocker88_root_shape', not the wrapped payload — the pre-fix counter was correct for bare lists, so no divergence is expected of it tonight; denominators stated anyway: old=$blocker88_old_n, contracted=$census_modules_n, over the 1 real artifact. The perpetual red rides tools/census_denominator_control.py (fixture mode)."
+      fi
+      echo "BLOCKER #88 MUST_PASS leg, happy half, OBSERVED GREEN: tools/count_census_modules.py examined the real artifact's '$blocker88_root_shape' root and returned $census_modules_n — module records counted BY NAME under 'adapter_modules', never wrapper keys (doctrine 2); fs_live_save_gate() re-parses and re-counts the same file downstream."
+      # MUST_PASS, refusal half: doctrine 4 probes against garbage roots
+      # the contracted counter MUST refuse, run through the very same
+      # production file. A counter that silently guesses between shapes is
+      # BLOCKER #88 restored.
+      blocker88_garbage_dir=$(mktemp -d "${TMPDIR:-/tmp}/blocker88.XXXXXX") || {
+        echo "FATAL: BLOCKER #88 MUST_PASS refusal leg could not create a scratch dir — a leg that cannot run is not a control (doctrine 3). The launch BLOCKS." >&2
+        exit 1
+      }
+      blocker88_refused=0
+      blocker88_garbage_total=0
+      for blocker88_garbage_payload in \
+        '{"layer.0.self_attn.q_proj": {"out_features": 4096, "in_features": 4096}, "layer.0.self_attn.k_proj": {"out_features": 1024, "in_features": 4096}}' \
+        '{"module_inventory": ["a", "b", "c"], "producer": "not the census writer"}' \
+        '{"adapter_modules": {"count": 168}, "source": "garbage"}' \
+        '42'
+      do
+        blocker88_garbage_total=$((blocker88_garbage_total + 1))
+        printf '%s\n' "$blocker88_garbage_payload" > "$blocker88_garbage_dir/garbage_$blocker88_garbage_total.json"
+        if blocker88_garbage_out=$(python3 "$census_counter_py" "$blocker88_garbage_dir/garbage_$blocker88_garbage_total.json" 2>&1); then
+          rm -rf "$blocker88_garbage_dir"
+          echo "FATAL: BLOCKER #88 MUST_PASS refusal leg: tools/count_census_modules.py ACCEPTED garbage root shape #$blocker88_garbage_total and printed '$blocker88_garbage_out' — fail-closed on unrecognised roots (doctrine 4) has regressed, which is BLOCKER #88 in new clothes. The launch BLOCKS." >&2
+          exit 1
+        fi
+        blocker88_refused=$((blocker88_refused + 1))
+      done
+      rm -rf "$blocker88_garbage_dir"
+      echo "BLOCKER #88 MUST_PASS leg, refusal half, OBSERVED GREEN: examined $blocker88_garbage_total garbage roots — a bare name->record mapping (the shape the pre-fix comment FALSELY claimed the writer emits), an object missing 'adapter_modules', a wrapped object whose 'adapter_modules' member is not a list, and a scalar — and the contracted counter REFUSED $blocker88_refused of $blocker88_garbage_total, each refusal naming the shape it found. Fail closed intact."
       : # the population/control greps and per-target arithmetic below still
         # re-verify the probe's TEXT artifact exactly as before — nothing
         # above replaces the verdict triage or those greps; it gates only the

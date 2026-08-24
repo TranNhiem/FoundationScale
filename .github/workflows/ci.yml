@@ -164,7 +164,21 @@ jobs:
         # It is a TOTAL, and a total can be subsidised: the weakest module is
         # checkpoint/dcp_meta.py at 72%, which this floor would not catch on its
         # own. Named in the README under Status rather than left implicit.
-        run: pytest --cov=foundationscale --cov-report=term-missing --cov-fail-under=90
+        #
+        # #85: the floor now also measures the two tools/ modules that
+        # ADJUDICATE — tools/live_save_gate.py (adjudicates the first real
+        # save) and tools/emit_run_manifest.py (refuses dishonest
+        # emissions) — which sat outside the measured denominator while
+        # the total read as though it covered them. Scoped per-file
+        # because tools/ is not an importable package: a blanket
+        # --cov=tools would drag every non-adjudicating helper in at ~0%
+        # and read below the floor, and the remedy for that is putting
+        # code under test, never lowering 90. The rest of tools/ stays
+        # OUT of the claim. The first combined total for the widened
+        # denominator is produced by this job's next run; whatever it
+        # prints is the measurement, and a red there is a correct red,
+        # not a re-floor prompt.
+        run: pytest --cov=foundationscale --cov=tools/live_save_gate.py --cov=tools/emit_run_manifest.py --cov-report=term-missing --cov-fail-under=90
 
   controls:
     name: gate controls (MUST_FIRE fixtures)

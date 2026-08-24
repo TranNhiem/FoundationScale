@@ -74,6 +74,18 @@ drive:
       DRIVER extraction gap, not a probe finding -- doctrine 5 requires
       this distinction be visible. Sentinal '<unresolved-check-failed>'
       means the check itself broke: red either way, never green.
+  F78_SYNTH_MODE=<kwargs|fixture>  how the writer call was assembled;
+      'fixture' reflects the LIVE signature (driver extension made for the
+      legs: the heredoc it replaces regexed the def line of a neutered
+      exec copy, and its substring classes would have mapped 'total' onto
+      the path class via the substring 'out' -- matching here is by word
+      segment, never by whole-name substring)
+  F78_SYNTH_PATH=<csv>             fixture mode: params mapped <- out_path
+  F78_SYNTH_DATA=<csv>             fixture mode: params mapped <- fixture
+  F78_FIXTURE_ROWS=<k>             fixture mode: attachment count actually
+      sent. The refusal leg's k is 0 BY CONSTRUCTION (the mutation IS the
+      empty set); printing it keeps 'empty' examined, not asserted
+      (doctrine 1/2).
   F78_RAISED=<none|Type: msg>      writer behaviour, including SystemExit
   F78_EXIT=<none|code>             under the probe's own 0/1/3 vocabulary
   F78_OUT_PATH=<path|unspecified>
@@ -134,12 +146,34 @@ swap ships as these verbatim instructions, not as an Edit):
       additive: grep 'F78_EXTRACT_UNRESOLVED=none' against "$out".
 
 Spec shapes (JSON, authored by the leg fixtures):
-  drive : {"kwargs": {"out_path": ..., "rows": [...], "population": N,
-                      "hf_model_path": ..., "targets": [...], "total": M},
-           "out_path": "optional explicit artifact path -- set it when the
-                        writer's out-parameter is not named out_path, so
-                        F78_OUT_EXISTS stays measured instead of unknown"}
-          kwargs keys pass through as **kwargs to the real writer.
+  drive : EITHER explicit mode:
+            {"kwargs": {<writer's parameter names>: <values>},
+             "out_path": "explicit artifact path -- set it when the
+                          writer's out-parameter is not named out_path, so
+                          F78_OUT_EXISTS stays measured instead of unknown"}
+            kwargs keys pass through as **kwargs to the real writer, but
+            only after they are BOUND against the lifted writer's LIVE
+            signature (inspect.signature .bind): a key the signature
+            rejects, or a required parameter the spec omits, is
+            stage=F78_STAGE=drive-failed rc 15 naming the failure -- a
+            stale-fixture red, never a mid-call TypeError at rc 0
+            masquerading as a measured probe finding (doctrine 5).
+          OR fixture mode (what the legs ship):
+            {"fixture": [<attachment elements>], "out_path": "..."}
+            the driver reflects the writer's LIVE signature and maps
+            path-class params (name segment out|path|dest|file|json) <-
+            out_path and attachment-class params (segment prefix attach|
+            module|row|entri|record|parent|found|result|population|
+            census|target|fixture) <- list(fixture); defaulted params keep
+            their own defaults; a param in NO class -- or in BOTH -- or a
+            zero candidate on either side is stage=F78_STAGE=drive-failed
+            rc 15 ('refusing to guess'), the same fail-closed contract the
+            heredoc honoured at its exit 13, but mapped over the live
+            signature instead of a regexed neutered copy. The EMPTY list
+            is the refusal fixture; an absent 'fixture' key with no
+            'kwargs' object is the fixture defect (doctrine 4). Fixture
+            kwargs come FROM the signature, so the pre-call bind is a
+            no-op there by construction.
   verify: {"artifact": "/path/to/expected.json",
            "expect_fqns": ["module....linear_qkv", ...],
            "expect_denominator": <int printed as the 'of M'>;
@@ -194,6 +228,14 @@ _NS_DUNDERS = frozenset({
 })
 
 _VERDICT_RE = re.compile(r"UNMEASURED|BLOCKED|CLEAR")
+
+# Param-name segment classes for fixture-mode synthesis (see
+# _synthesize_kwargs): matched against word SEGMENTS of the live
+# signature, never substrings of the whole name.
+_PATH_SEGS = frozenset({"out", "path", "dest", "file", "json"})
+_DATA_PREFIXES = ("attach", "module", "row", "entri", "record", "parent",
+                  "found", "result", "population", "census", "target",
+                  "fixture")
 
 USAGE = ("usage: f78_census_writer_driver.py drive PROBE SPEC.json"
          " | f78_census_writer_driver.py verify SPEC.json")
@@ -339,13 +381,102 @@ def _load_writer(probe_path):
     return ns[WRITER_ENTRY], report
 
 
+def _split_param_segments(name):
+    """Identifier -> its lowercase word segments. Parameters are
+    identifiers, so segments split on runs of non-letters (underscores,
+    digits). Matching is by SEGMENT, never by substring of the whole
+    name: the heredoc this driver replaces regexed whole names and would
+    have mapped a 'total' parameter onto the PATH class via the substring
+    'out' -- a fabricated value class is a false-green engine (doctrine
+    5, symmetric)."""
+    return [s for s in re.split(r"[^a-z]+", name.lower()) if s]
+
+
+def _synthesize_kwargs(writer, spec):
+    """Fixture mode: reflect the writer's LIVE signature and map by
+    segment class -- path-class params take spec.out_path,
+    attachment-class params take a copy of the fixture, defaulted params
+    are left at the writer's own defaults, and a param in NO class (or in
+    BOTH) fails closed at stage=drive-failed: guessing a value for it
+    would paraphrase the writer's contract. A probe refactor therefore
+    re-shapes the map LEGIBLY (an rc-15 stage-named red a reviewer can
+    read) instead of stranding the leg the way the hand-enumerated stub
+    set did."""
+    import inspect  # local and idempotent: this round adds the first
+    # signature use; the merge must not red on a missing top-level import
+    # when only real writer behaviour may speak (doctrine 4).
+    out_path = spec.get("out_path")
+    if not isinstance(out_path, str) or not out_path:
+        _fail("drive", "arg-synthesis needs spec.out_path: the path-class "
+                       "parameter takes it, and an un-pinned artifact path "
+                       "reads F78_OUT_EXISTS=unknown -- never 0 (doctrine 4)")
+    fixture = spec.get("fixture")
+    if not isinstance(fixture, list):
+        _fail("drive", "spec.fixture must be a list -- the EMPTY list is "
+                       "the refusal fixture; an absent/non-list key is a "
+                       "fixture defect, not an empty fixture (doctrine 4)")
+    try:
+        params = list(inspect.signature(writer).parameters.values())
+    except (TypeError, ValueError) as exc:
+        _fail("drive", f"arg-synthesis cannot reflect the writer: {exc}")
+    kwargs, path_hits, data_hits = {}, [], []
+    for p in params:
+        if p.kind in (inspect.Parameter.VAR_POSITIONAL,
+                      inspect.Parameter.VAR_KEYWORD):
+            continue  # splats are never fabricated; the writer gets what it gets
+        segs = _split_param_segments(p.name)
+        is_path = any(s in _PATH_SEGS for s in segs)
+        is_data = any(s.startswith(_DATA_PREFIXES) for s in segs)
+        if is_path and is_data:
+            _fail("drive", f"arg-synthesis param={p.name} matches BOTH the "
+                           "path and the attachment class; refusing to guess")
+        elif is_path:
+            path_hits.append(p.name)
+            kwargs[p.name] = out_path
+        elif is_data:
+            data_hits.append(p.name)
+            kwargs[p.name] = list(fixture)
+        elif p.default is not inspect.Parameter.empty:
+            continue  # the writer's own default speaks for it
+        else:
+            _fail("drive", f"arg-synthesis param={p.name}: no honest value "
+                           "available; refusing to guess")
+    if not path_hits or not data_hits:
+        _fail("drive", "arg-synthesis mapped path="
+                       + (",".join(path_hits) or "none") + " attachment="
+                       + (",".join(data_hits) or "none")
+                       + ": a zero candidate on either side means the "
+                       "writer's shape changed; refusing to run blind")
+    return kwargs, {"path": path_hits, "data": data_hits,
+                    "fixture_rows": len(fixture)}
+
+
 def cmd_drive(probe_path, spec_path):
+    import inspect  # see _synthesize_kwargs: local, idempotent, first use
     spec = _read_spec(spec_path, "drive")
-    if not isinstance(spec, dict) or not isinstance(spec.get("kwargs"), dict):
+    if not isinstance(spec, dict):
         _fail("drive", "spec must be an object carrying a 'kwargs' object "
-                       "keyed on the writer's parameters")
-    kwargs = spec["kwargs"]
+                       "keyed on the writer's parameters, or a 'fixture' "
+                       "list for signature-mapped synthesis")
     writer, report = _load_writer(probe_path)
+    if isinstance(spec.get("kwargs"), dict):
+        # Fail-closed fixture binding (the control the merge keeps from
+        # the alternative sample): explicit kwargs are bound against the
+        # lifted writer's REAL signature BEFORE the call, so a renamed,
+        # added, or omitted required parameter is a named drive-failed at
+        # rc 15 -- never a mid-call TypeError at rc 0 that a leg could
+        # misread as a measured probe finding (doctrine 5).
+        try:
+            inspect.signature(writer).bind(**spec["kwargs"])
+        except TypeError as exc:
+            _fail("drive", f"spec kwargs do not bind the lifted writer's "
+                           f"signature {inspect.signature(writer)}: {exc}")
+        kwargs, synth = spec["kwargs"], None
+    elif "fixture" in spec:
+        kwargs, synth = _synthesize_kwargs(writer, spec)
+    else:
+        _fail("drive", "spec carries neither a 'kwargs' object nor a "
+                       "'fixture' list; there is no honest call to make")
 
     out_path = spec.get("out_path") or kwargs.get("out_path")
     if not isinstance(out_path, str) or not out_path:
@@ -374,6 +505,11 @@ def cmd_drive(probe_path, spec_path):
     print(f"F78_EXTRACT_CONSTS={report['consts']}")
     print(f"F78_EXTRACT_FUTURES={','.join(report['futures']) or 'none'}")
     print(f"F78_EXTRACT_UNRESOLVED={','.join(report['unresolved']) or 'none'}")
+    print(f"F78_SYNTH_MODE={'fixture' if synth is not None else 'kwargs'}")
+    if synth is not None:
+        print(f"F78_SYNTH_PATH={','.join(synth['path'])}")
+        print(f"F78_SYNTH_DATA={','.join(synth['data'])}")
+        print(f"F78_FIXTURE_ROWS={synth['fixture_rows']}")
     print(f"F78_RAISED={raised}")
     print(f"F78_EXIT={exited}")
     if out_path is None:

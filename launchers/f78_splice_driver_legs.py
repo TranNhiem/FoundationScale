@@ -74,10 +74,10 @@ own docstring integration; nothing weakened, nothing laundered):
 """
 
 import contextlib
-import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 SSTAGE = "F78_SPLICE"
 RC_INFRA = 15
@@ -122,7 +122,7 @@ def _fail(tag, detail):
 
 def _read(path, tag):
     try:
-        with open(path, encoding="utf-8") as fh:
+        with Path(path).open(encoding="utf-8") as fh:
             return fh.read()
     except OSError as exc:
         # doctrine 4: unreadable is not empty; a file we cannot read is an
@@ -249,7 +249,7 @@ F78SPEC
   fi
   [ -n "$f78_msim" ] && rm -rf "$f78_msim" || true
 fi
-'''
+'''  # noqa: E501 -- byte-exact spliced bash payload (verdict text and unwrappable heredoc fixtures); wrapping would rewrite the shipped script
 
 
 def cmd_check(path):
@@ -263,8 +263,7 @@ def cmd_check(path):
     _bash_syntax_gate(path, "check-syntax")
     print(f"stage={SSTAGE}=verified rc=0")
     print(f"F78_SPLICE_DRIVER_VOCAB={DRIVER_FQN_MARKER!r} present (positive per-unit evidence)")
-    print("F78_SPLICE_POST_NEEDLES=%d of %d"
-          % (len(POST_NEEDLES), len(POST_NEEDLES)))
+    print(f"F78_SPLICE_POST_NEEDLES={len(POST_NEEDLES)} of {len(POST_NEEDLES)}")
     return 0
 
 
@@ -276,17 +275,17 @@ def cmd_splice(path):
         # control must be observed, and here the observation is cheap).
         missing = _missing_needles(text)
         if missing:
-            _fail("verify", "suite is wired but lost post-splice needles: {}".format(",".join(missing)))
+            _fail("verify", "suite is wired but lost post-splice needles:"
+                  " {}".format(",".join(missing)))
         _bash_syntax_gate(path, "check-syntax")
         print(f"stage={SSTAGE}=already-wired rc=0")
         print(f"F78_SPLICE_DRIVER_VOCAB={DRIVER_FQN_MARKER!r} present (positive per-unit"
               " evidence)")
-        print("F78_SPLICE_POST_NEEDLES=%d of %d"
-              % (len(POST_NEEDLES), len(POST_NEEDLES)))
+        print(f"F78_SPLICE_POST_NEEDLES={len(POST_NEEDLES)} of {len(POST_NEEDLES)}")
         return 0
 
     lines = text.splitlines(keepends=True)
-    hdr = [i for i, l in enumerate(lines) if HEADER_NEEDLE in l]
+    hdr = [i for i, ln in enumerate(lines) if HEADER_NEEDLE in ln]
     if not hdr:
         _fail("header-missing", f"needle not found: {HEADER_NEEDLE!r}")
     if len(hdr) != 1:
@@ -296,13 +295,12 @@ def cmd_splice(path):
     ends = [i for i in range(h + 1, len(lines)) if END_NEEDLE in lines[i]]
     if not ends:
         _fail("boundary-missing",
-              "%r not found after header at suite line %d" % (END_NEEDLE,
-                                                              h + 1))
+              f"{END_NEEDLE!r} not found after header at suite line {h + 1}")
     e = ends[0]
     if e - (h + 1) < 2:
-        _fail("region-empty", "only %d line(s) between header (suite line %d)"
-              " and %r boundary -- nothing recognizable to replace"
-              % (e - (h + 1), h + 1, END_NEEDLE))
+        _fail("region-empty", f"only {e - (h + 1)} line(s) between header (suite line"
+              f" {h + 1}) and {END_NEEDLE!r} boundary -- nothing recognizable"
+              " to replace")
 
     region = lines[h + 1:e]
     rtext = "".join(region)
@@ -312,19 +310,17 @@ def cmd_splice(path):
         c_all, c_reg = text.count(n), rtext.count(n)
         if c_reg == 0:
             _fail("leg-needle-missing",
-                  "%r absent from region (suite lines %d-%d) -- refusing to"
-                  " splice unverified bytes" % (n, h + 2, e + 1))
+                  f"{n!r} absent from region (suite lines {h + 2}-{e + 1}) -- refusing to"
+                  " splice unverified bytes")
         if c_all != c_reg:
             _fail("leg-needle-not-unique",
-                  "%r occurs %d time(s) file-wide but %d in region -- the"
-                  " boundary would amputate a copy outside it"
-                  % (n, c_all, c_reg))
+                  f"{n!r} occurs {c_all} time(s) file-wide but {c_reg} in region"
+                  " -- the boundary would amputate a copy outside it")
     for n in ANTI_NEEDLES:
         if n in rtext:
             _fail("region-overrun",
-                  "preserved-neighbor needle %r inside region (suite lines"
-                  " %d-%d) -- boundary over-ran into a leg that must live"
-                  % (n, h + 2, e + 1))
+                  f"preserved-neighbor needle {n!r} inside region (suite lines"
+                  f" {h + 2}-{e + 1}) -- boundary over-ran into a leg that must live")
     if MACHINERY_NEEDLE not in rtext:
         _fail("machinery-absent",
               f"no {MACHINERY_NEEDLE!r} evidence in region -- the inline neuter/exec family is"
@@ -344,8 +340,8 @@ def cmd_splice(path):
     preserved = END_NEEDLE, "#78-B", HEADER_NEEDLE
     for n in preserved:
         if text.count(n) != new_text.count(n):
-            _fail("self-check", "preserved needle %r count changed (%d -> %d)"
-                  % (n, text.count(n), new_text.count(n)))
+            _fail("self-check", f"preserved needle {n!r} count changed"
+                                f" ({text.count(n)} -> {new_text.count(n)})")
 
     backup = path + ".f78-presplice.bak"
     tmp = path + ".f78-splice.tmp"
@@ -355,31 +351,29 @@ def cmd_splice(path):
         _fail("backup", f"could not preserve the original at {backup}: {exc} -- no"
               " splice without an audit trail")
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
+        with Path(tmp).open("w", encoding="utf-8") as fh:
             fh.write(new_text)
     except OSError as exc:
         _fail("write", f"candidate tmp unwritable: {exc}")
     _bash_syntax_gate(tmp, "syntax")
     try:
-        os.replace(tmp, path)
+        Path(tmp).replace(path)
     except OSError as exc:
         with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        _fail("rename", f"os.replace failed: {exc} (original untouched; backup"
+            Path(tmp).unlink()
+        _fail("rename", f"atomic replace failed: {exc} (original untouched; backup"
               f" {backup})")
     if _read(path, "post") != new_text:
         _fail("post", "re-read of the spliced suite differs from the"
               f" validated candidate (backup {backup})")
 
     print(f"stage={SSTAGE}=spliced rc=0")
-    print("F78_SPLICE_REPLACED_LINES=%d" % len(region))
-    print("F78_SPLICE_REGION=suite lines %d-%d (header kept at %d, %r"
-          " boundary kept at %d pre-splice)" % (h + 2, e + 1, h + 1,
-                                                END_NEEDLE, e + 1))
+    print(f"F78_SPLICE_REPLACED_LINES={len(region)}")
+    print(f"F78_SPLICE_REGION=suite lines {h + 2}-{e + 1} (header kept at {h + 1},"
+          f" {END_NEEDLE!r} boundary kept at {e + 1} pre-splice)")
     print(f"F78_SPLICE_BAK={backup}")
     print(f"F78_SPLICE_DRIVER_VOCAB={DRIVER_FQN_MARKER!r} present (positive per-unit evidence)")
-    print("F78_SPLICE_POST_NEEDLES=%d of %d"
-          % (len(POST_NEEDLES), len(POST_NEEDLES)))
+    print(f"F78_SPLICE_POST_NEEDLES={len(POST_NEEDLES)} of {len(POST_NEEDLES)}")
     # The one duty that could NOT be discharged blind (doctrine 4, stated,
     # never guessed): the writer's row schema, previously carried only by the
     # spliced-out fixture. It is preserved for reconciliation; a fixture red
