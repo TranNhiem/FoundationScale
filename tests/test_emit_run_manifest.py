@@ -17,10 +17,13 @@ and a drifted keys tuple must raise under the strict zip.
 Mutation rows planted in tools/mutate.py over this module (#85) and the
 leg that kills each:
   emit_run_manifest.lora-zip-unstrict           -> test_zip_is_strict_raises_on_drift
-  emit_run_manifest.lora-status-not-abstained   -> test_lora_abstention_record_status_and_denominator
-  emit_run_manifest.lora-preexisting-key-rename -> test_lora_abstention_record_status_and_denominator
-                                                   (KeyError on the pinned key is the red)
-  emit_run_manifest.lora-count-plus-one         -> test_lora_abstention_record_status_and_denominator
+  emit_run_manifest.lora-status-not-abstained
+      -> test_lora_abstention_record_status_and_denominator
+  emit_run_manifest.lora-preexisting-key-rename
+      -> test_lora_abstention_record_status_and_denominator
+         (KeyError on the pinned key is the red)
+  emit_run_manifest.lora-count-plus-one
+      -> test_lora_abstention_record_status_and_denominator
   emit_run_manifest.lora-count-fabricated       -> main()-level; SURVIVOR, stated
   emit_run_manifest.drill-never-arms            -> main()-level; SURVIVOR, stated
 The two survivors are planted over main() flow that needs a checkpoint
@@ -96,7 +99,98 @@ def _record_text(dropped_key=None) -> str:
     return "\n".join(lines)
 
 
+def _load_emit_run_manifest_module():
+    """Load the real emitter exactly as it ships, so the record keys,
+    values, and source token below cannot drift from the producer whose
+    on-disk format these fixtures exist to match. Self-contained by
+    design: this round's listing carried zero lines of this module, so
+    nothing here may depend on an unlisted helper or import. FAIL
+    CLOSED (doctrine 4): an unloadable emitter is a loud error, never
+    a vacuous pass."""
+    import importlib.util
+    from pathlib import Path
+
+    emitter = (
+        Path(__file__).resolve().parents[1] / "tools" / "emit_run_manifest.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "emit_run_manifest_under_test", emitter
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {emitter}")  # FAIL CLOSED
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _real_on_disk_lora_abstention_record(mod, drop=None):
+    """The on-disk abstention record IN THE FORMAT THE REAL STORE WRITES.
+
+    That format is not guessed here. It is the byte shape measured on real
+    emitted records and pinned in the docstring of the control this fixture
+    feeds (``_abstention_markers_absent``): a JSON manifest whose config
+    block carries each ``declared.*`` record field as a quoted JSON OBJECT
+    KEY (``"declared.status": {`` ...), each entry echoing its key in-band
+    (``"key": "declared.status"`` -- the echo never carries the object-key
+    colon spelling; measured: quoted-anywhere count 2, with-colon count
+    exactly 1 per field), and ``declared`` itself a bare JSON null. The
+    previous fixture rendered the record as flat ``key: value`` lines -- a
+    format the store has never written -- so the 5-of-5 leg failed closed
+    on first run, exactly as the merge note predicted it would. The
+    predicate, the control, and the 5-of-5 denominator are untouched;
+    only the fixture moves. Keys, values, and the source token come from
+    the real producer, not from a paraphrase, and the keys-tuple drift
+    guard below keeps the examined denominator the one the control
+    examines (doctrine 2). drop=<field name> omits that WHOLE entry
+    (object key and echo together): it exists for the sibling MUST_FIRE
+    leg, whose guessed flat fixture currently makes absence VACUOUS --
+    with every object-key spelling missing, the leg fires whether or not
+    any one field was dropped, so it is not yet a running control
+    (doctrine 3). That leg's fixture line is not byte-anchored this round
+    (zero listed lines of this file beyond the failing leg's def line),
+    so its one-line rewire to drop= is staged here, stated, and pending.
+    Residual, stated: this reproduces the serializer's measured
+    INVARIANTS rather than one captured file; if the store layout ever
+    drifts, this leg fails closed again -- that failure mode is the
+    control working, by design; the end-to-end proof over the real store
+    path remains the FS_EMIT_DRILL_BARE_NULL drill.
+    """
+    import json
+
+    entries = mod._lora_abstention_record_entries(0)
+    keys = list(mod._LORA_ABSTENTION_RECORD_KEYS)
+    assert [k for k, _ in entries] == keys, (
+        "producer/keys-tuple drift: the producer must zip over the module's "
+        "single keys tuple, so this fixture cannot silently examine a "
+        "different denominator than the on-disk control"
+    )
+    config = {
+        key: {"key": key, "value": value, "source": mod._LORA_ABSTENTION_SOURCE}
+        for key, value in entries
+        if key != drop
+    }
+    return json.dumps({"declared": None, "config": config}, indent=2) + "\n"
+
+
 def test_must_pass_complete_on_disk_record_verifies_5_of_5():
+    mod = _load_emit_run_manifest_module()
+    record_text = _real_on_disk_lora_abstention_record(mod)
+    # DENOMINATOR: the 5 record fields of a resume-shaped record (saves
+    # already on disk), verified against the SERIALIZED bytes by the real
+    # control the emission path runs after store.save -- the positive arm:
+    # bare-null declared + complete record reads STATED-ABSTENTION, 5 of 5.
+    # The verifier call shape below is taken from the emission path's own
+    # post-save check; if it has drifted, this leg errors RED, never
+    # vacuously green (fail closed, doctrine 4).
+    state, present, total = mod._enforce_lora_abstention_record(
+        record_text, saves_observed=3, drill_armed=False
+    )
+    assert (present, total) == (5, 5)
+    assert state.startswith("STATED-ABSTENTION"), state
+    return  # splice note: the superseded guessed-format body below this
+    # point is dead code -- retained only because the pytest-reported def
+    # line above is the single byte-certain anchor in this file this
+    # round; it never runs and must be deleted once the file is listed.
     state, present, total = erm._enforce_lora_abstention_record(
         _record_text(), saves_observed=0, drill_armed=False
     )
@@ -218,7 +312,14 @@ def test_must_fire_row_validator_rejects_planted_bad_rows():
     # replacement identical to anchor
     assert _validate_rows(
         good_paths,
-        [{"name": "x", "what": "x", "anchor": "    return entries", "replacement": "    return entries"}],
+        [
+            {
+                "name": "x",
+                "what": "x",
+                "anchor": "    return entries",
+                "replacement": "    return entries",
+            }
+        ],
         src,
     )
     # module never registered

@@ -95,8 +95,8 @@ def pre_fix_len_of_root(d: object) -> int:
     if isinstance(d, (dict, list)):
         return len(d)
     raise TypeError(
-        "census root is %s, not an object/array of module records"
-        % type(d).__name__
+        f"census root is {type(d).__name__}, not an object/array of "
+        f"module records"
     )
 
 
@@ -125,7 +125,7 @@ def build_writer_shape_fixture(path: Path) -> None:
     input that keeps the red observable without tonight's artifact."""
     entries = [
         {
-            "fqn": "module.decoder.layers.%d.self_attn.linear_qkv" % i,
+            "fqn": f"module.decoder.layers.{i}.self_attn.linear_qkv",
             "out_features": 4096,
             "in_features": 4096,
         }
@@ -170,7 +170,7 @@ def main() -> int:
                 f"readable JSON ({type(exc).__name__}: {exc}) -- a "
                 f"control that cannot parse its input cannot state a "
                 f"denominator; UNMEASURED, never PASS (doctrines 2+4)."
-            )
+            ) from exc
         true_n = true_declared_count(obj, census)
 
         # WIRING leg -- the production path must BE the controlled path.
@@ -209,7 +209,7 @@ def main() -> int:
                 f"not dict/list, so the pre-fix logic would have ERRORED "
                 f"here rather than miscounted -- the #88 silent form is "
                 f"not observable on this payload (doctrine 3)."
-            )
+            ) from None
         if old_n == true_n:
             raise SystemExit(
                 f"CONTROL UNMEASURED (MUST_FIRE): pre-fix len(root) "

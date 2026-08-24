@@ -2212,12 +2212,23 @@ f41_sim() { # $1=launcher file $2=drill knob (0|1) $3=fixture (unmeasured|clear|
     # unmodified launcher text — the leg itself is the verification of this
     # repair. Two disclosures, fail-closed: (1) the name below must match
     # the region's own spelling of its --out destination and moves in
-    # lockstep with the region — never by weakening the gate; (2) if the
-    # leg stays red after this, the next seam is the stub body below
-    # tonight's verified listing window (the stub may also need to deposit
-    # the persisted census on clear+rc0); that repair ships only from a
-    # full listing with byte-exact anchors — a fabricated anchor is the one
-    # outcome worse than leaving the leg red.
+    # lockstep with the region — never by weakening the gate; (2) the seam
+    # point (2) named LAST round is where the leg in fact died: the CLEAR
+    # stub returned 0 (the previous repair held) but deposited only the
+    # probe's healthy TRANSCRIPT, never its --out ARTIFACT, so the
+    # launcher's fix35 arm ([[ ! -r "$ADAPTER_MODULES" ]] -> FATAL exit 1,
+    # launch_g4e4b_lora_1tray.sh line ~789, its message on stderr, which
+    # this leg never quotes) failed CLOSED — correctly, per doctrine 4:
+    # CLEAR text with no census JSON on disk is the exact 'verdict
+    # survives, evidence doesn't' shape that arm exists to end. The
+    # control stays untouched; the fixture moves: the clear arm below now
+    # deposits a synthetic but contract-exact wrapped census (168 records
+    # = the transcript's own 4 targets x 42, non-empty "fqn" under
+    # "adapter_modules", readable by the same tools/count_census_modules.py
+    # the launcher runs next) at CENSUS_PERSIST whenever the stub exits 0.
+    # The deposit cannot disarm the drill: the armed refusal reads the
+    # knob before this file is consulted — proven by the anti-vacuity leg
+    # being green tonight with NO artifact on disk at all.
     CENSUS_PERSIST=$PREFLIGHT_DIR/target_census.persist
     FS_CENSUS_DRILL_BUILD_FAILURE=$2
     run_in_container() {
@@ -2240,11 +2251,83 @@ f41_sim() { # $1=launcher file $2=drill knob (0|1) $3=fixture (unmeasured|clear|
             'CENSUS_TARGET linear_proj 42 42' \
             'CENSUS_TARGET *.mlp.mlp.linear_fc1 42 0' \
             'CENSUS_TARGET *.mlp.mlp.linear_fc2 42 0' \
-            'CENSUS_VERDICT=CLEAR (4 of 4 shipped targets attach; population 1556; controls 3/3 OK)' ;;
+            'CENSUS_VERDICT=CLEAR (4 of 4 shipped targets attach; population 1556; controls 3/3 OK)'
+          # A clean probe run leaves TWO witnesses and this fixture owes
+          # both: the transcript above AND the --out artifact the
+          # launcher's doctrine-4 arm demands on disk. Deposit it here —
+          # synthetic payload, contract-exact shape (wrapped under
+          # "adapter_modules", each record a dict with non-empty "fqn"),
+          # 168 records = this transcript's own 4 targets x 42, so the
+          # denominator the launcher prints next is parsed off an
+          # artifact, never restated from memory (doctrine 2). Only on a
+          # stub rc 0: a probe simulating failure must NOT certify a
+          # fresh artifact, and ${F41_STUB_RC:-1} fails closed on an
+          # unset rc for the same reason (missing is not zero). Two
+          # top-level keys ("adapter_modules" + "source") beside 168
+          # records also keep the BLOCKER #88 MUST_FIRE leg's OBSERVED
+          # RED: the frozen pre-fix len(root) counter reads 2 against 168.
+          # Host python3 with stdlib json only — the same interpreter the
+          # launcher itself is about to invoke on this path (fix44). The
+          # destination is guarded by :? — if the harness ever stops
+          # declaring it, the fixture dies here NAMING the seam on stderr
+          # instead of silently CLEAR (doctrine 4; attribution).
+          if [ "${F41_STUB_RC:-1}" -eq 0 ]; then
+            python3 - "${CENSUS_PERSIST:?f41 harness: census --out destination undeclared}" <<'F41_CLEAR_JSON'
+import json
+import sys
+
+STEMS = (
+    "self_attn.linear_qkv",
+    "self_attn.linear_proj",
+    "mlp.mlp.linear_fc1",
+    "mlp.mlp.linear_fc2",
+)
+records = [
+    {
+        "fqn": "model.layers.%d.%s" % (layer, stem),
+        "out_features": 4096,
+        "in_features": 4096,
+    }
+    for layer in range(42)
+    for stem in STEMS
+]
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    json.dump(
+        {
+            "adapter_modules": records,
+            "source": "fix41 CLEAR fixture (synthetic probe --out deposit)",
+        },
+        fh,
+    )
+F41_CLEAR_JSON
+          fi
+          ;;
       esac
       return "$F41_STUB_RC"
     }
-    eval "$f41_reg"
+    # Attribution instrumentation: a red drill leg used to quote only the
+    # fixture's leading stdout, so 'rc=1 or DRILL text leaked' could not
+    # say WHICH failure it was nor where the run died (every launcher
+    # FATAL on this path goes to stderr, which the leg never quotes).
+    # Buffer the eval's stdout; on nonzero rc emit one F41_SIM_ATTR line —
+    # fixture, stub rc, knob, eval rc, LAST stdout line — BEFORE the
+    # replay, so even head-truncated failure quotes carry it. The rc
+    # contract is unchanged (the caller still receives the eval's own
+    # status) and the replayed bytes are unchanged apart from one
+    # normalized trailing newline. The line fires only on nonzero rc, so
+    # the MUST_PASS's rc-0 clean path gains zero new output, and the line
+    # deliberately contains no drill needle, so it can never read as the
+    # drill leaking off-trigger.
+    f41_eval_out=$(eval "$f41_reg")
+    f41_eval_rc=$?
+    if [ "$f41_eval_rc" -ne 0 ]; then
+      printf 'F41_SIM_ATTR fixture=%s stub_rc=%s knob=%s eval_rc=%s last_stdout=%s\n' \
+        "${F41_FIXTURE:-unset}" "${F41_STUB_RC:-unset}" \
+        "${FS_CENSUS_DRILL_BUILD_FAILURE:-unset}" "$f41_eval_rc" \
+        "$(printf '%s\n' "$f41_eval_out" | tail -n 1)"
+    fi
+    printf '%s\n' "$f41_eval_out"
+    return "$f41_eval_rc"
   )
 }
 
@@ -2789,66 +2872,121 @@ echo "== fix44: python call-site census — the complement of the executor censu
 # construction) and require the population to be EXACTLY the enumerated host
 # exceptions — host calls that are legitimate because they never read a DCP;
 # the discriminator this estate applies is "does it read a DCP", never "is it
-# on the host". Each of the five is torch-free by its own evidence, so the
+# on the host". Each of the eight is torch-free by its own evidence, so the
 # torch-less host interpreter is safe for it:
 #   cfg_get(1): reads config.json text.
 #   config-identity(1): reads config.json text.
 #   resolved-train-config writer(1): writes the gate's JSON.
 #   manifest emitter(1): FoundationScale tool, no torch import.
-#   census-modules counter(1): parses the ADAPTER_MODULES census verdict with
-#     stdlib json alone and reads no DCP — torch-free by construction, the
-#     same kind as the four above; the fixed-string conjunct below names this
-#     site by the census_modules_n variable the predicate checks for.
+#   census-modules counter(1): BLOCKER #88 re-seated this site from an inline
+#     python3 -c snippet to tools/count_census_modules.py parsing the
+#     ADAPTER_MODULES census verdict with stdlib json alone — same seat, new
+#     form; the needle below names it by the census_modules_n variable on the
+#     module call line.
+#   BLOCKER-88 root-shape probe(1): inline python3 -c reading the verdict
+#     JSON's root shape (blocker88_root_shape=$(python3 -c ...)) — stdlib
+#     json on an argv text file, no DCP, no torch import.
+#   BLOCKER-88 MUST_FIRE replay(1): re-executes the FROZEN pre-fix counter
+#     verbatim against the same artifact (blocker88_old_n=$(python3 -c ...))
+#     — stdlib json, no torch; an every-launch control leg seated on the
+#     host, enumerated here so the next unannounced site stays visible.
+#   BLOCKER-88 MUST_PASS refusal(1): runs the REAL counter module on
+#     constructed garbage root shapes and requires rejection every launch
+#     (blocker88_garbage_out=$(python3 ...)) — stdlib-only module, no DCP,
+#     doctrine 4 kept load-bearing and enumerated the same way.
+# None of the three new sites touches live_save_gate (verified line by line:
+# they name only their own variables and tools/count_census_modules.py).
 # The one python call that DOES import torch and reads the checkpoint —
 # tools/live_save_gate.py — fails the discriminator and must exist ONLY inside
 # an executor payload, which the negative conjunct asserts. The headcount
-# alone is blind here: the pre-fix44 tree also counted 5 (these four plus a
-# host-routed gate), so only enumeration separates tonight's legitimate 5 from
-# the defect's 5 — the fifth fixed-string conjunct below is load-bearing, not
-# decoration. Fail-before on the pre-fix44 tree: count was 5 and the negative
-# conjunct hit, so both legs were RED there. The narration recorded at line
-# 2635 wrote the census-wiring intent ahead of this counter and enumeration —
-# a claim ahead of its evidence (doctrine 5), now repaired by naming the fifth
-# site, not by waving the number.
-f44_python_census_ok() { # $1=launcher file (real or doctored copy)
-  local lc n
+# alone is blind here: the pre-fix44 tree also counted 5 (the four stdlib
+# sites plus a host-routed gate), so only enumeration separates a legitimate
+# population from a defect wearing the same headcount. Fail-before on the
+# pre-fix44 tree: count was 5 and the negative conjunct hit, so both legs
+# were RED there. Tonight the population legitimately grew 5 -> 8: BLOCKER
+# #88 re-seated the counter (same seat, new naming string — no population
+# add) and landed three new every-launch legs — the root-shape probe, the
+# frozen pre-fix-counter MUST_FIRE replay, and the MUST_PASS garbage
+# refusal. The narration recorded at line 2635 wrote the census-wiring
+# intent ahead of its evidence (doctrine 5) and was repaired then by naming
+# the fifth site, not by waving the number; this re-enumeration keeps that
+# rule in F44_PY_SITES below — the names ARE the census, and the pinned
+# total is DERIVED from the list's own line count, so the count can never
+# again sit one integer away from the names, which is exactly how this leg
+# went red tonight.
+# The enumeration itself: one 'name ::: needle' line per site, each needle a
+# FIXED STRING occurring on exactly its site's line in the stripped view.
+# This list is the single source of truth for the predicate below: the
+# expected population is the list's own line count, so the pinned total is
+# always equal to the number of names by construction — a launcher site with
+# no name here is red, a name with no site is red, and "bump the number" no
+# longer exists as an operation.
+F44_PY_SITES='cfg_get ::: python3 - "$HF_MODEL_PATH/config.json" "$1"
+config-identity ::: python3 - "$HF_MODEL_PATH/config.json" <<
+resolved-train-config writer ::: python3 - "$RESOLVED_CFG"
+manifest emitter ::: python3 "$FS_ROOT/tools/emit_run_manifest.py"
+census-modules counter ::: census_modules_n=$(python3 "$census_counter_py"
+BLOCKER-88 root-shape probe ::: blocker88_root_shape=$(python3 -c
+BLOCKER-88 MUST_FIRE replay ::: blocker88_old_n=$(python3 -c
+BLOCKER-88 MUST_PASS refusal ::: blocker88_garbage_out=$(python3 "$census_counter_py"'
+f44_python_census_ok() { # $1=launcher file (real or doctored copy). Every
+                         # conjunct reads F44_PY_SITES: the headcount derives
+                         # from the list's length, every named needle must be
+                         # present, and the negative conjunct refuses any
+                         # command-position python3 line naming
+                         # live_save_gate. Sets f44_census_diag for the
+                         # caller's red narration (doctrine 2).
+  local lc n total missing needle
   lc=$(strip_shell_comments < "$1")
   n=$(printf '%s\n' "$lc" | grep -cE "$(pos_pat python3)" || true)
-  [ "$n" -eq 5 ] \
-    && printf '%s\n' "$lc" | grep -qF 'python3 - "$HF_MODEL_PATH/config.json" "$1"' \
-    && printf '%s\n' "$lc" | grep -qF 'python3 - "$HF_MODEL_PATH/config.json" <<' \
-    && printf '%s\n' "$lc" | grep -qF 'python3 - "$RESOLVED_CFG"' \
-    && printf '%s\n' "$lc" | grep -qF 'python3 "$FS_ROOT/tools/emit_run_manifest.py"' \
-    && printf '%s\n' "$lc" | grep -qF 'census_modules_n=$(python3 -c' \
+  total=$(printf '%s\n' "$F44_PY_SITES" | grep -c .)
+  missing=$(printf '%s\n' "$F44_PY_SITES" | while IFS= read -r entry; do
+    needle=${entry#* ::: }
+    printf '%s\n' "$lc" | grep -qF "$needle" || printf 'UNMET[%s] ' "$entry"
+  done)
+  f44_census_diag="observed $n site(s) vs $total enumerated;${missing:+ $missing}"
+  [ "$n" -eq "$total" ] && [ -z "$missing" ] \
     && ! printf '%s\n' "$lc" | grep -E "$(pos_pat python3)" | grep -qF 'live_save_gate'
 }
 f44_py_n=$(strip_shell_comments < "$LORA" | grep -cE "$(pos_pat python3)" || true)
 if f44_python_census_ok "$LORA"; then
-  ok "python call sites: $f44_py_n command-position python3 sites, ALL enumerated host exceptions (cfg_get(1)+config-identity(1)+resolved-config-writer(1)+manifest-emitter(1)+census-modules-counter(1) — each torch-free by its own evidence; the counter parses the ADAPTER_MODULES census verdict with stdlib json alone and touches no DCP, so under the 'does it read a DCP' discriminator its host seat is legitimate); zero python3 command-position lines touch live_save_gate (the torch-importing, DCP-reading call is executor-routed). Complement of the executor census, 5 of 5 exceptions named — an unenumerated python call is red, never an absence"
+  ok "python call sites: $f44_py_n command-position python3 sites, ALL enumerated host exceptions (cfg_get(1)+config-identity(1)+resolved-config-writer(1)+manifest-emitter(1)+census-modules-counter(1)+BLOCKER88-root-shape-probe(1)+BLOCKER88-MUST_FIRE-replay(1)+BLOCKER88-MUST_PASS-refusal(1) — each torch-free by its own evidence: the counter and the refusal leg run tools/count_census_modules.py with stdlib json alone, the probe and the replay are inline python3 -c on argv text files, none touches a DCP, and NONE of the three new sites names live_save_gate, so under the 'does it read a DCP' discriminator every host seat is legitimate); zero python3 command-position lines touch live_save_gate (the torch-importing, DCP-reading call is executor-routed). Complement of the executor census, 8 of 8 exceptions named with the pinned total derived FROM the list — an unenumerated python call is red, never an absence"
 else
-  no "python call-site census failed: $f44_py_n command-position python3 sites (required 5, all enumerated) or a command-position python3 line touches live_save_gate — an unenumerated host python call exists, and an unenumerated exception is the two-interpreter defect (#77-B1)"
+  no "python call-site census failed: $f44_census_diag — an unenumerated host python call exists or a command-position python3 line touches live_save_gate; an unenumerated exception is the two-interpreter defect (#77-B1), and a legitimate new site is repaired by NAMING it in F44_PY_SITES, never by bumping a number"
 fi
 # MUST_FIRE (doctrine 3): re-inject a host-routed gate call on a temp COPY —
-# the exact #77-B1 shape — and require (i) construction proven (the copy's
-# count moves 5 -> 6 and the injected line names live_save_gate), (ii) the
-# SAME predicate reports the copy NOT ok, (iii) the live launcher still
-# satisfies the predicate (the leg above), so the flip is constructed, not
-# ambient.
+# the exact #77-B1 shape — and require (i) construction proven ON THE COPY
+# ALONE (the copy's command-position python3 census moves to live+1 and the
+# injected line names live_save_gate on the comment-stripped view), (ii) the
+# SAME predicate reports the copy NOT ok. There is deliberately NO conjunct
+# on any property of the live launcher: "an injected site is detected" is a
+# set-based statement about the constructed copy, not "the live tree is
+# clean" — that claim belongs to the census leg above, this detector's
+# MUST_PASS half. Coupling the fire rig to the live leg's health is exactly
+# what manufactured tonight's UNREACHABLE: the injection HAD constructed
+# (copy count 9 = live 8 + 1) and the predicate WAS red on the copy, yet the
+# rig refused that measurement because the census leg was (legitimately) red
+# during re-enumeration. A detector whose control inherits the live tree's
+# faults is no control.
 f44_pt=$(mktemp "${TMPDIR:-/tmp}/fs-f44-pycensus.XXXXXX") \
   && awk '/^fs_live_save_gate\(\) \{/ && !d {d=1; print; print "  python3 \"$FS_ROOT/tools/live_save_gate.py\" \"$1\"  # fix44-MUST-FIRE injection"; next} {print}' "$LORA" > "$f44_pt"
 f44_ps=$?
 f44_pn=-1
-[ "$f44_ps" -eq 0 ] && f44_pn=$(strip_shell_comments < "$f44_pt" | grep -cE "$(pos_pat python3)" || true)
+f44_pin=-1
+if [ "$f44_ps" -eq 0 ]; then
+  f44_pn=$(strip_shell_comments < "$f44_pt" | grep -cE "$(pos_pat python3)" || true)
+  f44_pin=$(strip_shell_comments < "$f44_pt" | grep -E "$(pos_pat python3)" | grep -cF 'live_save_gate' || true)
+fi
 f44_pfired=1
-if [ "$f44_ps" -eq 0 ] && [ "$f44_pn" -eq 6 ] && ! f44_python_census_ok "$f44_pt" \
-   && f44_python_census_ok "$LORA"; then
+if [ "$f44_ps" -eq 0 ] && [ "$f44_pn" -eq "$((f44_py_n + 1))" ] \
+   && [ "$f44_pin" -ge 1 ] && ! f44_python_census_ok "$f44_pt"; then
   f44_pfired=0
 fi
 [ -n "${f44_pt:-}" ] && rm -f "$f44_pt" || true
 if [ "$f44_pfired" -eq 0 ]; then
-  ok "MUST_FIRE python-census: re-injecting a host-routed live_save_gate call on a copy moves the census 5 -> 6 and turns the predicate red — the complement census can see the #77-B1 shape it exists to refuse"
+  ok "MUST_FIRE python-census: re-injecting a host-routed live_save_gate call on a copy moves the copy's census to live+1 (measured $f44_py_n -> $f44_pn; the injected line names live_save_gate after comment-stripping) and turns the SAME predicate red on the copy alone — the complement census can see the #77-B1 shape it exists to refuse, and the fire rig no longer stands on the live leg's health"
 else
-  no "MUST_FIRE UNREACHABLE (python-census): the host-call injection did not construct or did not fire (awk rc=$f44_ps, copy count=$f44_pn) — the complement census is an unproven detector"
+  no "MUST_FIRE UNREACHABLE (python-census): the host-call injection did not construct or did not fire on the constructed copy (awk rc=$f44_ps, copy count=$f44_pn vs live+1=$((f44_py_n + 1)), copy live_save_gate command-position sites=$f44_pin) — the complement census is an unproven detector"
 fi
 
 echo "== fix44: the artifact gate is executor-routed and returns the gate's rc UNTOUCHED (#77-B1) =="
@@ -2887,7 +3025,7 @@ f44_gate_wired_ok() { # $1=launcher file (real or doctored copy). The
     && ! printf '%s\n' "$fn" | grep -qE "$(pos_pat python3)"
 }
 if f44_gate_wired_ok "$LORA"; then
-  ok "fs_live_save_gate routes through run_in_container (--slurm-ntasks 1 --workdir \$REPO idiom), prepends \$FS_ROOT/src to the CONTAINER's forwarded PYTHONPATH, restates PYTHONNOUSERSITE=1 in the payload, passes --adapter-modules (the launcher-declared LoRA attachment set) to the census writer on full-FT's --fqn-map footing (#78-B), returns the captured rc, and carries no command-position python3 — the fifth python call joins the executor with the census wired through"
+  ok "fs_live_save_gate routes through run_in_container (--slurm-ntasks 1 --workdir \$REPO idiom), prepends \$FS_ROOT/src to the CONTAINER's forwarded PYTHONPATH, restates PYTHONNOUSERSITE=1 in the payload, passes --adapter-modules (the launcher-declared LoRA attachment set) to the census writer on full-FT's --fqn-map footing (#78-B), returns the captured rc, and carries no command-position python3 — the torch-importing gate call rides the executor payload and stays INVISIBLE to the re-enumerated 8-site census, with the census wired through"
 else
   no "fs_live_save_gate is not executor-routed with the established in-container PYTHONPATH/PYTHONNOUSERSITE/--adapter-modules/untouched-rc idiom — the torch-importing gate still runs on a host interpreter that cannot read DCP, or the census writer no longer receives the declared adapter set (#77-B1 routing / #78-B flag)"
 fi
@@ -3304,24 +3442,35 @@ else
 fi
 # MUST_FIRE (doctrine 3): re-inject the measured #77-B1 shape — a
 # host-routed gate call — into a temp COPY of the full-FT launcher, and
-# require (i) construction proven (the copy's census moves 4 -> 5), (ii)
-# the SAME predicate reports the copy NOT ok, (iii) the live launcher still
-# satisfies the predicate (leg 1), so the flip is constructed, not ambient.
+# require (i) construction proven ON THE COPY ALONE (the copy's census moves
+# to live+1 and the injected line names live_save_gate on the stripped
+# view), (ii) the SAME predicate reports the copy NOT ok. The live-tree-clean
+# conjunct that used to sit here is REMOVED, mirroring the fix44 repair made
+# tonight: coupling the fire rig to leg 1's health means a legitimate census
+# re-enumeration knocks out its own control and manufactures a false
+# UNREACHABLE — a false alarm costing what a false green costs (doctrine 5,
+# symmetric arm). The live population here stands at 4 sites against the 4
+# named exceptions — attested by leg 1, green tonight; not re-grepped in
+# this repair — and both torch-importing calls stay invisible to the census.
 f45_pt=$(mktemp "${TMPDIR:-/tmp}/fs-f45-pycensus.XXXXXX") \
   && awk '/^fs_live_save_gate\(\) \{/ && !d {d=1; print; print "  python3 \"$FS_ROOT/tools/live_save_gate.py\" \"$1\"  # fix45-MUST-FIRE injection"; next} {print}' "$FULL" > "$f45_pt"
 f45_ps=$?
 f45_pn=-1
-[ "$f45_ps" -eq 0 ] && f45_pn=$(strip_shell_comments < "$f45_pt" | grep -cE "$(pos_pat python3)" || true)
+f45_pin=-1
+if [ "$f45_ps" -eq 0 ]; then
+  f45_pn=$(strip_shell_comments < "$f45_pt" | grep -cE "$(pos_pat python3)" || true)
+  f45_pin=$(strip_shell_comments < "$f45_pt" | grep -E "$(pos_pat python3)" | grep -cF 'live_save_gate' || true)
+fi
 f45_pfired=1
-if [ "$f45_ps" -eq 0 ] && [ "$f45_pn" -eq 5 ] && ! f45_py_census_ok "$f45_pt" \
-   && f45_py_census_ok "$FULL"; then
+if [ "$f45_ps" -eq 0 ] && [ "$f45_pn" -eq "$((f45_py_n + 1))" ] \
+   && [ "$f45_pin" -ge 1 ] && ! f45_py_census_ok "$f45_pt"; then
   f45_pfired=0
 fi
 [ -n "${f45_pt:-}" ] && rm -f "$f45_pt" || true
 if [ "$f45_pfired" -eq 0 ]; then
-  ok "MUST_FIRE full-FT python-census: re-injecting a host-routed live_save_gate call on a copy moves the census 4 -> 5 and turns the predicate red — the complement census can see the shape it exists to refuse"
+  ok "MUST_FIRE full-FT python-census: re-injecting a host-routed live_save_gate call on a copy moves the copy's census to live+1 (measured $f45_py_n -> $f45_pn; the injected line names live_save_gate after comment-stripping) and turns the SAME predicate red on the copy alone — the complement census can see the shape it exists to refuse, with the fire rig independent of the live tree's state as in fix44"
 else
-  no "MUST_FIRE UNREACHABLE (full-FT python-census): the host-call injection did not construct or did not fire (awk rc=$f45_ps, copy count=$f45_pn) — the complement census is an unproven detector"
+  no "MUST_FIRE UNREACHABLE (full-FT python-census): the host-call injection did not construct or did not fire on the constructed copy (awk rc=$f45_ps, copy count=$f45_pn vs live+1=$((f45_py_n + 1)), copy live_save_gate command-position sites=$f45_pin) — the complement census is an unproven detector"
 fi
 
 # --- legs 3-4: the gate wiring itself (conjuncts unchanged from fix45-A —

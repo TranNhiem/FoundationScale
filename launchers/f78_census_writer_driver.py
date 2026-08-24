@@ -41,7 +41,13 @@ silently):
     still fabricates symbols -- ranked below function-extraction even by
     the reviewer that proposed it;
   * relaxing MUST_FIRE to 'rc != 0' or MUST_PASS to 'a file exists':
-    drops exactly the assertion halves these legs exist to indict.
+    drops exactly the assertion halves these legs exist to indict;
+  * hand-authoring the writer's kwargs while the signature was NOT yet
+    in evidence: REJECTED last merge as a claim broader than its
+    evidence -- correctly, then. The signature and writer body are now
+    the evidence (Leg integration below): the rejection is superseded,
+    and recording the reversal HERE keeps it an audit event rather than
+    a quiet re-pick.
 
 What this driver does
 ---------------------
@@ -54,7 +60,13 @@ ast.parse the probe (stdlib only). Lift, IN ORDER:
     out and, if the writer's closure needs it, surfaces LEGIBLY as
     F78_EXTRACT_UNRESOLVED=<name> -- never silently fabricated,
   * _persist_adapter_census plus the transitive closure of same-module
-    functions it references (ast.Name Load walk over each kept body),
+    top-level DEFINITIONS it references -- functions AND classes -- via
+    an ast.Name Load walk over each kept body, emitted in ORIGINAL
+    top-level order (class bases/decorators and def defaults evaluate at
+    exec time, exactly as the probe's own module evaluates them). The
+    writer's refusal contract is a raised top-level class,
+    _CensusRefusal: un-lifted, the guard dies as NameError, a DRIVER red
+    impersonating probe behaviour on the leg that exists to watch it,
 then exec NOTHING else, in a namespace whose __name__ is
 '__f78_persistence__' (the probe's __main__ guard cannot fire even
 transitively), over a stdlib-only prelude. The bytes executed are the
@@ -66,7 +78,9 @@ Facts printed (the driver's contract with the legs)
 ---------------------------------------------------
 drive:
   stage=F78_STAGE=drove rc=0
-  F78_EXTRACT_FUNCS=<k>            extraction denominator (doctrine 2)
+  F78_EXTRACT_FUNCS=<k>            top-level DEFINITIONS lifted --
+      functions plus closure-referenced classes (e.g. _CensusRefusal);
+      extraction denominator (doctrine 2)
   F78_EXTRACT_CONSTS=<c>
   F78_EXTRACT_FUTURES=<csv|none>
   F78_EXTRACT_UNRESOLVED=<csv|none>   module-scope names the closure wants
@@ -80,6 +94,10 @@ drive:
       exec copy, and its substring classes would have mapped 'total' onto
       the path class via the substring 'out' -- matching here is by word
       segment, never by whole-name substring)
+  F78_KWARGS_BOUND=<k> of <n>      explicit mode: the pre-call bind's own
+      examined set -- k supplied keys against the n non-splat parameters
+      of the LIVE signature (doctrine 2; fixture mode's denominator is
+      F78_SYNTH_PATH/DATA instead, since its map comes FROM the signature)
   F78_SYNTH_PATH=<csv>             fixture mode: params mapped <- out_path
   F78_SYNTH_DATA=<csv>             fixture mode: params mapped <- fixture
   F78_FIXTURE_ROWS=<k>             fixture mode: attachment count actually
@@ -93,8 +111,13 @@ drive:
       cannot see is UNKNOWN, never 0 -- a forged 0 here would vacuously
       pass MUST_FIRE half (a). Legs pin the path via spec.out_path.
   F78_OUT_PARENT_PRESENT=<0|1|unknown>
-  F78_VERDICT_TOKENS=<csv|none>    UNMEASURED/BLOCKED/CLEAR lifted from the
-      writer's captured stdout+stderr, in order, duplicates kept
+  F78_VERDICT_TOKENS=<csv|none>    UNMEASURED/BLOCKED/CLEAR, in order,
+      duplicates kept -- indexed over BOTH captured channels the lifted
+      call can speak on: the stdout+stderr tape AND the refusal's own
+      exception/SystemExit message text. A refusal raised below main()'s
+      verdict printer never reaches the tape, yet still speaks -- and its
+      words are already quoted verbatim in F78_RAISED. INDEXED, never
+      minted: if the code under test says no verdict word, none appears.
   F78_RESULT=<json|repr>           writer return value, when not None
   F78_TOOL|<line>                  the tool's own words, quoted
   rc is 0 even when the writer misbehaved: an unwritten artifact or an
@@ -121,7 +144,60 @@ the audited window of the 3676-line harness -- locate it with
 -- and doctrine 4 forbids shipping a blind byte-anchor against it, so the
 swap ships as these verbatim instructions, not as an Edit):
 
-  MUST_FIRE (refusal fixture authored by the leg):
+  BOTH legs ship EXPLICIT-MODE specs. The writer's LIVE signature and
+  body are in evidence now (launchers/lora_target_census.py:238-240 ff.):
+
+      def _persist_adapter_census(
+          out_path, rows, population, hf_model_path, targets, total
+      ) -> None:
+
+  Hand-authoring this kwargs set was rejected last merge as naming
+  parameters nowhere in evidence; the rejection is SUPERSEDED -- the
+  signature above IS the evidence. The driver keeps
+  inspect.signature(...).bind(**kwargs) in front of every explicit call,
+  so a renamed/added/omitted parameter re-fails as a NAMED rc-15
+  drive-failed before the writer runs: drift goes red, never silently
+  mis-bound. Per-parameter sourcing -- read off the writer body,
+  AUTHORED by the leg, never guessed by the driver:
+
+    out_path      the leg's artifact path; ALSO pin spec.out_path to the
+                  same string so F78_OUT_EXISTS stays measured. Feeds
+                  _atomic_write_json(out_path, payload) (line 355).
+    rows          the fixture's per-target records; each record carries
+                  its FULL 'found' list (the writer's own docstring:
+                  rows carries the FULL per-target match lists, the same
+                  found lists CENSUS_SAMPLE previews only 2 of).
+                  MUST_FIRE: every found is [] -- the zero attachment
+                  set BY CONSTRUCTION; the empty-set guard must raise
+                  _CensusRefusal BEFORE any temp file exists.
+                  MUST_PASS: two records whose founds carry the two
+                  expected names.
+    population    {} -- the fixture authors NO module dims, so the
+                  writer's all-or-nothing rule (lines 321-338) writes
+                  every entry as a bare stem BY DESIGN; a partially
+                  dimmed fixture would poke a gate-refusal contract the
+                  leg is not aiming at.
+    hf_model_path a leg-authored provenance string; in visible evidence
+                  it is interpolated ONLY into the artifact 'source'
+                  text (line 348) -- never opened, never globbed.
+    targets       the fixture's pattern names, joined into 'source'
+                  (line 348); e.g. the two 'target' keys of the rows.
+    total         the offerable-module count the fixture CLAIMS, as an
+                  int MATCHING the leg's own rows (line 349). The leg
+                  authors the arithmetic; ANY driver-side derivation
+                  (len(fixture), a constant, skipping the parameter) is
+                  exactly the guessing the rc-15 refusal exists to
+                  refuse (doctrine 4/5, symmetric).
+
+  expect_fqns note (verify spec): with population={} the artifact's
+  adapter_modules carry bare stems; the probe's _artifact_stem defines
+  the found-name -> stem mapping. Author expect_fqns from
+  _artifact_stem's REAL behaviour -- read it, do not guess it
+  (doctrine 4). cmd_verify searches every string in the artifact JSON,
+  so the leg greps key on F78_FQN_OK|<fqn> (positive form), never the
+  bare name, which also appears inside F78_FQNS_MISSING on failure.
+
+  MUST_FIRE (zero attachment set; explicit-kwargs spec as above):
       out=$(python3 launchers/f78_census_writer_driver.py drive \
             launchers/lora_target_census.py "$f78_spec.json") || true
       keep asserting BOTH halves against "$out":
@@ -129,9 +205,13 @@ swap ships as these verbatim instructions, not as an Edit):
             ('unknown' NEVER matches: unmeasured is not pass)
         (b) grep 'F78_VERDICT_TOKENS=.*UNMEASURED' -- the verdict is UNMEASURED
       additive: grep 'F78_EXTRACT_UNRESOLVED=none' -- the driver's own
-      extraction denominator; !=none re-reads the red as a DRIVER gap.
+      extraction denominator; !=none re-reads the red as a DRIVER gap;
+      grep 'F78_RAISED=.*CensusRefusal' -- the refusal fires as the
+      writer's PROMISED type, lifted, not a NameError miscarriage of an
+      un-lifted guard; grep 'F78_KWARGS_BOUND=6 of 6' -- the bind's
+      examined set, printed, never assumed.
 
-  MUST_PASS (real-artifact fixture authored by the leg):
+  MUST_PASS (2-module explicit-kwargs spec as above):
       out=$(python3 launchers/f78_census_writer_driver.py drive \
             launchers/lora_target_census.py "$f78_spec.json") || true
       ver=$(python3 launchers/f78_census_writer_driver.py verify "$f78_verify.json")
@@ -143,7 +223,9 @@ swap ships as these verbatim instructions, not as an Edit):
         and grep 'F78_FQNS_MISSING=none'
         grep the explicit denominator 'F78_FQNS_FOUND=<k> of <n>' and/or
         'F78_ARTIFACT_ROWS=<r> of <m>' -- never a bare numerator
-      additive: grep 'F78_EXTRACT_UNRESOLVED=none' against "$out".
+      additive: grep 'F78_EXTRACT_UNRESOLVED=none' against "$out", and
+      'F78_KWARGS_BOUND=6 of 6' -- the whole signature bound and
+      examined (doctrine 2), not just the happy path asserted.
 
 Spec shapes (JSON, authored by the leg fixtures):
   drive : EITHER explicit mode:
@@ -158,7 +240,8 @@ Spec shapes (JSON, authored by the leg fixtures):
             stage=F78_STAGE=drive-failed rc 15 naming the failure -- a
             stale-fixture red, never a mid-call TypeError at rc 0
             masquerading as a measured probe finding (doctrine 5).
-          OR fixture mode (what the legs ship):
+          OR fixture mode (RETAINED -- every rc-15 refusal below stays
+          live and reachable -- but NOT what the F78 legs ship):
             {"fixture": [<attachment elements>], "out_path": "..."}
             the driver reflects the writer's LIVE signature and maps
             path-class params (name segment out|path|dest|file|json) <-
@@ -172,8 +255,24 @@ Spec shapes (JSON, authored by the leg fixtures):
             signature instead of a regexed neutered copy. The EMPTY list
             is the refusal fixture; an absent 'fixture' key with no
             'kwargs' object is the fixture defect (doctrine 4). Fixture
-            kwargs come FROM the signature, so the pre-call bind is a
-            no-op there by construction.
+            kwargs come FROM the signature and then RUN through the same
+            inspect.signature(...).bind(**kwargs) guard explicit-kwargs
+            mode keeps: an accept by construction that must still RUN to
+            be a control (a never-run guard is no more a control than a
+            never-fired detector, doctrine 3), going red as a NAMED rc 15
+            the day the live signature drifts -- never a silent mis-bind
+            or a mid-call TypeError at rc 0 that a leg could misread as a
+            probe finding (doctrine 5).
+            Against the #78 signature this mode rc-15s naming param=total
+            BY DESIGN: total has no honest driver-side source (it is the
+            offerable-population size, not the attachment-feed length),
+            while hf_model_path would silently take the artifact path via
+            its 'path' segment and population/targets the attachment
+            list -- the guesses the refusal exists to refuse. The legs
+            therefore author explicit kwargs (Leg integration). Fixture
+            mode remains for writers whose signatures honestly map, and
+            remains the standing proof that an unsourcable parameter is
+            a NAMED rc 15, never a fabricated value.
   verify: {"artifact": "/path/to/expected.json",
            "expect_fqns": ["module....linear_qkv", ...],
            "expect_denominator": <int printed as the 'of M'>;
@@ -332,34 +431,46 @@ def _load_writer(probe_path):
     except SyntaxError as exc:
         _fail("extract", f"probe did not parse: {exc}")
 
-    futures, consts, funcs = [], [], {}
+    futures, consts, defs, order = [], [], {}, []
     const_names = set()
     for node in tree.body:
         if isinstance(node, ast.ImportFrom) and node.module == "__future__":
             futures.append(node)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            funcs[node.name] = node
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                               ast.ClassDef)):
+            # Classes are lifted too: the writer's refusal CONTRACT is
+            # 'raise _CensusRefusal' (its own docstring). Un-lifted, the
+            # top-level class reads NameError in this namespace -- the
+            # guard would miscarry as a DRIVER gap on exactly the leg
+            # whose purpose is watching the guard fire (doctrine 3).
+            if node.name not in defs:
+                order.append(node.name)
+            defs[node.name] = node
         elif _literal_assign(node) is not None:
             name = _literal_assign(node)
             if name not in const_names:
                 consts.append(node)
                 const_names.add(name)
 
-    if WRITER_ENTRY not in funcs:
+    if WRITER_ENTRY not in defs:
         _fail("extract", f"{WRITER_ENTRY} not found at probe top level")
 
     keep, pending = set(), {WRITER_ENTRY}
     while pending:
         name = pending.pop()
-        if name in keep or name not in funcs:
+        if name in keep or name not in defs:
             continue
         keep.add(name)
-        for sub in ast.walk(funcs[name]):
+        for sub in ast.walk(defs[name]):
             if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
                 pending.add(sub.id)
 
     unresolved = _unresolved_names(src, probe_path, keep, const_names)
-    body = list(futures) + consts + [funcs[n] for n in sorted(keep)]
+    # ORIGINAL top-level order, not sorted: class bases/decorators (and
+    # any def defaults) are evaluated at exec time, exactly the way the
+    # probe's own module would evaluate them.
+    body = (list(futures) + consts
+            + [defs[n] for n in order if n in keep])
     module = ast.fix_missing_locations(ast.Module(body=body, type_ignores=[]))
 
     ns = {"__name__": "__f78_persistence__", "__file__": probe_path}
@@ -402,9 +513,6 @@ def _synthesize_kwargs(writer, spec):
     re-shapes the map LEGIBLY (an rc-15 stage-named red a reviewer can
     read) instead of stranding the leg the way the hand-enumerated stub
     set did."""
-    import inspect  # local and idempotent: this round adds the first
-    # signature use; the merge must not red on a missing top-level import
-    # when only real writer behaviour may speak (doctrine 4).
     out_path = spec.get("out_path")
     if not isinstance(out_path, str) or not out_path:
         _fail("drive", "arg-synthesis needs spec.out_path: the path-class "
@@ -447,12 +555,24 @@ def _synthesize_kwargs(writer, spec):
                        + (",".join(data_hits) or "none")
                        + ": a zero candidate on either side means the "
                        "writer's shape changed; refusing to run blind")
+    # Fixture kwargs are bound against the LIVE signature as a guard, the
+    # same control explicit-kwargs mode keeps in cmd_drive. Synthesis
+    # builds kwargs FROM that signature, so bind() accepts them by
+    # construction -- but a guard is only a control if it RUNS (doctrine
+    # 3), and a future signature drift that ever breaks construction is
+    # this named rc-15 red, never a silent mis-bind or a mid-call
+    # TypeError at rc 0 that a leg could misread as a measured probe
+    # finding (doctrine 5).
+    try:
+        inspect.signature(writer).bind(**kwargs)
+    except TypeError as exc:
+        _fail("drive", "synthesized kwargs do not bind the lifted writer's "
+                       f"signature {inspect.signature(writer)}: {exc}")
     return kwargs, {"path": path_hits, "data": data_hits,
                     "fixture_rows": len(fixture)}
 
 
 def cmd_drive(probe_path, spec_path):
-    import inspect  # see _synthesize_kwargs: local, idempotent, first use
     spec = _read_spec(spec_path, "drive")
     if not isinstance(spec, dict):
         _fail("drive", "spec must be an object carrying a 'kwargs' object "
@@ -466,11 +586,12 @@ def cmd_drive(probe_path, spec_path):
         # added, or omitted required parameter is a named drive-failed at
         # rc 15 -- never a mid-call TypeError at rc 0 that a leg could
         # misread as a measured probe finding (doctrine 5).
+        sig = inspect.signature(writer)
         try:
-            inspect.signature(writer).bind(**spec["kwargs"])
+            bound = sig.bind(**spec["kwargs"])
         except TypeError as exc:
             _fail("drive", f"spec kwargs do not bind the lifted writer's "
-                           f"signature {inspect.signature(writer)}: {exc}")
+                           f"signature {sig}: {exc}")
         kwargs, synth = spec["kwargs"], None
     elif "fixture" in spec:
         kwargs, synth = _synthesize_kwargs(writer, spec)
@@ -494,8 +615,11 @@ def cmd_drive(probe_path, spec_path):
                 result = asyncio.run(result)
     except SystemExit as exc:
         # the writer using the probe's own 0/1/3 exit vocabulary is a
-        # MEASURED behaviour, reported, never re-judged
-        raised, exited = "SystemExit", str(exc.code)
+        # MEASURED behaviour, reported, never re-judged. The code is kept
+        # in the F78_RAISED text too, so a SystemExit(<msg>) refusal's
+        # own words stay reachable by the verdict-token index below --
+        # still within the F78_RAISED=<none|Type: msg> contract.
+        raised, exited = f"SystemExit: {exc.code}", str(exc.code)
     except BaseException as exc:
         raised = f"{type(exc).__name__}: {exc}"
     text = tape.getvalue()
@@ -510,6 +634,16 @@ def cmd_drive(probe_path, spec_path):
         print(f"F78_SYNTH_PATH={','.join(synth['path'])}")
         print(f"F78_SYNTH_DATA={','.join(synth['data'])}")
         print(f"F78_FIXTURE_ROWS={synth['fixture_rows']}")
+    else:
+        # explicit mode: the pre-call BIND is the guard, so its examined
+        # set gets a denominator too (doctrine 2) -- k supplied keys
+        # against the n bindable (non-splat) parameters of the LIVE
+        # signature; greppable as '<k> of <n>', never a bare numerator.
+        n_bindable = sum(
+            1 for p in sig.parameters.values()
+            if p.kind not in (inspect.Parameter.VAR_POSITIONAL,
+                              inspect.Parameter.VAR_KEYWORD))
+        print(f"F78_KWARGS_BOUND={len(bound.arguments)} of {n_bindable}")
     print(f"F78_RAISED={raised}")
     print(f"F78_EXIT={exited}")
     if out_path is None:
@@ -523,7 +657,12 @@ def cmd_drive(probe_path, spec_path):
         print(f"F78_OUT_EXISTS={1 if pathlib.Path(out_path).is_file() else 0}")
         parent = pathlib.Path(out_path).resolve().parent
         print(f"F78_OUT_PARENT_PRESENT={1 if parent.is_dir() else 0}")
-    tokens = _VERDICT_RE.findall(text)
+    # doctrine 4: scan BOTH captured channels the lifted call can speak
+    # on -- the stdout+stderr tape AND the refusal's own message text
+    # (already quoted verbatim in F78_RAISED). A refusal raised below
+    # main()'s verdict printer never reaches the tape; its message is
+    # still the code-under-test's own words, INDEXED here, never minted.
+    tokens = _VERDICT_RE.findall(text) + _VERDICT_RE.findall(raised)
     print(f"F78_VERDICT_TOKENS={','.join(tokens) if tokens else 'none'}")
     if result is not None:
         try:

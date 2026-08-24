@@ -210,37 +210,62 @@ _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")
 EMIT_RUN_MANIFEST_ROWS = [
     {
         "name": "emit_run_manifest.lora-zip-unstrict",
-        "what": "zip(..., strict=True) is the only length-pin between the producer and the on-disk verifier; strict=False lets a drifted keys tuple silently truncate the five-field record",
+        "what": (
+            "zip(..., strict=True) is the only length-pin between the "
+            "producer and the on-disk verifier; strict=False lets a "
+            "drifted keys tuple silently truncate the five-field record"
+        ),
         "anchor": "    return list(zip(_LORA_ABSTENTION_RECORD_KEYS, values, strict=True))",
         "replacement": "    return list(zip(_LORA_ABSTENTION_RECORD_KEYS, values, strict=False))",
     },
     {
         "name": "emit_run_manifest.lora-status-not-abstained",
-        "what": "declared.status is the field the on-disk predicate reads to call this null a DECLARED state; swapping the literal makes an abstention serialize as a non-abstention",
+        "what": (
+            "declared.status is the field the on-disk predicate reads "
+            "to call this null a DECLARED state; swapping the literal "
+            "makes an abstention serialize as a non-abstention"
+        ),
         "anchor": '        "abstained",',
         "replacement": '        "present",',
     },
     {
         "name": "emit_run_manifest.lora-preexisting-key-rename",
-        "what": "producer and on-disk predicate share the keys tuple, so renaming the audited denominator key travels end-to-end with enforcement staying green; only the pinned literal key names in the tests catch it",
+        "what": (
+            "producer and on-disk predicate share the keys tuple, so "
+            "renaming the audited denominator key travels end-to-end "
+            "with enforcement staying green; only the pinned literal "
+            "key names in the tests catch it"
+        ),
         "anchor": '    "declared.preexisting_iter_dirs",',
         "replacement": '    "declared.preexisting_save_dirs",',
     },
     {
         "name": "emit_run_manifest.lora-count-plus-one",
-        "what": "inflates the observed pre-existing save-dir count by one, so the serialized record disagrees with the measured estate the predicate compares against",
+        "what": (
+            "inflates the observed pre-existing save-dir count by one, "
+            "so the serialized record disagrees with the measured "
+            "estate the predicate compares against"
+        ),
         "anchor": "        str(preexisting_saves),",
         "replacement": "        str(preexisting_saves + 1),",
     },
     {
         "name": "emit_run_manifest.lora-count-fabricated",
-        "what": "declared.preexisting_iter_dirs is the denominator an auditor checks against the estate; pinning it to 0 fabricates the count instead of measuring it",
+        "what": (
+            "declared.preexisting_iter_dirs is the denominator an "
+            "auditor checks against the estate; pinning it to 0 "
+            "fabricates the count instead of measuring it"
+        ),
         "anchor": "        lora_preexisting_saves = _count_save_dirs(ckpt_dir)",
         "replacement": "        lora_preexisting_saves = 0",
     },
     {
         "name": "emit_run_manifest.drill-never-arms",
-        "what": "the bare-null drill is the observed-firing leg for the on-disk abstention control; '== \"0\"' means the drill can never arm, a quiet control",
+        "what": (
+            "the bare-null drill is the observed-firing leg for the "
+            "on-disk abstention control; '== \"0\"' means the drill "
+            "can never arm, a quiet control"
+        ),
         "anchor": '    drill_bare_null = os.environ.get(_DRILL_BARE_NULL_ENV) == "1"',
         "replacement": '    drill_bare_null = os.environ.get(_DRILL_BARE_NULL_ENV) == "0"',
     },

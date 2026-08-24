@@ -31,6 +31,7 @@ Stdlib only: the host python on this path has no torch (fix44).
 """
 
 import json
+import pathlib
 import sys
 
 WRAPPED_KEY = "adapter_modules"
@@ -64,7 +65,7 @@ def extract_entries(obj: object, path: str) -> list:
             keys = sorted(obj)
             shown = ", ".join(repr(k) for k in keys[:8])
             if len(keys) > 8:
-                shown += ", ... (%d keys total)" % len(keys)
+                shown += f", ... ({len(keys)} keys total)"
             raise SystemExit(
                 f"census root in {path} is a JSON object WITHOUT an "
                 f"'{WRAPPED_KEY}' key -- found a bare mapping with keys "
@@ -98,7 +99,7 @@ def main(argv: list) -> int:
         )
     path = argv[1]
     try:
-        with open(path, encoding="utf-8") as fh:
+        with pathlib.Path(path).open(encoding="utf-8") as fh:
             obj = json.load(fh)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SystemExit(
@@ -106,7 +107,7 @@ def main(argv: list) -> int:
             f"{exc}) -- unreadable is not empty and missing is not zero "
             f"(doctrine 4); a census the launcher cannot parse states no "
             f"denominator (doctrine 2) and BLOCKS."
-        )
+        ) from exc
     entries = extract_entries(obj, path)
     bad = sum(1 for e in entries if not is_record(e))
     if bad:
