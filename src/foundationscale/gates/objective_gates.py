@@ -78,6 +78,20 @@ _KNOWN_SOURCES = frozenset({"cli", "config", "default", "env"})
 _ABSENT = object()
 """Sentinel for key-diffing so a present-but-``None`` value is distinguishable from absent."""
 
+# Relative slack for the RewardStats coherence rules in RewardScaleSanityGate.
+# The rules are exact theorems of real arithmetic (a mean of values bounded by
+# [min, max] cannot leave [min, max]; a std over that range is analytically
+# bounded), but the numbers reach the gate after fp32/fp64 accumulation and
+# sometimes rounded serialisation, so an honest summary can land a hair past
+# the exact bound. The slack is orders of magnitude below any violation a
+# fabrication produces in practice — the incident estate's std values were
+# comparable to the entire range, ~2x the ceiling. It exists so the gate fires
+# on fiction, not rounding dust: a limits gate that false-fires on float noise
+# gets muted within a week, and the estate has already demonstrated what it
+# learns from that.
+_MEAN_RANGE_SLACK = 1e-6
+_STD_CEILING_SLACK = 1e-6
+
 
 @dataclass(frozen=True)
 class ValueProvenance:
@@ -107,6 +121,12 @@ class LossComponent:
     ``None`` means unmeasured, in which case no contributing/not-contributing claim is
     made either way. A measured contribution of exactly 0.0 with a declared non-zero
     weight is the ratio-identically-1.0 signature: listed, instantiated, inert.
+
+    ``None`` is a per-component abstention, not a licence at aggregate scope: a step
+    in which EVERY declared component carries ``None`` leaves
+    :class:`LossComponentCoverageGate`'s inert-component detector with zero examined
+    units, and the gate answers that sweep with a blocking VACUOUS that names 0
+    measured — never with ``all([])`` and a full-looking numerator.
     """
 
     name: str
@@ -297,6 +317,43 @@ def _absent_component_ctx() -> ObjectiveGateContext:
     )
 
 
+def _no_contributions_measured_ctx() -> ObjectiveGateContext:
+    # Every component present, observed, non-zero-weighted — and not one
+    # contribution measured. Presence and weight come back clean while the
+    # inert-component detector, the part of its gate that exists for the
+    # ratio-identically-1.0 incident, examines zero units. A pass grade here is
+    # all([]) wearing a covered numerator.
+    return _healthy_ctx(
+        components=(
+            LossComponent(name="policy_loss", weight=1.0, observed=True, contribution=None),
+            LossComponent(name="kl_penalty", weight=0.04, observed=True, contribution=None),
+            LossComponent(name="entropy_bonus", weight=0.001, observed=True, contribution=None),
+        ),
+    )
+
+
+def _partially_measured_components_ctx() -> ObjectiveGateContext:
+    # kl_penalty declines the contribution leg while the other two components
+    # carry measurements. This pins the documented None contract — abstention,
+    # not accusation — while forcing the verdict to carry the measured/total
+    # denominator and the abstainer's name.
+    return _healthy_ctx(
+        components=(
+            LossComponent(name="policy_loss", weight=1.0, observed=True, contribution=0.83),
+            LossComponent(name="kl_penalty", weight=0.04, observed=True, contribution=None),
+            LossComponent(name="entropy_bonus", weight=0.001, observed=True, contribution=0.0021),
+        ),
+    )
+
+
+def _stats_without_reward_term_ctx() -> ObjectiveGateContext:
+    # Healthy reward statistics attached to an objective that declares no reward
+    # term: the data exists, so it is examined — but the declaration and the
+    # data contradict each other, and the verdict must surface that rather than
+    # read as a clean bill for a term the objective says it does not have.
+    return _healthy_ctx(uses_rewards=False)
+
+
 def _identical_rewards_ctx() -> ObjectiveGateContext:
     # reward/mean=0.794 with zero spread: the 472-zero-grad-steps signature.
     return _healthy_ctx(
@@ -312,6 +369,57 @@ def _out_of_bounds_rewards_ctx() -> ObjectiveGateContext:
 
 def _missing_reward_stats_ctx() -> ObjectiveGateContext:
     return _healthy_ctx(reward_stats=None, expected_sample_count=None)
+
+
+def _zero_std_with_range_ctx() -> ObjectiveGateContext:
+    # W-obj-8 verbatim: std reported as exactly 0.0 across 256 samples that
+    # supposedly span [-1.0, 2.0]. Zero std forces min == max, so one of the
+    # two reported numbers is a lie. Whichever it is, the gate once PASSED it
+    # while its own detail line asserted "std > 0".
+    return _healthy_ctx(
+        reward_stats=RewardStats(n=256, mean=0.5, std=0.0, min=-1.0, max=2.0),
+    )
+
+
+def _negative_std_ctx() -> ObjectiveGateContext:
+    return _healthy_ctx(
+        reward_stats=RewardStats(n=256, mean=0.5, std=-0.25, min=-1.0, max=2.0),
+    )
+
+
+def _inverted_range_ctx() -> ObjectiveGateContext:
+    return _healthy_ctx(
+        reward_stats=RewardStats(n=64, mean=0.0, std=0.3, min=2.0, max=-1.0),
+    )
+
+
+def _mean_outside_range_ctx() -> ObjectiveGateContext:
+    return _healthy_ctx(
+        reward_stats=RewardStats(n=128, mean=5.0, std=0.4, min=-1.0, max=2.0),
+    )
+
+
+def _std_above_ceiling_ctx() -> ObjectiveGateContext:
+    # A range of 3.0 over 64 samples caps the sample std at 1.5*sqrt(64/63)
+    # ~= 1.5119 and the population std at 1.5. Reporting std == the full range
+    # width is the classic careless fabrication: it sounds plausible and is
+    # ~2x what any real batch could reach.
+    return _healthy_ctx(
+        reward_stats=RewardStats(n=64, mean=0.5, std=3.0, min=-1.0, max=2.0),
+    )
+
+
+def _single_sample_with_spread_ctx() -> ObjectiveGateContext:
+    return _healthy_ctx(
+        reward_stats=RewardStats(n=1, mean=0.0, std=0.0, min=-1.0, max=2.0),
+    )
+
+
+def _negative_sample_count_ctx() -> ObjectiveGateContext:
+    return _healthy_ctx(
+        reward_stats=RewardStats(n=-3, mean=0.5, std=0.3, min=-1.0, max=2.0),
+        expected_sample_count=None,
+    )
 
 
 def _drifted_hparams_ctx() -> ObjectiveGateContext:
@@ -451,6 +559,16 @@ class LossComponentCoverageGate(Gate):
     The check is bidirectional: components observed contributing but never declared
     also fail, because the objective in force exceeding its own record is the same
     unrecoverability with the signs flipped.
+
+    A third, quieter shape sits between those two: every declared component
+    present and weighted, and not one contribution measured. ``contribution=None``
+    is a legitimate per-component abstention (see :class:`LossComponent`), but a
+    step where EVERY component abstains leaves this gate's inert-component
+    detector — the part that exists for the trust-region incident — having
+    examined zero units. That sweep returns VACUOUS naming 0 measured, never
+    PASS. Partial abstention passes as a declared sample: the numerator counts
+    only components verified on every leg, and the abstainers are named in the
+    sample reason rather than averaged into an unqualified "N/N checked".
     """
 
     id: ClassVar[str] = "objective.loss_components"
@@ -480,10 +598,19 @@ class LossComponentCoverageGate(Gate):
         zero_weight: list[str] = []
         inert: list[str] = []
         non_finite: list[str] = []
+        measured_names: list[str] = []
+        unmeasured_names: list[str] = []
         for name in declared:
             comp = by_name.get(name)
             if comp is None or not comp.observed:
                 continue  # already counted in `missing`; report each component once
+            # Track the contribution leg separately from presence/weight: it is
+            # the only conditional leg of the check, and the verdict below may
+            # only claim it — or count a component toward it — when it ran.
+            if comp.contribution is not None:
+                measured_names.append(name)
+            else:
+                unmeasured_names.append(name)
             if not math.isfinite(comp.weight):
                 non_finite.append(f"{name} (weight={comp.weight!r})")
             elif comp.weight == 0.0:
@@ -524,8 +651,10 @@ class LossComponentCoverageGate(Gate):
                 f"force exceeds its own record"
             )
 
+        examined = len(declared) - len(missing)
+        measured = len(measured_names)
         cov = Coverage(
-            checked=len(declared) - len(missing),
+            checked=examined,
             unit="loss components",
             expected=len(declared),
         )
@@ -536,6 +665,63 @@ class LossComponentCoverageGate(Gate):
                 evidence={
                     "problems": problems,
                     "declared": list(declared),
+                    "contributions_measured": measured,
+                    "contributions_unmeasured": unmeasured_names,
+                    "origin": c.origin,
+                },
+            )
+        if measured == 0:
+            # Presence and weight came back clean, but not one contribution
+            # carried a measurement — so "no component is inert" over this step
+            # is all([]) with a covered numerator: 3/3 components examined for
+            # presence, 0/3 examined for the relation this gate exists to check.
+            # ok() over empty coverage downgrades to a blocking VACUOUS that
+            # names the 0; the claimed clause records what WAS established so
+            # the downgrade reads as scoped abstention, not malfunction.
+            # (examined >= 1 here: declared is non-empty and any missing
+            # component would have produced a FAIL above.)
+            return self.ok(
+                f"all {len(declared)} declared components present and "
+                f"non-zero-weighted, but contribution was measured for 0 of "
+                f"{examined} — the inert-component check examined nothing this step",
+                Coverage.none("contribution measurements"),
+                evidence={
+                    "declared": list(declared),
+                    "contributions_measured": 0,
+                    "contributions_unmeasured": unmeasured_names,
+                    "origin": c.origin,
+                },
+            )
+        if unmeasured_names:
+            # Partial measurement: some components declined the contribution leg
+            # (the LossComponent contract makes that an abstention, not a
+            # defect), so the numerator counts only components verified on every
+            # leg and the shortfall enters through the framework's declared-sample
+            # lane — Coverage(sampled=True) exists precisely so partial coverage
+            # is admitted in the open, with the abstainers named, instead of
+            # being averaged into an unqualified "N/N checked". The verdict stays
+            # PASS because no defect was found; the claim now stops at the
+            # evidence.
+            return self.ok(
+                f"all {len(declared)} declared components present, weighted; "
+                f"contribution established for {measured} of {examined} "
+                f"(unmeasured make no claim either way): {unmeasured_names}",
+                Coverage(
+                    checked=measured,
+                    unit="loss components",
+                    expected=len(declared),
+                    sampled=True,
+                    sample_reason=(
+                        f"contribution unmeasured for {len(unmeasured_names)} "
+                        f"of {examined} present components: {unmeasured_names}; "
+                        f"per the LossComponent contract an unmeasured "
+                        f"contribution carries no claim either way"
+                    ),
+                ),
+                evidence={
+                    "declared": list(declared),
+                    "contributions_measured": measured,
+                    "contributions_unmeasured": unmeasured_names,
                     "origin": c.origin,
                 },
             )
@@ -565,10 +751,26 @@ class LossComponentCoverageGate(Gate):
                 note="kl_penalty declared but never entered the loss at this step",
             ),
             Control(
+                "no-contributions-measured",
+                ControlKind.MUST_FIRE,
+                _no_contributions_measured_ctx,
+                note="all three components present and weighted, zero contributions "
+                "measured — the inert-component detector examined nothing and "
+                "must block (VACUOUS naming 0), not issue a pass grade",
+            ),
+            Control(
                 "all-components-contributing",
                 ControlKind.MUST_PASS,
                 _healthy_objective_ctx,
                 note="three declared components, all observed with non-zero contribution",
+            ),
+            Control(
+                "partially-measured-contributions",
+                ControlKind.MUST_PASS,
+                _partially_measured_components_ctx,
+                note="kl_penalty unmeasured: abstains that leg as a declared sample "
+                "without blocking — pins the documented None contract so the "
+                "zero-measurement fix cannot grow into 'unmeasured is a defect'",
             ),
         ]
 
@@ -585,19 +787,43 @@ class RewardScaleSanityGate(Gate):
     case preserves. This gate therefore treats zero reward variance across a
     multi-sample batch as FAIL, not as a curiosity — alongside the conventional
     checks (finite statistics, declared bounds) that alone would have waved it through.
+
+    Second incident shape (W-obj-8): the gate adjudicates a CALLER-SUPPLIED
+    aggregate and never sees the raw samples, so any RewardStats that is
+    internally impossible — std exactly 0 over a nonzero reported range, std
+    beyond the analytic ceiling of its range, a mean outside [min, max], an
+    inverted range, spread over fewer than two samples, a negative sample
+    count — is fabrication or corruption, and accepting it means auditing
+    fiction. Those summaries FAIL here, and the PASS detail states only
+    relations the checks actually evaluated: the pre-fix "std={...} > 0"
+    wording was a hardcoded literal that shipped a verdict claiming positive
+    spread about a batch whose attached evidence said std=0.0.
     """
 
     id: ClassVar[str] = "objective.reward_scale"
     description: ClassVar[str] = (
-        "Reward statistics are finite and inside declared bounds, and the "
+        "Reward statistics are finite and inside declared bounds, the "
         "all-identical-rewards degenerate case (zero variance, healthy mean) is "
-        "caught explicitly"
+        "caught explicitly, and caller-supplied aggregates that are internally "
+        "impossible (std = 0 over a nonzero range; std beyond the analytic "
+        "ceiling; mean outside [min, max]; inverted range; spread over n < 2; "
+        "negative n) fail as fabricated summaries"
     )
     events: ClassVar[tuple[Lifecycle, ...]] = (Lifecycle.STEP_ZERO,)
 
     def check(self, ctx: Any) -> GateResult:
         c = _coerce(ctx)
         stats = c.reward_stats
+        # Order is load-bearing: "are there statistics?" is asked BEFORE "does
+        # the objective declare rewards?" because the answers compose
+        # asymmetrically. Supplied statistics are always examined below — even
+        # when uses_rewards is False, where the final verdict surfaces the
+        # declaration contradiction as data. The skip is therefore reachable
+        # only when no statistics exist at all, the one state where its reason
+        # ("nothing to bound") is a verified fact rather than a claim about
+        # data nobody looked at. Reversing these tests would let an abstention
+        # wave past populated samples — the defect shape this framework exists
+        # to catch, committed by the abstainer itself.
         if stats is None:
             if not c.uses_rewards:
                 return self.skip("objective declares no reward term; nothing to bound")
@@ -607,6 +833,36 @@ class RewardScaleSanityGate(Gate):
                 "objective uses rewards but no reward samples were collected",
                 Coverage.none("reward samples"),
                 evidence={"origin": c.origin},
+            )
+        if stats.n < 0:
+            # Hoisted ABOVE the Coverage construction on purpose. Coverage rejects a
+            # negative count in __post_init__, so leaving this in the cascade below
+            # made the gate die with "ValueError: coverage cannot be negative: -3"
+            # — blocking, so it failed closed, but an ERROR traceback is a worse
+            # artifact than a stated reason. A negative count was never "collected":
+            # the summary describes no batch that ran. n == 0 deliberately does not
+            # join this branch — zero samples is doctrine-1 VACUOUS via empty
+            # coverage, not fabrication. Reported alone and before the finiteness
+            # check, because a fantasy count invalidates the denominator itself.
+            return self.fail(
+                f"reward sample count is {stats.n} — no batch ever contained a "
+                f"negative number of rewards; the summary is fabricated or corrupted",
+                Coverage.none("reward samples"),
+                evidence={
+                    "problems": [
+                        f"reward sample count is {stats.n} — no batch ever contained a "
+                        f"negative number of rewards; the summary is fabricated or "
+                        f"corrupted"
+                    ],
+                    "stats": {
+                        "n": stats.n,
+                        "mean": stats.mean,
+                        "std": stats.std,
+                        "min": stats.min,
+                        "max": stats.max,
+                    },
+                    "origin": c.origin,
+                },
             )
         cov = Coverage(stats.n, "reward samples", expected=c.expected_sample_count)
 
@@ -618,6 +874,14 @@ class RewardScaleSanityGate(Gate):
                 f"non-finite reward statistics (mean={stats.mean}, std={stats.std}, "
                 f"min={stats.min}, max={stats.max})"
             )
+        elif stats.min > stats.max:
+            # An inverted range poisons every comparison below that assumes
+            # min <= max, so it too is reported alone rather than cascaded over.
+            problems.append(
+                f"reported reward range is inverted: min={stats.min} > "
+                f"max={stats.max} — no set of samples produces a minimum above "
+                f"its maximum; the summary is self-contradictory"
+            )
         elif stats.n > 1 and stats.min == stats.max:
             problems.append(
                 f"all {stats.n} sampled rewards are identical ({stats.mean!r}): every "
@@ -625,6 +889,61 @@ class RewardScaleSanityGate(Gate):
                 f"reward/mean still logs a healthy-looking {stats.mean!r} — the "
                 f"472-steps-of-grad_norm-0.000 signature"
             )
+        else:
+            # Finite statistics, n >= 0, min <= max, and a nonzero range whenever
+            # n > 1 — the comparisons below now tell the truth. This is the
+            # RewardStats coherence cascade (W-obj-8): the gate only ever sees a
+            # caller-supplied aggregate, so a summary that no sample set could
+            # produce is fabrication, and before this cascade the gate PASSED one
+            # (std=0.0 over min=-1.0, max=2.0) while claiming "std > 0" in its
+            # own verdict line.
+            spread = stats.max - stats.min
+            if stats.n < 2 and spread > 0.0:
+                problems.append(
+                    f"n={stats.n} sample(s) cannot span a range, yet min={stats.min} "
+                    f"and max={stats.max} differ — a summary of fewer than two "
+                    f"samples must have min == max"
+                )
+            slack = _MEAN_RANGE_SLACK * max(abs(stats.min), abs(stats.max))
+            if stats.mean < stats.min - slack or stats.mean > stats.max + slack:
+                problems.append(
+                    f"reported mean {stats.mean!r} lies outside the reported range "
+                    f"[{stats.min}, {stats.max}] — samples bounded by that range "
+                    f"cannot average beyond it; the summary is self-contradictory"
+                )
+            if stats.std < 0.0:
+                problems.append(
+                    f"reported std {stats.std!r} is negative — a standard deviation "
+                    f"is the square root of a mean of squares and cannot be "
+                    f"negative under any convention"
+                )
+            elif stats.std == 0.0 and stats.n > 1 and spread > 0.0:
+                # The exact W-obj-8 batch. std vanishes iff every sample is equal,
+                # which forces min == max; a nonzero reported range contradicts it.
+                # Either the rewards really varied and the std is fabricated, or
+                # they did not and the range is — the second reading is the
+                # 472-zero-grad-steps incident arriving through the aggregate.
+                problems.append(
+                    f"reported std is exactly 0.0 while rewards span "
+                    f"[{stats.min}, {stats.max}] over {stats.n} samples — zero "
+                    f"spread with a nonzero range is arithmetically impossible"
+                )
+            else:
+                # Analytic ceiling: a population std over [min, max] is at most
+                # spread/2 (Popoviciu; half the mass at each endpoint), and the
+                # Bessel-corrected sample std at most spread/2*sqrt(n/(n-1)).
+                # The sample bound is the looser, so enforcing it is legal under
+                # either convention — the gate never sees which one the caller
+                # used. For n < 2 no spread is observable at all: ceiling 0.
+                ceiling = 0.0 if stats.n < 2 else spread / 2.0 * math.sqrt(stats.n / (stats.n - 1))
+                if stats.std > ceiling * (1.0 + _STD_CEILING_SLACK):
+                    problems.append(
+                        f"reported std {stats.std!r} exceeds the analytic ceiling "
+                        f"{ceiling:.6g} for {stats.n} sample(s) bounded by "
+                        f"[{stats.min}, {stats.max}] (max sample std = "
+                        f"range/2*sqrt(n/(n-1)); max population std = range/2) — "
+                        f"no real batch can produce it"
+                    )
         if c.reward_bounds is not None and math.isfinite(stats.min) and math.isfinite(stats.max):
             lo, hi = c.reward_bounds
             if not (math.isfinite(lo) and math.isfinite(hi)):
@@ -661,10 +980,48 @@ class RewardScaleSanityGate(Gate):
             bound_note = f"inside declared bounds [{lo}, {hi}]"
         else:
             bound_note = "with no declared bounds (degeneracy still checked)"
+        if not c.uses_rewards:
+            # Reachable only via populated reward_stats alongside
+            # uses_rewards=False (the stats-None case skipped above): the
+            # samples exist and were examined on their own merits, so the
+            # statistics earn the verdict — but a verdict silent about
+            # "objective declares no reward term, yet N reward statistics were
+            # supplied" would hide a wiring contradiction. It is surfaced as
+            # data and NOT made a defect: nothing here observed the statistics
+            # to be wrong, and a divergence claim nobody observed is as
+            # counterfeit as a pass nobody earned.
+            declared_note = (
+                "; note: the objective declares no reward term, yet these "
+                "statistics were supplied — examined and reported, the "
+                "contradiction surfaced rather than skipped or failed"
+            )
+        else:
+            declared_note = ""
+        # State only relations the checks above actually evaluated (W-obj-8: the
+        # pre-fix line ended in a literal "std=... > 0" that was never computed).
+        # At this point the cascade guarantees std > 0 whenever n > 1 — a zero std
+        # with a nonzero range failed, and a collapsed range failed earlier — so
+        # the positivity claim is earned on exactly that branch and no other.
+        if stats.n > 1:
+            spread_note = f"std={stats.std:.4g} > 0 over [{stats.min:.4g}, {stats.max:.4g}]"
+        elif stats.n == 1:
+            spread_note = (
+                f"single sample at mean={stats.mean:.4g}; spread is unobservable "
+                f"at n=1 and no positivity claim is made"
+            )
+        else:
+            # n == 0 reaches ok() only to be downgraded to VACUOUS by the empty
+            # coverage; the detail must not describe a measurement that never ran.
+            spread_note = "no samples were measured"
         return self.ok(
-            f"{stats.n} reward samples {bound_note}; std={stats.std:.4g} > 0",
+            f"{stats.n} reward samples {bound_note}; {spread_note}{declared_note}",
             cov,
-            evidence={"std": stats.std, "origin": c.origin},
+            evidence={
+                "std": stats.std,
+                "min": stats.min,
+                "max": stats.max,
+                "origin": c.origin,
+            },
         )
 
     def controls(self) -> list[Control]:
@@ -688,10 +1045,60 @@ class RewardScaleSanityGate(Gate):
                 note="reward-bearing objective, zero samples examined — vacuous, not clean",
             ),
             Control(
+                "zero-std-with-nonzero-range",
+                ControlKind.MUST_FIRE,
+                _zero_std_with_range_ctx,
+                note="W-obj-8 verbatim: std 0.0 over [-1.0, 2.0] — impossible, once passed",
+            ),
+            Control(
+                "negative-std",
+                ControlKind.MUST_FIRE,
+                _negative_std_ctx,
+                note="std is a root-mean-square; -0.25 under it describes no batch",
+            ),
+            Control(
+                "inverted-range",
+                ControlKind.MUST_FIRE,
+                _inverted_range_ctx,
+                note="min=2.0 > max=-1.0: the range itself contradicts itself",
+            ),
+            Control(
+                "mean-outside-range",
+                ControlKind.MUST_FIRE,
+                _mean_outside_range_ctx,
+                note="mean 5.0 reported over samples bounded by [-1.0, 2.0]",
+            ),
+            Control(
+                "std-above-analytic-ceiling",
+                ControlKind.MUST_FIRE,
+                _std_above_ceiling_ctx,
+                note="std 3.0 vs ceiling ~1.512 for range 3.0 over n=64: fabrication",
+            ),
+            Control(
+                "single-sample-with-range",
+                ControlKind.MUST_FIRE,
+                _single_sample_with_spread_ctx,
+                note="one sample cannot span [-1.0, 2.0]; min must equal max at n=1",
+            ),
+            Control(
+                "negative-sample-count",
+                ControlKind.MUST_FIRE,
+                _negative_sample_count_ctx,
+                note="n=-3 finite stats and all: the summary describes no batch that ran",
+            ),
+            Control(
                 "healthy-rewards",
                 ControlKind.MUST_PASS,
                 _healthy_objective_ctx,
                 note="256 samples in bounds with genuine variance",
+            ),
+            Control(
+                "stats-supplied-without-reward-term",
+                ControlKind.MUST_PASS,
+                _stats_without_reward_term_ctx,
+                note="objective declares no reward term, yet 256 sane samples "
+                "exist — examined and surfaced, never auto-failed: a "
+                "divergence claim nobody observed would itself be a defect",
             ),
         ]
 

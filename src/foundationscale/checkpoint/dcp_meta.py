@@ -517,6 +517,19 @@ def _st_weight_map(base: Path, header_of: Any) -> dict[str, str]:
 _MANIFEST_BASENAMES = ("run_manifest.json", "manifest.json", "provenance.json")
 _MANIFEST_REQUIRED_KEYS = ("run_id", "code", "environment", "topology")
 
+_MANIFEST_RESERVED_BASENAME = _MANIFEST_BASENAMES[0]
+"""The basename this framework alone writes beside a checkpoint.
+
+Strictness in :func:`load_manifest` scales with how certainly a file is *ours*.
+``manifest.json`` and ``provenance.json`` are shared names — export tooling and
+monitoring write files under them too — so an unparseable or unshaped file
+bearing one of those names is skipped as foreign. But nothing except a
+FoundationScale launcher writes ``run_manifest.json`` into a checkpoint tree, so
+for that name "exists but unreadable/unshaped" can only mean the manifest write
+failed: corrupt provenance, which raises, never the benign "no manifest" that
+``|| true`` made of it.
+"""
+
 
 def load_manifest(path: str | os.PathLike[str]) -> RunManifest | None:
     """Return the run manifest sitting beside the checkpoint, or ``None``.
@@ -537,6 +550,15 @@ def load_manifest(path: str | os.PathLike[str]) -> RunManifest | None:
     "provenance missing", and 77 result dirs accumulated zero bundles without
     anyone being paged. Corrupt-unreadable and corrupt-unloadable are not the
     same state as never-written.
+
+    Under the reserved name ``run_manifest.json`` (see
+    :data:`_MANIFEST_RESERVED_BASENAME`) the strictness starts earlier: a file
+    under that exact name that cannot be read as JSON at all, or that parses
+    but lacks the required manifest keys, is corrupt or partial provenance and
+    raises. Under the shared names and the ``attempt-*.json`` glob the search
+    stays lenient — those names legitimately belong to other tools, and
+    blocking a healthy checkpoint on some export tool's ``manifest.json``
+    would be a false failure minted to fix a false pass.
     """
     from ..provenance.manifest import ManifestError
     from ..provenance.manifest import load as _load_run_manifest
@@ -564,11 +586,42 @@ def load_manifest(path: str | os.PathLike[str]) -> RunManifest | None:
             _add(candidate)
 
     for candidate in candidates:
+        # Ownership decides what `continue` is allowed to mean. For a shared
+        # name, skipping an unreadable file is correct: it probably is not
+        # ours. For the reserved name, skipping relabels "provenance write
+        # failed" as "provenance never existed" — the exact || true collapse,
+        # and the gates then treat corrupt provenance as a legacy checkpoint.
+        reserved = candidate.name == _MANIFEST_RESERVED_BASENAME
         try:
             data: Any = json.loads(candidate.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            if reserved:
+                raise CheckpointFormatError(
+                    f"{candidate.name!r} is the reserved run-manifest name but "
+                    f"cannot be read as JSON ({type(exc).__name__}: {exc}); a "
+                    f"corrupt manifest is not 'no manifest', and treating it "
+                    f"as one is the || true failure",
+                    path=os.fspath(path),
+                ) from exc
             continue  # a neighbouring file that simply is not a manifest
         if not isinstance(data, dict) or not all(k in data for k in _MANIFEST_REQUIRED_KEYS):
+            if reserved:
+                # Same ownership argument one layer up: the bytes parsed, but a
+                # run_manifest.json that lost run_id/code/environment/topology
+                # (a torn write, an ancient writer) is a *partial* manifest,
+                # and partial provenance must surface, not pass as absence.
+                found: object = (
+                    sorted(str(key) for key in data)[:8]
+                    if isinstance(data, dict)
+                    else f"<{type(data).__name__}>"
+                )
+                raise CheckpointFormatError(
+                    f"{candidate.name!r} is the reserved run-manifest name but "
+                    f"lacks the required manifest keys "
+                    f"{list(_MANIFEST_REQUIRED_KEYS)!r} (content keys: {found!r}); "
+                    f"a partial manifest is not 'no manifest'",
+                    path=os.fspath(path),
+                )
             continue  # JSON, but not manifest-shaped (a config, an export index...)
         # Shaped like a run manifest: from here strictness is the feature, and
         # failures raise rather than degrade to "no manifest".

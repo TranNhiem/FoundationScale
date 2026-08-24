@@ -111,6 +111,74 @@ class _HonestGate(Gate):
         ]
 
 
+class _BlocksOnEverythingGate(Gate):
+    """The pathology MUST_PASS exists to kill: a detector that blocks on every input.
+
+    Its single MUST_FIRE control "holds" trivially — of course it blocks on the
+    defective fixture; it blocks on healthy ones too, and with no MUST_PASS
+    control declared, nothing ever ran one. Until the existence guard, this
+    gate verified green.
+    """
+
+    id = "test.blocks_on_everything"
+    description = "Returns fail() unconditionally, on healthy and defective inputs alike"
+    events = (Lifecycle.SAVE,)
+
+    def check(self, ctx: Any) -> GateResult:
+        return self.fail("something is wrong", Coverage(1, "checkpoints"))
+
+    def controls(self) -> list[Control]:
+        return [
+            Control(
+                "corrupt-checkpoint",
+                ControlKind.MUST_FIRE,
+                make_ctx=lambda: {"corrupt": True},
+                note="defective input — the gate blocks, as it blocks on everything",
+            )
+        ]
+
+
+class _NoControlsAtAllGate(Gate):
+    """Zero declared controls: must now earn BOTH existence findings."""
+
+    id = "test.no_controls"
+    description = "Ships an empty control list"
+    events = (Lifecycle.SAVE,)
+
+    def check(self, ctx: Any) -> GateResult:
+        return self.ok("irrelevant — controls are what is under test", Coverage(1, "units"))
+
+    def controls(self) -> list[Control]:
+        return []
+
+
+class TestMustPassExistence:
+    """A gate never shown to pass a healthy input is a finding, not a green check."""
+
+    def test_must_fire_only_unconditional_blocker_is_named_for_must_pass(self) -> None:
+        """The finding's acceptance case: today every MUST_FIRE control holds and
+        the per-control MUST_PASS check runs zero times, so failures == []."""
+        reg = GateRegistry()
+        reg.register(_BlocksOnEverythingGate())
+
+        failures = verify_controls(reg)
+
+        assert any("test.blocks_on_everything" in f and "MUST_PASS" in f for f in failures), (
+            "a gate that blocks on literally every input was certified as proven "
+            f"over zero healthy-input evaluations: {failures!r}"
+        )
+
+    def test_zero_control_gate_names_both_missing_kinds(self) -> None:
+        """Both existence guards are symmetric; an empty list is missing two things."""
+        reg = GateRegistry()
+        reg.register(_NoControlsAtAllGate())
+
+        failures = verify_controls(reg)
+
+        assert any("MUST_FIRE" in f for f in failures)  # held before; must not regress
+        assert any("MUST_PASS" in f for f in failures)  # absent today
+
+
 class TestControlsThatRaise:
     """A gate whose controls() raises is a finding, not an exception."""
 

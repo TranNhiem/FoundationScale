@@ -53,12 +53,13 @@ import math
 import os
 import re
 from collections import defaultdict
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from .core import (
+    AbstentionKind,
     Control,
     ControlKind,
     Coverage,
@@ -138,7 +139,7 @@ class TensorMeta:
     kind: str = "tensor"  # "tensor" | "extra_state"
 
     @property
-    def implied_nbytes(self) -> int:
+    def implied_nbytes(self) -> int | None:
         """Bytes this FQN *claims* to occupy, computed from shape and dtype alone.
 
         This is metadata-implied, not measured: 128 aliased FQNs each imply their
@@ -147,8 +148,21 @@ class TensorMeta:
         declared volume. Physical accounting lives in :func:`_distinct_storage_bytes`,
         which prices each storage identity once; only a reader-supplied storage
         map can do better.
+
+        Returns ``None`` when ``dtype`` is outside :data:`_DTYPE_BYTES`. The old
+        behaviour defaulted unknown dtypes to 4 bytes *silently*: a 1-byte
+        float8_e4m3fn expert set (a dtype dcp_meta parses from real safetensors
+        headers) was priced at 4x its true volume with no signal anywhere, and a
+        manifest declaring the true volume then "matched". A guessed element
+        width is a fabricated denominator, and fabricating it inside the price is
+        the same class of lie as reporting ``all([]) is True``. Consumers must
+        handle ``None`` explicitly — byte accounting blocks, message-only uses
+        degrade the message — and the return type makes mypy enforce that they do.
         """
-        return math.prod(self.shape) * _DTYPE_BYTES.get(self.dtype, 4)
+        per_element = _DTYPE_BYTES.get(self.dtype)
+        if per_element is None:
+            return None
+        return math.prod(self.shape) * per_element
 
 
 @dataclass(frozen=True)
@@ -163,7 +177,14 @@ class CheckpointGateContext:
 
     tensors: tuple[TensorMeta, ...]
     declared_fqns: tuple[str, ...] | None
-    num_experts: int | None  # declared experts per MoE layer; 0/None => dense model
+    # Declared experts per MoE layer. 0 is a DECLARATION of a dense model and
+    # earns the dense-model SKIP; None means nothing was declared at all (the
+    # from_path shape of a manifestless checkpoint), and the expert gates must
+    # read None as UNKNOWN and fail closed on it. Conflating the two is what
+    # let a gutted MoE checkpoint strip its experts and skip past both expert
+    # gates with the prose "context declares no experts" — a declaration the
+    # context never made.
+    num_experts: int | None
     num_moe_layers: int | None
     expected_expert_bytes: int | None
     origin: str
@@ -246,7 +267,11 @@ class CheckpointGateContext:
             ]
             if expert_tensors:
                 physical, storage_complete = _distinct_storage_bytes(expert_tensors)
-                if storage_complete:
+                # A None sum means some expert dtype is outside the price table:
+                # the physical figure stays unset so the byte gate reaches its own
+                # unpriceable-dtype refusal with the FQNs attached, instead of
+                # quietly reverting to an implied sum it could not compute either.
+                if storage_complete and physical is not None:
                     expert_storage_bytes = physical
         return cls(
             tensors=tensors,
@@ -283,6 +308,44 @@ def _coerce(ctx: Any) -> CheckpointGateContext:
 def _is_real_tensor(t: TensorMeta) -> bool:
     """True for actual parameter/buffer tensors — never for metadata byte blobs."""
     return t.kind == "tensor" and "_extra_state" not in t.fqn
+
+
+def _checked_num_experts(c: CheckpointGateContext) -> tuple[CheckpointGateContext, str | None]:
+    """Type the one denominator the gates used to launder through ``== 0``.
+
+    ``CheckpointGateContext.num_experts`` is annotated ``int | None``, and every
+    producer flowing through ``DeclaredCheckpoint`` validation honors that — but
+    contexts also arrive via :func:`_coerce`'s duck-typed ``getattr`` and via
+    flat-attribute manifest adapters, where nothing types the value. Python's
+    equalities then launder wrong types into real declarations: ``False == 0``,
+    ``0.0 == 0`` and ``0j == 0`` are ALL True, so each used to buy the
+    dense-model SKIP — and with it FirstSaveGate's inapplicable-denominator
+    shrink — without any dense declaration ever being stated (a YAML
+    ``moe: false`` flattened into the field, an integrator's ``bool(...)`` glue).
+
+    Returns ``(context, None)`` when the field is a genuine non-negative int or
+    truly absent (None). Otherwise the value normalizes to None on the returned
+    context copy and the second element names the offense; the gates block
+    VACUOUS on that reason before any classification, because a denominator the
+    gate cannot name is no denominator at all — and doctrine (4) bills malformed
+    exactly where it bills missing.
+    """
+    value = c.num_experts
+    if value is None:
+        return c, None
+    # bool before int: isinstance(True, int) is True, and a boolean is never a
+    # count however eagerly it compares like one.
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return replace(c, num_experts=None), (
+            f"the declared expert count is {value!r} ({type(value).__name__}), "
+            f"not a genuine non-negative integer. Only a real int may speak "
+            f"here: 0 is a positive dense declaration and makes the expert "
+            f"properties inapplicable, so letting a bool/float/complex "
+            f"look-alike equal to 0 buy that shrink re-mints the founding "
+            f"all([]) defect through a type check the manifest layer performs "
+            f"and this layer skipped"
+        )
+    return c, None
 
 
 def _expert_named(fqn: str) -> bool:
@@ -325,29 +388,43 @@ def _expert_weight_candidates(tensors: Sequence[TensorMeta]) -> Sequence[TensorM
     ]
 
 
-def _distinct_storage_bytes(experts: list[TensorMeta]) -> tuple[int, bool]:
+def _distinct_storage_bytes(experts: list[TensorMeta]) -> tuple[int | None, bool]:
     """Sum bytes over *distinct physical storages*, not over FQNs.
 
     One ``implied_nbytes`` is counted per distinct storage identity, so 128
     right-shaped FQNs aliased to one storage price that storage once — the
     count-correct variant of the incident, which per-FQN summation cannot see.
 
-    Returns ``(physical_bytes, complete)``. ``complete`` is True only when every
-    tensor carried a storage identity; tensors without one fall back to their
-    FQN as the key (unique by construction), which prices each unidentifiable
-    name as its own storage and marks the result incomplete — honest about
-    being per-FQN accounting under another name.
+    Returns ``(physical_bytes, complete)``. The byte figure is ``None`` when any
+    tensor's dtype is outside the price table: pricing only the recognizable
+    storages would state a total over a self-chosen subset and read it as the
+    whole checkpoint, which is the unrecognized-layout failure wearing
+    arithmetic. ``complete`` is True only when every tensor carried a storage
+    identity; tensors without one fall back to their FQN as the key (unique by
+    construction), which prices each unidentifiable name as its own storage and
+    marks the result incomplete — honest about being per-FQN accounting under
+    another name.
     """
     seen: dict[str, int] = {}
     complete = True
+    unpriceable = False
     for t in experts:
+        nbytes = t.implied_nbytes
+        if nbytes is None:
+            # Poison the figure, not the loop: the caller must learn that this
+            # total cannot be stated, never receive a partial sum wearing the
+            # shape of a full one.
+            unpriceable = True
+            continue
         if t.storage_id is None:
             complete = False
             key = t.fqn
         else:
             key = t.storage_id
         if key not in seen:
-            seen[key] = t.implied_nbytes
+            seen[key] = nbytes
+    if unpriceable:
+        return None, complete
     return sum(seen.values()), complete
 
 
@@ -411,17 +488,20 @@ def _stacked_layout_problems(
         ONLY aliasing signature that survives stacking, since each tensor is one
         span by construction.
 
-    Returns ``(problems, offender_fqns)``. Anything NOT caught here is not "fine";
-    per-expert slice identity inside a stacked tensor is simply unobservable from
-    metadata, and the caller's verdict wording owns that distinction — it must
-    abstain from claiming distinctness, never upgrade this list's quietness into
-    proof of it.
+    ``num_experts`` distinguishes UNKNOWN from DECLARED-DENSE: ``None`` skips the
+    leading-dim comparison (no denominator exists to compare against), while an
+    explicit ``0`` is a dense declaration that any stacked expert tensor
+    contradicts, and must fire. Returns ``(problems, offender_fqns)``. Anything
+    NOT caught here is not "fine"; per-expert slice identity inside a stacked
+    tensor is simply unobservable from metadata, and the caller's verdict
+    wording owns that distinction — it must abstain from claiming distinctness,
+    never upgrade this list's quietness into proof of it.
     """
     problems: list[str] = []
     offenders: list[str] = []
 
     for t in stacked:
-        if num_experts and (not t.shape or t.shape[0] != num_experts):
+        if num_experts is not None and (not t.shape or t.shape[0] != num_experts):
             problems.append(
                 f"{t.fqn}: stacked expert tensor's leading dim "
                 f"{t.shape[0] if t.shape else '?'} != declared experts {num_experts} — "
@@ -455,11 +535,28 @@ def _stacked_layout_problems(
             if ts is consistent:
                 continue
             for t in ts:
+                this_bytes = t.implied_nbytes
+                if this_bytes is not None and norm_bytes is not None:
+                    evidence_clause = (
+                        f"shape {shape} implies {this_bytes:,} bytes, but "
+                        f"{len(consistent)} other layer(s) of {stem} are "
+                        f"{norm_shape} {norm_dtype} ({norm_bytes:,} bytes, ratio "
+                        f"{this_bytes / norm_bytes:.3f})"
+                    )
+                else:
+                    # The shape disagreement is the defect; the byte ratio is
+                    # exhibit formatting. A guessed price for an unrecognized
+                    # dtype would fabricate the exhibit, so the message names
+                    # the pricing failure and lets the shape disagreement stand
+                    # on its own.
+                    evidence_clause = (
+                        f"shape {shape} disagrees with {len(consistent)} other "
+                        f"layer(s) of {stem} at {norm_shape} {norm_dtype}; the "
+                        "byte ratio cannot be stated because an unrecognized "
+                        "dtype makes at least one sibling unpriceable"
+                    )
                 problems.append(
-                    f"{t.fqn}: shape {shape} implies {t.implied_nbytes:,} bytes, but "
-                    f"{len(consistent)} other layer(s) of {stem} are {norm_shape} "
-                    f"{norm_dtype} ({norm_bytes:,} bytes, ratio "
-                    f"{t.implied_nbytes / norm_bytes:.3f}) — a stacked tensor holding "
+                    f"{t.fqn}: {evidence_clause} — a stacked tensor holding "
                     "a fraction of its sibling projections is the stacked-layout "
                     "form of the 16-of-128 save"
                 )
@@ -483,16 +580,185 @@ def _stacked_layout_problems(
     return problems, offenders
 
 
-def _declared_tensor_count(ctx: CheckpointGateContext, *, sharded: bool) -> int | None:
-    """How many expert-weight tensors the checkpoint should hold, if knowable."""
-    if ctx.num_moe_layers is None:
+# The full per-MoE-layer projection sets of every expert naming family this
+# module knows how to verify. This table is where "how many weights per layer"
+# may legitimately come from, and its provenance is the entire point:
+#
+# * Not from the manifest — none declares it. CheckpointGateContext carries
+#   num_experts, num_moe_layers, expected_expert_bytes and declared_fqns; no
+#   projection-count field exists for from_path to populate.
+# * Not from a universal constant. The previous `weights_per_layer = 2` priced
+#   Megatron's fc1+fc2 for EVERY family, so a cleanly saved 24-tensor Mixtral
+#   checkpoint (w1/w2/w3 per expert per layer) reported 24/16 — a real
+#   examination whose stated denominator refuted it, which is precisely the
+#   shape Verdict.OVERCOVERED now blocks. An unwarranted constant standing in
+#   for a fact the artifact never stated is the defect this file already
+#   removed from implied_nbytes; the count deserved the same removal.
+# * Never from the OBSERVED stems. A denominator derived from the numerator is
+#   circular in the direction that kills it: under uniform shrinkage (one
+#   projection never written on ANY layer) a stem-count-derived expected
+#   equals checked by construction and can only ratify the gutting, while in
+#   the cases where it could disagree the per-stem count check has already
+#   fired with a more precise message. A number that cannot fail on its own is
+#   decoration, and doctrine (5) grades decoration as a defect.
+#
+# The tables instead restate, as data, what the selector asserts when it
+# classifies a name: "this is Mixtral-family naming" already means "one MoE
+# layer of it is w1, w2 and w3 per expert". Matching a saved population
+# AGAINST the closed set (subset, never equality-from-counts) yields a width
+# that can and does disagree with what was saved.
+_PER_EXPERT_PROJECTION_FAMILIES: tuple[frozenset[str], ...] = (
+    # Megatron per-expert weights — local suffix (``…linear_fc1.weight<i>``,
+    # the incident) and global spelling (``…experts.<i>.linear_fc1.weight``).
+    frozenset({"linear_fc1.weight", "linear_fc2.weight"}),
+    # Mixtral: ``…block_sparse_moe.experts.<i>.w{1,2,3}.weight``.
+    frozenset({"w1.weight", "w2.weight", "w3.weight"}),
+    # Qwen-MoE: ``…mlp.experts.<i>.{gate,up,down}_proj.weight``.
+    frozenset({"gate_proj.weight", "up_proj.weight", "down_proj.weight"}),
+)
+
+# Stacked families are keyed on the token after the FINAL ``.experts.``
+# segment, with one trailing ``.weight`` removed, so Gemma-4's bare spelling
+# (``...experts.down_proj``) and GPT-OSS's suffixed spelling
+# (``...experts.gate_up_proj.weight``) denote the same membership; Megatron's
+# fused ``...experts.experts.linear_fc1.weight`` collapses onto its last token
+# by the same cut. Biases are NOT normalised in: a ``gate_up_proj.bias`` token
+# matches no entry below, so a checkpoint whose projections carry biases
+# abstains from the aggregate count rather than being priced against
+# weight-only tables it half-matches.
+_STACKED_PROJECTION_FAMILIES: tuple[frozenset[str], ...] = (
+    frozenset({"linear_fc1", "linear_fc2"}),  # Megatron fused
+    frozenset({"gate_up_proj", "down_proj"}),  # Gemma-4 / GPT-OSS
+    # Split-projection HF MoE (Qwen3-style stacked). No fixture exercises it;
+    # the entry exists so an artifact that DOES spell it gets a true
+    # denominator instead of a Gemma-shaped 2.
+    frozenset({"gate_proj", "up_proj", "down_proj"}),
+)
+
+
+def _shard_projection_token(group_key: str) -> str | None:
+    """The projection one per-expert shard STEM names, e.g. ``w1.weight``.
+
+    Group keys come from :func:`_split_expert_layouts` in exactly two shapes:
+    per-expert members as ``<prefix><i>.<suffix>`` (the suffix IS the token)
+    and Megatron local shards as ``<stem…linear_fcN.weight><i>``. A key in any
+    other shape is a shape this module did not emit; returning None lets the
+    caller's denominator go absent rather than be built on a guessed token.
+    """
+    marker = "<i>."
+    if marker in group_key:
+        return group_key.rsplit(marker, 1)[1]
+    if group_key.endswith("<i>"):
+        match = re.search(r"linear_fc[12]\.weight$", group_key[: -len("<i>")])
+        return match.group(0) if match else None
+    return None
+
+
+def _stacked_projection_token(fqn: str) -> str | None:
+    """The projection one stacked tensor names, normalised per the table above.
+
+    Every family regex that sorts a name into the stacked list contains the
+    ``experts`` substring, but only the dotted segment is a safe anchor (the
+    classifier's own docs warn about spellings like ``fooexperts.bar``); a
+    name with no ``.experts.`` segment returns None and poisons the total.
+    """
+    if ".experts." not in fqn:
         return None
-    weights_per_layer = 2  # linear_fc1 + linear_fc2
-    if sharded:
+    return fqn.rsplit(".experts.", 1)[1].removesuffix(".weight")
+
+
+def _family_layer_width(
+    tokens: set[str],
+    families: tuple[frozenset[str], ...],
+) -> int | None:
+    """Per-layer weight count of the ONE family whose full set contains ``tokens``.
+
+    Subset semantics are the anti-circularity device: the saved population is
+    matched against the family's declared set, so fc1-alone resolves to
+    ``{linear_fc1, linear_fc2}`` → width 2 and a checkpoint that never wrote
+    fc2 still carries fc2 in its expectation, registering as UNDERCOVERED
+    instead of redefining the denominator to fit the artifact. Zero containing
+    families means the stems name structure no table defines (a novel
+    projection, a bias spelling); MORE than one means this population cannot
+    distinguish the families (a lone ``down_proj`` is both a complete Gemma
+    layer and a gutted split-projection one). Both return None: an unqualified
+    count is a stated abstention; a guessed one is a fabricated fact.
+    """
+    if not tokens:
+        return None
+    containing = [family for family in families if tokens <= family]
+    if len(containing) != 1:
+        return None
+    return len(containing[0])
+
+
+def _declared_tensor_count(
+    ctx: CheckpointGateContext,
+    *,
+    shard_groups: Mapping[str, Sequence[TensorMeta]],
+    stacked: Sequence[TensorMeta],
+) -> int | None:
+    """How many expert-weight tensors the checkpoint should hold, if knowable.
+
+    The three multiplicands now have three separate, defensible provenances:
+    ``num_experts`` and ``num_moe_layers`` from the manifest, weights-per-layer
+    from the closed naming-family tables above. Two of them stay absent
+    (``None``) rather than guessed:
+
+    * Zero or undeclared MoE layers DECLARE NO EXPERT POPULATION: the
+      denominator is absent, not zero. Returning 0 rendered real coverage as
+      ``N/0 expert tensors`` — an unqualified count wearing a denominator's
+      clothes — and doctrine (2) does not grade that on severity. (The old
+      docstring's aside about "the non-blocking direction" is deleted with
+      the constant: that direction no longer exists, and a comment asserting
+      it would be doctrine (5) in prose.)
+    * A stem population resolving to no single family has no truthfully
+      computable total; the examined count stands unqualified.
+
+    What this number is FOR, stated plainly so its absence is never read as
+    lost verification: on the ok() path every observed stem already provably
+    holds ``num_experts`` members (otherwise the per-stem count check has
+    failed the gate with the stem named), so the member-level count is fully
+    redundant upstream of here. The one defect class only this aggregate can
+    see is an ENTIRELY ABSENT (layer, projection) stem — nothing in the loop
+    over observed stems can indict a stem that is not in its data. The family
+    tables preserve precisely that increment and nothing more.
+
+    When both families coexist (reachable only from the byte gate — the
+    distinctness gate refuses the artifact as MIXED upstream), the shard
+    family's table prices the total: a mixed artifact's blocking verdicts have
+    already been decided by the gates that own them, and this count is the
+    byte gate's audit trail for what was priced, never its real denominator —
+    that remains ``expected_expert_bytes``, manifest-stated and untouched.
+    """
+    if not ctx.num_moe_layers:
+        return None
+    if shard_groups:
+        # Keep falsiness here deliberately: with the gates' count checks now
+        # `is not None`, a declared-0 manifest beside real shards fails at the
+        # contradiction before this helper's value can dress any verdict.
         if not ctx.num_experts:
             return None
-        return ctx.num_experts * ctx.num_moe_layers * weights_per_layer
-    return ctx.num_moe_layers * weights_per_layer
+        tokens: list[str] = []
+        for group_key in shard_groups:
+            token = _shard_projection_token(group_key)
+            if token is None:
+                return None
+            tokens.append(token)
+        width = _family_layer_width(set(tokens), _PER_EXPERT_PROJECTION_FAMILIES)
+        if width is None:
+            return None
+        return ctx.num_experts * ctx.num_moe_layers * width
+    tokens = []
+    for tensor in stacked:
+        token = _stacked_projection_token(tensor.fqn)
+        if token is None:
+            return None
+        tokens.append(token)
+    width = _family_layer_width(set(tokens), _STACKED_PROJECTION_FAMILIES)
+    if width is None:
+        return None
+    return ctx.num_moe_layers * width
 
 
 @register
@@ -554,6 +820,15 @@ class ExpertDistinctnessGate(Gate):
     zero expert tensors under ANY recognized layout must be VACUOUS, because "no
     mismatches found" is what ``all([])`` reported on the corrupt artifact for
     months.
+
+    Its stricter twin is the no-manifest door: ``num_experts is None`` means the
+    context declared *nothing* (exactly what ``from_path`` builds beside a
+    manifestless checkpoint), and a gutted MoE artifact — experts stripped or
+    never written — reaches it byte-for-byte identical to a true dense model.
+    So ``None`` blocks as VACUOUS through the enforced-ok path, and only an
+    explicit ``0`` earns the dense-model SKIP. None means UNKNOWN, 0 means
+    dense: doctrine (4) is precisely that a missing denominator blocks rather
+    than abstains politely with a fabricated reason.
     """
 
     id: ClassVar[str] = "checkpoint.expert_distinctness"
@@ -579,12 +854,57 @@ class ExpertDistinctnessGate(Gate):
 
     def check(self, ctx: Any) -> GateResult:
         c = _coerce(ctx)
+        declared_num_experts = c.num_experts
+        c, malformed = _checked_num_experts(c)
+        if malformed is not None:
+            # Block BEFORE the empty-set doors below: a malformed count must
+            # never reach the `== 0` dense door, and never read as the None
+            # (UNKNOWN) door either — its own named reason blocks VACUOUS, with
+            # the raw value kept as evidence.
+            return self.ok(
+                malformed,
+                Coverage.none("expert tensors"),
+                evidence={
+                    "declared_num_experts_raw": repr(declared_num_experts),
+                    "origin": c.origin,
+                },
+            )
         candidates = _expert_weight_candidates(c.tensors)
         shard_groups, stacked, unknown = _split_expert_layouts(candidates)
 
         if not candidates:
-            if not c.num_experts:
-                return self.skip("context declares no experts and none are present (dense model)")
+            if c.num_experts is None:
+                # None is not 0. This is exactly the context from_path builds
+                # when NO MANIFEST EXISTS, so nothing anywhere declares the
+                # model dense: a gutted MoE checkpoint (experts stripped or
+                # never written) arrives at this branch looking identical to a
+                # true dense model, and the old falsy test answered both with
+                # the dense-model SKIP and prose claiming "context declares no
+                # experts" — a declaration the context never made. Missing
+                # denominator BLOCKS: ok() over zero coverage takes the
+                # framework's enforced-VACUOUS path, the same one the
+                # completeness gate uses for a missing manifest, and doctrine
+                # (1) is honoured because Coverage.none names the 0 examined.
+                return self.ok(
+                    "run manifest does not declare an expert count and the "
+                    "checkpoint contains no expert tensors, so zero expert "
+                    "tensors were examined against an unknown declaration — "
+                    "'none found' is indistinguishable from 'none saved', and "
+                    "establishes nothing",
+                    Coverage.none("expert tensors"),
+                    evidence={"origin": c.origin},
+                )
+            if c.num_experts == 0:
+                # An explicit 0 is the ONLY ground on which distinctness is
+                # INAPPLICABLE rather than unestablished: a positive declaration
+                # of a dense model, distinguishable from the None (UNKNOWN) door
+                # directly above, which can never reach this branch. The kind
+                # travels as data so composites may remove this gate from the
+                # applicable denominator without parsing this string.
+                return self.skip(
+                    "context declares no experts and none are present (dense model)",
+                    kind=AbstentionKind.NOT_APPLICABLE,
+                )
             # A MoE model whose checkpoint has zero expert tensors has not "passed an
             # identity check on every expert". ok() downgrades this to VACUOUS, which
             # is the exact difference between this gate and the audit tool it replaces.
@@ -602,8 +922,14 @@ class ExpertDistinctnessGate(Gate):
 
         # Per-expert shard groups — the incident family, checked exactly as it always
         # was: declared-count per stem, then storage aliasing within the stem.
+        # Per-expert shard groups — the incident family, checked exactly as it always
+        # was: declared-count per stem, then storage aliasing within the stem.
         for stem, members in sorted(shard_groups.items()):
-            if c.num_experts and len(members) != c.num_experts:
+            # `is not None`, deliberately not truthiness: an explicit 0 is a
+            # DECLARED dense model, and expert shards physically present beside
+            # that declaration contradict it — a mismatch the falsy version
+            # folded into "no count was declared" and skipped.
+            if c.num_experts is not None and len(members) != c.num_experts:
                 problems.append(
                     f"{stem}: {len(members)} expert shards on disk, config declares "
                     f"{c.num_experts} — the local-name save signature (16 of 128)"
@@ -708,15 +1034,20 @@ class ExpertDistinctnessGate(Gate):
             coverage = Coverage(
                 checked=examined,
                 unit="expert tensors",
-                expected=_declared_tensor_count(c, sharded=True),
+                expected=_declared_tensor_count(c, shard_groups=shard_groups, stacked=stacked),
                 sampled=True,
                 sample_reason="no storage identity",
             )
         else:
+            # The denominator's weights-per-layer factor resolves through the
+            # naming family the stems matched — fc1/fc2 for Megatron, w1..w3
+            # for Mixtral, gate/up/down for Qwen — so a healthy non-Megatron
+            # checkpoint is no longer accused of exceeding a Megatron-shaped
+            # expectation, and an entirely absent stem still reads as short.
             coverage = Coverage(
                 checked=examined,
                 unit="expert tensors",
-                expected=_declared_tensor_count(c, sharded=True),
+                expected=_declared_tensor_count(c, shard_groups=shard_groups, stacked=stacked),
             )
         if problems:
             return self.fail(
@@ -771,7 +1102,7 @@ class ExpertDistinctnessGate(Gate):
         with the complete reasoning carried in the detail string and evidence.
         """
         checked_claims: list[str] = []
-        if c.num_experts:
+        if c.num_experts is not None:
             checked_claims.append(
                 f"all {len(stacked)} leading dims equal the declared {c.num_experts} experts"
             )
@@ -788,7 +1119,20 @@ class ExpertDistinctnessGate(Gate):
                 f"all {len(stacked)} stacked storage spans are distinct across layers "
                 "and projections"
             )
-        checked_claims.append("sibling projections price consistently across layers")
+        unpriceable = [t for t in stacked if t.implied_nbytes is None]
+        if unpriceable:
+            # The sibling check above could not price these tensors, so the
+            # pricing-consistency claim would be doctrine (5)'s defect verbatim —
+            # a claim broader than its evidence, emitted by correct code. Name
+            # the gap with the dtype attached instead.
+            checked_claims.append(
+                f"{len(unpriceable)} of {len(stacked)} stacked tensors carry a "
+                f"dtype outside the price table (first: {unpriceable[0].dtype!r}), "
+                "so sibling byte pricing was NOT examined — only their shapes "
+                "could be compared"
+            )
+        else:
+            checked_claims.append("sibling projections price consistently across layers")
 
         shard_note = ""
         if shard_groups:
@@ -798,12 +1142,23 @@ class ExpertDistinctnessGate(Gate):
                 f"; the {sharded_examined} per-expert shard(s) also present were "
                 f"verified by {basis}"
             )
+        # UNKNOWN (None) and DECLARED-DENSE (0) are different statements; the
+        # falsy version rendered a declared 0 as unknowable. Logical experts are
+        # only computable when both declared fields actually exist.
         logical_experts = (
-            c.num_experts * c.num_moe_layers if c.num_experts and c.num_moe_layers else None
+            c.num_experts * c.num_moe_layers
+            if c.num_experts is not None and c.num_moe_layers is not None
+            else None
         )
         return self._result(
             Verdict.SKIP,
             coverage,
+            # The kind IS the verdict's meaning, one level down: the experts
+            # exist (this layout is MoE by construction), and metadata cannot
+            # settle their distinctness. NOT_ESTABLISHED keeps this abstention
+            # charged against every composite denominator — as data, so the
+            # composite never has to parse the prose below to price it.
+            abstention=AbstentionKind.NOT_ESTABLISHED,
             detail=(
                 f"STACKED MoE layout: {len(stacked)} expert tensor(s) each hold an "
                 f"entire layer's experts on leading dim 0 (first: {stacked[0].fqn})"
@@ -848,6 +1203,32 @@ class ExpertDistinctnessGate(Gate):
                 note="MoE declared, zero expert tensors present — the all([]) is True trap",
             ),
             Control(
+                "manifestless-expert-set",
+                ControlKind.MUST_FIRE,
+                fx.manifestless_moe_ctx,
+                note="NO manifest at all: num_experts is None (UNKNOWN), not an "
+                "explicit 0 (dense) — the gutted-MoE twin of the empty-expert-set "
+                "trap; must VACUOUS-block, never take the dense-model SKIP",
+            ),
+            Control(
+                "malformed-dense-count-bool",
+                ControlKind.MUST_FIRE,
+                lambda: CheckpointGateContext(
+                    tensors=(),
+                    declared_fqns=None,
+                    num_experts=False,
+                    num_moe_layers=None,
+                    expected_expert_bytes=None,
+                    origin="synthetic:malformed-dense-count-bool",
+                ),
+                note="num_experts=False satisfies `== 0` and used to buy the "
+                "dense-model NOT_APPLICABLE SKIP — the YAML `moe: false` "
+                "flattening path. 0.0 and 0j launder the same way (pinned in "
+                "tests). A bool/float/complex declared count must VACUOUS-block "
+                "as a malformed denominator, never shrink the first-save "
+                "denominator",
+            ),
+            Control(
                 "right-count-but-aliased",
                 ControlKind.MUST_FIRE,
                 fx.right_count_aliased_storage_ctx,
@@ -866,6 +1247,14 @@ class ExpertDistinctnessGate(Gate):
                 fx.stacked_hf_moe_ctx,
                 note="clean Gemma-style stacked layout: expect an explicit SKIP "
                 "abstention — non-blocking, and never a 'distinct' claim",
+                expect_skip=(
+                    "per-expert identity inside a stacked tensor is "
+                    "metadata-invisible by construction — N duplicated slices "
+                    "occupy exactly the one storage span N distinct slices "
+                    "occupy — so this gate abstains NOT_ESTABLISHED on every "
+                    "stacked layout; the affirmative half of its healthy-input "
+                    "proof is carried by healthy-sharded above"
+                ),
             ),
             Control(
                 "stacked-cross-layer-alias",
@@ -901,6 +1290,14 @@ class ExpertDistinctnessGate(Gate):
                 fx.healthy_fused_moe_ctx,
                 note="legacy Megatron fused names are the same stacked epistemology "
                 "under an older name — now expect the stated SKIP abstention",
+                expect_skip=(
+                    "Megatron's fused ...linear_fc[12].weight holds a whole "
+                    "layer's experts in one tensor — the stacked layout under "
+                    "an older name — so per-expert identity inside it is just "
+                    "as metadata-invisible and the gate abstains "
+                    "NOT_ESTABLISHED here too, by the same construction as "
+                    "stacked-clean"
+                ),
             ),
         ]
 
@@ -930,8 +1327,21 @@ class ExpertByteVolumeGate(Gate):
     family) this gate reaches a real, non-vacuous PASS where the distinctness gate
     must abstain. The denominator is still never derived from the artifact itself —
     pricing a checkpoint against itself is the vacuity trap — so without a
+    Unlike distinctness, this gate prices STACKED layouts correctly and completely:
+    a stacked tensor holding N experts on its leading dim implies exactly the bytes
+    the manifest should declare, so on a clean stacked checkpoint (the Gemma-4
+    family) this gate reaches a real, non-vacuous PASS where the distinctness gate
+    must abstain. The denominator is still never derived from the artifact itself —
+    pricing a checkpoint against itself is the vacuity trap — so without a
     manifest-supplied ``expected_expert_bytes`` the gate abstains and names the
     missing denominator, exactly as before.
+
+    Two further denominator failures now block instead of shading into green.
+    ``num_experts is None`` over an empty expert set is UNKNOWN, not dense (the
+    enforced-VACUOUS path; only an explicit ``0`` earns the SKIP), and any expert
+    dtype outside the price table blocks the whole pricing path rather than being
+    costed at a silent 4 bytes/element — the float8 case the old default inflated
+    to 4x volume and then matched against an honest manifest.
     """
 
     id: ClassVar[str] = "checkpoint.expert_bytes"
@@ -959,13 +1369,53 @@ class ExpertByteVolumeGate(Gate):
 
     def check(self, ctx: Any) -> GateResult:
         c = _coerce(ctx)
+        declared_num_experts = c.num_experts
+        c, malformed = _checked_num_experts(c)
+        if malformed is not None:
+            # Same door as in ExpertDistinctnessGate: a malformed denominator
+            # blocks here, typed and named, before any empty-set classification
+            # can turn it into a dense-model SKIP.
+            return self.ok(
+                malformed,
+                Coverage.none("expert tensors"),
+                evidence={
+                    "declared_num_experts_raw": repr(declared_num_experts),
+                    "origin": c.origin,
+                },
+            )
         candidates = _expert_weight_candidates(c.tensors)
         shard_groups, stacked, unknown = _split_expert_layouts(candidates)
         experts = _expert_weights(c)
 
         if not candidates:
-            if not c.num_experts:
-                return self.skip("context declares no experts and none are present (dense model)")
+            if c.num_experts is None:
+                # None is not 0: from_path yields exactly this shape when no
+                # manifest exists at all. A gutted MoE checkpoint and a true
+                # dense model are indistinguishable from here, and the old falsy
+                # test answered both with the dense-model SKIP — a fabricated
+                # reason over a missing denominator. Missing denominator BLOCKS
+                # via ok() over zero coverage: the framework's enforced-VACUOUS
+                # path, mirroring the declared-but-absent branch below and the
+                # completeness gate's missing-manifest branch.
+                return self.ok(
+                    "run manifest does not declare an expert count and the "
+                    "checkpoint contains no expert tensors, so zero expert "
+                    "tensors were examined against an unknown declaration: "
+                    "'nothing to sum' cannot be told apart from 'nothing was "
+                    "ever saved', and no byte-volume claim is established",
+                    Coverage.none("expert tensors"),
+                    evidence={"origin": c.origin},
+                )
+            if c.num_experts == 0:
+                # Same door as the distinctness gate: an explicit 0 is a
+                # POSITIVE dense declaration; the None (UNKNOWN) door above
+                # blocks as VACUOUS and never reaches here. There is no expert
+                # byte volume to measure on a declared-dense run — the property
+                # itself is absent, so the abstention is priced NOT_APPLICABLE.
+                return self.skip(
+                    "context declares no experts and none are present (dense model)",
+                    kind=AbstentionKind.NOT_APPLICABLE,
+                )
             return self.ok(
                 f"model declares {c.num_experts} experts but checkpoint has no "
                 f"expert tensors — there is nothing to sum",
@@ -987,10 +1437,37 @@ class ExpertByteVolumeGate(Gate):
                 },
             )
 
+        unpriceable = [t for t in experts if t.implied_nbytes is None]
+        if unpriceable:
+            # An unknown dtype costed at the old silent default of 4 bytes was
+            # this gate inflating a float8 expert set 4x and then matching an
+            # honest manifest against the inflated figure — a fabricated
+            # denominator smuggled into the numerator. Checked AFTER the layout
+            # refusal so an unrecognized naming family keeps its verdict, but
+            # BEFORE the manifest denominators because the failure is
+            # artifact-side: even with no manifest this must block, not skip.
+            return self.ok(
+                f"{len(unpriceable)} of {len(experts)} expert tensor(s) carry a "
+                f"dtype this gate cannot price (first: {unpriceable[0].fqn}: "
+                f"{unpriceable[0].dtype!r}); guessing the element width would "
+                "state a byte volume in guessed units, so none is stated",
+                Coverage.none("expert tensors"),
+                evidence={
+                    "unpriceable_dtypes": sorted({t.dtype for t in unpriceable}),
+                    "unpriceable_fqns": [t.fqn for t in unpriceable[:8]],
+                    "origin": c.origin,
+                },
+            )
+
         if c.expected_expert_bytes is None:
+            # Experts EXIST here (the empty-candidates doors are upstream) and
+            # only the external denominator is missing: the property is
+            # unestablished, never inapplicable. Naming the kind is what keeps
+            # this abstention inside every composite's denominator.
             return self.skip(
                 "run manifest does not declare expected expert byte volume; without "
-                "the denominator a byte count is an unqualified count, not a fact"
+                "the denominator a byte count is an unqualified count, not a fact",
+                kind=AbstentionKind.NOT_ESTABLISHED,
             )
         if c.expected_expert_bytes <= 0:
             # A non-positive denominator is malformed, not absent: "matches
@@ -1004,34 +1481,58 @@ class ExpertByteVolumeGate(Gate):
                 evidence={"origin": c.origin},
             )
 
-        implied = sum(t.implied_nbytes for t in experts)
+        # The unpriceable guard above returned on any None, so every element of
+        # this comprehension is int; the filter is for mypy, not control flow.
+        implied = sum(p for p in (t.implied_nbytes for t in experts) if p is not None)
         physical, storage_complete = _distinct_storage_bytes(experts)
         if c.expert_storage_bytes is not None:
             # The reader's storage map measured physical bytes directly; that
             # number outranks anything summable from per-FQN metadata.
             physical = c.expert_storage_bytes
             storage_complete = True
+        # "storage_complete" and "physical is not None" are two spellings of one
+        # fact, and until now they were kept in sync by hand: the guard set the
+        # flag while leaving the value None, so every comparison below was
+        # written against a total that might not exist, ruled out only by a flag
+        # no checker could follow. Collapse them — a non-None `physical` IS
+        # storage completeness — so "compare against a sum of nothing" becomes
+        # unrepresentable rather than merely commented against. The None case is
+        # unreachable for the set priced above (None only arises from an
+        # unpriceable dtype, which returned earlier); this keeps it that way by
+        # construction instead of by assertion.
+        # Every branch below therefore tests ``physical is not None`` rather than
+        # the flag: the test that decides the branch is the same test that makes
+        # the value safe to read inside it, which no amount of flag discipline
+        # can guarantee.
+        if not storage_complete:
+            physical = None
+        del storage_complete
 
         coverage = Coverage(
             checked=len(experts),
             unit="expert tensors",
-            expected=_declared_tensor_count(c, sharded=bool(shard_groups)),
+            # The tensor-count denominator prices the CLASSIFIED structure:
+            # shard stems carry per-expert membership, stacked tensors one
+            # weight per layer, weights-per-layer read from the family table
+            # the classifier matched — never a Megatron-shaped constant. This
+            # count is the audit trail for what was priced; the gate's real
+            # denominator remains expected_expert_bytes, manifest-stated.
+            expected=_declared_tensor_count(c, shard_groups=shard_groups, stacked=stacked),
         )
-        del stacked  # priced but not individually needed beyond classification
         expected = c.expected_expert_bytes
-        measured = physical if storage_complete else implied
+        measured = implied if physical is None else physical
         evidence = {
             "implied_expert_bytes": implied,
-            "physical_expert_bytes": physical if storage_complete else None,
-            "storage_identity": "complete" if storage_complete else "absent-or-partial",
+            "physical_expert_bytes": physical,
+            "storage_identity": ("absent-or-partial" if physical is None else "complete"),
             "expected_expert_bytes": expected,
             "origin": c.origin,
         }
         if measured * 1000 < expected * (1000 - self._DEFICIT_PER_MILLE):
             basis = (
-                "measured over distinct storage"
-                if storage_complete
-                else "metadata-implied (no storage identity)"
+                "metadata-implied (no storage identity)"
+                if physical is None
+                else "measured over distinct storage"
             )
             return self.fail(
                 f"expert byte volume {measured:,} {basis} is below the declared "
@@ -1040,7 +1541,7 @@ class ExpertByteVolumeGate(Gate):
                 coverage,
                 evidence={**evidence, "ratio": round(measured / expected, 4)},
             )
-        if storage_complete and implied > physical:
+        if physical is not None and implied > physical:
             # Count and shape look right while storage is aliased: the FQNs price
             # N tensors but distinct storage prices fewer. Not a volume deficit —
             # say exactly what it is so it is never mistaken for one.
@@ -1051,7 +1552,7 @@ class ExpertByteVolumeGate(Gate):
                 coverage,
                 evidence=evidence,
             )
-        if storage_complete and physical > implied:
+        if physical is not None and physical > implied:
             # The other direction of the same disagreement. It used to share the
             # branch above, which meant a checkpoint with MORE physical bytes
             # than its expert names account for was reported as aliasing — a
@@ -1073,7 +1574,7 @@ class ExpertByteVolumeGate(Gate):
                 coverage,
                 evidence=evidence,
             )
-        if storage_complete:
+        if physical is not None:
             return self.ok(
                 f"expert byte volume {physical:,} measured over distinct storage "
                 f"matches declared {expected:,}",
@@ -1109,6 +1610,46 @@ class ExpertByteVolumeGate(Gate):
                 ControlKind.MUST_FIRE,
                 fx.empty_expert_set_ctx,
                 note="zero experts to sum must not read as 'bytes match'",
+            ),
+            Control(
+                "manifestless-expert-set",
+                ControlKind.MUST_FIRE,
+                fx.manifestless_moe_ctx,
+                note="no manifest at all: num_experts None is UNKNOWN, not an "
+                "explicit 0 — the empty expert set must VACUOUS-block, not take "
+                "the dense-model SKIP",
+            ),
+            Control(
+                "malformed-dense-count-bool",
+                ControlKind.MUST_FIRE,
+                lambda: CheckpointGateContext(
+                    tensors=(),
+                    declared_fqns=None,
+                    # Deliberately ill-typed, and the ignore is the point: this
+                    # control exists BECAUSE a float can reach num_experts at
+                    # runtime (a JSON config states `0.0`, and json.load hands
+                    # back a float that satisfies `== 0`). The annotation says
+                    # int | None; the wire does not honour annotations. Silencing
+                    # the checker here keeps the runtime door under test instead
+                    # of deleting the fixture that proves the door shuts.
+                    num_experts=0.0,  # type: ignore[arg-type]
+                    num_moe_layers=None,
+                    expected_expert_bytes=None,
+                    origin="synthetic:malformed-dense-count-float",
+                ),
+                note="num_experts=0.0 satisfies `== 0` and used to price this "
+                "gate as dense-model inapplicable. The byte twin of the "
+                "distinctness control above: a look-alike of 0 is not a dense "
+                "declaration and must VACUOUS-block",
+            ),
+            Control(
+                "unpriceable-expert-dtype",
+                ControlKind.MUST_FIRE,
+                fx.unpriceable_dtype_ctx,
+                note="float8_e4m3fn is a real safetensors dtype with no price-"
+                "table entry; the old 4-byte default inflated this 4x and "
+                "matched the manifest, PASSing — pricing must block and name "
+                "the dtype",
             ),
             Control(
                 "healthy-fused",
@@ -1263,6 +1804,26 @@ class FirstSaveGate(Gate):
     estate the equivalent check lived as a copy-pasted heredoc in one launcher and
     was simply absent from the other; making this a registered gate means its
     absence shows up as ``missing`` in the FIRST_SAVE report instead of as silence.
+
+    The composite denominator counts APPLICABLE properties
+    ------------------------------------------------------
+    A sub-gate that abstains with ``abstention=NOT_APPLICABLE`` — reachable only
+    through a POSITIVE declaration (``num_experts == 0``; ``None`` is UNKNOWN and
+    takes the VACUOUS door, which blocks) — is removed from the denominator,
+    because a property that provably does not exist can be neither verified nor
+    missing: charging the two expert sub-gates against a declared-dense run
+    blocks every dense model at its first save for a defect that is not there,
+    and blocks-then-gets-disabled is how verification dies in the audited
+    estate. Any other SKIP (``NOT_ESTABLISHED``, or an undeclared ``None``)
+    stays in the denominator: "I could not check" is not "there was nothing to
+    check". The kind is read off the machine-readable field, never off the
+    reason string. The two shapes the shrink must never swallow are pinned by
+    controls below: a declared-MoE artifact with ZERO expert tensors produces
+    VACUOUS, not SKIP (``empty-expert-first-save``), and a stacked MoE artifact
+    produces NOT_ESTABLISHED and stays 2/3 UNDERCOVERED
+    (``stacked-first-save``). Inapplicable gates are NAMED in the detail and
+    evidence: a shrunken-denominator PASS reads "verified 1/1 applicable …;
+    2 inapplicable (named)", never "verified 3/3", never bare "verified".
     """
 
     id: ClassVar[str] = "checkpoint.first_save"
@@ -1294,13 +1855,29 @@ class FirstSaveGate(Gate):
     def check(self, ctx: Any) -> GateResult:
         sub = tuple(cls_().run(ctx) for cls_ in self._subgates)
         passed = [r for r in sub if r.verdict is Verdict.PASS]
-        abstained = [r for r in sub if r.verdict is Verdict.SKIP]
+        skipped = [r for r in sub if r.verdict is Verdict.SKIP]
         blocking = [r for r in sub if r.blocking]
-        # Coverage counts verified properties, not invoked sub-gates: a SKIP ran but
-        # established nothing, so it cannot count as "checked". With expected pinned
-        # to the full sweep, ok() downgrades any partial sweep to UNDERCOVERED (and
-        # an abstention-only sweep to VACUOUS) instead of letting PASS stand over it.
-        coverage = Coverage(len(passed), "sub-gates", expected=len(self._subgates))
+        # Abstentions are priced off the machine-readable kind, never off the
+        # reason string — prose-sniffing is the paraphrase defect this codebase
+        # already deleted once. NOT_APPLICABLE leaves the denominator: the
+        # property provably does not exist in this run's declared scope, and the
+        # POSITIVE-declaration requirement is enforced upstream (the UNKNOWN
+        # door is VACUOUS, and VACUOUS landed in `blocking` above before any of
+        # this pricing runs). Everything else — NOT_ESTABLISHED, or an
+        # undeclared None from an unaudited call site — stays in.
+        inapplicable = [
+            r for r in skipped if r.abstention is AbstentionKind.NOT_APPLICABLE
+        ]
+        unresolved = [
+            r for r in skipped if r.abstention is not AbstentionKind.NOT_APPLICABLE
+        ]
+        applicable = len(self._subgates) - len(inapplicable)
+        # Coverage still counts VERIFIED properties against the applicable
+        # total. ok() enforces the rest by construction: an unverified-but-
+        # applicable remainder downgrades to UNDERCOVERED, and an all-
+        # inapplicable sweep has checked == 0 and downgrades to VACUOUS —
+        # "every property was beside the point" is not a pass shape either.
+        coverage = Coverage(len(passed), "sub-gates", expected=applicable)
         if blocking:
             return self.fail(
                 "first save is defective: "
@@ -1308,14 +1885,41 @@ class FirstSaveGate(Gate):
                 coverage,
                 evidence={r.gate_id: r.to_dict() for r in blocking},
             )
-        if abstained:
-            verified_msg = ", ".join(r.gate_id for r in passed)
-            missing_msg = "; ".join(f"{r.gate_id} skipped: {r.detail}" for r in abstained)
+        if unresolved:
+            verified_msg = ", ".join(r.gate_id for r in passed) or "none"
+            missing_msg = "; ".join(f"{r.gate_id}: {r.detail}" for r in unresolved)
+            na_msg = ""
+            if inapplicable:
+                na_msg = (
+                    "; inapplicable by positive declaration (removed from the "
+                    "denominator, never counted as verified): "
+                    + ", ".join(r.gate_id for r in inapplicable)
+                )
             return self.ok(
-                f"verified {len(passed)}/{len(self._subgates)} first-save properties "
-                f"({verified_msg}); not established: {missing_msg}",
+                f"verified {len(passed)}/{applicable} applicable first-save "
+                f"properties ({verified_msg}); not established: {missing_msg}{na_msg}",
                 coverage,
-                evidence={r.gate_id: r.verdict.value for r in sub},
+                evidence={
+                    **{r.gate_id: r.verdict.value for r in sub},
+                    "inapplicable": [r.gate_id for r in inapplicable],
+                    "unresolved": [r.gate_id for r in unresolved],
+                },
+            )
+        if inapplicable:
+            # Where the denominator shrank, say so with the names attached —
+            # this string must never collapse to "verified" over fewer
+            # properties than the sweep declared.
+            return self.ok(
+                f"verified {len(passed)}/{applicable} applicable first-save "
+                f"properties ({', '.join(r.gate_id for r in passed)}); "
+                f"{len(inapplicable)} inapplicable by positive declaration "
+                "(removed from the denominator, never counted as verified): "
+                + "; ".join(f"{r.gate_id}: {r.detail}" for r in inapplicable),
+                coverage,
+                evidence={
+                    **{r.gate_id: r.verdict.value for r in sub},
+                    "inapplicable": [r.gate_id for r in inapplicable],
+                },
             )
         return self.ok(
             "verified at first save: " + ", ".join(r.gate_id for r in passed),
@@ -1353,5 +1957,18 @@ class FirstSaveGate(Gate):
                 fx.healthy_sharded_moe_ctx,
                 note="a correct first save must not be blocked — per-expert layout, "
                 "the only family in which every sub-gate can fully verify",
+            ),
+            Control(
+                "dense-first-save",
+                ControlKind.MUST_PASS,
+                fx.dense_declared_ctx,
+                note="declared-dense run (num_experts == 0, a POSITIVE "
+                "declaration): the expert properties do not exist, so the "
+                "composite must verify 1/1 APPLICABLE and name the two "
+                "inapplicable sub-gates — never block, never read as 'verified "
+                "3/3'. The MUST_FIRE half of the same distinction already "
+                "exists: empty-expert-first-save (declared-but-absent experts "
+                "stay VACUOUS-blocking) and stacked-first-save (could-not-check "
+                "stays 2/3)",
             ),
         ]

@@ -104,18 +104,35 @@ def test_listing_prints_context_type_or_explicit_marker(
 ) -> None:
     """main() prints each gate's context_type — declaration or explicit absence.
 
-    WHY a hermetic registry and a stubbed package walk: this test pins the
-    listing's rendering, not the shipped modules' import health (the CI
-    ``controls`` job asserts that itself), and a real walk would re-register
-    every shipped gate into the global registry for the rest of the session.
+    WHY a hermetic registry and an INJECTED walk: this test pins the listing's
+    rendering, not the shipped modules' import health ( the CI ``controls``
+    job asserts that itself), and a real walk would re-register every shipped
+    gate into the global registry for the rest of the session. fix27 measured
+    how silent that breach is: fix24 moved the walk worker, and the
+    ``monkeypatch.setattr(controls_runner, "_import_gate_modules", ...)`` that
+    used to stand here went dead — the stub returned its two-tuple into a void
+    while main() walked and imported the real tree, and the test reddened only
+    through collateral exit-code damage (an off-target provenance finding),
+    never through "your stub no longer intercepts". A test whose stub is
+    silently ignored is the same defect class as a control whose detector
+    cannot fire; the walk is now injected through main()'s ``walk`` parameter,
+    which cannot rot silently — deleting it raises TypeError at this call
+    site, and bypassing it inside main() reddens
+    test_main_consults_the_injected_walk below.
+
+    The injected walk reports the one module that genuinely WAS imported into
+    this process before main() ran — this test module, by pytest — not the
+    empty list the old stub claimed. The provenance reconciliation is thereby
+    satisfied by a FACT (the two doubles below really do come from a module
+    the process imported), and the reconciliation's machinery still executes
+    end-to-end instead of being fed a population of zero.
     """
     registry = GateRegistry()
     registry.register(_TypedListingGate())
     registry.register(_UntypedListingGate())
     monkeypatch.setattr(controls_runner, "REGISTRY", registry)
-    monkeypatch.setattr(controls_runner, "_import_gate_modules", lambda: ([], []))
 
-    exit_code = controls_runner.main()
+    exit_code = controls_runner.main(walk=lambda: ([__name__], [], []))
     out = capsys.readouterr().out
 
     # Both gates carry working controls, so the run itself is clean — the
@@ -135,3 +152,49 @@ def test_listing_prints_context_type_or_explicit_marker(
     assert any("no context_type declared" in line for line in untyped_lines), out
     # The population denominator, so "how typed are we" needs no hand tally.
     assert "context_type declared: 1/2" in out
+
+
+def test_main_consults_the_injected_walk(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MUST_FIRE for the walk seam: a finding only the injected walk could supply.
+
+    The listing test above is the seam's MUST_PASS half — a healthy injected
+    walk renders a clean listing with exit 0. This is the half that proves the
+    seam cannot be abandoned unnoticed: fix24 moved the walk worker and the
+    previous seam (a monkeypatch site) went silently dead, so this control
+    exists to fail the day main() stops consulting the walk it was handed, or
+    consults it and discards what it returned — the same defect in a
+    consulted-costume. Red on the pre-fix27 tree with ``TypeError: main() got
+    an unexpected keyword argument 'walk'`` — the seam's absence stated
+    plainly, in the fix24 tradition of vocabulary-absence reds, not dressed up
+    as a behavioural failure.
+    """
+    sentinel = "fix27.walk_probe: only an honestly consulted walk could report this"
+    consultations = 0
+
+    def probe_walk() -> tuple[list[str], list[str], list[str]]:
+        nonlocal consultations
+        consultations += 1
+        # Claim exactly the module that WAS imported (this one, by pytest): the
+        # hermetic registry's double then passes the provenance reconciliation
+        # by fact, and the sentinel is the ONLY finding this run may
+        # legitimately print.
+        return [__name__], [], [sentinel]
+
+    registry = GateRegistry()
+    registry.register(_TypedListingGate())
+    monkeypatch.setattr(controls_runner, "REGISTRY", registry)
+    exit_code = controls_runner.main(walk=probe_walk)
+    out = capsys.readouterr().out
+
+    # Consulted exactly once: zero means bypassed (the fix24 shape); two would
+    # mean the walk's import side effects were doubled without anyone paying
+    # for them.
+    assert consultations == 1
+    assert exit_code == 1
+    assert sentinel in out
+    # ...and undiluted: the clean double contributes no finding and the census
+    # is quiet over a classified tree, so any header but exactly one means an
+    # off-target finding crept into the tally this control owns.
+    assert "1 control failure(s):" in out

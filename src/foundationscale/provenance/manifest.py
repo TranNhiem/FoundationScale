@@ -137,7 +137,10 @@ always see what was *not* captured.
 
 _GIT_TIMEOUT_S = 60
 _PATH_SAFE = re.compile(r"[^A-Za-z0-9._-]")
-_SOURCE_RE = re.compile(r"^(cli|default|env:[A-Za-z_][A-Za-z0-9_]*|config:[^#\s]+#[^#\s]+)$")
+_SOURCE_RE = re.compile(
+    r"^(cli|default|env:[A-Za-z_][A-Za-z0-9_]*|config:[^#\s]+#[^#\s]+"
+    r"|measured:[A-Za-z][A-Za-z0-9-]*)$"
+)
 _ATTEMPT_RE = re.compile(r"^attempt-(\d+)\.json$")
 
 
@@ -157,9 +160,13 @@ class CaptureStatus(str, Enum):
     """Tree differs from HEAD, and the diff bytes + hash are stored in the manifest."""
 
     NOT_CAPTURED = "not_captured"
-    """Executing code exists that the diff cannot see (untracked files, or edits
-    outside every captured path, or an entrypoint outside the repo root). This is
-    the exact shape of the 0-byte-``uncommitted.patch`` defect."""
+    """The record cannot vouch for the executing code: untracked files,
+    ``.gitignore``-excluded files inside a captured scope, an unborn HEAD, edits
+    outside every captured path, an entrypoint outside the repo root — or a probe
+    that FAILED, in which case every recorded zero means "unmeasured", never
+    "measured none". This is the exact shape of the 0-byte-``uncommitted.patch``
+    defect, in both its costumes: the file git was never shown, and the probe git
+    never answered."""
 
     NOT_A_REPOSITORY = "not_a_repository"
     """No git metadata at the capture root. A commit hash is impossible here."""
@@ -296,6 +303,7 @@ _CODE_KNOWN_KEYS = frozenset(
         "paths",
         "entrypoint",
         "entrypoint_captured",
+        "probe_failed",
     }
 )
 _PATH_KNOWN_KEYS = frozenset(
@@ -305,9 +313,11 @@ _PATH_KNOWN_KEYS = frozenset(
         "tracked_files",
         "modified_tracked_files",
         "untracked_files",
+        "ignored_files",
         "captured_files",
         "captured_bytes",
         "status",
+        "failed_probes",
     }
 )
 _ENVIRONMENT_KNOWN_KEYS = frozenset({"allowlist", "values", "source_var_count"})
@@ -319,6 +329,7 @@ _TOPOLOGY_KNOWN_KEYS = frozenset(
         "pipeline_parallel",
         "data_parallel",
         "expert_parallel",
+        "context_parallel",
     }
 )
 _EFFECTIVE_VALUE_KNOWN_KEYS = frozenset({"key", "value", "source", "env_value", "findings"})
@@ -490,9 +501,15 @@ class ConfigResolver:
                 check to be meaningful, key naming should match the corresponding
                 environment variable exactly (``key`` is looked up verbatim).
             value: The resolved value; stringified for storage.
-            source: ``"cli"``, ``"default"``, ``"env:NAME"`` or
-                ``"config:path#key"``. Anything else raises ``ValueError`` — a
-                free-text source is the 18-key string bag coming back.
+            source: ``"cli"``, ``"default"``, ``"env:NAME"``,
+                ``"config:path#key"`` or ``"measured:NAME"``. Anything else
+                raises ``ValueError`` — a free-text source is the 18-key
+                string bag coming back. ``"measured:NAME"`` is the fifth,
+                closed class: the value was SAMPLED in-band by the recording
+                process at the point of record (NAME names the sampled fact,
+                e.g. ``"measured:training-stack"``), so no resolution channel
+                exists to overwrite it and the env-shadow/drift branches
+                below intentionally do not apply to it.
 
         Returns:
             The recorded :class:`EffectiveValue`, including any findings.
@@ -506,7 +523,7 @@ class ConfigResolver:
         if not _SOURCE_RE.match(source):
             raise ValueError(
                 f"invalid source {source!r} for key {key!r}: expected 'cli', "
-                f"'default', 'env:NAME' or 'config:path#key'"
+                f"'default', 'env:NAME', 'config:path#key' or 'measured:NAME'"
             )
         if key in self._values:
             raise ValueError(
@@ -580,14 +597,31 @@ class DiffPathCoverage:
             path that does not exist is itself evidence of path drift (the audited
             ``$SDPO`` capture pointed at a subtree nothing edited).
         tracked_files: Files git tracks under this path. Zero means ``git diff``
-            structurally cannot capture edits here.
+            structurally cannot capture edits here — and is a *measurement* only
+            when :attr:`failed_probes` is empty; otherwise it is a placeholder.
         modified_tracked_files: Tracked files with staged or unstaged changes.
         untracked_files: Untracked files under this path. Every one of these is a
             file that will execute and that ``git diff HEAD`` will never contain.
+        ignored_files: Files under this path excluded via ``.gitignore``. These are
+            as invisible to ``git diff HEAD`` as untracked files — a gitignored
+            ``gen/`` codegen tree or vendored dependency is the canonical
+            executable blind spot — so the per-path probes pass ``--ignored`` and
+            any nonzero count inside a captured scope forces NOT_CAPTURED. Not
+            counted by the repo-wide probe: walking every ignored build/cache tree
+            under ``.`` is the slowest sweep this module launches, and on a loaded
+            NFS worktree it would convert a slow probe into a FAILED one.
         captured_files: Files the captured diff actually touched under this path.
         captured_bytes: Size in bytes of the diff restricted to this path. The
             measured defect is ``captured_bytes == 0`` with ``untracked_files > 0``.
         status: Rolled-up :class:`PathStatus`.
+        failed_probes: Names of the probes over this path that did not complete
+            (a subset of ``status``, ``ls-files``, ``diff``, ``diff --name-only``).
+            Non-empty FORCES ``status == PathStatus.NOT_CAPTURED``. This field, and
+            only this field, keeps "0 measured" and "0 because nobody looked"
+            distinguishable on disk: a failed probe is the sweep-level ``all([])``
+            recurring inside a single row of the record — a pathspec git refuses
+            (an absolute path outside the repository, rc=128) and an empty stdout
+            are byte-identical without it.
     """
 
     path: str
@@ -598,6 +632,8 @@ class DiffPathCoverage:
     captured_files: int
     captured_bytes: int
     status: PathStatus
+    ignored_files: int = 0
+    failed_probes: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -606,13 +642,20 @@ class DiffPathCoverage:
             "tracked_files": self.tracked_files,
             "modified_tracked_files": self.modified_tracked_files,
             "untracked_files": self.untracked_files,
+            "ignored_files": self.ignored_files,
             "captured_files": self.captured_files,
             "captured_bytes": self.captured_bytes,
             "status": self.status.value,
+            "failed_probes": sorted(self.failed_probes),
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> DiffPathCoverage:
+        # ignored_files / failed_probes default to "none known" so stores written
+        # before probe accounting load unchanged — this module's stated tolerance
+        # for append-only longevity. The asymmetry is honest: it also means
+        # fabricated CLEANs written by the old reader cannot be retro-adjudicated,
+        # which the findings text says rather than hides.
         return cls(
             path=str(data["path"]),
             exists=bool(data["exists"]),
@@ -621,9 +664,13 @@ class DiffPathCoverage:
                 data["modified_tracked_files"], "modified_tracked_files"
             ),
             untracked_files=_expect_int(data["untracked_files"], "untracked_files"),
+            ignored_files=_expect_int(data.get("ignored_files", 0), "ignored_files"),
             captured_files=_expect_int(data["captured_files"], "captured_files"),
             captured_bytes=_expect_int(data["captured_bytes"], "captured_bytes"),
             status=PathStatus(str(data["status"])),
+            failed_probes=tuple(
+                str(name) for name in _expect_list(data.get("failed_probes", []), "failed_probes")
+            ),
         )
 
 
@@ -645,11 +692,16 @@ class CodeProvenance:
     :attr:`dirty_files`, :attr:`diff_sha256` and :attr:`status`."""
 
     dirty_files: int
-    """Total files (staged + unstaged, tracked) plus untracked files repo-wide."""
+    """Total files (staged + unstaged, tracked) plus untracked files repo-wide.
+
+    When :attr:`probe_failed` is true this is an unreadable placeholder, not a
+    measurement: the probe producing it did not complete. Read it through the
+    status (forced NOT_CAPTURED) and the finding, never as a counted zero."""
 
     untracked_files: int
     """Repo-wide untracked files. Untracked files are invisible to ``git diff``;
-    any nonzero value within the captured scope forces NOT_CAPTURED."""
+    any nonzero value within the captured scope forces NOT_CAPTURED. Same
+    unreadable-zero caveat as :attr:`dirty_files` under :attr:`probe_failed`."""
 
     diff_sha256: str | None
     """SHA-256 of the exact diff bytes captured for the scoped paths."""
@@ -668,6 +720,16 @@ class CodeProvenance:
     entrypoint lived under a different root and appeared in no snapshot; a
     ``False`` here is that hole, made legible."""
 
+    probe_failed: bool = False
+    """Whether the repo-wide ``git status`` sweep (scope ``.``) did not complete.
+
+    That sweep is the sole source of :attr:`dirty_files` /
+    :attr:`untracked_files` and of the CLEAN verdict's denominator. When it fails
+    (corrupt index, timeout on a loaded worktree) those counts are unreadable
+    zeros, not clean-tree evidence — the ``(0, 0)`` initialiser that previously
+    let such a sweep reach CLEAN unopposed. This flag forces NOT_CAPTURED at the
+    rollup and a finding at :meth:`RunManifest._derive_findings`."""
+
     def to_dict(self) -> dict[str, object]:
         return {
             "status": self.status.value,
@@ -680,6 +742,7 @@ class CodeProvenance:
             "paths": [p.to_dict() for p in self.paths],
             "entrypoint": self.entrypoint,
             "entrypoint_captured": self.entrypoint_captured,
+            "probe_failed": self.probe_failed,
         }
 
     @classmethod
@@ -702,6 +765,10 @@ class CodeProvenance:
                 if data.get("entrypoint_captured") is None
                 else bool(data["entrypoint_captured"])
             ),
+            # Absent in pre-probe-accounting records: default False, i.e. "no
+            # failure recorded" — never True on assumption. Old stores keep the
+            # claims they made; this repair is prospective.
+            probe_failed=bool(data.get("probe_failed", False)),
         )
 
 
@@ -809,47 +876,97 @@ def _git_bytes(root: Path, args: Sequence[str]) -> bytes | None:
         return None
 
 
-def _porcelain_counts(root: Path, rel_path: str) -> tuple[int, int]:
-    """Return ``(modified_tracked, untracked)`` counts under ``rel_path``.
+def _porcelain_counts(
+    root: Path, rel_path: str, *, include_ignored: bool = False
+) -> tuple[int, int, int] | None:
+    """Return ``(modified_tracked, untracked, ignored)`` counts under ``rel_path``.
+
+    Returns ``None`` when the probe itself did not complete — git absent, timeout,
+    non-zero exit, or a pathspec git refuses (an absolute path outside the
+    repository is refused with rc=128 and is *byte-identical to an empty result*
+    in ``--porcelain`` output). ``None`` is the point of this signature: a failed
+    probe is not an empty measurement. The founding incident of this framework is
+    an initialiser set to the success value surviving a zero-trip loop, and the
+    previous body of this function was that shape verbatim — ``(0, 0)`` was
+    returned for "no lines because clean" and for "no lines because git never
+    ran". Callers must map ``None`` to NOT_CAPTURED; mapping it to zeros is how a
+    corrupt ``.git/index`` or a drifted-out-of-repo capture path used to reach
+    CLEAN without a single byte being read.
 
     Counts come from ``--porcelain=v1``; rename entries count as one changed file,
     which is the correct denominator for *files that differ*, not for diff hunks.
+    ``--untracked-files=all`` expands untracked recursively rather than collapsing
+    directories.
+
+    ``include_ignored`` adds ``--ignored`` so ``!!`` entries — files git has been
+    told to exclude — are counted instead of silently dropped. Ignored bytes are
+    as invisible to ``git diff HEAD`` as untracked ones: a gitignored
+    ``gen/runner.py`` executes and appears in no diff, with every probe exiting
+    zero, which is Finding 3's blind spot. The per-path probes over captured
+    scope always pass it; the repo-wide probe does NOT, because walking every
+    ignored build/cache tree (``node_modules``, ``__pycache__``) under ``.`` is
+    the most expensive sweep this module launches, and on a loaded NFS worktree
+    its runtime brushing ``_GIT_TIMEOUT_S`` would convert a slow sweep into a
+    failed one — recreating Finding 1 while fixing Finding 3.
     """
-    out = _git(root, ["status", "--porcelain=v1", "--untracked-files=all", "--", rel_path])
+    argv = ["status", "--porcelain=v1", "--untracked-files=all"]
+    if include_ignored:
+        argv.append("--ignored")
+    out = _git(root, [*argv, "--", rel_path])
     if out is None or out[0] != 0:
-        return 0, 0
-    modified = untracked = 0
+        return None
+    modified = untracked = ignored = 0
     for line in out[1].splitlines():
         if not line:
             continue
         if line.startswith("??"):
             untracked += 1
+        elif line.startswith("!!"):
+            ignored += 1
         else:
             modified += 1
-    return modified, untracked
+    return modified, untracked, ignored
 
 
-def _tracked_count(root: Path, rel_path: str) -> int:
+def _tracked_count(root: Path, rel_path: str) -> int | None:
+    """Tracked-file count under ``rel_path``; ``None`` when the probe failed.
+
+    ``0`` must mean *git enumerated the index and found nothing* — a counted
+    denominator — never *the index could not be read*. A corrupt ``.git/index``
+    fails this probe while ``rev-parse`` still succeeds, so swallowing the
+    failure fabricates a zero exactly where the denominator matters most.
+    """
     out = _git(root, ["ls-files", "-z", "--", rel_path])
     if out is None or out[0] != 0:
-        return 0
+        return None
     return sum(1 for name in out[1].split("\0") if name)
 
 
 def _diff_bytes(root: Path, rel_path: str) -> bytes | None:
     """Diff of ``rel_path`` against HEAD, exactly as it would be stored.
 
-    Returns ``None`` (treated as zero bytes) when the repo has no HEAD — every file
-    is then untracked from git's perspective, and the correct status is
-    NOT_CAPTURED, which the caller derives.
+    ``None`` means the probe produced no answer: non-zero exit (a pathspec git
+    refuses, an unreadable index), a timeout, OR a repository with no HEAD.
+    ``None`` is therefore not a zero-byte diff and must never be collapsed with
+    ``or b""`` into evidence of cleanliness: with a HEAD present, ``None``
+    forces the path to NOT_CAPTURED; the no-HEAD case is adjudicated at the
+    record level, where the missing commit can be named in words rather than
+    smuggled through as an empty byte string.
     """
     return _git_bytes(root, ["diff", "--binary", "HEAD", "--", rel_path])
 
 
-def _diff_file_count(root: Path, rel_path: str) -> int:
+def _diff_file_count(root: Path, rel_path: str) -> int | None:
+    """Files the captured diff touches under ``rel_path``; ``None`` on probe failure.
+
+    Fails in step with :func:`_diff_bytes` on the defects that matter (refused
+    pathspec, unreadable index), so it shares the tri-state contract: ``None``
+    is "not measured", ``0`` is "measured none", and only one of those may
+    underwrite a verdict.
+    """
     out = _git(root, ["diff", "--name-only", "-z", "HEAD", "--", rel_path])
     if out is None or out[0] != 0:
-        return 0
+        return None
     return sum(1 for name in out[1].split("\0") if name)
 
 
@@ -913,23 +1030,82 @@ def capture_code_provenance(
     commit = head[1].strip() if head is not None and head[0] == 0 else None
 
     scope: tuple[str, ...] = tuple(diff_paths) if diff_paths else (".",)
-    dirty_modified, dirty_untracked = _porcelain_counts(root_path, ".")
+
+    # Repo-wide sweep first; it feeds dirty_files / untracked_files and the
+    # dirty_total guard in the rollup. It deliberately runs WITHOUT
+    # include_ignored (see _porcelain_counts): ignored bytes are adjudicated
+    # per-path, inside the declared capture scope where invisibility is the
+    # hazard, not repo-wide where walk cost is itself a failure mode.
+    tree_probe_failed = False
+    repo_probe = _porcelain_counts(root_path, ".")
+    if repo_probe is None:
+        # The optimistic initialiser one altitude up. (0, 0) from a failed sweep
+        # is indistinguishable from a measured clean tree, and that confusion is
+        # the framework's namesake bug. The counts stay at their placeholders,
+        # probe_failed=True travels into the record, and the rollup below is
+        # barred from CLEAN and CAPTURED alike.
+        tree_probe_failed = True
+        dirty_modified, dirty_untracked = 0, 0
+    else:
+        dirty_modified, dirty_untracked, _ignored_repo_wide = repo_probe
 
     per_path: list[DiffPathCoverage] = []
     combined = bytearray()
     for rel in scope:
         exists = (root_path / rel).exists()
-        tracked = _tracked_count(root_path, rel)
-        modified, untracked = _porcelain_counts(root_path, rel)
-        blob = _diff_bytes(root_path, rel) or b""
-        captured_files = _diff_file_count(root_path, rel) if commit else 0
+        tracked_probe = _tracked_count(root_path, rel)
+        porcelain_probe = _porcelain_counts(root_path, rel, include_ignored=True)
+        blob_probe = _diff_bytes(root_path, rel)
+
+        # Zero is a fact only when the probe that reports it completed. Each
+        # failure is collected BY NAME into failed_probes, because this loop is
+        # exactly where the audited estate lost four probes' worth of signal to
+        # optimistic zeros: a capture path drifted out of the repository (an
+        # absolute $VAR path is refused with rc=128 by every git subcommand)
+        # used to reach PathStatus.CLEAN with no bytes ever read.
+        failed: list[str] = []
+        if tracked_probe is None:
+            failed.append("ls-files")
+            tracked = 0
+        else:
+            tracked = tracked_probe
+        if porcelain_probe is None:
+            failed.append("status")
+            modified = untracked = ignored = 0
+        else:
+            modified, untracked, ignored = porcelain_probe
+        if blob_probe is None:
+            # Absent HEAD is not charged as a probe failure here: that state is
+            # owned by the record-level `commit is None` branch, which can say
+            # "there is no commit" in words. Any OTHER emptying of this probe is
+            # a failure and must be named.
+            if commit is not None:
+                failed.append("diff")
+            blob = b""
+        else:
+            blob = blob_probe
         combined += blob
+        captured_files = 0
+        if commit:
+            names_probe = _diff_file_count(root_path, rel)
+            if names_probe is None:
+                failed.append("diff --name-only")
+            else:
+                captured_files = names_probe
 
         if not exists:
             status = PathStatus.NO_SUCH_PATH
-        elif untracked > 0:
-            # Files that will execute but that `git diff HEAD` structurally cannot
-            # contain. This is the 0-byte-patch-over-a-living-tree defect: the
+        elif failed:
+            # Nothing below may be asserted: the counts are placeholders, not
+            # observations. VACUITY IS NOT SUCCESS, expressed per row: a path no
+            # probe could read is never CLEAN and never CAPTURED.
+            status = PathStatus.NOT_CAPTURED
+        elif untracked > 0 or ignored > 0:
+            # Files that will execute but that `git diff HEAD` structurally
+            # cannot contain — whether nothing told git about them (untracked)
+            # or git was TOLD to exclude them (ignored: codegen output and
+            # vendored trees are the canonical .gitignore residents). This is
+            # the 0-byte-patch-over-a-living-tree defect in both costumes: the
             # capture "succeeded" and stored nothing.
             status = PathStatus.NOT_CAPTURED
         elif modified > 0 and not blob:
@@ -950,6 +1126,8 @@ def capture_code_provenance(
                 captured_files=captured_files,
                 captured_bytes=len(blob),
                 status=status,
+                ignored_files=ignored,
+                failed_probes=tuple(failed),
             )
         )
 
@@ -958,6 +1136,12 @@ def capture_code_provenance(
         # Unborn HEAD: the least reproducible state a repository can be in — there
         # is no commit to anchor the record against, and `git diff HEAD` is empty
         # by construction. It must never read as CLEAN.
+        overall = CaptureStatus.NOT_CAPTURED
+    elif tree_probe_failed:
+        # The sweep's own yardstick failed. With the repo-wide denominator
+        # unreadable, no CLEAN (nothing was counted) and no CAPTURED (dirt may
+        # exist that no probe saw) is derivable — only an honest NOT_CAPTURED,
+        # with probe_failed=True left on the record to say why.
         overall = CaptureStatus.NOT_CAPTURED
     elif any(p.status in (PathStatus.NOT_CAPTURED, PathStatus.NO_SUCH_PATH) for p in per_path):
         overall = CaptureStatus.NOT_CAPTURED
@@ -980,6 +1164,7 @@ def capture_code_provenance(
         paths=tuple(per_path),
         entrypoint=entry_str,
         entrypoint_captured=entry_in_root,
+        probe_failed=tree_probe_failed,
     )
 
 
@@ -995,6 +1180,15 @@ class Topology:
     Topology decides numerics (a TP change is a different reduction order and, as
     the audit's vocab-clamp incident showed, sometimes a different *semantics*), so
     it belongs in the fingerprint.
+
+    ``context_parallel`` was added after the estate measured the then-required
+    launcher knob (``--cp``) being consumed and silently discarded: CP=1 and
+    CP=8 attempts fingerprinted equal while training different mathematics.
+    Unlike the :class:`CodeProvenance` payload fields, whose widening was
+    refused to hold v1 fingerprints stable, this one MUST widen the payload: a
+    parallelism dimension is exactly what the fingerprint exists to
+    distinguish. Older manifests load with ``context_parallel=None`` — "never
+    recorded", stated, never backfilled.
     """
 
     nodes: int
@@ -1003,6 +1197,7 @@ class Topology:
     pipeline_parallel: int
     data_parallel: int
     expert_parallel: int | None = None
+    context_parallel: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -1012,6 +1207,7 @@ class Topology:
             "pipeline_parallel": self.pipeline_parallel,
             "data_parallel": self.data_parallel,
             "expert_parallel": self.expert_parallel,
+            "context_parallel": self.context_parallel,
         }
 
     @classmethod
@@ -1026,6 +1222,14 @@ class Topology:
                 None
                 if data.get("expert_parallel") is None
                 else _expect_int(data["expert_parallel"], "topology.expert_parallel")
+            ),
+            # Older records carry no key: None is "never recorded", and loading
+            # them says exactly that rather than backfilling a 1 that no
+            # launcher ever stated.
+            context_parallel=(
+                None
+                if data.get("context_parallel") is None
+                else _expect_int(data["context_parallel"], "topology.context_parallel")
             ),
         )
 
@@ -1084,8 +1288,13 @@ class DeclaredCheckpoint:
     exactly the honest abstentions they had.
 
     Attributes:
-        num_experts: Declared routed experts per MoE layer; ``None`` for a dense
-            model.
+        num_experts: Declared routed experts per MoE layer. ``0`` is a POSITIVE
+            dense declaration — permitted only with :attr:`moe_layer_basis`
+            recorded, because an unexplained denominator is an unaccountable
+            one, and this is the one value the expert gates read as
+            "inapplicable" and FirstSaveGate reads as removable-from-the-
+            denominator. ``None`` means NOTHING was declared: the gates read it
+            as UNKNOWN and fail closed on it. Neither is "dense by default".
         num_moe_layers: Layers carrying routed experts.
         expected_expert_bytes: Total expert tensor bytes the checkpoint should
             hold — the 45.70 GB the incident checkpoint never had. Computed by
@@ -1125,10 +1334,28 @@ class DeclaredCheckpoint:
     def __post_init__(self) -> None:
         for name in ("num_experts", "num_moe_layers", "expected_expert_bytes"):
             value = getattr(self, name)
-            if value is not None and (
-                isinstance(value, bool) or not isinstance(value, int) or value <= 0
-            ):
-                raise ValueError(f"declared.{name} must be a positive int or None, got {value!r}")
+            if value is None:
+                continue
+            # 0 is honored for num_experts ONLY, and only per the corroboration
+            # contract below: it is the positive dense declaration that earns
+            # the expert gates' NOT_APPLICABLE skip. bool is refused first
+            # because isinstance(True, int) is True and a boolean is never a
+            # count however eagerly it converts like one.
+            minimum = 0 if name == "num_experts" else 1
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                qualifier = "non-negative" if minimum == 0 else "positive"
+                raise ValueError(
+                    f"declared.{name} must be a {qualifier} int or None, got {value!r}"
+                )
+        if self.num_experts == 0 and not (self.moe_layer_basis or "").strip():
+            raise ValueError(
+                "declared.num_experts=0 is a positive dense declaration and "
+                "requires moe_layer_basis naming the evidence (the emit rule: "
+                "an affirmative discriminator AND an expert-free base census — "
+                "two independent sources). A 0 without a recorded basis is how "
+                "absence used to launder itself into density upstream of the "
+                "denominator shrink"
+            )
         object.__setattr__(self, "declared_fqns", tuple(sorted(set(self.declared_fqns))))
         for dtype, width in self.dtype_widths.items():
             if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
@@ -1236,18 +1463,39 @@ disarms every expert gate.
 """
 
 _EXPERT_COUNT_KEYS: tuple[str, ...] = ("num_local_experts", "n_routed_experts", "num_experts")
-"""Routed-expert count keys this producer understands, in precedence order."""
+"""Routed-expert count keys this producer understands, in precedence order.
+
+This is THE single definition of the vocabulary: ``tools/real_checkpoint_probe.py``
+imports it verbatim (a second, narrower copy in the probe drifted from this list,
+and a DeepSeek-family config stating ``n_routed_experts`` was MoE to the library
+and "dense" to the probe). Rename it and the probe's import failing loudly is the
+intended alarm.
+"""
+
+_ENABLE_MOE_BLOCK_KEY = "enable_moe_block"
+"""The affirmative dense/MoE discriminator key, defined once.
+
+Read in ``text_config`` scope before top level by every consumer of this name —
+``tools/emit_run_manifest.py`` and ``tools/real_checkpoint_probe.py`` both import
+this constant rather than spelling the literal twice; the multiscope search
+order mirrors :func:`declared_from_hf_config`'s nesting convention. A
+stringly-typed second copy of the count-key list was how that vocabulary
+drifted; the discriminator gets one owner for the same reason.
+"""
 
 _UNMODELED_SPARSITY_KEYS: tuple[str, ...] = (
     "moe_layer_freq",
     "decoder_sparse_step",
     "mlp_only_layers",
 )
-"""Keys announcing a sparse/dense layer interleave this producer does not model.
+"""Keys announcing a sparse/dense layer interleave that no declared producer models.
 
-Any of them present forces ``num_moe_layers=None``: a missing denominator
-makes the gates abstain loudly (SKIP), where a fabricated one — "else every
-hidden layer" — makes them adjudicate against fiction and lie quietly.
+Shared by both producers: the HF path consults it via ``scope.get(key)``, the
+Megatron path via ``getattr(args, key, None)`` — Megatron-LM's own interleave
+knob is literally ``--moe-layer-freq`` → ``args.moe_layer_freq``. Any of them
+present forces ``num_moe_layers=None``: a missing denominator makes the gates
+abstain loudly (SKIP), where a fabricated one — "else every hidden layer" —
+makes them adjudicate against fiction and lie quietly.
 """
 
 
@@ -1358,8 +1606,11 @@ def declared_from_hf_config(
     number came from instead of merely trusting that it exists.
 
     A config with no routed-expert key in either scope — an explicit ``null``
-    counts as *no* key — yields a dense declaration (``num_experts=None``),
-    not a guess.
+    counts as *no* key — yields NO routed-expert declaration at all
+    (``num_experts=None``): None reads UNKNOWN to the gates (fail-closed),
+    never dense. The positive dense declaration (``num_experts=0``) is minted
+    only by the emitter, off an affirmative discriminator corroborated by an
+    expert-free base census; this producer refuses to mint it from absence.
 
     Args:
         config: Path to ``config.json``, or an already-parsed mapping.
@@ -1478,6 +1729,24 @@ def declared_from_megatron_args(
     Mirroring the *resolved* args, not the recipe file, is what keeps declared
     from diverging from effective: the resolver already did the work, and this
     records its answer.
+
+    Depth follows the same refuse-rather-than-invent discipline as
+    :func:`declared_from_hf_config`, because both producers' outputs divide the
+    same gates:
+
+    * ``num_moe_layers`` is honoured only when *present and valid*. A stated
+      ``0`` is not "unset": ``None`` (unknown) and ``0`` (declared-and-invalid)
+      differ materially, an ``or``-chain cannot tell them apart, and rewriting
+      a stated 0 into ``num_layers``' full depth fabricates a denominator from
+      a contradictory config while erasing that the 0 was ever stated. It
+      raises here, as the HF producer raises on the identical shape.
+    * When depth would be *derived* from ``num_layers``, any key from
+      :data:`_UNMODELED_SPARSITY_KEYS` set on the args object forces
+      ``num_moe_layers=None`` with the refusal stated in ``moe_layer_basis``.
+      An interleave this producer does not model is a loud abstention the
+      gates read as SKIP, never a routed-layer count invented from total
+      depth. An explicit ``num_moe_layers`` always wins over this abstention:
+      the operator who knows the depth says so, as on the HF path.
     """
     owner = "Megatron args"
     num_experts = getattr(args, "num_experts", None)
@@ -1488,11 +1757,62 @@ def declared_from_megatron_args(
     num_moe_layers: int | None = None
     moe_layer_basis: str | None = None
     if num_experts is not None:
-        num_moe_layers = getattr(args, "num_moe_layers", None) or getattr(args, "num_layers", None)
-        if num_moe_layers is not None:
-            moe_layer_basis = (
-                "num_moe_layers" if getattr(args, "num_moe_layers", None) else "num_layers"
+        raw_moe_layers = getattr(args, "num_moe_layers", None)
+        if raw_moe_layers is not None:
+            # Presence is tested before truthiness because the `or`-chain this
+            # replaces was the defect: it laundered a stated 0 (or False) into
+            # num_layers' depth and recorded basis="num_layers", so the record
+            # claimed a derived number while erasing the contradictory stated
+            # one. Validate here, as the HF producer's num_moe_layers branch
+            # does, so the invalid value dies naming the field that carried it.
+            if (
+                isinstance(raw_moe_layers, bool)
+                or not isinstance(raw_moe_layers, int)
+                or raw_moe_layers <= 0
+            ):
+                raise ValueError(
+                    f"{owner}.num_moe_layers must be a positive int, got "
+                    f"{raw_moe_layers!r} — a stated zero or non-int is refused "
+                    f"here, not silently rewritten into num_layers"
+                )
+            num_moe_layers = raw_moe_layers
+            moe_layer_basis = "num_moe_layers"
+        else:
+            unmodeled = sorted(
+                key for key in _UNMODELED_SPARSITY_KEYS if getattr(args, key, None) is not None
             )
+            if unmodeled:
+                # Verbatim the HF producer's verdict for the identical facts:
+                # the interleave is real, its arithmetic is not modelled here,
+                # so the denominator is declined and the refusal recorded in
+                # the basis. num_layers' total depth is NOT a routed-layer
+                # count under moe_layer_freq, and using it as one hands the
+                # expert gates a fabricated denominator wearing a resolved-args
+                # look. Abstention keeps gates honestly SKIP; explicit
+                # num_moe_layers (above) remains the stated way to assert depth.
+                moe_layer_basis = (
+                    f"abstained: args declares {', '.join(unmodeled)}; the "
+                    f"interleave is real but unmodeled, so the depth is refused "
+                    f"rather than invented"
+                )
+            else:
+                raw_layers = getattr(args, "num_layers", None)
+                if raw_layers is not None:
+                    # The all-routed fallback, validated at the producer so a
+                    # nonsense depth raises naming the field actually read —
+                    # previously __post_init__ raised it as "num_moe_layers",
+                    # the field the value had just been laundered into.
+                    if (
+                        isinstance(raw_layers, bool)
+                        or not isinstance(raw_layers, int)
+                        or raw_layers <= 0
+                    ):
+                        raise ValueError(
+                            f"{owner}.num_layers must be a positive int when it "
+                            f"backs the MoE depth, got {raw_layers!r}"
+                        )
+                    num_moe_layers = raw_layers
+                    moe_layer_basis = "num_layers"
     if getattr(args, "bf16", False):
         dtype_names = ("bfloat16",)
     elif getattr(args, "fp16", False):
@@ -1681,6 +2001,23 @@ class RunManifest:
                 f"no commit, diff or dirty state could be recorded"
             )
         elif code.status is CaptureStatus.NOT_CAPTURED:
+            # A blocking verdict that names no reason trains operators to dismiss
+            # the status itself — the audit's operability lesson. Every cause now
+            # speaks, top-down by altitude.
+            if code.probe_failed:
+                findings.append(
+                    f"the repo-wide git status probe over {code.root!r} did not "
+                    f"complete (refused, non-zero exit, or timeout): dirty_files "
+                    f"and untracked_files are UNREADABLE ZEROS, not measurements, "
+                    f"so no part of the tree's dirty state was established"
+                )
+            if code.commit is None:
+                findings.append(
+                    f"{code.root!r} has no resolvable HEAD commit (unborn branch, "
+                    f"or a HEAD ref git could not read): there is no commit to "
+                    f"anchor against and `git diff HEAD` is empty by construction, "
+                    f"so no byte of this tree can be captured until one exists"
+                )
             for p in code.paths:
                 if p.status is PathStatus.NO_SUCH_PATH:
                     findings.append(
@@ -1688,12 +2025,45 @@ class RunManifest:
                         f"it cannot have contributed to the snapshot"
                     )
                 elif p.status is PathStatus.NOT_CAPTURED:
-                    findings.append(
-                        f"code under {p.path!r} is NOT CAPTURED: {p.untracked_files} "
-                        f"untracked / {p.modified_tracked_files} modified tracked / "
-                        f"{p.captured_bytes} diff bytes — a 0-byte patch over "
-                        f"untracked files is not a clean tree"
-                    )
+                    if p.failed_probes:
+                        findings.append(
+                            f"code under {p.path!r} is NOT CAPTURED: {len(p.failed_probes)} "
+                            f"of 4 probes ({', '.join(sorted(p.failed_probes))}) did not "
+                            f"complete over this path — a pathspec outside the "
+                            f"repository is refused identically, rc=128. The zero "
+                            f"counts on this row are the ABSENCE of a measurement, "
+                            f"not measured zeros; the path examined nothing"
+                        )
+                    else:
+                        findings.append(
+                            f"code under {p.path!r} is NOT CAPTURED: "
+                            f"{p.untracked_files} untracked / {p.ignored_files} "
+                            f"ignored / {p.modified_tracked_files} modified tracked / "
+                            f"{p.captured_bytes} diff bytes — a 0-byte patch over "
+                            f"untracked or .gitignore-excluded files is not a "
+                            f"clean tree"
+                        )
+            if (
+                not code.probe_failed
+                and code.commit is not None
+                and code.dirty_files > 0
+                and code.diff_bytes == 0
+                and not any(
+                    p.status in (PathStatus.NOT_CAPTURED, PathStatus.NO_SUCH_PATH)
+                    for p in code.paths
+                )
+            ):
+                # The terminal-else branch of the rollup: the repo is dirty, the
+                # declared scope is clean, the captured diff is empty. Verdict was
+                # always NOT_CAPTURED here; what was missing is the sentence.
+                findings.append(
+                    f"the repository carries {code.dirty_files} dirty/untracked "
+                    f"file(s), but the captured diff over the declared scope holds "
+                    f"0 bytes: the dirt lives OUTSIDE every captured path and is "
+                    f"stored nowhere. Either the scope is missing living code — the "
+                    f"$SDPO capture-path-drift defect — or the dirt is incidental; "
+                    f"the record refuses to call that CAPTURED"
+                )
         if code.entrypoint_captured is False:
             findings.append(
                 f"entrypoint {code.entrypoint!r} lies outside the provenance root "
@@ -1736,6 +2106,12 @@ class RunManifest:
                 "diff_sha256": self.code.diff_sha256,
                 "diff_bytes": self.code.diff_bytes,
                 "entrypoint_captured": self.code.entrypoint_captured,
+                # ignored_files / failed_probes are deliberately NOT payload
+                # fields: per-path status already subsumes them (probe failure or
+                # ignored bytes force NOT_CAPTURED), and widening the payload
+                # shape would re-fingerprint every v1 record against its own
+                # append-only store. Identity must change only when the verdict
+                # about the code changes.
                 "paths": [
                     {
                         "path": p.path,

@@ -1,273 +1,411 @@
 {
- "core": [
-  {
-   "name": "vacuous-passes",
-   "what": "a gate that examined zero units returns PASS",
-   "anchor": "if coverage.is_vacuous:",
-   "replacement": "if False and coverage.is_vacuous:"
-  },
-  {
-   "name": "undercovered-passes",
-   "what": "a gate that examined fewer units than expected returns PASS",
-   "anchor": "if coverage.is_short and not coverage.sampled:",
-   "replacement": "if False and coverage.is_short and not coverage.sampled:"
-  },
-  {
-   "name": "vacuous-not-blocking",
-   "what": "VACUOUS stops being a blocking verdict",
-   "anchor": "return self in (Verdict.FAIL, Verdict.VACUOUS, Verdict.UNDERCOVERED, Verdict.ERROR)",
-   "replacement": "return self in (Verdict.FAIL, Verdict.UNDERCOVERED, Verdict.ERROR)"
-  },
-  {
-   "name": "undercovered-not-blocking",
-   "what": "UNDERCOVERED stops being a blocking verdict",
-   "anchor": "return self in (Verdict.FAIL, Verdict.VACUOUS, Verdict.UNDERCOVERED, Verdict.ERROR)",
-   "replacement": "return self in (Verdict.FAIL, Verdict.VACUOUS, Verdict.ERROR)"
-  },
-  {
-   "name": "error-not-blocking",
-   "what": "a gate that crashed no longer fails closed",
-   "anchor": "return self in (Verdict.FAIL, Verdict.VACUOUS, Verdict.UNDERCOVERED, Verdict.ERROR)",
-   "replacement": "return self in (Verdict.FAIL, Verdict.VACUOUS, Verdict.UNDERCOVERED)"
-  },
-  {
-   "name": "empty-is-not-vacuous",
-   "what": "zero examined units stops counting as vacuous at the source",
-   "anchor": "        return self.checked == 0",
-   "replacement": "        return False"
-  },
-  {
-   "name": "short-is-never-short",
-   "what": "partial coverage stops registering as short",
-   "anchor": "return self.expected is not None and self.checked < self.expected",
-   "replacement": "return False"
-  },
-  {
-   "name": "sample-needs-no-reason",
-   "what": "a gate can declare itself a sample without saying why",
-   "anchor": "if self.sampled and not self.sample_reason.strip():",
-   "replacement": "if False and self.sampled and not self.sample_reason.strip():"
-  }
- ],
- "dcp": [
-  {
-   "name": "zero-volume-box-origin-only",
-   "what": "A caller asking read_box for an empty box away from the origin, such as rows [1,1), would receive elements_covered == elements_expected == 0 and complete=True, i.e. a 'complete' read that examined no data.",
-   "anchor": "        if lo_t[i] == hi_t[i] and shape[i] > 0:",
-   "replacement": "        if lo_t[i] == hi_t[i] == 0 and shape[i] > 0:"
-  },
-  {
-   "name": "empty-dcp-accepted-when-blobs-exist",
-   "what": "A DCP directory whose metadata contains only _extra_state byte blobs and zero tensors would open as a valid WeightSource with tensor_keys() == (), so a downstream all(...) over keys becomes the vacuous-truth pass from incident #6.",
-   "anchor": "        if not tensor_md:",
-   "replacement": "        if not tensor_md and not nontensor:"
-  },
-  {
-   "name": "float64-accumulator-downgraded",
-   "what": "On huge-magnitude tensors the comparison would overflow/underflow back into the historic failure class and could again manufacture an impossible self-comparison (the 1.80-cosine incident) instead of an exactly reproducible cosine/RMS.",
-   "anchor": "        fa = ta.to(torch.float64)\n        fb = tb.to(torch.float64)",
-   "replacement": "        fa = ta.to(torch.float32)\n        fb = tb.to(torch.float32)"
-  },
-  {
-   "name": "bitwise-self-check-only-for-zeros",
-   "what": "Bitwise-identical nonzero tensors would no longer force the computed cosine to be exactly 1.0; a broken reduction could assert EXACT while its own cosine contradicts the bits, laundering bad numerics into a green report.",
-   "anchor": "        if sumsq_a > 0.0:",
-   "replacement": "        if sumsq_a <= 0.0:"
-  },
-  {
-   "name": "overlap-pair-scan-skips-neighbors",
-   "what": "Two stored chunks that overlap adjacent regions could double-store rows while their volumes still sum to the declared size, so read_full/read_box would report exact coverage even though the written regions do not tile the tensor.",
-   "anchor": "        for i in range(len(written)):\n            for j in range(i + 1, len(written)):",
-   "replacement": "        for i in range(len(written)):\n            for j in range(i + 2, len(written)):"
-  },
-  {
-   "name": "orphan-chunk-treated-as-mere-hole",
-   "what": "A tensor metadata chunk with no storage record would stop being reported as 'metadata declares a chunk that has no storage record'; operators would get a generic short-coverage error and lose the exact corruption that distinguishes orphaned metadata from a simple hole.",
-   "anchor": "            if sinfo is None:",
-   "replacement": "            if sinfo is None:\n                continue"
-  }
- ],
- "manifest": [
-  {
-   "name": "attempt-scan-loses-end-anchor",
-   "what": "A run directory containing only lookalike files (attempt-0001.json.bak, half-named records) counts as having recorded attempts: the scanner trusts names that merely start with a valid prefix, so a stale backup file is read as manifest attempt 1 and attempt numbering silently skips over phantom slots.",
-   "anchor": "_ATTEMPT_RE = re.compile(r\"^attempt-(\\d+)\\.json$\")",
-   "replacement": "_ATTEMPT_RE = re.compile(r\"attempt-(\\d+)\\.json\")"
-  },
-  {
-   "name": "corrupt-slot-silently-skipped",
-   "what": "store.attempts() on a run whose only record is corrupt returns zero attempts, reading exactly like ''nothing ever ran'' \u2014 the corrupt slot vanishes from the record the way the 27 overwritten manifests did, and nothing ever raises.",
-   "anchor": "        records: list[tuple[int, RunManifest]] = []\n        for entry in run_dir.iterdir():\n            match = _ATTEMPT_RE.match(entry.name)\n            if match:\n                records.append((int(match.group(1)), load(entry)))",
-   "replacement": "        records: list[tuple[int, RunManifest]] = []\n        for entry in run_dir.iterdir():\n            match = _ATTEMPT_RE.match(entry.name)\n            if match:\n                try:\n                    records.append((int(match.group(1)), load(entry)))\n                except ManifestError:\n                    continue"
-  },
-  {
-   "name": "save-uses-clobbering-replace",
-   "what": "Saving a conflicting manifest over an existing attempt quietly rewrites history in place: the previous launch's record is destroyed and the slot shows only the newest claim \u2014 the exact overwrite that made 27 of 62 launches disappear, now succeeding without a sound.",
-   "anchor": "        try:\n            os.link(tmp, final)\n        except FileExistsError as exc:",
-   "replacement": "        try:\n            os.replace(tmp, final)\n        except FileExistsError as exc:"
-  },
-  {
-   "name": "identical-retry-always-raises",
-   "what": "A crash-safe launcher that retries its manifest write always fails with ManifestExistsError: a byte-identical re-save of the same computation is reported as a slot conflict, so a rerun of a successful save looks like two different computations fighting over one attempt.",
-   "anchor": "            if final.read_bytes() == payload:",
-   "replacement": "            if False and final.read_bytes() == payload:"
-  },
-  {
-   "name": "fingerprint-swallows-job-id",
-   "what": "Two attempts of the same computation no longer fingerprint equally once they run under different scheduler jobs: requeues and relaunches always look like different mathematics, so 'same fingerprint, same computation' stops being checkable for anything that was ever resubmitted.",
-   "anchor": "        return {\n            \"code\": {\n                \"status\": self.code.status.value,",
-   "replacement": "        return {\n            \"job_id\": self.job_id,\n            \"code\": {\n                \"status\": self.code.status.value,"
-  },
-  {
-   "name": "absent-key-compares-equal",
-   "what": "differs_from short-circuits to 'equal' before reading a key that exists in only one manifest: a manifest missing OBJECTIVE_SWITCH compares identical to one that has it, so the 12/12 split disappears from the field-level diff \u2014 exactly the vacuous all([])-is-True the audit's own verifier shipped.",
-   "anchor": "            if key not in a:",
-   "replacement": "            if False and key not in a:"
-  },
-  {
-   "name": "unborn-head-reports-clean",
-   "what": "A freshly git-init'ed repository with zero commits reports CaptureStatus.CLEAN \u2014 'working tree matches the recorded commit' asserted against a commit that does not exist. Every capture on an empty repo reads as a verified clean checkout.",
-   "anchor": "    if commit is None:\n        # Unborn HEAD: the least reproducible state a repository can be in \u2014 there\n        # is no commit to anchor the record against, and `git diff HEAD` is empty\n        # by construction. It must never read as CLEAN.\n        overall = CaptureStatus.NOT_CAPTURED",
-   "replacement": "    if commit is None:\n        # Unborn HEAD: the least reproducible state a repository can be in \u2014 there\n        # is no commit to anchor the record against, and `git diff HEAD` is empty\n        # by construction. It must never read as CLEAN.\n        overall = CaptureStatus.CLEAN"
-  },
-  {
-   "name": "latest-returns-first-attempt",
-   "what": "require_manifest returns the oldest attempt of a run instead of the most recent: a relaunch whose manifest exists passes the gate while every consumer of 'the manifest that launched this run' is handed the first attempt's configuration and code claims, silently.",
-   "anchor": "        all_attempts = self.attempts(run_id)\n        if not all_attempts:\n            raise ManifestMissing(f\"no provenance manifests recorded for run {run_id!r}\")\n        return all_attempts[-1]",
-   "replacement": "        all_attempts = self.attempts(run_id)\n        if not all_attempts:\n            raise ManifestMissing(f\"no provenance manifests recorded for run {run_id!r}\")\n        return all_attempts[0]"
-  }
- ],
- "topology": [
-  {
-   "name": "comparison-never-compares",
-   "what": "An entrypoint that silently forces cp=1 over the launcher's CP=4 is reported as 'the runtime honours the declared config' \u2014 declared_vs_effective always takes the match path, so a knob that appears configurable and is not gets a green check mark again.",
-   "anchor": "        if want != got:",
-   "replacement": "        if False and want != got:"
-  },
-  {
-   "name": "match-path-reports-agreement-without-coverage",
-   "what": "A matching comparison says 'the runtime honours the declared config' but omits how many fields were compared, so a full seven-field comparison is indistinguishable from a comparison that read nothing.",
-   "anchor": "                details={\"fields_compared\": compared},",
-   "replacement": "                details={},"
-  },
-  {
-   "name": "mismatch-path-drops-coverage-summary",
-   "what": "When declared and effective disagree, the BLOCK findings name the differing fields but no finding ever states how many fields were compared \u2014 a partial comparison that happened to catch a difference looks identical to a full one.",
-   "anchor": "    if findings:\n        findings.append(\n            Finding(\n                code=\"topology.effective_comparison_summary\",",
-   "replacement": "    if False:\n        findings.append(\n            Finding(\n                code=\"topology.effective_comparison_summary\","
-  },
-  {
-   "name": "layout-fields-excluded-from-comparison",
-   "what": "declared_vs_effective silently skips nodes and gpus_per_node: a runtime that lands the job on a different node count or GPU-per-node count than the manifest declares passes as full agreement, and the coverage count no longer covers the layout.",
-   "anchor": "    for name in (*_DEGREES, *_LAYOUT):\n        compared += 1",
-   "replacement": "    for name in _DEGREES:\n        compared += 1"
-  },
-  {
-   "name": "partition-normalization-keeps-spellings-distinct",
-   "what": "gpu-a100 and gpu_a100 are treated as two unrelated partitions, so the measured 188-files-one-way/4-the-other split on a single partition is reported as 'N distinct partitions, 0 spelling variants' \u2014 the exact estate failure reads as clean.",
-   "anchor": "    return re.sub(r\"[^a-z0-9]\", \"\", spelling.lower())",
-   "replacement": "    return spelling"
-  },
-  {
-   "name": "empty-partition-scan-passes-vacuously",
-   "what": "A scan of zero files reports OK instead of BLOCK: supplying no corpus to partition_consistency returns a clean verdict, repeating the all([]) is True incident the check's own message claims to refuse.",
-   "anchor": "            code=\"topology.partition_scan_empty\",\n            severity=Severity.BLOCK,",
-   "replacement": "            code=\"topology.partition_scan_empty\",\n            severity=Severity.OK,"
-  },
-  {
-   "name": "dash-p-flag-noise-becomes-partitions",
-   "what": "The sbatch/srun gating on the short '-p' form is dropped, so 'cp -p weights.bin' manufactures a partition named weights.bin and a corpus containing nothing but flag noise is reported partition-consistent \u2014 the not-found BLOCK that distinguishes real extraction from noise never fires.",
-   "anchor": "            if _SBATCH_LINE_RE.search(line):\n                spellings += _PARTITION_SHORT_RE.findall(line)",
-   "replacement": "            if True:\n                spellings += _PARTITION_SHORT_RE.findall(line)"
-  }
- ],
- "parity": [
-  {
-   "name": "cosine-range-check-needs-both-impossible-directions",
-   "what": "A broken accumulator's cosine of 1.80 is reported as data again instead of raising \u2014 the exact 'tensor's cosine with itself printed as >1' incident this guard descends from. Since a finite cosine cannot simultaneously exceed 1.0+slack and fall below -1.0-slack, no value ever trips the impossible-value check.",
-   "anchor": "        cosine is not None\n        and math.isfinite(cosine)\n        and (cosine > 1.0 + _COSINE_SLACK or cosine < -1.0 - _COSINE_SLACK)\n",
-   "replacement": "        cosine is not None\n        and math.isfinite(cosine)\n        and (cosine > 1.0 + _COSINE_SLACK and cosine < -1.0 - _COSINE_SLACK)\n"
-  },
-  {
-   "name": "self-cosine-slack-widened-past-reality",
-   "what": "A reduction that scores a bitwise-identical tensor's cosine with itself at 0.4 \u2014 a mathematically impossible self-similarity and the signature of a statistics bug \u2014 sails through the sanity guard and is printed as fact, because a deviation must now exceed 1.5 to be called impossible.",
-   "anchor": "        elements > 0\n        and cosine is not None\n        and (math.isnan(cosine) or abs(cosine - 1.0) > _SELF_COSINE_SLACK)\n",
-   "replacement": "        elements > 0\n        and cosine is not None\n        and (math.isnan(cosine) or abs(cosine - 1.0) > 1.5)\n"
-  },
-  {
-   "name": "dtype-mismatch-no-longer-blocks",
-   "what": "A checkpoint exported with one tensor silently written at the wrong dtype passes the weight-parity gate: the mismatch is still noted in the skipped list, but it never becomes a blocking finding, so the gate's verdict reads ok while cast-around is exactly what an auditor must assume happened.",
-   "anchor": "        return self in (\n            ParityStatus.DIFFER,\n            ParityStatus.DTYPE_MISMATCH,\n            ParityStatus.SHAPE_MISMATCH,\n        )",
-   "replacement": "        return self in (\n            ParityStatus.DIFFER,\n            ParityStatus.SHAPE_MISMATCH,\n        )"
-  },
-  {
-   "name": "unread-keys-counted-as-compared",
-   "what": "The report's compared_keys count includes dtype- and shape-mismatched keys that were never numerically read \u2014 the coverage number overstates what was actually examined, and a report can claim N compared keys while fewer than N comparisons ever happened.",
-   "anchor": "        return tuple(\n            entry\n            for entry in self.keys\n            if (entry.key, entry.note) not in self.skipped_set and entry.elements > 0\n        )",
-   "replacement": "        return tuple(self.keys)"
-  },
-  {
-   "name": "none-cosine-report-laundered-to-one",
-   "what": "A zero-element tensor, or a key where one side is all zeros, reports cosine 1.0 \u2014 a perfect-similarity score for a comparison where no similarity was measurable \u2014 instead of the null that tells the reader no cosine exists. Consumers of to_dict can no longer distinguish 'measured identical direction' from 'cosine undefined'.",
-   "anchor": "        mismatched_elements=cmp.mismatched_elements,\n        max_abs_diff=cmp.max_abs_diff,\n        cosine=cmp.cosine,\n        rel_frob=rel_frob,",
-   "replacement": "        mismatched_elements=cmp.mismatched_elements,\n        max_abs_diff=cmp.max_abs_diff,\n        cosine=cmp.cosine if cmp.cosine is not None else 1.0,\n        rel_frob=rel_frob,"
-  },
-  {
-   "name": "vacuity-no-longer-declared",
-   "what": "A parity report over zero common keys \u2014 the literal all([]) shape of Incident #6 \u2014 no longer declares itself vacuous: is_vacuous is False, the rendered verdict skips the VACUOUS banner, and to_dict reports vacuous: false for a comparison that examined nothing. The gate's own vacuous branch becomes dead code.",
-   "anchor": "        return not self.findings and self.compared_elements == 0",
-   "replacement": "        return not self.findings and self.compared_elements < 0"
-  },
-  {
-   "name": "zero-reference-rel-frob-underreported",
-   "what": "A genuinely nonzero tensor compared against an all-zero reference reports rel_frob 0.0 \u2014 'identical to the zero tensor' \u2014 instead of the inf that states the difference is unbounded relative to the reference. A scrubbed-to-zero or never-written reference tensor masquerades as a perfect match on the relative-difference axis.",
-   "anchor": "    if rb > 0.0:\n        return math.sqrt(var_diff) / rb\n    return 0.0 if var_diff == 0.0 else math.inf",
-   "replacement": "    if rb > 0.0:\n        return math.sqrt(var_diff) / rb\n    return 0.0 if var_diff >= 0.0 else math.inf"
-  },
-  {
-   "name": "dtype-mismatch-disguised-as-value-difference",
-   "what": "A dtype mismatch is recorded as an ordinary numeric DIFFER finding, so consumers can no longer tell 'never numerically compared \u2014 possible silent cast' apart from 'compared and outside tolerance'. Every numeric statistic for that key still shows inf/None for zero compared elements, but under a status that claims a value judgement was made.",
-   "anchor": "                _metadata_entry(\n                    key,\n                    ParityStatus.DTYPE_MISMATCH,\n                    shape_left,\n                    shape_right,\n                    dtype_left,\n                    dtype_right,\n                    tolerances,\n                    reason,\n                )",
-   "replacement": "                _metadata_entry(\n                    key,\n                    ParityStatus.DIFFER,\n                    shape_left,\n                    shape_right,\n                    dtype_left,\n                    dtype_right,\n                    tolerances,\n                    reason,\n                )"
-  },
-  {
-   "name": "inert-control-must-pass",
-   "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. If the battery reports this killed, its attribution machinery is proven unsound and the whole run is void — exit 2.",
-   "anchor": "        and math.isfinite(cosine)\n",
-   "replacement": "        and math.isfinite(cosine)  # inert must-pass control\n",
-   "must_survive": true
-  }
- ],
- "checkpoint_gates": [
-  {
-   "name": "aliasing-records-unique-fqns-instead",
-   "what": "The aliasing signature is gone: a checkpoint where 128 (or 32) expert FQNs all resolve to one stored byte range passes the distinctness gate, because 'distinct FQNs' is being counted instead of 'distinct storages' \u2014 exactly the incident's 'all names present, count matches, every dtype correct' disguise.",
-   "anchor": "            storages = {t.storage_id if t.storage_id is not None else t.fqn for t in members}",
-   "replacement": "            storages = {t.fqn for t in members}"
-  },
-  {
-   "name": "shard-count-mismatch-reads-as-match",
-   "what": "A checkpoint holding 16 expert shards against 128 declared is reported as 'present at declared count', because the declared-vs-present comparison now only flags layouts whose shard count equals the declared count \u2014 the local-name save signature passes silently.",
-   "anchor": "            if c.num_experts and len(members) != c.num_experts:",
-   "replacement": "            if c.num_experts and len(members) == c.num_experts:"
-  },
-  {
-   "name": "byte-volume-deficit-tolerance-swallows-incident",
-   "what": "The 5.71-GB-where-45.70-GB-was-correct checkpoint passes the byte-volume gate: the deficit must now exceed 99.9% before anything fires, so the incident's metadata-visible 0.125 byte ratio re-greens.",
-   "anchor": "    _DEFICIT_PER_MILLE: ClassVar[int] = 10  # fail if actual < expected * 99%",
-   "replacement": "    _DEFICIT_PER_MILLE: ClassVar[int] = 999  # fail if actual < expected * 99%"
-  },
-  {
-   "name": "coverage-denominator-purely-decorative",
-   "what": "A context reporting 4 expert tensors against a declared expectation of 8 (or any number) is never flagged: the declared-count denominator written into every Coverage object can be half the truth and nothing in the gates or the bridge suite compares checked against expected.",
-   "anchor": "    weights_per_layer = 2  # linear_fc1 + linear_fc2",
-   "replacement": "    weights_per_layer = 1  # linear_fc1 + linear_fc2"
-  },
-  {
-   "name": "first-save-composite-ignores-blocking-subgates",
-   "what": "A corrupt first checkpoint whose distinctness, byte-volume and completeness gates all FAIL still leaves the composite reporting 'all hold at first save' \u2014 the composite aggregates verdicts but the blocking set is empty by construction, so save #1 is never stopped.",
-   "anchor": "        blocking = [r for r in sub if r.blocking]",
-   "replacement": "        blocking = []"
-  }
- ]
+  "core": [
+    {
+      "name": "vacuous-passes",
+      "what": "a gate that examined zero units returns PASS",
+      "anchor": "if coverage.is_vacuous:",
+      "replacement": "if False and coverage.is_vacuous:"
+    },
+    {
+      "name": "undercovered-passes",
+      "what": "a gate that examined fewer units than expected returns PASS",
+      "anchor": "if coverage.is_short and not coverage.sampled:",
+      "replacement": "if False and coverage.is_short and not coverage.sampled:"
+    },
+    {
+      "name": "vacuous-not-blocking",
+      "what": "VACUOUS stops being a blocking verdict",
+      "anchor": "        return self in (\n            Verdict.FAIL,\n            Verdict.VACUOUS,\n            Verdict.UNDERCOVERED,\n            Verdict.OVERCOVERED,\n            Verdict.ERROR,\n        )\n",
+      "replacement": "        return self in (\n            Verdict.FAIL,\n            Verdict.UNDERCOVERED,\n            Verdict.OVERCOVERED,\n            Verdict.ERROR,\n        )\n"
+    },
+    {
+      "name": "undercovered-not-blocking",
+      "what": "UNDERCOVERED stops being a blocking verdict",
+      "anchor": "        return self in (\n            Verdict.FAIL,\n            Verdict.VACUOUS,\n            Verdict.UNDERCOVERED,\n            Verdict.OVERCOVERED,\n            Verdict.ERROR,\n        )\n",
+      "replacement": "        return self in (\n            Verdict.FAIL,\n            Verdict.VACUOUS,\n            Verdict.OVERCOVERED,\n            Verdict.ERROR,\n        )\n"
+    },
+    {
+      "name": "error-not-blocking",
+      "what": "a gate that crashed no longer fails closed",
+      "anchor": "        return self in (\n            Verdict.FAIL,\n            Verdict.VACUOUS,\n            Verdict.UNDERCOVERED,\n            Verdict.OVERCOVERED,\n            Verdict.ERROR,\n        )\n",
+      "replacement": "        return self in (\n            Verdict.FAIL,\n            Verdict.VACUOUS,\n            Verdict.UNDERCOVERED,\n            Verdict.OVERCOVERED,\n        )\n"
+    },
+    {
+      "name": "empty-is-not-vacuous",
+      "what": "zero examined units stops counting as vacuous at the source",
+      "anchor": "        return self.checked == 0",
+      "replacement": "        return False"
+    },
+    {
+      "name": "short-is-never-short",
+      "what": "partial coverage stops registering as short",
+      "anchor": "return self.expected is not None and self.checked < self.expected",
+      "replacement": "return False"
+    },
+    {
+      "name": "sample-needs-no-reason",
+      "what": "a gate can declare itself a sample without saying why",
+      "anchor": "if self.sampled and not self.sample_reason.strip():",
+      "replacement": "if False and self.sampled and not self.sample_reason.strip():"
+    },
+    {
+      "name": "overcovered-not-blocking",
+      "what": "A gate that examined MORE units than its manifest declared — the denominator and the numerator disagree and at least one of them is wrong — stops blocking and reports the sweep as clean, which is how a fabricated denominator gets published beside an honest count.",
+      "anchor": "        return self in (\n            Verdict.FAIL,\n            Verdict.VACUOUS,\n            Verdict.UNDERCOVERED,\n            Verdict.OVERCOVERED,\n            Verdict.ERROR,\n        )\n",
+      "replacement": "        return self in (\n            Verdict.FAIL,\n            Verdict.VACUOUS,\n            Verdict.UNDERCOVERED,\n            Verdict.ERROR,\n        )\n"
+    }
+  ],
+  "dcp": [
+    {
+      "name": "zero-volume-box-origin-only",
+      "what": "A caller asking read_box for an empty box away from the origin, such as rows [1,1), would receive elements_covered == elements_expected == 0 and complete=True, i.e. a 'complete' read that examined no data.",
+      "anchor": "        if lo_t[i] == hi_t[i] and shape[i] > 0:",
+      "replacement": "        if lo_t[i] == hi_t[i] == 0 and shape[i] > 0:"
+    },
+    {
+      "name": "empty-dcp-accepted-when-blobs-exist",
+      "what": "A DCP directory whose metadata contains only _extra_state byte blobs and zero tensors would open as a valid WeightSource with tensor_keys() == (), so a downstream all(...) over keys becomes the vacuous-truth pass from incident #6.",
+      "anchor": "        if not tensor_md:",
+      "replacement": "        if not tensor_md and not nontensor:"
+    },
+    {
+      "name": "float64-accumulator-downgraded",
+      "what": "On huge-magnitude tensors the comparison would overflow/underflow back into the historic failure class and could again manufacture an impossible self-comparison (the 1.80-cosine incident) instead of an exactly reproducible cosine/RMS.",
+      "anchor": "        fa = ta.to(torch.float64)\n        fb = tb.to(torch.float64)",
+      "replacement": "        fa = ta.to(torch.float32)\n        fb = tb.to(torch.float32)"
+    },
+    {
+      "name": "bitwise-self-check-only-for-zeros",
+      "what": "Bitwise-identical nonzero tensors would no longer force the computed cosine to be exactly 1.0; a broken reduction could assert EXACT while its own cosine contradicts the bits, laundering bad numerics into a green report.",
+      "anchor": "        if sumsq_a > 0.0:",
+      "replacement": "        if sumsq_a <= 0.0:"
+    },
+    {
+      "name": "overlap-pair-scan-skips-neighbors",
+      "what": "Two stored chunks that overlap adjacent regions could double-store rows while their volumes still sum to the declared size, so read_full/read_box would report exact coverage even though the written regions do not tile the tensor.",
+      "anchor": "        for i in range(len(written)):\n            for j in range(i + 1, len(written)):",
+      "replacement": "        for i in range(len(written)):\n            for j in range(i + 2, len(written)):"
+    },
+    {
+      "name": "orphan-chunk-treated-as-mere-hole",
+      "what": "A tensor metadata chunk with no storage record would stop being reported as 'metadata declares a chunk that has no storage record'; operators would get a generic short-coverage error and lose the exact corruption that distinguishes orphaned metadata from a simple hole.",
+      "anchor": "            if sinfo is None:",
+      "replacement": "            if sinfo is None:\n                continue"
+    }
+  ],
+  "manifest": [
+    {
+      "name": "attempt-scan-loses-end-anchor",
+      "what": "A run directory containing only lookalike files (attempt-0001.json.bak, half-named records) counts as having recorded attempts: the scanner trusts names that merely start with a valid prefix, so a stale backup file is read as manifest attempt 1 and attempt numbering silently skips over phantom slots.",
+      "anchor": "_ATTEMPT_RE = re.compile(r\"^attempt-(\\d+)\\.json$\")",
+      "replacement": "_ATTEMPT_RE = re.compile(r\"attempt-(\\d+)\\.json\")"
+    },
+    {
+      "name": "corrupt-slot-silently-skipped",
+      "what": "store.attempts() on a run whose only record is corrupt returns zero attempts, reading exactly like ''nothing ever ran'' — the corrupt slot vanishes from the record the way the 27 overwritten manifests did, and nothing ever raises.",
+      "anchor": "        records: list[tuple[int, RunManifest]] = []\n        for entry in run_dir.iterdir():\n            match = _ATTEMPT_RE.match(entry.name)\n            if match:\n                records.append((int(match.group(1)), load(entry)))",
+      "replacement": "        records: list[tuple[int, RunManifest]] = []\n        for entry in run_dir.iterdir():\n            match = _ATTEMPT_RE.match(entry.name)\n            if match:\n                try:\n                    records.append((int(match.group(1)), load(entry)))\n                except ManifestError:\n                    continue"
+    },
+    {
+      "name": "save-uses-clobbering-replace",
+      "what": "Saving a conflicting manifest over an existing attempt quietly rewrites history in place: the previous launch's record is destroyed and the slot shows only the newest claim — the exact overwrite that made 27 of 62 launches disappear, now succeeding without a sound.",
+      "anchor": "        try:\n            os.link(tmp, final)\n        except FileExistsError as exc:",
+      "replacement": "        try:\n            os.replace(tmp, final)\n        except FileExistsError as exc:"
+    },
+    {
+      "name": "identical-retry-always-raises",
+      "what": "A crash-safe launcher that retries its manifest write always fails with ManifestExistsError: a byte-identical re-save of the same computation is reported as a slot conflict, so a rerun of a successful save looks like two different computations fighting over one attempt.",
+      "anchor": "            if final.read_bytes() == payload:",
+      "replacement": "            if False and final.read_bytes() == payload:"
+    },
+    {
+      "name": "fingerprint-swallows-job-id",
+      "what": "Two attempts of the same computation no longer fingerprint equally once they run under different scheduler jobs: requeues and relaunches always look like different mathematics, so 'same fingerprint, same computation' stops being checkable for anything that was ever resubmitted.",
+      "anchor": "        return {\n            \"code\": {\n                \"status\": self.code.status.value,",
+      "replacement": "        return {\n            \"job_id\": self.job_id,\n            \"code\": {\n                \"status\": self.code.status.value,"
+    },
+    {
+      "name": "absent-key-compares-equal",
+      "what": "differs_from short-circuits to 'equal' before reading a key that exists in only one manifest: a manifest missing OBJECTIVE_SWITCH compares identical to one that has it, so the 12/12 split disappears from the field-level diff — exactly the vacuous all([])-is-True the audit's own verifier shipped.",
+      "anchor": "            if key not in a:",
+      "replacement": "            if False and key not in a:"
+    },
+    {
+      "name": "unborn-head-reports-clean",
+      "what": "A freshly git-init'ed repository with zero commits reports CaptureStatus.CLEAN — 'working tree matches the recorded commit' asserted against a commit that does not exist. Every capture on an empty repo reads as a verified clean checkout.",
+      "anchor": "    if commit is None:\n        # Unborn HEAD: the least reproducible state a repository can be in — there\n        # is no commit to anchor the record against, and `git diff HEAD` is empty\n        # by construction. It must never read as CLEAN.\n        overall = CaptureStatus.NOT_CAPTURED",
+      "replacement": "    if commit is None:\n        # Unborn HEAD: the least reproducible state a repository can be in — there\n        # is no commit to anchor the record against, and `git diff HEAD` is empty\n        # by construction. It must never read as CLEAN.\n        overall = CaptureStatus.CLEAN"
+    },
+    {
+      "name": "latest-returns-first-attempt",
+      "what": "require_manifest returns the oldest attempt of a run instead of the most recent: a relaunch whose manifest exists passes the gate while every consumer of 'the manifest that launched this run' is handed the first attempt's configuration and code claims, silently.",
+      "anchor": "        all_attempts = self.attempts(run_id)\n        if not all_attempts:\n            raise ManifestMissing(f\"no provenance manifests recorded for run {run_id!r}\")\n        return all_attempts[-1]",
+      "replacement": "        all_attempts = self.attempts(run_id)\n        if not all_attempts:\n            raise ManifestMissing(f\"no provenance manifests recorded for run {run_id!r}\")\n        return all_attempts[0]"
+    }
+  ],
+  "topology": [
+    {
+      "name": "comparison-never-compares",
+      "what": "An entrypoint that silently forces cp=1 over the launcher's CP=4 is reported as 'the runtime honours the declared config' — declared_vs_effective always takes the match path, so a knob that appears configurable and is not gets a green check mark again.",
+      "anchor": "        if want != got:",
+      "replacement": "        if False and want != got:"
+    },
+    {
+      "name": "match-path-reports-agreement-without-coverage",
+      "what": "A matching comparison says 'the runtime honours the declared config' but omits how many fields were compared, so a full seven-field comparison is indistinguishable from a comparison that read nothing.",
+      "anchor": "                details={\"fields_compared\": compared},",
+      "replacement": "                details={},"
+    },
+    {
+      "name": "mismatch-path-drops-coverage-summary",
+      "what": "When declared and effective disagree, the BLOCK findings name the differing fields but no finding ever states how many fields were compared — a partial comparison that happened to catch a difference looks identical to a full one.",
+      "anchor": "    if findings:\n        findings.append(\n            Finding(\n                code=\"topology.effective_comparison_summary\",",
+      "replacement": "    if False:\n        findings.append(\n            Finding(\n                code=\"topology.effective_comparison_summary\","
+    },
+    {
+      "name": "layout-fields-excluded-from-comparison",
+      "what": "declared_vs_effective silently skips nodes and gpus_per_node: a runtime that lands the job on a different node count or GPU-per-node count than the manifest declares passes as full agreement, and the coverage count no longer covers the layout.",
+      "anchor": "    for name in (*_DEGREES, *_LAYOUT):\n        compared += 1",
+      "replacement": "    for name in _DEGREES:\n        compared += 1"
+    },
+    {
+      "name": "partition-normalization-keeps-spellings-distinct",
+      "what": "gpu-a100 and gpu_a100 are treated as two unrelated partitions, so the measured 188-files-one-way/4-the-other split on a single partition is reported as 'N distinct partitions, 0 spelling variants' — the exact estate failure reads as clean.",
+      "anchor": "    return re.sub(r\"[^a-z0-9]\", \"\", spelling.lower())",
+      "replacement": "    return spelling"
+    },
+    {
+      "name": "empty-partition-scan-passes-vacuously",
+      "what": "A scan of zero files reports OK instead of BLOCK: supplying no corpus to partition_consistency returns a clean verdict, repeating the all([]) is True incident the check's own message claims to refuse.",
+      "anchor": "            code=\"topology.partition_scan_empty\",\n            severity=Severity.BLOCK,",
+      "replacement": "            code=\"topology.partition_scan_empty\",\n            severity=Severity.OK,"
+    },
+    {
+      "name": "dash-p-flag-noise-becomes-partitions",
+      "what": "The sbatch/srun gating on the short '-p' form is dropped, so 'cp -p weights.bin' manufactures a partition named weights.bin and a corpus containing nothing but flag noise is reported partition-consistent — the not-found BLOCK that distinguishes real extraction from noise never fires.",
+      "anchor": "            if _SBATCH_LINE_RE.search(line):\n                spellings += _PARTITION_SHORT_RE.findall(line)",
+      "replacement": "            if True:\n                spellings += _PARTITION_SHORT_RE.findall(line)"
+    }
+  ],
+  "parity": [
+    {
+      "name": "cosine-range-check-needs-both-impossible-directions",
+      "what": "A broken accumulator's cosine of 1.80 is reported as data again instead of raising — the exact 'tensor's cosine with itself printed as >1' incident this guard descends from. Since a finite cosine cannot simultaneously exceed 1.0+slack and fall below -1.0-slack, no value ever trips the impossible-value check.",
+      "anchor": "        cosine is not None\n        and math.isfinite(cosine)\n        and (cosine > 1.0 + _COSINE_SLACK or cosine < -1.0 - _COSINE_SLACK)\n",
+      "replacement": "        cosine is not None\n        and math.isfinite(cosine)\n        and (cosine > 1.0 + _COSINE_SLACK and cosine < -1.0 - _COSINE_SLACK)\n"
+    },
+    {
+      "name": "self-cosine-slack-widened-past-reality",
+      "what": "A reduction that scores a bitwise-identical tensor's cosine with itself at 0.4 — a mathematically impossible self-similarity and the signature of a statistics bug — sails through the sanity guard and is printed as fact, because a deviation must now exceed 1.5 to be called impossible.",
+      "anchor": "    if cosine is not None and (math.isnan(cosine) or abs(cosine - 1.0) > _SELF_COSINE_SLACK):\n",
+      "replacement": "    if cosine is not None and (math.isnan(cosine) or abs(cosine - 1.0) > 1.5):\n"
+    },
+    {
+      "name": "dtype-mismatch-no-longer-blocks",
+      "what": "A checkpoint exported with one tensor silently written at the wrong dtype passes the weight-parity gate: the mismatch is still noted in the skipped list, but it never becomes a blocking finding, so the gate's verdict reads ok while cast-around is exactly what an auditor must assume happened.",
+      "anchor": "        return self in (\n            ParityStatus.DIFFER,\n            ParityStatus.DTYPE_MISMATCH,\n            ParityStatus.SHAPE_MISMATCH,\n        )",
+      "replacement": "        return self in (\n            ParityStatus.DIFFER,\n            ParityStatus.SHAPE_MISMATCH,\n        )"
+    },
+    {
+      "name": "unread-keys-counted-as-compared",
+      "what": "The report's compared_keys count includes dtype- and shape-mismatched keys that were never numerically read — the coverage number overstates what was actually examined, and a report can claim N compared keys while fewer than N comparisons ever happened.",
+      "anchor": "        return tuple(\n            entry\n            for entry in self.keys\n            if (entry.key, entry.note) not in self.skipped_set and entry.elements > 0\n        )",
+      "replacement": "        return tuple(self.keys)"
+    },
+    {
+      "name": "none-cosine-report-laundered-to-one",
+      "what": "A zero-element tensor, or a key where one side is all zeros, reports cosine 1.0 — a perfect-similarity score for a comparison where no similarity was measurable — instead of the null that tells the reader no cosine exists. Consumers of to_dict can no longer distinguish 'measured identical direction' from 'cosine undefined'.",
+      "anchor": "        mismatched_elements=cmp.mismatched_elements,\n        max_abs_diff=cmp.max_abs_diff,\n        cosine=cmp.cosine,\n        rel_frob=rel_frob,",
+      "replacement": "        mismatched_elements=cmp.mismatched_elements,\n        max_abs_diff=cmp.max_abs_diff,\n        cosine=cmp.cosine if cmp.cosine is not None else 1.0,\n        rel_frob=rel_frob,"
+    },
+    {
+      "name": "vacuity-no-longer-declared",
+      "what": "A parity report over zero common keys — the literal all([]) shape of Incident #6 — no longer declares itself vacuous: is_vacuous is False, the rendered verdict skips the VACUOUS banner, and to_dict reports vacuous: false for a comparison that examined nothing. The gate's own vacuous branch becomes dead code.",
+      "anchor": "        return not self.findings and self.compared_elements == 0",
+      "replacement": "        return not self.findings and self.compared_elements < 0"
+    },
+    {
+      "name": "zero-reference-rel-frob-underreported",
+      "what": "A genuinely nonzero tensor compared against an all-zero reference reports rel_frob 0.0 — 'identical to the zero tensor' — instead of the inf that states the difference is unbounded relative to the reference. A scrubbed-to-zero or never-written reference tensor masquerades as a perfect match on the relative-difference axis.",
+      "anchor": "    if rb > 0.0:\n        return math.sqrt(var_diff) / rb\n    return 0.0 if var_diff == 0.0 else math.inf",
+      "replacement": "    if rb > 0.0:\n        return math.sqrt(var_diff) / rb\n    return 0.0 if var_diff >= 0.0 else math.inf"
+    },
+    {
+      "name": "dtype-mismatch-disguised-as-value-difference",
+      "what": "A dtype mismatch is recorded as an ordinary numeric DIFFER finding, so consumers can no longer tell 'never numerically compared — possible silent cast' apart from 'compared and outside tolerance'. Every numeric statistic for that key still shows inf/None for zero compared elements, but under a status that claims a value judgement was made.",
+      "anchor": "                _metadata_entry(\n                    key,\n                    ParityStatus.DTYPE_MISMATCH,\n                    shape_left,\n                    shape_right,\n                    dtype_left,\n                    dtype_right,\n                    tolerances,\n                    reason,\n                )",
+      "replacement": "                _metadata_entry(\n                    key,\n                    ParityStatus.DIFFER,\n                    shape_left,\n                    shape_right,\n                    dtype_left,\n                    dtype_right,\n                    tolerances,\n                    reason,\n                )"
+    },
+    {
+      "name": "inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. If the battery reports this killed, its attribution machinery is proven unsound and the whole run is void — exit 2.",
+      "anchor": "        and math.isfinite(cosine)\n",
+      "replacement": "        and math.isfinite(cosine)  # inert must-pass control\n",
+      "must_survive": true
+    }
+  ],
+  "checkpoint_gates": [
+    {
+      "name": "aliasing-records-unique-fqns-instead",
+      "what": "The aliasing signature is gone: a checkpoint where 128 (or 32) expert FQNs all resolve to one stored byte range passes the distinctness gate, because 'distinct FQNs' is being counted instead of 'distinct storages' — exactly the incident's 'all names present, count matches, every dtype correct' disguise.",
+      "anchor": "            storages = {t.storage_id if t.storage_id is not None else t.fqn for t in members}",
+      "replacement": "            storages = {t.fqn for t in members}"
+    },
+    {
+      "name": "shard-count-mismatch-reads-as-match",
+      "what": "A checkpoint holding 16 expert shards against 128 declared is reported as 'present at declared count', because the declared-vs-present comparison now only flags layouts whose shard count equals the declared count — the local-name save signature passes silently.",
+      "anchor": "            if c.num_experts is not None and len(members) != c.num_experts:",
+      "replacement": "            if c.num_experts is not None and len(members) == c.num_experts:"
+    },
+    {
+      "name": "byte-volume-deficit-tolerance-swallows-incident",
+      "what": "The 5.71-GB-where-45.70-GB-was-correct checkpoint passes the byte-volume gate: the deficit must now exceed 99.9% before anything fires, so the incident's metadata-visible 0.125 byte ratio re-greens.",
+      "anchor": "    _DEFICIT_PER_MILLE: ClassVar[int] = 10  # fail if actual < expected * 99%",
+      "replacement": "    _DEFICIT_PER_MILLE: ClassVar[int] = 999  # fail if actual < expected * 99%"
+    },
+    {
+      "name": "coverage-denominator-purely-decorative",
+      "what": "A context reporting 4 expert tensors against a declared expectation of 8 (or any number) is never flagged: the declared-count denominator written into every Coverage object can be half the truth and nothing in the gates or the bridge suite compares checked against expected.",
+      "anchor": "        return ctx.num_experts * ctx.num_moe_layers * width",
+      "replacement": "        return ctx.num_experts * ctx.num_moe_layers"
+    },
+    {
+      "name": "first-save-composite-ignores-blocking-subgates",
+      "what": "A corrupt first checkpoint whose distinctness, byte-volume and completeness gates all FAIL still leaves the composite reporting 'all hold at first save' — the composite aggregates verdicts but the blocking set is empty by construction, so save #1 is never stopped.",
+      "anchor": "        blocking = [r for r in sub if r.blocking]",
+      "replacement": "        blocking = []"
+    }
+  ],
+  "controls": [
+    {
+      "name": "verify-package-dropped-from-walk",
+      "what": "The gate-module walk visits only the FIRST declared gate package, reopening the F1 blind spot: foundationscale.verify.parity is never imported, its three controls are certified zero times, and the run still prints a certification receipt over the gates it did know.",
+      "anchor": "    for root_name in _GATE_PACKAGES:",
+      "replacement": "    for root_name in _GATE_PACKAGES[:1]:",
+      "why": "Kept verbatim from fix29; the anchor occurs exactly once in the handed controls.py. Predicted KILLED by tests/test_fix24_control_layer.py::test_gate_walk_reaches_sibling_gate_packages (this call's own `imported` must contain foundationscale.verify.parity) and test_main_reaches_and_lists_weight_parity (output names checkpoint.weight_parity and the receipt), with test_controls_harness.py's populated_registry membership assert corroborating."
+    },
+    {
+      "name": "uncertified-provenance-certified-anyway",
+      "what": "A gate registered from a module the walk never attempted is silently certified along with its neighbours — the harness vouches for imports it did not perform, and the decision to widen the walk is never put in front of a human.",
+      "anchor": "        if module not in attempted:",
+      "replacement": "        if False and module not in attempted:",
+      "why": "Kept verbatim; anchor occurs once. Predicted KILLED by test_provenance_reconciliation_names_gate_from_unwalked_module (expects exactly one finding naming the gate and its module; the mutation mints zero — the false-negative direction, doctrine 5 symmetric)."
+    },
+    {
+      "name": "package-census-silenced",
+      "what": "The first-party package census can no longer name an unclassified sibling, so the next package full of gates added to neither list ships months of controls runs that never knew it existed — the F1 shape standing open with the tripwire removed.",
+      "anchor": "        if info.ispkg and info.name not in classified:",
+      "replacement": "        if False and info.ispkg and info.name not in classified:",
+      "why": "Kept verbatim; anchor occurs once. Prediction: ALIVE — stated as a finding, not a failure. No handed test constructs an unclassified first-party package; test_package_census_classifies_known_first_party_packages asserts only ABSENCE of findings for the four knowns, which the mutation still satisfies, and the 854-test green ground state implies the shipped tree itself yields zero census findings (else test_run_result_agrees_with_verify_controls is already red)."
+    },
+    {
+      "name": "certification-receipt-fakes-its-denominator",
+      "what": "The 'controls executed for M of N registered gates' receipt prints N of N by construction: a gate excluded from verification because its controls() could not be built disappears from the printed denominator, and the receipt a human eyeballs certifies a completeness the run did not have.",
+      "anchor": "        print(\n            f\"controls executed for {len(verifiable_ids)} of {gate_count} \"\n            f\"registered gates\"\n        )",
+      "replacement": "        print(\n            f\"controls executed for {gate_count} of {gate_count} \"\n            f\"registered gates\"\n        )",
+      "why": "Kept verbatim; anchor occurs once. Prediction: ALIVE. Handed tests assert only the literal substring 'controls executed for' (test_main_reaches_and_lists_weight_parity); the one handed divergent-counters scenario (TestControlsListFailure's exploding-controls gate prints 1 of 2 here) never reads the receipt's numerals."
+    },
+    {
+      "name": "empty-registry-refusal-never-fires",
+      "what": "A run over an empty registry — zero gates ran, zero controls executed — bypasses the named 'registry is empty' refusal and certifies through the generic path; the sweep-level all([]) the harness exists to refuse is unguarded again.",
+      "anchor": "    if gate_count == 0:",
+      "replacement": "    if gate_count < 0:",
+      "why": "Kept verbatim; anchor occurs once (`if gate_count:` is a different string). Predicted KILLED by TestEmptyRegistryBlocks::test_zero_registered_gates_is_a_failure_not_an_all_clear (asserts 'registry is empty' and 'vacuous' in output; the mutation removes both even though rc stays 1 via verify_controls' empty-refusal)."
+    },
+    {
+      "name": "control-construction-failures-quietly-dropped",
+      "what": "A gate whose controls() raises is still excluded from the verification pass but its finding is never appended to the failure list: the named, actionable record of an unprovable gate vanishes while the run continues.",
+      "anchor": "    failures.extend(control_errors)",
+      "replacement": "    if unverifiable_ids is None:\n        failures.extend(control_errors)",
+      "why": "Kept verbatim; anchor occurs once. unverifiable_ids is always a list, so the condition is statically False. Predicted KILLED by TestControlsListFailure::test_gate_whose_controls_cannot_be_built_is_reported_not_fatal (asserts 'controls() raised' in output)."
+    },
+    {
+      "name": "typed-declaration-receipt-launders-omission",
+      "what": "The context_type coverage line always claims full declaration: a forgotten context_type on a registered gate no longer moves the printed ratio, and the column of markers no longer carries a denominator a human can price.",
+      "anchor": "        print(\n            f\"  context_type declared: {gate_count - undeclared}/{gate_count} gates; \"\n            f\"{undeclared} on untyped legacy broadcast\"\n        )",
+      "replacement": "        print(\n            f\"  context_type declared: {gate_count}/{gate_count} gates; \"\n            f\"0 on untyped legacy broadcast\"\n        )",
+      "why": "Kept verbatim; anchor occurs once. Prediction: ALIVE — and possibly output-invisible by construction: no handed test asserts the ratio line, and every gate visible in the handed test assertions declares a context_type (weight_parity does; the full registry's typed fraction is not verifiable from the handed packet — flagged in Uncertainties), in which case undeclared==0 makes the mutated string byte-identical to the honest one on the shipped tree."
+    },
+    {
+      "name": "inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. If the battery reports this killed, its attribution machinery is proven unsound and the whole run is void — exit 2.",
+      "anchor": "    total = 0\n",
+      "replacement": "    total = 0  # inert must-pass control\n",
+      "must_survive": true,
+      "why": "The module's own MUST-PASS half (doctrine 3). Anchor occurs once (the only `total = 0` in _count_controls)."
+    }
+  ],
+  "live_save_gate": [
+    {
+      "name": "any-fired-floor-deleted",
+      "what": "A controls sweep in which NOTHING fired passes unremarked — the tool's sweep-level all([]): an artifact whose detectors were all inapplicable, unconstructable or silent prints CLEAR because nobody re-stated that the run proved nothing about the detectors.",
+      "anchor": "    if not any_fired:\n        reasons.append(\"no MUST_FIRE control fired on this artifact -- the run \"\n                       \"proved nothing about the detectors\")",
+      "replacement": "    if False and not any_fired:\n        reasons.append(\"no MUST_FIRE control fired on this artifact -- the run \"\n                       \"proved nothing about the detectors\")",
+      "why": "Kept verbatim from fix29; anchor occurs once. Predicted KILLED by TestControlFloors::test_empty_control_sweep_blocks_via_any_fired_floor and ::test_skipped_only_lands_on_the_floor_not_on_silence (both assert the floor's reason text in blocking_reasons)."
+    },
+    {
+      "name": "quiet-detector-filed-as-inapplicable",
+      "what": "A MUST_FIRE control that stayed QUIET on real content — the detector accepted the injected defect, a true negative — is filed under the recorded-only inapplicable leg instead of producing the named blocking reason; the consume loop no longer convicts a dead detector by name.",
+      "anchor": "        elif st == \"not_fired\":\n            reasons.append(f\"MUST_FIRE control {c['control']} stayed QUIET on real \"\n                           f\"content -- the detector cannot be trusted on this artifact\")\n",
+      "replacement": "        elif st == \"not_fired\":\n            pass\n",
+      "why": "RE-ANCHORED after the 62-row battery reported this row ALIVE. The previous replacement appended \"not_fired\" to the ('inapplicable','skipped') tuple, but that elif sits BELOW `elif st == \"not_fired\":` in the same chain, so the added member is unreachable and the edit was semantically INERT -- an equivalent mutant masquerading as an uncovered rule. It measured nothing about the rule it names. The rule is now expressed where it actually lives: the not_fired branch's reasons.append is replaced by `pass`, which really does file a quiet detector under the recorded-only leg. MEASURED (not predicted): applied to the shipped tree the suite goes 880 -> 879 passed / 1 failed, the single failure being tests/test_live_save_gate.py::TestControlFloors::test_quiet_detector_blocks_even_though_gates_pass at the `any(\"stayed QUIET\" ...)` assertion -- clean single-test attribution. Anchor verified unique (count == 1)."
+    },
+    {
+      "name": "inconclusive-falls-through-unremarked",
+      "what": "The Defect-A fall-through returns: an exercised-but-unattributable control (confounded or absent baseline, or a detector that answered the injection with ERROR/a coverage verdict) earns no named INCONCLUSIVE blocking reason and lands in the unrecognized-status else under the wrong name.",
+      "anchor": "        elif st == \"inconclusive\":",
+      "replacement": "        elif False and st == \"inconclusive\":",
+      "why": "Kept verbatim; anchor occurs once. Predicted KILLED by test_inconclusive_only_blocks_with_named_reason, test_confounded_alias_is_inconclusive_and_blocks, and test_detector_crash_on_injection_is_inconclusive_not_a_fire — all three assert an uppercase 'INCONCLUSIVE' reason; the fall-through's 'unrecognized status 'inconclusive'' does not contain it."
+    },
+    {
+      "name": "pass-over-zero-tripwire-removed",
+      "what": "The framework self-check is gone: a gate returning PASS with coverage.checked == 0 — the framework's own founding invariant breach arriving over a live artifact — no longer generates a blocking reason, so a vacuous gate rides a live CLEAR again.",
+      "anchor": "        if r.verdict is Verdict.PASS and r.coverage.checked == 0:",
+      "replacement": "        if r.verdict is Verdict.PASS and r.coverage.checked < 0:",
+      "why": "Kept verbatim; anchor occurs once. Predicted KILLED by test_framework_tripwire_pass_over_zero_checked_blocks (asserts 'framework invariant breach' in reasons and exit 1; with the tripwire gone the run goes CLEAR — the vacuous pass itself — and both assertions redden)."
+    },
+    {
+      "name": "auto-kind-majority-read-backwards",
+      "what": "The auto kind classifier inverts its marker majority: adapter-marker-majority artifacts classify 'full' and unmarked populations classify 'lora', so every config-less run is adjudicated against the wrong denominator set in BOTH directions.",
+      "anchor": "        kind = \"lora\" if frac >= 0.6 else \"full\"",
+      "replacement": "        kind = \"full\" if frac >= 0.6 else \"lora\"",
+      "why": "Kept verbatim; anchor occurs once. Predicted KILLED by test_auto_kind_infers_full_for_unmarked_population (dense population now infers 'lora' — and then dies on the unpinned --adapter-prefix demand, an erroring red) and test_auto_kind_infers_lora_from_markers_without_config_keys (lora population infers 'full'; run_kind assertion fails)."
+    },
+    {
+      "name": "adapter-prefix-demand-neutralized",
+      "what": "The pinned-or-refused --adapter-prefix demand is inverted: a lora adjudication WITHOUT the pin sails past the refusal while a correctly pinned prefix raises — the tool silently guesses the unprefixed namespace again, the exact guess the demand exists to refuse.",
+      "anchor": "    if kind == \"lora\" and adapter_prefix is None:",
+      "replacement": "    if kind == \"lora\" and adapter_prefix is not None:",
+      "why": "Kept verbatim; anchor occurs once. Predicted KILLED by TestAdapterPrefixDemand (the unpinned calls no longer raise GateUnmeasured) and by every healthy-lora test once the inversion raises on their explicit adapter_prefix=\"\" — attribution will name several."
+    },
+    {
+      "name": "naming-agreement-checks-only-the-defaults",
+      "what": "The startup agreement proof checks the DEFAULT recognizer against the DEFAULT generator templates instead of the operator's pair, so contradictory calibrated knobs are never cross-checked and the disjoint declared-vs-recognized false alarm the check exists to refuse sails through.",
+      "anchor": "    _verify_adapter_naming_agreement(\n        adapter_suffix_re, adapter_prefix or \"\", adapter_suffixes\n    )",
+      "replacement": "    _verify_adapter_naming_agreement(\n        _DEFAULT_ADAPTER_SUFFIX_RE, adapter_prefix or \"\", _DEFAULT_ADAPTER_SUFFIXES\n    )",
+      "why": "Kept verbatim; the call block occurs once (the def site carries type annotations and differs). Predicted KILLED by TestAdapterNamingAgreement::test_cli_refusal_is_exactly_three_and_names_the_disagreement (the mismatched pair is never refused; adjudication proceeds against a disjoint declared set and returns 1, not 3, with no disagreement in stderr). Direct-call agreement tests stay green, which is honest: the unit is unbroken, the WIRING is."
+    },
+    {
+      "name": "drop-control-credits-without-naming",
+      "what": "The drop control's self-attribution is gone: crediting requires only a blocking verdict, not the rerun NAMING an injected-dropped FQN in its own missing-list evidence, so a block caused by a pre-existing defect on the unmodified artifact counts as a proven detection of the injection.",
+      "anchor": "    fired = res.blocking and bool(named)",
+      "replacement": "    fired = res.blocking",
+      "why": "Re-stated post-fix36 with its correction adopted. Anchor occurs once. The fix36 prediction was ALIVE because no handed test then built a blocking-but-naming-nothing rerun; fix36 closed that gap with two discriminating tests rather than by weakening the row, so the corrected prediction is KILLED by TestUnderfillAndDropBuilders::test_drop_receives_no_credit_for_a_block_naming_no_injected_loss (FAIL block naming only a pre-existing never-written ghost; dropped and named are disjoint -> not_fired under shipped, fired under mutant) and ::test_drop_receives_no_credit_for_an_error_verdict (an ERROR rerun carries no missing evidence at all). The healthy-path fakes credit under both readings and stay green -- exactly why the two negative fixtures are the load-bearing ones."
+    },
+    {
+      "name": "adapter-scope-inherits-base-expert-denominator",
+      "what": "The MINT_ZERO_ONLY_IN_PROBE declared exception is removed: a LoRA adapter of a MoE base whose declared targets touch no expert-resident module inherits the base's expert denominator instead of declaring the measured zero, reattaching the canonical false alarm this tool documents as its reason for existence. Post-fix38 the mutant cannot also launder unknown-target runs, because those no longer mint at all -- it only re-breaks the known-non-expert case.",
+      "anchor": "        elif not spec.frozen_regex and not expert_targets:",
+      "replacement": "        elif False and not spec.frozen_regex and not expert_targets:",
+      "why": "Re-aimed by fix38. The shipped condition is now live on every KNOWN target list because the census measures the real in-scope expert population (expert_base via _lora_target_attaches), so suppressing it is observable. Predicted KILLED by TestLoraDiscrimination::test_healthy_lora_over_moe_base_is_adjudicated_in_adapter_scope (exit flips 0->1, expert gates VACUOUS-blocking on experts the adapter never declared) and by the fix38 positive-control leg inside test_adapter_scope_mint_does_not_apply_when_adapters_target_experts (asserts the minted zero and its basis denominator for q_proj over the same MoE base). Anchor occurs exactly once."
+    },
+    {
+      "name": "inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. If the battery reports this killed, its attribution machinery is proven unsound and the whole run is void — exit 2.",
+      "anchor": "    markers = re.compile(adapter_marker)\n",
+      "replacement": "    markers = re.compile(adapter_marker)  # inert must-pass control\n",
+      "must_survive": true,
+      "why": "The module's own MUST-PASS half (doctrine 3). Anchor occurs once (the only re.compile(adapter_marker) in adjudicate_checkpoint)."
+    }
+  ]
 }

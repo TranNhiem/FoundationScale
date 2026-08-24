@@ -30,7 +30,10 @@ The three properties every gate has
 1. **A verdict** — and ``PASS`` is only one of two non-blocking outcomes.
 2. **Coverage** — how many units it actually examined, and out of how many. An
    unqualified count is not a fact: a gate reporting "3 layers checked" out of 205 is
-   :attr:`Verdict.UNDERCOVERED` unless it explicitly declares itself a sample.
+   :attr:`Verdict.UNDERCOVERED` unless it explicitly declares itself a sample, and a
+   gate reporting 500 examined out of 256 expected is :attr:`Verdict.OVERCOVERED` —
+   the denominator binds in both directions, because a numerator that outruns it is
+   not coverage, it is a contradiction.
 3. **Controls** — at least one deliberately broken input the gate *must* flag. A gate
    with no control is not a gate; :func:`verify_controls` fails it in CI. This makes the
    audit's own review rule executable: *every claim that something does not exist must
@@ -55,6 +58,7 @@ from typing import Any, ClassVar
 __all__ = [
     "Lifecycle",
     "Verdict",
+    "AbstentionKind",
     "Coverage",
     "GateResult",
     "GateReport",
@@ -106,9 +110,11 @@ class Lifecycle(str, Enum):
 class Verdict(str, Enum):
     """The outcome of a gate.
 
-    There are two ways to not-block (:attr:`PASS`, :attr:`SKIP`) and four ways to block.
-    The asymmetry is intentional: it is much easier to accidentally produce a
-    meaningless success than a meaningless failure.
+    There are two ways to not-block (:attr:`PASS`, :attr:`SKIP`) and five ways to
+    block. The asymmetry is intentional: it is much easier to accidentally produce a
+    meaningless success than a meaningless failure. The fifth block,
+    :attr:`OVERCOVERED`, joined when the denominator learned to bind in both
+    directions: "500 of 256 examined" is as false a claim as "3 of 205 checked".
     """
 
     PASS = "PASS"
@@ -132,8 +138,35 @@ class Verdict(str, Enum):
     them is what a green check mark communicates.
     """
 
+    OVERCOVERED = "OVERCOVERED"
+    """Reported MORE units examined than the denominator declares exist. Blocks.
+
+    ``checked > expected`` means at least one of the two numbers is wrong:
+    units were double-counted (an aliased name, a re-swept batch), the sweep
+    ranged over a superset of the declared population, or ``expected`` came
+    from a stale config. Each shape invalidates the result exactly as
+    thoroughly as undercoverage does — the claim contradicts its own
+    denominator — so this is :attr:`UNDERCOVERED`'s mirror: a blocking
+    verdict, not a warning annotation.
+
+    There is deliberately no author pardon (no ``sampled``-equivalent). A
+    sample is a deliberate choice to examine *fewer*, declared while both
+    numbers remain true; no choice makes 500 a subset of 256, so there is
+    nothing to bless. The honest remediations belong to the author: correct
+    the count, correct ``expected`` to the true population, or pass
+    ``expected=None`` when no denominator is knowable.
+    """
+
     SKIP = "SKIP"
-    """Explicitly not applicable. Requires a reason. Does not block, but is reported."""
+    """Explicitly declined to verify. Requires a reason. Does not block, but is reported.
+
+    Two different abstentions wear this verdict — "the property does not exist
+    here" and "the property exists but my evidence cannot settle it". The split
+    is machine-readable in :attr:`GateResult.abstention` (:class:`AbstentionKind`);
+    aggregators pricing a verified/applicable denominator must read THAT FIELD,
+    never the prose reason. An undeclared kind (``None``) prices exactly like
+    :attr:`AbstentionKind.NOT_ESTABLISHED`: it never leaves a denominator.
+    """
 
     ERROR = "ERROR"
     """The gate itself raised. Blocks — gates fail closed."""
@@ -141,7 +174,13 @@ class Verdict(str, Enum):
     @property
     def blocking(self) -> bool:
         """Whether this verdict should stop the job or prevent promotion."""
-        return self in (Verdict.FAIL, Verdict.VACUOUS, Verdict.UNDERCOVERED, Verdict.ERROR)
+        return self in (
+            Verdict.FAIL,
+            Verdict.VACUOUS,
+            Verdict.UNDERCOVERED,
+            Verdict.OVERCOVERED,
+            Verdict.ERROR,
+        )
 
     @property
     def symbol(self) -> str:
@@ -150,9 +189,50 @@ class Verdict(str, Enum):
             Verdict.FAIL: "FAIL",
             Verdict.VACUOUS: "VACUOUS",
             Verdict.UNDERCOVERED: "UNDER",
+            Verdict.OVERCOVERED: "OVER",
             Verdict.SKIP: "skip",
             Verdict.ERROR: "ERROR",
         }[self]
+
+
+class AbstentionKind(str, Enum):
+    """Why a gate abstained — machine-readable, because composites must price it.
+
+    :attr:`Verdict.SKIP` is two different statements wearing one verdict, and an
+    aggregator that prices them identically is wrong in both directions:
+
+    * Charging "not established" as applicable-and-verified fabricates coverage.
+    * Charging "not applicable" as applicable-and-missing blocks every run whose
+      declared scope legitimately lacks the property — a composite that blocks
+      every dense model at its first save teaches operators to route around the
+      gate, which is how verification tools die in the audited estate.
+
+    The split therefore lives HERE, as data — never in the skip reason string,
+    which prose-sniffing aggregators would paraphrase (the defect this codebase
+    already removed once). ``None`` on :attr:`GateResult.abstention` is NOT a
+    synonym for either member: it means "this call site was never audited for
+    the distinction", and consumers must price it exactly like
+    :attr:`NOT_ESTABLISHED` — it stays inside every denominator.
+    """
+
+    NOT_APPLICABLE = "not_applicable"
+    """The property does not exist in this run's DECLARED scope.
+
+    Legitimate only when grounded in a POSITIVE declaration — an explicit
+    ``num_experts == 0``, never an absence of evidence. "I found no experts" is
+    not "this model has no experts"; that inference is the founding incident.
+    A composite may remove a NOT_APPLICABLE verdict from its applicable
+    denominator, must NAME it, and must never count it as verified.
+    """
+
+    NOT_ESTABLISHED = "not_established"
+    """The property may well exist; the available evidence could not settle it.
+
+    The canonical instance is per-expert identity inside a stacked MoE tensor:
+    the experts exist, and metadata cannot see whether they are distinct. This
+    kind MUST remain in every denominator — "could not check" is charged
+    against the sweep, never excused from it.
+    """
 
 
 @dataclass(frozen=True)
@@ -168,10 +248,17 @@ class Coverage:
             ``"export dirs"``. Appears in rendered output, so make it read naturally.
         expected: Total units that *should* have been examined, when knowable. Leave
             ``None`` when the denominator genuinely is not known in advance; do not
-            fabricate one to make a ratio look complete.
+            fabricate one to make a ratio look complete. The denominator binds in
+            BOTH directions when it is given: ``checked < expected`` blocks as
+            :attr:`Verdict.UNDERCOVERED` unless declared a sample, and ``checked >
+            expected`` blocks as :attr:`Verdict.OVERCOVERED` with no declaration
+            available. If the true population moved since ``expected`` was computed,
+            update ``expected`` — do not ship a contradicted ratio.
         sampled: Set ``True`` to declare deliberately partial coverage. This converts
             what would be :attr:`Verdict.UNDERCOVERED` into a pass — so it requires
-            ``sample_reason`` and is surfaced in every rendering.
+            ``sample_reason`` and is surfaced in every rendering. It pardons
+            undercoverage only: a count above the denominator is not a partial
+            anything, and :attr:`is_over` coverage blocks regardless.
         sample_reason: Why partial coverage is acceptable here. Required if ``sampled``.
     """
 
@@ -204,7 +291,26 @@ class Coverage:
         return self.expected is not None and self.checked < self.expected
 
     @property
+    def is_over(self) -> bool:
+        """True if MORE units were examined than the denominator declares.
+
+        The mirror of :attr:`is_short`, shipped as a sibling rather than a
+        widening of it: "short" means ``checked < expected`` — that reading is
+        pinned by the contract tests, 300-of-205 explicitly NOT short — and
+        folding overage into the same word would silently retarget every
+        existing consumer of it. An over-covered claim contradicts itself (the
+        units examined cannot outnumber the units that exist), so
+        :meth:`Gate.ok` blocks it outright; no ``sampled`` pardon applies,
+        because sampling declares a partial sweep and a count above the
+        denominator is not a partial anything.
+        """
+        return self.expected is not None and self.checked > self.expected
+
+    @property
     def fraction(self) -> float | None:
+        # May exceed 1.0: that IS the overage signal, and capping it here would
+        # file the evidence down to fit the chart. Consumers that need a
+        # bounded ratio must clamp on their own side, knowingly.
         if self.expected in (None, 0):
             return None
         return self.checked / float(self.expected)
@@ -216,6 +322,15 @@ class Coverage:
             base = f"{self.checked}/{self.expected} {self.unit}"
         if self.sampled:
             base += f" (sample: {self.sample_reason})"
+        if self.is_over:
+            # "500/256 reward samples" printed bare reads as a typo, not a
+            # defect — and this string is rendered where no verdict sits
+            # beside it (the coverage column is the whole result line until
+            # the detail follows). "3/205" stays bare because it is a
+            # believable statement that needs a verdict to judge it; "500/256"
+            # refutes itself on its face, so the string must not present it
+            # neutrally.
+            base += " (over: checked exceeds expected — one of them is wrong)"
         return base
 
     @classmethod
@@ -238,6 +353,27 @@ class GateResult:
     detail: str = ""
     evidence: Mapping[str, Any] = field(default_factory=dict)
     duration_s: float = 0.0
+    abstention: AbstentionKind | None = None
+    """Machine-readable kind of a :attr:`Verdict.SKIP` verdict.
+
+    ``None`` for every other verdict, and for a SKIP whose kind the gate never
+    declared (a legacy or unaudited call site — priced like NOT_ESTABLISHED by
+    consumers, never like NOT_APPLICABLE). Carried on the result rather than
+    encoded in ``detail`` so that composites never parse prose to price an
+    abstention.
+    """
+
+    def __post_init__(self) -> None:
+        # An abstention kind on a non-SKIP verdict would let a PASSED result
+        # smuggle an inapplicability claim past every aggregator that trusts the
+        # verdict alone. Refuse at construction: the type itself keeps the two
+        # channels consistent, the same doctrine as Gate.ok()'s downgrades.
+        if self.abstention is not None and self.verdict is not Verdict.SKIP:
+            raise ValueError(
+                f"abstention kind {self.abstention!r} is only meaningful on "
+                f"Verdict.SKIP, got {self.verdict!r} — a pass cannot carry an "
+                f"inapplicability"
+            )
 
     @property
     def blocking(self) -> bool:
@@ -253,6 +389,10 @@ class GateResult:
         return {
             "gate": self.gate_id,
             "verdict": self.verdict.value,
+            # Serialized for every result (None when not a declared-kind SKIP):
+            # a downstream aggregator reading JSON must be able to price an
+            # abstention without re-parsing the detail prose.
+            "abstention": self.abstention.value if self.abstention is not None else None,
             "checked": self.coverage.checked,
             "expected": self.coverage.expected,
             "unit": self.coverage.unit,
@@ -329,8 +469,44 @@ class GateReport:
         return all(r.gate_id.startswith(_EMPTY_SWEEP_GATE_PREFIX) for r in self.results)
 
     @property
+    def is_unverified(self) -> bool:
+        """True when gates executed and not one of them verified anything.
+
+        Distinct from :attr:`is_vacuous`, and deliberately NOT folded into it.
+        Vacuity names "no gate ran"; this names "gates ran and every single one
+        declined". The only non-blocking verdicts are :attr:`Verdict.PASS` and
+        :attr:`Verdict.SKIP`, so a report that reaches :attr:`ok`'s final clause
+        with no blocking results and real gate ids is a sweep whose every unit
+        is a declared, reasoned, per-gate SKIP — the audit's ``all([]) is True``
+        wearing per-gate costumes. Each abstention is a first-class outcome; an
+        aggregate of nothing but abstentions still examined zero units, and the
+        verdict-bearing position must say so (the SKIP lines below the headline
+        are detail, not verdict).
+
+        Only PASS and FAIL are post-examination verdicts: both assert the gate
+        actually looked at its units. VACUOUS examined nothing by definition,
+        ERROR never rendered on the artifact, UNDERCOVERED and OVERCOVERED block
+        on their own — those four never reach this property's deciding case
+        anyway, but the set is named over full verdicts so any future verdict
+        defaults to "not verification" unless explicitly added. OVERCOVERED
+        inherits that default exactly as the design intends: a gate that
+        examined plenty but contradicts its own denominator has still verified
+        nothing.
+
+        Empty results are excluded by design: a no-results report is VACUOUS,
+        :attr:`is_vacuous` already owns that shape along with its ``allow_empty``
+        pardon, and the two properties must not both claim it — otherwise a
+        declared-gateless sweep would block on the abstention rule, which exists
+        for *executed* gates. That polarity split is load-bearing; the report-
+        vacuity test suite pins both sides of it.
+        """
+        return bool(self.results) and not any(
+            r.verdict in (Verdict.PASS, Verdict.FAIL) for r in self.results
+        )
+
+    @property
     def ok(self) -> bool:
-        """True only when nothing blocks and the sweep examined something.
+        """True only when nothing blocks and the sweep verified something.
 
         The first two clauses are the old definition. The third closes the
         report-layer ``all([])``: over an empty report, "no blocking results"
@@ -340,8 +516,25 @@ class GateReport:
         :attr:`is_vacuous` already named the condition; now it gates on it. The
         sole pardon is a runner-declared :attr:`allow_empty`, where gateless
         was a decision, not an accident.
+
+        The fourth clause closes the per-gate-costume restatement: a report
+        whose every result is SKIP has no blocking results, no missing gates,
+        and real (non-marker) gate ids — and examined zero units.
+        :attr:`allow_empty` does NOT pardon this clause. Its declaration is
+        "this event is legitimately gateless", and a report carrying SKIP
+        results is not gateless: gates were registered, wired and run, and each
+        individually declined — precisely the pattern (a renamed ctx field, a
+        wholesale ``missing_ctx="report-skip"``) that must surface instead of
+        passing. An environment where no gate applies is expressed by not
+        selecting the gates, making the event genuinely gateless; then the
+        declaration matches the fact and the third clause pardons it.
         """
-        return not self.blocking and not self.missing and (not self.is_vacuous or self.allow_empty)
+        return (
+            not self.blocking
+            and not self.missing
+            and (not self.is_vacuous or self.allow_empty)
+            and not self.is_unverified
+        )
 
     def render(self) -> str:
         # The empty-sweep marker is a result, not a gate that ran. The footer has
@@ -358,6 +551,16 @@ class GateReport:
                 # a claim broader than its evidence unless the declaration that
                 # permitted it is shown.
                 head += " (gateless by declaration: event_allow_empty)"
+            else:
+                skipped = sum(1 for r in self.results if r.verdict is Verdict.SKIP)
+                if skipped:
+                    # An ok report contains only PASS and SKIP results (every
+                    # other verdict blocks, and the marker never coexists with a
+                    # verdict of ok), so ran - skipped IS the verified count.
+                    # "all clear" alone would claim all N gates verified; the
+                    # parenthetical keeps the headline inside its evidence while
+                    # the per-gate skip lines carry the reasons.
+                    head += f" ({ran - skipped} of {ran} verified; {skipped} declared SKIP)"
         else:
             bits = []
             if self.blocking:
@@ -367,6 +570,11 @@ class GateReport:
                 # blocking tuple is empty and it is the vacuity itself that must
                 # be named here — "0 blocking" would read as a near-miss.
                 bits.append("VACUOUS — no gates ran")
+            elif self.is_unverified:
+                # Nothing blocked, nothing is missing — and nothing verified.
+                # The head must name the abstention sweep WITH its denominator,
+                # or "2 run" reads as two verifications above a wall of skips.
+                bits.append(f"0 of {ran} verified — every gate abstained (SKIP)")
             if self.missing:
                 bits.append(f"{len(self.missing)} MISSING")
             head += " — " + ", ".join(bits)
@@ -387,6 +595,11 @@ class GateReport:
                 "missing": list(self.missing),
                 "registered": self.registered,
                 "allow_empty": self.allow_empty,
+                # The abstention-sweep state travels on the wire: otherwise a
+                # downstream consumer sees a bare "ok": false and must re-derive
+                # WHY from per-gate verdicts — or worse, sees "ok": true over a
+                # healthy-but-partial sweep with the skips invisible at the top.
+                "unverified": self.is_unverified,
                 "results": [r.to_dict() for r in self.results],
             },
             **kwargs,
@@ -419,7 +632,15 @@ class ControlKind(str, Enum):
 
     MUST_PASS = "must_pass"
     """A known-good input. Guards against a gate that blocks on everything, which is
-    just as useless and tends to get disabled."""
+    just as useless and tends to get disabled.
+
+    "Does not block" is not the assertion: the control must produce its DECLARED
+    outcome — :attr:`Verdict.PASS` by default, or an explicit
+    :attr:`Control.expect_skip` reason when the healthy input is one the gate
+    genuinely cannot adjudicate. An abstention discovered at run time rather
+    than declared on the fixture certified nothing about healthy-input
+    behaviour, and :func:`verify_controls` now fails it.
+    """
 
 
 @dataclass(frozen=True)
@@ -438,6 +659,43 @@ class Control:
     note: str = ""
     """What defect this fixture injects, in one line."""
 
+    expect_skip: str = ""
+    """Declares that a :attr:`ControlKind.MUST_PASS` control is EXPECTED to abstain.
+
+    Empty — the default — means the control must reach :attr:`Verdict.PASS`.
+    The strict reading is the default deliberately, so the stricter rule cannot
+    be satisfied by omission: doctrine (1) applied to the declaration itself.
+    Set a non-empty reason only when the fixture is known-healthy AND genuinely
+    unadjudicable by this gate (the live case: per-expert identity inside a
+    stacked MoE tensor is metadata-invisible, so a PASS there would be a claim
+    broader than the gate's evidence). :func:`verify_controls` checks the
+    declaration against reality in BOTH directions: abstain without declaring
+    and the run fails; declare and then reach PASS anyway and the run also
+    fails, because the gate demonstrably CAN adjudicate the fixture and the
+    declaration has become a stale claim narrower than its evidence. Illegal
+    on :attr:`ControlKind.MUST_FIRE`: a deliberately defective input the gate
+    is expected to abstain on has proven nothing about the defect — that
+    fixture is a MUST_PASS control or it is nothing — so the combination is
+    refused here, at construction, rather than priced at run time.
+    """
+
+    def __post_init__(self) -> None:
+        if self.expect_skip:
+            if not self.expect_skip.strip():
+                raise ValueError(
+                    f"Control {self.name!r}: expect_skip must carry the reason the "
+                    f"gate cannot adjudicate this fixture — a blank declaration is "
+                    f"an exemption, and an unreasoned exemption is the exact defect "
+                    f"this field exists to remove"
+                )
+            if self.kind is ControlKind.MUST_FIRE:
+                raise ValueError(
+                    f"Control {self.name!r}: expect_skip is illegal on MUST_FIRE — "
+                    f"a positive control the detector is expected to abstain on "
+                    f"never fired, so nothing is proven; the fixture belongs under "
+                    f"MUST_PASS or not at all"
+                )
+
 
 class ControlFailure(AssertionError):
     """A gate failed its own control."""
@@ -446,8 +704,13 @@ class ControlFailure(AssertionError):
 class Gate(ABC):
     """Base class for all gates.
 
-    Subclasses set the three class attributes, implement :meth:`check`, and declare at
-    least one :class:`Control` of kind :attr:`ControlKind.MUST_FIRE`.
+    Subclasses set the three class attributes, implement :meth:`check`, and declare
+    controls of BOTH kinds — at least one :attr:`ControlKind.MUST_FIRE` proving the
+    detector can block, and at least one :attr:`ControlKind.MUST_PASS` proving it
+    does not block on a healthy input. :func:`verify_controls` enforces both. One
+    kind without the other is half a proof, and was accepted as a whole one until
+    an adversarial sweep traced the zero-trip loop in verify_controls: a gate with
+    only MUST_FIRE controls had its healthy-input behaviour verified zero times.
 
     Return results through :meth:`ok`, :meth:`fail` and :meth:`skip`. Those helpers
     apply the coverage rule; constructing :class:`GateResult` by hand bypasses it, which
@@ -471,9 +734,16 @@ class Gate(ABC):
                 return self.ok("all expert byte counts match", cov)
 
             def controls(self):
-                return [Control("aliased-16-of-128", ControlKind.MUST_FIRE,
-                                make_aliased_ckpt,
-                                note="128 experts collapsed to 16 by local-name save")]
+                return [
+                    Control("aliased-16-of-128", ControlKind.MUST_FIRE,
+                            make_aliased_ckpt,
+                            note="128 experts collapsed to 16 by local-name save"),
+                    Control("intact-128-of-128", ControlKind.MUST_PASS,
+                            make_intact_ckpt,
+                            note="declared shapes and byte counts all correct — "
+                                 "without a healthy fixture, a gate that blocked "
+                                 "on every input would verify green"),
+                ]
 
     If ``experts`` comes back empty — the corrupt-artifact case — ``self.ok`` returns
     ``VACUOUS`` rather than ``PASS``, and the author did not have to remember to handle
@@ -526,8 +796,11 @@ class Gate(ABC):
 
         This does **not** always produce :attr:`Verdict.PASS`. If ``coverage`` is
         vacuous the verdict is :attr:`Verdict.VACUOUS`; if it is short of ``expected``
-        and not declared a sample, the verdict is :attr:`Verdict.UNDERCOVERED`. The
-        gate author cannot override this, which is the point.
+        and not declared a sample, the verdict is :attr:`Verdict.UNDERCOVERED`; if it
+        EXCEEDS ``expected`` the verdict is :attr:`Verdict.OVERCOVERED` — a claim
+        whose numerator outruns its own denominator is not a pass, and no sample
+        declaration pardons it. The gate author cannot override this, which is the
+        point.
         """
         if coverage.is_vacuous:
             return self._result(
@@ -550,6 +823,26 @@ class Gate(ABC):
                 ),
                 evidence=evidence,
             )
+        if coverage.is_over:
+            # Placed AFTER the sampled pardon, and deliberately NOT conditioned on
+            # it: sampled= declares a partial sweep and can only pardon shortage.
+            # A numerator above the denominator is a contradiction, not a partial
+            # result, so nothing an author can attach to a Coverage lifts this
+            # block. Before this branch existed the chain's final else was
+            # default-success, and overage was the last coverage classification
+            # that reached PASS unopposed.
+            return self._result(
+                Verdict.OVERCOVERED,
+                coverage,
+                detail=(
+                    f"examined {coverage.checked} of {coverage.expected} "
+                    f"{coverage.unit} — the numerator exceeds the denominator, so at "
+                    f"least one of them is wrong (double-counted units, a superset "
+                    f"sweep, or a stale expected); fix the count, correct expected, "
+                    f"or pass expected=None" + (f" (claimed: {detail})" if detail else "")
+                ),
+                evidence=evidence,
+            )
         return self._result(Verdict.PASS, coverage, detail=detail, evidence=evidence)
 
     def fail(
@@ -562,11 +855,24 @@ class Gate(ABC):
         """Report a defect. Always blocks; coverage is recorded but never softens it."""
         return self._result(Verdict.FAIL, coverage, detail=detail, evidence=evidence)
 
-    def skip(self, reason: str) -> GateResult:
-        """Declare the gate not applicable. Requires a reason; does not block."""
+    def skip(self, reason: str, *, kind: AbstentionKind | None = None) -> GateResult:
+        """Declare the gate non-verifying on this input. Requires a reason; does not block.
+
+        ``kind`` makes the abstention machine-readable so composites can price
+        it. :attr:`AbstentionKind.NOT_APPLICABLE` is only legitimate behind a
+        POSITIVE declaration that the property does not exist in this run's
+        scope (an explicit ``num_experts == 0``, never an absence of evidence);
+        a composite may then remove the gate from its applicable denominator.
+        Everywhere else pass :attr:`AbstentionKind.NOT_ESTABLISHED` or leave
+        the default ``None``: both stay in every denominator, and ``None``
+        deliberately records that the call site was never audited for the
+        distinction rather than laundering legacy code into an audited kind.
+        """
         if not reason.strip():
             raise ValueError("skip() requires a reason — an unexplained skip is a hole")
-        return self._result(Verdict.SKIP, Coverage.none("units"), detail=reason)
+        return self._result(
+            Verdict.SKIP, Coverage.none("units"), detail=reason, abstention=kind
+        )
 
     def _result(
         self,
@@ -575,6 +881,7 @@ class Gate(ABC):
         *,
         detail: str = "",
         evidence: Mapping[str, Any] | None = None,
+        abstention: AbstentionKind | None = None,
     ) -> GateResult:
         return GateResult(
             gate_id=self.id,
@@ -582,6 +889,7 @@ class Gate(ABC):
             coverage=coverage,
             detail=detail,
             evidence=dict(evidence or {}),
+            abstention=abstention,
         )
 
     # -- the gate itself ----------------------------------------------------------
@@ -592,7 +900,14 @@ class Gate(ABC):
 
     @abstractmethod
     def controls(self) -> Sequence[Control]:
-        """Fixtures proving this gate works. At least one MUST_FIRE, enforced in CI."""
+        """Fixtures proving this gate works.
+
+        At least one :attr:`ControlKind.MUST_FIRE` AND one :attr:`ControlKind.MUST_PASS`,
+        both enforced in CI by :func:`verify_controls`: the MUST_FIRE proves the
+        detector can fire; the MUST_PASS proves it is not firing on everything. A
+        gate that blocks unconditionally is useless and gets disabled — and without
+        a declared healthy fixture, no run would ever notice it had become one.
+        """
 
     def run(self, ctx: Any) -> GateResult:
         """Invoke :meth:`check` with timing, and convert any exception to ERROR."""
@@ -1017,13 +1332,37 @@ def verify_controls(
 
     Wire this into CI. It enforces three things a code review reliably misses:
 
-    1. Every gate declares at least one :attr:`ControlKind.MUST_FIRE` control. A gate
-       with no control has never been shown to detect anything.
+    1. Every gate declares controls of BOTH kinds — at least one
+       :attr:`ControlKind.MUST_FIRE` and at least one :attr:`ControlKind.MUST_PASS`.
+       The MUST_PASS half is not implied by check (3): that check lives INSIDE the
+       loop over declared controls, so a gate shipping only MUST_FIRE had its
+       healthy-input behaviour verified ZERO times while every MUST_FIRE control
+       held — and this function returned "all controls held" for what could be a
+       detector that blocks on literally everything. A check nested in a
+       data-driven loop cannot see the absence of its own trip; only an
+       existence guard outside the loop can. (This is the ``compare_keys``
+       NO_ELEMENTS defect, one meta level up.)
     2. Each MUST_FIRE control actually makes the gate block. This is the executable
        form of the review rule *name the positive control that proves your detector
        could have fired*.
-    3. Each MUST_PASS control does not block, so gates that block unconditionally are
-       caught before someone disables them.
+    3. Each MUST_PASS control produces its DECLARED outcome. The default
+       declaration is :attr:`Verdict.PASS`: a healthy fixture must affirmatively
+       pass, because testing "not blocking" used to accept SKIP — and an
+       abstention verifies neither "the gate's healthy-input behaviour is
+       correct" nor "the gate is not firing on everything" (the purpose stated
+       at the top of this module's controls documentation). A known-healthy
+       fixture the gate genuinely cannot adjudicate declares
+       :attr:`Control.expect_skip` with its reason; declaring it and then
+       reaching PASS anyway is equally a failure — a stale declaration is a
+       claim the evidence has outgrown, and doctrine (5) binds both directions.
+    4. Each gate's MUST_PASS set must reach at least one real PASS in total.
+       Every individual abstention may be honest and declared while the SET
+       still certifies nothing: a gate that has never affirmatively accepted
+       any input could block — or abstain — on everything and return green
+       here. This is the zero-trip guard for the abstention lane, the same
+       shape as the missing-MUST_PASS existence check above it, computed over
+       observed verdicts on the far side of the loop that cannot see its own
+       absence of trips.
 
     It also enforces three things about itself, because a verifier that loses
     findings to its own exceptions is the ``all([])`` bug one level up:
@@ -1040,7 +1379,11 @@ def verify_controls(
       as a failure naming the fact. Returning ``[]`` from that call would be
       "all controls held" over zero controls.
 
-    An empty return value means all controls held.
+    An empty return value means every control produced its DECLARED outcome —
+    block, pass, or a declared and reasoned abstention — and every gate proved
+    at least one affirmative healthy-input PASS. Anything less is a named
+    failure, including the shapes "no gate was targeted", "the abstention was
+    discovered rather than declared", and "every healthy fixture abstained".
     """
     reg = registry if registry is not None else REGISTRY
     failures: list[str] = []
@@ -1081,6 +1424,35 @@ def verify_controls(
                 f"{gate.id}: declares no MUST_FIRE control — a gate that has never "
                 f"been shown to fire is not evidence of anything"
             )
+        if not any(c.kind is ControlKind.MUST_PASS for c in controls):
+            # The zero-trip guard for the MUST_PASS branch of the loop below —
+            # same shape, same lesson, as the MUST_FIRE guard directly above,
+            # and conspicuously missing until an adversarial sweep traced it: a
+            # gate whose check() returns fail() unconditionally BLOCKS its own
+            # MUST_FIRE control (verdict: holding), evaluates the per-control
+            # MUST_PASS check zero times, and this function returned [] — "all
+            # controls held" over zero healthy-input evaluations, certifying a
+            # detector that blocks on everything as proven. An empty controls
+            # list lands here too and earns both messages; each missing kind is
+            # its own independently true, independently actionable finding.
+            failures.append(
+                f"{gate.id}: declares no MUST_PASS control — never shown to pass "
+                f"a healthy input, so this gate could block on EVERYTHING and "
+                f"verify green over zero healthy-input evaluations (and gates "
+                f"that block unconditionally are the ones that get disabled)"
+            )
+        must_pass_total = sum(1 for c in controls if c.kind is ControlKind.MUST_PASS)
+        must_pass_affirmed = 0
+        # The affirmed counter is the healthy-input half's numerator. Per
+        # doctrine (1) it is initialised to zero and may only be INCREMENTED by
+        # an observed PASS, so an all-abstaining, all-erroring or all-blocking
+        # MUST_PASS set cannot coast through the post-loop guard on a
+        # success-valued initialiser. "At least one MUST_PASS declared" (the
+        # existence guard above) never implied "at least one MUST_PASS passed":
+        # the measured estate carried 16 MUST_PASS controls of which 2 returned
+        # SKIP and were *accepted* — two controls certifying nothing — and had
+        # the one affirming control regressed to SKIP as well, every gate would
+        # still have certified green over zero healthy-input affirmations.
         for ctrl in controls:
             try:
                 result = gate.run(ctrl.make_ctx())
@@ -1095,9 +1467,59 @@ def verify_controls(
                     f"(got {result.verdict.value}: {result.detail}). "
                     f"The defect was present and the gate reported success."
                 )
-            elif ctrl.kind is ControlKind.MUST_PASS and result.blocking:
-                failures.append(
-                    f"{gate.id}/{ctrl.name}: MUST_PASS control blocked "
-                    f"(got {result.verdict.value}: {result.detail})"
-                )
+            elif ctrl.kind is ControlKind.MUST_PASS:
+                if result.blocking:
+                    failures.append(
+                        f"{gate.id}/{ctrl.name}: MUST_PASS control blocked "
+                        f"(got {result.verdict.value}: {result.detail})"
+                    )
+                elif result.verdict is Verdict.PASS:
+                    if ctrl.expect_skip:
+                        # Doctrine (5) in the other direction: an abstention
+                        # DECLARED for a fixture the gate now affirmatively
+                        # adjudicates is a claim narrower than the evidence.
+                        # The gate can judge this input today, so shipping the
+                        # declaration would exempt this control from the proof
+                        # it is now able to carry. Delete it.
+                        failures.append(
+                            f"{gate.id}/{ctrl.name}: MUST_PASS control declared "
+                            f"expect_skip ({ctrl.expect_skip!r}) but the gate "
+                            f"reached PASS — the declaration is stale; delete "
+                            f"expect_skip so this control proves healthy-input "
+                            f"behaviour again"
+                        )
+                    else:
+                        must_pass_affirmed += 1
+                elif not ctrl.expect_skip:
+                    # The F2 acceptance, closed: "result not blocking" used to
+                    # certify a SKIPPED MUST_PASS, and an abstention verifies
+                    # neither half of the control's purpose. The expectation
+                    # therefore lives on the fixture, where omission defaults
+                    # to strictness: an author who expects SKIP says so, with
+                    # the reason the input is genuinely unadjudicable; nothing
+                    # else earns the abstention lane.
+                    failures.append(
+                        f"{gate.id}/{ctrl.name}: MUST_PASS control abstained "
+                        f"(SKIP: {result.detail}) with no expect_skip declaration "
+                        f"— an abstention certifies nothing about healthy-input "
+                        f"behaviour; declare expect_skip=<reason> on the Control "
+                        f"if this input is genuinely outside the gate's scope, "
+                        f"or fix the gate to reach PASS here"
+                    )
+        if must_pass_total and must_pass_affirmed == 0:
+            # The abstention lane's zero-trip guard, deliberately OUTSIDE the
+            # data-driven loop that cannot see its own absence of trips: the
+            # gate declared healthy fixtures (the no-MUST_PASS existence check
+            # is satisfied), every fixture may even have behaved exactly as
+            # declared — and the gate has still never been shown to accept
+            # anything. At certification time that detector is indistinguishable
+            # from one that abstains or blocks on EVERYTHING, and detectors
+            # like that are the ones operators learn to route around.
+            failures.append(
+                f"{gate.id}: 0 of {must_pass_total} MUST_PASS control(s) reached "
+                f"PASS — every healthy fixture abstained, blocked or errored, so "
+                f"healthy-input behaviour was verified zero times; at least one "
+                f"fixture that affirmatively passes is required, or this gate "
+                f"is unproven in precisely the direction that gets gates disabled"
+            )
     return failures

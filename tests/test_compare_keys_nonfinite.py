@@ -39,6 +39,13 @@ from foundationscale.checkpoint.dcp import (
     ReadResult,
     compare_keys,
 )
+from foundationscale.gates.core import Verdict
+from foundationscale.verify.parity import (
+    ParityGateContext,
+    ParityStatus,
+    WeightParityGate,
+    compare_sources,
+)
 
 # ---------------------------------------------------------------------------
 # In-memory WeightSource double (full protocol — the real streaming path runs)
@@ -205,3 +212,53 @@ def test_shape_mismatch_projection_survives_strict_json() -> None:
     assert cmp.max_abs_diff == math.inf  # the fact on the object is unchanged
     payload = json.dumps(cmp.to_dict(), allow_nan=False)
     assert '"inf"' in payload  # encoded by name, never a bare Infinity token
+
+
+# ---------------------------------------------------------------------------
+# The consumer seam: verify.parity must adjudicate the comparator's NO_ELEMENTS
+# abstention as an abstention. Every parity-side double scripts compare_keys, so
+# only these tests — the real comparator through MemSource, no monkeypatching —
+# can see the dcp contract reach parity. This is the break the scripted suite
+# shipped green.
+# ---------------------------------------------------------------------------
+
+
+def test_parity_treats_a_zero_element_key_as_a_stated_abstention() -> None:
+    """The exact break report: real dcp NO_ELEMENTS handed to real parity.
+
+    Pre-fix parity crashes here — _guard_stats reads 0-mismatched-of-0 as bitwise
+    identity and raises on max_abs_diff=inf. Post-fix the key is a named, skipped
+    abstention and the report's ok rests solely on the 16 streamed elements.
+    """
+    torch: Any = pytest.importorskip("torch")
+    left = MemSource({"w": torch.zeros(0, 8), "real": torch.ones(4, 4)})
+    right = MemSource({"w": torch.zeros(0, 8), "real": torch.ones(4, 4)})
+    report = compare_sources(left, right)
+
+    by_key = {entry.key: entry for entry in report.keys}
+    assert by_key["w"].status is ParityStatus.NO_ELEMENTS
+    assert by_key["w"].elements == 0
+    assert not by_key["w"].blocking  # abstention, not a finding
+    assert by_key["real"].status is ParityStatus.EXACT
+    assert report.skipped[0][0] == "w"
+    assert report.compared_elements == 16
+    assert report.ok  # the pass rests on the real tensor alone
+
+
+def test_parity_gate_abstains_vacuous_when_every_key_declares_zero_elements() -> None:
+    """All-empty report through the real comparator and the gate: VACUOUS, not a
+    pass and not a crash. Pre-fix the guard raise surfaces as Verdict.ERROR, which
+    is exactly how "must not pass" tests waved the break through; the Verdict.VACUOUS
+    assertion is the flip."""
+    torch: Any = pytest.importorskip("torch")
+    spec = {"pad.a": torch.zeros(0, 8), "pad.b": torch.zeros(5, 0)}
+    ctx = ParityGateContext(
+        left_path=MemSource(spec),  # type: ignore[arg-type]
+        right_path=MemSource(spec),  # type: ignore[arg-type]
+    )
+    result = WeightParityGate().run(ctx)
+
+    assert result.verdict is Verdict.VACUOUS
+    assert result.blocking
+    assert "0 elements were compared" in result.detail
+    assert result.evidence["compared_elements"] == 0

@@ -36,6 +36,7 @@ from typing import Any
 import pytest
 
 import foundationscale.checkpoint.dcp as dcp_module
+import foundationscale.verify.parity as parity_module
 from foundationscale.checkpoint.dcp import TensorComparison
 from foundationscale.gates.core import (
     ControlKind,
@@ -564,19 +565,46 @@ class TestZeroDataMustNotReadAsAgreement:
     def test_zero_element_tensor_is_disclosed_as_such(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Both sources declare a zero-sized tensor; compare_keys streams nothing and
-        # reports bitwise identity over 0 elements. Pin the module's actual behaviour:
-        # the key adjudicates EXACT with elements == 0 and an explicit disclosure in
-        # the note. See the strict-xfail gate test below for the verdict-level hole.
-        cmp = _comparison("empty.w", elements=0, cosine=None, rms_a=0.0, rms_b=0.0, shape=(0,))
-        _script_compare_keys(monkeypatch, {"empty.w": cmp})
+        # Scripted on dcp's POST-fix NO_ELEMENTS contract: nothing read, unbounded
+        # difference sentinels, cosine None. Pre-fix parity fed this shape into
+        # _guard_stats, which inferred bitwise identity from 0-mismatched-of-0 and
+        # raised ParityInvariantError; pre-dcp-fix it came back EXACT over zero
+        # elements. Both are the all([]) shape; the correct outcome is a named,
+        # skipped ABSTENTION that never enters the EXACT/CLOSE numerators.
+        script = _script_compare_keys(
+            monkeypatch,
+            {
+                "empty.w": _comparison(
+                    "empty.w",
+                    elements=0,
+                    bitwise=False,
+                    max_abs_diff=math.inf,
+                    cosine=None,
+                    rms_a=0.0,
+                    rms_b=0.0,
+                    shape=(0,),
+                )
+            },
+        )
         spec = {"empty.w": ("torch.float32", (0,))}
         report = compare_sources(_FakeSource("l", spec), _FakeSource("r", spec))
+        # The comparison never ran: zero elements are knowable from the shape
+        # metadata, and streaming nothing is not a comparison.
+        assert script.calls == []
         entry = report.keys[0]
-        assert entry.status is ParityStatus.EXACT
+        assert entry.status is ParityStatus.NO_ELEMENTS
+        assert not entry.blocking  # an abstention, not a finding
         assert entry.elements == 0
         assert entry.cosine is None
-        assert "empty tensor: 0 elements" in entry.note
+        assert report.compared == ()  # excluded from the compared numerator
+        assert report.skipped == (("empty.w", entry.note),)
+        assert "0 elements" in entry.note
+        # A report whose entire evidence base is one empty tensor is VACUOUS.
+        assert report.is_vacuous
+        assert not report.ok
+        rendered = report.render()
+        assert "VACUOUS" in rendered
+        assert re.search(r"SKIPPED\s+empty\.w\b", rendered)
         assert json.dumps(report.to_dict())  # the disclosure must be serializable
 
     def test_a_source_reporting_an_empty_key_set_is_an_invariant_violation(self) -> None:
@@ -594,6 +622,63 @@ class TestZeroDataMustNotReadAsAgreement:
 # ---------------------------------------------------------------------------
 # Degenerate payloads: NaN, inf, zero-norm.  Findings, never acquittals.
 # ---------------------------------------------------------------------------
+
+
+class TestZeroElementsAbstainAtMetadataLevel:
+    """A zero-element key is a stated abstention: never EXACT, never minted DIFFER.
+
+    The dcp NO_ELEMENTS contract crashed parity on the way in (the guard's empty
+    numerator read as identity) and would have laundered into DIFFER had it survived
+    (sentinel infs read as observed divergence). These tests pin the routing and the
+    report arithmetic on scripted doubles encoding the fixed comparator's contract.
+    """
+
+    def test_mixed_report_passes_on_real_elements_with_the_empty_key_named(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        script = _script_compare_keys(monkeypatch, {"real.w": _comparison("real.w")})
+        spec = {
+            "empty.w": ("torch.float32", (0, 8)),
+            "real.w": ("torch.float32", (4, 4)),
+        }
+        report = compare_sources(_FakeSource("l", spec), _FakeSource("r", spec))
+        # Only the real key streamed; the empty one was adjudicated from metadata.
+        assert script.calls == [("real.w", 4096, 0.01, 0.999)]
+        by_key = {entry.key: entry for entry in report.keys}
+        assert by_key["empty.w"].status is ParityStatus.NO_ELEMENTS
+        assert by_key["real.w"].status is ParityStatus.EXACT
+        assert ParityStatus.NO_ELEMENTS not in {s for s in ParityStatus if s.blocking}
+        # The pass rests on the 16 compared elements; the empty key is named as
+        # skipped, not folded into the EXACT numerator (which counts elements > 0).
+        assert [entry.key for entry in report.compared] == ["real.w"]
+        assert report.compared_elements == 16
+        assert not report.is_vacuous
+        assert report.ok
+        assert [skipped_key for skipped_key, _ in report.skipped] == ["empty.w"]
+
+    def test_a_report_of_only_empty_keys_is_vacuous_not_clean(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The case that matters most: every common tensor is empty, including the
+        # (5, 0) shape whose nonzero row count would otherwise have burned real
+        # reads over zero-element blocks. The report must block as VACUOUS, naming
+        # 0 elements — never acquit, and never invent divergence findings.
+        script = _script_compare_keys(monkeypatch, {})
+        spec = {
+            "pad.a": ("torch.float32", (0, 8)),
+            "pad.b": ("torch.float32", (5, 0)),
+        }
+        report = compare_sources(_FakeSource("l", spec), _FakeSource("r", spec))
+        assert script.calls == []
+        assert {entry.status for entry in report.keys} == {ParityStatus.NO_ELEMENTS}
+        assert report.findings == ()  # nothing observed, so nothing convicts
+        assert report.compared_elements == 0
+        assert report.is_vacuous
+        assert not report.ok
+        rendered = report.render()
+        assert "VACUOUS" in rendered
+        assert "0 elements compared" in rendered
+        assert rendered.count("SKIPPED") == 2  # both empty keys are named
 
 
 class TestDegeneratePayloads:
@@ -753,11 +838,49 @@ class TestImpossibleStatisticsGuard:
     def test_invariant_error_is_an_arithmetic_error(self) -> None:
         assert issubclass(ParityInvariantError, ArithmeticError)
 
+    # ---------------------------------------------------------------------------
+    # Source lifecycle: paths are opened via the sniffer and closed; caller-owned
+    # sources are never closed.
+    # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Source lifecycle: paths are opened via the sniffer and closed; caller-owned
-# sources are never closed.
-# ---------------------------------------------------------------------------
+    def test_zero_elements_compared_pins_nothing_but_impossible_stats_still_raise(self) -> None:
+        # The repaired inference: 0 mismatched of 0 compared is an empty numerator,
+        # not bitwise identity. The guard must not condemn the "compared nothing"
+        # sentinels of dcp's NO_ELEMENTS contract — on the pre-fix tree this exact
+        # call raised on max_abs_diff=inf and broke the dcp/parity seam.
+        assert (
+            parity_module._guard_stats(
+                key="w",
+                elements=0,
+                mismatched=0,
+                max_abs_diff=math.inf,
+                rel_frob=math.inf,
+                cosine=None,
+            )
+            is None
+        )
+        # Positive control: the identity pins still bite when identity was genuinely
+        # examined — abstention at 0 elements did not amputate the guard.
+        with pytest.raises(ParityInvariantError, match="bitwise-identical tensors produced"):
+            parity_module._guard_stats(
+                key="w",
+                elements=16,
+                mismatched=0,
+                max_abs_diff=0.25,
+                rel_frob=0.0,
+                cosine=1.0,
+            )
+        # And abstention is not amnesty: an out-of-range cosine is impossible in any
+        # data, at any element count, and still raises.
+        with pytest.raises(ParityInvariantError, match="impossible cosine"):
+            parity_module._guard_stats(
+                key="w",
+                elements=0,
+                mismatched=0,
+                max_abs_diff=math.inf,
+                rel_frob=math.inf,
+                cosine=1.80,
+            )
 
 
 class TestSourceLifecycle:
@@ -950,13 +1073,39 @@ class TestWeightParityGate:
     def test_gate_must_not_pass_when_every_key_compared_zero_elements(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        cmp = _comparison("empty.w", elements=0, cosine=None, rms_a=0.0, rms_b=0.0, shape=(0,))
-        _script_compare_keys(monkeypatch, {"empty.w": cmp})
+        # Scripted on dcp's POST-fix NO_ELEMENTS contract. The previous script fed
+        # the old comparator shape (bitwise identity over zero elements, zeroed
+        # statistics), and the old assertion accepted anything-but-PASS — so when
+        # dcp started abstaining, this test watched the gate convert the resulting
+        # parity crash into ERROR and waved it through. The required outcome is
+        # narrower and is now pinned exactly: a blocking, stated VACUOUS.
+        script = _script_compare_keys(
+            monkeypatch,
+            {
+                "empty.w": _comparison(
+                    "empty.w",
+                    elements=0,
+                    bitwise=False,
+                    max_abs_diff=math.inf,
+                    cosine=None,
+                    rms_a=0.0,
+                    rms_b=0.0,
+                    shape=(0,),
+                )
+            },
+        )
         spec = {"empty.w": ("torch.float32", (0,))}
         result = WeightParityGate().run(
             _gate_ctx(_FakeSource("cand", spec), _FakeSource("ref", spec))
         )
+        assert script.calls == []  # zero elements are adjudicated from metadata
         assert result.verdict is not Verdict.PASS
+        assert result.verdict is Verdict.VACUOUS
+        assert result.blocking
+        assert "0 elements were compared" in result.detail
+        assert result.coverage.is_vacuous
+        assert result.evidence["compared_elements"] == 0
+        assert result.evidence["skipped"][0][0] == "empty.w"
 
     def test_controls_cover_both_directions(self) -> None:
         # A gate that can only pass is a rubber stamp; a gate that can only fire is
@@ -968,6 +1117,29 @@ class TestWeightParityGate:
         names = [control.name for control in controls]
         assert len(names) == len(set(names))
         assert any("expert" in name for name in names)
+
+    def test_gate_passes_on_streamed_keys_while_naming_empty_keys_uncompared(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An unallocated buffer (0 rows) in an otherwise bit-identical pair of
+        # exports must not block the run — blocking on it would mint a failure from
+        # content nobody read, doctrine 5's symmetry in reverse — but it must be
+        # named as not-compared, never quietly acquitted.
+        script = _script_compare_keys(monkeypatch, {"real": _comparison("real")})
+        spec = {
+            "empty.buf": ("torch.float32", (0, 8)),
+            "real": ("torch.float32", (4, 4)),
+        }
+        result = WeightParityGate().run(
+            _gate_ctx(_FakeSource("cand", spec), _FakeSource("ref", spec))
+        )
+        assert script.calls == [("real", 4096, 0.01, 0.999)]
+        assert result.verdict is Verdict.PASS
+        assert "empty.buf" in result.detail
+        assert "0 elements" in result.detail
+        assert result.evidence["finding_count"] == 0
+        assert result.evidence["skipped"][0][0] == "empty.buf"
+        assert result.evidence["compared_elements"] == 16
 
 
 @pytest.mark.slow

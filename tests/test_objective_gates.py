@@ -471,6 +471,60 @@ class TestLossComponentCoverageGate:
         assert result.verdict is Verdict.ERROR
         assert result.blocking
 
+    def test_zero_measured_contributions_is_vacuous_and_names_zero(
+        self, component_gate: LossComponentCoverageGate
+    ) -> None:
+        # F1: declared, observed, non-zero-weighted — and not one contribution
+        # measured. Presence/weight examination is real, but the relation this
+        # gate exists to check ran over zero units, so the pass grade is
+        # all([]) with a covered numerator.
+        # FAILS TODAY: current tree returns PASS with checked=3 and a detail
+        # asserting "present, weighted, contributing".
+        components = tuple(
+            LossComponent(c.name, c.weight, c.observed, contribution=None) for c in _components()
+        )
+        result = component_gate.run(_healthy_ctx(components=components))
+        assert result.verdict is Verdict.VACUOUS  # today: PASS
+        assert result.verdict is not Verdict.PASS
+        assert result.blocking
+        assert result.coverage.checked == 0  # today: 3
+        assert result.coverage.unit == "contribution measurements"
+        assert "0 of 3" in result.detail  # the 0 must be named
+        assert "contributing" not in result.detail
+        assert result.evidence["contributions_measured"] == 0
+        assert result.evidence["contributions_unmeasured"] == [
+            "policy_loss",
+            "kl_penalty",
+            "entropy_bonus",
+        ]
+
+    def test_partially_measured_contributions_pass_as_a_declared_sample(
+        self, component_gate: LossComponentCoverageGate
+    ) -> None:
+        # F1's sibling arm, constrained by the pinned None contract (see
+        # test_unmeasured_contribution_makes_no_claim_and_passes — verdict PASS
+        # is preserved): the pass must carry the measured/total denominator,
+        # count only fully-examined components, and name the abstainer. This is
+        # doctrine 2 applied to the numerator, not a minted defect.
+        # FAILS TODAY: checked==3, sampled==False, no denominator in the
+        # detail, and the evidence keys do not exist.
+        components = tuple(
+            LossComponent(c.name, c.weight, c.observed, contribution=None)
+            if c.name == "kl_penalty"
+            else c
+            for c in _components()
+        )
+        result = component_gate.run(_healthy_ctx(components=components))
+        assert result.verdict is Verdict.PASS
+        assert result.coverage.checked == 2  # today: 3 — credit for an unexamined leg
+        assert result.coverage.expected == 3
+        assert result.coverage.sampled is True
+        assert "kl_penalty" in result.coverage.sample_reason
+        assert "2 of 3" in result.detail
+        assert "present, weighted, contributing" not in result.detail
+        assert result.evidence["contributions_measured"] == 2
+        assert result.evidence["contributions_unmeasured"] == ["kl_penalty"]
+
 
 class TestRewardScaleSanityGate:
     """The gate exists because of a batch where every reward was 0.794, every
@@ -714,6 +768,155 @@ class TestRewardScaleSanityGate:
         assert result.blocking
         assert "TypeError" in result.detail
 
+    def test_supplied_stats_for_a_reward_less_objective_are_examined_and_noted(
+        self, reward_gate: RewardScaleSanityGate
+    ) -> None:
+        # F3 re-verified: with stats populated the skip branch is unreachable —
+        # the samples ARE examined (256-strong coverage proves it). The residue
+        # is that the verdict said nothing about the declaration contradiction.
+        # The fix surfaces it as data; the verdict still judges the statistics,
+        # because minting a failure nobody observed is doctrine 5's symmetric sin.
+        # FAILS TODAY on the note assertion only (the note text is absent);
+        # every other assertion holds on both trees and pins "no false failure".
+        result = reward_gate.run(_healthy_ctx(uses_rewards=False))
+        assert result.verdict is Verdict.PASS
+        assert not result.blocking
+        assert result.coverage.checked == 256
+        assert "nothing to bound" not in result.detail
+        assert "declares no reward term" in result.detail  # today: absent
+
+
+class TestRewardStatsInternalCoherence:
+    """W-obj-8: the gate adjudicates a caller-supplied aggregate and never sees
+    raw samples, so a RewardStats no sample set can produce is fiction — and
+    before the fix the gate passed exactly such a summary (std=0.0 over
+    min=-1.0, max=2.0) while its own detail line asserted ``std > 0``."""
+
+    def test_zero_std_over_a_nonzero_range_fails_with_the_ledger_reproduction(
+        self, reward_gate: RewardScaleSanityGate
+    ) -> None:
+        # The ledger reproduction, verbatim: 256 samples, mean 0.5, std exactly
+        # 0.0, range [-1.0, 2.0]. Zero spread forces min == max; one of the
+        # numbers is a lie, so this can never be a passing summary again.
+        result = reward_gate.run(
+            _healthy_ctx(
+                reward_stats=RewardStats(n=256, mean=0.5, std=0.0, min=-1.0, max=2.0),
+            ),
+        )
+        assert result.verdict is Verdict.FAIL  # flips: this batch PASSes today
+        assert result.blocking
+        assert any("std is exactly 0.0" in p for p in result.evidence["problems"])
+        assert result.evidence["stats"]["std"] == 0.0
+
+    @pytest.mark.parametrize(
+        ("stats", "marker"),
+        [
+            (RewardStats(n=64, mean=0.0, std=-0.25, min=-1.0, max=2.0), "negative"),
+            (RewardStats(n=64, mean=0.0, std=0.3, min=2.0, max=-1.0), "inverted"),
+            (
+                RewardStats(n=128, mean=5.0, std=0.4, min=-1.0, max=2.0),
+                "lies outside the reported range",
+            ),
+            (
+                RewardStats(n=128, mean=-5.0, std=0.4, min=-1.0, max=2.0),
+                "lies outside the reported range",
+            ),
+            (RewardStats(n=1, mean=0.0, std=0.0, min=-1.0, max=2.0), "cannot span a range"),
+            (RewardStats(n=-3, mean=0.5, std=0.3, min=-1.0, max=2.0), "negative number"),
+            (RewardStats(n=0, mean=0.0, std=0.0, min=0.0, max=1.0), "cannot span a range"),
+        ],
+        ids=[
+            "negative-std",
+            "inverted-range",
+            "mean-above-max",
+            "mean-below-min",
+            "one-sample-with-range",
+            "negative-count",
+            "zero-samples-with-range",
+        ],
+    )
+    def test_internally_impossible_summaries_fail_and_say_why(
+        self, reward_gate: RewardScaleSanityGate, stats: RewardStats, marker: str
+    ) -> None:
+        # One class per row of the impossible-summary taxonomy. The marker is
+        # asserted against evidence so a FAIL from the wrong branch (e.g. the
+        # bounds check) cannot masquerade as coherence coverage.
+        result = reward_gate.run(
+            _healthy_ctx(reward_stats=stats, expected_sample_count=None),
+        )
+        # Flips on every row: each summary currently walks to the ok path
+        # (PASS, or VACUOUS for the n=0 row — neither is FAIL). The negative-count
+        # row additionally pins the hoist above Coverage: left in the cascade it
+        # died as "ValueError: coverage cannot be negative", an ERROR traceback
+        # rather than the stated reason doctrine 5 asks for.
+        assert result.verdict is Verdict.FAIL
+        assert result.blocking
+        assert any(marker in p for p in result.evidence["problems"])
+
+    def test_std_ceiling_admits_the_maximum_and_rejects_anything_above(
+        self, reward_gate: RewardScaleSanityGate
+    ) -> None:
+        # 32 samples at -1.0 and 32 at 2.0: mean 0.5 with Bessel-corrected std
+        # exactly 1.5*sqrt(64/63). A summary AT the ceiling is physically real
+        # and must pass — otherwise the gate false-fires on honest extremes and
+        # gets muted, which is how limits checks die in this estate.
+        ceiling_std = 1.5 * math.sqrt(64 / 63)
+        at = RewardStats(n=64, mean=0.5, std=ceiling_std, min=-1.0, max=2.0)
+        above = RewardStats(n=64, mean=0.5, std=ceiling_std * 1.05, min=-1.0, max=2.0)
+        result_at = reward_gate.run(
+            _healthy_ctx(reward_stats=at, expected_sample_count=64),
+        )
+        assert result_at.verdict is Verdict.PASS
+        result_above = reward_gate.run(
+            _healthy_ctx(reward_stats=above, expected_sample_count=None),
+        )
+        # The assertion that flips: nothing on the current tree compares std
+        # to the range, so the impossible batch passes.
+        assert result_above.verdict is Verdict.FAIL
+        assert "ceiling" in result_above.detail
+
+    def test_single_sample_pass_claims_no_spread_positivity(
+        self, reward_gate: RewardScaleSanityGate
+    ) -> None:
+        # Boundary AT the n>1 positivity guarantee: n=1 passes, but the verdict
+        # text must not assert "std > 0" the way the pre-fix literal did — the
+        # gate only earns that claim from the coherence cascade at n>1.
+        result = reward_gate.run(
+            _healthy_ctx(
+                reward_stats=RewardStats(n=1, mean=0.794, std=0.0, min=0.794, max=0.794),
+                expected_sample_count=1,
+            ),
+        )
+        assert result.verdict is Verdict.PASS
+        # Flips: the current detail ends in the literal "std=0 > 0".
+        assert "> 0" not in result.detail
+
+    _COHERENCE_MUST_FIRE = {
+        "zero-std-with-nonzero-range",
+        "negative-std",
+        "inverted-range",
+        "mean-outside-range",
+        "std-above-analytic-ceiling",
+        "single-sample-with-range",
+        "negative-sample-count",
+    }
+
+    def test_coherence_controls_exist_and_each_blocks_with_fail(self) -> None:
+        gate = RewardScaleSanityGate()
+        by_name = {control.name: control for control in gate.controls()}
+        # Flips: none of the coherence controls exist on the current tree.
+        assert set(by_name) >= self._COHERENCE_MUST_FIRE
+        for name in sorted(self._COHERENCE_MUST_FIRE):
+            control = by_name[name]
+            assert control.kind is ControlKind.MUST_FIRE
+            result = gate.run(control.make_ctx())
+            # verify_controls only demands blocking; pin FAIL so a severity
+            # downgrade to VACUOUS — or an ERROR traceback, which the
+            # negative-count control produced before the Coverage hoist — cannot
+            # ride through as "still a control".
+            assert result.verdict is Verdict.FAIL, name
+            assert result.blocking, name
+
 
 class TestHyperparameterDriftGate:
     """The gate's whole claim: what is being optimised now is what the run
@@ -917,11 +1120,14 @@ class TestControlsArePrecise:
             (LossComponentCoverageGate(), "empty-component-list", Verdict.VACUOUS),
             (LossComponentCoverageGate(), "zero-weight-trust-region", Verdict.FAIL),
             (LossComponentCoverageGate(), "absent-declared-component", Verdict.FAIL),
+            (LossComponentCoverageGate(), "no-contributions-measured", Verdict.VACUOUS),
             (LossComponentCoverageGate(), "all-components-contributing", Verdict.PASS),
+            (LossComponentCoverageGate(), "partially-measured-contributions", Verdict.PASS),
             (RewardScaleSanityGate(), "all-identical-rewards", Verdict.FAIL),
             (RewardScaleSanityGate(), "out-of-bounds-rewards", Verdict.FAIL),
             (RewardScaleSanityGate(), "no-samples-on-reward-objective", Verdict.VACUOUS),
             (RewardScaleSanityGate(), "healthy-rewards", Verdict.PASS),
+            (RewardScaleSanityGate(), "stats-supplied-without-reward-term", Verdict.PASS),
             (HyperparameterDriftGate(), "kl-coef-slid-to-zero", Verdict.FAIL),
             (HyperparameterDriftGate(), "no-step0-fingerprint", Verdict.FAIL),
             (HyperparameterDriftGate(), "no-hyperparameters-at-all", Verdict.VACUOUS),

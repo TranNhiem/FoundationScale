@@ -261,12 +261,29 @@ def test_killed_must_survive_control_voids_the_run(tmp_path, capsys):
     WHY: this is the exact failure the battery shipped — an inert mutant
     banked as a kill. The control turns 'the battery fires no matter what'
     into a blocking failure instead of a green headline.
+
+    The table pairs the control with one real MUST-FIRE mutant because a
+    control-only table became a confounded double the day P3 landed:
+    _validate_table() now refuses a selection of ZERO MUST-FIRE rows with
+    exit 2 before baseline, so the old fixture died at validation and never
+    reached the behaviour its name claims. The added mutant cannot
+    manufacture the verdict under test: a KILLED mutant is the neutral,
+    exit-0-compatible outcome and touches no rung of the exit ladder, so
+    in this terminal state (0 unscored, 0 n/a, 1 control configured,
+    0 alive) exactly one exit-2 branch of main() is reachable — `if
+    ctrl_dead:` — and the assertions below name that branch's own text so
+    the attribution is proven, not assumed.
     """
-    table, paths = _fixture(tmp_path, [dict(_CONTROL)])
+    table, paths = _fixture(tmp_path, [dict(_GUARD_ONE), dict(_CONTROL)])
 
     def runner(**kw):
         if kw["label"] == "baseline":
             return _out(rc=0, failed=(), passed=400)
+        # One red for every trial, blind to which row is on disk. The
+        # fixture deliberately does not learn which row is the control:
+        # routing the same reproducible red to [killed] for one row and to
+        # [CTRL DEAD] for the other is main()'s behaviour under test, not
+        # a branch the runner may take on main()'s behalf.
         return _out()  # an attributed, reproducible red: a KILLED verdict
 
     rc = mutate.main((), suite_runner=runner, table=table, module_paths=paths)
@@ -275,14 +292,57 @@ def test_killed_must_survive_control_voids_the_run(tmp_path, capsys):
     assert "[CTRL DEAD]" in out
     assert "inert-control" in out
     assert "MUST-PASS" in out
+    # The real mutant took the neutral path — killed mutants never void a
+    # run — so the exit 2 above cannot have been bought by anything the
+    # added row did.
+    assert "[killed]" in out
+    assert "break-guard-one" in out
+    # Attribution proof: this sentence is printed by exactly one branch of
+    # main() — the ctrl_dead branch — beside its return. If exit 2 ever
+    # starts arriving by another route (unscored trial, zero controls), one
+    # of these two strings goes silent and this test reddens.
+    assert "1 MUST-PASS control(s) reported killed" in out
+    assert "attribution is proven unsound" in out
+    # The control was exercised and died: zero of one survived, one
+    # configured — a returned fact, stated in words (doctrine 2)...
+    assert "MUST-PASS CONTROL: 0/1" in out
+    # ...and a dead control suppresses the module's percentage: caught=
+    # over a module whose attribution just fired with no fault behind it
+    # would be arithmetic, not evidence, so main() prints the refusal.
+    assert "caught=--" in out
 
 
 def test_surviving_must_survive_control_is_not_a_survivor(tmp_path, capsys):
-    """The control passing must not put the battery into exit-1 (survivor) shape."""
-    table, paths = _fixture(tmp_path, [dict(_CONTROL)])
+    """The control passing must not put the battery into exit-1 (survivor) shape.
+
+    The table pairs the control with one real MUST-FIRE mutant because a
+    control-only table became a confounded double the day P3 landed:
+    _validate_table() refuses a selection of ZERO MUST-FIRE rows, so the
+    old fixture died at validation and never measured what its name claims.
+    The added mutant must be KILLED, not left alive — a survivor would flip
+    the run to exit 1 and print [ALIVE] for a reason that has nothing to do
+    with the control, re-confounding the test in the opposite direction
+    (doctrine 5's symmetry: a failure never caused by the thing named is as
+    false as a pass never earned). The runner discriminates on `label`, the
+    per-trial argument score_trial() hands every SuiteRunner. That is
+    honest, not rigged: the shipped run_suite() behaves differently per
+    label too, because main() swaps which mutant sits on disk before each
+    call — behaviour keyed on "which mutation is applied" IS the contract,
+    and the fake encodes ground truth about this table (a disabled guard
+    has coverage; a comment does not). It still has to earn the KILLED:
+    anything short of identical attribution on both confirmation runs
+    demotes the trial to UNSCORED, and `rc == 0` below dies.
+    """
+    table, paths = _fixture(tmp_path, [dict(_GUARD_ONE), dict(_CONTROL)])
 
     def runner(**kw):
-        return _out(rc=0, failed=(), passed=400)  # green everywhere: ALIVE territory
+        if kw["label"] == "baseline":
+            return _out(rc=0, failed=(), passed=400)
+        if kw["label"].startswith("scratch-00"):
+            # The real mutant: an attributed red, identical across both
+            # confirmation runs, so confirm_kill promotes it to KILLED.
+            return _out()
+        return _out(rc=0, failed=(), passed=400)  # inert control: stays green
 
     rc = mutate.main((), suite_runner=runner, table=table, module_paths=paths)
     out = capsys.readouterr().out
@@ -291,6 +351,12 @@ def test_surviving_must_survive_control_is_not_a_survivor(tmp_path, capsys):
     # doctrine 2: the control's outcome is a returned fact, stated on its own
     # line in the summary even when everything passed — never by omission.
     assert "MUST-PASS CONTROL: 1/1" in out
+    # The MUST-FIRE half of this table really fired and was really caught:
+    # with the mutant anything but KILLED, the run cannot read rc == 0 with
+    # no [ALIVE] line — so this pair pins WHICH verdict the green run
+    # rests on, instead of letting any green run satisfy the name.
+    assert "[killed]" in out
+    assert "break-guard-one" in out
 
 
 def test_control_rows_excluded_from_tally_and_denominator(tmp_path, capsys):

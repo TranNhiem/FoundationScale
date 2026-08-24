@@ -87,6 +87,16 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RET", "ARG", "PTH"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ARG"]
+# The ten preflight checks are dispatched through one uniform signature
+# `(cfg, s, env, shared, registry=None)` so `_execute` can call any of them
+# without knowing which; a check that reads no corpus still receives `env`.
+# That makes an unused PARAMETER a property of the dispatch contract rather than
+# a defect at any one site, which is why this is scoped here instead of repeated
+# as ten inline noqas. Scoped to ARG001 deliberately: ARG002 (unused method
+# argument) and ARG005 (unused lambda argument) still fire in this file, and so
+# does F841 — an unused LOCAL is the shape that hid a dropped knob in
+# tools/live_save_gate.py, and nothing here should silence it.
+"tools/preflight.py" = ["ARG001"]
 
 [tool.mypy]
 mypy_path = "src"

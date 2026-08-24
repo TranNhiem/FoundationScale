@@ -27,9 +27,20 @@ both:
    lower-indexed expert. This is the one no shape/count/dtype check can ever see.
 
 The gate also encodes the audit's sharpest lesson by *not* encoding it: there is no
-special case for an empty expert set. ``self.ok`` is called with zero coverage and
-the contract in :mod:`~foundationscale.gates.core` downgrades it to VACUOUS. The
-MUST_FIRE control ``empty-expert-set`` exists to prove that stays true.
+special case for an empty expert set ON A DECLARED-MoE MODEL. ``self.ok`` is called
+with zero coverage and the contract in :mod:`~foundationscale.gates.core` downgrades
+it to VACUOUS. The MUST_FIRE control ``empty-expert-set`` exists to prove that stays
+true.
+
+Exactly one exception stands beside that lesson, and it is narrow enough to state in
+one sentence: a POSITIVE dense declaration — ``declared_expert_count == 0``, never
+an absence of evidence — corroborated by zero expert tensors in the artifact is the
+one shape in which "no experts" means "no experts", so only that shape earns the
+gate's declared ``NOT_APPLICABLE`` abstention. Every other arrival at "no experts"
+(undeclared-but-present, declared-but-malformed) blocks. Look-alike zeros
+(``False``, ``0.0``, ``0j``) satisfy ``== 0`` in Python without being dense
+declarations — the checkpoint gates learned that from a YAML ``moe: false`` — so a
+type guard blocks malformed counts BEFORE the dense door can be purchased with one.
 """
 
 from __future__ import annotations
@@ -39,7 +50,16 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
-from .core import Control, ControlKind, Coverage, Gate, GateResult, Lifecycle, register
+from .core import (
+    AbstentionKind,
+    Control,
+    ControlKind,
+    Coverage,
+    Gate,
+    GateResult,
+    Lifecycle,
+    register,
+)
 from .fixtures import (
     ExpertSet,
     make_aliased_experts,
@@ -128,6 +148,22 @@ def _ranges(indices: Sequence[int]) -> str:
 class ExpertAliasGate(Gate):
     """Blocks MoE checkpoints whose experts were saved under local (aliased) identity.
 
+    Scope, stated because the repo now produces evidence-backed dense
+    declarations this gate will meet for real: expert-content aliasing is a
+    property of MoE artifacts. On a POSITIVE dense declaration
+    (``declared_expert_count == 0``) corroborated by an artifact containing
+    zero expert tensors, the property does not exist, and this gate makes a
+    DECLARED ``NOT_APPLICABLE`` abstention — never a PASS over zero examined
+    units (doctrine 1), and never a VACUOUS block of a legitimate dense
+    checkpoint (a gate that blocks every dense model at first save is a gate
+    operators learn to route around). Any other shape that arrives with "no
+    experts" blocks: expert tensors beside a declared 0 take the framework's
+    OVERCOVERED door, and a count that merely COMPARES equal to zero
+    (``False``, ``0.0``) is a malformed denominator, blocked before the dense
+    door. Both directions of the abstention are pinned by controls
+    (``dense-model`` / ``malformed-dense-count-bool``); until they existed,
+    this gate's dense behaviour was unverified in both directions at once.
+
     Registered with the global :data:`REGISTRY` at import time so the CI controls
     job exercises it without anyone remembering to add it to a list — a gate that
     requires a registration step is a gate that is absent from exactly the run
@@ -185,6 +221,26 @@ class ExpertAliasGate(Gate):
 
     def check(self, ctx: ExpertCheckContext) -> GateResult:
         """Look for the local-name signature first, then compare expert content."""
+        declared = ctx.declared_expert_count
+        # Python launders look-alikes into `== 0`: False == 0, 0.0 == 0 and
+        # 0j == 0 are all True, so an unguarded `declared == 0` dense door would
+        # admit a YAML `moe: false` flattened into the count field — the lesson
+        # the checkpoint gates encoded as _checked_num_experts. The dataclass
+        # annotates an int, but adapters are gate-author code (production
+        # callers write their own, per ExpertCheckContext), and this framework's
+        # premise is that annotations are promises worth checking. A malformed
+        # count BLOCKS, routed through ok() over zero coverage so the framework
+        # renders it VACUOUS with the raw value named — before it can buy the
+        # abstention below or price any expected=coverage downstream.
+        if isinstance(declared, bool) or not isinstance(declared, int) or declared < 0:
+            return self.ok(
+                f"declared_expert_count is {declared!r} ({type(declared).__name__}), "
+                f"not a genuine non-negative integer: a malformed denominator "
+                f"establishes nothing, and a value that merely compares equal to "
+                f"zero must never buy the dense-model abstention",
+                Coverage.none("expert tensors"),
+                evidence={"declared_expert_count_raw": repr(declared)},
+            )
         names = sorted(ctx.tensors)
 
         # 1. The name signature is the cheapest, most diagnostic check: it fires
@@ -221,11 +277,38 @@ class ExpertAliasGate(Gate):
             expected=ctx.declared_expert_count,
         )
 
-        # 3. The empty case is NOT special-cased. self.ok with zero coverage is
-        #    downgraded to VACUOUS by the contract — that downgrade is the fix for
-        #    the `all([]) is True` verification tool, and the `empty-expert-set`
-        #    control below exists to prove nobody "helpfully" bypasses it here.
+        # 3. The empty case is NOT special-cased for declared-MoE models: self.ok
+        #    with zero coverage is downgraded to VACUOUS by the contract — that
+        #    downgrade is the fix for the `all([]) is True` verification tool,
+        #    and the `empty-expert-set` control below exists to prove nobody
+        #    "helpfully" bypasses it here. The ONE exception is the positive
+        #    dense declaration, and it is deliberately double-gated: the config
+        #    says 0 experts AND the artifact census finds 0 expert tensors.
         if not by_expert:
+            if declared == 0 and not names:
+                # A dense model has no experts, so the aliasing property this
+                # gate exists to check does not exist here. PASS would be the
+                # founding defect verbatim ("no aliases found" over zero
+                # examined units); VACUOUS would block every legitimate dense
+                # checkpoint at first save, which is how gates get routed
+                # around. The honest verdict is a DECLARED abstention with the
+                # machine-readable kind attached, exactly the door the sibling
+                # checkpoint gates take for num_experts == 0 — and the
+                # `dense-model` control proves the door is taken, while
+                # `malformed-dense-count-bool` proves a boolean zero cannot
+                # sneak through it. Expert tensors present beside the declared
+                # 0 fall through to the VACUOUS/UNDERCOVERED doors below or the
+                # framework's OVERCOVERED door in step 4: a declaration the
+                # artifact contradicts is a finding, never an abstention.
+                return self.skip(
+                    "context declares 0 experts — a positive dense-model "
+                    "declaration — and the artifact census corroborates it "
+                    "(zero expert tensors present): expert-content aliasing is "
+                    "a property this artifact does not have, so this gate "
+                    "abstains rather than passing over zero examined units or "
+                    "blocking a legitimate dense checkpoint",
+                    kind=AbstentionKind.NOT_APPLICABLE,
+                )
             return self.ok(
                 f"checkpoint exposes {len(names)} expert tensors total but none with "
                 f"a resolvable global expert index",
@@ -288,11 +371,20 @@ class ExpertAliasGate(Gate):
         )
 
     def controls(self) -> Sequence[Control]:
-        """One MUST_FIRE per defect class, plus a known-good MUST_PASS.
+        """One MUST_FIRE per defect class, plus known-good MUST_PASS fixtures in
+        both verdict directions the gate can honestly produce.
 
         The empty-expert-set control is the one future authors most often question;
         it is the whole point. A gate guarding against silent success must be proven
         not to succeed on the artifact that contains nothing to succeed on.
+
+        The two DENSE controls flank it from the opposite side. ``dense-model``
+        proves the positive-declaration door produces the stated, reasoned
+        abstention — it declares ``expect_skip`` so the certification layer
+        checks the declaration in both directions (an unexpected abstention
+        fails; so would a stale one). ``malformed-dense-count-bool`` proves a
+        boolean zero — ``False == 0`` is True — is refused at the door as a
+        malformed denominator rather than admitted through it.
         """
         return [
             Control(
@@ -338,6 +430,45 @@ class ExpertAliasGate(Gate):
                 note=(
                     "known-good artifact; guards against a gate that blocks on "
                     "everything and gets disabled rather than fixed"
+                ),
+            ),
+            Control(
+                name="dense-model",
+                kind=ControlKind.MUST_PASS,
+                make_ctx=lambda: ExpertCheckContext(
+                    tensors={},
+                    expert_index={},
+                    declared_expert_count=0,
+                ),
+                note=(
+                    "positive dense declaration corroborated by the artifact "
+                    "census (0 declared, 0 present): the aliasing property does "
+                    "not exist here, so the gate must take its stated "
+                    "NOT_APPLICABLE door — never VACUOUS-block a healthy dense "
+                    "checkpoint, never PASS over zero examined units"
+                ),
+                expect_skip=(
+                    "expert-content aliasing is a property a declared-dense "
+                    "artifact does not have; with the property absent the only "
+                    "honest alternatives to this abstention were a blocking "
+                    "vacuity (which blocks every dense model at first save and "
+                    "teaches operators to route around the gate) or a pass "
+                    "over zero examined units (the founding defect)"
+                ),
+            ),
+            Control(
+                name="malformed-dense-count-bool",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: ExpertCheckContext(
+                    tensors={},
+                    expert_index={},
+                    declared_expert_count=False,
+                ),
+                note=(
+                    "False == 0 in Python, so a YAML `moe: false` flattened "
+                    "into the count field would take the dense door unopposed; "
+                    "a boolean denominator is malformed and must VACUOUS-block "
+                    "with its raw value named, before any `== 0` test runs"
                 ),
             ),
         ]

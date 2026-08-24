@@ -432,6 +432,11 @@ def _assert_clean_per_expert(
     assert result.verdict is Verdict.PASS, result.detail
     assert result.coverage.checked == checked
     assert result.coverage.expected == expected
+    # A healthy artifact is never over-covered: the denominator must describe
+    # the family the artifact actually saved, so PASS and is_over are
+    # mutually exclusive states for every family above, not just the two
+    # whose wrong numbers made it visible.
+    assert not result.coverage.is_over
 
 
 def _assert_aliased_per_expert(ctx: CheckpointGateContext, *, checked: int) -> None:
@@ -648,27 +653,35 @@ def test_megatron_global_clean_passes_with_full_denominator() -> None:
 def test_mixtral_clean_passes_with_full_examination() -> None:
     """Mixtral ``block_sparse_moe.experts.<i>.w<n>.weight``: 24 tensors examined.
 
-    The declared-count denominator helper prices two weights per MoE layer
-    (fc1 + fc2), so with three projections per expert it reports 16 where 24
-    were examined — checked strictly exceeds expected, which is the
-    non-blocking direction for the coverage rule. Deleting this test lets
+    Mixtral stores THREE projections per expert per layer (w1, w2, w3), and
+    the denominator must now say so: expected derives from the Mixtral naming
+    family's own closed projection set, so a healthy artifact asserts 24/24 —
+    a number that is allowed to be wrong and therefore worth printing. The
+    previous revision pinned ``expected=16`` on the rationale that checked
+    exceeding expected was "the non-blocking direction for the coverage
+    rule"; OVERCOVERED retired that direction, and keeping the 16 pin would
+    pin the fabricated Megatron-shaped denominator itself — the defect, not
+    the intent. The intent (selector reach, a healthy Mixtral verifying clean)
+    is preserved and the pin is now on a true number. Deleting this test lets
     Mixtral names fall out of the selector unnoticed; the gates would then
     VACUOUS-block a healthy Mixtral save as "no expert tensors".
     """
     ctx = _mixtral_ctx()
-    _assert_clean_per_expert(ctx, checked=24, expected=16, router_count=2)
+    _assert_clean_per_expert(ctx, checked=24, expected=24, router_count=2)
 
 
 def test_qwen_clean_passes_with_full_examination() -> None:
     """Qwen-MoE ``mlp.experts.<i>.{gate,up,down}_proj.weight``: 24 tensors examined.
 
-    Same denominator note as Mixtral (fc1/fc2 pricing vs three projections).
-    Deleting this test leaves the Qwen family — the family whose ``gate_proj``
-    suffix encodes the projection a router substring-search would confuse —
-    without a known-good control.
+    Same denominator repair as Mixtral: the expected count comes from Qwen's
+    own three-projection family set (24/24 for this fixture), replacing the
+    Megatron constant's fabricated 16 that OVERCOVERED — correctly — refused
+    to publish beside an honest 24. Deleting this test leaves the Qwen
+    family — the family whose ``gate_proj`` suffix encodes the projection a
+    router substring-search would confuse — without a known-good control.
     """
     ctx = _qwen_ctx()
-    _assert_clean_per_expert(ctx, checked=24, expected=16, router_count=2)
+    _assert_clean_per_expert(ctx, checked=24, expected=24, router_count=2)
 
 
 # ---------------------------------------------------------------------------
@@ -992,7 +1005,25 @@ def test_first_save_reports_two_of_three_on_a_clean_stacked_save() -> None:
     assert stacked.blocking
     assert stacked.coverage.checked == 2
     assert stacked.coverage.expected == 3
-    assert "checkpoint.expert_distinctness skipped" in stacked.detail
+    # The composite's abstention vocabulary moved from "<gate> skipped: ..." to
+    # "not established: <gate>: ..." when abstentions became machine-readable
+    # (AbstentionKind). This assertion originally matched the old prose, which
+    # made it a spelling check wearing a behaviour check's clothes: it would go
+    # red on a rename that changed nothing, and — far worse — it would stay
+    # GREEN if a stacked abstention were ever reclassified as *inapplicable*,
+    # because that path still prints the gate's name. Inapplicable is the one
+    # reclassification that would break this test's actual thesis: it shrinks
+    # the denominator, and a stacked save would go PASS 2/2 over exactly the
+    # unexamined distinctness claim the docstring above says must never pass.
+    # So the assertion is widened in prose and TIGHTENED in substance: the gate
+    # must still be named, and it must be named as unresolved rather than
+    # inapplicable, asserted against the machine-readable evidence rather than
+    # against any sentence. Prose may be reworded freely; the classification
+    # may not.
+    assert "checkpoint.expert_distinctness" in stacked.detail
+    assert "not established" in stacked.detail
+    assert stacked.evidence["unresolved"] == ["checkpoint.expert_distinctness"]
+    assert stacked.evidence["inapplicable"] == []
 
     healthy_ctx = _with_routers(fx.healthy_sharded_moe_ctx(), prefix="model")
     healthy = composite.run(healthy_ctx)
@@ -1016,3 +1047,99 @@ def test_checkpoint_gate_controls_hold(gate_id: str) -> None:
     where someone wires it.
     """
     assert verify_controls(REGISTRY, gate_ids=[gate_id]) == []
+
+
+# ---------------------------------------------------------------------------
+# The family-derived denominator: MUST_FIRE, MUST_PASS, and the abuse guard.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("family_ctx", [_mixtral_ctx, _qwen_ctx], ids=["mixtral", "qwen"])
+def test_per_expert_byte_volume_passes_at_the_family_denominator(family_ctx) -> None:
+    """MUST_PASS for the repaired rule on the byte gate: healthy 24/24, PASS.
+
+    FAILS on the current tree: the byte gate's ok() was reached with
+    ``checked=24, expected=16`` and OVERCOVERED blocked a healthy artifact
+    whose bytes matched the manifest exactly — the constant's injury
+    duplicated one gate over, where this module's own tests never looked.
+    After the repair the family's projection set prices the denominator and
+    the PASS carries 24 of 24. A byte gate that cannot pass a healthy
+    three-projection MoE is a detector that blocks unconditionally for whole
+    architectures, and those get disabled; this is the healthy fixture that
+    proves ours is not one.
+    """
+    ctx = family_ctx()
+
+    result = ExpertByteVolumeGate().run(ctx)
+
+    assert result.verdict is Verdict.PASS, result.detail
+    assert result.coverage.checked == 24
+    assert result.coverage.expected == 24
+    assert not result.coverage.is_over
+
+
+def test_mixtral_missing_whole_projection_stem_is_undercovered_not_over() -> None:
+    """MUST_FIRE for the repaired rule: an absent w3 stem must read 20/24.
+
+    An entirely absent (layer, projection) stem is the ONE defect class the
+    per-stem count check cannot see: every observed stem holds the declared 4
+    experts, and only the aggregate can say 20 tensors were examined where 24
+    were owed. The Mixtral family defines three stems per layer regardless of
+    what was saved, so the missing w3 registers as UNDERCOVERED — proof the
+    family table is a denominator and not decoration (this expected CAN
+    disagree with checked). FAILS on the current tree, where the same context
+    reports OVERCOVERED at 20-against-16: it blocks, but the stated reason
+    accuses the examination of exceeding the population, the opposite of the
+    truth — and doctrine (5) counts the wrong stated reason as a defect, which
+    is why this test asserts the verdict AND both numbers, not merely
+    "blocking".
+    """
+    ctx = _mixtral_ctx()
+    dropped = {f"model.layers.1.block_sparse_moe.experts.{expert}.w3.weight" for expert in range(4)}
+    tensors = tuple(t for t in ctx.tensors if t.fqn not in dropped)
+    assert len(tensors) == len(ctx.tensors) - 4  # the injured stem is really gone
+    ctx = replace(ctx, tensors=tensors)  # declared_fqns kept: completeness sees it too
+
+    result = ExpertDistinctnessGate().run(ctx)
+
+    assert result.verdict is Verdict.UNDERCOVERED, result.detail
+    assert result.coverage.checked == 20
+    assert result.coverage.expected == 24
+    assert result.coverage.is_short
+    assert not result.coverage.is_over
+    assert "20 of 24" in result.detail
+
+
+def test_unrecognized_projection_silences_the_aggregate_count() -> None:
+    """A projection no family table defines must silence the total, never adopt one.
+
+    A Qwen checkpoint whose experts also carry ``shared_proj.weight`` names
+    structure this module does not know. Fabricating a width for it would be
+    the original constant wearing a bigger table, so the aggregate goes
+    absent (``expected is None``) while everything checkable stays checked:
+    every stem still counts against the declared 4 experts, and the
+    examination is still reported as 32 tensors. FAILS on the current tree,
+    where the constant accuses this healthy artifact of OVERCOVERED at
+    32-against-16. This is doctrine (5)'s symmetry applied to the fix itself:
+    where the denominator cannot be derived honestly we abstain — we do not
+    mint a failure to replace the false pass OVERCOVERED refused to print.
+    """
+    ctx = _qwen_ctx()
+    extra = tuple(
+        TensorMeta(
+            fqn=f"model.layers.{layer}.mlp.experts.{expert}.shared_proj.weight",
+            shape=_PER_EXPERT_SHAPE,
+            dtype=_EXPERT_DTYPE,
+            storage_id=f"qwen-extra:L{layer}:e{expert}",
+        )
+        for layer in range(2)
+        for expert in range(4)
+    )
+    tensors = (*ctx.tensors, *extra)
+    ctx = replace(ctx, tensors=tensors, declared_fqns=tuple(t.fqn for t in tensors))
+
+    result = ExpertDistinctnessGate().run(ctx)
+
+    assert result.verdict is Verdict.PASS, result.detail
+    assert result.coverage.checked == 32
+    assert result.coverage.expected is None  # abstained, not guessed and not 16

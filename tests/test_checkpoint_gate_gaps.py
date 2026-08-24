@@ -21,7 +21,7 @@ from test_checkpoint_bridge import (
 )
 
 from foundationscale.gates import fixtures as fx
-from foundationscale.gates.checkpoint_gates import CheckpointGateContext
+from foundationscale.gates.checkpoint_gates import CheckpointGateContext, TensorMeta
 from foundationscale.gates.core import REGISTRY, Verdict
 
 _INCIDENT_ACTUAL_BYTES = 5_710_000_000
@@ -202,3 +202,191 @@ def test_first_save_composite_preserves_all_subgate_failures() -> None:
     assert stacked_result.blocking
     assert stacked_result.coverage.checked == len(_FIRST_SAVE_SUBGATE_IDS) - 1
     assert stacked_result.coverage.expected == len(_FIRST_SAVE_SUBGATE_IDS)
+
+
+_EXPERT_GATES_FOR_MANIFESTLESS = (
+    "checkpoint.expert_distinctness",
+    "checkpoint.expert_bytes",
+)
+
+
+def _manifestless_ctx() -> CheckpointGateContext:
+    """Exactly what from_path builds beside a manifestless checkpoint: all None."""
+    tensors = tuple(
+        TensorMeta(
+            fqn=f"layers.{layer}.attention.self_attention.linear_proj.weight",
+            shape=(256, 512),
+            dtype="float32",
+            storage_id=f"manifestless:L{layer}",
+        )
+        for layer in range(2)
+    )
+    return CheckpointGateContext(
+        tensors=tensors,
+        declared_fqns=None,
+        num_experts=None,
+        num_moe_layers=None,
+        expected_expert_bytes=None,
+        origin="test://manifestless",
+    )
+
+
+def test_manifestless_context_vacuous_blocks_expert_gates_never_dense_skips() -> None:
+    """num_experts=None means UNKNOWN: zero experts over an unknown declaration
+    is VACUOUS; only an explicit 0 is a dense model and may SKIP.
+
+    A gutted MoE artifact (experts stripped or never written) without a manifest
+    is selection-identical to a true dense model, and both expert gates answered
+    it with a non-blocking SKIP asserting a declaration no context made
+    ("context declares no experts"). The flipping assertions are the two
+    `verdict is Verdict.VACUOUS` checks: on the current tree both gates return
+    Verdict.SKIP from the `if not c.num_experts:` door. The negative controls
+    pin the doors either side of the fix — explicit num_experts=0 still earns
+    SKIP, and declared-MoE-with-empty-experts keeps its pre-existing VACUOUS
+    wording — so a gate that merely started FAILING on everything cannot pass.
+    """
+    manifestless = _manifestless_ctx()
+
+    distinctness = REGISTRY.get("checkpoint.expert_distinctness").run(manifestless)
+    assert distinctness.verdict is Verdict.VACUOUS, distinctness.detail  # was SKIP
+    assert distinctness.blocking
+    assert distinctness.coverage.checked == 0  # doctrine 1: the zero is named
+    assert "does not declare an expert count" in distinctness.detail
+    assert "dense" not in distinctness.detail.lower()
+
+    bytes_gate = REGISTRY.get("checkpoint.expert_bytes").run(manifestless)
+    assert bytes_gate.verdict is Verdict.VACUOUS, bytes_gate.detail  # was SKIP
+    assert bytes_gate.blocking
+    assert bytes_gate.coverage.checked == 0
+    assert "does not declare an expert count" in bytes_gate.detail
+
+    # Negative control A: an EXPLICIT dense declaration keeps the original SKIP.
+    declared_dense = CheckpointGateContext(
+        tensors=manifestless.tensors,
+        declared_fqns=tuple(t.fqn for t in manifestless.tensors),
+        num_experts=0,
+        num_moe_layers=0,
+        expected_expert_bytes=0,
+        origin="test://declared-dense",
+    )
+    for gate_id in _EXPERT_GATES_FOR_MANIFESTLESS:
+        dense_result = REGISTRY.get(gate_id).run(declared_dense)
+        assert dense_result.verdict is Verdict.SKIP, dense_result.detail
+        assert not dense_result.blocking
+
+    # Negative control B: declared MoE with an absent expert set keeps the
+    # pre-existing enforced-VACUOUS path and its incident wording.
+    empty = REGISTRY.get("checkpoint.expert_distinctness").run(fx.empty_expert_set_ctx())
+    assert empty.verdict is Verdict.VACUOUS, empty.detail
+    assert "model declares 128 experts" in empty.detail
+
+    # The composite now names all three blocked sub-gates; today the two expert
+    # gates SKIP past the failure report and only completeness is named.
+    composite = REGISTRY.get(_FIRST_SAVE_GATE_ID).run(manifestless)
+    assert composite.verdict is Verdict.FAIL, composite.detail
+    for gate_id in (*_EXPERT_GATES_FOR_MANIFESTLESS, "checkpoint.save_complete"):
+        assert f"{gate_id}={Verdict.VACUOUS.value}" in composite.detail
+
+    # The shipped control fixtures must exhibit the same blocking pair; this
+    # reference is why the controls job cannot lose the regression silently.
+    shipped = fx.manifestless_moe_ctx()
+    assert REGISTRY.get("checkpoint.expert_distinctness").run(shipped).verdict is Verdict.VACUOUS
+    assert REGISTRY.get("checkpoint.expert_bytes").run(shipped).verdict is Verdict.VACUOUS
+
+
+def test_unpriceable_dtype_blocks_byte_gate_and_qualifies_stacked_abstention() -> None:
+    """An unrecognized dtype must NOT be priced at a silent 4 bytes/element.
+
+    float8_e4m3fn is a dtype dcp_meta parses from real safetensors headers, but
+    _DTYPE_BYTES does not price it. On the current tree implied_nbytes guesses
+    4: this context's manifest declares the same (guessed) volume, so the byte
+    gate PASSes an honest manifest against an inflated artifact, and the
+    distinctness abstention claims "sibling projections price consistently
+    across layers". Flipping assertions: `bytes_gate.verdict is VACUOUS` (PASS
+    today) and `"price consistently across layers" not in distinctness.detail`
+    (present today). The bfloat16 twin — identical names, shapes and storages —
+    is the negative control: PASS and the full pricing claim survive intact.
+    """
+    legacy_default_width = 4  # the guess the old implied_nbytes made, spelled out
+    f8_tensors = tuple(
+        TensorMeta(
+            fqn=f"model.language_model.layers.{layer}.experts.{projection}",
+            shape=(8, *inner),
+            dtype="float8_e4m3fn",
+            storage_id=f"f8:L{layer}:{projection}",
+        )
+        for layer in range(2)
+        for projection, inner in (("gate_up_proj", (16, 32)), ("down_proj", (32, 16)))
+    )
+    f8_ctx = CheckpointGateContext(
+        tensors=f8_tensors,
+        declared_fqns=tuple(t.fqn for t in f8_tensors),
+        num_experts=8,
+        num_moe_layers=2,
+        expected_expert_bytes=sum(math.prod(t.shape) for t in f8_tensors) * legacy_default_width,
+        origin="test://float8-stacked",
+    )
+
+    bytes_gate = REGISTRY.get("checkpoint.expert_bytes").run(f8_ctx)
+    assert bytes_gate.verdict is Verdict.VACUOUS, bytes_gate.detail  # was PASS
+    assert bytes_gate.blocking
+    assert bytes_gate.coverage.checked == 0
+    assert "float8_e4m3fn" in bytes_gate.detail
+    assert bytes_gate.evidence.get("unpriceable_dtypes") == ["float8_e4m3fn"]
+    assert f8_tensors[0].fqn in bytes_gate.evidence.get("unpriceable_fqns", [])
+
+    distinctness = REGISTRY.get("checkpoint.expert_distinctness").run(f8_ctx)
+    assert distinctness.verdict is Verdict.SKIP, distinctness.detail
+    assert "price consistently across layers" not in distinctness.detail  # present today
+    assert "float8_e4m3fn" in distinctness.detail
+    assert "shapes could be compared" in distinctness.detail  # what WAS examined is named
+
+    healthy = fx.stacked_hf_moe_ctx()
+    healthy_bytes = REGISTRY.get("checkpoint.expert_bytes").run(healthy)
+    assert healthy_bytes.verdict is Verdict.PASS, healthy_bytes.detail
+    healthy_distinct = REGISTRY.get("checkpoint.expert_distinctness").run(healthy)
+    assert healthy_distinct.verdict is Verdict.SKIP, healthy_distinct.detail
+    assert "price consistently across layers" in healthy_distinct.detail
+
+    shipped = fx.unpriceable_dtype_ctx()
+    assert REGISTRY.get("checkpoint.expert_bytes").run(shipped).verdict is Verdict.VACUOUS
+    shipped_distinct = REGISTRY.get("checkpoint.expert_distinctness").run(shipped)
+    assert shipped_distinct.verdict is Verdict.SKIP
+    assert "price consistently across layers" not in shipped_distinct.detail
+
+
+def test_zero_declared_moe_layers_never_renders_an_expected_of_zero() -> None:
+    """A manifest declaring ZERO MoE layers declares no expert population, so
+    the expert-tensor denominator is absent (None), not 0.
+
+    On the current tree _declared_tensor_count guards only `is None`, computes
+    0 * 2 = 0, and this checkpoint renders coverage as 2/0 — an unqualified
+    count in a denominator's clothes. The byte verdict itself is gated by
+    expected_expert_bytes (guarded separately), so this pins the rendering
+    exactly as the defect report sized it. The flipping assertion is
+    `result.coverage.expected is None` (0 today); checked stays 2 and the
+    volume verdict stays PASS so a blanket-failing gate cannot pass either.
+    """
+    tensors = tuple(
+        TensorMeta(
+            fqn=f"model.language_model.layers.{layer}.experts.down_proj",
+            shape=(8, 32, 16),
+            dtype="bfloat16",
+            storage_id=f"zero-layer:L{layer}",
+        )
+        for layer in range(2)
+    )
+    ctx = CheckpointGateContext(
+        tensors=tensors,
+        declared_fqns=tuple(t.fqn for t in tensors),
+        num_experts=8,
+        num_moe_layers=0,
+        expected_expert_bytes=sum(int(t.implied_nbytes or 0) for t in tensors),
+        origin="test://zero-declared-layers",
+    )
+
+    result = REGISTRY.get("checkpoint.expert_bytes").run(ctx)
+
+    assert result.verdict is Verdict.PASS, result.detail
+    assert result.coverage.checked == 2
+    assert result.coverage.expected is None  # was 0: the N/0 rendering

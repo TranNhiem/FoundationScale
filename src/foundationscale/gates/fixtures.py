@@ -25,6 +25,26 @@ reference gate and, in practice, to most future checkpoint gates:
   expert tensors at all, on which ``all([])`` is ``True``. Any control suite that
   purports to guard against silent success must contain this case.
 
+Defect-bearing builders REFUSE parameterisations that would synthesise no defect
+--------------------------------------------------------------------------------
+A MUST_FIRE fixture that contains no defect is worse than no fixture. The gate
+contract downgrades zero-work results to VACUOUS, and VACUOUS BLOCKS — so a
+MUST_FIRE control built on an empty or defect-free "broken" fixture is satisfied
+by the gate's own vacuity tripwire, never by detection, and the control suite
+goes green over a detector that was exercised zero times on its defect. The
+guard therefore lives at the source, not in consumer discipline. The builders
+below raise ``ValueError`` on any parameterisation whose output could not
+contain the defect their name promises: :func:`make_aliased_experts` requires a
+source map that actually replicates bytes (``period`` strictly smaller than
+``num_experts``, at least one expert, at least one layer),
+:func:`make_local_name_experts` requires at least one local-named tensor, and
+:func:`make_empty_experts` requires a declared count of at least one (its
+defect is absence-while-declared — declaring zero experts makes it a dense
+artifact containing nothing to fire on). The HEALTHY builder is deliberately
+not guarded this way: ``make_healthy_experts(num_experts=0)`` is a legitimate
+dense-model MUST_PASS input, and refusing it would mint a defect where none
+exists. Guards refuse stories; they do not refuse layouts.
+
 "Tensors" here are plain ``bytes`` derived from a fixed seed via SHA-256, so the
 same call always produces the same bytes on every platform and Python process.
 There is deliberately no ``random`` module use anywhere in this file.
@@ -33,6 +53,7 @@ There is deliberately no ``random`` module use anywhere in this file.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -186,13 +207,57 @@ def make_aliased_experts(
 
     Args:
         num_experts: Experts the model declares and the artifact appears to hold.
+            Must be at least 1: zero experts means zero tensors, and an empty
+            "aliased" fixture carries no defect for any gate to detect.
         period: How many genuinely distinct experts exist on disk. Must divide
-            ``num_experts`` evenly, as 16 divided 128.
+            ``num_experts`` evenly, as 16 divided 128, and must be STRICTLY
+            smaller than ``num_experts``. At equality the source map is the
+            identity, every synthesised expert is byte-distinct, and the
+            fixture is a healthy expert set wearing a MUST_FIRE label. Build
+            that with :func:`make_healthy_experts`; this builder must not mint it.
+
+    Raises:
+        ValueError: On any parameterisation whose output would not materially
+            contain the replication defect — see the module-docstring section
+            "Defect-bearing builders REFUSE...".
     """
+    if num_experts < 1:
+        raise ValueError(
+            f"make_aliased_experts(num_experts={num_experts}): the fixture would "
+            f"contain ZERO tensors. Its only way to make a gate block is the "
+            f"gate's vacuity tripwire, which means the aliasing detector itself "
+            f"was exercised zero times while the MUST_FIRE control read green. "
+            f"Refusing at the source."
+        )
+    if num_layers < 1:
+        raise ValueError(
+            f"make_aliased_experts(num_layers={num_layers}): zero layers means "
+            f"zero tensors — the same vacuous-MUST_FIRE trap as num_experts=0, "
+            f"one loop level up."
+        )
+    if period < 1:
+        # This used to fall through to `num_experts % period` and die as a bare
+        # ZeroDivisionError — a crash wearing guard's clothing. A refusal with a
+        # reason is the contract every other guard in this file keeps.
+        raise ValueError(
+            f"make_aliased_experts(period={period}): the period is the count of "
+            f"genuinely distinct experts on disk and must be at least 1"
+        )
     if num_experts % period != 0:
         raise ValueError(
             f"num_experts ({num_experts}) must be a multiple of period ({period}); "
             f"the incident being modelled is an exact replication"
+        )
+    if period >= num_experts:
+        raise ValueError(
+            f"period ({period}) must be strictly smaller than num_experts "
+            f"({num_experts}): at equality source_expert(i) = i % {period} = i, "
+            f"the map is the identity, and every expert's bytes are distinct — "
+            f"the fixture would contain NO DEFECT, and a dependent MUST_FIRE "
+            f"control could hold only via a gate's vacuity tripwire, never via "
+            f"alias detection. If a distinct-bytes expert set is what a test "
+            f"needs, that set is healthy: build it with make_healthy_experts "
+            f"and label the control MUST_PASS."
         )
     tensors, index = _global_names(
         num_experts,
@@ -201,6 +266,21 @@ def make_aliased_experts(
         nbytes=nbytes,
         seed=seed,
     )
+    # Post-build proof that the defect is materially present, not merely
+    # intended. The parameter guards above make replication a theorem of
+    # _global_names AS WRITTEN TODAY; this check is what keeps the promise if
+    # _global_names or _blob ever change — say, hashing the destination expert
+    # index into every payload, a one-line edit that would silently un-alias
+    # every fixture built here and demote every dependent MUST_FIRE control to
+    # a vacuity check again. A fixture must fail loudly the day it stops
+    # containing its defect.
+    if len(set(tensors.values())) == len(tensors):
+        raise RuntimeError(
+            f"fixture invariant broken: {len(tensors)} tensors synthesised and "
+            f"every payload is byte-distinct. The replication source map lost "
+            f"its effect; investigate _global_names/_blob before trusting any "
+            f"control built on this fixture."
+        )
     return ExpertSet(tensors=tensors, declared_expert_count=num_experts, expert_index=index)
 
 
@@ -220,7 +300,22 @@ def make_local_name_experts(
     local shard under unqualified names. The defect is visible in the key set
     alone: no global expert identity survives in these names, so content
     comparison is impossible and the artifact must be rejected before serve.
+
+    Raises:
+        ValueError: If the call would synthesise zero tensors. The defect this
+            builder ships is a NAMING signature, and zero tensors means zero
+            names — nothing to detect, so a MUST_FIRE control built on it would
+            hold only via a gate's vacuity tripwire while claiming the name
+            check was exercised.
     """
+    if num_layers < 1 or num_local < 1:
+        raise ValueError(
+            f"make_local_name_experts(num_local={num_local}, num_layers={num_layers}): "
+            f"the fixture would contain zero tensors. The defect is a naming "
+            f"signature; zero tensors means zero names, and a claim that the "
+            f"signature was checked, made over zero names, is the all([]) "
+            f"verdict one level up. Refusing at the source."
+        )
     tensors: dict[str, bytes] = {}
     for layer in range(num_layers):
         for local in range(num_local):
@@ -228,6 +323,19 @@ def make_local_name_experts(
                 tensors[f"layers.{layer}.experts.{param}{local}"] = _blob(
                     "local", layer, local, param, seed=seed, nbytes=nbytes
                 )
+    # Same post-build proof as make_aliased_experts: the defect must be visible
+    # in the artifact, not just in the builder's intent. Every synthesised key
+    # must lack a parseable GLOBAL expert index — that absence is the fixture's
+    # entire claim, and a key that regains one (a renamed format string above)
+    # silently converts the corrupt-signature fixture into a healthy global one.
+    globally_named = [k for k in tensors if parse_global_expert_index(k) is not None]
+    if not tensors or globally_named:
+        raise RuntimeError(
+            f"fixture invariant broken: {len(tensors)} tensors synthesised, "
+            f"{len(globally_named)} of which (e.g. {globally_named[:3]}) carry a "
+            f"parseable global expert index — this fixture exists because its "
+            f"names hold NO global identity."
+        )
     return ExpertSet(
         tensors=tensors,
         declared_expert_count=declared_expert_count,
@@ -245,7 +353,22 @@ def make_empty_experts(declared_expert_count: int = 128) -> ExpertSet:
     gate contract, ``Gate.ok`` downgrades zero-coverage results to VACUOUS no
     matter what the author writes; this fixture exists to prove nobody designed
     around that.
+
+    ``declared_expert_count`` must be at least 1: this fixture's defect is
+    absence WHILE DECLARED. A declared count of zero makes the absence declared
+    and expected — a dense-model artifact containing no defect — and gates
+    typically respond to that with an abstention ("dense, not applicable"), so
+    a MUST_FIRE control built on it would exercise a skip path, never the
+    empty-comparison tripwire it exists to pin.
     """
+    if declared_expert_count < 1:
+        raise ValueError(
+            f"make_empty_experts(declared_expert_count={declared_expert_count}): "
+            f"this fixture's defect is experts being ABSENT WHILE DECLARED. With "
+            f"a declared count of zero it mints a dense-model artifact — no "
+            f"defect, no tripwire. If a dense artifact is the intent, that is a "
+            f"MUST_PASS input; label it so instead of borrowing this name."
+        )
     return ExpertSet(tensors={}, declared_expert_count=declared_expert_count, expert_index={})
 
 
@@ -262,9 +385,11 @@ __all__ = [
     *__all__,
     "aliased_local_names_ctx",
     "bloated_extra_state_ctx",
+    "dense_declared_ctx",
     "empty_expert_set_ctx",
     "healthy_fused_moe_ctx",
     "healthy_sharded_moe_ctx",
+    "manifestless_moe_ctx",
     "missing_shard_ctx",
     "mixed_expert_layout_ctx",
     "right_count_aliased_storage_ctx",
@@ -272,6 +397,7 @@ __all__ = [
     "stacked_hf_moe_ctx",
     "stacked_underfilled_ctx",
     "unknown_expert_layout_ctx",
+    "unpriceable_dtype_ctx",
 ]
 
 _CONTEXT_ORIGIN_ROOT = "fixture://checkpoint-gates"
@@ -290,6 +416,23 @@ def _storage_id(kind: str, *parts: object) -> str:
     return _blob(kind, *parts, seed=SEED, nbytes=32).hex()
 
 
+def _priced_nbytes(meta: TensorMeta) -> int:
+    """Price a fixture tensor, refusing outright when the dtype is unpriceable.
+
+    ``implied_nbytes`` is now ``None`` outside the price table, and the fixtures
+    bake declared volumes into manifest fields, so a guessed width here would
+    poison every control's denominator at once. Fixture dtypes are all
+    priceable; a None is therefore a fixture bug, and fixtures fail loudly.
+    """
+    nbytes = meta.implied_nbytes
+    if nbytes is None:
+        raise ValueError(
+            f"fixture dtype {meta.dtype!r} is outside the price table; controls "
+            "must declare volumes from dtypes the gates can actually price"
+        )
+    return nbytes
+
+
 def _fused_expert_fqn(layer: int, parameter: str) -> str:
     return f"layers.{layer}.mlp.experts.experts.{parameter}"
 
@@ -299,11 +442,13 @@ def _sharded_expert_fqn(layer: int, parameter: str, index: int) -> str:
 
 
 def _one_expert_weight_bytes() -> int:
-    return TensorMeta(
-        fqn="fixture.declared_one_expert_weight",
-        shape=_EXPERT_INNER_SHAPE,
-        dtype=_EXPERT_DTYPE,
-    ).implied_nbytes
+    return _priced_nbytes(
+        TensorMeta(
+            fqn="fixture.declared_one_expert_weight",
+            shape=_EXPERT_INNER_SHAPE,
+            dtype=_EXPERT_DTYPE,
+        )
+    )
 
 
 def _declared_expert_bytes(num_experts: int, num_layers: int) -> int:
@@ -315,9 +460,9 @@ def _make_context(
     name: str,
     tensors: tuple[TensorMeta, ...],
     declared_fqns: tuple[str, ...] | None,
-    num_experts: int,
-    num_moe_layers: int,
-    expected_expert_bytes: int,
+    num_experts: int | None,
+    num_moe_layers: int | None,
+    expected_expert_bytes: int | None,
 ) -> CheckpointGateContext:
     return CheckpointGateContext(
         tensors=tensors,
@@ -487,7 +632,7 @@ def healthy_fused_moe_ctx(
         declared_fqns=tuple(meta.fqn for meta in context_tensors),
         num_experts=num_experts,
         num_moe_layers=num_layers,
-        expected_expert_bytes=sum(meta.implied_nbytes for meta in context_tensors),
+        expected_expert_bytes=sum(_priced_nbytes(meta) for meta in context_tensors),
     )
 
 
@@ -617,7 +762,7 @@ def healthy_sharded_moe_ctx(
         declared_fqns=tuple(meta.fqn for meta in context_tensors),
         num_experts=num_experts,
         num_moe_layers=num_layers,
-        expected_expert_bytes=sum(meta.implied_nbytes for meta in context_tensors),
+        expected_expert_bytes=sum(_priced_nbytes(meta) for meta in context_tensors),
     )
 
 
@@ -634,11 +779,13 @@ def _stacked_expert_fqn(layer: int, projection: str) -> str:
 def _stacked_declared_volume(num_experts: int, num_layers: int) -> int:
     """The volume a correct run would declare: experts x per-slice bytes x weights."""
     return sum(
-        TensorMeta(
-            fqn=f"fixture.stacked-declared.{layer}.{projection}",
-            shape=(num_experts, *inner),
-            dtype=_EXPERT_DTYPE,
-        ).implied_nbytes
+        _priced_nbytes(
+            TensorMeta(
+                fqn=f"fixture.stacked-declared.{layer}.{projection}",
+                shape=(num_experts, *inner),
+                dtype=_EXPERT_DTYPE,
+            )
+        )
         for layer in range(num_layers)
         for projection, inner in _STACKED_PROJECTIONS
     )
@@ -680,7 +827,7 @@ def stacked_hf_moe_ctx(
         declared_fqns=tuple(meta.fqn for meta in context_tensors),
         num_experts=num_experts,
         num_moe_layers=num_layers,
-        expected_expert_bytes=sum(meta.implied_nbytes for meta in context_tensors),
+        expected_expert_bytes=sum(_priced_nbytes(meta) for meta in context_tensors),
     )
 
 
@@ -784,7 +931,7 @@ def unknown_expert_layout_ctx(num_experts: int = 8) -> CheckpointGateContext:
         declared_fqns=tuple(meta.fqn for meta in tensors),
         num_experts=num_experts,
         num_moe_layers=layers,
-        expected_expert_bytes=sum(meta.implied_nbytes for meta in tensors),
+        expected_expert_bytes=sum(_priced_nbytes(meta) for meta in tensors),
     )
 
 
@@ -838,5 +985,106 @@ def mixed_expert_layout_ctx(num_experts: int = 8) -> CheckpointGateContext:
         declared_fqns=tuple(meta.fqn for meta in context_tensors),
         num_experts=num_experts,
         num_moe_layers=layers,
-        expected_expert_bytes=sum(meta.implied_nbytes for meta in context_tensors),
+        expected_expert_bytes=sum(_priced_nbytes(meta) for meta in context_tensors),
+    )
+
+
+def manifestless_moe_ctx() -> CheckpointGateContext:
+    """NO run manifest at all: every declared_* field is None — the gutted-MoE trap.
+
+    This is exactly what ``CheckpointGateContext.from_path`` builds for a
+    checkpoint saved with no manifest beside it. The artifact is otherwise
+    coherent — present, well-formed dense tensors — so no block can be blamed
+    on a malformed fixture. If the run was MoE and the expert tensors were
+    stripped or never written, the artifact arrives indistinguishable from a
+    true dense model, and "zero experts examined" over an UNKNOWN declaration
+    must VACUOUS-block, never inherit the dense-model SKIP. The explicit-0
+    twin of this door is pinned inline in test_checkpoint_gate_gaps.
+    """
+    num_layers = 2
+    tensors = tuple(
+        TensorMeta(
+            fqn=f"layers.{layer}.attention.self_attention.linear_proj.weight",
+            shape=(256, 512),
+            dtype="float32",
+            storage_id=_storage_id("manifestless-dense", layer),
+        )
+        for layer in range(num_layers)
+    )
+    return CheckpointGateContext(
+        tensors=tensors,
+        declared_fqns=None,
+        num_experts=None,
+        num_moe_layers=None,
+        expected_expert_bytes=None,
+        origin=f"{_CONTEXT_ORIGIN_ROOT}/manifestless-moe",
+    )
+
+
+def unpriceable_dtype_ctx(num_experts: int = 8, *, num_layers: int = 2) -> CheckpointGateContext:
+    """A coherent STACKED MoE checkpoint in a dtype the gates cannot price.
+
+    Gemma-style names, correct leading dims, distinct storage per tensor —
+    every metadata observable is clean except that ``float8_e4m3fn`` (a dtype
+    dcp_meta legitimately parses from real safetensors headers) has no entry
+    in ``_DTYPE_BYTES``. The declared volume is computed at the TRUE 1-byte
+    width inside the fixture — fixtures may know float8's element size
+    precisely so the block can never be excused by a wrong manifest; the gates
+    may not guess it. That asymmetry is the control: the byte gate must refuse
+    to price, and the distinctness abstention must not claim sibling byte
+    pricing was examined.
+    """
+    tensors: list[TensorMeta] = []
+    for layer in range(num_layers):
+        for projection, inner in _STACKED_PROJECTIONS:
+            tensors.append(
+                TensorMeta(
+                    fqn=_stacked_expert_fqn(layer, projection),
+                    shape=(num_experts, *inner),
+                    dtype="float8_e4m3fn",
+                    storage_id=_storage_id("unpriceable-expert-dtype", layer, projection),
+                )
+            )
+    context_tensors = tuple(tensors)
+    return _make_context(
+        name=f"unpriceable-dtype-{num_layers}x{num_experts}",
+        tensors=context_tensors,
+        declared_fqns=tuple(meta.fqn for meta in context_tensors),
+        num_experts=num_experts,
+        num_moe_layers=num_layers,
+        expected_expert_bytes=sum(math.prod(meta.shape) for meta in context_tensors),
+    )
+
+
+def dense_declared_ctx() -> CheckpointGateContext:
+    """A checkpoint from a run that POSITIVELY declared itself dense.
+
+    ``num_experts=0`` here is a DECLARATION — "this model has no experts" — and
+    is categorically different from ``None`` ("nothing was declared"), which is
+    :func:`manifestless_moe_ctx`'s shape and must VACUOUS-block through the
+    expert gates' UNKNOWN doors. This fixture exists to pin the shrink-safe
+    half of the composite's applicable-denominator pricing: the two expert
+    gates abstain NOT_APPLICABLE on it, completeness verifies the four real
+    tensors it does carry, and the composite must therefore reach 1/1
+    applicable — non-blocking, with both abstentions NAMED in its detail. If
+    this context ever produces "verified 3/3", bare "verified", or a block, the
+    distinction the composite exists to enforce has rotted.
+    """
+    num_layers = 2
+    tensors = tuple(
+        TensorMeta(
+            fqn=f"layers.{layer}.attention.self_attention.linear_proj.weight",
+            shape=(256, 512),
+            dtype="float32",
+            storage_id=_storage_id("dense-declared", layer),
+        )
+        for layer in range(num_layers)
+    )
+    return _make_context(
+        name="dense-declared",
+        tensors=tensors,
+        declared_fqns=tuple(meta.fqn for meta in tensors),
+        num_experts=0,
+        num_moe_layers=0,
+        expected_expert_bytes=0,
     )

@@ -105,13 +105,17 @@ EXIT STATUS
      module unreadable), any mutation could not be applied (provided no
      mutant survived — a survivor takes exit 1; see above), any trial
      was UNSCORED (timeout, collection/usage error, red run naming no
-     test, attribution that did not reproduce) — for that part of the
+     test, a green run whose junit records zero executed tests,
+     attribution that did not reproduce) — for that part of the
      table, we never measured — a MUST-PASS control was reported KILLED,
      which proves the attribution machinery unsound and voids every other
      measurement the run printed, or the table carried ZERO MUST-PASS
      control rows: with the negative half of the detector never wired up,
      every caught= figure the run printed is an unverified claim, and
-     claiming from silence is "we never measured" one level up
+     claiming from silence is "we never measured" one level up; or the
+     table carried ZERO MUST-FIRE rows — every row a control, so the
+     positive half fired zero times and exit 0 there is 0 killed of
+     0 fired: the 0/0 success in exit-code form
 
 CI depends on the difference between 1 and 2: "the suite has a gap" and
 "we never measured" are different states and must not share an exit code.
@@ -168,13 +172,24 @@ TABLE = TOOLS / "mutations.json"
 # the battery refuses to run.
 PY = sys.executable
 
+# Values are TREE-root-relative, not SRC-relative: every src module restates
+# its src/foundationscale prefix so that a file OUTSIDE the package can sit in
+# the same table under one format. The previous SRC-relative shape made tools/
+# literally unexpressible, which is how tools/live_save_gate.py — the tool that
+# adjudicates the FIRST REAL SAVE of the real training run — spent its whole
+# life with zero mutation coverage while the tally printed caught= over only
+# what the table could name. SRC stays as the canonical package-root handle;
+# nothing resolves against it anymore, and both resolution sites (load_table
+# and main) join at ROOT with no per-module special-casing.
 MODULE_PATHS = {
-    "core": "gates/core.py",
-    "dcp": "checkpoint/dcp.py",
-    "manifest": "provenance/manifest.py",
-    "topology": "topology.py",
-    "parity": "verify/parity.py",
-    "checkpoint_gates": "gates/checkpoint_gates.py",
+    "core": "src/foundationscale/gates/core.py",
+    "dcp": "src/foundationscale/checkpoint/dcp.py",
+    "manifest": "src/foundationscale/provenance/manifest.py",
+    "topology": "src/foundationscale/topology.py",
+    "parity": "src/foundationscale/verify/parity.py",
+    "checkpoint_gates": "src/foundationscale/gates/checkpoint_gates.py",
+    "controls": "src/foundationscale/gates/controls.py",
+    "live_save_gate": "tools/live_save_gate.py",
 }
 
 _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")
@@ -397,6 +412,28 @@ def classify(out: SuiteOutcome) -> TrialVerdict:
                 "green run over evidence that was never read is not a surviving "
                 f"mutant — junit: {out.junit_path}",
             )
+        if out.passed == 0:
+            # A green return code over a junit report recording ZERO executed
+            # tests detected nothing: "the suite stayed green" and "the suite
+            # ran" have collapsed into the same non-event. Vanilla pytest
+            # exits 5 on an empty collection, so reaching this branch means
+            # the return code and the report disagree (an injected runner, a
+            # plugin, a race on the junit file) — and contradictory evidence
+            # blocks, it never scores. Above all it cannot be ALIVE: ALIVE's
+            # reason asserts "no test detects the broken rule", a claim about
+            # tests that never ran, priced at exit 1 ("the suite has a gap")
+            # when the truth is exit 2 ("we never measured"). check_baseline
+            # has always refused `not out.passed` for exactly this reason;
+            # the trial side of the per-run contract needed the same floor.
+            return TrialVerdict(
+                TrialKind.UNSCORED,
+                (),
+                f"rc=0 but the junit report records 0 executed tests — a "
+                f"green run over zero tests detected nothing (vanilla pytest "
+                f"exits 5 on an empty collection, so the return code and the "
+                f"report disagree; treat the pair as unreadable evidence) — "
+                f"junit: {out.junit_path}",
+            )
         return TrialVerdict(
             TrialKind.ALIVE,
             (),
@@ -588,7 +625,11 @@ def _validate_table(data: dict[str, list[dict]], paths: dict[str, Path]) -> None
     (doctrine 3); it is optional, but when present must be a real boolean
     or die() — a truthy string would silently arm the control path on a
     typo, and a control armed by accident is the vacuous-success shape in
-    miniature.
+    miniature. It also refuses a table carrying ZERO MUST-FIRE rows: every
+    row a negative control means the positive half of the detector fires
+    zero times, and that run's exit 0 would print 0 killed of 0 fired —
+    the vacuous success one level up from the mutants. Half a proof does
+    not get to run.
     """
     unknown = set(data) - set(paths)
     if unknown:
@@ -607,6 +648,37 @@ def _validate_table(data: dict[str, list[dict]], paths: dict[str, Path]) -> None
                 die(f"{mod}/{m.get('name', '?')}: anchor and replacement must be strings")
             if "must_survive" in m and not isinstance(m["must_survive"], bool):
                 die(f"{mod}/{m.get('name', '?')}: must_survive must be a boolean")
+    must_fire_rows = sum(
+        1 for muts in data.values() for m in muts if not m.get("must_survive", False)
+    )
+    if must_fire_rows == 0:
+        # The 0/0 run in its purest form: every selected row is a negative
+        # control, so the battery's positive half — deliberately break a
+        # rule, demand the suite notice — is exercised ZERO times. A
+        # surviving control can never redden such a run (surviving is what
+        # a control MEANS), so the run would print a clean control line,
+        # tally caught=n/a over zero scored trials, and fall off the end of
+        # the exit ladder to `return 0`: the battery certifying detection
+        # over a detector that fired never. That is the founding incident
+        # in exit-code form. Reachable from the shipped CLI as well as from
+        # injected tables, because load_table() validates AFTER the
+        # --module filter: `--module X` on a module whose rows are all
+        # controls selects exactly this table. die() beside the zero-rows
+        # guard above — both guards say one sentence (a battery that fires
+        # nothing proves nothing), once for an empty magazine and once for
+        # a magazine of blanks. Placed AFTER the per-row loop so
+        # must_survive has already been proven a real bool; read earlier,
+        # `must_survive: "yes"` would count its row as a control on a typo
+        # and trip this guard for the wrong reason.
+        die(
+            "the table selects zero MUST-FIRE mutations — every row is a "
+            '"must_survive" control. Surviving controls cannot redden that '
+            "run by construction, so its exit 0 would be 0 killed of 0 "
+            "fired: the vacuous success this battery exists to refuse, in "
+            "exit-code form. Controls are the detector's negative half "
+            "(doctrine 3); run alone they are half a proof. Add a real "
+            "mutant to the selection. This run exits 2: never measured."
+        )
 
 
 def load_table(only: str | None) -> dict[str, list[dict]]:
@@ -625,7 +697,7 @@ def load_table(only: str | None) -> dict[str, list[dict]]:
         if only not in data:
             die(f"unknown module {only!r}; have: {', '.join(sorted(data))}")
         data = {only: data[only]}
-    _validate_table(data, {mod: SRC / rel for mod, rel in MODULE_PATHS.items()})
+    _validate_table(data, {mod: ROOT / rel for mod, rel in MODULE_PATHS.items()})
     return data
 
 
@@ -641,13 +713,16 @@ exit status — CI relies on 1 and 2 being different:
      claims nothing, not even "the suite has a gap".
   2  never measured: suite red, skipped tests, no table, nothing applied
      (and no survivor to outrank the refusal), any trial UNSCORED
-     (timeout, collection/usage error, rc=1 naming no failing test,
-     attribution that failed to reproduce), a MUST-PASS control reported
+     (timeout, collection/usage error, rc=1 naming no failing test, a
+     green run whose junit records zero executed tests, attribution that
+     failed to reproduce), a MUST-PASS control reported
      killed — an inert edit dying proves attribution unsound, and an
      unsound battery claims nothing — or the table carrying ZERO MUST-PASS
      control rows at all: without the negative half of the detector, every
      caught= figure the run printed is an unverified claim, and claiming
-     from silence is "we never measured" one level up
+     from silence is "we never measured" one level up; or the table
+     carrying ZERO MUST-FIRE rows (every row a control) — the positive
+     half fired zero times, and exit 0 there is 0 killed of 0 fired
 
 MUST-PASS CONTROL
   One table row is flagged "must_survive": an inert, comment-only edit that
@@ -728,8 +803,10 @@ def main(
 
     resolved_paths: dict[str, Path]
     if module_paths is None:
-        resolved_paths = {mod: SRC / rel for mod, rel in MODULE_PATHS.items()}
+        resolved_paths = {mod: ROOT / rel for mod, rel in MODULE_PATHS.items()}
     else:
+        # Injected tables resolve their own paths verbatim; this branch is
+        # pinned by tests/test_mutate_zero_work_refusals.py and must not move.
         resolved_paths = {mod: Path(p) for mod, p in module_paths.items()}
 
     # The table/module_paths seam is the second half of the inert-control
@@ -752,6 +829,37 @@ def main(
         print(f"\n{sum(len(v) for v in table.values())} mutations across {len(table)} module(s)")
         return 0
 
+    # A table entry that resolves to a file this tree does not have is an
+    # unreadable artifact, and the rule for unreadable artifacts is fail
+    # CLOSED with the entry NAMED — before the baseline, not after it:
+    # check_baseline costs one full suite run, and the old shape spent that
+    # run and then reported through the generic OSError catch below, which
+    # can surface the path (via the exception) but never the table ENTRY.
+    # --list is exempt by design (it mutates nothing and returns above);
+    # a file vanishing between this check and the backup read below is
+    # still caught by that catch — this guard exists so the common case
+    # (a table that has outgrown the tree) refuses cheaply and by name.
+    missing_files = [
+        (mod, resolved_paths[mod])
+        for mod in sorted(table)
+        if not resolved_paths[mod].is_file()
+    ]
+    if missing_files:
+        named = "\n".join(
+            f"  {mod}: resolves to {path} — no such file"
+            for mod, path in missing_files
+        )
+        print(
+            f"{len(missing_files)} of {len(table)} table module(s) point at "
+            f"files this tree does not have:\n{named}\n"
+            "a battery that cannot read its measurement target measures "
+            "nothing over it, and measuring nothing never exits 0. Fix "
+            "MODULE_PATHS (tree-root-relative now) or the table entry; "
+            "exiting 2.",
+            file=sys.stderr,
+        )
+        return 2
+
     # One mkdtemp per battery run, deliberately never deleted: junit reports
     # are the evidence behind every non-green claim this tool prints.
     junit_dir = Path(tempfile.mkdtemp(prefix="foundationscale-mutate-"))
@@ -772,7 +880,7 @@ def main(
         print(
             f"cannot back up every module before mutating — {exc}\n"
             f"each table module must be readable at its mapped path (the shipped "
-            f"defaults resolve under {SRC}); for the committed table, is this "
+            f"defaults resolve under {ROOT}); for the committed table, is this "
             f"tools/ sitting at the repository root, next to src/ and tests/?",
             file=sys.stderr,
         )
@@ -845,7 +953,25 @@ def main(
     finally:
         for p, text in backups.items():
             p.write_text(text, "utf-8")
-            assert p.read_text("utf-8") == text, f"restore failed for {p}!"
+            # Not an assert. This read-back is the ONLY verification that
+            # the live tree actually got its pre-battery bytes back, and
+            # this tool's whole safety case rests on it: asserts are
+            # compiled out under `python -O` / PYTHONOPTIMIZE=1 (a common
+            # CI default, and this file tells operators to run it under
+            # whatever interpreter they are verifying), after which the
+            # "restored byte-for-byte" line below would keep printing with
+            # nothing verified — the vacuous-success shape guarding the
+            # one operation that can corrupt the tree. A guard that a
+            # command-line flag can erase is not a guard; the check must
+            # be ordinary control flow.
+            if p.read_text("utf-8") != text:
+                raise RuntimeError(
+                    f"restore verification failed for {p}: the pre-battery "
+                    f"bytes were written back and read again and do not "
+                    f"match — the tree may still carry a mutant. Restore "
+                    f"this file from version control before trusting ANY "
+                    f"result this run printed."
+                )
         print(f"\n{len(backups)} module(s) restored byte-for-byte.")
 
     print("\n=== per-module tally ===")

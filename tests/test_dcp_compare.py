@@ -282,7 +282,15 @@ def test_zero_row_tensor_reports_zero_elements_and_no_fabricated_cosine() -> Non
     # between two things that were never compared.
     assert tc.cosine is None
     assert tc.chunks_read == 0
-    assert tc.max_abs_diff == 0.0 and tc.rms_a == 0.0
+    # This test originally asserted `max_abs_diff == 0.0` and never asserted the
+    # verdict at all — which is precisely how the vacuous-EXACT blocker survived
+    # into production. The author reasoned correctly about the fabricated cosine
+    # and about elements/chunks, then pinned a diff of 0.0 ("no difference found")
+    # and left the one field a consumer actually branches on unchecked. Both lines
+    # below now match the SHAPE_MISMATCH sibling above: comparing nothing yields an
+    # unbounded diff and an abstaining verdict, never a pass grade.
+    assert tc.verdict == "NO_ELEMENTS"
+    assert tc.max_abs_diff == math.inf and tc.rms_a == 0.0
 
 
 def test_nonpositive_block_rows_is_rejected_not_silently_exact() -> None:

@@ -136,9 +136,20 @@ def test_missing_ctx_report_skip_never_reads_as_pass() -> None:
     (result,) = report.results
     assert result.verdict is Verdict.SKIP
     assert result.verdict is not Verdict.PASS
-    assert not result.blocking
-    assert report.ok
+    assert not result.blocking  # the per-gate abstention is still non-blocking
     assert "established nothing" in result.detail
+
+    # This test originally asserted `report.ok` — and its own docstring one
+    # screen up says the SKIP "never counts as evidence of health". Both were
+    # true of the per-gate result and false of the aggregate: a sweep whose
+    # every gate reported "established nothing" rendered "1 run — all clear".
+    # An abstention is a first-class per-gate outcome; an aggregate of nothing
+    # but abstentions examined zero units and may not occupy a passing
+    # position. This is the shape `missing_ctx="report-skip"` exists to expose
+    # — a wholly unwired sweep — so it is exactly the case that must not pass.
+    assert not report.ok
+    assert report.is_unverified
+    assert not report.is_vacuous  # a gate ran and declined; it is not gateless
 
 
 def test_unknown_missing_ctx_mode_raises() -> None:

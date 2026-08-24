@@ -78,6 +78,8 @@ __all__ = [
     "VERDICT_DIFFER",
     "VERDICT_SHAPE_MISMATCH",
     "VERDICT_NON_FINITE",
+    "VERDICT_NO_ELEMENTS",
+    "VERDICT_DTYPE_MISMATCH",
 ]
 
 DCP_METADATA_FILENAME = ".metadata"
@@ -88,11 +90,27 @@ SAFETENSORS_INDEX_FILENAME = "model.safetensors.index.json"
 # is its own verdict instead of an overloaded DIFFER: a consumer written
 # before this fix must see a verdict it does not recognize (and fail closed
 # on it), never silently treat a poisoned artifact as ordinary divergence.
+# NO_ELEMENTS exists on the same rule. A shape that matches but declares zero
+# elements could not reuse DIFFER (no divergence was observed) or
+# SHAPE_MISMATCH (the geometry agrees), and EXACT/CLOSE are pass grades that
+# must never be earned by examining nothing -- that is the founding all([])
+# incident surfacing inside the comparator itself.
+# DTYPE_MISMATCH is the third verdict on this rule, and it is the abstention's
+# mirror: unlike NO_ELEMENTS the difference WAS observed -- in the declared
+# encodings, before any read -- so abstaining would un-state a fact the
+# function is holding in its hands. The geometry agrees, so it cannot borrow
+# SHAPE_MISMATCH; nothing is streamed, so DIFFER's definition ("finite
+# content outside both tolerances") has no basis; and EXACT across differing
+# encodings is a requantization laundered into an identity claim, which is
+# the defect class the export gates exist to catch. A pre-fix consumer meets
+# a token it cannot map to any grade and fails closed on it.
 VERDICT_EXACT = "EXACT"
 VERDICT_CLOSE = "CLOSE"
 VERDICT_DIFFER = "DIFFER"
 VERDICT_SHAPE_MISMATCH = "SHAPE_MISMATCH"
 VERDICT_NON_FINITE = "NON_FINITE"
+VERDICT_NO_ELEMENTS = "NO_ELEMENTS"
+VERDICT_DTYPE_MISMATCH = "DTYPE_MISMATCH"
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +251,17 @@ class TensorComparison:
     All norms and the dot product were accumulated in float64 over row blocks,
     so ``cosine`` is meaningful on tensors far too large to upcast at once.
     ``verdict`` is one of ``EXACT``, ``CLOSE``, ``DIFFER``, ``NON_FINITE``,
-    ``SHAPE_MISMATCH``; ``nonfinite_elements`` counts NaN/Inf on every
+    ``SHAPE_MISMATCH``, ``NO_ELEMENTS``, ``DTYPE_MISMATCH``. ``NO_ELEMENTS``
+    is a stated abstention, not a grade: both sources agreed on a shape that
+    declares zero elements, so nothing was read and neither identity nor
+    divergence can be claimed. ``DTYPE_MISMATCH`` is the mirror of that
+    abstention: a divergence (in the declared encodings) that WAS observed --
+    at metadata level, before any streaming -- so it is a finding, never an
+    abstention, and no numeric field on its record claims a measurement.
+    ``bitwise_equal`` is a claim about the stored encodings, not merely the
+    decoded values: across differing dtypes no bitwise-identity claim is
+    possible, so the field is False no matter how closely the values agree.
+    ``nonfinite_elements`` counts NaN/Inf on every
     verdict, including ``EXACT`` — bitwise identity is a statement about
     bytes, not about the finiteness of the weights those bytes encode.
     """
@@ -1129,16 +1157,33 @@ def compare_keys(
         close_min_cosine: Cosine floor for a ``CLOSE`` verdict.
 
     Returns:
-        A :class:`TensorComparison`. ``EXACT`` means bitwise identical;
+        A :class:`TensorComparison`. ``EXACT`` means bitwise identical -- same
+        declared encoding AND same decoded values, elementwise;
         ``CLOSE`` means within both tolerances; ``DIFFER`` means finite
         content outside both tolerances; ``NON_FINITE`` means NaN or Inf was
         present without bitwise identity — no tolerance answer over poisoned
         content is honest, because IEEE comparisons swallow NaN
-        (``max(0.0, nan) == 0.0``); ``SHAPE_MISMATCH`` means the two sources
-        disagree on the shape (zero elements compared, by design visibly so).
+        (``max(0.0, nan) == 0.0``); ``DTYPE_MISMATCH`` means the sources
+        declare different encodings for the same logical tensor: a positively
+        observed metadata finding, adjudicated before any streaming, so the
+        record carries the same "compared nothing, visibly so" expression as
+        the two branches below (``elements=0`` naming the compared
+        denominator, ``bitwise_equal=False``, unbounded diffs, ``cosine``
+        None) and no value statistic claims a measurement;
+        ``SHAPE_MISMATCH`` means the two sources
+        disagree on the shape (zero elements compared, by design visibly so);
+        ``NO_ELEMENTS`` means the shapes agree but declare zero elements, so
+        the comparison abstains using exactly the mismatch branch's
+        "compared nothing" expression (``bitwise_equal=False``, unbounded
+        diffs, ``elements=0`` naming the denominator): an empty tensor is a
+        legitimate artifact, but an unread nothing must abstain, never pass.
 
     Raises:
         TensorNotFoundError: If ``key`` is absent from either source.
+        CheckpointFormatError: If either source declares a negative extent for
+            ``key``. This raises rather than returning a verdict because such
+            metadata describes no tensor at all, so both "identical" and
+            "different" would be fabrications — see the branch comment.
         AssertionError: If the float64 accumulator fails its self-check —
             bitwise-equal inputs must produce cosine 1.0 and zero max
             difference; anything else means the numerics are lying.
@@ -1157,6 +1202,133 @@ def compare_keys(
     shape_b = source_b.shape(key)
     dtype_a = source_a.dtype(key)
     dtype_b = source_b.dtype(key)
+
+    # Extent validation runs ABOVE both the shape-mismatch branch and the
+    # zero-element abstention, because a negative extent is not a disagreement
+    # and not an emptiness -- it is metadata that cannot describe any tensor,
+    # and every downstream branch would render it as one of those two lies.
+    #
+    # Read as identity: shape (-1,) on both sides passes the equality check,
+    # yields total == -1 which slips past the `total == 0` abstention, makes
+    # range(0, -1, block_rows) empty, and lets the `bitwise = True` initialiser
+    # survive a loop that never ran -- EXACT over zero reads with elements=-1
+    # as its denominator. That is the founding all([]) incident wearing a
+    # different predicate, one floor below the abstention that claims to close
+    # it. Read as divergence: (-1,) against (3,) would return SHAPE_MISMATCH,
+    # asserting a difference between a real tensor and a description of
+    # nothing. A claim of divergence never observed is exactly as wrong as a
+    # claim of identity never observed, so neither branch may own this.
+    #
+    # It raises rather than abstains because, unlike an empty tensor, no valid
+    # writer produces this: DcpReader.shape() is `tuple(int(d) for d in
+    # meta.size)` over an unvalidated pickle, so a negative dim means the
+    # metadata is corrupt and the artifact -- not this comparison -- is the
+    # thing that failed.
+    for _shape, _src in ((shape_a, source_a), (shape_b, source_b)):
+        _bad = [i for i, d in enumerate(_shape) if d < 0]
+        if _bad:
+            raise CheckpointFormatError(
+                f"tensor metadata declares negative extent(s) at "
+                f"dim(s) {_bad} of shape {_shape!r} -- no tensor has a "
+                f"negative dimension; the metadata is corrupt",
+                path=_src.path,
+                key=key,
+            )
+
+    # Encoding disagreement: a positively observed finding, owned by this
+    # branch and no other. The pre-fix comparator fetched dtype_a and dtype_b
+    # into the lines above, recorded both on the returned record, and never
+    # compared them -- identity was then decided by torch.equal, which
+    # type-promotes and compares DECODED VALUES. A bf16 export against its
+    # f32 source whose content is exactly representable in both encodings
+    # (any lossless round-trip; every small integral constant in learned
+    # scales and router buffers) streamed both sides, promoted, agreed, and
+    # returned EXACT with bitwise_equal=True -- two artifacts holding
+    # different-width bits, reported as identical. The requantized twin case
+    # was no better: a successful bf16 conversion reported honest-looking
+    # value statistics (near-CLOSE numbers riding a DIFFER verdict) that
+    # buried the operative fact that the encoding had changed.
+    #
+    # Why this branch, and not a neighbour, owns the case:
+    #
+    # Not NO_ELEMENTS. The abstention below exists because nothing was
+    # examined and so nothing may be claimed. Here something WAS examined --
+    # the two declared encodings, two lines above -- and they differ.
+    # Abstaining over an observed difference is the mirrored lie doctrine 5
+    # forbids, and it was live pre-fix: (0, 8)-bf16 against (0, 8)-f32 fell
+    # into the total==0 branch and reported "nothing examined" about two
+    # artifacts whose encodings demonstrably disagreed.
+    #
+    # Not SHAPE_MISMATCH. The geometry agrees: rank, extents and addressing
+    # of the element grid are identical. What differs is the width and
+    # interpretation of each storage slot -- same evidential class (metadata
+    # positively observed), different axis, and reusing the geometry token
+    # would mint one false claim to retire another.
+    #
+    # Not DIFFER. That verdict is defined over streamed content ("finite
+    # content outside both tolerances"), and nothing is streamed here -- by
+    # choice. Streaming cannot repair the operative claim (there is no
+    # encoding in which these bits are the same tensor), the value
+    # statistics it would mint are precisely the laundering vector (a good
+    # requantization reads as near-agreement), and the one verdict string
+    # cannot co-express "encodings differ" with "values close" without
+    # inviting a downgrade of a finding into a pass. The caller who
+    # DELIBERATELY wants cross-encoding value distance (a conversion-
+    # fidelity audit) has read_box/read_full to compute it; what closes
+    # here is the accidental laundering of an encoding change into EXACT.
+    #
+    # Not a raise, either: valid writers produce dtype mismatches (a
+    # converter legitimately emitting bf16). Both artifacts are well-formed;
+    # this is a finding -- data, like a shape mismatch -- not corruption
+    # like a negative extent, which describes no tensor at all.
+    #
+    # The numeric fields therefore carry the module's one established
+    # "compared nothing, visibly so" expression -- elements=0 naming the
+    # compared denominator, chunks/bytes 0, unbounded diffs, cosine None --
+    # identical to the SHAPE_MISMATCH branch and to parity's _metadata_entry
+    # for this same finding, so every metadata adjudication presents one
+    # record shape downstream. The fields that must be positively true are:
+    # the two dtype strings (they ARE the finding), the shapes (recorded as
+    # declared), and bitwise_equal=False. That False is enforced by ROUTING,
+    # not by clamping a computed True: the branch returns above the
+    # `bitwise = True` initialiser and above every torch.equal call, so the
+    # promotion predicate that minted the false claim is unreachable across
+    # encodings. Same-dtype comparisons never touch this branch, and for
+    # them torch.equal promotion is a no-op -- bitwise_equal's meaning is
+    # thereby narrowed to exactly what it says: same encoding, same values.
+    #
+    # Precedence: above shape and above zero-element, matching parity's
+    # adjudication order (dtype mismatch, then shape mismatch, then
+    # zero-element abstention). Two layers of one framework must never
+    # disagree about which finding owns a key, or which door the operator
+    # walked in decides which defect gets named. The predicate is dtype-
+    # OBJECT inequality, not string equality: both readers return canonical
+    # torch.dtype singletons (_safetensors_dtype maps each on-disk name to
+    # exactly one, and raises on any name the torch build lacks; DCP reads
+    # properties.dtype from metadata), aliases are the same object, and
+    # distinct torch dtypes always denote distinct storage encodings -- so
+    # `!=` here can neither misfire on a renamed-equal encoding nor pass a
+    # genuinely different one.
+    if dtype_a != dtype_b:
+        return TensorComparison(
+            key=key,
+            elements=0,
+            shape_a=shape_a,
+            shape_b=shape_b,
+            dtype_a=str(dtype_a),
+            dtype_b=str(dtype_b),
+            bitwise_equal=False,
+            mismatched_elements=0,
+            max_abs_diff=math.inf,
+            mean_abs_diff=math.inf,
+            cosine=None,
+            rms_a=0.0,
+            rms_b=0.0,
+            chunks_read=0,
+            bytes_read=0,
+            verdict=VERDICT_DTYPE_MISMATCH,
+            nonfinite_elements=0,
+        )
 
     if shape_a != shape_b:
         return TensorComparison(
@@ -1181,6 +1353,40 @@ def compare_keys(
 
     nd = len(shape_a)
     total = math.prod(shape_a)
+
+    if total == 0:
+        # Zero elements is never a pass: EXACT here would claim verified
+        # bitwise identity over content that does not exist, minted from the
+        # `bitwise = True` initialiser surviving a loop that never ran -- the
+        # founding all([]) incident inside the flagship comparator. An empty
+        # tensor is a legitimate artifact (zero-row padding embeddings,
+        # unallocated buffers), so this abstains rather than raising, and it
+        # mirrors the SHAPE_MISMATCH branch's established expression of "I
+        # compared nothing": bitwise_equal=False, unbounded diffs, elements=0
+        # naming the denominator. Returning before the loop also covers
+        # shapes like (5, 0): rows > 0 would otherwise run the stream over
+        # zero-element blocks, burn real reads, and report chunks_read > 0 --
+        # laundering "work happened" over a comparison of nothing.
+        return TensorComparison(
+            key=key,
+            elements=0,
+            shape_a=shape_a,
+            shape_b=shape_b,
+            dtype_a=str(dtype_a),
+            dtype_b=str(dtype_b),
+            bitwise_equal=False,
+            mismatched_elements=0,
+            max_abs_diff=math.inf,
+            mean_abs_diff=math.inf,
+            cosine=None,
+            rms_a=0.0,
+            rms_b=0.0,
+            chunks_read=0,
+            bytes_read=0,
+            verdict=VERDICT_NO_ELEMENTS,
+            nonfinite_elements=0,
+        )
+
     rows = shape_a[0] if nd else 1
 
     sum_a = sum_b = sumsq_a = sumsq_b = dot = sum_abs = 0.0

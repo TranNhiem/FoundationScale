@@ -194,3 +194,100 @@ def test_render_declared_empty_sweep_is_labelled_not_barely_all_clear() -> None:
     reg = GateRegistry(event_allow_empty=(Lifecycle.SAVE,))
     head = reg.run(Lifecycle.SAVE, ctx=object()).render().splitlines()[0]
     assert "gateless by declaration" in head
+
+
+class _AbstainingGate(Gate):
+    """The all-SKIP sweep's building block: declares itself not applicable, always.
+
+    SKIP is a first-class per-gate outcome with a reason; the report-layer
+    question is what the AGGREGATE may claim when every gate in it abstained.
+    Never verified here — report-level tests only, never registered globally.
+    """
+
+    id = "test.report_vacuity.abstains"
+    description = "Skips with a reason on every input"
+    events = (Lifecycle.PROMOTE,)
+
+    def check(self, ctx: Any) -> GateResult:
+        return self.skip("declared not applicable in this environment")
+
+    def controls(self) -> list[Control]:
+        return []
+
+
+def test_all_skip_report_is_not_ok_and_blocks() -> None:
+    # WHY: the finding's trace verbatim — SKIP does not block, nothing is
+    # missing, and the ids are real gate ids, so is_vacuous (prefix-based,
+    # correctly) cannot see it. Zero verified units must not read as success.
+    abstaining = _AbstainingGate()
+    results = (
+        abstaining.skip("no CUDA on this runner"),
+        abstaining.skip("no CUDA on this runner"),
+    )
+    rep = GateReport(event=Lifecycle.PROMOTE, results=results, missing=())
+    assert not rep.is_vacuous
+    assert rep.is_unverified
+    assert not rep.ok
+    with pytest.raises(GateBlocked):
+        rep.raise_if_blocking()
+
+
+def test_mixed_pass_and_skip_report_is_still_ok_and_says_so() -> None:
+    # WHY negative control: a healthy partial sweep must keep passing — the fix
+    # over-rotating into blocking mixed reports would be a regression of the
+    # same size as the defect. AND doctrine 5: the headline must state how much
+    # of it actually verified.
+    reg = GateRegistry()
+    reg.register(_PresenceGate())
+    reg.register(_AbstainingGate())
+    rep = reg.run(Lifecycle.PROMOTE, ctx=["layer-0"])
+    assert rep.ok
+    assert not rep.is_unverified
+    head = rep.render().splitlines()[0]
+    assert head.startswith("gates @ promote: 2 run")
+    assert "1 of 2 verified; 1 declared SKIP" in head
+
+
+def test_allow_empty_declaration_does_not_pardon_an_all_skip_sweep() -> None:
+    # WHY: event_allow_empty declares "zero gates for this event is deliberate".
+    # A gate that ran and abstained is not the absence of a gate; pardoning it
+    # with the same flag would widen the declaration beyond its evidence.
+    reg = GateRegistry(event_allow_empty=(Lifecycle.PROMOTE,))
+    reg.register(_AbstainingGate())
+    rep = reg.run(Lifecycle.PROMOTE, ctx=object())
+    assert rep.allow_empty
+    assert rep.is_unverified
+    assert not rep.ok
+    with pytest.raises(GateBlocked):
+        rep.raise_if_blocking()
+
+
+def test_all_skip_head_states_zero_verified_of_n_not_all_clear() -> None:
+    # WHY: "1 run — all clear" over one abstention is the doctrine-5 defect in
+    # the verdict-bearing position of the rendered output.
+    reg = GateRegistry()
+    reg.register(_AbstainingGate())
+    rep = reg.run(Lifecycle.PROMOTE, ctx=object())
+    head = rep.render().splitlines()[0]
+    assert "all clear" not in head
+    assert "0 of 1 verified" in head
+
+
+def test_to_json_records_unverified_for_abstention_sweeps() -> None:
+    # WHY: the verdict leaves the process as JSON; the new state must be on the
+    # wire or downstream consumers rebuild the fail-open reading from it.
+    reg = GateRegistry()
+    reg.register(_AbstainingGate())
+    rep = reg.run(Lifecycle.PROMOTE, ctx=object())
+    payload = json.loads(rep.to_json())
+    assert payload["unverified"] is True
+    assert payload["ok"] is False
+
+
+def test_empty_report_is_vacuous_not_unverified_polarity_preserved() -> None:
+    # WHY: is_vacuous's all([])-is-True polarity is load-bearing; is_unverified
+    # must NOT also claim the empty report, or declared-gateless (allow_empty)
+    # sweeps would suddenly block. Two properties, two shapes, disjoint.
+    rep = GateReport(event=Lifecycle.PROMOTE, results=(), missing=())
+    assert rep.is_vacuous
+    assert not rep.is_unverified

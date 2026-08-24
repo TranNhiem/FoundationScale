@@ -94,18 +94,27 @@ class ParityStatus(str, Enum):
     SHAPE_MISMATCH = "shape_mismatch"
     """Same key, different shapes. Blocks."""
 
+    NO_ELEMENTS = "no_elements"
+    """Same key, dtype and shape agree, and the shape declares zero elements.
+
+    Nothing was streamed, so neither identity nor divergence was observed: a stated
+    abstention, not a grade. It never counts as EXACT/CLOSE (a pass minted from zero
+    examined elements is the founding all([]) incident) and never as DIFFER (that
+    would be a divergence nobody observed — the same lie, mirrored). It does not
+    block on its own, because an empty tensor is a legitimate artifact; when no key
+    supplies elements, report-level vacuity blocks instead, naming 0 elements.
+    """
+
     @property
     def blocking(self) -> bool:
+        # NO_ELEMENTS is deliberately absent: it abstains rather than acquitting or
+        # convicting. Blocking over "everything examined was nothing" is the
+        # vacuity path's job, where the denominator (0 elements) can be named.
         return self in (
             ParityStatus.DIFFER,
             ParityStatus.DTYPE_MISMATCH,
             ParityStatus.SHAPE_MISMATCH,
         )
-
-
-# ---------------------------------------------------------------------------
-# Tolerance policy — explicit data, never magic numbers in comparisons
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -215,8 +224,9 @@ class KeyParity:
 
     Statistics were accumulated in float64 by ``dcp.compare_keys`` (per-key norms) and
     derived here (``rel_frob``), then validated by :func:`_guard_stats`. ``elements``
-    is the number of elements actually compared; for metadata-level findings
-    (dtype/shape mismatch) it is 0 by design, and visibly so.
+    is the number of elements actually compared; for metadata-level adjudications
+    (dtype/shape mismatch findings, zero-element abstentions) it is 0 by design, and
+    visibly so — a 0 here never enters the EXACT/CLOSE evidence counts.
     """
 
     key: str
@@ -506,6 +516,36 @@ def _compare_open_sources(
                     reason,
                 )
             )
+        elif math.prod(shape_left) == 0:
+            # dtype and shape agree, and the shape declares zero elements: there is
+            # nothing to stream. This branch is what the old note in
+            # _entry_from_comparison always claimed ("adjudicated at metadata
+            # level") while the code classified the key EXACT instead; and when
+            # dcp.compare_keys began abstaining on these with VERDICT_NO_ELEMENTS,
+            # feeding that abstention onward crashed the guard (it read
+            # 0-mismatched-of-0 as bitwise identity and condemned the unbounded-diff
+            # sentinels) and would otherwise have minted DIFFER from divergence
+            # nobody observed. The check sits after the shape check, mirroring the
+            # comparator's ordering: (0, 8) vs (0, 9) is an honest shape finding.
+            # Adjudicate from metadata, name the key as skipped, and let report-level
+            # vacuity do the blocking when no other key supplies elements.
+            reason = (
+                f"shape {shape_left} declares 0 elements on both sides; nothing was "
+                "streamed, so no numeric agreement is claimed"
+            )
+            skipped.append((key, reason))
+            entries.append(
+                _metadata_entry(
+                    key,
+                    ParityStatus.NO_ELEMENTS,
+                    shape_left,
+                    shape_right,
+                    dtype_left,
+                    dtype_right,
+                    tolerances,
+                    reason,
+                )
+            )
         else:
             cmp = compare_keys(
                 left,
@@ -539,7 +579,15 @@ def _metadata_entry(
     tolerances: Tolerances,
     note: str,
 ) -> KeyParity:
-    """A finding established from metadata alone — 0 elements compared, visibly so."""
+    """An adjudication established from metadata alone — 0 elements compared, visibly so.
+
+    Used for findings (dtype/shape mismatch, which block) and for zero-element
+    abstentions (NO_ELEMENTS, which does not). The unbounded-diff sentinels mean "no
+    bound was measured", matching dcp.compare_keys' own expression of "I compared
+    nothing"; the ``status`` and ``note`` carry whether the adjudication is a defect
+    or an abstention, so the sentinel can never be read as either agreement or
+    observed divergence.
+    """
     return KeyParity(
         key=key,
         status=status,
@@ -560,6 +608,14 @@ def _metadata_entry(
 
 
 def _entry_from_comparison(cmp: TensorComparison, tolerances: Tolerances) -> KeyParity:
+    # cmp.elements > 0 here by construction: _compare_open_sources adjudicates
+    # zero-element shapes at metadata level (skipped, ParityStatus.NO_ELEMENTS)
+    # before compare_keys is called. The earlier comment in this function claimed
+    # exactly that while the code classified zero-element keys EXACT — the comment
+    # described the design and the code never implemented it. Routing, not any
+    # check below, is what keeps an unread nothing out of both EXACT and DIFFER;
+    # the repaired _guard_stats merely declines to condemn the abstention sentinels
+    # if a zero-element comparison ever reaches here from a future caller.
     rel_frob = _relative_frobenius(cmp)
     _guard_stats(
         key=cmp.key,
@@ -578,8 +634,6 @@ def _entry_from_comparison(cmp: TensorComparison, tolerances: Tolerances) -> Key
         tolerances=tolerances,
     )
     fragments: list[str] = []
-    if cmp.elements == 0:
-        fragments.append("empty tensor: 0 elements, adjudicated at metadata level")
     if cmp.cosine is None and cmp.elements > 0:
         fragments.append("cosine undefined: at least one side is all zeros")
     if math.isnan(cmp.max_abs_diff) or (math.isnan(cmp.cosine) if cmp.cosine else False):
@@ -660,7 +714,10 @@ def _guard_stats(
     The separation of concerns: a statistic that is possible but bad (a NaN payload
     in the weights, which shows up as mismatched elements alongside NaN diffs) is a
     *finding*. A statistic that is impossible in any data (cosine 1.80, differing
-    bitwise-identical tensors) is a *lying reduction*, and it raises.
+    bitwise-identical tensors) is a *lying reduction*, and it raises. A comparison
+    over zero elements is neither: nothing was examined, so the guard pins nothing
+    — adjudicating that case is a routing decision (see _compare_open_sources), not
+    a numeric-invariant one.
     """
     if elements < 0 or mismatched < 0 or (elements > 0 and mismatched > elements):
         raise ParityInvariantError(
@@ -683,7 +740,20 @@ def _guard_stats(
         # Real mismatches make NaN statistics explainable (NaN payload in weights);
         # those are findings, handled downstream.
         return
+    if elements == 0:
+        # 0 mismatched out of 0 compared is an empty numerator, not bitwise identity
+        # — inferring the positive property from it is the all([]) shape hiding
+        # inside the guard itself. dcp.compare_keys' NO_ELEMENTS contract expresses
+        # "compared nothing" exactly this way (unbounded-diff sentinels, cosine
+        # None), and routing that abstention through the identity pins below raised
+        # ParityInvariantError on a legitimate artifact — the dcp/parity integration
+        # break. The possible-in-no-data checks above have already run, so this is
+        # an abstention from pinning, not an amnesty for a lying accumulator.
+        return
     # Bitwise-identical tensors pin every remaining statistic to a known value.
+    # elements > 0 is proven by the two returns above, so an examined identity
+    # genuinely has content to pin against (which is why the self-cosine clause no
+    # longer needs its own elements>0 conjunct).
     if max_abs_diff != 0.0:
         raise ParityInvariantError(
             f"bitwise-identical tensors produced max_abs_diff={max_abs_diff!r} on {key!r}"
@@ -692,11 +762,7 @@ def _guard_stats(
         raise ParityInvariantError(
             f"bitwise-identical tensors produced rel_frob={rel_frob!r} on {key!r}"
         )
-    if (
-        elements > 0
-        and cosine is not None
-        and (math.isnan(cosine) or abs(cosine - 1.0) > _SELF_COSINE_SLACK)
-    ):
+    if cosine is not None and (math.isnan(cosine) or abs(cosine - 1.0) > _SELF_COSINE_SLACK):
         raise ParityInvariantError(
             f"bitwise-identical tensors scored cosine={cosine!r} on {key!r}: a "
             f"tensor's cosine with itself is 1.0; any other printed value is a "
