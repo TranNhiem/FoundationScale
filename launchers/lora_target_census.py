@@ -60,6 +60,34 @@ EXIT VOCABULARY (shipped estate vocabulary, not renumbered):
                  vocabulary; the launcher maps it to the infrastructure arm.
   Every refusal path prints the number of targets actually certified (0).
 
+--out PATH (the finding-#78 PRODUCER half): OPTIONAL. When given and the
+verdict is CLEAR, the FULL attachment-parent set -- the union of every live
+FQN the shipped targets match under the real matcher, never the 2-per-target
+CENSUS_SAMPLE -- is persisted for live_save_gate.py --adapter-modules as a
+JSON object {'adapter_modules': [...], 'source': ...}. Entries are
+{'fqn', 'out_features', 'in_features'} when every unique parent exposes a
+positive-int dims pair, else plain stems: dims are all-or-nothing because the
+consumer's own dims-coverage check (live_save_gate.py:824-830) refuses a
+partially dimmed file as an unstated mixture, so this producer never emits
+one -- bare stems leave the gate's shape check abstaining BY NAME. Stems are
+written in the ARTIFACT namespace: the single leading 'module.' segment every
+live FQN on this estate is measured to carry is stripped exactly once
+(ARTIFACT_STRIP_SEGMENT), and any FQN lacking it -- or left empty by it --
+refuses the whole write rather than guess a strip. Fail-closed AT THE
+PRODUCER LAYER, in code: an empty attachment set is UNMEASURED with NO file
+written -- a zero must never travel as a census (doctrine 1); until #78 that
+refusal lived ONLY downstream (live_save_gate.py:811), and that downstream
+check is now a BACKSTOP for broken producers, not this producer's license to
+emit []. The write is same-dir temp + flush/fsync + rename atomic, so a
+crash mid-write cannot leave a truncated census that parses. BLOCKED with a
+non-empty set persists nothing either: the surviving subset must not stand
+as the launch-intended denominator, and a census of a mis-spelled target
+list would outlive its own re-spelling. PATH must resolve OUTSIDE any tree
+the gate will judge -- _load_adapter_modules refuses a census resolving
+inside the judged tree. Every --out refusal prints the certified count (0)
+and exactly one CENSUS_VERDICT= line, the same discipline as every
+pre-existing path.
+
 Environment: importable ONLY in the training container (megatron.bridge must
 import); elsewhere, ast.parse/py_compile is the offline-verifiable minimum
 the contract suite enforces. Mirrors dump_gemma4_modules.py's build recipe
@@ -72,7 +100,10 @@ the launcher blocks on — measured tonight only at --ep 1 on the dense base.
 """
 
 import argparse
+import json
+import os
 import sys
+import tempfile
 
 import torch
 from megatron.bridge import AutoBridge
@@ -85,6 +116,15 @@ CONTROL_MUST_NOT_FIRE = "zzz_no_such_module_xyz"
 # C3's subject: measured 2026-08-24, this family's linear_proj OWNS a child
 # (post_layernorm), so exactly the modules a leaf-only census silently drops.
 CONTROL_NONLEAF_SUBJECT = "linear_proj"
+
+# Namespace hand-off for --out (#78), measured 2026-08-24 on this estate's
+# live tree: every FQN named_modules() yields carries exactly ONE leading
+# "module." segment (the model wrapper) which the checkpoint/artifact
+# namespace does NOT carry. Strip exactly that one segment -- a stem renamed
+# by more or by less than the measured segment is a denominator entry no
+# artifact FQN can match, and a hand-rolled substring trim is a paraphrase
+# oracle, the exact fix39 defect class this tool exists to kill.
+ARTIFACT_STRIP_SEGMENT = "module."
 
 EXIT_CLEAR = 0
 EXIT_BLOCKED = 1
@@ -111,6 +151,218 @@ def build_model(hf_model_path: str, ep: int):
     return mp.provide_distributed_model(wrap_with_ddp=False)[0]
 
 
+class _CensusRefusal(Exception):
+    """Internal control flow for the --out writer (#78): every raise site is a
+    reason the census MUST NOT exist at the requested path. main() converts
+    each into exactly one REFUSAL line plus exactly one
+    CENSUS_VERDICT=UNMEASURED line -- never two verdict lines, never a file."""
+
+
+def _artifact_stem(fqn: str):
+    """Live-tree FQN -> artifact-namespace stem by removing the ONE measured
+    leading 'module.' segment. Returns None when the segment is absent or is
+    the entire FQN: the caller then REFUSES rather than guesses, because a
+    guessed stem is a denominator entry no artifact can match (doctrine 4)
+    -- and '' would be malformed-on-read at the consumer anyway."""
+    if fqn.startswith(ARTIFACT_STRIP_SEGMENT):
+        stem = fqn[len(ARTIFACT_STRIP_SEGMENT):]
+        if stem:
+            return stem
+    return None
+
+
+def _parent_dims(module):
+    """(out_features, in_features) of an attachment parent, or None.
+
+    Acceptance mirrored from the consumer (_load_adapter_modules,
+    live_save_gate.py:786-801): positive, non-bool ints only -- JSON booleans
+    ARE Python ints, so an unchecked isinstance would let a True/True pair
+    read as a plausible (out, in) and mint wrong shapes with an authoritative
+    face. A module that lacks the attrs, or whose attrs raise when read,
+    yields None; the caller's all-or-nothing rule then degrades the WHOLE
+    file to bare stems (the gate's shape check abstains by name) -- never a
+    partially-dimmed census, which is refuse-on-read at
+    live_save_gate.py:824-830."""
+    try:
+        out_d = getattr(module, "out_features", None)
+        in_d = getattr(module, "in_features", None)
+    except Exception:  # noqa: BLE001 -- a raising property reads as absent.
+        return None
+    if (
+        isinstance(out_d, int) and not isinstance(out_d, bool)
+        and isinstance(in_d, int) and not isinstance(in_d, bool)
+        and out_d > 0 and in_d > 0
+    ):
+        return (out_d, in_d)
+    return None
+
+
+def _atomic_write_json(out_path, payload) -> None:
+    """Persist payload at out_path such that a crash mid-write can never leave
+    a TRUNCATED CENSUS THAT PARSES (doctrine 4): mkstemp in the SAME
+    directory (a rename is atomic only within one filesystem -- a temp on
+    another mount would silently degrade the 'atomic' rename into a copy),
+    flush + fsync (a crash must not persist the new name without its
+    contents), then os.replace onto out_path. Before the replace, out_path is
+    whatever it was; after, it is complete JSON. On any failure the temp file
+    is unlinked, best-effort, so a failed probe never leaves a half-file a
+    human could later mistake for a census; the cleanup error must never mask
+    the real one, and after a successful replace tmp_path no longer exists to
+    unlink (OSError swallowed by design)."""
+    out_dir = os.path.dirname(os.path.abspath(out_path))
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=".adapter-census-", suffix=".tmp", dir=out_dir
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _persist_adapter_census(out_path, rows, population, hf_model_path, targets, total) -> None:
+    """Write the #78 launch-time attachment-parent census in exactly the shape
+    tools/live_save_gate.py:_load_adapter_modules accepts, or raise
+    _CensusRefusal with NO file at out_path.
+
+    Denominator discipline is enforced HERE at the producer, not delegated
+    downstream:
+      * rows carries the FULL per-target match lists (the same `found` lists
+        CENSUS_SAMPLE previews only 2 of) -- the file always carries ALL of
+        them, de-duplicated into a SORTED union: one module matched by TWO
+        shipped patterns would otherwise appear twice and the gate loader
+        refuses a census carrying duplicates outright
+        (live_save_gate.py:816-823), and sorted order makes the emitted bytes
+        a pure function of the attachment SET, so re-ordering or re-spelling
+        LORA_TARGETS can never silently diff the denominator file;
+      * the EMPTY-SET guard sits directly in front of the only call that
+        creates the file. Broken to see red: hand this writer rows whose
+        every `found` is [] and it must raise BEFORE any temp file is
+        created -- if it ever writes [], the producer-side control against a
+        manufactured zero denominator (doctrine 1) is dead. On current
+        verdict logic CLEAR already implies non-empty, so this guard firing
+        means the verdict logic changed, which is exactly when a guard earns
+        its keep;
+      * dims are all-or-nothing, the consumer contract at
+        live_save_gate.py:824-830: emitting dims "per module where exposed"
+        naively would mint exactly the partially-dimmed mixture the gate
+        refuses on read -- a file that LOOKS producer-complete and
+        adjudicates nothing. So a single parent without clean dims degrades
+        EVERY entry to a bare stem, and the gate's shape check abstains by
+        name instead of driving against an unstated mixture.
+    On return (no raise) the file EXISTS, parses, and carries >= 1 unique
+    stem.
+    """
+    mod_by_fqn = {fqn: module for (module, _leaf, _prefix, fqn) in population}
+    raw_matches = 0
+    attachment_live = set()
+    for (_t, _real_n, _grep_n, found) in rows:
+        for fqn in found:
+            raw_matches += 1
+            attachment_live.add(fqn)
+
+    pairs = []  # [(live_fqn, artifact_stem)], sorted by live_fqn
+    strip_failures = []
+    for fqn in sorted(attachment_live):
+        stem = _artifact_stem(fqn)
+        if stem is None:
+            strip_failures.append(fqn)
+        else:
+            pairs.append((fqn, stem))
+
+    if strip_failures:
+        # Broken to see red: feed a matched FQN spelled without the measured
+        # leading 'module.' (e.g. 'decoder.layers.0.self_attention.linear_qkv')
+        # and this raise must fire; passing it through unstripped would ship a
+        # census disjoint from every artifact FQN the save can produce.
+        raise _CensusRefusal(
+            f"--out path {out_path!r}: {len(strip_failures)} of "
+            f"{len(attachment_live)} unique matched FQN(s) lack the single "
+            f"leading '{ARTIFACT_STRIP_SEGMENT}' segment this census is "
+            f"measured to strip (or nothing would remain after it); first "
+            f"offender: {strip_failures[0]!r}. The namespace hand-off is "
+            "ambiguous here, and a stem emitted by guessing is a denominator "
+            "entry no artifact FQN can match -- NO census file was written "
+            "(doctrine 4)."
+        )
+    if not pairs:
+        raise _CensusRefusal(
+            f"--out path {out_path!r}: the attachment set is EMPTY (0 "
+            f"unique parents assembled from {raw_matches} raw matches over "
+            f"{len(rows)} targets). CENSUS_VERDICT=UNMEASURED and NO file "
+            "written: a zero can never travel as a census (doctrine 1). The "
+            "downstream empty-declarations refusal (_load_adapter_modules, "
+            "live_save_gate.py:810-815) is a BACKSTOP for broken producers, "
+            "not this producer's license to emit []."
+        )
+
+    dims = {}
+    for fqn, stem in pairs:
+        d = _parent_dims(mod_by_fqn[fqn])
+        if d is not None:
+            dims[stem] = d
+    if len(dims) == len(pairs):
+        entries = [
+            {"fqn": s, "out_features": dims[s][0], "in_features": dims[s][1]}
+            for _f, s in pairs
+        ]
+        dims_note = (
+            f"dims=all ({len(dims)} of {len(pairs)} parents carry "
+            "positive-int out_features/in_features; gate shape check armed)"
+        )
+    else:
+        entries = [s for _f, s in pairs]
+        dims_note = (
+            f"dims=none ({len(dims)} of {len(pairs)} parents expose clean "
+            "positive-int dims) -- all entries written as bare stems so the "
+            "gate's shape check abstains BY NAME; a partially-dimmed census "
+            "is refuse-on-read at live_save_gate.py:824-830 and would only "
+            "LOOK shipped"
+        )
+
+    payload = {
+        "adapter_modules": entries,
+        # 'source' is the provenance the gate loader folds into its basis
+        # text (live_save_gate.py:764-766); a census that cannot say who
+        # wrote it earns the louder NO-provenance basis instead.
+        "source": (
+            "launchers/lora_target_census.py launch-time live-module census "
+            f"(#78): shipped ModuleMatcher over the base tree built from "
+            f"{hf_model_path!r}; targets [{', '.join(targets)}]; population "
+            f"{total} offerable modules; {len(pairs)} unique attachment "
+            f"parents from {raw_matches} raw target-module matches"
+        ),
+    }
+
+    try:
+        _atomic_write_json(out_path, payload)
+    except Exception as exc:  # noqa: BLE001 -- any write failure refuses.
+        raise _CensusRefusal(
+            f"--out path {out_path!r} could not be written "
+            f"({type(exc).__name__}: {exc}). --out names the destination: "
+            "fix the path, its parent directory, or its permissions and "
+            "re-run. NO complete census now exists at that path, and none "
+            "may be assumed; any previous file there is untouched (the "
+            "atomic writer replaces only after a fully serialised temp file "
+            "survives fsync)."
+        ) from exc
+
+    print(
+        f"CENSUS_OUT {os.path.abspath(out_path)} attachment_parents="
+        f"{len(pairs)} raw_matches={raw_matches} collapsed_duplicates="
+        f"{raw_matches - len(pairs)} {dims_note}",
+        flush=True,
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="fix39 LoRA target census — oracle: the shipped ModuleMatcher itself."
@@ -122,6 +374,22 @@ def main() -> int:
         required=True,
         help="Comma-separated; the launcher passes its shipped LORA_TARGETS "
         "verbatim so what is censused is byte-identical to what is launched.",
+    )
+    ap.add_argument(
+        "--out",
+        default=None,
+        metavar="PATH",
+        help="Optional (#78 producer): on a CLEAR verdict, persist the FULL "
+        "attachment-parent census -- every FQN the shipped matcher attaches, "
+        "not the 2-per-target CENSUS_SAMPLE -- as the JSON "
+        "live_save_gate.py --adapter-modules parses, in the artifact "
+        "namespace (one measured leading 'module.' segment stripped; parent "
+        "dims all-or-nothing). Written atomically and only on CLEAR; an "
+        "empty or unpersistable set is CENSUS_VERDICT=UNMEASURED with NO "
+        "file at PATH. Write it OUTSIDE any tree the gate will judge -- "
+        "_load_adapter_modules refuses a census resolving inside the judged "
+        "tree. Absent: byte-identical pre-#78 preflight behaviour, so "
+        "existing preflight invocations are unaffected.",
     )
     args = ap.parse_args()
 
@@ -327,12 +595,53 @@ def main() -> int:
                 f"grep laundered into a pass.",
                 flush=True,
             )
+        if args.out is not None:
+            # A BLOCKED target list must NOT receive a census file: the shipped
+            # strings must be re-spelled, and a persisted census of the
+            # surviving attachments would outlive that re-spelling -- a file a
+            # LATER, differently-spelled launch could be pointed at, laundering
+            # tonight's blocked config into a gate input it never earned
+            # (doctrine 4). CENSUS_NOTE is not a verdict line; exactly one
+            # CENSUS_VERDICT= still follows below.
+            print(
+                f"CENSUS_NOTE --out path {args.out!r} NOT written: verdict is "
+                "BLOCKED; persisting a census now would manufacture a "
+                "denominator for strings PEFT was never asked to attach in "
+                "this exact spelling.",
+                flush=True,
+            )
         print(
             f"CENSUS_VERDICT=BLOCKED ({len(zero)} of {len(rows)} shipped "
             f"targets attach nothing; population {total})",
             flush=True,
         )
         return EXIT_BLOCKED
+
+    if args.out is not None:
+        # Persist BEFORE the verdict line below: that line must never claim,
+        # even by implication, a file this run failed to produce. Every
+        # refusal here is its own exit carrying exactly one
+        # CENSUS_VERDICT=UNMEASURED line (doctrines 3/4 -- an absent census
+        # must never let a launch proceed as-if gate-verified). Reached only
+        # on the CLEAR path: the BLOCKED branch above returns first, so a
+        # mis-spelled target list never receives a census file, and a
+        # measured all-zero population stays a BLOCKED verdict rather than
+        # being re-faced as UNMEASURED.
+        try:
+            _persist_adapter_census(
+                args.out, rows, population, args.hf_model_path, targets, total
+            )
+        except _CensusRefusal as exc:
+            print(f"REFUSAL: --out census NOT written: {exc}", flush=True)
+            print(
+                f"CENSUS_VERDICT=UNMEASURED (0 of {len(rows)} targets "
+                "carried to a persisted census: --out refused or failed; the "
+                "attachment counts above stay measured, but a census the "
+                "operator asked to persist and was NOT persisted must never "
+                "let a launch proceed as-if gate-verified)",
+                flush=True,
+            )
+            return EXIT_UNMEASURED
 
     print(
         f"CENSUS_VERDICT=CLEAR ({len(rows)} of {len(rows)} shipped targets "

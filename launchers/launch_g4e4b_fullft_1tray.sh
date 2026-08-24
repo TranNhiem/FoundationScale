@@ -13,6 +13,10 @@
 #
 # Env overrides: TP CP EP ETP SEQ_LENGTH GBS MBS EPOCHS TRAIN_ITERS
 #                SAVE_INTERVAL MASTER_PORT OUT_DIR BASE_CKPT EXTRA_OVERRIDES
+#                PROBE=1 -> 20 iters, saves at 10 AND 20, OUT_DIR gains a
+#                _probe suffix, G5 save-path gate on exit (mirrors the LoRA
+#                launcher). Unset reads as 0; any other value is refused --
+#                silence about this knob was finding #81 and must not return.
 # ============================================================================
 #SBATCH --job-name=g4e4b-tw-v3-fullft
 #SBATCH --partition=<group>
@@ -62,7 +66,7 @@ EXTRAS=$A/python-extras-mbridge     # trap1: $EXTRAS is FIRST on PYTHONPATH; nev
 SQSH=$CLUSTER_HOME/SQSH-env/nemo-automodel-26-04_compute.sqsh
 G=$CLUSTER_HOME/pretraining_weights/Vision-Language-Models/Google/Gemma4
 # fix45-A2 / #82: this assignment MUST be exported. The in-container preflight
-# probe ($PROBE below) reads os.environ["HF_MODEL"], and run_in_container
+# probe ($COT_PROBE_PY below) reads os.environ["HF_MODEL"], and run_in_container
 # forwards EXPORTED env only (s7). Measured on <compute-node>: unexported, the probe
 # died KeyError: 'HF_MODEL' on every launch ("preflight tokenizer/CoT probe
 # FAILED — job stopped before any training GPU-seconds") — a second
@@ -245,9 +249,49 @@ SAVE_INTERVAL=${SAVE_INTERVAL:-100}              # FIRST_SAVE EARLY: see rationa
 require_pos_int SAVE_INTERVAL "$SAVE_INTERVAL"
 EVAL_INTERVAL=100000; EVAL_ITERS=0               # val loader is NOT modality-bucketed -> any eval pass deadlocks silently. Keep OFF.
 
+# PROBE mode (fix #81), with probe parity to the LoRA launcher (its lines
+# 349-356). The original defect was SILENCE plus a name collision: `PROBE=1
+# sbatch` bound the mode knob, then the old preflight path assignment (now
+# COT_PROBE_PY, below) overwrote the operator's `1` with a path before
+# anything read it as a mode, handing the operator a ~2016-iter production
+# run. So no read of this knob may be quiet again: unset reads as 0, 1
+# selects the probe arm, and any OTHER value is refused outright (fail
+# closed -- silently mapping "yes" onto production would be the finding
+# re-born with better spelling). The arms write back a normalized 0/1, so
+# the banner below and the G5 gate read the RESOLVED $PROBE and never
+# re-read the environment independently.
+case "${PROBE:-0}" in
+  0|1) ;;
+  *) die "PROBE must be 0 or 1, got '${PROBE}' -- refusing to choose between a 20-iter probe and a ~2016-iter production run on the operator's behalf" ;;
+esac
+if [[ "${PROBE:-0}" == "1" ]]; then
+  PROBE=1
+  TRAIN_ITERS=20        # literal, self-validating; the row-count arithmetic above sized PRODUCTION only
+  SAVE_INTERVAL=10      # a run is healthy only after its FIRST save -- probe forces saves at 10 AND 20
+  RUN_SUFFIX=_probe
+else
+  PROBE=0
+  RUN_SUFFIX=""
+fi
+
 MASTER_PORT=${MASTER_PORT:-$(( 29400 + SLURM_JOB_ID % 1000 ))}
 (( MASTER_PORT >= 1024 && MASTER_PORT <= 65535 )) || die "MASTER_PORT out of range: $MASTER_PORT"
-OUT_DIR=${OUT_DIR:-$A/results/g4e4b_twaiec_it_fullft_v3_${SEQ_K}k}   # STABLE dir -> auto-resume chain works
+# ${RUN_SUFFIX} is folded in where OUT_DIR is BORN, ahead of every consumer
+# (the mkdir/write-probe below, the disk watermark check, WANDB_DIR, the
+# checkpoint.load/save paths, the resume read of checkpoints/ at ~635): a
+# probe must be PHYSICALLY unable to write into the stable auto-resume
+# chain, else its latest_checkpointed_iteration.txt (=20) seeds that chain
+# and the next production launch "resumes" a throwaway probe at 20/2016 --
+# the probe's optimizer state silently worn by the run it was meant to
+# precede. The suffix sits OUTSIDE the default: an operator-set OUT_DIR
+# takes it too, because a custom path is no proof the mode knob was
+# remembered. Suffixing any later than this line reopens exactly that
+# collision; this ordering is the load-bearing part. (logger.wandb_exp_name
+# at ~669 does NOT inherit the suffix -- stated, not hidden.) MUST_FIRE
+# (broken to see red): delete ${RUN_SUFFIX} from this line and the banner
+# below prints PROBE=1 beside an unsuffixed out= path -- the loud
+# contradiction this arrangement exists to produce.
+OUT_DIR=${OUT_DIR:-$A/results/g4e4b_twaiec_it_fullft_v3_${SEQ_K}k}${RUN_SUFFIX}   # STABLE dir -> auto-resume chain works; PROBE=1 detours to *_probe, out of that chain's reach
 LOG_OUT=$A/logs/g4e4b_sft_${SLURM_JOB_ID}.out
 LOG_ERR=$A/logs/g4e4b_sft_${SLURM_JOB_ID}.err
 mkdir -p "$OUT_DIR/checkpoints" "$A/logs"
@@ -264,7 +308,13 @@ echo " rows=$ROWS gbs=$GBS mbs=$MBS epochs=$EPOCHS -> train_iters=$TRAIN_ITERS (
 echo " save_interval=$SAVE_INTERVAL (first ckpt at iter $SAVE_INTERVAL)"
 echo " hf=$HF_MODEL"
 echo " base_ckpt=$BASE_CKPT"
-echo " out=$OUT_DIR  port=$MASTER_PORT"
+# PROBE= prints the mode as RESOLVED in the probe-mode block above
+# (normalized to exactly 0 or 1 there), not a fresh environment read --
+# re-reading the knob here would print the operator's intent instead of the
+# script's decision, which is precisely the gap a swallowed flag hides in
+# (fix #81). Under PROBE=1 the out= path on this same line ends in _probe;
+# a PROBE/out= pairing that disagrees proves the suffix plumbing regressed.
+echo " out=$OUT_DIR  port=$MASTER_PORT  PROBE=$PROBE"
 echo "============================================================"
 
 # ----------------------------------------------------------------------------
@@ -546,8 +596,18 @@ FREE_BYTES=$(df -B1 --output=avail "$OUT_DIR" | tail -n1 | tr -d ' ')
 # Dynamic probe (1 CPU task, in-container): tokenizer loads; trap is present in
 # the stock template; the two-replacement patch mechanics keep the CoT in the
 # render of a REAL think row. Fails the job if the render-under-patch drops CoT.
-PROBE=$OUT_DIR/preflight_cot_probe.py
-cat > "$PROBE" <<'PY'
+# fix #81: this path variable MUST NOT be named PROBE. PROBE is the
+# operator-facing mode knob (PROBE=1 -> 20-iter probe run, resolved above);
+# the old line bound a path to the same name and silently overwrote the
+# operator's `1` with a path before anything read it as a mode -- that
+# overwrite WAS the finding, turning `PROBE=1 sbatch` into a ~2016-iter
+# production run. COT_PROBE_PY makes the collision structurally impossible,
+# not just unlikely: after this patch every remaining PROBE use in this file
+# names the mode knob exactly (header doc, mode block, banner, G5 gate), so
+# no corner is left for a second meaning to hide in. Renaming this back is
+# how that defect returns -- one name, one meaning.
+COT_PROBE_PY=$OUT_DIR/preflight_cot_probe.py
+cat > "$COT_PROBE_PY" <<'PY'
 import json, os, sys
 hf = os.environ["HF_MODEL"]
 try:
@@ -587,7 +647,69 @@ PY
 # Same interpreter stack as training (see the module-dump comment in the LoRA
 # launcher); --slurm-ntasks 1 preserves the historic single-task probe exactly.
 run_in_container --slurm-ntasks 1 --workdir "$REPO" \
-     bash -lc "python3 $PROBE" || die "preflight tokenizer/CoT probe FAILED — job stopped before any training GPU-seconds"
+     bash -lc "python3 $COT_PROBE_PY" || die "preflight tokenizer/CoT probe FAILED — job stopped before any training GPU-seconds"
+
+# ----------------------------------------------------------------------------
+# G5-equivalent post-run save-path gate (fix #81; mirrors the LoRA launcher's
+# lines 1521-1533)
+# ----------------------------------------------------------------------------
+# Probe mode without this gate burns 20 iterations and asserts NOTHING -- an
+# unmeasured run (doctrine 1), the same defect the finding was filed against.
+# Written as an EXIT trap installed HERE, ahead of every later exit path
+# (die() everywhere below, the resume-complete `exit 0`, the training rc
+# passthrough, later post-run gate calls): a linear insertion at the script
+# tail could be orphaned by any future early exit, and an install point
+# AFTER the resume-complete exit would silently stop covering it -- on that
+# path a second `PROBE=1 sbatch` costs zero GPU-seconds and this gate
+# re-measures the EXISTING saves instead of trusting them. The gate
+# adjudicates ONLY a run that claims success: it captures the pending rc
+# first and passes a nonzero rc straight through, so a crashed or
+# preflight-red run keeps its own single clean error message and never gets
+# green check text printed beside its red status (scope is symmetric: a
+# false alarm costs what a false green costs).
+# HAZARD (stated, not hidden): bash keeps exactly ONE EXIT trap. If any
+# later section installs its own, it MUST chain fs_probe_save_gate when
+# PROBE=1 -- the armed-banner echo below is what an operator greps the log
+# for to notice the gate went missing; a detector that never RUNS is not a
+# control. Armed ONLY under PROBE=1: production runs keep a byte-identical
+# trap state and never adjudicate probe evidence.
+fs_probe_save_gate() {
+  local rc=$?    # the status the script was ALREADY exiting with; captured first, before any test below clobbers it
+  # Scope lock: even if someone later re-arms this trap on a production
+  # path, a non-probe run must never adjudicate probe evidence.
+  [[ "${PROBE:-0}" == "1" ]] || exit "$rc"
+  # A red run never reaches the checks: rc!=0 means something upstream
+  # already failed, and inspecting the save dir could only double-report --
+  # or print green text beside a red run when the iter-10 save happened to
+  # land. The original failure passes through with its rc untouched.
+  (( rc == 0 )) || exit "$rc"
+  local ckpt_dir=$OUT_DIR/checkpoints
+  local latest=$ckpt_dir/latest_checkpointed_iteration.txt
+  [[ -f "$latest" ]] || die "PROBE=1 reached rc 0 but $latest is missing -- no save ever landed; the probe run examined 0 save artifacts, and zero units is UNMEASURED, never PASS"
+  local raw; raw=$(tr -dc '0-9' < "$latest")
+  [[ -n "$raw" ]] || die "PROBE=1: $latest carries no iteration digits -- unreadable is not zero"
+  local last=$((10#$raw))    # 10# pins base: a zero-padded write would otherwise parse octal and report nonsense like 16!=20
+  (( last == TRAIN_ITERS )) || die "PROBE=1 last_iter=$last != TRAIN_ITERS=$TRAIN_ITERS in $latest -- saved short of the probe budget; not measured"
+  local nd; nd=$(ls -d "$ckpt_dir"/iter_* 2>/dev/null | wc -l | tr -d ' ')
+  (( nd >= 2 )) || die "PROBE=1 expected >=2 iter_* dirs under $ckpt_dir (forced saves at iters 10 and 20), found $nd"
+  echo "PROBE G5 PASS: latest_checkpointed_iteration=$last == TRAIN_ITERS=$TRAIN_ITERS, $nd iter_* dirs under $ckpt_dir -- save path measured end-to-end on $TRAIN_ITERS iters"
+  exit 0
+}
+if [[ "${PROBE:-0}" == "1" ]]; then
+  trap fs_probe_save_gate EXIT
+  # The echo below is the gate's proof-of-RUN marker in the log: no banner,
+  # no armed gate.
+  # MUST_FIRE (broken to see red): set TRAIN_ITERS=21 in the probe block
+  #   above -- an honest probe dies here with last_iter=20 != 21; or delete
+  #   latest_checkpointed_iteration.txt after a probe save and the missing
+  #   file goes red on its own line.
+  # MUST_PASS: an honest PROBE=1 run -- saves at 10 and 20 on disk, latest
+  #   file reading 20, PASS line printed, exit 0 preserved.
+  # The OBSERVED red/green evidence for both legs belongs to the #81
+  # contract suite (a separate task); until it lands this gate is
+  # specified, not witnessed -- sign no green off this file alone.
+  echo "PROBE=1: G5 save-path gate armed (EXIT trap) -- will require $OUT_DIR/checkpoints/latest_checkpointed_iteration.txt == $TRAIN_ITERS and >=2 iter_* dirs"
+fi
 
 # ----------------------------------------------------------------------------
 # Environment (estate conventions, smoke runner + dense launcher)

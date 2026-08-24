@@ -1414,6 +1414,85 @@ def _real(meta: CheckpointMetadata) -> list[tuple[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+# #80: a healthy adapter save is not ONLY adapter tensors -- measured on the
+# production Megatron adapter save, the 679 real entries are 672
+# language_model.* + 6 optimizer.* + 1 rng_state. Those last 7 are legitimate
+# non-adapter checkpoint content (optimizer state and RNG), misjudged by the
+# pre-#80 lora branch as "unrecognized adapter content" (exit 1 on a good
+# save, reproducible the moment #78's sibling wiring reaches this branch).
+# NARROW BY CONTRACT: membership is decided on the FQN's ROOT segment only
+# (see _is_non_adapter_namespace), so a module merely named with the letters
+# "optimizer" is still adjudicated. Two controls pin this set from opposite
+# sides: DELETING it (or its two call sites) turns the MUST_PASS
+# test_calibrated_nondefault_naming_clears_end_to_end red -- its fixture
+# carries the measured 7 entries and must CLEAR; WIDENING the match to a
+# substring test turns the MUST_FIRE
+# test_optimizer_shaped_decoy_still_flagged_as_unmarked red -- its decoy
+# must stay judged. Add an entry ONLY with a measured save to cite: an
+# evidence-free entry here silently shrinks every lora denominator, which is
+# doctrine-5 scope creep wearing a fix's clothes.
+_NON_ADAPTER_CHECKPOINT_NAMESPACE_ROOTS = frozenset({"optimizer", "rng_state"})
+
+
+def _is_non_adapter_namespace(fqn: str) -> bool:
+    """TRUE only when fqn's ROOT segment is a measured non-adapter namespace.
+
+    partition rather than split: we want the first segment only, and it makes
+    the bare single-segment case explicit -- 'rng_state' (no dot) partitions
+    to ('rng_state', '', '') and matches by EXACT segment equality, which is
+    precisely how the RNG entry appears on disk. Root-anchored means
+    'layers.3.self_attn.optimizer_gate.weight' and even 'optimizer_gate.x'
+    are NOT excused: the decoy control for that distinction lives in the
+    test module; do not "simplify" to a substring test, that is the
+    red-maker it watches for."""
+    return fqn.partition(".")[0] in _NON_ADAPTER_CHECKPOINT_NAMESPACE_ROOTS
+
+
+def _infer_auto_kind(
+    real_fqns: set[str], markers: re.Pattern[str],
+) -> tuple[str, str]:
+    """Auto-run-kind inference over the JUDGED population only.
+
+    Extracted from adjudicate_checkpoint so the denominator has its own
+    firing control (test_auto_kind_denominator_excludes_save_state) -- the
+    second, latent bite of #80 lived inline here and could not be probed
+    without driving a whole adjudication."""
+    judged = sorted(f for f in real_fqns if not _is_non_adapter_namespace(f))
+    excluded = len(real_fqns) - len(judged)
+    if not judged:
+        # Fail closed (doctrine 4) against vacuous truth (doctrine 1): the
+        # caller guarantees real_fqns is non-empty, but EVERY entry can be
+        # save state -- e.g. a probe pointed at a trainer scratch artifact.
+        # The old inline code computed frac = 0/N = 0 -> "full" here, a guess
+        # laundered through arithmetic. Zero judged entries is UNMEASURED and
+        # the operator must answer with --run-kind instead.
+        raise GateUnmeasured(
+            f"auto kind inference over {len(real_fqns)} real tensor(s): all sit "
+            f"in non-adapter checkpoint namespaces "
+            f"{sorted(_NON_ADAPTER_CHECKPOINT_NAMESPACE_ROOTS)} -- zero "
+            f"adapter-namespace entries to measure, so there is no fraction to "
+            f"classify; pin --run-kind rather than let the tool guess")
+    marked = sum(1 for f in judged if markers.search(f))
+    # #80 denominator: pre-patch this was marked / len(real_fqns). On the
+    # measured production save the error is invisible (the fraction is ~0.99
+    # either way) and both launchers pin --run-kind, so this is LATENT --
+    # but on a small artifact under `--run-kind auto` or via a library
+    # caller, the 6-7 optimizer/rng entries drag the fraction under 0.6, kind
+    # resolves "full", and the LoRA save routes into the MODE/full
+    # "population looks partial" blocker: the SAME false alarm re-worded.
+    # Fixing only the `unmarked` append in cross_check_population would
+    # RELOCATE #80 instead of ending it, which is why one constant feeds
+    # both sites.
+    frac = marked / len(judged)
+    kind = "lora" if frac >= 0.6 else "full"
+    basis = (f"auto: {marked}/{len(judged)} adapter-namespace tensors carry an "
+             f"adapter marker ({frac:.2f}), with {excluded} non-adapter "
+             f"checkpoint namespace entries excluded from the denominator per "
+             f"#80 -> {kind!r}; corroborate with --run-kind when the train "
+             f"config has no peft key")
+    return kind, basis
+
+
 def cross_check_population(
     kind: str, real_fqns: set[str], base: BaseModel, decl: Declared,
     adapter_marker: re.Pattern[str], modules_to_save: frozenset[str],
@@ -1447,16 +1526,61 @@ def cross_check_population(
                 f"FQNs (first: {contaminated[0]}) -- an adapter checkpoint carrying "
                 f"base weights masks a broken adapter save behind plausible bytes"
             )
+        # #80: every healthy Megatron adapter save also carries optimizer
+        # state and RNG entries (measured: 6 optimizer.* + 1 rng_state among
+        # 679 real entries, see _NON_ADAPTER_CHECKPOINT_NAMESPACE_ROOTS).
+        # Pre-#80 the `unmarked` sweep below adjudicated them as
+        # "unrecognized adapter content" -- exit 1 on a healthy save, masked
+        # only because #78 left this branch unreached in production. They are
+        # set aside BEFORE judging, by anchored ROOT-SEGMENT match only: a
+        # module merely named with the letters "optimizer"
+        # (layers.3.self_attn.optimizer_gate.weight) is NOT save state and
+        # must stay judged -- test_optimizer_shaped_decoy_still_flagged_as_
+        # unmarked is the firing control for that distinction.
+        non_adapter = sorted(f for f in real_fqns if _is_non_adapter_namespace(f))
+        judged = len(real_fqns) - len(non_adapter)
+        if non_adapter:
+            # Doctrine 2, on the GREEN path too: an exclusion that silently
+            # shrinks a population is indistinguishable from a detector that
+            # stopped working, so the shrink is recorded on EVERY lora
+            # adjudication, not just red ones -- as a non-blocking
+            # declared-basis note. It excuses measured content and must never
+            # allege a defect on its own; the red paths quote the same count
+            # inline so the denominator is visible in the blocking reason
+            # itself.
+            decl.notes.append(
+                f"set {len(non_adapter)} non-adapter checkpoint namespace "
+                f"entry(ies) aside from lora adjudication (roots "
+                f"{sorted(_NON_ADAPTER_CHECKPOINT_NAMESPACE_ROOTS)}; first: "
+                f"{non_adapter[0]}) -- measured save state excused per #80's "
+                f"anchored root-segment match; they remain counted in the "
+                f"artifact inventory, only outside the judged population"
+            )
+        if real_fqns and not judged:
+            # Doctrine 1: sweeping zero judged tensors proves nothing
+            # (all([]) is True), so an artifact reduced to pure save state is
+            # UNMEASURED, never CLEAR. Without this leg the exclusion itself
+            # could hollow the detector out from inside -- a one-line way to
+            # "fix #80" that no test would distinguish from fixing it.
+            reasons.append(
+                f"MODE/lora: all {len(real_fqns)} real tensor(s) sit in "
+                f"non-adapter checkpoint namespaces (first: {non_adapter[0]}) "
+                f"-- zero adapter-namespace entries remain to adjudicate, and "
+                f"zero units judged is UNMEASURED, never PASS"
+            )
         unmarked = sorted(
             f for f in real_fqns
             if not adapter_marker.search(f) and f not in modules_to_save
+            and not _is_non_adapter_namespace(f)
         )
         if unmarked:
             reasons.append(
-                f"MODE/lora: {len(unmarked)} tensor(s) carry no adapter marker "
-                f"/{adapter_marker.pattern}/ and are not declared modules_to_save "
-                f"(first: {unmarked[0]}) -- unrecognized adapter content is not "
-                f"assumed healthy"
+                f"MODE/lora: {len(unmarked)} of {judged} adapter-namespace "
+                f"tensor(s) carry no adapter marker /{adapter_marker.pattern}/ "
+                f"and are not declared modules_to_save (first: {unmarked[0]}; "
+                f"{len(non_adapter)} non-adapter checkpoint namespace entr(ies) "
+                f"set aside per #80, see the declared-basis note) -- "
+                f"unrecognized adapter content is not assumed healthy"
             )
     return reasons
 
@@ -2009,14 +2133,18 @@ def adjudicate_checkpoint(
     kind = spec.run_kind
     markers = re.compile(adapter_marker)
     if kind == "auto":
-        marked = sum(1 for f in real_fqns if markers.search(f))
-        frac = marked / len(real_fqns)
-        kind = "lora" if frac >= 0.6 else "full"
-        spec = dataclasses.replace(
-            spec, run_kind=kind,
-            kind_basis=f"auto: {marked}/{len(real_fqns)} tensors carry an adapter "
-                       f"marker ({frac:.2f}) -> {kind!r}; corroborate with "
-                       f"--run-kind when the train config has no peft key")
+        # #80's second bite, latent today (both launchers pin --run-kind and
+        # production-scale fractions sit far clear of the 0.6 cut) but real
+        # for --run-kind auto and library callers on small artifacts: the old
+        # denominator counted the same optimizer/rng entries the lora branch
+        # now excludes, so a healthy LoRA save could resolve kind='full' and
+        # route into the MODE/full "population looks partial" blocker -- the
+        # same false alarm re-worded. Fixing only the `unmarked` append would
+        # RELOCATE #80, not end it; the seamed helper also gives the
+        # denominator its own firing control
+        # (test_auto_kind_denominator_excludes_save_state).
+        kind, basis = _infer_auto_kind(real_fqns, markers)
+        spec = dataclasses.replace(spec, run_kind=kind, kind_basis=basis)
 
     # The --adapter-prefix question, answered as a DEMAND rather than a
     # default. This file's own evidence cannot establish the estate's adapter

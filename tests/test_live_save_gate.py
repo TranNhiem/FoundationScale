@@ -2515,6 +2515,26 @@ def _megatron_named_lora_tensors(prefix: str = "") -> dict:
             stem = f"layers.{i}.self_attn.{w}"
             out[f"{prefix}{stem}.adapter.linear_in.weight"] = ((4, 8), "F32")
             out[f"{prefix}{stem}.adapter.linear_out.weight"] = ((8, 4), "F32")
+    # #80: a real save is not ONLY adapter tensors. Measured on the
+    # production Megatron adapter save: 672 language_model.* + 6 optimizer.*
+    # + 1 rng_state = 679 real entries. This fixture historically carried
+    # ZERO non-adapter namespaces -- the "fixture and defect share one shape"
+    # failure this file's calibration record warns about, which is exactly
+    # why #80 was invisible here while reproducible on every real save. The
+    # 7 entries below restore the measured shape. They deliberately do NOT
+    # take `prefix` -- save-state roots live at checkpoint scope, above the
+    # adapter export's module wrapper -- and the optimizer keys are rooted at
+    # a real `optimizer.state.` namespace rather than adapter-suffixed, so
+    # only an anchored namespace ROOT match can excuse them; a marker, a
+    # suffix, or luck cannot. Adding them turns
+    # test_calibrated_nondefault_naming_clears_end_to_end RED on the unfixed
+    # tree (measured: EXIT 1) and keeps it red under the mutation that
+    # deletes the exclusion; the decoy-based MUST_FIRE covers the opposite
+    # mutation (the match widened to a substring). Shapes are placeholders --
+    # no shape gate reads optimizer or RNG content.
+    for i in range(6):
+        out[f"optimizer.state.exp_avg.layers.{i}.mlp.linear_fc1.weight"] = ((8, 8), "F32")
+    out["rng_state"] = ((4,), "F32")
     return out
 
 
@@ -2632,7 +2652,17 @@ class TestAdapterNamingAgreement:
         flows through generation, SaveCompletenessGate, and the structural
         sweep to CLEAR, with the derived denominator on the wire. This is the
         fixture-shaped answer to the defect narrative: correct calibration
-        must never again be the CAUSE of a catastrophic-looking verdict."""
+        must never again be the CAUSE of a catastrophic-looking verdict.
+
+        #80 amendment: the fixture now also carries the 6 optimizer.* +
+        1 rng_state entries measured on the production save. That addition is
+        the control #80 needed all along -- on the unfixed tree this test
+        goes RED with EXIT 1 (the lora branch adjudicated those 7 entries as
+        "unrecognized adapter content"), and it returns GREEN only via the
+        anchored namespace exclusion, never via a weakened assertion below.
+        It is also the DELETION-control for the exclusion itself: remove
+        _NON_ADAPTER_CHECKPOINT_NAMESPACE_ROOTS or either
+        _is_non_adapter_namespace call site and this test is red again."""
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
         ckpt = _materialize_artifact(
             tmp_path, _megatron_named_lora_tensors(), name="mt-lora")
@@ -2650,10 +2680,121 @@ class TestAdapterNamingAgreement:
                               ".adapter.linear_out.weight"),
             adapter_modules=census)
         assert d.exit_code == 0, f"calibrated non-default must CLEAR: {d.blocking_reasons}"
-        assert d.report["inventory"]["real_tensors"] == 24
+        # 31 is the honest #80 denominator, NOT a weakened assertion: 24
+        # adapter + 6 optimizer + 1 rng_state, the measured non-adapter shape
+        # of a real save. Holding the RAW inventory at exactly 31 alongside
+        # the DECLARED 24 is what keeps the exclusion provably narrow --
+        # 7 entries were excused by namespace root, and every one is still
+        # counted on disk. Keeping 24 here would be residual fixture/defect
+        # shape-sharing; asserting only the declared side would let a future
+        # exclusion-maker silently shrink the population (doctrine 2), which
+        # is indistinguishable from the detector stopping working.
+        assert d.report["inventory"]["real_tensors"] == 31
         assert "24 adapter tensors" in d.declared_basis["fqns"]
         assert ".adapter.linear_in.weight" in d.declared_basis["fqns"]
         assert _control_by_prefix(d, "drop")["status"] == "fired"
+
+    def test_optimizer_shaped_decoy_still_flagged_as_unmarked(self, tmp_path):
+        """[FAILS-BEFORE -- pre-#80 the exclusion does not exist: the decoy
+        flags as 8 of 32 rather than 1 of 25, and the judged/excluded
+        denominator format is absent -> red] MUST_FIRE for the #80 namespace
+        exclusion. A genuinely unrecognized tensor wearing an optimizer-
+        SHAPED name -- module stem `layers.3.self_attn.optimizer_gate`, NOT
+        one of the measured non-adapter namespace ROOTS -- must still be
+        adjudicated as unrecognized adapter content.
+
+        Broken to see red: widen `_is_non_adapter_namespace` from FQN
+        root-segment equality to a substring test (`"optimizer" in fqn`) or
+        to any-segment membership, and the decoy below is swallowed by the
+        exclusion -- no MODE/lora "adapter marker" reason fires, exit flips
+        to 0, this test goes red. That mutation is exactly "exclude a
+        namespace" decaying into "delete the check", and it is invisible to
+        the sibling MUST_PASS above, which only ever sees legitimate
+        namespace roots. The pair pins the exclusion from opposite sides:
+        MUST_PASS goes red if the exclusion is DELETED, this one red if it is
+        WIDENED. Denominator per doctrine 2: 24 adapter + 1 decoy = 25 JUDGED
+        adapter-namespace tensors, with the 7 legitimate save-state entries
+        quoted in the reason as set aside -- reported, not silently dropped.
+        """
+        base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
+        tensors = _megatron_named_lora_tensors()
+        # The decoy: the letters "optimizer" embedded INSIDE a module name --
+        # the false friend the anchored root-segment match exists to keep
+        # adjudicable. It ends in a plain ".weight", so no adapter suffix or
+        # marker can excuse it either; only a broken exclusion lets it pass.
+        tensors["layers.3.self_attn.optimizer_gate.weight"] = ((8, 8), "F32")
+        ckpt = _materialize_artifact(tmp_path, tensors, name="mt-lora-decoy")
+        census = _census_file(tmp_path, self._census_stems())
+        d = lsg.adjudicate_checkpoint(
+            ckpt, run_kind="lora", base_model_dir=base,
+            train_config_path=_write_cfg(tmp_path, LORA_TRAIN),
+            adapter_prefix="",
+            adapter_suffix_re=r"\.adapter\.linear_(?:in|out)\.weight$",
+            adapter_suffixes=(".adapter.linear_in.weight",
+                              ".adapter.linear_out.weight"),
+            adapter_modules=census)
+        assert d.exit_code == 1, (
+            f"optimizer-shaped decoy must still hard-block: {d.blocking_reasons}")
+        flagged = [r for r in d.blocking_reasons
+                   if "MODE/lora" in r and "adapter marker" in r]
+        assert flagged, f"no unmarked-adapter reason fired: {d.blocking_reasons}"
+        # "1 of 25" is the anti-disarm pin: pre-#80 the flagged count was 8
+        # (decoy + 7 save-state entries, no exclusion); deleting the
+        # exclusion restores that; widening it drives the count to 0 and
+        # empties `flagged` above. Three failure shapes, three different
+        # assertions catching them.
+        assert any("1 of 25" in r and "optimizer_gate.weight" in r
+                   for r in flagged), f"decoy not isolated in reason: {flagged}"
+        assert any("7 non-adapter" in r for r in flagged), (
+            f"excluded-namespace count missing from reason: {flagged}")
+
+    def test_auto_kind_denominator_excludes_save_state(self):
+        """[FAILS-BEFORE -- lsg._infer_auto_kind does not exist pre-patch ->
+        AttributeError, red] MUST_FIRE for the latent second bite of #80: the
+        AUTO-KIND denominator. Pre-patch the inline code computed
+        frac = marked / len(real_fqns); on leg one below that is 4/16 = 0.25
+        < 0.6 -> "full", routing a LoRA save into the MODE/full "population
+        looks partial" blocker -- #80 re-worded. Latent in production (both
+        launchers pin --run-kind), real for --run-kind auto and library
+        callers.
+
+        Broken to see red (the mutation leg one exists for): revert the
+        judged pool from the excluded view back to raw real_fqns, and the
+        kind flips to "full". Leg three is the mirrored seam check for the
+        SAME anchor the end-to-end decoy pins: widen the root-segment match
+        and the decoy vanishes from the judged pool, snapping the basis from
+        "4/5" back to "4/4". Leg four pins doctrine 1/4 at the seam: a judged
+        pool of ZERO is UNMEASURED (GateUnmeasured), never a guessed kind.
+        `lsg.re` is used so this file needs no new import for a one-off
+        pattern."""
+        markers = lsg.re.compile(r"\.adapter\.linear_(?:in|out)\.weight$")
+        fqns = {f"layers.{i}.self_attn.q_proj.adapter.linear_in.weight"
+                for i in range(4)}
+        fqns |= {f"optimizer.state.exp_avg.block{i}.weight" for i in range(11)}
+        fqns.add("rng_state")
+        kind, basis = lsg._infer_auto_kind(fqns, markers)
+        # Post-exclusion the judged pool is 4/4 = 1.00; raw counting would
+        # give 4/16 = 0.25 -> "full". The basis string carries BOTH counts so
+        # the shrink is reported, not silent (doctrine 2).
+        assert kind == "lora", (
+            f"save-state namespaces dragged auto-kind to full: {basis}")
+        assert "4/4" in basis and "12 non-adapter" in basis, basis
+        # Embedded-segment decoy at the seam: "optimizer" inside a module
+        # name is NOT a namespace root, so it must enter the judged
+        # denominator -- 4/5 = 0.80 still resolves lora, but the string
+        # moves only while the decoy is counted.
+        fqns.add("layers.9.self_attn.optimizer_gate.weight")
+        kind, basis = lsg._infer_auto_kind(fqns, markers)
+        assert kind == "lora" and "4/5" in basis, basis
+        # Zero judged entries: nothing measurable. all-clear on an empty pool
+        # is vacuous truth; refuse instead of guessing.
+        try:
+            lsg._infer_auto_kind({"optimizer.state.exp_avg.only.weight"}, markers)
+        except lsg.GateUnmeasured:
+            pass
+        else:
+            raise AssertionError(
+                "all-excluded pool must raise GateUnmeasured, not guess a kind")
 
     def test_calibrated_templates_generate_exact_names_and_shapes(self, tmp_path):
         """[FAILS-BEFORE -- kwarg absent pre-patch] Unit-level MUST_PASS on

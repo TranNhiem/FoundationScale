@@ -1,4 +1,4 @@
-# Three jobs, on purpose.
+# Four jobs, on purpose.
 #
 # `check` is ordinary hygiene: lint, format, types, tests across supported Pythons.
 #
@@ -10,6 +10,19 @@
 # (all_identity: True over an empty tensor set — all([]) is True).
 # The entry point also exits nonzero if the registry is empty: a controls run
 # that verified nothing is the same vacuous pass one level up.
+#
+# `launchers` closes finding #81: launchers/test_launcher_contracts.sh carries
+# 134 controls and was invoked by no CI step — a suite that only runs when a
+# human remembers is a control that never RUNS, which is to say not a control.
+# The job runs it from the repository root (measured CWD-sensitivity: called
+# from inside launchers/, its watchdog sub-suite reports "0/8 launcher
+# unreadable" and fails closed) and credits a pass only on the suite's own
+# summary line showing zero failures over the measured denominator — an exit
+# code alone cannot tell 134 green controls from a run that died before its
+# tally. The summary verifier itself gets MUST_FIRE legs: three doctored logs
+# must be refused before the real one is trusted. A bash -n sweep over every
+# *.sh under launchers/ gates syntax first and fails on zero matched files,
+# because a sweep that found nothing is unmeasured, not clean.
 #
 # `mutation` runs tools/mutate.py: the test suite is executed against
 # systematically mutated sources, and any mutant the suite does not kill fails
@@ -168,6 +181,206 @@ jobs:
           pip install -e ".[dev]"
       - name: Run gate controls
         run: python -m foundationscale.gates.controls
+
+  launchers:
+    name: launcher contracts (a silent suite fails this job)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax gate (bash -n over launchers/; zero files is a failure)
+        # bash -n parses without executing, so this catches edit-time breakage
+        # before the slower contract suite runs. find, not a glob: launchers/
+        # holds subdirectories (the watchdog sub-suite among them), and a claim
+        # about "every shell file" may not silently mean "every shell file at
+        # depth 1" — a check narrower than its claim is a defect even when green.
+        # The count is load-bearing twice: it is printed (a claim needs a
+        # denominator) and zero matches fail the build, because a find that
+        # matches nothing is UNMEASURED, never "all files are clean". The
+        # refusal comes BEFORE any verdict line: "0 of 0 parse clean" must not
+        # be emitted even on a path that fails a moment later, and a red run's
+        # tally carries its rejection count inline so no line ever reads green
+        # over red evidence.
+        # Counters accumulate in the main shell via heredoc, never in a
+        # `find | while` pipeline: on bash 3.2 (the macOS harness) the piped loop
+        # is a subshell and both counters die with it — the gate would print 0/0,
+        # the very vacuous read it exists to forbid. The increments are
+        # `$((x + 1))` assignments, not `((x++))`: an arithmetic command whose
+        # value is 0 returns exit 1, and under `bash -e` that kills the gate on
+        # the first file it checks.
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          if [ ! -d launchers ]; then
+            echo "::error::launchers/ not found from $(pwd) — this gate must run from the"
+            echo "::error::repository root. Missing is not zero: refusing, not reporting"
+            echo "::error::0 files clean."
+            exit 1
+          fi
+          files=$(find launchers -type f -name '*.sh' | sort)
+          checked=0
+          bad=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            checked=$((checked + 1))
+            if ! bash -n "$f"; then
+              bad=$((bad + 1))
+              echo "::error::$f: bash -n failed (see parser output above)"
+            fi
+          done <<SYNTAX_FILES
+          $files
+          SYNTAX_FILES
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::find launchers -type f -name '*.sh' matched zero files from $(pwd)."
+            echo "::error::Zero examined files is UNMEASURED, not clean. If launchers/ moved,"
+            echo "::error::move this gate with it in the same commit; if the files are gone,"
+            echo "::error::the suite below has nothing to contract-test and must not pass either."
+            exit 1
+          fi
+          echo "bash -n: $((checked - bad)) of $checked shell files under launchers/ parse clean ($bad rejected)"
+          if [ "$bad" -ne 0 ]; then
+            echo "::error::$bad of $checked shell files under launchers/ failed bash -n (named above)"
+            exit 1
+          fi
+      - name: Run launcher contract suite (exit code checked, summary proven)
+        # Invoked from the repository root and by relative path, on purpose.
+        # Measured CWD-sensitivity: from inside launchers/, the watchdog
+        # sub-suite resolves launchers/... against the caller and fails closed
+        # with "0/8 launcher unreadable". cd "$GITHUB_WORKSPACE" pins the root
+        # even if a job-level defaults.run.working-directory ever appears, and
+        # the preflight -f check refuses with a named path rather than letting
+        # a missing entry point read as zero controls run.
+        #
+        # The exit code is checked AND disbelieved. `bash script` exiting 0 says
+        # the process ended, not that 134 controls ran — a suite killed before
+        # its summary, or one whose summary print rotted away, must not be
+        # creditable (a check over zero units proves nothing; ambiguous is
+        # refused). So the captured output goes through verify_summary, which
+        # requires the summary line, a zero failure count, and the 134-control
+        # denominator measured when this gate was written. Exit-code-only
+        # wiring would look identical in the Actions log on the day the suite
+        # starts exiting 0 early; that undetectable green is the fake this step
+        # exists to refuse. Output is captured via $(...) rather than piped
+        # through tee: no pipe, no pipefail question, the suite's real status
+        # lands in rc untouched.
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          if [ ! -f launchers/test_launcher_contracts.sh ]; then
+            echo "::error::launchers/test_launcher_contracts.sh not found from $(pwd)."
+            echo "::error::This step must run from the repository root (see step comment:"
+            echo "::error::the suite is measured CWD-sensitive). A missing entry point is a"
+            echo "::error::refusal — never zero controls, never a pass."
+            exit 1
+          fi
+
+          verify_summary() {
+            # Returns 0 only when the suite's summary line exists, reports
+            # exactly 0 failures, and covers >= 134 controls. Every refusal
+            # names what failed and echoes the offending line so the operator
+            # can act. Pinned to the suite's '<passed>/<total> ... <n> failed'
+            # summary (a bare '<n> passed' without the fraction is accepted
+            # too); if the suite ever rewords it, THIS step must go red and be
+            # updated in the same commit — unreadable is not empty. `set --`
+            # runs only after $1 is saved into log, since it rebinds the
+            # function's positional parameters.
+            local log=$1 line frac failed passed_n passed total
+            line=$(printf '%s\n' "$log" | { grep -i 'summary' || true; } | tail -n 1)
+            if [ -z "$line" ]; then
+              echo "::error::no summary line in suite output — a run that never" >&2
+              echo "::error::prints its summary has measured nothing CI may credit." >&2
+              return 1
+            fi
+            frac=$(printf '%s\n' "$line" | { sed -n 's/[^0-9]*\([0-9][0-9]*\)\/\([0-9][0-9]*\).*/\1 \2/p' || true; } | head -n 1)
+            failed=$(printf '%s\n' "$line" | { sed -n 's/.*[^0-9]\([0-9][0-9]*\)[[:space:]]*failed.*/\1/p' || true; } | head -n 1)
+            passed_n=$(printf '%s\n' "$line" | { sed -n 's/[^0-9]*\([0-9][0-9]*\)[[:space:]]*passed.*/\1/p' || true; } | head -n 1)
+            if [ -n "$frac" ]; then
+              set -- $frac
+              passed=$1
+              total=$2
+              if [ "$passed" != "$total" ]; then
+                echo "::error::summary reads $passed of $total green — not all controls passed:" >&2
+                echo "::error::$line" >&2
+                return 1
+              fi
+            elif [ -n "$passed_n" ]; then
+              total=$passed_n
+            else
+              echo "::error::summary carries no parseable pass count" >&2
+              echo "::error::('<passed>/<total>' or '<n> passed'): $line" >&2
+              return 1
+            fi
+            if [ -z "$failed" ]; then
+              echo "::error::summary names no failure count ('<n> failed'): $line" >&2
+              return 1
+            fi
+            if [ "$((10#$failed))" -ne 0 ]; then
+              echo "::error::summary reports $failed failed control(s): $line" >&2
+              return 1
+            fi
+            if [ "$((10#$total))" -lt 134 ]; then
+              echo "::error::summary covers $total controls; 134 were measured when this" >&2
+              echo "::error::gate was written. A quietly shrunk suite is the empty-registry" >&2
+              echo "::error::move, one directory down. Remove controls on purpose and lower" >&2
+              echo "::error::this floor in the same commit — or not at all." >&2
+              return 1
+            fi
+            return 0
+          }
+
+          # MUST_FIRE legs for verify_summary itself — broken to see red. A
+          # summary checker that has never been observed refusing is not a
+          # control, so three deliberately doctored logs must each be rejected
+          # before the real output is trusted. Mutations: (1) the summary line
+          # deleted — the dies-early green; (2) the summary rewritten to
+          # '1 failed' with 134/134 intact, isolating the failure-count check;
+          # (3) the summary shrunk to '12/12, 0 failed' — the silently-emptied
+          # suite that only the 134 floor catches. Refusals go to /dev/null so
+          # the expected reds do not pollute the annotation stream.
+          mustfire_1='launchers: 8/8 watchdog checks green
+contracts: 126/126 green'
+          mustfire_2='SUMMARY: 134/134 controls passed, 1 failed'
+          mustfire_3='SUMMARY: 12/12 controls passed, 0 failed'
+          if verify_summary "$mustfire_1" 2>/dev/null; then
+            echo "::error::summary verifier ACCEPTED doctored log 1 (mutation: summary"
+            echo "::error::line deleted). It must refuse a full run's worth of output that"
+            echo "::error::has no summary; as written it is a no-op stamp. Trust no green."
+            exit 1
+          fi
+          if verify_summary "$mustfire_2" 2>/dev/null; then
+            echo "::error::summary verifier ACCEPTED doctored log 2 (mutation: '1 failed')."
+            echo "::error::A checker that only greps for the word 'summary' looks exactly"
+            echo "::error::like this from the outside — that fake is why this leg exists."
+            exit 1
+          fi
+          if verify_summary "$mustfire_3" 2>/dev/null; then
+            echo "::error::summary verifier ACCEPTED doctored log 3 (mutation: suite shrunk"
+            echo "::error::to 12/12). The 134-control floor is decorative without this leg."
+            exit 1
+          fi
+          echo "verify_summary fired on all three doctored logs (MUST_FIRE legs 1-3) — proven able to refuse."
+
+          set +e
+          output=$(bash launchers/test_launcher_contracts.sh 2>&1)
+          rc=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::launchers/test_launcher_contracts.sh exited $rc from the"
+            echo "::error::repository root; suite output above. (From any other directory"
+            echo "::error::this same command fails closed with '0/8 launcher unreadable'"
+            echo "::error::— that refusal is the watchdog working, not a bug to retry.)"
+            exit 1
+          fi
+          if ! verify_summary "$output"; then
+            echo "::error::The suite exited 0, but exit 0 is not evidence that 134"
+            echo "::error::controls ran. The required proof is the summary line above —"
+            echo "::error::missing, unreadable, or red, this run is UNMEASURED and refused."
+            exit 1
+          fi
+          # MUST_PASS leg, observed live: the real suite's summary accepted.
+          # The summary line is reprinted as the claim, denominator included —
+          # "the guard works" is not a claim, "134 of 134 carry it" is.
+          printf 'launcher contracts green, verified summary: '
+          printf '%s\n' "$output" | { grep -i 'summary' || true; } | tail -n 1
 
   mutation:
     name: mutation testing (a surviving mutant fails this job)

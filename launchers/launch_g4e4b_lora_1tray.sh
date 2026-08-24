@@ -598,6 +598,36 @@ done
   { echo "FATAL: lora_target_census.py not found. Searched: $(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ (shipped beside the launcher, fix39), $WORKSPACE/g4_sft/ (container-visible location; the old dump tool's measured precedent), then all of $REPO." >&2; exit 1; }
 echo "Preflight: LoRA target census via $CENSUS_PROBE (oracle = the shipped ModuleMatcher itself; grep kept only as a labelled secondary column that decides nothing)"
 CENSUS_OUT=$PREFLIGHT_DIR/target_census.txt
+# #78 — MACHINE-READABLE HALF of this census (the sibling --out patch on
+# lora_target_census.py, assumed landed). The SAME probe run below also
+# writes $ADAPTER_MODULES, the JSON attachment census fs_live_save_gate()
+# now demands via --adapter-modules. Three lines below are load-bearing:
+#  - LOCATION $OUTPUT_DIR/fs_gate/: OUTSIDE the judged iter_* tree on
+#    purpose — written inside it, the loader's own tautology guard
+#    (tools/live_save_gate.py:742) refuses the census as self-certifying.
+#  - mkdir BEFORE the probe runs: the probe's write is atomic (tmp file +
+#    rename inside the target dir) and cannot create the parent itself; a
+#    missing parent would surface only AFTER a CLEAR verdict, as the
+#    claim-vs-disk gap this estate already measured once (doctrine 4).
+#  - rm -f of any STALE artifact: the CLEAR arm below certifies PRESENCE.
+#    A previous run's surviving file would let a probe that wrote NOTHING
+#    this run pass that check — presence must mean THIS probe wrote it, or
+#    the check certifies a foreign census and zero units were measured
+#    tonight (doctrine 1). This is the line that makes the check below
+#    unfakeable by leftovers.
+# Container visibility is inherited from the same bind-mount precedent as
+# $CENSUS_PROBE itself (fix39, below): the probe writes this path from
+# INSIDE the container. If that precedent ever breaks, the probe cannot
+# write where the host reads and the CLEAR-arm check fails CLOSED — never
+# open, and never a launch failure on an UNMEASURED verdict: that check
+# lives inside the CLEAR arm only, so the verdict triage below stays
+# authoritative over every non-CLEAR outcome (the fix41 drill included).
+ADAPTER_MODULES="$OUTPUT_DIR/fs_gate/adapter-modules.json"
+mkdir -p "$OUTPUT_DIR/fs_gate" || \
+  { echo "FATAL: cannot create $OUTPUT_DIR/fs_gate (for ADAPTER_MODULES=$ADAPTER_MODULES) — the census probe's atomic --out write needs the parent directory; refusing now rather than failing a CLEAR census on a missing artifact afterwards (doctrine 4)." >&2; exit 1; }
+rm -f "$ADAPTER_MODULES" || \
+  { echo "FATAL: cannot remove stale $ADAPTER_MODULES before the census — a leftover artifact would let the CLEAR-arm presence check below certify a census THIS probe never wrote (the measured claim-vs-disk gap). Refusing (doctrine 4)." >&2; exit 1; }
+echo "Preflight: machine-readable adapter census -> $ADAPTER_MODULES (--out on the same probe run; deliberately outside the judged iter_* tree per live_save_gate.py:742's tautology guard)"
 # Invocation MEASURED (fix39): the probe's argparse is --hf_model_path
 # (required) plus --ep ONLY — the pre-fix attempt passed --hf_path/--recipe
 # and would have died in argparse before censusing anything — and the provider
@@ -659,9 +689,17 @@ if [[ "${FS_CENSUS_DRILL_BUILD_FAILURE:-0}" == "1" ]]; then
   echo "dead tripwire wearing a banner."
   echo "============================================================"
 fi
+# #78: one probe run, two artifacts — the preflight TEXT above and the JSON
+# census at --out. The single quotes around '$ADAPTER_MODULES' belong to the
+# CONTAINER bash exactly like '$LORA_TARGETS' (the fix39 idiom): the host
+# expands the variable into the payload, the container receives one literal
+# word. The drill prefix stays scoped ahead of torchrun, so an armed
+# FS_CENSUS_DRILL_BUILD_FAILURE=1 still writes NOTHING — and what blocks
+# that drill remains the verdict-keyed triage below, never the CLEAR-only
+# artifact check (an UNMEASURED verdict must not be re-scored by it).
 census_rc=0
 run_in_container --slurm-ntasks 1 --workdir "$REPO" \
-  bash -lc "cd $REPO && ${census_cuda_prefix}torchrun --nnodes=1 --nproc_per_node=1 --master_addr=127.0.0.1 --master_port=$MASTER_PORT $CENSUS_PROBE --hf_model_path $HF_MODEL_PATH --ep $EP --targets '$LORA_TARGETS'" \
+  bash -lc "cd $REPO && ${census_cuda_prefix}torchrun --nnodes=1 --nproc_per_node=1 --master_addr=127.0.0.1 --master_port=$MASTER_PORT $CENSUS_PROBE --hf_model_path $HF_MODEL_PATH --ep $EP --targets '$LORA_TARGETS' --out '$ADAPTER_MODULES'" \
     >"$CENSUS_OUT" 2>&1 || census_rc=$?
 # fix40 — VERDICT-LINE TRIAGE (deciding), rc (corroborating only).
 # MEASURED 2026-08-24 on <compute-node> (the CUDA_VISIBLE_DEVICES="" run): the
@@ -722,8 +760,74 @@ case "$census_verdict" in
         echo "FATAL: CENSUS DRILL ARMED BUT THE LAUNCH PROCEEDED — FS_CENSUS_DRILL_BUILD_FAILURE=1 was set for this launch, yet the census returned a corroborated CLEAR. Either the scoped CUDA_VISIBLE_DEVICES= prefix silently dropped out of the census invocation (the drill is vacuous — an armed no-op is precisely the unread-tripwire class fix41 exists to end), or the probe no longer fails to build with zero GPUs visible (the measured trigger drifted). Either way the UNMEASURED arm just demonstrably failed to fire on demand, so this run's green census is not evidence the tripwire is live. Fix the drill or the census — never delete this refusal to make a drill run launch." >&2
         exit 1
       fi
-      : # corroborated CLEAR — the population/control greps and per-target
-        # arithmetic below still re-verify the artifact itself.
+      # #78 CLEAR-ONLY artifact re-verification (doctrines 1/2/4). A
+      # corroborated CLEAR whose machine-readable census is absent is the
+      # claim-vs-disk gap this estate already measured once, and the verdict
+      # triage above vouches for the probe's TEXT only — the launcher never
+      # rests on the probe honouring its own contract (the same principle
+      # the population/control greps below enforce on the text artifact), so
+      # it re-verifies the JSON half itself. STRONGER THAN SPECIFIED, stated
+      # plainly: mere presence is fakeable — an empty or garbage file is
+      # PRESENT — so this arm also parses the file and requires a positive
+      # module count, refusing otherwise. Scope, load-bearing: the check
+      # sits INSIDE the CLEAR arm only, so an UNMEASURED or BLOCKED verdict
+      # is never re-scored by it — the triage stays authoritative, and an
+      # armed fix41 drill is already refused above, before this line.
+      # MUST_FIRE (broken to see red): aim --out where the container cannot
+      # write (delete the mkdir above, or point ADAPTER_MODULES outside the
+      # bind-mounted tree) and every CLEAR census MUST die at the first
+      # refusal below — a CLEAR that sails on with no readable JSON on disk
+      # is the fix35-era 'verdict survives, evidence doesn't' shape this arm
+      # exists to end. MUST_PASS (observed green on a healthy input): an
+      # ordinary CLEAR launch in which THIS probe wrote its --out artifact
+      # MUST pass the -r/parse/count gauntlet below and print the parsed
+      # denominator off the artifact; a healthy CLEAR that dies here is
+      # doctrine 5's symmetric defect — a false red costs what a false green
+      # costs — and the arm gets repaired, never bypassed. Both halves ship
+      # with this detector because a control observed only red is as
+      # uncalibrated as one observed only green (doctrine 3).
+      if [[ ! -r "$ADAPTER_MODULES" ]]; then
+        cat "$CENSUS_OUT" >&2 || true
+        echo "FATAL: census verdict CLEAR (rc=0 corroborated) yet ADAPTER_MODULES=$ADAPTER_MODULES is absent or unreadable — the probe's text claims CLEAR but the JSON census the gate will demand via --adapter-modules is not on disk where the launcher reads. Missing is not zero and unreadable is not empty (doctrine 4). Suspects, in order: the bind-mount precedent broke (the probe wrote where the host cannot see), the atomic write never committed, or a probe edit dropped --out. The launch BLOCKS — and do NOT hand-create the file: a census no probe wrote certifies nothing." >&2
+        exit 1
+      fi
+      # Denominator, measured off the artifact (doctrine 2): the launcher
+      # parses the JSON and counts what THIS file declares — 168 is tonight's
+      # expectation, never a number the launcher restates from memory
+      # (doctrine 5). The sibling --out contract is a flat name->record
+      # mapping with the leading 'module.' stripped (or an array of such
+      # names), so len(root) IS the declared count; if that shape ever grows
+      # a metadata wrapper around the mapping, this count goes wrong LOUDLY
+      # at the next CLEAR and the repair lands here, not in the gate. Host
+      # python3 is safe for this read: it needs only stdlib json, so fix44's
+      # torch-less-host hazard does not apply — no torch import exists on
+      # this path.
+      census_modules_n=$(python3 -c '
+import json, sys
+with open(sys.argv[1]) as fh:
+    d = json.load(fh)
+if isinstance(d, (dict, list)):
+    print(len(d))
+else:
+    raise SystemExit("census root is %s, not an object/array of module records" % type(d).__name__)
+' "$ADAPTER_MODULES" 2>&1) || {
+        echo "FATAL: census verdict CLEAR but ADAPTER_MODULES=$ADAPTER_MODULES is not countable JSON — a census the launcher cannot parse states no denominator (doctrine 2), and the launcher does not rest on the probe honouring its own contract. python3's own words: $census_modules_n. The launch BLOCKS." >&2
+        exit 1
+      }
+      # The 2>&1 capture above is double-duty: on failure the operator reads
+      # python's own message, and on success stdout carries ONLY the bare
+      # count — which the regex below enforces, so any stray print turns the
+      # run red here instead of being narrated as a module count (doctrine 4
+      # over a pretty story).
+      [[ "$census_modules_n" =~ ^[1-9][0-9]*$ ]] || {
+        echo "FATAL: census verdict CLEAR but ADAPTER_MODULES=$ADAPTER_MODULES declares ${census_modules_n:-<nothing countable>} modules — zero declared modules is UNMEASURED, never PASS (doctrine 1): with an empty census every downstream --adapter-modules demand is all([])==True. The launch BLOCKS." >&2
+        exit 1
+      }
+      echo "Preflight census: $ADAPTER_MODULES declares $census_modules_n adapter modules (written-census denominator, parsed off the artifact itself — doctrine 2); this file is the --adapter-modules demand fs_live_save_gate() now receives on every gate call."
+      : # the population/control greps and per-target arithmetic below still
+        # re-verify the probe's TEXT artifact exactly as before — nothing
+        # above replaces the verdict triage or those greps; it gates only the
+        # machine-readable half the sibling --out patch added.
     else
       cat "$CENSUS_OUT" >&2 || true
       echo "FATAL: census verdict CLEAR but rc=$census_rc — DISAGREEMENT: past torchrun rc!=0 means the child genuinely exited nonzero, so a process printed CLEAR and then failed, or the wrapper failed around a completed child (this arm includes any rc outside {0,1}). The printed CLEAR and the exit status contradict; the census is untrustworthy — investigate the probe/wrapper, never 'rescue' this into a pass." >&2
@@ -1188,9 +1292,28 @@ gate_fail(){ echo "GATE FAIL: $1" >&2; GATE=1; }
 # run_in_container like the four sites the contract suite already pins.
 # ---------------------------------------------------------------------------
 fs_live_save_gate() { # $1=iter dir  $2=event  $3=report path  $4=capture log; returns the gate's rc UNTOUCHED.
-  # NO --adapter-prefix: deliberately unpinned today (see the block above);
-  # when the gate's exit 3 IS the prefix abstention, the mapper confirms it
-  # from the gate's own refusal record before calibrating it to rc 0.
+  # #78 — the wiring this wrapper used to deliberately OMIT. The comment
+  # this replaces read "NO --adapter-prefix: deliberately unpinned today",
+  # under which a gate exit 3 with refusal_class adapter_prefix_unpinned was
+  # the calibrated rc-0 'expected lora state' in the mapper below. Both
+  # flags are now pinned ON EVERY CALL, and the calibrated arm is retired in
+  # the SAME edit — one edit, not two — because the gate raises its prefix
+  # demand BEFORE its census demand (live_save_gate.py:505-531, order
+  # load-bearing; the :511-523 note licenses exactly this COORDINATED
+  # change), so wiring --adapter-modules while leaving the prefix arm in
+  # place would have changed NOTHING: the prefix refusal would still
+  # short-circuit first and the run would still abstain. --adapter-prefix ''
+  # is a PIN, not an omission: the decision is 'no prefix' — the census
+  # strips the leading 'module.', so adapter names attach to base-model
+  # module names bare. The '' rides the same host->container quote layering
+  # as the census probe's '$LORA_TARGETS' (fix39): the outer double quotes
+  # are the host's, the container bash sees a literal --adapter-prefix '',
+  # and argv carries a genuinely EMPTY word — neither a missing flag (the
+  # gate's demand distinguishes an empty pin from None) nor the two-
+  # character string "''". --adapter-modules hands the gate the preflight
+  # probe's --out artifact, written OUTSIDE the judged iter_* tree on
+  # purpose, because live_save_gate.py:742's tautology guard refuses any
+  # census inside it.
   # Executor-routed (fix44 / #77-B1), invocation shape copied from the two
   # measured precedents: --slurm-ntasks 1 (a single-CPU adjudicator, like the
   # env probe and the census/replay probes), --workdir "$REPO" (the replay
@@ -1221,7 +1344,7 @@ fs_live_save_gate() { # $1=iter dir  $2=event  $3=report path  $4=capture log; r
   # words survive, and the mapper reads the exit-3 CAUSE from it (#77-B2).
   local fs_gate_rc=0
   run_in_container --slurm-ntasks 1 --workdir "$REPO" \
-    bash -lc "PYTHONPATH='$FS_ROOT/src':\${PYTHONPATH} PYTHONNOUSERSITE=1 python3 '$FS_ROOT/tools/live_save_gate.py' '$1' --event '$2' --run-kind lora --base-model-dir '$HF_MODEL_PATH' --train-config '$RESOLVED_CFG' --json '$3'" \
+    bash -lc "PYTHONPATH='$FS_ROOT/src':\${PYTHONPATH} PYTHONNOUSERSITE=1 python3 '$FS_ROOT/tools/live_save_gate.py' '$1' --event '$2' --run-kind lora --base-model-dir '$HF_MODEL_PATH' --train-config '$RESOLVED_CFG' --adapter-modules '$ADAPTER_MODULES' --adapter-prefix '' --json '$3'" \
     >"$4" 2>&1 || fs_gate_rc=$?
   return "$fs_gate_rc"
 }
@@ -1241,15 +1364,23 @@ fs_lora_gate_verdict_to_rc() { # $1=gate rc  $2=which  $3=report path  $4=captur
   # on-disk refusal report first (written by the tool at the point of
   # refusal — the single source of truth, fix44 / #77-B3), the captured
   # stderr line as corroboration and as the ONLY signal available when the
-  # record itself is missing. Calibration, decided explicitly: exactly ONE
-  # member of the exit-3 class is an rc-0 abstention — the adapter-prefix
-  # refusal, because WE chose not to pin the prefix and the gate correctly
-  # declines a job it was never configured to do. Every other member is a
-  # wiring/tool/artifact failure and rides the rc-92 infrastructure class:
-  # unreadable checkpoint, missing base files, tool crash, unreadable
-  # capture, missing record. An unchosen non-measurement that lets the
-  # afterany resume chain continue converts a broken adjudicator into a
-  # decorative one; this arm is where the production chain is decided.
+  # record itself is missing. Calibration, RE-DECIDED (#78, this same edit):
+  # NO member of the exit-3 class is an rc-0 abstention any longer. The
+  # comment this replaces calibrated exactly ONE member — the adapter-prefix
+  # refusal — to rc 0, because WE chose not to pin the prefix and the gate
+  # correctly declined a job it was never configured to do. That choice
+  # ended when --adapter-prefix '' and --adapter-modules were wired in this
+  # same edit (fs_live_save_gate above): a chosen abstention cannot survive
+  # the choice being made, and leaving the rc-0 arm armed after the wiring
+  # landed would have silently kept the abstention alive (the byte-for-byte
+  # hazard live_save_gate.py:511-523 warns about). Every member of the class
+  # now rides the rc-92 infrastructure class: unreadable checkpoint, missing
+  # base files, tool crash, unreadable capture, missing record, missing
+  # census — AND the formerly-calibrated prefix refusal, which can now only
+  # mean the flags dropped out of the payload, i.e., a wiring failure. An
+  # unchosen non-measurement that lets the afterany resume chain continue
+  # converts a broken adjudicator into a decorative one; this arm is where
+  # the production chain is decided.
   local fs_cause="" fs_rec_class=""
   if [[ -r "${4:-}" ]]; then
     fs_cause=$(grep -m1 'live_gate could not measure:' "$4" 2>/dev/null || true)
@@ -1276,26 +1407,45 @@ fs_lora_gate_verdict_to_rc() { # $1=gate rc  $2=which  $3=report path  $4=captur
        echo "ARTIFACT GATE BLOCKED ($2): the adapter artifact was measured and did not clear, or a MUST_FIRE detector is unproven on it. Report: $3. This run's checkpoints are NOT cleared for resume, eval, or export." >&2
        if [[ -r "${4:-}" ]]; then grep -m4 '^      ' "$4" >&2 || true; fi ;;
     3) if [[ "$fs_rec_class" == "adapter_prefix_unpinned" ]]; then
-         # The ONE calibrated member of the exit-3 class — and it earns rc 0
-         # only as a CONFIRMED fact: the tool's own record (fix44 / #77-B3)
-         # names the prefix refusal, so the cause is stated with evidence,
-         # every run, which is the honest form of the anti-habituation
-         # argument the pre-fix44 text tried to make by declaration.
-         FS_ART_GATE_STATE="UNMEASURED (gate exit 3 — cause CONFIRMED as the adapter-prefix abstention, TODAY THE EXPECTED lora state, from the tool's own refusal record; 0 of its 3 gates and 0 of its 3 MUST_FIRE controls exercised; adjudication of record remains G1-G5 above)"
-         FS_ART_GATE_RC=0
-         echo "artifact gate ($2): UNMEASURED (exit 3) — the adapter-prefix abstention, CONFIRMED from the tool's own refusal record (verified present at $3), not assumed. The artifact is NOT gate-verified; 0 of 3 gates and 0 of 3 controls ran. This does not fail the job today BY CALIBRATION — it is the only member of the exit-3 class that earns an rc-0 abstention, because we CHOSE not to pin the prefix." >&2
+         # RETIRED CALIBRATION (#78, this edit) — kept as an explicit RED
+         # arm, never deleted, because a silently deleted calibration is
+         # unreviewable. What this arm WAS: the ONE calibrated member of the
+         # exit-3 class, mapped to rc 0 as "TODAY THE EXPECTED lora state",
+         # because WE chose not to pin --adapter-prefix and the gate
+         # correctly declined a job it was never configured to do (the
+         # pre-#78 text, fix44 / #77-B3, earned even that green only as a
+         # CONFIRMED fact from this same refusal record). Why the
+         # calibration ended: the choice it calibrated no longer exists —
+         # fs_live_save_gate now pins --adapter-prefix '' AND
+         # --adapter-modules "$ADAPTER_MODULES" on every call, and the
+         # gate's own contract (live_save_gate.py:511-523) licensed only
+         # this COORDINATED edit, byte-for-byte. A gate that STILL raises
+         # the prefix refusal is a gate whose payload silently lost the
+         # flags — the same armed-no-op class as the drill that cannot fire
+         # — and calibrating THAT to rc 0 is exactly how a gate goes
+         # decorative. MUST_FIRE for the wiring (broken to see red): delete
+         # --adapter-prefix '' from the fs_live_save_gate payload and every
+         # gate call MUST land HERE and stop the chain — a launch that still
+         # self-narrates UNMEASURED-by-prefix after this edit is the
+         # measurement that the wiring did not land. Denominator, stated on
+         # every fire: 0 of the gate's gates and 0 of its controls ran.
+         FS_ART_GATE_STATE="UNMEASURED-INFRA (gate exit 3, record CONFIRMED adapter_prefix_unpinned at $3 — a refused-the-refusal now that --adapter-prefix '' and --adapter-modules are wired, #78; class rc-92)"
+         FS_ART_GATE_RC=92
+         echo "artifact gate ($2): exit 3 classified adapter_prefix_unpinned — CONFIRMED from the tool's own refusal record (verified present at $3), and now a FAILURE, not an abstention: --adapter-prefix '' and --adapter-modules $ADAPTER_MODULES are wired on every call since #78, so this refusal can only mean the flags silently dropped out of the fs_live_save_gate payload (or the gate drifted). Formerly the calibrated rc-0 'expected lora state' (fix44 / #77-B3); that calibration ended in the same edit that wired the census, per the byte-for-byte contract at live_save_gate.py:511-523. 0 of 3 gates and 0 of 3 controls ran; mapping to the infrastructure class, chain stops. Do NOT restore rc 0 here — resurrecting the abstention without retiring the wiring is the one-sided edit live_save_gate.py:511-523 forbids." >&2
        elif [[ "$fs_cause" == *"--adapter-prefix was not pinned"* ]]; then
          # The gate's words name the prefix abstention, but the refusal
          # record it must have written is absent or unmarked — precisely the
          # fix35-era state, now an indictment instead of a narration: a
-         # claimed-but-absent record is not a record (#77-B3).
+         # claimed-but-absent record is not a record (#77-B3). Post-#78 the
+         # words themselves are ALSO a wiring alarm (the arm above); the
+         # missing record stays the deciding defect here.
          FS_ART_GATE_STATE="OVERCLAIM (gate's own line names the adapter-prefix abstention, but the refusal record it must have written is absent or unmarked at $3; class rc-92)"
          FS_ART_GATE_RC=92
          echo "artifact gate ($2): the gate's own output names the adapter-prefix abstention, but no refusal record with that classification exists at $3 — the refusal record it must have written is absent. A stated-on-stdout abstention without its on-disk record is the exact claim-vs-disk gap measured on both PROBE runs (#77-B3); mapping to the infrastructure class, chain stops." >&2
        else
-         FS_ART_GATE_STATE="UNMEASURED-INFRA (gate exit 3, cause NOT the calibrated prefix abstention; class rc-92)"
+         FS_ART_GATE_STATE="UNMEASURED-INFRA (gate exit 3, cause not the retired prefix refusal; class rc-92)"
          FS_ART_GATE_RC=92
-         echo "artifact gate ($2): exit 3 whose cause is OUTSIDE the calibrated adapter-prefix abstention — class rc-92 (wiring/tool/artifact failure), never an rc-0 abstention. Cause, quoted from the gate's own output: ${fs_cause:-<no 'live_gate could not measure:' line captured in ${4:-<none>} — an unreadable or silent capture is itself fail-closed>}. Only the prefix refusal is a chosen abstention; every other non-measurement stops the afterany chain, because calibrating a broken adjudicator to rc 0 is how a gate becomes decorative." >&2
+         echo "artifact gate ($2): exit 3 whose cause is OUTSIDE the (retired, #78) adapter-prefix refusal — class rc-92 (wiring/tool/artifact failure), never an rc-0 abstention. Cause, quoted from the gate's own output: ${fs_cause:-<no 'live_gate could not measure:' line captured in ${4:-<none>} — an unreadable or silent capture is itself fail-closed>}. Since #78 NO member of the exit-3 class is a chosen abstention — the prefix is pinned on every call; every non-measurement stops the afterany chain, because calibrating a broken adjudicator to rc 0 is how a gate becomes decorative." >&2
        fi ;;
     *) FS_ART_GATE_STATE="INFRASTRUCTURE FAILURE (gate rc=$1 — outside 0/1/3: 2=argparse/wiring, 127=tool vanished, else=crash)"
        FS_ART_GATE_RC=92

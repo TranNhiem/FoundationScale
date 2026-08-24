@@ -724,11 +724,216 @@ f45_full_executor_ok() { # $1=launcher file -> rc 0 iff the full-FT census is
   gate_span=$(sed -n '/^fs_live_save_gate() {/,/^}/p' "$f" | strip_shell_comments)
   [ "$(pos_count run_in_container "$f")" = "4" ] \
     && printf '%s\n' "$gate_span" | grep -qF 'run_in_container --slurm-ntasks 1 --workdir "$REPO"' \
-    && strip_shell_comments < "$f" | grep -qF 'bash -lc "python3 $PROBE"' \
+    && strip_shell_comments < "$f" | grep -qF 'bash -lc "python3 $COT_PROBE_PY"' \
     && strip_shell_comments < "$f" | grep -qF 'run_in_container --workdir "$REPO" bash -lc "$CMD" &' \
     && strip_shell_comments < "$f" | grep -qF "python3 '\$FS_ROOT/tools/emit_run_manifest.py'" \
     && awk '/run_in_container --slurm-ntasks 1/ && /\\$/ {getline nxt; if (nxt ~ /tools\/emit_run_manifest\.py/) found=1} END{exit !found}' "$f"
 }
+
+# --- fix81: two-launcher PROBE contract (#81, contract half) ------------------
+# Companion to the repair inside f45_full_executor_ok immediately above: its
+# third conjunct now pins 'bash -lc "python3 $COT_PROBE_PY"' after the sibling
+# rename of full-FT's preflight script path. That grep is DELIBERATELY the new
+# spelling only — a pattern relaxed to also match the old $PROBE (say, an
+# alternation over the COT_ prefix) would green through a revert to the #81
+# collision, i.e. the pin would stop detecting the exact regression it exists
+# to catch, which is the defect class this file was built to eliminate.
+#
+# #81 as shipped: full-FT reused $PROBE — the documented 20-iter smoke switch
+# the LoRA launcher already honored — as its preflight script PATH
+# (PROBE=$OUT_DIR/preflight_cot_probe.py), so the operator's PROBE=1 was
+# overwritten before any guard could read it: a one-launcher mode wearing a
+# two-launcher name. The sibling patch renamed the path to $COT_PROBE_PY and
+# gave full-FT the real mode (guarded branch, 20 iters, save every 10, a
+# _probe-suffixed OUT_DIR, a banner field, a G5-equivalent save gate). THIS
+# leg pins the resulting four-part contract on BOTH files through ONE
+# instrument and ONE loop — two single-file greps cannot express "same
+# contract on both", and a leg written against only $FULL is precisely the
+# instrument under which #81 survived until now.
+#
+# Construction notes (how each cheap fake is refused):
+#  * the "2/2" is a COUNT of two observed predicate rc's, printed by the
+#    instrument and re-grepped at the site before PASS is emitted — a bare
+#    rc==0 would also be produced by any future early-return refactor of the
+#    helper, and a hardcoded "2/2" literal would print over files never
+#    opened (doctrine 1);
+#  * the launcher NAME in a red verdict comes from the LOOP SLOT, never from
+#    the path: the MUST_FIREs swap mktemp copies into slots, and a verdict of
+#    "offenders: fs-f81-collision.X7kQ2" tells the operator nothing actionable
+#    (house rule: breakage text names the thing to fix);
+#  * each MUST_FIRE proves its construction on the COPY with greps BEFORE the
+#    leg runs; arm A's collision proof is an anchored exact line
+#    ('^PROBE=$OUT_DIR/preflight_cot_probe.py$', metacharacters escaped) PLUS
+#    a zero count of surviving '^COT_PROBE_PY=' assignments — PRESENCE of the
+#    old spelling is not REVERSION: a sed that duplicated the assignment
+#    instead of renaming it would still satisfy a presence grep while the
+#    renamed line survived underneath;
+#  * arm B exists because arm A alone never exercises the LoRA slot: a leg
+#    that greens while LoRA's PROBE semantics change underneath it is a
+#    one-launcher leg wearing a two-launcher name. Both arms move conjuncts
+#    (b)/(c) on their respective copies (OBSERVED red below); conjuncts
+#    (a)/(d) are held green on the LIVE pair by the site leg itself — a
+#    there-malformed grep reds the unmodified estate, not just a doctored
+#    copy. As with f44/f45, the detector of record proven red is the LEG in
+#    each slot; that is stated, not silently assumed.
+f81_probe_file_ok() { # $1=launcher file (real or doctored copy) -> rc 0 iff ALL
+                      # four PROBE parts hold, each as a conjunct — an OR'd
+                      # contract would green a file missing three of the four,
+                      # the vacuous-pass class in miniature:
+                      #   (a) the HEADER documents the idiom. "Header" is the
+                      #       leading comment run BY CONSTRUCTION (awk prints
+                      #       it and stops at the first code line): never
+                      #       "first N lines" (a fixed N silently re-scopes the
+                      #       check as headers grow) and never "anywhere in
+                      #       the file" (the comment beside the branch would
+                      #       then impersonate launch-time documentation);
+                      #   (b) a guarded ${PROBE:-0} branch, checked on the
+                      #       DECOMMENTED view, so a branch surviving only
+                      #       inside a comment — "documented, not wired"
+                      #       drift — cannot read as present;
+                      #   (c) the _probe suffixing of the output directory must
+                      #       sit INSIDE the branch region (guard line through
+                      #       its closing fi) and share its line with DIR or
+                      #       SUFFIX: a stray _probe on an unrelated token — a
+                      #       stale log name, a checkpoint glob, prose — must
+                      #       not launder the conjunct. The identifier SPELLING
+                      #       is deliberately NOT pinned (RUN_SUFFIX vs inline
+                      #       suffixing): a cross-launcher pin on one spelling
+                      #       would red a correct implementation that merely
+                      #       chose another name, a false alarm priced like a
+                      #       false green (doctrine 5). The accepted residual —
+                      #       a _probe token nothing consumes — is real, but the
+                      #       branch-region scoping forces that token to live
+                      #       inside the guarded mode: a smaller hole than the
+                      #       identifier fragility, and it is on the record here
+                      #       rather than silently assumed away;
+                      #   (d) the banner echoes the RESOLVED value: the exact
+                      #       ${PROBE:-0} expansion the guard reads, carried on
+                      #       an echo/printf line. Pinning the bare word PROBE
+                      #       would green on prose; the trailer rule (whitespace
+                      #       or EOL after echo/printf) keeps a variable named
+                      #       e.g. echoes_probed from matching.
+  local f=$1
+  [ -r "$f" ] || return 1  # fail closed: unreadable is not empty (doctrine 4)
+  awk 'NR==1 && /^#!/ {next} /^[[:space:]]*(#|$)/ {print; next} {exit}' "$f" | grep -qw PROBE \
+    && strip_shell_comments < "$f" | grep -qF 'if [[ "${PROBE:-0}" == "1" ]]; then' \
+    && sed -n '/if \[\[ "${PROBE:-0}" == "1" \]\]; then/,/^fi$/p' "$f" | strip_shell_comments | grep -qE '(DIR|SUFFIX)[^#]*_probe|_probe[^#]*(DIR|SUFFIX)' \
+    && strip_shell_comments < "$f" | grep -E '^[[:space:]]*(echo|printf)([[:space:]]|$)' | grep -qF '${PROBE:-0}'
+}
+f81_probe_pair_report() { # $1=LoRA slot file, $2=full-FT slot file -> one
+                          # summary line on stdout, rc 0 iff 2/2. The offender
+                          # name is taken from the slot position, never from
+                          # the path (see construction notes); the denominator
+                          # is counted from observed rc's, so "2/2" cannot
+                          # print for a launcher never examined — and arity is
+                          # enforced fail-closed: anything but two slots is
+                          # UNMEASURED (rc 2), never a partial green
+                          # (doctrines 1/4).
+  [ "$#" -eq 2 ] || { printf 'PROBE 4-part contract UNMEASURED: %d slot(s) supplied, need 2 — refusing to score\n' "$#"; return 2; }
+  local slot=0 f name have=0 bad=""
+  for f in "$1" "$2"; do
+    slot=$((slot+1))
+    if [ "$slot" -eq 1 ]; then name=LoRA; else name=full-FT; fi
+    if f81_probe_file_ok "$f"; then
+      have=$((have+1))
+    elif [ -z "$bad" ]; then bad=$name
+    else bad="$bad, $name"; fi
+  done
+  printf 'PROBE 4-part contract: %d/2 launchers%s\n' "$have" "${bad:+ — offenders: $bad}"
+  [ "$have" -eq 2 ]
+}
+f81_live=$(f81_probe_pair_report "$LORA" "$FULL"); f81_live_rc=$?
+# MUST_PASS (doctrine 3's green leg), asserted the strong way: rc alone is
+# insufficient — an early return also yields 0 — so the PASS REQUIRES the
+# instrument's own computed '2/2 launchers' denominator text, and that
+# measured line is quoted into the record verbatim (doctrine 2 at the site).
+if [ "$f81_live_rc" -eq 0 ] && printf '%s\n' "$f81_live" | grep -qF '2/2 launchers'; then
+  ok "PROBE pair-contract: $f81_live — LoRA AND full-FT each document the idiom in the header, gate it behind a wired \${PROBE:-0} branch, suffix the output directory with _probe inside that branch, and echo the resolved PROBE value in the banner; the #81 shape (a mode present on one launcher while the other collides the flag away with a path assignment) is now red on BOTH files, and the f45 conjunct above keeps the preflight path itself named \$COT_PROBE_PY"
+else
+  no "PROBE pair-contract broken — instrument printed '$f81_live' (rc=$f81_live_rc); the NAMED offender lost one of the four parts (header PROBE documentation / wired \${PROBE:-0} branch / in-branch _probe suffixing of the output dir / banner echo of the resolved \${PROBE:-0}), or a launcher file under \$LDIR was unreadable — which this instrument fails CLOSED on, never reads as absent-evidence (doctrine 4)"
+fi
+# MUST_FIRE A, full-FT arm — broken to see red: the mutation is the exact
+# two-move regression that would silently resurrect #81, applied to a COPY of
+# $FULL: (1) reinstate the shipped collision by rewriting the renamed
+# assignment back to PROBE=$OUT_DIR/preflight_cot_probe.py (the operator's
+# PROBE=1 once again dies before the guard reads it), and (2) delete every
+# ${PROBE:-0} branch, so the mode is gone rather than merely unreachable.
+f81_mfa=$(mktemp "${TMPDIR:-/tmp}/fs-f81-collision.XXXXXX") \
+  && sed -e 's/^COT_PROBE_PY=\$OUT_DIR\/preflight_cot_probe\.py/PROBE=$OUT_DIR\/preflight_cot_probe.py/' \
+         -e '/if \[\[ "${PROBE:-0}" == "1" \]\]; then/,/^fi$/d' "$FULL" > "$f81_mfa"
+f81_mfa_sed=$?
+f81_mfa_col=-1; f81_mfa_cot=-1; f81_mfa_br=-1
+f81_mfa_rc=-1; f81_mfa_out="(leg never ran — construction unproven)"
+if [ "$f81_mfa_sed" -eq 0 ]; then
+  # Construction proof ON THE COPY, before the leg runs (an edit that silently
+  # did nothing must not read as green). The collision grep is anchored at
+  # both ends with metacharacters escaped, and the rename must be REVERTED
+  # (zero surviving ^COT_PROBE_PY= assignments), not duplicated — presence of
+  # the old spelling alone would also be satisfied by an edit that left the
+  # renamed line in place.
+  f81_mfa_col=$(grep -c '^PROBE=\$OUT_DIR/preflight_cot_probe\.py$' "$f81_mfa" || true)
+  f81_mfa_cot=$(grep -c '^COT_PROBE_PY=' "$f81_mfa" || true)
+  f81_mfa_br=$(strip_shell_comments < "$f81_mfa" | grep -cF 'if [[ "${PROBE:-0}" == "1" ]]; then' || true)
+fi
+f81_mfa_fired=1
+if [ "$f81_mfa_sed" -eq 0 ] && [ "$f81_mfa_col" -ge 1 ] && [ "$f81_mfa_cot" -eq 0 ] && [ "$f81_mfa_br" -eq 0 ]; then
+  f81_mfa_out=$(f81_probe_pair_report "$LORA" "$f81_mfa"); f81_mfa_rc=$?
+  # OBSERVED red, under the full-FT name specifically: LoRA must NOT share the
+  # blame (a both-names red would be a false positive on the innocent slot —
+  # doctrine 5 prices that like a false green), and the live pair must still
+  # be 2/2, so the doctored copy — not a broken instrument — caused the red.
+  if [ "$f81_mfa_rc" -ne 0 ] \
+     && printf '%s\n' "$f81_mfa_out" | grep -qF '1/2 launchers' \
+     && printf '%s\n' "$f81_mfa_out" | grep -qF 'offenders: full-FT' \
+     && ! printf '%s\n' "$f81_mfa_out" | grep -qF 'LoRA' \
+     && f81_probe_pair_report "$LORA" "$FULL" >/dev/null; then
+    f81_mfa_fired=0
+  fi
+fi
+[ -n "${f81_mfa:-}" ] && rm -f "$f81_mfa" || true
+if [ "$f81_mfa_fired" -eq 0 ]; then
+  ok "MUST_FIRE pair-contract (full-FT arm): reinstating PROBE=\$OUT_DIR/preflight_cot_probe.py and deleting the \${PROBE:-0} branch on a copy of \$FULL (construction proven: anchored '^PROBE=\$OUT_DIR/preflight_cot_probe.py' line present, '^COT_PROBE_PY=' assignments 0, surviving probe branches 0) turns the SAME leg red as 'offenders: full-FT' at 1/2 with LoRA unblamed — the shipped #81 collision cannot regress behind a green, and the leg demonstrably reads the full-FT slot"
+else
+  no "MUST_FIRE UNREACHABLE (pair-contract, full-FT arm): the doctored copy of \$FULL did not construct or the leg did not go red naming full-FT — sed rc=$f81_mfa_sed, anchored collision lines=$f81_mfa_col, remaining '^COT_PROBE_PY=' lines=$f81_mfa_cot, surviving probe branches=$f81_mfa_br, leg rc=$f81_mfa_rc, instrument printed: '$f81_mfa_out' — an unproven detector is recorded as a defect, never as green (doctrine 3)"
+fi
+# MUST_FIRE B, LoRA arm — broken to see red: delete every ${PROBE:-0} branch
+# from a COPY of $LORA. The sibling patch touched full-FT only, so LoRA has no
+# collision line to reinstate; the LoRA-side way to resurrect #81's divergence
+# is for the wired mode to quietly disappear while full-FT keeps the leg
+# half-green. Without this arm the leg's two-launcher claim would exceed its
+# evidence — arm A cannot distinguish "both slots examined" from "$FULL
+# examined twice".
+f81_mfb=$(mktemp "${TMPDIR:-/tmp}/fs-f81-nobranch.XXXXXX") \
+  && sed '/if \[\[ "${PROBE:-0}" == "1" \]\]; then/,/^fi$/d' "$LORA" > "$f81_mfb"
+f81_mfb_sed=$?
+f81_mfb_br=-1
+f81_mfb_rc=-1; f81_mfb_out="(leg never ran — construction unproven)"
+if [ "$f81_mfb_sed" -eq 0 ]; then
+  # The branch-line literal below deliberately RESTATES the guard text rather
+  # than sharing a variable with the conjunct inside f81_probe_file_ok: if a
+  # future edit moves one spelling without the other, this count stops being 0
+  # and the detector reports UNREACHABLE-red instead of silently passing a
+  # proof that no longer proves anything.
+  f81_mfb_br=$(strip_shell_comments < "$f81_mfb" | grep -cF 'if [[ "${PROBE:-0}" == "1" ]]; then' || true)
+fi
+f81_mfb_fired=1
+if [ "$f81_mfb_sed" -eq 0 ] && [ "$f81_mfb_br" -eq 0 ]; then
+  f81_mfb_out=$(f81_probe_pair_report "$f81_mfb" "$FULL"); f81_mfb_rc=$?
+  if [ "$f81_mfb_rc" -ne 0 ] \
+     && printf '%s\n' "$f81_mfb_out" | grep -qF '1/2 launchers' \
+     && printf '%s\n' "$f81_mfb_out" | grep -qF 'offenders: LoRA' \
+     && ! printf '%s\n' "$f81_mfb_out" | grep -qF 'full-FT' \
+     && f81_probe_pair_report "$LORA" "$FULL" >/dev/null; then
+    f81_mfb_fired=0
+  fi
+fi
+[ -n "${f81_mfb:-}" ] && rm -f "$f81_mfb" || true
+if [ "$f81_mfb_fired" -eq 0 ]; then
+  ok "MUST_FIRE pair-contract (LoRA arm): deleting the \${PROBE:-0} branch from a copy of \$LORA (construction proven: probe-branch count in the copy = 0 while the live LoRA file is untouched — sed wrote only to the mktemp copy) turns the SAME leg red as 'offenders: LoRA' at 1/2 with full-FT unblamed — LoRA's PROBE semantics cannot drift while the leg greens on the sibling file alone"
+else
+  no "MUST_FIRE UNREACHABLE (pair-contract, LoRA arm): the doctored copy of \$LORA did not construct or the leg did not go red naming LoRA — sed rc=$f81_mfb_sed, surviving probe branches in copy=$f81_mfb_br, leg rc=$f81_mfb_rc, instrument printed: '$f81_mfb_out' — without a firing LoRA arm the two-launcher claim is broader than its evidence (doctrines 3/5)"
+fi
+
 lora_ric=$(pos_count run_in_container "$LORA")
 full_ric=$(pos_count run_in_container "$FULL")
 lora_srun=$(pos_count srun "$LORA")
@@ -2400,18 +2605,36 @@ f44_gate_wired_ok() { # $1=launcher file (real or doctored copy). The
                       # fs_live_save_gate — the payload's python3 lives inside
                       # a quoted string and is invisible to pos_pat, so the
                       # conjunct holds exactly when the call is routed.
+                      # #78-B adds one conjunct on --fqn-map's fix45 footing:
+                      # '--adapter-modules' must appear inside this function,
+                      # mirroring exactly how the full-FT predicate pins
+                      # --fqn-map: the gate must receive the launcher-declared
+                      # LoRA attachment set, or the census writer runs on an
+                      # UNDECLARED adapter set while every routing assertion
+                      # here stays green — the vacuous shape finding #78
+                      # exists to refuse, and doctrine 2 dies at the producer
+                      # seam with no red anywhere. The `--` end-of-options
+                      # guard on the pin is load-bearing (as at the --fqn-map
+                      # pin): the pattern itself begins with dashes, and
+                      # omitting the guard lets grep parse it as options and
+                      # exit 2 — a RED against a correctly-wired launcher that
+                      # no legitimate launcher edit could ever clear, the
+                      # exact wrong-reason-red class fix26b retired from this
+                      # file. The MUST_FIRE below excises the token on a copy
+                      # to prove this predicate can see the loss.
   local fn
   fn=$(sed -n '/^fs_live_save_gate() {/,/^}/p' "$1" | strip_shell_comments)
   printf '%s\n' "$fn" | grep -qF 'run_in_container --slurm-ntasks 1 --workdir "$REPO"' \
     && printf '%s\n' "$fn" | grep -qF "PYTHONPATH='\$FS_ROOT/src'" \
     && printf '%s\n' "$fn" | grep -qF 'PYTHONNOUSERSITE=1' \
+    && printf '%s\n' "$fn" | grep -qF -- '--adapter-modules' \
     && printf '%s\n' "$fn" | grep -qF 'return "$fs_gate_rc"' \
     && ! printf '%s\n' "$fn" | grep -qE "$(pos_pat python3)"
 }
 if f44_gate_wired_ok "$LORA"; then
-  ok "fs_live_save_gate routes through run_in_container (--slurm-ntasks 1 --workdir \$REPO idiom), prepends \$FS_ROOT/src to the CONTAINER's forwarded PYTHONPATH, restates PYTHONNOUSERSITE=1 in the payload, returns the captured rc, and carries no command-position python3 — the fifth python call joins the executor"
+  ok "fs_live_save_gate routes through run_in_container (--slurm-ntasks 1 --workdir \$REPO idiom), prepends \$FS_ROOT/src to the CONTAINER's forwarded PYTHONPATH, restates PYTHONNOUSERSITE=1 in the payload, passes --adapter-modules (the launcher-declared LoRA attachment set) to the census writer on full-FT's --fqn-map footing (#78-B), returns the captured rc, and carries no command-position python3 — the fifth python call joins the executor with the census wired through"
 else
-  no "fs_live_save_gate is not executor-routed with the established in-container PYTHONPATH/PYTHONNOUSERSITE idiom and an untouched rc — the torch-importing gate still runs on a host interpreter that cannot read DCP (#77-B1)"
+  no "fs_live_save_gate is not executor-routed with the established in-container PYTHONPATH/PYTHONNOUSERSITE/--adapter-modules/untouched-rc idiom — the torch-importing gate still runs on a host interpreter that cannot read DCP, or the census writer no longer receives the declared adapter set (#77-B1 routing / #78-B flag)"
 fi
 # MUST_FIRE for the wiring leg: doctor the executor call back to a bare
 # python3 on a COPY (the #77-B1 shape), prove construction (the executor
@@ -2433,6 +2656,280 @@ if [ "$f44_gfired" -eq 0 ]; then
 else
   no "MUST_FIRE UNREACHABLE (gate-wiring): the bare-python3 revert did not construct or did not fire (sed rc=$f44_gs, copy executor count=$f44_gw) — the wiring leg is an unproven detector"
 fi
+
+echo "== #78: --adapter-modules census flag pinned in f44 (task B) + the producer's empty-set refusal/admission legs (task A) =="
+
+# MUST_FIRE for the new conjunct, on a doctored COPY of the live launcher,
+# after the 2420-2435 idiom (construct, prove construction landed, assert both
+# directions). Broken to see red: sed excises the '--adapter-modules' token
+# GLOBALLY on the copy — the excision is comment-blind-proof (the token goes
+# everywhere it appears, so no prose mention can masquerade as a surviving
+# site; contrast fix45's line-number surgery) and collision-free (the leading
+# dashes are in the pattern, so the fs_gate/adapter-modules.json path
+# basename, which carries none, is untouched). The predicate must go red on
+# the copy while the live file stays green.
+f44_at=$(mktemp "${TMPDIR:-/tmp}/fs-f44-admod.XXXXXX") \
+  && sed 's/--adapter-modules//g' "$LORA" > "$f44_at"
+f44_as=$?
+f44_aw=-1
+[ "$f44_as" -eq 0 ] && f44_aw=$(sed -n '/^fs_live_save_gate() {/,/^}/p' "$f44_at" | grep -cF -- '--adapter-modules' || true)
+f44_afired=1
+if [ "$f44_as" -eq 0 ] && [ "$f44_aw" -eq 0 ] && ! f44_gate_wired_ok "$f44_at" \
+   && f44_gate_wired_ok "$LORA"; then
+  f44_afired=0
+fi
+[ -n "${f44_at:-}" ] && rm -f "$f44_at" || true
+if [ "$f44_afired" -eq 0 ]; then
+  ok "MUST_FIRE adapter-modules conjunct: excising the '--adapter-modules' token from a launcher copy (construction proven: token count inside the copy's fs_live_save_gate = 0) turns the wiring predicate red while the live launcher stays green — the gate cannot silently lose sight of the LoRA attachment set (#78-B)"
+else
+  no "MUST_FIRE UNREACHABLE (adapter-modules conjunct): the token excision did not construct or did not fire (mktemp/sed rc=$f44_as, copy token count=$f44_aw) — the --adapter-modules pin is an unproven detector"
+fi
+
+echo "== fix78: the census --out producer refuses a zero attachment set (no file + UNMEASURED) and admits a non-empty set with its denominator printed =="
+# Task (A) arms the PRODUCER side of finding #78; the next two legs are its
+# controls, driven headlessly so the refusal is OBSERVED, not asserted. The
+# probe imports megatron.bridge (in-container-only, #77-B1) and builds its
+# model only in-container, so no leg here may need a real model — a leg that
+# never RUNS is not a control (doctrine 3). The seam that keeps both legs
+# runnable AND non-vacuous: drive the probe's REAL --out writer directly, at
+# function level. Function level is chosen over a whole-probe subprocess run
+# for a second, load-bearing reason: the probe already carries six
+# pre-existing environment-level CENSUS_VERDICT=UNMEASURED exit paths, and a
+# subprocess drive cannot distinguish the NEW empty-census refusal from any
+# of them — an UNMEASURED collected at the process boundary could green this
+# leg for the wrong reason. Calling the writer in isolation makes the
+# refusal observed at this seam attributable to this fixture.
+#
+# One shared driver (house rule: the rule is shared, not duplicated) makes a
+# control copy of the probe with ONLY its megatron import lines neutered —
+# replacement count proven nonzero, so a probe refactor cannot silently turn
+# these legs into no-ops — locates the writer as the ONE top-level function
+# carrying both the CENSUS_VERDICT=UNMEASURED refusal print and the census
+# write call (zero or ambiguous candidates = construction failure = RED,
+# doctrine 4), and invokes it with a synthesized attachment fixture: empty
+# for the refusal leg, two FQN strings for the admission leg. Every
+# construction failure (exit 10..15) lands as a loud `no` naming the stage;
+# an unreadable probe is caught up front on the bash side and reported by
+# name. This control fails CLOSED and never self-greens on a drive that did
+# not happen.
+f78_probe_ok=1
+{ [ -n "${F39_PROBE:-}" ] && [ -r "$F39_PROBE" ]; } || f78_probe_ok=0
+f78_dir=$(mktemp -d "${TMPDIR:-/tmp}/fs-f78-census.XXXXXX")
+f78_sd=$?
+f78_drv=$f78_dir/drive_census_writer.py
+f78_setup=1
+if [ "$f78_sd" -eq 0 ]; then
+  cat > "$f78_drv" <<'PYEOF'
+import contextlib
+import io
+import json
+import os
+import re
+import sys
+import traceback
+
+probe, outpath, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def stage(code, detail=""):
+    # The bash side keys on the FIRST F78_STAGE= line; anything other than
+    # "driven" is a construction failure and pairs with a nonzero exit.
+    print("F78_STAGE=%s%s" % (code, (" " + detail) if detail else ""))
+
+src = open(probe, "r").read()
+if "--out" not in src:
+    stage("no-out-seam", "(the probe carries no --out wiring; nothing to control)")
+    sys.exit(10)
+
+# Neuter only megatron import lines, preserving line count 1:1 so any
+# source-position accounting in the probe text stays truthful; a
+# parenthesized from-import's continuation lines are neutered with it.
+imp = re.compile(r"^(\s*)(from[ \t]+megatron\b|import[ \t]+megatron\b)")
+lines = src.splitlines(True)
+out = []
+neut = 0
+i = 0
+while i < len(lines):
+    ln = lines[i]
+    m = imp.match(ln)
+    if not m:
+        out.append(ln)
+        i += 1
+        continue
+    indent = m.group(1)
+    depth = ln.count("(") - ln.count(")")
+    out.append(indent + "pass  # fix78 control copy: heavy import neutered (line count preserved)\n")
+    neut += 1
+    i += 1
+    while depth > 0 and i < len(lines):
+        depth += lines[i].count("(") - lines[i].count(")")
+        out.append(indent + "pass  # fix78 control copy: parenthesized import continuation neutered\n")
+        i += 1
+if neut == 0:
+    stage("no-heavy-import", "(probe import shape changed; refusing to run blind)")
+    sys.exit(11)
+
+src2 = "".join(out)
+ns = {"__name__": "fix78_control_copy", "__file__": probe}
+try:
+    exec(compile(src2, probe, "exec"), ns)
+except Exception:
+    stage("exec-failed", "(a non-megatron top-level statement did not survive the neuter)")
+    traceback.print_exc()
+    sys.exit(15)
+
+# Discover the writer ON the control copy's text: exactly one top-level def
+# whose body carries BOTH the refusal print and the census write call.
+cands = []
+for dm in re.finditer(r"(?m)^def[ \t]+([A-Za-z_]\w*)[ \t]*\(([^)]*)\)[ \t]*:", src2):
+    tail = src2[dm.end():]
+    nxt = re.search(r"(?m)^\S", tail)
+    body = tail[:nxt.start()] if nxt else tail
+    if "CENSUS_VERDICT=UNMEASURED" in body and ("json.dump" in body or "open(" in body or ".write(" in body):
+        cands.append((dm.group(1), dm.group(2)))
+if len(cands) != 1:
+    stage("writer-discovery", "count=%d (fail closed: zero or ambiguous writer candidates)" % len(cands))
+    sys.exit(12)
+
+wname, wparams = cands[0]
+wfn = ns.get(wname)
+if not callable(wfn):
+    stage("writer-discovery", "name=%s not bound after exec" % wname)
+    sys.exit(12)
+
+# Fixture: the empty leg sends zero attachments (the doctoring IS the
+# input); the admission leg sends two distinct FQN strings — the simplest
+# element shape any attachment container accepts, keeping the assumption
+# surface minimal. FQNs are checked byte-wise against the JSON afterwards,
+# so the count is observed in the artifact, not asserted from the fixture.
+fixture = []
+if mode != "empty":
+    fixture = [
+        "model.decoder.layers.0.mlp.linear_fc1.lora_A",
+        "model.decoder.layers.0.mlp.linear_fc1.lora_B",
+    ]
+
+path_re = re.compile(r"out|path|dest|file|json", re.I)
+data_re = re.compile(r"attach|module|row|entri|record|parent|found|result|population|census", re.I)
+kwargs = {}
+for p in [q.strip() for q in wparams.split(",") if q.strip()]:
+    base = p.split("=")[0].strip().lstrip("*")
+    defaulted = "=" in p
+    if path_re.search(base):
+        kwargs[base] = outpath
+    elif data_re.search(base):
+        kwargs[base] = list(fixture)
+    elif defaulted:
+        continue
+    else:
+        stage("arg-synthesis", "param=%s (no honest value available; refusing to guess)" % base)
+        sys.exit(13)
+
+buf = io.StringIO()
+wrc = None
+try:
+    with contextlib.redirect_stdout(buf):
+        wrc = wfn(**kwargs)
+except SystemExit as se:
+    wrc = se.code
+except Exception:
+    stage("writer-raised", "(the real writer rejected the control fixture)")
+    traceback.print_exc()
+    sys.stdout.write(buf.getvalue())
+    sys.exit(14)
+
+sys.stdout.write(buf.getvalue())
+stage("driven", "writer=%s neutered=%d mode=%s" % (wname, neut, mode))
+print("F78_WRITER_RC=%s" % ("None" if wrc is None else wrc))
+if mode != "empty" and os.path.exists(outpath):
+    raw = open(outpath, "r").read()
+    try:
+        json.loads(raw)
+        print("F78_JSON=parses bytes=%d" % len(raw))
+    except Exception:
+        print("F78_JSON=unparseable bytes=%d" % len(raw))
+    print("F78_FIXTURES_PRESENT=%s" % str(all(x in raw for x in fixture)))
+sys.exit(0)
+PYEOF
+  if [ $? -eq 0 ] && [ -s "$f78_drv" ]; then f78_setup=0; fi
+fi
+
+# MUST_FIRE (bullet 3; broken to see red: the synthesized attachment set IS
+# the mutation — it is constructed EMPTY). Both assertions are conjunctive
+# because each alone has a hole the other closes: a crash-before-print also
+# leaves no file, and a verdict-only leg cannot see the wrote-an-empty-file
+# failure shape. The '^F78_STAGE=driven ' conjunct is what converts "ran"
+# from a hope into evidence — a driver exit of 10..15 can never green here.
+f78_eout=$f78_dir/census-empty.json
+f78_elog=$f78_dir/census-empty.log
+f78_erc=-1
+if [ "$f78_setup" -eq 0 ] && [ "$f78_probe_ok" -eq 1 ]; then
+  python3 "$f78_drv" "$F39_PROBE" "$f78_eout" empty > "$f78_elog" 2>&1
+  f78_erc=$?
+fi
+f78_estage=none
+[ "$f78_erc" -ne -1 ] && f78_estage=$(grep -m1 '^F78_STAGE=' "$f78_elog" 2>/dev/null || true)
+f78_efired=1
+if [ "$f78_setup" -eq 0 ] && [ "$f78_probe_ok" -eq 1 ] && [ "$f78_erc" -eq 0 ] \
+   && printf '%s\n' "$f78_estage" | grep -q '^F78_STAGE=driven ' \
+   && [ ! -e "$f78_eout" ] \
+   && grep -q '^CENSUS_VERDICT=UNMEASURED' "$f78_elog"; then
+  f78_efired=0
+fi
+if [ "$f78_efired" -eq 0 ]; then
+  ok "MUST_FIRE census --out refusal: driven with a zero-attachment fixture, the probe's REAL writer printed CENSUS_VERDICT=UNMEASURED and left NO census file ($f78_estage) — 2 of 2 assertions held (verdict refused AND file absent) across 1 of 1 zero-attachment drives — a zero denominator can never travel as a census (#78-A)"
+else
+  no "MUST_FIRE UNREACHABLE (census --out refusal): the zero-attachment drive did not observe the refusal (probe \$F39_PROBE=${F39_PROBE:-<unset>} readable=$f78_probe_ok; setup=$f78_setup, python rc=$f78_erc, stage=$f78_estage, census file present: $( [ -e "$f78_eout" ] && echo yes || echo no )) — either the empty guard never ran in this harness or the producer ships a census on an empty attachment set; both are this leg's red, and neither may be read as a pass"
+fi
+
+# MUST_PASS (bullet 4): the same REAL writer, driven with a two-module
+# non-empty fixture, must produce the census file AND a verdict that is NOT
+# UNMEASURED with the declared module count 2 printed as an explicit
+# denominator (doctrine 2). The FQNs must survive into the JSON bytes and
+# the JSON must parse, so the artifact is examined, not trusted; the count
+# '2' is matched with non-digit guards so a stray '12' or '20' cannot speak
+# for it.
+f78_fout=$f78_dir/census-full.json
+f78_flog=$f78_dir/census-full.log
+f78_frc=-1
+if [ "$f78_setup" -eq 0 ] && [ "$f78_probe_ok" -eq 1 ]; then
+  python3 "$f78_drv" "$F39_PROBE" "$f78_fout" full > "$f78_flog" 2>&1
+  f78_frc=$?
+fi
+f78_fstage=none
+[ "$f78_frc" -ne -1 ] && f78_fstage=$(grep -m1 '^F78_STAGE=' "$f78_flog" 2>/dev/null || true)
+f78_fverdict=""
+[ "$f78_frc" -eq 0 ] && f78_fverdict=$(grep -m1 '^CENSUS_VERDICT=' "$f78_flog" || true)
+f78_fpassed=1
+if [ "$f78_setup" -eq 0 ] && [ "$f78_probe_ok" -eq 1 ] && [ "$f78_frc" -eq 0 ] \
+   && printf '%s\n' "$f78_fstage" | grep -q '^F78_STAGE=driven ' \
+   && [ -s "$f78_fout" ] \
+   && [ -n "$f78_fverdict" ] \
+   && ! printf '%s\n' "$f78_fverdict" | grep -q '^CENSUS_VERDICT=UNMEASURED' \
+   && printf '%s\n' "$f78_fverdict" | grep -qE '(^|[^0-9])2([^0-9]|$)' \
+   && grep -q '^F78_JSON=parses ' "$f78_flog" \
+   && grep -q '^F78_FIXTURES_PRESENT=True' "$f78_flog"; then
+  f78_fpassed=0
+fi
+if [ "$f78_fpassed" -eq 0 ]; then
+  ok "MUST_PASS census --out admission: 1 of 1 non-empty drives produced a non-empty census file that parses as JSON (2 of 2 fixture FQNs observed in its bytes) with verdict '$f78_fverdict' — non-UNMEASURED and carrying the declared count 2 as its explicit denominator (#78-A)"
+else
+  no "MUST_PASS FAILED (census --out admission): the real writer did not admit a legitimate non-empty fixture (probe \$F39_PROBE=${F39_PROBE:-<unset>} readable=$f78_probe_ok; setup=$f78_setup, python rc=$f78_frc, stage=$f78_fstage, census file: $( [ -s "$f78_fout" ] && echo present || echo absent ), verdict: ${f78_fverdict:-none}) — a control that cannot green on a good input cries wolf"
+fi
+
+# NAMED ABSTENTION (doctrine 3, stated not silent): the END-TO-END admission
+# — real megatron.bridge import, in-container model build, attachments
+# discovered from live module names and handed to the writer — cannot run in
+# this harness by the probe's own construction, and no stub may stand in for
+# the model without paraphrasing the thing under test (the harness's own
+# no-paraphrase rule). What ran above is everything BELOW the model seam:
+# the writer's refusal and admission logic, byte-for-byte unmodified apart
+# from the counted import neuter. The above-the-seam half is recorded by
+# name so its zero-run denominator can never read as coverage (doctrine 1),
+# and it adds nothing to pass or fail.
+printf '  ABSTAIN  fix78-realmodel: census --out end-to-end admission against a real in-container model (attachment discovery above the writer seam) — 0 legs run by construction; the runnable writer-level legs above ran with synthesized 0- and 2-module fixtures\n'
+abstain=$((abstain+1))
+
+[ -n "${f78_dir:-}" ] && rm -rf "$f78_dir" || true
 # rc passthrough (the #72 lesson): the function's contract is 'returns the
 # gate's rc UNTOUCHED', and a layer was just added between gate and rc — so
 # PROVE it, never assert it. The REAL extracted function is evaled against a
