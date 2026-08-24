@@ -646,8 +646,18 @@ print("PREFLIGHT-PROBE-PASS")
 PY
 # Same interpreter stack as training (see the module-dump comment in the LoRA
 # launcher); --slurm-ntasks 1 preserves the historic single-task probe exactly.
+# $COT_PROBE_PY crosses into the container as DATA, not as inner-shell SOURCE:
+# 'python3 "$1"' is a fixed literal for the inner bash and the path rides along
+# as positional $1, so an OUT_DIR containing whitespace stays one word and one
+# containing $(...) text is never executed by the inner shell (BLOCKER 2). The
+# :513/:1002 nesting idiom ('$VAR' inside a double-quoted source) fixes the
+# split and substitution but still splices the path INTO source text -- a
+# single quote in the path reopens the injection; passing arguments is the
+# only form that treats the path as data. The BASH-LC standing leg in
+# .github/workflows/ci.yml now enforces the boundary; do not "simplify" this
+# back to a splice.
 run_in_container --slurm-ntasks 1 --workdir "$REPO" \
-     bash -lc "python3 $COT_PROBE_PY" || die "preflight tokenizer/CoT probe FAILED — job stopped before any training GPU-seconds"
+     bash -lc 'python3 "$1"' _ "$COT_PROBE_PY" || die "preflight tokenizer/CoT probe FAILED — job stopped before any training GPU-seconds"
 
 # ----------------------------------------------------------------------------
 # G5-equivalent post-run save-path gate (fix #81; mirrors the LoRA launcher's

@@ -94,6 +94,10 @@ verify:
       contract obliges the writer to produce is a probe red at rc 0
   F78_FQNS_FOUND=<k> of <n>        explicit denominator, n = len(expect_fqns)
   F78_FQNS_MISSING=<csv|none>
+  F78_FQN_OK|<fqn>                 one line per FOUND expected fqn, positive
+      form: leg greps must key on this, never the bare name -- the bare name
+      also appears verbatim inside F78_FQNS_MISSING on failure, so a
+      bare-name grep goes green exactly when the artifact is absent
   F78_ARTIFACT_ROWS=<r> of <m>     when the artifact carries a rows list,
       else F78_ARTIFACT_ROWS=absent -- unmeasured is not zero (doctrine 4),
       and no fabricated '0 of m' line may satisfy the grep by accident.
@@ -106,7 +110,8 @@ the audited window of the 3676-line harness -- locate it with
 swap ships as these verbatim instructions, not as an Edit):
 
   MUST_FIRE (refusal fixture authored by the leg):
-      out=$(python3 launchers/f78_census_writer_driver.py drive launchers/lora_target_census.py "$f78_spec.json") || true
+      out=$(python3 launchers/f78_census_writer_driver.py drive \
+            launchers/lora_target_census.py "$f78_spec.json") || true
       keep asserting BOTH halves against "$out":
         (a) grep 'F78_OUT_EXISTS=0'                -- no census file afterwards
             ('unknown' NEVER matches: unmeasured is not pass)
@@ -115,11 +120,15 @@ swap ships as these verbatim instructions, not as an Edit):
       extraction denominator; !=none re-reads the red as a DRIVER gap.
 
   MUST_PASS (real-artifact fixture authored by the leg):
-      out=$(python3 launchers/f78_census_writer_driver.py drive launchers/lora_target_census.py "$f78_spec.json") || true
+      out=$(python3 launchers/f78_census_writer_driver.py drive \
+            launchers/lora_target_census.py "$f78_spec.json") || true
       ver=$(python3 launchers/f78_census_writer_driver.py verify "$f78_verify.json")
       keep asserting against "$ver":
         grep 'F78_JSON_PARSE=ok'
-        each expected FQN individually and grep 'F78_FQNS_MISSING=none'
+        grep "F78_FQN_OK|<fqn>" for EACH expected fqn (positive form; the
+        bare name also appears inside F78_FQNS_MISSING on failure, so a
+        bare-name grep false-greens exactly when the artifact is absent)
+        and grep 'F78_FQNS_MISSING=none'
         grep the explicit denominator 'F78_FQNS_FOUND=<k> of <n>' and/or
         'F78_ARTIFACT_ROWS=<r> of <m>' -- never a bare numerator
       additive: grep 'F78_EXTRACT_UNRESOLVED=none' against "$out".
@@ -145,11 +154,13 @@ Exit vocabulary (deliberately disjoint from the probe's 0/1/3):
 """
 
 import ast
+import asyncio
 import builtins
 import contextlib
+import inspect
 import io
 import json
-import os
+import pathlib
 import re
 import symtable
 import sys
@@ -189,18 +200,18 @@ USAGE = ("usage: f78_census_writer_driver.py drive PROBE SPEC.json"
 
 
 def _fail(stage, detail):
-    print("stage=%s=%s-failed %s" % (STAGE, stage, detail))
+    print(f"stage={STAGE}={stage}-failed {detail}")
     sys.exit(RC_INFRA)
 
 
 def _read_spec(spec_path, stage):
     try:
-        with open(spec_path, "r", encoding="utf-8") as fh:
+        with pathlib.Path(spec_path).open(encoding="utf-8") as fh:
             return json.load(fh)
     except (OSError, ValueError) as exc:
         # doctrine 4: an unreadable spec is an INFRASTRUCTURE red, never
         # an empty fixture sailing through at rc 0.
-        _fail(stage, "spec unreadable/unparseable: %s" % exc)
+        _fail(stage, f"spec unreadable/unparseable: {exc}")
 
 
 def _literal_assign(node):
@@ -270,14 +281,14 @@ def _load_writer(probe_path):
     its __future__ flags -- with the module's top-level statements NEVER
     executed."""
     try:
-        with open(probe_path, "r", encoding="utf-8") as fh:
+        with pathlib.Path(probe_path).open(encoding="utf-8") as fh:
             src = fh.read()
     except OSError as exc:
-        _fail("extract", "probe unreadable: %s" % exc)  # doctrine 4: unreadable is not empty
+        _fail("extract", f"probe unreadable: {exc}")  # doctrine 4: unreadable is not empty
     try:
         tree = ast.parse(src, filename=probe_path)
     except SyntaxError as exc:
-        _fail("extract", "probe did not parse: %s" % exc)
+        _fail("extract", f"probe did not parse: {exc}")
 
     futures, consts, funcs = [], [], {}
     const_names = set()
@@ -293,7 +304,7 @@ def _load_writer(probe_path):
                 const_names.add(name)
 
     if WRITER_ENTRY not in funcs:
-        _fail("extract", "%s not found at probe top level" % WRITER_ENTRY)
+        _fail("extract", f"{WRITER_ENTRY} not found at probe top level")
 
     keep, pending = set(), {WRITER_ENTRY}
     while pending:
@@ -317,7 +328,7 @@ def _load_writer(probe_path):
         # SystemExit included: lifted def/const statements have no business
         # exiting; if they do, it is INFRA red on the published vocabulary,
         # never a bare traceback at an off-vocabulary rc.
-        _fail("exec", "%s: %s" % (type(exc).__name__, exc))
+        _fail("exec", f"{type(exc).__name__}: {exc}")
 
     report = {
         "funcs": len(keep),
@@ -345,22 +356,26 @@ def cmd_drive(probe_path, spec_path):
     try:
         with contextlib.redirect_stdout(tape), contextlib.redirect_stderr(tape):
             result = writer(**kwargs)
+            if inspect.iscoroutine(result):
+                # an async writer awaited HERE is the driver's business: an
+                # un-awaited coroutine would run zero units yet red the leg
+                # in the probe's clothing (doctrine 1 units, doctrine 5 scope)
+                result = asyncio.run(result)
     except SystemExit as exc:
         # the writer using the probe's own 0/1/3 exit vocabulary is a
         # MEASURED behaviour, reported, never re-judged
         raised, exited = "SystemExit", str(exc.code)
     except BaseException as exc:
-        raised = "%s: %s" % (type(exc).__name__, exc)
+        raised = f"{type(exc).__name__}: {exc}"
     text = tape.getvalue()
 
-    print("stage=%s=drove rc=0" % STAGE)
-    print("F78_EXTRACT_FUNCS=%d" % report["funcs"])
-    print("F78_EXTRACT_CONSTS=%d" % report["consts"])
-    print("F78_EXTRACT_FUTURES=%s" % (",".join(report["futures"]) or "none"))
-    print("F78_EXTRACT_UNRESOLVED=%s"
-          % (",".join(report["unresolved"]) or "none"))
-    print("F78_RAISED=%s" % raised)
-    print("F78_EXIT=%s" % exited)
+    print(f"stage={STAGE}=drove rc=0")
+    print(f"F78_EXTRACT_FUNCS={report['funcs']}")
+    print(f"F78_EXTRACT_CONSTS={report['consts']}")
+    print(f"F78_EXTRACT_FUTURES={','.join(report['futures']) or 'none'}")
+    print(f"F78_EXTRACT_UNRESOLVED={','.join(report['unresolved']) or 'none'}")
+    print(f"F78_RAISED={raised}")
+    print(f"F78_EXIT={exited}")
     if out_path is None:
         # doctrine 4: unmeasured is UNKNOWN, never a forged 0 that would
         # vacuously pass MUST_FIRE half (a).
@@ -368,21 +383,20 @@ def cmd_drive(probe_path, spec_path):
         print("F78_OUT_EXISTS=unknown")
         print("F78_OUT_PARENT_PRESENT=unknown")
     else:
-        print("F78_OUT_PATH=%s" % out_path)
-        print("F78_OUT_EXISTS=%d" % (1 if os.path.isfile(out_path) else 0))
-        print("F78_OUT_PARENT_PRESENT=%d"
-              % (1 if os.path.isdir(os.path.dirname(os.path.abspath(out_path)))
-                 else 0))
+        print(f"F78_OUT_PATH={out_path}")
+        print(f"F78_OUT_EXISTS={1 if pathlib.Path(out_path).is_file() else 0}")
+        parent = pathlib.Path(out_path).resolve().parent
+        print(f"F78_OUT_PARENT_PRESENT={1 if parent.is_dir() else 0}")
     tokens = _VERDICT_RE.findall(text)
-    print("F78_VERDICT_TOKENS=%s" % (",".join(tokens) if tokens else "none"))
+    print(f"F78_VERDICT_TOKENS={','.join(tokens) if tokens else 'none'}")
     if result is not None:
         try:
             rendered = json.dumps(result, sort_keys=True)
         except (TypeError, ValueError):
             rendered = repr(result)
-        print("F78_RESULT=%s" % rendered)
+        print(f"F78_RESULT={rendered}")
     for line in text.splitlines():
-        print("F78_TOOL|%s" % line)  # the tool's own words, quoted
+        print(f"F78_TOOL|{line}")  # the tool's own words, quoted
     return 0
 
 
@@ -421,31 +435,37 @@ def cmd_verify(spec_path):
 
     parse_ok, payload = False, None
     try:
-        with open(artifact, "r", encoding="utf-8") as fh:
+        with pathlib.Path(artifact).open(encoding="utf-8") as fh:
             payload = json.load(fh)
         parse_ok = True
     except (OSError, ValueError):
         parse_ok = False
 
-    print("stage=%s=verified rc=0" % STAGE)
+    print(f"stage={STAGE}=verified rc=0")
     if not parse_ok:
         # A missing/unparsable artifact the writer was contracted to produce
         # is a MEASURED fact about the code under test: rc 0, and every leg
         # grep below is driven red on purpose.
         print("F78_JSON_PARSE=fail")
-        print("F78_FQNS_FOUND=0 of %d" % len(fqns))
-        print("F78_FQNS_MISSING=%s" % ",".join(fqns))
+        print(f"F78_FQNS_FOUND=0 of {len(fqns)}")
+        print(f"F78_FQNS_MISSING={','.join(fqns)}")
         print("F78_ARTIFACT_ROWS=absent")
         return 0
 
     strings = set(_all_strings(payload))
     missing = [f for f in fqns if f not in strings]
     print("F78_JSON_PARSE=ok")
-    print("F78_FQNS_FOUND=%d of %d" % (len(fqns) - len(missing), len(fqns)))
-    print("F78_FQNS_MISSING=%s" % (",".join(missing) if missing else "none"))
+    print(f"F78_FQNS_FOUND={len(fqns) - len(missing)} of {len(fqns)}")
+    print(f"F78_FQNS_MISSING={','.join(missing) if missing else 'none'}")
+    for f in fqns:
+        if f not in missing:
+            # positive found-evidence, one unit per line (doctrine 2): a leg
+            # greps 'F78_FQN_OK|<fqn>' per expected name and can never be
+            # satisfied by the F78_FQNS_MISSING list of a failed verify
+            print(f"F78_FQN_OK|{f}")
     rows = payload.get("rows") if isinstance(payload, dict) else None
     if isinstance(rows, list):
-        print("F78_ARTIFACT_ROWS=%d of %d" % (len(rows), denominator))
+        print(f"F78_ARTIFACT_ROWS={len(rows)} of {denominator}")
     else:
         # doctrine 4: unmeasured is not zero; no fabricated '0 of m' line
         # may satisfy an explicit-denominator grep by accident.
@@ -470,6 +490,5 @@ if __name__ == "__main__":
     except BaseException as exc:
         # off-vocabulary exits are forbidden: any unexpected driver bug is
         # INFRA red on the published vocabulary, never a bare rc-1 traceback.
-        print("stage=%s=driver-failed %s: %s"
-              % (STAGE, type(exc).__name__, exc))
+        print(f"stage={STAGE}=driver-failed {type(exc).__name__}: {exc}")
         sys.exit(RC_INFRA)

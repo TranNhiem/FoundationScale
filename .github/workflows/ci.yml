@@ -335,8 +335,7 @@ jobs:
           # (3) the summary shrunk to '12/12, 0 failed' — the silently-emptied
           # suite that only the 134 floor catches. Refusals go to /dev/null so
           # the expected reds do not pollute the annotation stream.
-          mustfire_1='launchers: 8/8 watchdog checks green
-contracts: 126/126 green'
+          mustfire_1=$'launchers: 8/8 watchdog checks green\ncontracts: 126/126 green'
           mustfire_2='SUMMARY: 134/134 controls passed, 1 failed'
           mustfire_3='SUMMARY: 12/12 controls passed, 0 failed'
           if verify_summary "$mustfire_1" 2>/dev/null; then
@@ -357,6 +356,95 @@ contracts: 126/126 green'
             exit 1
           fi
           echo "verify_summary fired on all three doctored logs (MUST_FIRE legs 1-3) — proven able to refuse."
+          # ------------------------------------------------------------------
+          # Leg WF-YAML (control for the BLOCKER-1 class). One column-zero line
+          # inside a block scalar killed this entire file; dead file -> zero
+          # jobs -> nothing else could go red. This leg audits EVERY workflow
+          # file (*.yml AND *.yaml) from the verify job: the count is on the
+          # wire, 0 examined is RED (doctrine 1), unreadable is RED (doctrine
+          # 4), and the parser mode is named on the wire -- the structural
+          # fallback labels itself NOT a full parse (doctrine 5). MUST_FIRE:
+          # checks/wf_yaml_audit.py --doctor-blocker1 rebuilds BLOCKER 1
+          # verbatim on a copy of ci.yml (failing closed if the fixed needle is
+          # gone) and the audit must refuse the copy (doctrine 3). Plain limit:
+          # when ci.yml itself is the corpse, workflow-startup failure is the
+          # alarm -- no leg inside a dead workflow can run; this covers every
+          # push that starts and every sibling file.
+          # ------------------------------------------------------------------
+          repo_root=${GITHUB_WORKSPACE:-$PWD}
+          WORKFLOW_DIR=$repo_root/.github/workflows
+          LORA_LP=$repo_root/launchers/launch_g4e4b_lora_1tray.sh
+          FULL_LP=$repo_root/launchers/launch_g4e4b_fullft_1tray.sh
+          if [ ! -d "$WORKFLOW_DIR" ]; then
+            echo "::error::WF-YAML leg cannot see $WORKFLOW_DIR -- a gate that cannot reach its target is RED, never vacuous (doctrines 1 and 4)."
+            exit 1
+          fi
+          if [ ! -r "$repo_root/checks/wf_yaml_audit.py" ] || [ ! -r "$repo_root/checks/bash_lc_sweep.py" ]; then
+            echo "::error::control scripts unreadable under $repo_root/checks -- missing is not zero (doctrine 4); refusing to run blind."
+            exit 1
+          fi
+          mapfile -t wf_files < <(find "$WORKFLOW_DIR" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) | sort)
+          if [ ${#wf_files[@]} -eq 0 ]; then
+            echo "::error::WF-YAML found 0 *.yml/*.yaml under $WORKFLOW_DIR -- zero units is UNMEASURED, not a pass (doctrine 1)."
+            exit 1
+          fi
+          echo "WF-YAML MUST_PASS: auditing ${#wf_files[@]} workflow file(s); the count is on the wire."
+          if ! python3 "$repo_root/checks/wf_yaml_audit.py" "${wf_files[@]}"; then
+            echo "::error::WF-YAML leg RED on the live tree -- refusing to stamp dead workflows."
+            exit 1
+          fi
+          mustfire_wf_dir=$(mktemp -d)
+          if ! cp "$WORKFLOW_DIR/ci.yml" "$mustfire_wf_dir/ci-doctored.yml"; then
+            echo "::error::WF-YAML MUST_FIRE setup could not copy ci.yml -- a control that never runs is not a control (doctrine 3)."
+            exit 1
+          fi
+          if ! python3 "$repo_root/checks/wf_yaml_audit.py" --doctor-blocker1 "$mustfire_wf_dir/ci-doctored.yml"; then
+            echo "::error::WF-YAML MUST_FIRE setup failed -- could not rebuild BLOCKER 1 on a copy; the control cannot prove itself (doctrine 3)."
+            exit 1
+          fi
+          if python3 "$repo_root/checks/wf_yaml_audit.py" "$mustfire_wf_dir/ci-doctored.yml" >/dev/null 2>&1; then
+            echo "::error::WF-YAML MUST_FIRE leg failed: the audit ACCEPTED a copy doctored with BLOCKER 1's exact column-zero shape."
+            echo "::error::A checker that accepts what killed CI is a stamp, not a control (doctrine 3)."
+            exit 1
+          fi
+          echo "WF-YAML MUST_FIRE ok: doctored copy went red -- the checker is proven able to refuse."
+          rm -rf "$mustfire_wf_dir"
+          # ------------------------------------------------------------------
+          # Leg BASH-LC (control for the BLOCKER-2 class). Splicing a path
+          # variable into an inner shell's SOURCE text is an injection hatch:
+          # whitespace word-splits (false red on a healthy request) and $(...)
+          # text executes. The fix passes the path as DATA ($1). The sweep
+          # classifies EVERY bash -lc site in BOTH launchers; the site count and
+          # every site go on the wire; 0 sites is a broken sweep, not a pass
+          # (doctrine 1); an unreadable launcher is RED, not skipped (doctrine
+          # 4). MUST_FIRE reinstates BLOCKER 2's exact line on a copy and
+          # demands red (doctrine 3). Output deliberately avoids the
+          # green/passed/SUMMARY tokens and suite domain prefixes so
+          # verify_summary cannot mis-ingest it.
+          # ------------------------------------------------------------------
+          for lp_file in "$LORA_LP" "$FULL_LP"; do
+            if [ ! -r "$lp_file" ]; then
+              echo "::error::BASH-LC cannot read $lp_file -- unreadable is not empty; the sweep refuses to green a launcher it cannot see (doctrine 4)."
+              exit 1
+            fi
+          done
+          if ! python3 "$repo_root/checks/bash_lc_sweep.py" "$LORA_LP" "$FULL_LP"; then
+            echo "::error::BASH-LC leg RED on the live tree -- an unsafe splice is a defect even when the rendered command happens to work (doctrine 5, symmetric)."
+            exit 1
+          fi
+          mustfire_lp=$(mktemp)
+          if ! python3 "$repo_root/checks/bash_lc_sweep.py" --reinstate-blocker2 "$FULL_LP" "$mustfire_lp"; then
+            echo "::error::BASH-LC MUST_FIRE setup failed -- the fixed probe line is missing or not unique; the sweep cannot prove itself (doctrine 3)."
+            exit 1
+          fi
+          if python3 "$repo_root/checks/bash_lc_sweep.py" "$LORA_LP" "$mustfire_lp" >/dev/null 2>&1; then
+            echo "::error::BASH-LC MUST_FIRE leg failed: the sweep ACCEPTED the reinstated BLOCKER-2 line."
+            echo "::error::A sweep that cannot see its namesake defect is decoration -- trust no green from it (doctrine 3)."
+            exit 1
+          fi
+          echo "BASH-LC MUST_FIRE ok: reinstated unsafe splice on the copy went red."
+          rm -f "$mustfire_lp"
+          echo "Both new standing legs (WF-YAML, BASH-LC) hold -- and both controls were OBSERVED refusing before this stamp."
 
           set +e
           output=$(bash launchers/test_launcher_contracts.sh 2>&1)

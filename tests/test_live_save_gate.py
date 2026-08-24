@@ -2972,5 +2972,29 @@ class TestAdapterPrefixDemand:
             ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
             adapter_prefix="", adapter_modules=census)
         assert d.exit_code == 0, f"{d.blocking_reasons}"
-        assert d.report["inventory"]["real_tensors"] == 24
+        # #80: 31 is the honest EXAMINED denominator, NOT a weakened
+        # assertion: 24 judged adapter tensors + 7 set-aside save-state
+        # entries (6 optimizer.* + 1 rng_state) the healthy fixture grew
+        # this window. The inventory stays fail-closed over the PHYSICAL
+        # artifact (doctrine 2: the claim states how many units were
+        # examined); the JUDGED adapter population stays 24 and is pinned
+        # by the refusing twins above. Holding RAW=31 alongside JUDGED=24
+        # keeps the namespace exclusion provably narrow -- all 7 excused
+        # entries are still counted on disk. Refused alternatives:
+        # stripping the 7 entries back out of the fixture would blind the
+        # measured-save evidence this fence exists to carry; teaching the
+        # tool to exclude the set-aside from the inventory would be a
+        # wire lie; asserting only the judged side would let a future
+        # exclusion-maker silently shrink the population, which is
+        # indistinguishable from the detector stopping working. Same
+        # correction the sibling sites carry (626, 1109, 2029, 2717).
+        assert d.report["inventory"]["real_tensors"] == 31, (
+            f"post-#80 the examined real population is 31 (24 judged "
+            f"adapters + 6 optimizer.* + 1 rng_state), not the stale "
+            f"pre-#80 literal 24 -- got "
+            f"{d.report['inventory']['real_tensors']}; if 31 ever "
+            f"changes, the healthy fixture's real save shape changed and "
+            f"the #80 set-aside must be re-measured, never re-narrowed "
+            f"to make an expected constant come true"
+        )
         assert _control_by_prefix(d, "drop")["status"] == "fired"

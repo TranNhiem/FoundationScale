@@ -209,7 +209,14 @@ def _atomic_write_json(out_path, payload) -> None:
     human could later mistake for a census; the cleanup error must never mask
     the real one, and after a successful replace tmp_path no longer exists to
     unlink (OSError swallowed by design)."""
-    out_dir = os.path.dirname(os.path.abspath(out_path))
+    # Path stays function-local, NOT added to the probe's module import
+    # block: (i) that block sits outside the audited window for this pass
+    # (doctrine 4 -- no blind edits), and (ii) the F78 driver lifts THIS
+    # function's body -- but not module-scope imports -- into its own
+    # stdlib-prelude namespace, so a module-level import would surface as
+    # F78_EXTRACT_UNRESOLVED/NameError: a DRIVER red, not a probe one.
+    from pathlib import Path  # noqa: PLC0415 -- reason in comment above
+    out_dir = Path(out_path).resolve().parent
     fd, tmp_path = tempfile.mkstemp(
         prefix=".adapter-census-", suffix=".tmp", dir=out_dir
     )
@@ -219,10 +226,10 @@ def _atomic_write_json(out_path, payload) -> None:
             fh.write("\n")
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp_path, out_path)
+        Path(tmp_path).replace(out_path)  # same rename(2) as os.replace; still atomic
     except BaseException:  # noqa: BLE001 -- purge temp for ANY raise, then re-raise.
         try:  # noqa: SIM105 -- cleanup failure must never mask the real error.
-            os.unlink(tmp_path)
+            Path(tmp_path).unlink()
         except OSError:  # noqa: S110 -- swallow is by design (see docstring).
             pass
         raise
@@ -358,8 +365,12 @@ def _persist_adapter_census(
         )
         raise _CensusRefusal(msg) from exc
 
+    # Function-local for the same reason as in _atomic_write_json above:
+    # this def's body is exec'd by the F78 driver inside its own prelude.
+    from pathlib import Path  # noqa: PLC0415 -- reason in comment above
+
     print(
-        f"CENSUS_OUT {os.path.abspath(out_path)} attachment_parents="
+        f"CENSUS_OUT {Path(out_path).resolve()} attachment_parents="
         f"{len(pairs)} raw_matches={raw_matches} collapsed_duplicates="
         f"{raw_matches - len(pairs)} {dims_note}",
         flush=True,

@@ -2246,7 +2246,18 @@ fi
 # leaves the census invocation byte-identical, no DRILL text may print, and
 # a healthy census must proceed (rc 0). Fail-before by extraction like its
 # siblings: on the current tree there is no region to run (EXTRACTION-EMPTY).
-out=$(f41_sim "$F41_LORA" 0 clear 0 2>&1); rc=$?
+# Post-#78 delivery-mode repair: the census fixture is driven through the
+# --out artifact contract (arg4=1), as the routing and positive-evidence
+# legs already do. "Byte-identical" above means byte-identical to the LIVE
+# census invocation, which since #78 carries --out and whose verdict arm
+# keys on the produced artifact (no file + UNMEASURED). A stdout-only CLEAR
+# can no longer corroborate; the pre-repair rc=1 was the arm correctly
+# failing closed on a missing artifact, not the drill leaking. Expectations
+# below are UNCHANGED (rc 0, no DRILL text) — only the fixture's delivery
+# channel is repaired to what production consumes; the drill stays armable
+# via the untouched armed legs. (This repair claims nothing about the
+# fix78 reds in the same dump, which die before any production.)
+out=$(f41_sim "$F41_LORA" 0 clear 1 2>&1); rc=$?
 if [ $rc -eq 0 ] && ! printf '%s' "$out" | grep -q 'DRILL'; then
   ok "fix41 drill MUST_PASS: unarmed launch with a healthy census proceeds (rc=0, no DRILL output) — the control is inert off its trigger, never a tax on a healthy launch"
 else
