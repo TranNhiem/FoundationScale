@@ -238,6 +238,12 @@ PY
 done
 EPOCHS=${EPOCHS:-2}                              # estate standard for this corpus
 ITERS=$(( (ROWS * EPOCHS + GBS - 1) / GBS ))
+# fix #81 finding 3: snapshot the operator's EXPLICIT TRAIN_ITERS before the
+# default fills it in below, so the probe arm can LOG a displacement rather
+# than silently overwrite one -- the run manifest records only final values.
+# SAVE_INTERVAL gets its own snapshot immediately before ITS default line:
+# each snapshot sits provably upstream of the default it protects.
+OPERATOR_TRAIN_ITERS=${TRAIN_ITERS:-}
 TRAIN_ITERS=${TRAIN_ITERS:-$ITERS}
 require_pos_int TRAIN_ITERS "$TRAIN_ITERS"
 # ~16.1k rows * 2 / GBS 16 = ~2016 iters. Wall-clock is NOT the binding constraint
@@ -245,12 +251,16 @@ require_pos_int TRAIN_ITERS "$TRAIN_ITERS"
 # budget and scheduler.lr_decay_iters=$TRAIN_ITERS COMPLETES the cosine. This is
 # NOT a smoke test; the LR schedule is meaningful.
 
+# fix #81 finding 3: companion to OPERATOR_TRAIN_ITERS above -- capture the
+# operator's EXPLICIT SAVE_INTERVAL before the default folds in (empty reads
+# as unset: an empty assignment defaults anyway and deserves no warning).
+OPERATOR_SAVE_INTERVAL=${SAVE_INTERVAL:-}
 SAVE_INTERVAL=${SAVE_INTERVAL:-100}              # FIRST_SAVE EARLY: see rationale (trap 9/11 lesson)
 require_pos_int SAVE_INTERVAL "$SAVE_INTERVAL"
 EVAL_INTERVAL=100000; EVAL_ITERS=0               # val loader is NOT modality-bucketed -> any eval pass deadlocks silently. Keep OFF.
 
-# PROBE mode (fix #81), with probe parity to the LoRA launcher (its lines
-# 349-356). The original defect was SILENCE plus a name collision: `PROBE=1
+# PROBE mode (fix #81), with probe parity to the LoRA launcher's probe-mode
+# block. The original defect was SILENCE plus a name collision: `PROBE=1
 # sbatch` bound the mode knob, then the old preflight path assignment (now
 # COT_PROBE_PY, below) overwrote the operator's `1` with a path before
 # anything read it as a mode, handing the operator a ~2016-iter production
@@ -266,6 +276,15 @@ case "${PROBE:-0}" in
 esac
 if [[ "${PROBE:-0}" == "1" ]]; then
   PROBE=1
+  # Displacement is LOGGED, never silent (fix #81 finding 3): the probe
+  # budget forces 20/10 over any explicitly-set knobs, and the emitted run
+  # manifest records only the resolved values -- this echo is the record.
+  # The ==20/==10 no-op cases warn NOTHING: nothing was displaced, and a
+  # false alarm costs what a false green costs.
+  [[ -z "$OPERATOR_TRAIN_ITERS" || "$OPERATOR_TRAIN_ITERS" == 20 ]] || \
+    echo "WARN: PROBE=1 forces TRAIN_ITERS=20 over explicit $OPERATOR_TRAIN_ITERS (fix #81)"
+  [[ -z "$OPERATOR_SAVE_INTERVAL" || "$OPERATOR_SAVE_INTERVAL" == 10 ]] || \
+    echo "WARN: PROBE=1 forces SAVE_INTERVAL=10 over explicit $OPERATOR_SAVE_INTERVAL (fix #81)"
   TRAIN_ITERS=20        # literal, self-validating; the row-count arithmetic above sized PRODUCTION only
   SAVE_INTERVAL=10      # a run is healthy only after its FIRST save -- probe forces saves at 10 AND 20
   RUN_SUFFIX=_probe
@@ -292,11 +311,35 @@ MASTER_PORT=${MASTER_PORT:-$(( 29400 + SLURM_JOB_ID % 1000 ))}
 # below prints PROBE=1 beside an unsuffixed out= path -- the loud
 # contradiction this arrangement exists to produce.
 OUT_DIR=${OUT_DIR:-$A/results/g4e4b_twaiec_it_fullft_v3_${SEQ_K}k}${RUN_SUFFIX}   # STABLE dir -> auto-resume chain works; PROBE=1 detours to *_probe, out of that chain's reach
+# PROBE<->OUT_DIR pairing enforced IN CODE (fix #81 finding 2): until now,
+# dropping the suffix expansion from the line above produced only a
+# contradictory BANNER line -- no rc, no consumer. This gate reads the
+# RESOLVED knob and path, never source text (this file's own comments carry
+# literal ${RUN_SUFFIX} decoys; a token check would eat them), so the
+# stated MUST_FIRE is a real failure, not a described one. Both arms are
+# checked (scope is symmetric): a production OUT_DIR that ends in _probe
+# is the same coupling defect, other side.
+if [[ "$PROBE" == 1 ]]; then
+  [[ "$OUT_DIR" == *_probe ]] || \
+    die "PROBE=1 but OUT_DIR=$OUT_DIR lacks the _probe suffix (#81 pairing gate)"
+else
+  [[ "$OUT_DIR" != *_probe ]] || \
+    die "PROBE=0 but OUT_DIR=$OUT_DIR ends in _probe (#81 pairing gate)"
+fi
 LOG_OUT=$A/logs/g4e4b_sft_${SLURM_JOB_ID}.out
 LOG_ERR=$A/logs/g4e4b_sft_${SLURM_JOB_ID}.err
 mkdir -p "$OUT_DIR/checkpoints" "$A/logs"
 touch "$OUT_DIR/.preflight_write_ok" || die "OUT_DIR not writable: $OUT_DIR"
 rm -f "$OUT_DIR/.preflight_write_ok"
+
+# Post-resolution re-assertion of the mode knob (fix #81 finding 1): the
+# 0/1 case above guarded only the t=0 read, and readonly is no remedy --
+# this file ships `set -uo pipefail` WITHOUT -e, so a failed readonly
+# assignment prints and CONTINUES. A PROBE overwritten between the case and
+# this line now dies LOUDLY before the banner prints, instead of surfacing
+# later as an absent armed-gate echo (detection-by-absence, refused).
+[[ "$PROBE" =~ ^[01]$ ]] || \
+  die "PROBE='$PROBE' at banner -- post-resolution overwrite of the mode knob (#81)"
 
 echo "============================================================"
 echo " Gemma4-E4B  FULL fine-tune  (SFT-Taiwan-AIEC v3)  FoundationScale prod #1"
@@ -536,13 +579,178 @@ echo "provenance gate: run manifest emitted (declared censused from $BASE_CKPT/i
 #      emit_run_manifest from the INDEPENDENT base ($BASE_CKPT/iter_0000000),
 #      a tree the run under judgment never writes — exactly the provenance
 #      --fqn-map's own contract demands. This is the first reader of the
-#      declared block; the finding was that nothing ever read it.
+#      declared block; the finding was that nothing ever read it. What this
+#      comment no longer does is ASSERT the namespace (#78 re-scope): the
+#      PYNS block below MEASURES it at submit by live_save_gate.py's own
+#      overlap rule run the other way — >=0.90 of the record's FQNs found
+#      in the $HF_MODEL model*.safetensors header key set means the census
+#      IS the HF namespace and the launch refuses there (C1's first-save
+#      BLOCK moved to submit, where the evidence lives); zero overlap is
+#      the disjoint-segments shape of this estate's DCP census against HF
+#      names, and proceeds; anything between abstains BY NAME and refuses.
+#      So "artifact-namespace" above names the measurement's verdict, and
+#      the printed gate line carries the denominators that verdict rests
+#      on (R2). The materializer's own confident print line is beyond the
+#      window this repair was measured against and is deliberately left
+#      unedited: it can now print only over a measured denominator, and an
+#      ambiguous census never reaches it (the named abstention refuses the
+#      launch) — supersession stated, not hidden.
 # Both writes fail closed: launch-time failure means the first save cannot be
 # honestly adjudicated, and launching anyway is the defect being repaired.
 FS_GATE_DIR=$OUT_DIR/fs_gate
 RESOLVED_CFG=$FS_GATE_DIR/resolved-train-config.json
 FQN_MAP=$FS_GATE_DIR/fqn-map.json
 mkdir -p "$FS_GATE_DIR" || die "cannot create $FS_GATE_DIR — the gate reports and adjudication inputs have nowhere to land"
+
+# ---------------------------------------------------------------------------
+# #78 re-scope (R1/R2) — MEASURE the fqn-map namespace at submit; never assert it
+# ---------------------------------------------------------------------------
+# The fqn-map materializer further down copies declared.declared_fqns out of
+# the emitter's attempt record into $FQN_MAP verbatim, and its only
+# validation is non-emptiness: the strings wear whatever namespace $BASE_CKPT
+# resolved to when emit_run_manifest censused it. Estate today: the
+# Megatron/DCP base. But C1: if $BASE_CKPT ever resolves to an HF-layout
+# tree, the map is HF names under an artifact-namespace label and the gate
+# blocks at the FIRST SAVE — hours into a paid multi-node run — on evidence
+# fully available HERE (doctrine 4: the cheap refusal belongs at submit).
+# The block below reads the freshest attempt-*.json out of
+# $OUT_DIR/checkpoints, the same directory the materializer reads its map
+# out of, so the measurement covers exactly the consumer's input. The
+# discriminator is NOT a new regex: it is live_save_gate.py's own overlap
+# rule — two FQN sets share a namespace iff >=0.90 of one overlaps the
+# other, the 0.90 the gate applies when IT decides header-vs-artifact — run
+# in the other direction over that census against the HF pole exactly as
+# this estate defines it: the model*.safetensors HEADER key set under
+# $HF_MODEL (8-byte little-endian length + JSON: stdlib reads, no torch, no
+# DCP access, so under f45's own discriminator — "reads a DCP", never "is
+# python on the host" — this is a legitimate host site, enumerated as the
+# fifth exception in the f45 census leg). Three-way verdict, every branch
+# printing its denominators (doctrine 2):
+#   ratio >= 0.90 -> the census IS the HF namespace: REFUSE at submit. C1's
+#                    block moves from first save to submit, where the
+#                    evidence lives — the measured cheap refusal.
+#   ratio == 0    -> the disjoint-leading-segments shape this estate's DCP
+#                    census has against HF names: consistent with the
+#                    artifact namespace the --fqn-map contract requires.
+#                    Print the MEASUREMENT, then let the materializer run.
+#   anything else -> genuinely ambiguous (a partially-converted base tree):
+#                    ABSTAIN BY NAME and refuse — the confident materializer
+#                    line must never print over an abstention, so abstaining
+#                    here means not launching.
+# Missing/unreadable record, missing/unreadable header, or an empty key set
+# on either side is UNMEASURED, never empty (doctrine 4: missing is not
+# zero, unreadable is not empty): refuse. The invocation is ONE line with
+# the heredoc opener so the contract leg's sed-extract of this body drops
+# exactly one header line (a line-continued opener would leave the || die
+# line inside the extracted python).
+python3 - "$HF_MODEL" "$OUT_DIR/checkpoints" <<'PYNS' || die "fqn-map namespace gate: the map's namespace could not be ESTABLISHED as the artifact namespace at submit (see stderr for the measured basis — established-HF refusal, named abstention, or an unreadable/unmeasurable input; doctrines 1/4) — refusing to launch so the materializer's artifact-namespace line below never prints over an unmeasured denominator"
+import glob
+import json
+import os
+import struct
+import sys
+
+hf_root, ckpt_dir = sys.argv[1], sys.argv[2]
+
+
+def refuse(msg):
+    print(msg, file=sys.stderr)
+    sys.exit(1)
+
+
+records = sorted(glob.glob(os.path.join(ckpt_dir, "attempt-*.json")))
+if not records:
+    refuse(
+        f"fqn-map namespace UNMEASURED: no attempt-*.json record in "
+        f"{ckpt_dir} — the materializer below reads its map out of this "
+        "same directory, so absence is a broken emission (doctrine 4: "
+        "missing is not zero), not an empty namespace"
+    )
+try:
+    rec = max(records, key=lambda p: (os.path.getmtime(p), p))
+except OSError as exc:
+    refuse(
+        f"fqn-map namespace UNMEASURED: attempt record stat failed under "
+        f"{ckpt_dir} ({exc!r}) — unreadable is not empty (doctrine 4)"
+    )
+try:
+    with open(rec, encoding="utf-8") as fh:
+        attempt = json.load(fh)
+except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+    refuse(
+        f"fqn-map namespace UNMEASURED: attempt record {rec} unreadable "
+        f"({exc!r}) — unreadable is not empty (doctrine 4)"
+    )
+declared = attempt.get("declared") if isinstance(attempt, dict) else None
+fqns = declared.get("declared_fqns") if isinstance(declared, dict) else None
+if (
+    not isinstance(fqns, list)
+    or not fqns
+    or any(not isinstance(f, str) or not f for f in fqns)
+):
+    refuse(
+        f"fqn-map namespace UNMEASURED: declared.declared_fqns in {rec} "
+        "is absent, empty, or holds non-string entries — a census over "
+        "zero units is UNMEASURED (doctrine 1), never a denominator"
+    )
+shards = sorted(
+    glob.glob(os.path.join(hf_root, "**", "model*.safetensors"), recursive=True)
+)
+hf_keys = set()
+for shard in shards:
+    try:
+        with open(shard, "rb") as fh:
+            (hdr_len,) = struct.unpack("<Q", fh.read(8))
+            hdr = json.loads(fh.read(hdr_len).decode("utf-8"))
+    except (OSError, struct.error, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        refuse(
+            f"fqn-map namespace UNMEASURED: HF safetensors header {shard} "
+            f"unreadable ({exc!r}) — the HF pole of the discriminator is "
+            "unmeasured; unreadable is not empty (doctrine 4)"
+        )
+    hf_keys.update(k for k in hdr if k != "__metadata__")
+if not shards or not hf_keys:
+    refuse(
+        f"fqn-map namespace UNMEASURED: {len(shards)} model*.safetensors "
+        f"under {hf_root} yielded {len(hf_keys)} header keys — an empty "
+        "reference cannot discriminate a namespace (doctrine 1)"
+    )
+hits = sum(1 for f in fqns if f in hf_keys)
+n = len(fqns)
+ratio = hits / n
+basis = (
+    f"{hits}/{n} declared FQNs from {rec} overlap the {len(hf_keys)}-key "
+    f"HF safetensors header set ({len(shards)} model*.safetensors under "
+    f"{hf_root}; ratio {ratio:.3f}; the 0.90 same-namespace threshold is "
+    "live_save_gate.py's own overlap rule, run here in the other direction)"
+)
+if ratio >= 0.90:
+    refuse(
+        f"FQN-MAP NAMESPACE REFUSED at submit: {basis} — the census "
+        "already IS the HF namespace: $BASE_CKPT resolved to an HF-layout "
+        "tree and fqn-map.json would be HF names wearing the --fqn-map "
+        "artifact-namespace label, blocking at the FIRST SAVE hours into a "
+        "paid run (C1). Point $BASE_CKPT at the DCP conversion, re-emit, "
+        "resubmit."
+    )
+if hits:
+    refuse(
+        f"FQN-MAP NAMESPACE ABSTENTION: {basis} — neither 0 nor >=0.90, "
+        "so the namespace cannot be established from measurement: a mixed "
+        "census means a partially-converted base tree. This launcher "
+        "abstains BY NAME and refuses to certify what it has not measured; "
+        "the confident materializer line below must never print over an "
+        "abstention, so abstaining here means not launching."
+    )
+print(
+    f"fqn-map namespace measured: {basis} — zero overlap is the disjoint-"
+    "namespace shape this estate's DCP census must have against the HF "
+    "reference; the materializer below reads this same directory and "
+    f"copies the freshest attempt record's census verbatim, so these {n} "
+    "FQNs are the map's namespace is measured over — and this line, not "
+    "the copy, is the measurement"
+)
+PYNS
 python3 - "$RESOLVED_CFG" "$RECIPE" "$TRAIN_ITERS" "$GBS" "$SEQ_LENGTH" "$SAVE_INTERVAL" "$RECOMPUTE" "$HF_MODEL" "$BASE_CKPT" <<'PY' || die "resolved-train-config write failed — the gate would run on a tolerated absence again; refusing (doctrine 4)"
 import json, sys
 out, recipe, iters, gbs, seq, save_iv, recompute, hf, base = sys.argv[1:10]
@@ -661,7 +869,7 @@ run_in_container --slurm-ntasks 1 --workdir "$REPO" \
 
 # ----------------------------------------------------------------------------
 # G5-equivalent post-run save-path gate (fix #81; mirrors the LoRA launcher's
-# lines 1521-1533)
+# own post-run save-path gate)
 # ----------------------------------------------------------------------------
 # Probe mode without this gate burns 20 iterations and asserts NOTHING -- an
 # unmeasured run (doctrine 1), the same defect the finding was filed against.
@@ -685,6 +893,13 @@ run_in_container --slurm-ntasks 1 --workdir "$REPO" \
 # trap state and never adjudicate probe evidence.
 fs_probe_save_gate() {
   local rc=$?    # the status the script was ALREADY exiting with; captured first, before any test below clobbers it
+  # Re-assert the knob's 0/1 shape BEFORE the scope lock (fix #81 finding
+  # 1): a PROBE re-assigned to a path AFTER arming would fail the scope lock
+  # and exit with rc -- a green run would pass green, a red run would pass
+  # its rc, and either way the corruption would fail NOTHING. That silent
+  # disarm is exactly what this gate exists to refuse; the knob dies loudly.
+  [[ "$PROBE" =~ ^[01]$ ]] || \
+    die "PROBE='$PROBE' inside fs_probe_save_gate -- mode knob corrupted after arming (#81)"
   # Scope lock: even if someone later re-arms this trap on a production
   # path, a non-probe run must never adjudicate probe evidence.
   [[ "${PROBE:-0}" == "1" ]] || exit "$rc"
@@ -705,7 +920,16 @@ fs_probe_save_gate() {
   echo "PROBE G5 PASS: latest_checkpointed_iteration=$last == TRAIN_ITERS=$TRAIN_ITERS, $nd iter_* dirs under $ckpt_dir -- save path measured end-to-end on $TRAIN_ITERS iters"
   exit 0
 }
-if [[ "${PROBE:-0}" == "1" ]]; then
+# Fail-closed ARM decision (fix #81 finding 1): after the mode block PROBE
+# is exactly 0 or 1, so any other value AT THIS LINE is a post-resolution
+# re-assignment (the COT_PROBE_PY collision shape, which lands after the
+# banner re-check above and before this arm -- the gate-body check above
+# never runs if the trap is never installed, so this site needs its own).
+# Arming nothing on a corrupted knob was an absent echo, not a failure:
+# detection-by-absence, refused.
+[[ "$PROBE" =~ ^[01]$ ]] || \
+  die "PROBE='$PROBE' at G5-gate arming -- mode knob overwritten after resolution (#81)"
+if [[ "$PROBE" == "1" ]]; then
   trap fs_probe_save_gate EXIT
   # The echo below is the gate's proof-of-RUN marker in the log: no banner,
   # no armed gate.

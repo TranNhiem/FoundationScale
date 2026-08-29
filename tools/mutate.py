@@ -198,15 +198,30 @@ _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")
 
 # tools/emit_run_manifest.py mutants (#85). Rows carry exactly _REQUIRED_KEYS;
 # binding to the module is by anchor uniqueness inside the file, which is why
-# MODULE_PATHS names the file first. Four of the six are killed by
-# tests/test_emit_run_manifest.py; the two main()-level survivors
-# (lora-count-fabricated, drill-never-arms) are named in that module's
-# docstring and stand in the tally as survivors -- stated, not hidden.
-# Measured-status caveat: the test validates shape, keys, and anchor
-# uniqueness of these rows. Whether this list is the container load_table
-# aggregates is observed by the next mutation run showing a denominator of 6
-# for this module; that is NOT asserted here, and a denominator of 0 is red,
-# never green.
+# MODULE_PATHS names the file first. The list carries 7 MUST-FIRE rows.
+# KNOWN, re-observed on every test run: tests/test_emit_run_manifest.py pins
+# shape, keys, and per-row anchor uniqueness, over however many rows the
+# list carries. EXPECTED, not yet measured by the battery: the five rows
+# whose behaviors that suite exercises directly should be killed; and the
+# two main()-level rows (lora-count-fabricated, drill-never-arms) --
+# survivors with no test behind them when this caveat was first written --
+# should now be killed as well, because both main()-level legs have since
+# been repaired: they had been dying on missing argparse flags before ever
+# reaching main(), and a two-arm drill leg now pins EXIT_REFUSED and
+# EXIT_UNMEASURED separately. EXPECTED is not MEASURED: the next battery
+# run is what settles those two rows, one way or the other, and they stay
+# published either way -- a row dropped to protect an exit code is the
+# worst outcome available here.
+# Publication caveat, updated: from the day this list was planted, its
+# battery denominator was 0 -- mutations.json never carried the rows and
+# nothing refused. This repair closes both flanks: load_table publishes
+# the list by MERGE (EMBEDDED_TABLE: these 7 rows + 1 inert must-pass
+# control = a module denominator of 8; the constant stays the single
+# source and any copy appearing in the JSON is itself a refusal), and
+# _validate_table(complete=True) makes ANY mapped-but-unpublished module
+# a die() that names it with its expected row count. A denominator of 0
+# for this module is no longer a silence; it is a refusal -- red, never
+# green.
 EMIT_RUN_MANIFEST_ROWS = [
     {
         "name": "emit_run_manifest.lora-zip-unstrict",
@@ -225,8 +240,40 @@ EMIT_RUN_MANIFEST_ROWS = [
             "to call this null a DECLARED state; swapping the literal "
             "makes an abstention serialize as a non-abstention"
         ),
-        "anchor": '        "abstained",',
-        "replacement": '        "present",',
+        # Widened 2026-08-24: the #79 full-ft repair added a SECOND
+        # five-field abstention record whose value list opens with the same
+        # literal (emit_run_manifest.py:981), so the bare '"abstained",' line
+        # stopped being unique and the row's own validity leg went red. The
+        # following line is the LoRA record's WHO constant, which the full-ft
+        # record does not carry -- that is what pins this row to the LoRA
+        # producer. The full-ft twin at :981 is covered by the NEXT row, added
+        # in the same edit that recorded the gap -- annexing it here would have
+        # let one row claim two producers on one observation.
+        "anchor": '        "abstained",\n        _LORA_ABSTENTION_WHO,',
+        "replacement": '        "present",\n        _LORA_ABSTENTION_WHO,',
+    },
+    {
+        "name": "emit_run_manifest.full-ft-status-not-abstained",
+        "what": (
+            "the full-ft expected_expert_bytes abstention has its own "
+            "status literal (emit_run_manifest.py:981), a SECOND producer "
+            "of the same declared state; swapping it makes the byte "
+            "gate's None read as a populated denominator on disk"
+        ),
+        # Disjoint from the LoRA row above by construction: that anchor is
+        # pinned by _LORA_ABSTENTION_WHO on the following line, this one by
+        # the reason string the full-ft record opens with. Neither anchor can
+        # match the other's site, so the two producers are two measurements.
+        "anchor": (
+            '        "abstained",\n'
+            '        (\n'
+            '            "pricing expert bytes requires knowing which FQN pattern the byte "'
+        ),
+        "replacement": (
+            '        "present",\n'
+            '        (\n'
+            '            "pricing expert bytes requires knowing which FQN pattern the byte "'
+        ),
     },
     {
         "name": "emit_run_manifest.lora-preexisting-key-rename",
@@ -693,8 +740,21 @@ def die(msg: str) -> NoReturn:
     sys.exit(2)
 
 
-def _validate_table(data: dict[str, list[dict]], paths: dict[str, Path]) -> None:
+def _validate_table(
+    data: dict[str, list[dict]],
+    paths: dict[str, Path],
+    *,
+    complete: bool = False,
+) -> None:
     """Shape-check a mutation table against its module map.
+
+    complete=True adds the complement muster (the orphan tripwire): every
+    mapped module must be published with at least one row, or die() names
+    each unpublished module with the row count it owed. It stays opt-in so
+    pre-existing injected-table callers keep their exact semantics; the
+    disk path -- load_table -- always opts in, on the FULL merged view,
+    before --module filtering. EMBEDDED_TABLE is referenced below its
+    definition site and resolves at call time.
 
     Applied to the shipped table from disk and to injected tables alike: an
     in-memory table does not get a lower bar just because it never touched
@@ -711,6 +771,33 @@ def _validate_table(data: dict[str, list[dict]], paths: dict[str, Path]) -> None
     unknown = set(data) - set(paths)
     if unknown:
         die(f"table names modules with no path mapping: {sorted(unknown)}")
+    if complete:
+        # The complement of the historical check, and the orphan tripwire
+        # (#85/#86/#89): registered-but-unpublished means zero published
+        # rows, which is UNMEASURED, never covered -- a refusal, not a
+        # silence. Runs on the FULL merged view only; load_table applies
+        # the --module filter after it, so the check never sees modules a
+        # filtered run legitimately set aside.
+        unpublished = [mod for mod in sorted(paths) if not data.get(mod)]
+        if unpublished:
+            detail = []
+            for mod in unpublished:
+                rows = EMBEDDED_TABLE.get(mod)
+                if rows:
+                    detail.append(
+                        f"  {mod}: 0 of {len(rows)} rows the tool itself embeds "
+                        "(EMBEDDED_TABLE) -- the publish-by-merge step regressed"
+                    )
+                else:
+                    detail.append(
+                        f"  {mod}: 0 published; MODULE_PATHS maps it, so the "
+                        "table owes it at least 1 row and carries 0"
+                    )
+            die(
+                "mapped-but-unpublished module(s) in the mutation table: "
+                f"{len(unpublished)} of {len(paths)} mapped modules carry 0 "
+                "rows:\n" + "\n".join(detail)
+            )
     if not any(data.values()):
         die(
             "the table selects zero mutations — a battery with no mutants proves "
@@ -758,8 +845,46 @@ def _validate_table(data: dict[str, list[dict]], paths: dict[str, Path]) -> None
         )
 
 
+# R1+R2 (#85/#86/#89 orphan class). The emit_run_manifest rows are published
+# by MERGE, never copied into tools/mutations.json: EMIT_RUN_MANIFEST_ROWS
+# (above) is the single source for the fact, and load_table refuses a JSON
+# that grows a copy -- two sources for one fact. The inert must-pass row is
+# the module's MUST-PASS half (doctrine 3): it anchors on the same producer
+# line as row lora-count-plus-one, whose uniqueness in
+# tools/emit_run_manifest.py the shape test already enforces, and a trailing
+# comment is stripped by the tokenizer -- no test, import, or bytecode
+# comparison can observe it.
+EMBEDDED_TABLE: dict[str, list[dict]] = {
+    "emit_run_manifest": [
+        *EMIT_RUN_MANIFEST_ROWS,
+        {
+            "name": "emit_run_manifest.inert-control-must-pass",
+            "what": (
+                "MUST SURVIVE: a trailing comment changes no behaviour, so "
+                "the suite MUST stay green. If the battery reports this "
+                "killed, its attribution machinery is proven unsound and "
+                "the whole run is void -- exit 2."
+            ),
+            "anchor": "        str(preexisting_saves),\n",
+            "replacement": (
+                "        str(preexisting_saves),"
+                "  # inert must-pass control\n"
+            ),
+            "must_survive": True,
+        },
+    ],
+}
+
+
 def load_table(only: str | None) -> dict[str, list[dict]]:
-    """Read the committed table from disk. main() may be handed one instead."""
+    """Read the committed table from disk, merge the embedded rows, muster.
+
+    The complement muster (complete=True) runs exactly once per load, on
+    the FULL merged view, BEFORE --module narrows it: the filter can
+    therefore never trip the muster over modules it legitimately set
+    aside, and the merged module names appear in the unknown-module
+    'have:' list. main() may be handed a table instead.
+    """
     if not TABLE.exists():
         die(
             f"no mutation table at {TABLE} — it is committed alongside this tool.\n"
@@ -770,12 +895,235 @@ def load_table(only: str | None) -> dict[str, list[dict]]:
         data = json.loads(TABLE.read_text("utf-8"))
     except json.JSONDecodeError as exc:
         die(f"{TABLE} is not valid JSON: {exc}")
+    dual = sorted(set(EMBEDDED_TABLE) & set(data))
+    if dual:
+        die(
+            f"{TABLE} carries rows for {dual} but tools/mutate.py embeds them "
+            "(EMBEDDED_TABLE) -- two sources for one fact. Delete the JSON "
+            "key(s); never maintain a copy."
+        )
+    merged = {m: [dict(r) for r in rows] for m, rows in EMBEDDED_TABLE.items()}
+    data = {**data, **merged}
+    paths = {mod: ROOT / rel for mod, rel in MODULE_PATHS.items()}
+    _validate_table(data, paths, complete=True)
     if only:
         if only not in data:
             die(f"unknown module {only!r}; have: {', '.join(sorted(data))}")
         data = {only: data[only]}
-    _validate_table(data, {mod: ROOT / rel for mod, rel in MODULE_PATHS.items()})
     return data
+
+
+# --- anchor-freshness gate: is every published anchor still bindable? ---
+#
+# Ground truth here is RECONSTRUCTED, never read. The two obvious sources are
+# both measurably wrong for this tree. A git HEAD snapshot lags any repair
+# round that has not been committed yet, so it reports a stale row that is not
+# stale -- a false alarm on a healthy corpus, and doctrine 5 prices that
+# exactly like a false green. And the raw working tree IS one applied mutant
+# while the battery's exec'd suite is running (tools/mutate.py writes the
+# mutant, execs pytest, and restores only in `finally`), so a raw reader goes
+# red for every mutation of that file regardless of behaviour, is named in
+# every attribution, and reddens the inert must-pass control -- the text
+# tripwire that already cost two repair rounds.
+#
+# The corpus is its own inverse map: every row carries anchor AND replacement.
+# So the gate asks an EXISTENCE question instead of a recovery question:
+#
+#     is there a text P in which every one of this file's anchors occurs
+#     exactly once, and from which the live bytes are reachable in zero or
+#     one row applications?
+#
+# EXISTENCE, not uniqueness, and keyed on neither "which row is applied" nor
+# "is the replacement present". Four legitimate corpus shapes are live today
+# and each defeats a per-row reading:
+#   * DELETION-STYLE -- the replacement is a strict substring of its own
+#     anchor (2 rows), so `count(replacement) == 0` is unsatisfiable in a
+#     pristine source and every such row would false-alarm forever;
+#   * INSERTION-STYLE -- the anchor is a strict substring of its own
+#     replacement (2 rows), so the applied state still binds that anchor
+#     exactly once, which is correct and must not be refused;
+#   * IDENTICAL SHARED ANCHOR -- `core` publishes 4 rows against one anchor,
+#     so applying any one of them drives all four to 0x;
+#   * NESTED ANCHORS -- in `parity` and `emit_run_manifest` one row's anchor
+#     sits inside another's, so applying the inner row consumes the outer
+#     row's anchor too.
+# Demanding a unique applied row reddens 6 of the 70 legitimate applied
+# states; demanding a unique pristine candidate is impossible, because a
+# deletion-style row always generates a second self-consistent candidate.
+#
+# Placement: beside MODULE_PATHS and load_table, the two facts the gate
+# joins. Safe because tools/mutate.py is not itself a MODULE_PATHS target --
+# no battery leg writes a mutant into this file, so growing it here can evict
+# no corpus anchor and the gate's own bytes are never under measurement.
+
+MAX_FRESHNESS_CANDIDATES = 256
+
+
+class FreshnessRefusedError(Exception):
+    """The live bytes cannot be placed in the accepted state set."""
+
+
+def _accepted_pristine_states(live: str, rows: list[dict]) -> list[str]:
+    """Every text that could be the pristine source behind `live`.
+
+    A candidate is `live` itself -- nothing applied, the normal case -- or
+    `live` with ONE occurrence of one row's replacement rewritten back to
+    that row's anchor. EVERY occurrence is enumerated, not only the
+    single-occurrence case: a deletion-style row's replacement necessarily
+    occurs inside its own intact anchor, so any count-based shortcut is
+    reading the wrong thing.
+
+    A candidate is ACCEPTED only when both hold:
+
+      * every one of this file's anchors occurs EXACTLY once in it. Raw
+        str.count, byte-exact, indentation included -- no strip, no
+        normalisation, nothing fuzzy. The drift this gate exists to catch
+        was eight leading spaces becoming four, and a tolerant matcher
+        greens it.
+      * `live` is reachable from it in zero or one row applications. This is
+        the clause that stops a two-rows-applied or otherwise corrupt source
+        from being laundered into "pristine" by a candidate that merely
+        happens to bind every anchor.
+
+    Returns every accepted candidate; the caller needs only whether the list
+    is non-empty. Raises FreshnessRefusedError if enumeration exceeds
+    MAX_FRESHNESS_CANDIDATES -- refusing rather than searching, since the
+    shipped corpus peaks at 3 candidates across all 71 of its reachable
+    states, so a blow-up means the input is not what this gate was built for.
+    """
+    candidates = [live]
+    for row in rows:
+        rep = row["replacement"]
+        if not rep:
+            continue
+        at = live.find(rep)
+        while at != -1:
+            if len(candidates) >= MAX_FRESHNESS_CANDIDATES:
+                raise FreshnessRefusedError(
+                    "candidate enumeration exceeded "
+                    f"{MAX_FRESHNESS_CANDIDATES} states over {len(rows)} "
+                    "row(s): refusing rather than searching -- the shipped "
+                    "corpus peaks at 3 candidates, so this input is not "
+                    "what the freshness gate was built for"
+                )
+            candidates.append(live[:at] + row["anchor"] + live[at + len(rep):])
+            at = live.find(rep, at + 1)
+    accepted = []
+    for cand in candidates:
+        if not all(cand.count(row["anchor"]) == 1 for row in rows):
+            continue
+        reachable = {cand}
+        for row in rows:
+            reachable.add(cand.replace(row["anchor"], row["replacement"], 1))
+        if live in reachable:
+            accepted.append(cand)
+    return accepted
+
+
+def check_anchor_freshness(
+    table: dict[str, list[dict]],
+    paths: dict[str, Path],
+) -> list[str]:
+    """Resolve every published anchor exactly once, against RECOVERED bytes.
+
+    The caller hands over load_table's FULL merged view -- the
+    tools/mutations.json rows MERGED with EMBEDDED_TABLE -- because a gate
+    over the JSON half alone repeats the orphan class where the
+    emit_run_manifest rows sat outside the only table anything checked. A
+    --module narrowing must never be passed in as if it were the corpus.
+
+    Fail-closed enumerations, one problem string per finding, ALL findings
+    accumulated and returned together so a single red names every offender
+    at once: a zero-row corpus; a module publishing 0 rows beside measured
+    ones; a row with an empty anchor or replacement; a row whose replacement
+    EQUALS its anchor (that mutation edits nothing, so the battery would
+    score a guaranteed survivor as a real mutant); a corpus module absent
+    from `paths`; a source that will not read or will not decode; candidate
+    enumeration blowing past its bound; and finally the substantive verdict,
+    no pristine state accounting for the live bytes, which names each row
+    whose anchor does not bind exactly once and its counts.
+
+    An empty return is the only green.
+
+    RESIDUAL, stated exactly: the verdict is that every published anchor
+    BINDS, not that the tree is pristine. For an insertion-style row -- one
+    whose anchor is a substring of its own replacement -- the applied state
+    is accepted, correctly, because that anchor still resolves exactly once;
+    this gate does not claim to detect that such a row is applied. Drift
+    that displaces no anchor is likewise invisible to it. Whether the suite
+    would actually KILL any mutant is the battery's verdict, never this
+    gate's.
+    """
+    problems: list[str] = []
+    if sum(len(rows) for rows in table.values()) == 0:
+        problems.append(
+            f"zero-row corpus: {len(table)} module(s) publish 0 rows between "
+            "them -- a freshness gate over zero anchors has measured "
+            "nothing, and unmeasured is never fresh"
+        )
+        return problems
+    for mod in sorted(table):
+        rows = table[mod]
+        if not rows:
+            problems.append(
+                f"{mod}: 0 rows published beside measured modules -- "
+                "unmeasured, never fresh"
+            )
+            continue
+        blank = [
+            r.get("name", "?") for r in rows
+            if not r.get("anchor") or not r.get("replacement")
+        ]
+        if blank:
+            problems.append(
+                f"{mod}: {len(blank)} row(s) with an empty anchor or "
+                f"replacement: {', '.join(blank)} -- an empty anchor binds "
+                "everywhere and measures nothing"
+            )
+            continue
+        noop = [r["name"] for r in rows if r["anchor"] == r["replacement"]]
+        if noop:
+            problems.append(
+                f"{mod}: {len(noop)} row(s) whose replacement EQUALS their "
+                f"anchor: {', '.join(noop)} -- such a row edits nothing, so "
+                "the battery would score a guaranteed survivor as a mutant"
+            )
+        path = paths.get(mod)
+        if path is None:
+            problems.append(
+                f"{mod}: no source mapping -- fail closed: an unmappable "
+                "module's anchors are unresolved, never fresh"
+            )
+            continue
+        try:
+            live = path.read_text("utf-8")
+        except (OSError, UnicodeError) as exc:
+            problems.append(
+                f"{mod}: cannot read source {path}: {exc} -- fail closed: "
+                "unreadable is not empty, and a decode failure is not a "
+                "missing file"
+            )
+            continue
+        try:
+            accepted = _accepted_pristine_states(live, rows)
+        except FreshnessRefusedError as exc:
+            problems.append(f"{mod}: {exc}")
+            continue
+        if not accepted:
+            blamed = [r for r in rows if live.count(r["anchor"]) != 1] or rows
+            counts = "; ".join(
+                f"{r['name']} anchor {live.count(r['anchor'])}x, "
+                f"replacement {live.count(r['replacement'])}x"
+                for r in blamed
+            )
+            problems.append(
+                f"{mod}: no pristine state accounts for these bytes over "
+                f"{len(rows)} row(s) -- at least one anchor no longer binds "
+                "exactly once, and reverting any single row does not repair "
+                f"it; re-derive the offending row(s) against the current "
+                f"source. Live counts: {counts}"
+            )
+    return problems
 
 
 EPILOG = """\
@@ -1014,19 +1362,20 @@ def main(
                     print(f"  [ALIVE] {m['name']:32s} suite still green — NOT TESTED")
                 elif verdict.kind is TrialKind.KILLED:
                     r["killed"].append((m["name"], verdict.attribution))
-                    shown = ", ".join(verdict.attribution[:3])
-                    more = (
-                        f" (+{len(verdict.attribution) - 3})"
-                        if len(verdict.attribution) > 3
-                        else ""
-                    )
+                    # The attribution IS the evidence for the kill, so the
+                    # run record carries it in full, one nodeid per line.
+                    # A 100-char truncation once made a control-dead run
+                    # impossible to audit after the fact (R6).
                     print(
                         f"  [killed] {m['name']:31s} {len(verdict.attribution)} test(s), "
-                        f"reproduced: {(shown + more)[:100]}"
+                        "reproduced in full:"
                     )
+                    for nodeid in verdict.attribution:
+                        print(f"    - {nodeid}")
                 else:
                     r["unscored"].append((m["name"], verdict.reason))
-                    print(f"  [UNSCORED] {m['name']:32s} {verdict.reason[:100]}")
+                    print(f"  [UNSCORED] {m['name']:32s} trial failed, no verdict:")
+                    print(f"    - {verdict.reason}")
     finally:
         for p, text in backups.items():
             p.write_text(text, "utf-8")
@@ -1082,6 +1431,55 @@ def main(
 
     ctrl_ok = [(mod, n) for mod, r in results.items() for n in r["control_passed"]]
     ctrl_dead = [(mod, n, attr) for mod, r in results.items() for n, attr in r["control_failed"]]
+    # R6: the attribution IS the evidence; persist ALL of it, untruncated,
+    # before any summary rendering. The console lines above carry one
+    # nodeid per line; this JSON artifact is the machine-readable twin of
+    # the same claim, rendered from the same in-memory results in this
+    # same run, so the two cannot drift apart within a run. Failing to
+    # persist the evidence is a certification failure (fail closed),
+    # never a footnote: a run that cannot keep its own evidence proves
+    # nothing.
+    report_path = ROOT / "artifacts" / "mutation-battery-report.json"
+    try:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        with report_path.open("w", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    "modules": {
+                        module: {
+                            "killed": [
+                                {"name": n, "attribution": list(attr)}
+                                for n, attr in r["killed"]
+                            ],
+                            "alive": [
+                                {"name": n, "what": w} for n, w in r["alive"]
+                            ],
+                            "unscored": [
+                                {"name": n, "reason": why}
+                                for n, why in r["unscored"]
+                            ],
+                            "na": [{"name": n, "what": w} for n, w in r["na"]],
+                            "control_passed": list(r["control_passed"]),
+                            "control_failed": [
+                                {"name": n, "attribution": list(attr)}
+                                for n, attr in r["control_failed"]
+                            ],
+                        }
+                        for module, r in results.items()
+                    }
+                },
+                fh,
+                indent=2,
+                sort_keys=True,
+            )
+            fh.write("\n")
+    except OSError as exc:
+        raise SystemExit(
+            "refusing to certify: cannot write attribution artifact "
+            f"{report_path}: {exc}; a run that cannot persist its own "
+            "evidence proves nothing"
+        ) from exc
+    print(f"attribution artifact (complete, never truncated): {report_path}")
     # "Configured" is counted from the TABLE, never from verdicts: a control
     # row whose anchor went stale lands in r["na"], and one whose trial came
     # back UNSCORED lands in r["unscored"] — neither may collapse into "no
@@ -1118,11 +1516,30 @@ def main(
         for mod, n in ctrl_ok:
             print(f"  [ctrl ok] {mod}/{n}: no fault, no detection — attribution sound")
         for mod, n, attr in ctrl_dead:
-            named = ", ".join(attr[:3]) or "<no attribution>"
             print(
-                f"  [CTRL DEAD] {mod}/{n}: killed with attribution ({named}) — an inert"
-                " edit cannot be detected; the attribution machinery is unsound"
+                f"  [CTRL DEAD] {mod}/{n}: killed — an inert edit cannot be "
+                "detected; the attribution machinery is unsound. Full "
+                f"attribution ({len(attr)} test(s)):"
             )
+            for nodeid in attr:
+                print(f"    - {nodeid}")
+            if not attr:
+                print("    - <no attribution>")
+
+    # Denominator reconciliation (doctrine 2, M6), stated EVERY run so the
+    # scoreable count can never again sit next to the corpus row count as
+    # an unexplained gap: scoreable rows + must-pass control rows = corpus
+    # rows. Controls are unscoreable BY CONSTRUCTION (their evidence is
+    # survival, not a kill), so corpus minus scoreable is exactly the
+    # control count -- printed here, never left for a reader to infer.
+    corpus_rows = sum(len(muts) for muts in table.values())
+    print(
+        f"\nCORPUS DENOMINATOR: {corpus_rows} corpus row(s) over "
+        f"{len(table)} module(s) = {corpus_rows - ctrl_configured} "
+        f"scoreable MUST-FIRE mutation(s) + {ctrl_configured} MUST-PASS "
+        "control row(s); controls are excluded from the scoreable count "
+        "by construction, so that difference is stated, not an omission."
+    )
 
     un = [(mod, n, why) for mod, r in results.items() for n, why in r["unscored"]]
     if un:

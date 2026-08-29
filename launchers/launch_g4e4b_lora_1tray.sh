@@ -346,11 +346,31 @@ fi
 # Early-save requirement: PROBE forces a real save at iters 10 and 20 (trap 9:
 # a run looks healthy until its FIRST save; confirm iter_* + latest file before
 # trusting). Production save cadence matches the official Taiwan runs.
+# PROBE validation ported from the full-FT launcher (fix #81): this file was
+# the cited reference idiom, yet mapped ANY value != "1" onto the production
+# arm without refusal (PROBE=yes trained production), and its banner printed
+# the raw environment read -- the same swallowed-flag shape in a sibling
+# spelling. Unset reads as 0, 1 selects the probe arm, anything else dies.
+# The refusal is deliberately SELF-CONTAINED (echo + exit 1): it must not
+# depend on any helper being defined in this file, or a missing helper
+# would print-and-continue and the refusal would re-become the defect.
+# Both arms write back the normalized 0/1 so every later consumer (banner,
+# gates) reads the RESOLVED knob, exactly as the full-FT file now does.
+case "${PROBE:-0}" in
+  0|1) ;;
+  *)
+    echo "FATAL: PROBE must be 0 or 1, got '${PROBE}' -- refusing to choose" \
+      "between a 20-iter probe arm and the production arm on the operator's behalf" >&2
+    exit 1
+    ;;
+esac
 if [[ "${PROBE:-0}" == "1" ]]; then
+  PROBE=1
   TRAIN_ITERS=20
   SAVE_INTERVAL=10
   RUN_SUFFIX=_probe
 else
+  PROBE=0
   SAVE_INTERVAL=${SAVE_INTERVAL:-250} # official Taiwan base runs; TRAIN_ITERS computed below from row count
   RUN_SUFFIX=""
 fi
@@ -428,7 +448,11 @@ echo "============================================================"
 echo "Gemma-4-E4B — Taiwan-AIEC v3 LoRA (${LORA_ARM} arm — a dense base coerces L1 to base4, fix28) — 1 TRAY (world=$WORLD)"
 echo "============================================================"
 echo "Backend:       $FS_BACKEND$([[ "$FS_BACKEND" == enroot ]] && printf ' (enroot+torchrun; job-id minted locally, scontrol absent per s1)')"
-echo "Job:           ${SLURM_JOB_ID:-N/A}  node=${SLURM_JOB_NODELIST:-N/A}  PROBE=${PROBE:-0}"
+# fix #81: PROBE= prints the RESOLVED mode knob (normalized to exactly 0/1
+# by the case + arm write-backs above), never a fresh environment read --
+# re-reading would print the operator's intent instead of this script's
+# decision, the gap a swallowed flag hides in.
+echo "Job:           ${SLURM_JOB_ID:-N/A}  node=${SLURM_JOB_NODELIST:-N/A}  PROBE=$PROBE"
 echo "Recipe:        $RECIPE (peft=$PEFT_SCHEME step=$STEP_FUNC)"
 echo "HF:            $HF_MODEL_PATH"
 echo "Ckpt:          $MEGATRON_CKPT -> $OUTPUT_DIR/checkpoints"
@@ -1359,13 +1383,100 @@ gate_fail(){ echo "GATE FAIL: $1" >&2; GATE=1; }
 # (wiring bug/crash) stop the job. When the prefix is measured and pinned in
 # fs_live_save_gate, delete the prefix arm's "expected" phrasing in the same
 # edit.
-# fix44 / #77-B1 addendum: until this fix the wrapper invoked HOST python3 —
-# the one python call site in this launcher that did not go through the
-# executor. Host python3 has no torch (fix32 measurement: the host anaconda
-# interpreter shadows the image stack), so both PROBE runs' exit 3s were a
-# torch-less host reading a HEALTHY DCP at live_save_gate.py:1149 — never the
-# adapter-prefix abstention the log claimed. The gate now runs through
+# fix45-A2 / #77-B1, LoRA arm — the same measured record the sibling full-FT
+# launcher carries, restated so every sentence here is TRUE OF THIS FILE.
+# The host/interpreter facts — the four-env table, the host-torch fact, the
+# PYTHONNOUSERSITE=1 discriminator, the three arms, and the refusal of the
+# cheap shortcut — are facts of the shared login plane and hold identically
+# for this launcher. The sibling's mode-specific sentences — the
+# manifest-emitter justification idiom, the 99 GB iter_0000020 in-situ
+# reproduction, the live watcher and its tripwire (d) consequence row, and
+# its four-site host-python complement census — are NOT this file's facts
+# and are not restated as if they were; where this path legitimately
+# differs, the difference is written down at the end of this block with its
+# own re-derived denominator. Two falsified texts stay on record here,
+# quoted, each beside the measurement that killed it — the estate keeps its
+# refuted arguments, corrected: demoted, never deleted.
+# Refuted text 1, the JUSTIFICATION the sibling's fix45-A shipped for
+# invoking the gate host-side, on record verbatim on the sibling's record
+# and quoted here as a claim about that record, not about this file's call
+# sites:
+#   "read_metadata is torch-free by design" — true for the SAFETENSORS
+#   HEADER path and FALSE for the DCP path, and a training save is a DCP.
+# Refuted text 2, the DIAGNOSIS this file itself shipped as its fix44
+# / #77-B1 addendum, carried verbatim from fix44 until this edit:
+#   "fix44 / #77-B1 addendum: until this fix the wrapper invoked HOST python3 —
+#   the one python call site in this launcher that did not go through the
+#   executor. Host python3 has no torch (fix32 measurement: the host anaconda
+#   interpreter shadows the image stack), so both PROBE runs' exit 3s were a
+#   torch-less host reading a HEALTHY DCP at live_save_gate.py:1149 — never the
+#   adapter-prefix abstention the log claimed. The gate now runs through
+#   run_in_container like the four sites the contract suite already pins."
+# "Host python3 has no torch" is the sentence the measurement killed. The
+# killing table is a host/interpreter measurement (same login plane, same
+# host python3, same gate tool) and holds identically for this launcher,
+# measured on <compute-node>, 2026-08-24 (host python3 = anaconda3 Python
+# 3.12.2; user site ~/.local/lib/python3.12/site-packages):
+#   bare                                     rc=0  torch 2.10.0+cpu @ ~/.local/...
+#   PYTHONNOUSERSITE=1 only                  rc=3  ModuleNotFoundError: No module named 'torch'
+#   PYTHONPATH=launcher only                 rc=0  torch 2.10.0+cpu @ ~/.local/...
+#   BOTH (the launcher's env at the gate)    rc=3  ModuleNotFoundError
+# torch IS installed on the host (2.10.0+cpu, in the ~/.local user site);
+# the discriminator is PYTHONNOUSERSITE=1 — the single `export
+# PYTHONNOUSERSITE=1` in this file's Environment section, correct and
+# load-bearing for the training payload — hides the user site from every
+# host-side gate call that follows it. So both PROBE runs' exit 3s were the
+# hidden-torch import refusal at live_save_gate.py:1149 — never a
+# torch-LESS host, and (as the quoted addendum itself insisted) never the
+# adapter-prefix abstention the log claimed either.
+# The corrected claim: the host python3 CAN parse the training save; under
+# the launcher's own environment it must NOT be asked to.
+# Three arms, one extracted function, one artifact — the extracted function
+# is fs_live_save_gate, immediately below; the artifact is the arm-A
+# refusal text the gate dies with at live_save_gate.py:1149:
+#   A  host + launcher env (NOUSERSITE=1)  rc=3  report=ABSENT
+#      "torch.distributed.checkpoint is unavailable; cannot read DCP"
+#   B  host - NOUSERSITE                   rc=0  report=CLEAR — the import
+#      succeeds and the DCP parses: the save was HEALTHY all along, in the
+#      addendum's own words
+#   C  container (the fix)                 rc=0  report=CLEAR — the import
+#      succeeds through the executor, with the gate's own words captured
+#      for the cause-reading mapper below
+# Executor-routed, captured, rc bit-exact: the gate now runs through
 # run_in_container like the four sites the contract suite already pins.
+# The cheap fix the corrected diagnosis invites — unset PYTHONNOUSERSITE
+# around the gate — is REFUSED here, on record, for three load-bearing
+# reasons, each a host/interpreter fact that applies to this launcher
+# unchanged:
+#   1. it adjudicates a CUDA-written checkpoint with a CPU-only 2.10.0
+#      wheel that has no relationship to the 2.11.0a0 nv26.02 stack that
+#      wrote it — certifying an artifact with an instrument never
+#      certified against it is the failure this estate exists to prevent;
+#   2. ~/.local is UNMANAGED — nothing declares it, nothing pins it; a
+#      `pip uninstall torch` in a user's home silently flips every future
+#      gate from CLEAR to UNMEASURED with no code change and no diff to
+#      point at;
+#   3. PYTHONNOUSERSITE=1 exists precisely to keep user-site packages out
+#      of the training stack; re-enabling it for the ADJUDICATOR
+#      reintroduces the contamination it exists to prevent, in the one
+#      component whose whole job is to be trustworthy.
+# Where this file legitimately DIFFERS from the sibling's record, stated so
+# the two governed files cannot diverge silently: this launcher trains
+# synchronously with no watcher, so the gate is wired POST-RUN ONLY (the
+# asymmetry the fix35 header above states for this file); nothing here arms
+# tripwire (d), so "disarmed at its first invocation, the run trained
+# unwatched" is the sibling's consequence, never this file's — here the
+# defect's measured consequence was a misattributed refusal: both PROBE
+# runs were told "adapter-prefix unpinned" while the gate had actually died
+# at :1149 (this file's own mapper record, below). And the host-python
+# complement census of THIS file, re-derived instead of inherited: per the
+# addendum on record above the wrapper was the ONE python call site that
+# did not go through the executor, so with the gate executor-routed the
+# census goes to ZERO — no host python remains to census; the sibling's
+# cfg_get / schema spot-check / resolved-config writer / fqn-map entries
+# are the sibling's own and are not claimed here. The discriminator for any
+# future host-python site added to this file is NOT "is python on the host"
+# — it is "reads a DCP".
 # ---------------------------------------------------------------------------
 fs_live_save_gate() { # $1=iter dir  $2=event  $3=report path  $4=capture log; returns the gate's rc UNTOUCHED.
   # #78 — the wiring this wrapper used to deliberately OMIT. The comment

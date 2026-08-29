@@ -37,15 +37,38 @@ Every denominator comes from a source the run under judgment did not write:
                               headers hold zero expert-family names -- so the
                               census reads 0 and the mint is satisfiable on the
                               real artifact.
-  declared_fqns (full)       base model.safetensors *header key set* (2,130
-                             tensors per estate measurement -- re-read, never
-                             trusted from this comment), minus documented
-                             frozen scope
-  declared_fqns (full, DCP)  --fqn-map: planner/operator-exported JSON list of
-                             artifact-namespace FQNs. The ONLY way completeness
-                             is measured when the artifact layout is not the HF
-                             namespace; the basis text has pointed at this flag
-                             since the first draft, and it now exists.
+  declared_fqns (full)       ONE value, TWO mutually exclusive bases; which
+                             one applies is MEASURED per save, never assumed
+                             per row. (a) base model.safetensors *header key
+                             set* (2,130 tensors per estate measurement --
+                             re-read, never trusted from this comment), minus
+                             documented frozen scope -- applicable ONLY when
+                             the save on disk IS the HF layout, which the
+                             gate verifies, never assumes: overlap with this
+                             key set must reach 0.90 of the on-disk artifact
+                             FQNs, else this basis is refused with the
+                             refusal stated (declared_fqns stays None and
+                             save_complete VACUOUS-blocks) rather than
+                             compare against a guessed mapping.
+  declared_fqns (full, DCP)  (b) --fqn-map: a JSON list of ARTIFACT-namespace
+                             FQNs -- the ONLY completeness basis when the
+                             artifact layout is not the HF namespace (the
+                             estate's Megatron/DCP saves). Censused from the
+                             INDEPENDENT base before the run, read back by
+                             the launcher from the emitter's attempt record,
+                             never from the run under judgment; and since
+                             the #78 re-scope its namespace is MEASURED AT
+                             SUBMIT by this gate's own 0.90 discriminator in
+                             reverse (the census overlapped against the
+                             model*.safetensors header key set under
+                             $HF_MODEL -- >=0.90 means an HF-layout base
+                             resolved in and the submit refuses; a partial
+                             overlap is a stated abstention and also
+                             refuses). The label is now a measured property
+                             with a control that was observed firing
+                             (doctrine 3), not the producer's say-so; still
+                             the ONLY way completeness is measured when the
+                             artifact layout is not the HF namespace.
   declared_fqns (lora)       --adapter-modules: the launch-time live-module
                              census -- the module population the trainer's own
                              matcher attaches to, censused from the INDEPENDENT
@@ -1422,15 +1445,30 @@ def _real(meta: CheckpointMetadata) -> list[tuple[str, Any]]:
 # save, reproducible the moment #78's sibling wiring reaches this branch).
 # NARROW BY CONTRACT: membership is decided on the FQN's ROOT segment only
 # (see _is_non_adapter_namespace), so a module merely named with the letters
-# "optimizer" is still adjudicated. Two controls pin this set from opposite
-# sides: DELETING it (or its two call sites) turns the MUST_PASS
+# "optimizer" is still adjudicated. The predicate has THREE call sites --
+# 1460 (_infer_auto_kind's judged pool), 1540 (the lora set-aside below),
+# 1574 (the unmarked sweep) -- and the controls pin them site by site; the
+# earlier wording here said TWO call sites and charged both to the one
+# MUST_PASS, a doctrine-5 miscount. DELETING the frozenset reddens every
+# caller (NameError on first use). Deleting 1574 turns the MUST_PASS
 # test_calibrated_nondefault_naming_clears_end_to_end red -- its fixture
-# carries the measured 7 entries and must CLEAR; WIDENING the match to a
-# substring test turns the MUST_FIRE
-# test_optimizer_shaped_decoy_still_flagged_as_unmarked red -- its decoy
-# must stay judged. Add an entry ONLY with a measured save to cite: an
-# evidence-free entry here silently shrinks every lora denominator, which is
-# doctrine-5 scope creep wearing a fix's clothes.
+# carries the measured 7 entries (6 optimizer.* + 1 rng_state) that must
+# CLEAR; that path pins run_kind="lora", so deleting 1460 or 1540 leaves
+# it green. Deleting 1540 voids the decoy MUST_FIRE's pinned strings -- the
+# judged count slides "3 of 27" -> "3 of 34" and the pinned "7
+# non-adapter" quote stops matching. Deleting 1460 turns
+# test_auto_kind_denominator_excludes_save_state red -- its sized-to-swing
+# fixture slides 4/4 = 1.00 back to 4/16 = 0.25 < 0.6 and kind flips to
+# "full". WIDENING the match turns the decoy MUST_FIRE
+# test_optimizer_shaped_decoy_still_flagged_as_unmarked red: its three
+# decoys -- "optimizer" embedded in a module stem
+# (layers.3.self_attn.optimizer_gate.weight), a bare root
+# (optimizer_gate.x), an exact mid-path "optimizer" segment
+# (layers.9.self_attn.optimizer.exp_avg.weight) -- stay judged, pinning
+# substring ("optimizer" in fqn), prefix (startswith), and any-segment
+# widenings respectively. Add an entry ONLY with a measured save to cite:
+# an evidence-free entry here silently shrinks every lora denominator,
+# which is doctrine-5 scope creep wearing a fix's clothes.
 _NON_ADAPTER_CHECKPOINT_NAMESPACE_ROOTS = frozenset({"optimizer", "rng_state"})
 
 
@@ -2066,6 +2104,202 @@ class GateDecision:
 
 
 # ---------------------------------------------------------------------------
+# #83: interpreter provenance -- measured, always recorded, adjudicated
+# whenever the caller states an expectation
+# ---------------------------------------------------------------------------
+
+# The launcher knows which python it MEANT to run the gate under and says so
+# through this variable ("host": no torch; "container": torch + DCP). Unset
+# or empty means no expectation was expressed: the run is still attributed
+# (provenance is recorded on every exit path) but uncontested, and the
+# record says exactly that.
+_EXPECTED_INTERPRETER_ENV = "LIVE_SAVE_GATE_EXPECT_INTERPRETER"
+
+
+def _interpreter_provenance() -> dict[str, Any]:
+    """Measure THIS interpreter for the #83 record; a measurement, never an
+    authored constant, and total: it must never itself explode, because both
+    the CLEAR/BLOCKED report and the UNMEASURED refusal record have to be
+    able to carry it.
+
+    Keys mirror the manifest's training-stack vocabulary exactly
+    (emit_run_manifest._training_stack_entries: python_executable,
+    python_version, torch_record) -- one spelling for one fact, so the
+    manifest-side directive resolves to a field this file really writes.
+    torch is LOCATED (find_spec + dist metadata), not imported: importing
+    just to record it would let the measurement change the measured. Both
+    importlib names are imported locally -- the module's import block is
+    outside the listed lines.
+    """
+    import importlib.metadata
+    import importlib.util
+
+    torch_detected = False
+    torch_origin: str | None = None
+    try:
+        torch_spec = importlib.util.find_spec("torch")
+    except ValueError:
+        # "torch" in sys.modules with __spec__ None: PRESENT but beyond
+        # find_spec's reach. Record presence with the origin unread, never
+        # an authored absence -- unreadable is not empty.
+        torch_detected = True
+        torch_origin = "<in sys.modules with __spec__ None>"
+    else:
+        if torch_spec is not None:
+            torch_detected = True
+            torch_origin = torch_spec.origin
+    torch_version: str | None = None
+    if torch_detected:
+        try:
+            torch_version = importlib.metadata.version("torch")
+        except importlib.metadata.PackageNotFoundError:
+            torch_version = None
+    return {
+        "python_executable": sys.executable,
+        "python_version": sys.version.split()[0],
+        "torch_record": {
+            "detected": torch_detected,
+            "origin": torch_origin,
+            "dist_version": torch_version,
+            "basis": (
+                "importlib.util.find_spec + importlib.metadata.version, "
+                "run in the very process being recorded; torch itself never "
+                "imported for this record"
+            ),
+        },
+    }
+
+
+def _resolve_expected_interpreter(cli_expected: str | None) -> str | None:
+    """The caller's half of #83: the kwarg wins, else the env var. A value
+    outside the {host, container} vocabulary is a REFUSAL, never a silent
+    normalization -- an expectation this tool cannot parse is an expectation
+    it cannot have met, and adjudicating anyway would manufacture
+    attribution."""
+    raw = (
+        cli_expected
+        if cli_expected is not None
+        else os.environ.get(_EXPECTED_INTERPRETER_ENV)
+    )
+    if raw is None or not raw.strip():
+        return None
+    value = raw.strip().lower()
+    if value not in ("host", "container"):
+        source = (
+            "the expected_interpreter kwarg"
+            if cli_expected is not None
+            else f"${_EXPECTED_INTERPRETER_ENV}"
+        )
+        raise GateUnmeasured(
+            f"expected interpreter {raw!r} (from {source}) is neither "
+            f"'host' nor 'container' -- refusing to adjudicate under an "
+            f"expectation vocabulary this tool cannot read"
+        )
+    return value
+
+
+def _refuse_on_interpreter_mismatch(
+    provenance: dict[str, Any] | None, expected: str | None
+) -> None:
+    """#83's second half: record vs reality vs EXPECTED. On any failure the
+    tool REFUSES (UNMEASURED) instead of BLOCKING: the artifact may be fine,
+    but THIS run can prove nothing while it disagrees with the caller about
+    which interpreter it even is -- and BLOCKED would accuse the checkpoint
+    of what is the run's own misattribution.
+
+    Three tripwires fire before any expectation is even consulted, loudest
+    first: the record ABSENT (unattributable whether or not the caller
+    stated an expectation -- unreadable is not empty), and the record
+    LYING, caught against a fresh probe of this very interpreter rather
+    than anyone's say-so. Callers on the verdict path pass the record
+    _interpreter_provenance() has just measured; the re-probe costs one
+    find_spec and guards the seam against a foreign or authored record,
+    which is exactly what the MUST_FIRE legs plant. The expectation
+    vocabulary is re-validated here too, so a direct caller cannot slip an
+    unreadable expectation past the channel resolver: an expectation this
+    tool cannot read is an expectation it cannot have met.
+    """
+    if provenance is None:
+        raise GateUnmeasured(
+            "NO interpreter provenance record was produced -- a verdict "
+            "without it is unattributable on either python, expectation or "
+            "no expectation (#83) -> UNMEASURED"
+        )
+    fresh = _interpreter_provenance()
+    for key in ("python_executable", "python_version"):
+        if provenance.get(key) != fresh[key]:
+            raise GateUnmeasured(
+                f"provenance record says {key}={provenance.get(key)!r} but "
+                f"a fresh probe of THIS interpreter reads {fresh[key]!r} "
+                f"-- a record that lies about the interpreter that wrote "
+                f"it attributes nothing -> UNMEASURED"
+            )
+    detected_now = fresh["torch_record"]["detected"]
+    if provenance.get("torch_record", {}).get("detected") is not detected_now:
+        raise GateUnmeasured(
+            f"provenance record says torch_record.detected="
+            f"{provenance.get('torch_record', {}).get('detected')!r} but a "
+            f"fresh probe of THIS interpreter reads {detected_now!r} -- an "
+            f"authored record is not a measurement -> UNMEASURED"
+        )
+    if expected is None:
+        return
+    if expected not in ("host", "container"):
+        raise GateUnmeasured(
+            f"expected interpreter {expected!r} is neither 'host' nor "
+            f"'container' -- an expectation this tool cannot read is an "
+            f"expectation it cannot have met -> UNMEASURED"
+        )
+    needs_torch = expected == "container"
+    if detected_now is not needs_torch:
+        raise GateUnmeasured(
+            f"interpreter mismatch: caller expected the {expected} python "
+            f"(torch {'present' if needs_torch else 'absent'}), but this "
+            f"interpreter records {provenance.get('torch_record')!r} at "
+            f"{provenance.get('python_executable')!r} -- host and container "
+            f"verdicts are not interchangeable, and this must be settled "
+            f"BEFORE any gate runs -> UNMEASURED"
+        )
+
+
+def _interpreter_report_entry(cli_expected: str | None) -> dict[str, Any]:
+    """The complete #83 fact for the CLEAR/BLOCKED report: measured
+    interpreter + caller expectation + the adjudication's outcome. Reaching
+    the return means any supplied expectation was MET -- the raise in
+    _refuse_on_interpreter_mismatch is the refusal -- so the entry never
+    overstates itself, and says so when uncontested."""
+    expected = _resolve_expected_interpreter(cli_expected)
+    provenance = _interpreter_provenance()
+    _refuse_on_interpreter_mismatch(provenance, expected)
+    entry: dict[str, Any] = {
+        **provenance,
+        "expected_interpreter": expected,
+        "expectation_met": None if expected is None else True,
+    }
+    if expected is None:
+        entry["expectation_note"] = (
+            "no expectation supplied (kwarg unset and "
+            f"${_EXPECTED_INTERPRETER_ENV} unset): provenance recorded but "
+            "uncontested; attribution rests on the record alone"
+        )
+    return entry
+
+
+def _refusal_interpreter_entry() -> dict[str, Any]:
+    """The same fact riding the UNMEASURED refusal record. A refusal must
+    never refuse: the expectation is transcribed RAW -- if it is malformed,
+    that malformed value is very possibly WHY the refusal exists, and
+    laundering it here would erase the cause. Enforcement lives in
+    _interpreter_report_entry, on the verdict path."""
+    raw = os.environ.get(_EXPECTED_INTERPRETER_ENV)
+    return {
+        **_interpreter_provenance(),
+        "expected_interpreter": raw if raw and raw.strip() else None,
+        "expectation_met": None,
+    }
+
+
+# ---------------------------------------------------------------------------
 # The callable the launcher invokes
 # ---------------------------------------------------------------------------
 
@@ -2091,6 +2325,14 @@ def adjudicate_checkpoint(
     # _load_adapter_modules. Trailing and defaulted so positional callers
     # (library use) are untouched; None keeps the lora refusal path.
     adapter_modules: str | os.PathLike[str] | None = None,
+    # #83: "host" | "container" | None; None defers to
+    # $LIVE_SAVE_GATE_EXPECT_INTERPRETER (see _resolve_expected_interpreter;
+    # the env var is the CLI-facing channel while main()'s argparse wiring
+    # is outside this change). Trailing and defaulted under the same
+    # discipline as adapter_modules, so positional callers are untouched. A
+    # value outside the vocabulary is a refusal, never a silent
+    # normalization.
+    expected_interpreter: str | None = None,
 ) -> GateDecision:
     ckpt_path = Path(ckpt_dir)
 
@@ -2103,6 +2345,13 @@ def adjudicate_checkpoint(
     _verify_adapter_naming_agreement(
         adapter_suffix_re, adapter_prefix or "", adapter_suffixes
     )
+
+    # #83: attribute this run to a measured interpreter BEFORE anything is
+    # measured. Built once here and shipped verbatim in the CLEAR/BLOCKED
+    # report below; a stated expectation this interpreter cannot meet is a
+    # refusal (GateUnmeasured -> UNMEASURED on the refusal path), never a
+    # wrong-attribution verdict.
+    interpreter_entry = _interpreter_report_entry(expected_interpreter)
 
     base_dir = (
         Path(base_model_dir) if base_model_dir
@@ -2339,6 +2588,10 @@ def adjudicate_checkpoint(
         "controls": control_reports,
         "blocking_reasons": reasons,
         "exit_code": exit_code,
+        # #83: WHICH python produced this verdict; measured at the head of
+        # adjudicate_checkpoint, so a refused mismatch can never reach this
+        # dict wearing a false attribution.
+        "interpreter": interpreter_entry,
     }
     if json_out:
         try:
@@ -2394,6 +2647,10 @@ def _record_refusal(args: argparse.Namespace, message: str) -> None:
             "ran; the refusal IS the adjudication of record for an "
             "unmeasured exit"
         ),
+        # #83: a refusal is as env-dependent as a CLEAR, so the same
+        # measured interpreter record rides here too (expectation raw; see
+        # _refusal_interpreter_entry above).
+        "interpreter": _refusal_interpreter_entry(),
     }
     try:
         out = Path(args.json_out)

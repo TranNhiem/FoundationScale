@@ -17,17 +17,33 @@ commitments baked in:
   read green). Two independent enumerators or it is not a control.
 * MUST_FIRE pins NO single rc -- which arm fires is saves-dependent BY DESIGN
   (#79's own note); it pins rc != 0 AND the drill token in combined output.
-* KNOWN ABSTENTION, named, not silently skipped: the drop-one leg SHOULD also
-  run through the public check_saved_run_declaration, but that function
-  appears in NONE of the context given to this shard (no module, no
-  signature), and a guessed call site is defect 2 repeating itself -- a false
-  alarm priced like a false green. The drop-one below therefore drives all
-  five single-field drops through the serialized-bytes oracle
-  _abstention_markers_absent (signature IS in context) on REAL emitted bytes,
-  and the drill test proves fire is wired to hard refusal end-to-end. The
-  follow-up shard needs exactly one thing in context:
-  check_saved_run_declaration's module and call signature; then hoist the
-  five variants this file constructs.
+* ABSTENTION DISCHARGED (was: KNOWN ABSTENTION -- the discharge is named,
+  not silent). The drop-one leg once ran ONLY through the private
+  serialized-bytes oracle because check_saved_run_declaration's module and
+  signature were in NONE of this shard's context. Both are now in context
+  (module tools/emit_run_manifest.py; call signature
+  (record_text, *, saves_observed: int) -> str), and
+  test_lora_abstention_record_drop_one_public_adjudicator_hoist below drives
+  the same five single-field drops -- same real emitted bytes, same
+  fail-closed exactly-one-occurrence substitution -- through the PUBLIC
+  adjudicator: each variant MUST raise BareNullDeclarationError blaming
+  exactly THAT field (branch-pinned: the bare-null declared shape is
+  asserted intact per variant, so the NO-'declared'-key arm cannot supply
+  the red), the un-dropped record MUST return STATED-ABSTENTION by name,
+  and each variant at saves_observed=0 MUST return NOT-EXERCISED by name
+  and must not raise. The oracle leg is KEPT: the two legs fail for
+  different reasons (oracle blind vs adjudicator never asking or
+  swallowing), and two-enumerators-or-it-is-not-a-control applies one
+  level up as well.
+* KNOWN ABSTENTION, named, not silently skipped (the gap these legs do NOT
+  close): per check_saved_run_declaration's own docstring, NO post-run
+  consumer calls it with a run's realized save count, so UNCLEARED can
+  fire only at EMISSION (the drill, or a store/serializer regression);
+  the resume/eval/export judgment-time wiring has NOT landed and this
+  file does not claim it. The follow-up shard needs exactly one thing in
+  context: the judgment-time call site (module and function) at which a
+  run's realized save directories are observed, so the adjudicator can
+  be invoked there with the measured count.
 """
 
 from __future__ import annotations
@@ -208,9 +224,14 @@ def test_lora_abstention_record_drop_one_detected_all_five(
 ) -> None:
     """Drop-one on the serialized record: 5 of 5 drops fire, 0 pass silently.
 
-    Named-substitute for the check_saved_run_declaration leg -- see the
-    module docstring for that abstention and what the follow-up shard needs.
-    A partial record is not a record.
+    Pins the ORACLE half of the control: _abstention_markers_absent SEES
+    each missing field on real emitted bytes. The ADJUDICATOR half -- the
+    public check_saved_run_declaration refusing on the same five drops and
+    blaming exactly the dropped field -- is pinned by
+    test_lora_abstention_record_drop_one_public_adjudicator_hoist directly
+    below; the two legs fail for different reasons and both stay (two
+    enumerators or it is not a control, one level up). A partial record is
+    not a record.
     """
     monkeypatch.delenv(_DRILL_ENV, raising=False)
     rc, out_dir = _run_lora(tmp_path, "lora-drop-one")
@@ -232,6 +253,92 @@ def test_lora_abstention_record_drop_one_detected_all_five(
         assert len(missing) == 1 and any(key in str(m) for m in missing), (
             f"dropping {key} must flag exactly that one field (1 of 5); "
             f"oracle reported {missing!r}"
+        )
+
+
+def test_lora_abstention_record_drop_one_public_adjudicator_hoist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Drop-one through the PUBLIC adjudicator: 5 of 5 refused, 0 silent.
+
+    Discharges this module's recorded abstention (see the module
+    docstring). The oracle leg above proves _abstention_markers_absent
+    SEES a missing field; this leg proves check_saved_run_declaration --
+    what a launch actually calls -- REFUSES on it and blames exactly
+    THAT field. A refusal that fires for the right shape but blames
+    another field, or fires on another shape (the NO-'declared'-key
+    arm), is a different defect and must not read green; the bare-null
+    shape is branch-pinned intact per variant before the refusal is
+    accepted. MUST_PASS: the un-dropped record returns STATED-ABSTENTION
+    by name (DECLARED or NOT-EXERCISED would both be wrong; merely
+    not-raising is unmeasured). Doctrine-1 arm: every variant at
+    saves_observed=0 returns NOT-EXERCISED by name and never raises.
+    This EXTENDS, and does not duplicate, test_fs79_declared_abstention's
+    zero-saves leg, which covers only the COMPLETE record: there the
+    zero-saves return and the marker consultation commute (zero missing
+    either way), so that leg is blind to arm ORDER, and a repair that
+    hoists shape inspection above the zero-denominator return reads
+    green there forever and is caught here 5 of 5. Denominators
+    (doctrine 2): 5 of 5 drops refused; 1 of 1 un-dropped records
+    STATED-ABSTENTION by name; 5 of 5 variants NOT-EXERCISED by name at
+    saves_observed=0.
+    """
+    assert len(_ABSTENTION_KEYS) == 5, (
+        "denominator guard: this leg claims 5 of 5; a shrunk local "
+        f"enumerator ({len(_ABSTENTION_KEYS)} key(s)) would leave the "
+        "remainder unmeasured, and unmeasured is never a pass"
+    )
+    monkeypatch.delenv(_DRILL_ENV, raising=False)
+    rc, out_dir = _run_lora(tmp_path, "lora-drop-one-public")
+    capsys.readouterr()
+    assert rc == 0
+    emit = _load_tool("emit_run_manifest")
+    text = _disk_manifest_text(out_dir)
+    state = emit.check_saved_run_declaration(text, saves_observed=1)
+    assert state.startswith("STATED-ABSTENTION"), (
+        "MUST_PASS: the un-dropped record at saves_observed=1 must return "
+        "the STATED-ABSTENTION state BY NAME -- DECLARED and NOT-EXERCISED "
+        "are both wrong here, and merely not-raising is unmeasured; got "
+        f"{state!r}"
+    )
+    for key in _ABSTENTION_KEYS:
+        needle = f'"{key}":'
+        assert text.count(needle) == 1, (
+            f"drop-one construction needs exactly 1 on-disk occurrence of "
+            f"{needle!r}, found {text.count(needle)} -- refusing to guess which"
+        )
+        variant = text.replace(needle, '"control.dropped_key":', 1)
+        assert emit._DECLARED_NULL_RE.search(variant) is not None, (
+            f"branch pin broken on the {key} drop: the bare-null declared "
+            "shape must survive the substitution, otherwise the refusal "
+            "below could come from the NO-'declared'-key branch -- the "
+            "right colour for the wrong reason; fail closed instead"
+        )
+        # Doctrine-1 arm checked FIRST: unwrapped call, so a raise here
+        # ERRORS the test -- zero units examined is never a pass.
+        zero_state = emit.check_saved_run_declaration(variant, saves_observed=0)
+        assert zero_state.startswith("NOT-EXERCISED"), (
+            f"doctrine-1 arm broken on the {key} drop: saves_observed=0 "
+            "must return NOT-EXERCISED by name and never raise -- the arm "
+            "a careless 'make it refuse' repair would break; got "
+            f"{zero_state!r}"
+        )
+        with pytest.raises(emit.BareNullDeclarationError) as excinfo:
+            emit.check_saved_run_declaration(variant, saves_observed=1)
+        message = str(excinfo.value)
+        blamed = [k for k in _ABSTENTION_KEYS if k in message]
+        assert blamed == [key], (
+            f"refusal must blame EXACTLY the dropped field {key!r} and no "
+            "other -- firing for the right shape but blaming the wrong "
+            "field is a different defect and must not read green; message "
+            f"blamed {blamed!r}: {message}"
+        )
+        assert "1 of 5" in message, (
+            "the refusal's own denominator must read 1 of 5 for a "
+            "single-field drop from a five-field record; message was: "
+            f"{message}"
         )
 
 

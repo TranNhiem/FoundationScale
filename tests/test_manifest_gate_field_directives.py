@@ -26,9 +26,15 @@ zero-directive manifest can never masquerade as a passed measurement.
 First execution of this control is this change's next CI run.
 """
 
+import argparse
+import importlib.metadata
 import importlib.util
+import json
 import re
+import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_PATH = ROOT / "tools" / "live_save_gate.py"
@@ -99,7 +105,31 @@ def _load_emitter():
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {EMITTER_PATH}")  # FAIL CLOSED
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    sys.modules[spec.name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.modules.pop(spec.name, None)
+    return mod
+
+
+def _load_gate():
+    # exec, not subprocess: the gate's helpers then see THIS interpreter, so
+    # the value legs below cross-check the shipped record against an
+    # independent measurement of the same python (sys.executable, find_spec)
+    # taken in this very process. A load failure is a test failure (FAIL
+    # CLOSED), never a skip.
+    spec = importlib.util.spec_from_file_location(
+        "live_save_gate_under_control", GATE_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {GATE_PATH}")  # FAIL CLOSED
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.modules.pop(spec.name, None)
     return mod
 
 
@@ -138,13 +168,139 @@ def test_must_fire_planted_directive_is_flagged():
     assert _violations(named, gate_src) == ["never_written_field_qz"]
 
 
-def test_regression_pin_83_torch_record_is_still_unwritten_gate_side():
-    # Today's measured fact (grep -c -> 0). If the gate ever IMPLEMENTS
-    # torch provenance (option (a)), this pin MUST go red first and be
-    # updated in the same change that updates the emitter's prose --
-    # the prose and the gate may never drift apart silently again.
+def test_regression_pin_83_torch_record_is_written_and_truthful(
+    tmp_path, monkeypatch
+):
+    """INVERTED PIN. This function was the absence pin ("torch_record" not
+    in gate_src); its own comment ordered that it go red in the change that
+    implements gate-side provenance and be updated in that same change. This
+    is that change: gone red, now inverted into a presence-AND-VALUE
+    assertion (units: 1 readability guard + 3 field spellings over the gate
+    source, 5 measured-value comparisons on the provenance record, 5
+    must-pass checks on the adjudication entry and env channel, and 3
+    assertions over a really-written UNMEASURED refusal record).
+    """
+    monkeypatch.delenv("LIVE_SAVE_GATE_EXPECT_INTERPRETER", raising=False)
     gate_src = GATE_PATH.read_text(encoding="utf-8")
-    assert "torch_record" not in gate_src
+    assert len(gate_src) > 1000, "unreadable gate source would void this pin"
+    # PRESENCE, under the manifest's own spelling (one gate field per
+    # emitted training-stack entry): the fields the manifest directs
+    # operators to cross-check must exist as fields the gate really writes.
+    for field in ("python_executable", "python_version", "torch_record"):
+        assert f'"{field}"' in gate_src, (
+            f"gate does not write {field!r}: the manifest directive is "
+            f"unattributable again (#83 shape)"
+        )
+    # VALUE: a present string is not a measurement. The shipped helper's
+    # output is compared, value by value, against an INDEPENDENT reading of
+    # this very interpreter taken here -- a hardcoded record (the decoy
+    # repair) turns this leg red.
+    gate = _load_gate()
+    prov = gate._interpreter_provenance()
+    detected_here = importlib.util.find_spec("torch") is not None
+    assert prov["python_executable"] == sys.executable
+    assert prov["python_version"] == sys.version.split()[0]
+    assert prov["torch_record"]["detected"] is detected_here, (
+        "gate-reported torch presence disagrees with find_spec taken in "
+        "this same interpreter -- the record is authored, not measured"
+    )
+    if detected_here:
+        assert prov["torch_record"]["dist_version"] == (
+            importlib.metadata.version("torch")
+        )
+    else:
+        assert prov["torch_record"]["origin"] is None
+    # MUST_PASS of the adjudication half: the truthful expectation passes
+    # both the bare referee and the full report-entry path, and the entry
+    # states the met expectation.
+    expected_here = "container" if detected_here else "host"
+    gate._refuse_on_interpreter_mismatch(prov, expected_here)
+    entry = gate._interpreter_report_entry(expected_here)
+    assert entry["expected_interpreter"] == expected_here
+    assert entry["expectation_met"] is True
+    # NO expectation: a stated abstention, never a counted pass (doctrine 1)
+    # -- the entry pairs the provenance with expectation_met: null plus a
+    # note, instead of manufacturing a comparison that never ran.
+    uncontested = gate._interpreter_report_entry(None)
+    assert uncontested["expected_interpreter"] is None
+    assert uncontested["expectation_met"] is None
+    assert "no expectation" in uncontested["expectation_note"]
+    # The UNMEASURED refusal record (audit finding 2) carries the same
+    # measured values -- exercised for real, not merely grepped, and kept
+    # env-free here so the transcription legs below cannot contaminate it.
+    refusal_path = tmp_path / "refusal.json"
+    args = argparse.Namespace(
+        ckpt_dir="ckpt_qz",
+        event="save",
+        run_kind="auto",
+        json_out=str(refusal_path),
+    )
+    gate._record_refusal(args, "planted refusal for the #83 control qz")
+    refusal = json.loads(refusal_path.read_text(encoding="utf-8"))
+    assert refusal["verdict"] == "UNMEASURED"
+    assert refusal["interpreter"]["python_executable"] == sys.executable
+    assert refusal["interpreter"]["torch_record"]["detected"] is (
+        detected_here
+    )
+    # The env channel: fallback resolves when the kwarg abstains, and the
+    # kwarg wins when both speak. The resolver only validates vocabulary and
+    # precedence; adjudication itself is the referee's job.
+    monkeypatch.setenv("LIVE_SAVE_GATE_EXPECT_INTERPRETER", expected_here)
+    assert gate._resolve_expected_interpreter(None) == expected_here
+    other = "host" if expected_here == "container" else "container"
+    assert gate._resolve_expected_interpreter(other) == other
+
+
+def test_must_fire_83_refusal_observed_on_absent_lying_or_malformed(monkeypatch):
+    """MUST_FIRE for the recorded-vs-expected half (doctrine 3): nine
+    refusal legs, each a pytest.raises gate -- if any refusal path goes
+    quiet, that leg fails HERE, so the comparator can never rot to vacuity
+    green. Every field the referee compares against a fresh probe has its
+    own planted lie below. First execution of this control is this
+    change's CI run."""
+    monkeypatch.delenv("LIVE_SAVE_GATE_EXPECT_INTERPRETER", raising=False)
+    gate = _load_gate()
+    prov = gate._interpreter_provenance()
+    detected = prov["torch_record"]["detected"]
+    truthful = "container" if detected else "host"
+    untruthful = "host" if detected else "container"
+    lying_detected = {
+        **prov,
+        "torch_record": {**prov["torch_record"], "detected": not detected},
+    }
+    lying_executable = {**prov, "python_executable": "/nonexistent/python"}
+    # (1)-(2) record ABSENT refuses WHETHER OR NOT an expectation is on the
+    # table -- an unattributable verdict is not made attributable by the
+    # caller's silence (unreadable is not empty).
+    with pytest.raises(gate.GateUnmeasured):
+        gate._refuse_on_interpreter_mismatch(None, truthful)
+    with pytest.raises(gate.GateUnmeasured):
+        gate._refuse_on_interpreter_mismatch(None, None)
+    # (3)-(4) record PRESENT AND LYING -- caught against a fresh probe of
+    # this interpreter even with NO expectation to contradict, one planted
+    # lie per compared field: the load-bearing torch bit, then the
+    # executable path.
+    with pytest.raises(gate.GateUnmeasured, match="torch_record"):
+        gate._refuse_on_interpreter_mismatch(lying_detected, None)
+    with pytest.raises(gate.GateUnmeasured, match="python_executable"):
+        gate._refuse_on_interpreter_mismatch(lying_executable, None)
+    # (5) honest record against the swapped expectation -- the two-pythons
+    # mixup #83 exists to catch; refuses BEFORE any gate runs.
+    with pytest.raises(gate.GateUnmeasured, match="interpreter mismatch"):
+        gate._refuse_on_interpreter_mismatch(prov, untruthful)
+    # (6) the full report-entry path refuses the swapped expectation too.
+    with pytest.raises(gate.GateUnmeasured):
+        gate._interpreter_report_entry(untruthful)
+    # (7)-(9) the expectation vocabulary fails closed on every channel: the
+    # resolver kwarg, a direct referee call that bypassed the resolver, and
+    # the env var.
+    with pytest.raises(gate.GateUnmeasured):
+        gate._resolve_expected_interpreter("wsl2-something")
+    with pytest.raises(gate.GateUnmeasured):
+        gate._refuse_on_interpreter_mismatch(prov, "wsl2-something")
+    monkeypatch.setenv("LIVE_SAVE_GATE_EXPECT_INTERPRETER", "wsl2-something")
+    with pytest.raises(gate.GateUnmeasured):
+        gate._resolve_expected_interpreter(None)
 
 
 def test_regression_pins_historical_wording_absent_from_emitter_source():

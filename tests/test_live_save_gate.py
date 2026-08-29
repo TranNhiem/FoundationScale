@@ -767,7 +767,11 @@ class TestLoraDiscrimination:
     ):
         """[RED-UNDER-MUTANT live_save_gate/adapter-scope-inherits-base-expert-
         denominator; GREEN-ON-SHIPPED] MUST_FIRE for the MINT_ZERO_ONLY_IN_PROBE
-        declared exception (`if not spec.frozen_regex and not expert_targets:`).
+        declared exception (`if not spec.frozen_regex and not expert_stems:` --
+        live_save_gate.py:1211's census-side spelling since the #78 restructure;
+        the pre-#78 text named `expert_targets`, the retired HF-header oracle.
+        The docstring is updated, never the assertions -- the same drift class
+        as the two corpus rows repaired tonight).
 
         The matrix cell this suite never built (the mutation row's own "why"
         confesses it): a healthy LoRA adapter of a MoE base. Mutant: the
@@ -2685,9 +2689,17 @@ class TestAdapterNamingAgreement:
         goes RED with EXIT 1 (the lora branch adjudicated those 7 entries as
         "unrecognized adapter content"), and it returns GREEN only via the
         anchored namespace exclusion, never via a weakened assertion below.
-        It is also the DELETION-control for the exclusion itself: remove
-        _NON_ADAPTER_CHECKPOINT_NAMESPACE_ROOTS or either
-        _is_non_adapter_namespace call site and this test is red again."""
+        It is also the DELETION-control, site by site. Call sites of
+        _is_non_adapter_namespace are THREE -- 1460 in _infer_auto_kind,
+        1540 (the set-aside), 1574 (the unmarked sweep). Removing the
+        frozenset reddens every caller (NameError on first use). Removing
+        1574 reddens THIS test: the 7 measured save-state entries join
+        `unmarked`, the lora branch blocks, the asserted exit 0 flips to 1.
+        Removing 1540 leaves this test GREEN -- `unmarked` stays empty and
+        no note is asserted here -- and is caught by the sibling decoy
+        test's denominator strings. Removing 1460 is invisible here (this
+        test pins run_kind="lora" and never reaches the auto seam) and is
+        pinned by test_auto_kind_denominator_excludes_save_state."""
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
         ckpt = _materialize_artifact(
             tmp_path, _megatron_named_lora_tensors(), name="mt-lora")
@@ -2720,34 +2732,54 @@ class TestAdapterNamingAgreement:
         assert _control_by_prefix(d, "drop")["status"] == "fired"
 
     def test_optimizer_shaped_decoy_still_flagged_as_unmarked(self, tmp_path):
-        """[FAILS-BEFORE -- pre-#80 the exclusion does not exist: the decoy
-        flags as 8 of 32 rather than 1 of 25, and the judged/excluded
+        """[FAILS-BEFORE -- pre-#80 the exclusion does not exist: the decoys
+        flag as 10 of 34 rather than 3 of 27, and the judged/excluded
         denominator format is absent -> red] MUST_FIRE for the #80 namespace
-        exclusion. A genuinely unrecognized tensor wearing an optimizer-
-        SHAPED name -- module stem `layers.3.self_attn.optimizer_gate`, NOT
-        one of the measured non-adapter namespace ROOTS -- must still be
-        adjudicated as unrecognized adapter content.
+        exclusion. Genuinely unrecognized tensors wearing optimizer-SHAPED
+        names -- NOT one of the measured non-adapter namespace ROOTS -- must
+        still be adjudicated as unrecognized adapter content. Three decoy
+        shapes, one per decay class of the root-segment anchor: the letters
+        embedded INSIDE a module name (`layers.3.self_attn.optimizer_gate`),
+        a bare root (`optimizer_gate.x` -- fqn.partition(".")[0] yields the
+        root segment "optimizer_gate", which the anchored match must still
+        refuse), and an exact mid-path "optimizer" segment
+        (`layers.9.self_attn.optimizer.exp_avg.weight`). The tree shipped
+        with only the first while _is_non_adapter_namespace's own docstring
+        already cited `optimizer_gate.x` as controlled here and the
+        paragraph below promised an any-segment redden -- two doctrine-5
+        over-claims, repaired by measuring, not by rewording the claims
+        away.
 
-        Broken to see red: widen `_is_non_adapter_namespace` from FQN
-        root-segment equality to a substring test (`"optimizer" in fqn`) or
-        to any-segment membership, and the decoy below is swallowed by the
-        exclusion -- no MODE/lora "adapter marker" reason fires, exit flips
-        to 0, this test goes red. That mutation is exactly "exclude a
-        namespace" decaying into "delete the check", and it is invisible to
-        the sibling MUST_PASS above, which only ever sees legitimate
-        namespace roots. The pair pins the exclusion from opposite sides:
-        MUST_PASS goes red if the exclusion is DELETED, this one red if it is
-        WIDENED. Denominator per doctrine 2: 24 adapter + 1 decoy = 25 JUDGED
+        Broken to see red, one arm per widening class. A substring widening
+        (`"optimizer" in fqn`) swallows ALL THREE decoys: no MODE/lora
+        "adapter marker" reason fires, exit flips to 0, this test goes red
+        -- that mutation is exactly "exclude a namespace" decaying into
+        "delete the check", invisible to the sibling MUST_PASS above, which
+        only ever sees legitimate namespace roots. A prefix widening
+        (`fqn.startswith("optimizer")`) swallows ONLY the bare-root decoy;
+        an exact any-segment widening swallows ONLY the mid-path decoy; each
+        leaves `flagged` non-empty but slides the pinned count to "2 of
+        26", dying on the exact-count assertion -- the embedded stem alone
+        cannot see either shape. MUST_PASS/MUST_FIRE division: the sibling
+        goes red if call site 1574 is DELETED; this one goes red on
+        WIDENING, on call site 1540's deletion (denominator strings), and
+        on call site 1574's own deletion (numerator re-count, "10 of 27").
+        Denominator per doctrine 2: 24 adapter + 3 decoys = 27 JUDGED
         adapter-namespace tensors, with the 7 legitimate save-state entries
         quoted in the reason as set aside -- reported, not silently dropped.
         """
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
         tensors = _megatron_named_lora_tensors()
-        # The decoy: the letters "optimizer" embedded INSIDE a module name --
-        # the false friend the anchored root-segment match exists to keep
-        # adjudicable. It ends in a plain ".weight", so no adapter suffix or
-        # marker can excuse it either; only a broken exclusion lets it pass.
+        # Three decoys, one per decay class of the anchored root-segment
+        # match (named in the docstring): "optimizer" embedded INSIDE a
+        # module name, a BARE ROOT carrying the letters, and an exact
+        # "optimizer" segment MID-PATH. None carries the adapter suffix or
+        # marker or sits in modules_to_save, so only a broken exclusion
+        # lets any of them pass. The count pin below quotes the
+        # sorted-first decoy, layers.3.self_attn.optimizer_gate.weight.
         tensors["layers.3.self_attn.optimizer_gate.weight"] = ((8, 8), "F32")
+        tensors["optimizer_gate.x"] = ((4,), "F32")
+        tensors["layers.9.self_attn.optimizer.exp_avg.weight"] = ((8, 8), "F32")
         ckpt = _materialize_artifact(tmp_path, tensors, name="mt-lora-decoy")
         census = _census_file(tmp_path, self._census_stems())
         d = lsg.adjudicate_checkpoint(
@@ -2759,17 +2791,24 @@ class TestAdapterNamingAgreement:
                               ".adapter.linear_out.weight"),
             adapter_modules=census)
         assert d.exit_code == 1, (
-            f"optimizer-shaped decoy must still hard-block: {d.blocking_reasons}")
+            f"optimizer-shaped decoys must still hard-block: {d.blocking_reasons}")
         flagged = [r for r in d.blocking_reasons
                    if "MODE/lora" in r and "adapter marker" in r]
         assert flagged, f"no unmarked-adapter reason fired: {d.blocking_reasons}"
-        # "1 of 25" is the anti-disarm pin: pre-#80 the flagged count was 8
-        # (decoy + 7 save-state entries, no exclusion); deleting the
-        # exclusion restores that; widening it drives the count to 0 and
-        # empties `flagged` above. Three failure shapes, three different
-        # assertions catching them.
-        assert any("1 of 25" in r and "optimizer_gate.weight" in r
-                   for r in flagged), f"decoy not isolated in reason: {flagged}"
+        # "3 of 27" is the anti-disarm pin, one arm per failure shape.
+        # Pre-#80 (no exclusion): "10 of 34" -- the 3 decoys + the 7
+        # save-state entries over the raw 34. Deleting call site 1574
+        # re-flags those 7 ("10 of 27"); deleting 1540 inflates the judged
+        # denominator ("3 of 34") and the pinned "7 non-adapter" string
+        # below stops matching; a substring widening ("optimizer" in fqn)
+        # empties `flagged` and flips the exit (caught above); a prefix
+        # widening swallows only the bare-root decoy and an exact
+        # any-segment widening only the mid-path one, each sliding the
+        # count to "2 of 26" without emptying it -- both die here on the
+        # exact count. Six failure shapes, each landing on a named
+        # assertion.
+        assert any("3 of 27" in r and "optimizer_gate.weight" in r
+                   for r in flagged), f"decoys not isolated in reason: {flagged}"
         assert any("7 non-adapter" in r for r in flagged), (
             f"excluded-namespace count missing from reason: {flagged}")
 

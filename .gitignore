@@ -42,3 +42,6 @@ scratch/
 # would undo the point of publishing the audit with identifiers replaced.
 *.private.json
 redaction-map*
+
+# Mutation-battery run output (regenerated per run, never committed)
+artifacts/mutation-battery-report.json

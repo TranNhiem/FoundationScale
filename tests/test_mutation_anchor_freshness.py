@@ -1,0 +1,396 @@
+"""Anchor freshness: the cheap front gate against silent corpus rot.
+
+Every pytest round, resolve EVERY published mutation-row anchor exactly once
+-- the tools/mutations.json half AND tools/mutate.py's EMBEDDED_TABLE half,
+so neither can orphan the other -- byte-exact and indentation included. Raw
+str.count only: the drift this gate exists to catch was eight leading spaces
+becoming four, and any matcher that strips or normalises greens it.
+
+Ground truth is RECONSTRUCTED, never read. Reading the raw working tree as if
+pristine is the text tripwire: mid-battery the source on disk IS one applied
+mutant, so a raw reader reds every leg of that file regardless of behaviour
+and takes the inert must-pass control down with it. Reading git HEAD is wrong
+in the other direction: it lags any uncommitted repair round and reports a
+stale row that is not stale, and a false alarm costs what a false green
+costs. The corpus is its own inverse map, so the gate asks whether SOME
+pristine text exists that binds every anchor exactly once and reaches the
+live bytes in zero or one applications.
+
+Denominator: 62 JSON rows over 8 modules + 8 EMBEDDED_TABLE rows over 1
+module = 70 rows over 9 modules, pinned as constants below. Silent row
+deletion reds here rather than shrinking the denominator; a legitimate corpus
+change updates the pins.
+
+Controls. MUST_PASS: the real shipped corpus, plus the four row shapes that
+make "which row is applied?" undecidable -- deletion-style, insertion-style,
+identical shared anchors and nested anchors -- each asserted green in BOTH
+the pristine and the applied state. MUST_FIRE: a stale anchor, a duplicated
+anchor, two rows applied at once, a no-op row, candidate blow-up, and the
+fail-closed set. Every leg drives the real entry point
+mutate.check_anchor_freshness. No leg reads, doctors or asserts on the text
+of any real MODULE_PATHS source: every MUST_FIRE and every shape control is
+a synthetic corpus over a tmp_path file the test wrote itself.
+
+Residual, stated honestly: the verdict is that anchors BIND, not that the
+tree is pristine. An insertion-style row's applied state is accepted, which
+is correct -- its anchor still resolves exactly once -- and this gate does
+not claim to notice that such a row is applied. Whether the suite would kill
+any mutant is the battery's verdict, never this gate's.
+"""
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+MUTATE_PY = ROOT / "tools" / "mutate.py"
+MUTATIONS_JSON = ROOT / "tools" / "mutations.json"
+
+JSON_ROWS, JSON_MODS = 62, 8
+EMBEDDED_ROWS, EMBEDDED_MODS = 8, 1
+TOTAL_ROWS, TOTAL_MODS = 70, 9
+
+
+def _load_mutate():
+    """Import tools/mutate.py by path (tools/ is not a package)."""
+    spec = importlib.util.spec_from_file_location("mutate", MUTATE_PY)
+    assert spec is not None and spec.loader is not None, (
+        f"cannot load {MUTATE_PY} -- fail closed: the corpus tool being "
+        "unreadable is a build red, never something to route around"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    # Register BEFORE exec: tools/mutate.py defines dataclasses, and
+    # dataclasses resolves a class's annotations through
+    # sys.modules[cls.__module__].__dict__. Exec'ing an unregistered module
+    # makes that lookup return None -> AttributeError at class creation.
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _row(name, anchor, replacement):
+    return {
+        "name": name, "what": "synthetic",
+        "anchor": anchor, "replacement": replacement,
+    }
+
+
+def _green_in_every_state(mutate, tmp_path, mod, pristine, rows):
+    """Assert 0 problems in the pristine state AND each singly-applied one.
+
+    This is the shape of every state a battery leg can put a source into:
+    untouched, or with exactly one row applied. Both must certify fresh.
+    """
+    src = tmp_path / f"{mod}.py"
+    states = [("pristine", pristine)]
+    for row in rows:
+        applied = pristine.replace(row["anchor"], row["replacement"], 1)
+        assert applied != pristine, (
+            f"fixture defect: applying {row['name']!r} changed nothing, so "
+            "the applied leg would re-test the pristine state"
+        )
+        states.append((f"applied:{row['name']}", applied))
+    for label, text in states:
+        src.write_text(text, "utf-8")
+        problems = mutate.check_anchor_freshness({mod: rows}, {mod: src})
+        assert problems == [], (
+            f"{mod} [{label}] must certify fresh; got:\n"
+            + "\n".join(f"  {p}" for p in problems)
+        )
+    return states
+
+
+def test_must_pass_shipped_corpus_binds_every_anchor_exactly_once():
+    """MUST_PASS over the real shipped corpus: 70 rows, 9 modules, 0
+    problems, with the per-source split stated.
+
+    The gate reconstructs pristine per module from the LIVE bytes, so this
+    is correct on a quiet tree and mid-battery alike, when this very suite
+    is exec'd with one mutant written into a source. No git, no snapshot.
+    """
+    mutate = _load_mutate()
+    # tools/mutations.json is read from the working tree deliberately: it is
+    # not in MODULE_PATHS, so no battery leg ever applies a mutant to it.
+    data = json.loads(MUTATIONS_JSON.read_text("utf-8"))
+    json_rows = sum(len(rows) for rows in data.values())
+    emb_rows = sum(len(rows) for rows in mutate.EMBEDDED_TABLE.values())
+    denominator = (
+        f"{json_rows} JSON rows over {len(data)} module(s) + {emb_rows} "
+        f"EMBEDDED_TABLE rows over {len(mutate.EMBEDDED_TABLE)} module(s) "
+        f"= {json_rows + emb_rows} rows over "
+        f"{len(set(data) | set(mutate.EMBEDDED_TABLE))} module(s)"
+    )
+    assert (json_rows, len(data)) == (JSON_ROWS, JSON_MODS), (
+        f"JSON half drifted: {denominator}"
+    )
+    assert (emb_rows, len(mutate.EMBEDDED_TABLE)) == (
+        EMBEDDED_ROWS,
+        EMBEDDED_MODS,
+    ), f"embedded half drifted: {denominator}"
+    assert len(mutate.MODULE_PATHS) == TOTAL_MODS, (
+        f"module map drifted: {denominator}"
+    )
+    table = mutate.load_table(None)
+    assert sum(len(rows) for rows in table.values()) == TOTAL_ROWS, denominator
+    assert len(table) == TOTAL_MODS, denominator
+    paths = {mod: ROOT / rel for mod, rel in mutate.MODULE_PATHS.items()}
+    problems = mutate.check_anchor_freshness(table, paths)
+    assert problems == [], (
+        f"anchor freshness over {denominator}: {len(problems)} problem(s), "
+        "all accumulated:\n" + "\n".join(f"  {p}" for p in problems)
+    )
+
+
+def test_must_pass_deletion_style_row_is_fresh_pristine_and_applied(tmp_path):
+    """MUST_PASS shape control: replacement is a STRICT SUBSTRING of its own
+    anchor.
+
+    Two shipped rows have this shape. Its single occurrence of `replacement`
+    in a pristine source IS the anchor's own occurrence, so a predicate
+    demanding `count(replacement) == 0` can never accept a pristine file
+    carrying such a row -- that defect reddened the real corpus and is what
+    this leg pins. Synthetic corpus over a tmp_path source.
+    """
+    mutate = _load_mutate()
+    anchor = "    fired = res.blocking\n    named = res.named\n"
+    repl = "    fired = res.blocking\n"
+    assert repl in anchor and repl != anchor, (
+        "fixture defect: this leg must exercise a replacement that is a "
+        "STRICT substring of its anchor, or it tests nothing"
+    )
+    pristine = (
+        "def gate(res):\n"
+        "    fired = res.blocking\n"
+        "    named = res.named\n"
+        "    return fired and named\n"
+    )
+    rows = [
+        _row("deletion-style", anchor, repl),
+        _row("plain-row", "    return fired and named\n", "    return True\n"),
+    ]
+    assert pristine.count(repl) == 1 and pristine.count(anchor) == 1, (
+        "fixture defect: the pristine source must carry the anchor once and "
+        "the replacement exactly once, inside it"
+    )
+    _green_in_every_state(mutate, tmp_path, "deletion", pristine, rows)
+
+
+def test_must_pass_insertion_style_row_is_fresh_pristine_and_applied(tmp_path):
+    """MUST_PASS shape control: the ANCHOR is a strict substring of its own
+    REPLACEMENT.
+
+    Two shipped rows have this shape. Applying such a row leaves its anchor
+    still resolving exactly once, so the applied state is indistinguishable
+    from pristine by anchor count -- and that is correct, because the gate's
+    question is whether anchors BIND. Refusing this shape would be a false
+    alarm on real rows. Synthetic corpus over a tmp_path source.
+    """
+    mutate = _load_mutate()
+    anchor = "    total = 0\n"
+    repl = "    total = 0\n    total += 1  # planted\n"
+    assert anchor in repl and anchor != repl, (
+        "fixture defect: this leg must exercise an anchor that is a STRICT "
+        "substring of its replacement, or it tests nothing"
+    )
+    pristine = (
+        "def count(xs):\n"
+        "    total = 0\n"
+        "    for x in xs:\n"
+        "        total += len(x)\n"
+        "    return total\n"
+    )
+    rows = [
+        _row("insertion-style", anchor, repl),
+        _row("plain-row", "    return total\n", "    return -1\n"),
+    ]
+    states = _green_in_every_state(mutate, tmp_path, "insert", pristine, rows)
+    applied = dict(states)["applied:insertion-style"]
+    assert applied.count(anchor) == 1, (
+        "fixture defect: the whole point of this shape is that the anchor "
+        "still binds exactly once in the applied state"
+    )
+
+
+def test_must_pass_rows_sharing_one_identical_anchor_are_fresh(tmp_path):
+    """MUST_PASS shape control: several rows against ONE identical anchor.
+
+    Module `core` publishes four rows this way, so applying any one of them
+    drives all four anchors to 0x at once. A design that insists on
+    identifying a unique applied row reds here; existence of a pristine
+    state does not. Synthetic corpus over a tmp_path source.
+    """
+    mutate = _load_mutate()
+    shared = "    return 'full'\n"
+    rows = [
+        _row("share-a", shared, "    return 'lora'\n"),
+        _row("share-b", shared, "    return None\n"),
+    ]
+    assert rows[0]["anchor"] == rows[1]["anchor"], (
+        "fixture defect: these rows must share one IDENTICAL anchor"
+    )
+    pristine = "def pick(cfg):\n    return 'full'\n"
+    _green_in_every_state(mutate, tmp_path, "shared", pristine, rows)
+
+
+def test_must_pass_nested_anchors_are_fresh_pristine_and_applied(tmp_path):
+    """MUST_PASS shape control: one row's anchor NESTED inside another's.
+
+    `parity` and `emit_run_manifest` both publish this, so applying the
+    inner row consumes the outer row's anchor as collateral and two rows
+    read 0x in a perfectly healthy state. Synthetic corpus over a tmp_path
+    source.
+    """
+    mutate = _load_mutate()
+    inner = "        return a + b\n"
+    outer = "    if a and b:\n        return a + b\n"
+    assert inner in outer and inner != outer, (
+        "fixture defect: this leg must exercise one anchor strictly NESTED "
+        "inside another, or it tests nothing"
+    )
+    pristine = (
+        "def score(a, b):\n"
+        "    if a and b:\n"
+        "        return a + b\n"
+        "    return 0\n"
+    )
+    rows = [
+        _row("outer-row", outer, "    if True:\n        return a - b\n"),
+        _row("inner-row", inner, "        return a * b\n"),
+    ]
+    _green_in_every_state(mutate, tmp_path, "nested", pristine, rows)
+
+
+def test_must_fire_indentation_only_drift_is_refused(tmp_path):
+    """MUST_FIRE, reasoned to red: the evicted-row shape in miniature.
+
+    The source carries the target line at FOUR leading spaces; the corpus
+    row remembers EIGHT. Raw str.count refuses at 0x -- a matcher that
+    strips or normalises whitespace reports 1x and greens, and this leg
+    keeps that 'robustness' red forever. The fresh row beside it must stay
+    un-blamed. Synthetic corpus over a tmp_path source this test wrote.
+    """
+    mutate = _load_mutate()
+    src = tmp_path / "synthetic_gate.py"
+    src.write_text("def classify():\n    return 'full'\n", "utf-8")
+    table = {
+        "synthetic": [
+            _row("fresh-row", "    return 'full'", "    return 'lora'"),
+            _row("stale-row", "        return 'full'", "        return 'x'"),
+        ]
+    }
+    problems = mutate.check_anchor_freshness(table, {"synthetic": src})
+    assert any("stale-row" in p and "0x" in p for p in problems), problems
+    assert not any("fresh-row" in p for p in problems), problems
+
+
+def test_must_fire_anchor_matching_twice_is_refused(tmp_path):
+    """MUST_FIRE, reasoned to red: exactly-once is part of the contract.
+
+    An anchor occurring 2x would let the battery replace an arbitrary first
+    hit and call it measurement, so n>1 is refused with the count named --
+    0x and 2x are both failures, only 1x is fresh.
+    """
+    mutate = _load_mutate()
+    src = tmp_path / "dup.py"
+    src.write_text("x = 1\ny = 2\nx = 1\n", "utf-8")
+    table = {"dup": [_row("dup-row", "x = 1", "x = 0")]}
+    problems = mutate.check_anchor_freshness(table, {"dup": src})
+    assert any("dup-row" in p and "2x" in p for p in problems), problems
+
+
+def test_must_fire_two_rows_applied_at_once_is_refused(tmp_path):
+    """MUST_FIRE, reasoned to red: the battery applies ONE row per leg, so a
+    source carrying two is a state nothing measured.
+
+    This is the leg that pins the reachability clause. Drop it and any text
+    that happens to bind every anchor is accepted as pristine.
+    """
+    mutate = _load_mutate()
+    first = _row("first-row", "a = 1", "a = 0")
+    second = _row("second-row", "b = 2", "b = 0")
+    doubled = tmp_path / "doubled.py"
+    doubled.write_text("a = 0\nb = 0\n", "utf-8")
+    problems = mutate.check_anchor_freshness(
+        {"doubled": [first, second]}, {"doubled": doubled}
+    )
+    assert any(
+        "first-row" in p and "second-row" in p for p in problems
+    ), problems
+
+
+def test_must_fire_row_that_edits_nothing_is_refused(tmp_path):
+    """MUST_FIRE, reasoned to red: a row whose replacement EQUALS its anchor
+    mutates nothing, so the battery would score a guaranteed survivor as a
+    real mutant. Zero such rows ship today; this keeps it that way."""
+    mutate = _load_mutate()
+    src = tmp_path / "noop.py"
+    src.write_text("mode = 'strict'\n", "utf-8")
+    same = "mode = 'strict'\n"
+    problems = mutate.check_anchor_freshness(
+        {"noop": [_row("noop-row", same, same)]}, {"noop": src}
+    )
+    assert any(
+        "noop-row" in p and "edits nothing" in p for p in problems
+    ), problems
+
+
+def test_must_fire_candidate_blowup_refuses_rather_than_searching(tmp_path):
+    """MUST_FIRE, reasoned to red: the enumeration bound is a refusal, not a
+    silent truncation.
+
+    The anchor here binds exactly once, so WITHOUT the bound this source
+    would certify fresh -- which is what makes this a control on the bound
+    itself rather than on the verdict.
+    """
+    mutate = _load_mutate()
+    src = tmp_path / "flood.py"
+    body = "UNIQUE_ANCHOR_LINE\n" + "z = 0\n" * (
+        mutate.MAX_FRESHNESS_CANDIDATES + 40
+    )
+    src.write_text(body, "utf-8")
+    row = _row("flood-row", "UNIQUE_ANCHOR_LINE\n", "z = 0\n")
+    assert body.count(row["anchor"]) == 1, (
+        "fixture defect: the anchor must bind exactly once, or this leg "
+        "would red on the verdict instead of on the bound"
+    )
+    problems = mutate.check_anchor_freshness({"flood": [row]}, {"flood": src})
+    assert any("candidate enumeration exceeded" in p for p in problems), (
+        problems
+    )
+
+
+def test_must_fire_fail_closed_on_every_enumerated_refusal(tmp_path):
+    """MUST_FIRE, reasoned to red on each fail-closed enumeration.
+
+    An unmappable module, an unreadable source, a zero-row module, a
+    zero-row corpus and a row with an empty anchor must EACH surface as
+    their own problem string -- never a pass over nothing, never a guess --
+    and the healthy row beside them must stay un-named.
+    """
+    mutate = _load_mutate()
+    live = tmp_path / "live.py"
+    live.write_text("x = 1\n", "utf-8")
+    good = _row("live-row", "x = 1", "x = 2")
+    problems = mutate.check_anchor_freshness(
+        {"ghost": [good], "live": [good], "empty": [], "gone": [good]},
+        {"live": live, "empty": live, "gone": tmp_path / "missing.py"},
+    )
+    assert any(
+        "ghost" in p and "no source mapping" in p for p in problems
+    ), problems
+    assert any("gone" in p and "cannot read" in p for p in problems), problems
+    assert any("empty" in p and "0 rows" in p for p in problems), problems
+    assert not any("live-row" in p for p in problems), problems
+
+    corpus_level = mutate.check_anchor_freshness({}, {})
+    assert any("zero-row corpus" in p for p in corpus_level), corpus_level
+    still_empty = mutate.check_anchor_freshness({"a": [], "b": []}, {})
+    assert any("zero-row corpus" in p for p in still_empty), still_empty
+
+    blank = mutate.check_anchor_freshness(
+        {"blank": [_row("blank-row", "", "x = 3")]}, {"blank": live}
+    )
+    assert any(
+        "blank-row" in p and "empty anchor" in p for p in blank
+    ), blank

@@ -1595,6 +1595,88 @@ if grep -qF -- '--fqn-map' "$FULL" && grep -qF 'attempt-*.json' "$FULL"; then
   ok "full-FT materializes --fqn-map from the emitter's own attempt-*.json record (declared_fqns finally have a reader; without it every DCP first save exits 1, healthy or not)"
 else no "full-FT passes no --fqn-map producer — on estate DCP saves the gate then VACUOUS-blocks unconditionally (a permanent red that unmints this wiring)"; fi
 
+# #78 re-scope (R3, doctrine 3): the fqn-map NAMESPACE gate is a measurement,
+# so its control is a RUN, never a second grep — the string-presence pin
+# stays at the leg above and is not duplicated here (an HF-namespace map and
+# a DCP-namespace map are IDENTICAL at the presence layer: same string count,
+# same JSON shape, same tokens; no grep of $FULL can go red on the C1 shape).
+# Sed-extract the real launcher's PYNS classifier and EXECUTE it on three
+# fixtures that differ ONLY in overlap at constant presence (4 FQN strings
+# each, the same record shape): 4/4 HF overlap must REFUSE with the named
+# refusal (the C1 wrong-namespace shape, caught before one GPU-second); 1/4
+# must ABSTAIN BY NAME with the confident line provably absent; 0/4 must PASS
+# printing the measured denominator. A detector never observed firing is not
+# a control, and one that never RUNS is not a control either.
+f78_ns_py=$(sed -n '/<<.PYNS./,/^PYNS$/p' "$FULL" | sed '1d;$d')
+f78_ns_sim=$(mktemp -d "${TMPDIR:-/tmp}/fs-f78-ns.XXXXXX" 2>/dev/null) || f78_ns_sim=""
+[ -n "$f78_ns_sim" ] || { f78_ns_sim="${TMPDIR:-/tmp}/fs-f78-ns.$$"; mkdir -p "$f78_ns_sim" 2>/dev/null || f78_ns_sim=""; }
+if [ -n "$f78_ns_py" ] && printf '%s\n' "$f78_ns_py" | grep -qF '__metadata__' && [ -n "$f78_ns_sim" ]; then
+  printf '%s\n' "$f78_ns_py" > "$f78_ns_sim/ns_gate.py"
+  python3 - "$f78_ns_sim" <<'PYFIX'
+import json
+import os
+import struct
+import sys
+
+root = sys.argv[1]
+HF = [
+    "model.embed_tokens.weight",
+    "model.layers.0.self_attn.q_proj.weight",
+    "model.layers.0.mlp.gate_proj.weight",
+    "model.norm.weight",
+]
+DCP = [
+    "module.embedding.word_embeddings.weight",
+    "module.decoder.layers.0.self_attention.linear_qkv.weight",
+    "module.decoder.layers.0.mlp.linear_fc1.weight",
+    "module.decoder.final_norm.weight",
+]
+
+
+def shard(path, keys):
+    os.makedirs(path, exist_ok=True)
+    header = json.dumps(
+        {k: {"dtype": "BF16", "shape": [1], "data_offsets": [0, 1]} for k in keys}
+    ).encode()
+    with open(os.path.join(path, "model.safetensors"), "wb") as fh:
+        fh.write(struct.pack("<Q", len(header)))
+        fh.write(header)
+
+
+def attempt(path, fqns):
+    os.makedirs(path, exist_ok=True)
+    record = {"declared": {"declared_fqns": fqns}}
+    with open(os.path.join(path, "attempt-0001.json"), "w", encoding="utf-8") as fh:
+        json.dump(record, fh)
+
+
+for name, keys, fqns in (
+    ("fire", HF, HF),
+    ("hold", HF, DCP),
+    ("amb", HF, [DCP[0], DCP[1], HF[2], DCP[3]]),
+):
+    shard(os.path.join(root, name, "hf"), keys)
+    attempt(os.path.join(root, name, "ckpt"), fqns)
+PYFIX
+  f78_fire=$(python3 "$f78_ns_sim/ns_gate.py" "$f78_ns_sim/fire/hf" "$f78_ns_sim/fire/ckpt" 2>&1); f78_fire_rc=$?
+  f78_hold=$(python3 "$f78_ns_sim/ns_gate.py" "$f78_ns_sim/hold/hf" "$f78_ns_sim/hold/ckpt" 2>&1); f78_hold_rc=$?
+  f78_amb=$(python3 "$f78_ns_sim/ns_gate.py" "$f78_ns_sim/amb/hf" "$f78_ns_sim/amb/ckpt" 2>&1); f78_amb_rc=$?
+  if [ "$f78_fire_rc" -ne 0 ] \
+    && printf '%s\n' "$f78_fire" | grep -qF 'FQN-MAP NAMESPACE REFUSED' \
+    && [ "$f78_hold_rc" -eq 0 ] \
+    && printf '%s\n' "$f78_hold" | grep -qF 'fqn-map namespace measured: 0/4 declared FQNs' \
+    && [ "$f78_amb_rc" -ne 0 ] \
+    && printf '%s\n' "$f78_amb" | grep -qF 'FQN-MAP NAMESPACE ABSTENTION' \
+    && ! printf '%s\n' "$f78_amb" | grep -qF 'fqn-map namespace measured:'; then
+    ok "fqn-map namespace gate RUNS and discriminates namespace at constant presence (doctrine 3): MUST_FIRE refused the doctored HF-namespace census (rc=$f78_fire_rc, named REFUSAL — the C1 shape, 4/4 overlap with the fixture HF header, caught before one GPU-second), MUST_PASS passed the estate DCP shape printing the measured denominator (0/4 overlap against the fixture's 4-key HF header set), and the mixed census ABSTAINED BY NAME (rc=$f78_amb_rc) with the confident line provably absent — all three fixtures carry 4 FQN strings in the same record shape, identical at the presence layer, so no token-presence leg can produce this red/green/red row"
+  else
+    no "fqn-map namespace gate failed its control run: wrong-namespace rc=$f78_fire_rc (want nonzero + named REFUSAL), artifact rc=$f78_hold_rc (want 0 + a printed 'fqn-map namespace measured: 0/4 declared FQNs' denominator), ambiguous rc=$f78_amb_rc (want nonzero + named ABSTENTION and NO confident line) — a detector never observed firing is not a control (doctrine 3)"
+  fi
+else
+  no "fqn-map namespace gate block (PYNS heredoc) is not extractable from the launcher or no sim dir could be made — the control cannot RUN, and a control that never runs is not a control (doctrine 3)"
+fi
+[ -z "$f78_ns_sim" ] || rm -rf "$f78_ns_sim"
+
 if grep -qF '(d) FIRST-SAVE ARTIFACT' "$FULL" && grep -qF 'POST-RUN ONLY' "$LORA"; then
   ok "sibling asymmetry stated in both launchers' own text (full-FT live tripwire (d) vs LoRA post-run only)"
 else no "a launcher carries a guarantee its text does not state — silent sibling divergence"; fi
@@ -2998,6 +3080,53 @@ else
   no "MUST_FIRE UNREACHABLE (python-census): the host-call injection did not construct or did not fire on the constructed copy (awk rc=$f44_ps, copy count=$f44_pn vs live+1=$((f44_py_n + 1)), copy live_save_gate command-position sites=$f44_pin) — the complement census is an unproven detector"
 fi
 
+# MUST_FIRE (doctrine 3), the UNNAMED arm of this census — the fire the rig
+# above never isolated: its injection NAMES live_save_gate, so the negative
+# conjunct alone could have produced that red while the headcount arm slept
+# (an overdetermined fire). This rig injects ONE command-position host
+# python3 that names no forbidden string and no enumerated needle, then
+# proves ON THIS COPY ALONE, through the same views the predicate reads:
+# (i) the copy's census is live+1; (ii) ZERO command-position python3 lines
+# on the copy name live_save_gate — the negative conjunct PASSES there;
+# (iii) every enumerated needle is still present on the copy. The red the
+# SAME predicate then reports can have come only from the headcount arm:
+# the "a launcher site with no name here is red" claim, observed in
+# isolation at last. No conjunct reads the live leg's health — the fix44
+# lesson stands; the copy carries every needed measurement.
+f44_ut=$(mktemp "${TMPDIR:-/tmp}/fs-f44-pycensus-unnamed.XXXXXX") \
+  && awk '/^fs_live_save_gate\(\) \{/ && !d {d=1; print; print "  python3 -c \"import sys; sys.exit(0)\"  # fix44-MUST-FIRE unnamed-site injection"; next} {print}' "$LORA" > "$f44_ut"
+f44_us=$?
+f44_un=-1
+f44_uig=-1
+f44_umiss=UNSET
+if [ "$f44_us" -eq 0 ]; then
+  f44_ulc=$(strip_shell_comments < "$f44_ut")
+  f44_un=$(printf '%s\n' "$f44_ulc" | grep -cE "$(pos_pat python3)" || true)
+  f44_uig=$(printf '%s\n' "$f44_ulc" | grep -E "$(pos_pat python3)" | grep -cF 'live_save_gate' || true)
+  if [ -n "${F44_PY_SITES:-}" ]; then
+    f44_umiss=$(printf '%s\n' "$F44_PY_SITES" | while IFS= read -r entry; do
+      needle=${entry#* ::: }
+      printf '%s\n' "$f44_ulc" | grep -qF "$needle" || printf 'UNMET[%s] ' "$entry"
+    done)
+  else
+    # doctrine 1: a needle sweep over zero enumerated sites is UNMEASURED,
+    # never met — fail closed instead of letting all([]) pass as a fire.
+    f44_umiss='SITELIST-EMPTY(needle presence unmeasured: F44_PY_SITES unset or empty)'
+  fi
+fi
+f44_ufired=1
+if [ "$f44_us" -eq 0 ] && [ "$f44_un" -eq "$((f44_py_n + 1))" ] \
+   && [ "$f44_uig" -eq 0 ] && [ -z "$f44_umiss" ] \
+   && ! f44_python_census_ok "$f44_ut"; then
+  f44_ufired=0
+fi
+[ -n "${f44_ut:-}" ] && rm -f "$f44_ut" || true
+if [ "$f44_ufired" -eq 0 ]; then
+  ok "MUST_FIRE python-census, unnamed-site arm: ONE added command-position host python3 naming no enumerated needle and no forbidden string moves the copy's census to live+1 (measured $f44_py_n -> $f44_un), while the copy still carries ZERO command-position live_save_gate lines (the negative conjunct demonstrably PASSES there) and every enumerated needle remains present — so the red the SAME predicate reports on the copy can only be the headcount arm: 'an unenumerated python call is red, never an absence' is now an OBSERVED discrimination, not one inferred from the overdetermined live_save_gate injection"
+else
+  no "MUST_FIRE UNREACHABLE (python-census, unnamed-site arm): the unnamed host-call injection did not construct or did not isolate (awk rc=$f44_us; copy census=$f44_un vs live+1=$((f44_py_n + 1)); copy command-position live_save_gate lines=$f44_uig, required 0; unmet needles on the copy: ${f44_umiss:-NONE}) — the headcount arm of the complement census has still never been observed red in isolation and is an unproven detector"
+fi
+
 echo "== fix44: the artifact gate is executor-routed and returns the gate's rc UNTOUCHED (#77-B1) =="
 # Fail-before: all three legs are RED on tonight's tree (the function body
 # invokes host python3 directly and knows nothing of run_in_container).
@@ -3806,19 +3935,20 @@ f45_py_census_ok() { # $1=launcher file (real or doctored copy). The FOUR
   local lc n
   lc=$(strip_shell_comments < "$1")
   n=$(printf '%s\n' "$lc" | grep -cE "$(pos_pat python3)" || true)
-  [ "$n" -eq 4 ] \
+  [ "$n" -eq 5 ] \
     && printf '%s\n' "$lc" | grep -qF 'python3 - "$HF_MODEL/config.json" "$1"' \
     && printf '%s\n' "$lc" | grep -qF 'python3 - "$f" <<' \
     && printf '%s\n' "$lc" | grep -qF 'python3 - "$RESOLVED_CFG"' \
     && printf '%s\n' "$lc" | grep -qF 'python3 - "$OUT_DIR/checkpoints" "$FQN_MAP"' \
+    && printf '%s\n' "$lc" | grep -qF 'python3 - "$HF_MODEL" "$OUT_DIR/checkpoints"' \
     && ! printf '%s\n' "$lc" | grep -E "$(pos_pat python3)" | grep -qF 'live_save_gate' \
     && ! printf '%s\n' "$lc" | grep -E "$(pos_pat python3)" | grep -qF 'emit_run_manifest'
 }
 f45_py_n=$(strip_shell_comments < "$FULL" | grep -cE "$(pos_pat python3)" || true)
 if f45_py_census_ok "$FULL"; then
-  ok "full-FT python call sites: $f45_py_n command-position python3 sites, ALL enumerated host exceptions (cfg_get(1)+schema-spot-check(1)+resolved-config-writer(1)+fqn-map-materializer(1) — each stdlib-only on host-plane text; the discriminator is 'reads a DCP', never 'is on the host'); zero command-position python3 lines touch live_save_gate or emit_run_manifest (both torch-importing calls are executor-routed). Complement of the executor census, 4 of 4 exceptions named — an unenumerated python call is red, never an absence"
+  ok "full-FT python call sites: $f45_py_n command-position python3 sites, ALL enumerated host exceptions (cfg_get(1)+schema-spot-check(1)+resolved-config-writer(1)+fqn-map-materializer(1)+fqn-map-namespace-gate(1) — each stdlib-only on host-plane text; the discriminator is 'reads a DCP', never 'is on the host', and the namespace gate reads only JSON attempt records plus safetensors headers); zero command-position python3 lines touch live_save_gate or emit_run_manifest (both torch-importing calls are executor-routed). Complement of the executor census, 5 of 5 exceptions named — an unenumerated python call is red, never an absence"
 else
-  no "full-FT python call-site census failed: $f45_py_n command-position python3 sites (required 4, all enumerated) or a command-position python3 line touches live_save_gate/emit_run_manifest — an unenumerated host python call exists, the #77-B1 / emitter-site class: a torch-importing call adjudicating or producing DCP-plane artifacts outside the stack that writes them. The refusal of the '~/.local torch is RIGHT THERE' shortcut is on record in the launcher comment (the host CAN import torch — routing is the pinned property, not capability)"
+  no "full-FT python call-site census failed: $f45_py_n command-position python3 sites (required 5, all enumerated) or a command-position python3 line touches live_save_gate/emit_run_manifest — an unenumerated host python call exists, the #77-B1 / emitter-site class: a torch-importing call adjudicating or producing DCP-plane artifacts outside the stack that writes them. The refusal of the '~/.local torch is RIGHT THERE' shortcut is on record in the launcher comment (the host CAN import torch — routing is the pinned property, not capability)"
 fi
 # MUST_FIRE (doctrine 3): re-inject the measured #77-B1 shape — a
 # host-routed gate call — into a temp COPY of the full-FT launcher, and
@@ -4197,6 +4327,41 @@ if [ "$f45_lfired" -eq 0 ]; then
   ok "MUST_FIRE record-relabel: restoring the refuted 'no torch on the host' diagnosis in place of the correction (construction proven: the correction absent, the old label present) turns the record leg red — the correction itself is under contract, so the comment cannot decay into a dead control asserting incapacity on a host that can"
 else
   no "MUST_FIRE UNREACHABLE (record-relabel): the relabel did not construct or did not fire (sed rc=$f45_ls) — leg 9 cannot see a reversion of its own correction"
+fi
+
+# --- leg 9, LoRA arm (owed item 3, BOTH launchers): the SAME six-needle
+#     record predicate examined over "$LORA", with its own denominator on its
+#     own claim line (doctrine 2) and its own observed red below (doctrine 3)
+#     — one predicate, two per-launcher measurements, never one shared claim
+#     quietly spanning two files. If this leg is red the TREE, not the
+#     control, owes the block: the control shape is identical to the full-FT
+#     arm above, and the prose (if absent) belongs in
+#     launchers/launch_g4e4b_lora_1tray.sh, never a narrowed needle.
+if f45_record_ok "$LORA"; then
+  ok "fix45-A2 record, LoRA arm of leg 9: the predicate's six needles are on record in \$LORA — 6 of 6 examined over the LoRA launcher file (both refuted texts, the corrected host-torch diagnosis, the PYTHONNOUSERSITE=1 discriminator, the on-record refusal, and the gate-block three-arms signature) — owed item 3's BOTH-launchers reach now rests on two per-launcher measurements of the ONE predicate, each with its own stated denominator and each with its own observed red"
+else
+  no "fix45-A2 record, LoRA arm of leg 9: at least one of the six record needles is missing from \$LORA — the measured defect's documentation and its correction were owed in BOTH launchers (owed item 3); a record seated in only one of the two governed files is the silent-reversion shape this leg exists to refuse, and the repair is to seat the same measured prose in the LoRA launcher, never to narrow the predicate to what one file happens to carry"
+fi
+# MUST_FIRE (doctrine 3) for the LoRA arm: erase the measured refusal text
+# under /g on a copy of "$LORA" (per the same-view rule above: the needle
+# absent from raw AND folded views is the honest construction proof), and
+# require the SAME predicate red on the copy while live stays green — the
+# observed fire is then attributable to the mutation, never inherited from
+# a pre-existing hole in the tree.
+f45_rlt=$(mktemp "${TMPDIR:-/tmp}/fs-f45-record-lora.XXXXXX") \
+  && sed 's/torch\.distributed\.checkpoint/the host checkpoint reader/g' "$LORA" > "$f45_rlt"
+f45_rls=$?
+f45_rlfired=1
+if [ "$f45_rls" -eq 0 ] \
+   && ! f45_record_grep 'torch.distributed.checkpoint is unavailable' "$f45_rlt" \
+   && ! f45_record_ok "$f45_rlt" && f45_record_ok "$LORA"; then
+  f45_rlfired=0
+fi
+[ -n "${f45_rlt:-}" ] && rm -f "$f45_rlt" || true
+if [ "$f45_rlfired" -eq 0 ]; then
+  ok "MUST_FIRE record-erasure, LoRA arm: erasing the measured refusal text at every site the fold-aware predicate can see it (construction proven: the needle absent from raw AND folded views of the \$LORA copy) turns the LoRA record measurement red — the LoRA arm is a control observed going red on its own file, not a predicate only ever seen green over \$FULL"
+else
+  no "MUST_FIRE UNREACHABLE (record-erasure, LoRA arm): the erasure did not construct or did not fire (sed rc=$f45_rls) — the LoRA arm of the record leg is an unproven detector"
 fi
 
 # --- legs 12-13: the emitter routing — the proven <compute-node> delta, pinned.

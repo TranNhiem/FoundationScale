@@ -215,6 +215,25 @@ _TRAINING_STACK_SOURCE = "measured:training-stack"
 # control's reported failure, never a pass with extra steps.
 _DRILL_BARE_NULL_ENV = "FS_EMIT_DRILL_BARE_NULL"
 _DECLARED_NULL_RE = re.compile(r'"declared"\s*:\s*null')
+# A declared_fqns array serialized EMPTY on disk. The in-memory derivation
+# refuses a zero-tensor census, so this shape can only be a store/serializer
+# regression — the founding all([]) one persistence layer out (B3).
+_EMPTY_DECLARED_FQNS_RE = re.compile(r'"declared_fqns"\s*:\s*\[\s*\]')
+# The in-manifest record of the one abstaining field of a full-ft declaration
+# (B2): status, reason, who, what-supersedes, and the measured context,
+# carried as config entries in the SAME five-field shape as the LoRA
+# abstention record so the artifact itself distinguishes "abstained" from
+# "never populated" and the same object-key oracle verifies both.
+_FULL_FT_BYTES_ABSTENTION_RECORD_KEYS: tuple[str, ...] = (
+    "declared.expected_expert_bytes.status",
+    "declared.expected_expert_bytes.reason",
+    "declared.expected_expert_bytes.abstained_by",
+    "declared.expected_expert_bytes.superseded_by",
+    "declared.expected_expert_bytes.context",
+)
+# ConfigResolver source for those entries; matches _SOURCE_RE's measured:
+# class — stated in-band by the recording process at record time.
+_FULL_FT_BYTES_ABSTENTION_SOURCE = "measured:full-ft-bytes-abstention"
 
 
 class EmitRefused(RuntimeError):
@@ -231,8 +250,14 @@ class BareNullDeclarationError(RuntimeError):
     #56's rule one layer out: an abstaining declaration is a DECLARED STATE,
     not a silent pass — so the abstention has an in-manifest record, and the
     absence of BOTH declaration and record on a run with saves is a refusal,
-    never a green. Public because the post-run call site (gate/launcher, with
-    the realized save count) is fix46 follow-on wiring outside this file.
+    never a green.
+
+    Reach, stated honestly (doctrine 5): NOTHING post-run raises or catches
+    this today. The only live caller is the emitter auditing the bytes it
+    just wrote; at resume/eval/export judgment time no consumer reads the
+    UNCLEARED discrimination yet — the realized-save-count call site named
+    for it is follow-on wiring that does NOT exist in this tree. Public so
+    that wiring can land without a radius change, never to imply it has.
     """
 
 
@@ -615,12 +640,15 @@ def derive_declared_full_ft(
         # the HF tree the run does NOT save.
         naming_convention="megatron-core",
         tensors_per_expert_layer=2,
-        # expected_expert_bytes stays None — a stated abstention, not an
-        # omission. Pricing expert bytes honestly requires knowing which FQN
-        # pattern the byte gate's selection applies; guessing a regex against
-        # a gate this tool cannot see would mint a denominator from a
-        # pattern-space paraphrase, and a wrong denominator makes that gate
-        # lie quietly where None makes it SKIP loudly.
+        # expected_expert_bytes stays None — an abstention now recorded IN
+        # THE ARTIFACT under declared.expected_expert_bytes.* (see
+        # _full_ft_bytes_abstention_entries); this comment only explains the
+        # why, the entries ARE the record. Pricing expert bytes honestly
+        # requires knowing which FQN pattern the byte gate's selection
+        # applies; guessing a regex against a gate this tool cannot see
+        # would mint a denominator from a pattern-space paraphrase, and a
+        # wrong denominator makes that gate lie quietly where None makes
+        # it SKIP loudly.
     )
     info = {
         "mode": mode_note,
@@ -740,12 +768,17 @@ def _training_stack_entries() -> list[tuple[str, str]]:
                 f"interpreter ({type(exc).__name__}: {exc}); the training "
                 "stack is the container's, which a host-side emission cannot "
                 "honestly sample — recorded as an absence rather than guessed "
-                "(#83). Gate-side torch provenance is not implemented: the "
-                "adjudicating gate writes no torch field on any exit path, "
-                "UNMEASURED included (grep -c torch_record "
-                "tools/live_save_gate.py reads 0), so the cross-check "
-                "directive this entry used to carry named a record nothing "
-                "writes and was retracted.",
+                "(#83). The adjudicating gate DOES record torch provenance "
+                "on every exit path, UNMEASURED included: its live_save_gate."
+                "_interpreter_provenance writes a torch_record under this "
+                "entry's spelling by design, with torch LOCATED via importlib "
+                "find_spec + dist metadata, never imported, so the "
+                "measurement cannot move the measured. This arm carries no "
+                "in-emitter torch reading, so there is nothing here to set "
+                "against the gate's record. No automated comparison runs in "
+                "this shard: the emitter reads no gate report, and the "
+                "comparison is deferred to the shard that adds that reader "
+                "(named abstention, #83 follow-up).",
             )
         )
     else:
@@ -754,11 +787,23 @@ def _training_stack_entries() -> list[tuple[str, str]]:
                 "training_stack.torch_record",
                 f"measured in-emitter at launch time (pre-GPU): torch "
                 f"{torch.__version__} at {torch.__file__} — this samples the "
-                f"emitting interpreter only. Gate-side torch provenance is "
-                f"not implemented (#83): the gate writes no torch field on "
-                f"any exit path, so there is no gate record to compare this "
-                f"against; a mismatch with the training container's torch "
-                f"indicts the measurement, never the model.",
+                "emitting interpreter only, by IMPORTING torch and reading "
+                "__version__/__file__. The adjudicating gate also writes a "
+                "torch_record for the same fact under the same spelling on "
+                "every exit path — live_save_gate._interpreter_provenance — "
+                "but with a deliberately different instrument: torch is "
+                "LOCATED via importlib find_spec + dist metadata, never "
+                "imported, so the measurement cannot move the measured. The "
+                "two instruments can disagree for honest reasons (module "
+                "__version__ vs dist metadata; __file__ vs find_spec "
+                "origin), so a mismatch between the two records indicts the "
+                "instrument pairing first and demands reconciliation; by "
+                "itself it convicts neither the training build nor the "
+                "model, and agreement is corroboration, not certainty. No "
+                "automated comparison runs in this shard: the emitter reads "
+                "no gate report; both records exist so the shard that adds "
+                "that reader can set them against each other (named "
+                "abstention, #83 follow-up).",
             )
         )
     return entries
@@ -823,11 +868,20 @@ def check_saved_run_declaration(record_text: str, *, saves_observed: int) -> str
 
     Returns a state string, never a bare bool — every outcome here is a named
     state, matching the estate's exit-vocabulary discipline — and raises
-    :class:`BareNullDeclarationError` on the failing shapes. The LoRA emission
-    path below invokes this against the record it just wrote (which wires the
-    control into every launch today, RESUME launches included, since their
-    checkpoint dir is non-empty by design); the POST-RUN call site, with the
-    realized save count, is fix46 follow-on wiring outside this file.
+    :class:`BareNullDeclarationError` on the failing shapes. Call-site
+    honesty (doctrine 5): the ONLY invocation in this tree is the LoRA
+    emission path below, auditing the record it just wrote — launch-time
+    coverage that already includes RESUME launches (their checkpoint dir is
+    non-empty by design, so their pre-existing saves DO form a denominator
+    here). FULL-FT launches never invoke this control: they carry a
+    populated declared block, so the bare-null class does not apply, and
+    they answer to the serialized-record enforce in main instead
+    (_enforce_full_ft_declared_on_disk). NO post-run consumer exists: at
+    resume/eval/export judgment time nothing calls this with the realized
+    save count, so today UNCLEARED can fire only at emission (the drill, or
+    a store/serializer regression). That judgment-time wiring is follow-on
+    work outside this file, and this docstring must not be read as claiming
+    it has landed.
     """
     if saves_observed < 0:
         raise ValueError(f"saves_observed must be >= 0, got {saves_observed}")
@@ -921,6 +975,107 @@ def _enforce_lora_abstention_record(
         )
     total = len(_LORA_ABSTENTION_RECORD_KEYS)
     return state, total - len(missing), total
+
+
+def _full_ft_bytes_abstention_entries(
+    *, declared_fqn_count: int, expert_family_census: int
+) -> list[tuple[str, str]]:
+    """The full-ft ``expected_expert_bytes`` abstention, as in-manifest facts (#79).
+
+    Full-ft derivation leaves ``declared.expected_expert_bytes`` as ``None``
+    — a deliberate abstention whose statement used to live ONLY in a source
+    comment and a stdout line, i.e. nowhere in the artifact: on disk it was
+    indistinguishable from "never populated", which is #79's own defect
+    class on an in-scope field. These entries record the abstention in the
+    same five-field shape as the LoRA record (status, reason, who,
+    what-supersedes, measured context), zipped against
+    :data:`_FULL_FT_BYTES_ABSTENTION_RECORD_KEYS` so a drifted value list
+    dies at build, not on disk. The context entry carries the denominators
+    measured where the decision was made: an abstention that does not state
+    what it measured is a claim without a denominator.
+    """
+    values = [
+        "abstained",
+        (
+            "pricing expert bytes requires knowing which FQN pattern the byte "
+            "gate selects on; minting one from a regex paraphrased off a gate "
+            "this emitter cannot see would fabricate a denominator that makes "
+            "that gate lie quietly, where None makes it SKIP loudly"
+        ),
+        "tools/emit_run_manifest.py derive_declared_full_ft",
+        (
+            "the trainer supplying expected_expert_bytes from resolved shapes "
+            "and dtype widths post-launch (the DeclaredCheckpoint contract: "
+            "None leaves that denominator for the trainer to supply)"
+        ),
+        (
+            f"measured at emission: declared_fqns={declared_fqn_count} real "
+            f"base-checkpoint tensors censused, {expert_family_census} of "
+            f"them expert-family by the gates' own census atoms"
+        ),
+    ]
+    return list(zip(_FULL_FT_BYTES_ABSTENTION_RECORD_KEYS, values, strict=True))
+
+
+def _enforce_full_ft_declared_on_disk(record_text: str) -> tuple[int, int]:
+    """Serialized-bytes re-verification for full-ft emissions (the B3 hole).
+
+    The in-memory derivation refuses a zero-tensor census, but that guard
+    dies at the store boundary: a store or serializer regression that wrote
+    the populated declared block as bare null, or emptied ``declared_fqns``
+    ON DISK, would have emitted green and handed the checkpoint gates a
+    silent ``all([])`` — until now the whole re-read + enforce block was
+    gated ``if not args.full_ft``. This control reads the persisted bytes
+    with the same object-key oracle as the LoRA fidelity layer (a key's
+    echo inside its own entry is never counted: only the with-colon
+    spelling proves presence, a discrimination the B1 tests pin against the
+    real serializer) and fails closed as EmitUnmeasured — the emission's
+    own persistence failed, which is exit-3 unmeasured, never a verdict.
+
+    Scope stated honestly (doctrine 5): this control refuses three measured
+    shapes — (1) the declared block serialized as bare null, (2)
+    ``declared_fqns`` absent or emptied on disk, (3) abstention fields
+    dropped from the serialized config. A PARTIAL field rewrite short of
+    those shapes is outside its evidence and is not claimed: full
+    in-memory/on-disk equality would need a pinned round-trip-fidelity
+    guarantee through the store's load path, which this tree does not yet
+    have. Returns (present, total) over the five abstention fields so the
+    readout carries its own denominator (doctrine 2).
+    """
+    if _DECLARED_NULL_RE.search(record_text) is not None:
+        raise EmitUnmeasured(
+            "a full-ft emission held a POPULATED declared block in memory, "
+            'but the serialized manifest reads "declared": null — the '
+            "store or serializer dropped the census the derivation refused "
+            "to emit empty, and the gates would now read a fabricated "
+            "UNKNOWN where a denominator existed. Failing closed"
+        )
+    if '"declared_fqns":' not in record_text or _EMPTY_DECLARED_FQNS_RE.search(
+        record_text
+    ):
+        raise EmitUnmeasured(
+            "a full-ft emission censused a NON-EMPTY declared_fqns in "
+            "memory, but the serialized manifest has the key missing or "
+            "empty: on disk that reads downstream as NO denominator while "
+            "looking like a completed census — the founding all([]) shape, "
+            "one persistence layer out. Failing closed"
+        )
+    missing = [
+        key
+        for key in _FULL_FT_BYTES_ABSTENTION_RECORD_KEYS
+        if f'"{key}":' not in record_text
+    ]
+    if missing:
+        raise EmitUnmeasured(
+            f"the serialized full-ft record lacks {len(missing)} of "
+            f"{len(_FULL_FT_BYTES_ABSTENTION_RECORD_KEYS)} "
+            f"expected_expert_bytes abstention fields it held in memory "
+            f"({', '.join(missing)}) — the store/serializer dropped "
+            f"stated-abstention fields, so the artifact no longer "
+            f"distinguishes abstained from never populated. Failing closed"
+        )
+    total = len(_FULL_FT_BYTES_ABSTENTION_RECORD_KEYS)
+    return total - len(missing), total
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1064,9 +1219,14 @@ def _emit(args: argparse.Namespace) -> int:
     drill_bare_null = os.environ.get(_DRILL_BARE_NULL_ENV) == "1"
     lora_abstention_entries: list[tuple[str, str]] | None = None
     lora_preexisting_saves = 0
+    full_ft_bytes_entries: list[tuple[str, str]] | None = None
     if args.full_ft:
         declared, info = derive_declared_full_ft(
             args.base_checkpoint, ckpt_dir, args.hf_config
+        )
+        full_ft_bytes_entries = _full_ft_bytes_abstention_entries(
+            declared_fqn_count=info["declared_fqn_count"],
+            expert_family_census=info["expert_family_census"],
         )
         declared_line = (
             f"declared block: mode={info['mode']} | declared_fqns="
@@ -1077,7 +1237,8 @@ def _emit(args: argparse.Namespace) -> int:
             f"them — the artifact half of the dense corroboration) | "
             f"num_experts={declared.num_experts} num_moe_layers="
             f"{declared.num_moe_layers} expected_expert_bytes=None (stated "
-            f"abstention — see the derive function's comment)"
+            f"abstention — recorded in-manifest under "
+            f"declared.expected_expert_bytes.*)"
         )
     else:
         declared = None
@@ -1105,6 +1266,10 @@ def _emit(args: argparse.Namespace) -> int:
     if lora_abstention_entries is not None:
         _record_stated_entries(
             resolver, lora_abstention_entries, _LORA_ABSTENTION_SOURCE
+        )
+    if full_ft_bytes_entries is not None:
+        _record_stated_entries(
+            resolver, full_ft_bytes_entries, _FULL_FT_BYTES_ABSTENTION_SOURCE
         )
 
     # Deduplicated allowlist: the module default first, launcher extras after;
@@ -1179,16 +1344,18 @@ def _emit(args: argparse.Namespace) -> int:
     # stays under provenance/ as append-only forensic evidence of the refused
     # attempt, per the store's no-clobber contract.
     lora_record_report = ""
+    # Both modes re-read the bytes just persisted: an unreadable record must
+    # never be fatal in one mode and unguarded in the other (doctrine 4).
+    try:
+        record_text = saved.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise EmitUnmeasured(
+            f"could not re-read the manifest record just written at {saved} "
+            f"({type(exc).__name__}: {exc}). Provenance that cannot be "
+            f"re-read at emission time is not provenance, and the on-disk "
+            f"declaration controls would have nothing to stand on"
+        ) from exc
     if not args.full_ft:
-        try:
-            record_text = saved.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise EmitUnmeasured(
-                f"could not re-read the manifest record just written at {saved} "
-                f"({type(exc).__name__}: {exc}). Provenance that cannot be "
-                f"re-read at emission time is not provenance, and the on-disk "
-                f"abstention-record control would have nothing to stand on"
-            ) from exc
         state, present, total = _enforce_lora_abstention_record(
             record_text,
             saves_observed=lora_preexisting_saves,
@@ -1200,13 +1367,26 @@ def _emit(args: argparse.Namespace) -> int:
             f"iter_* dirs at emission: {lora_preexisting_saves}) | declaration "
             f"control: {state}"
         )
-    elif drill_bare_null:
+    else:
+        present, total = _enforce_full_ft_declared_on_disk(record_text)
         lora_record_report = (
-            f"drill note        : {_DRILL_BARE_NULL_ENV}=1 is set but mode is "
-            f"--full-ft; the drill targets the LoRA bare-null abstention "
-            f"record and is INERT here — stated so an inert drill can never "
-            f"read as an exercised control"
+            f"declared record   : {present} of {total} expected_expert_bytes "
+            f"abstention fields verified present in the serialized manifest "
+            f"at {saved.name}; declared block confirmed NON-NULL with "
+            f"declared_fqns present and NON-EMPTY on the serialized bytes — "
+            f"an on-disk all([]) fails closed above, never reaching the "
+            f"gates. Measured shapes, stated honestly: a null/absent "
+            f"declared block, an emptied declared_fqns, and dropped "
+            f"abstention fields; persistence of those shapes is re-verified, "
+            f"field-by-field equality with the in-memory record is not"
         )
+        if drill_bare_null:
+            lora_record_report += (
+                f" | drill note   : {_DRILL_BARE_NULL_ENV}=1 is set but mode "
+                f"is --full-ft; the drill targets the LoRA bare-null "
+                f"abstention record and is INERT here — stated so an inert "
+                f"drill can never read as an exercised control"
+            )
 
     # Discovery copy: SAME content in the directory load_manifest searches.
     # os.link over a copy because two paths holding two byte streams are two
