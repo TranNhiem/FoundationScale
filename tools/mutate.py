@@ -980,10 +980,27 @@ def _accepted_pristine_states(live: str, rows: list[dict]) -> list[str]:
         normalisation, nothing fuzzy. The drift this gate exists to catch
         was eight leading spaces becoming four, and a tolerant matcher
         greens it.
-      * `live` is reachable from it in zero or one row applications. This is
-        the clause that stops a two-rows-applied or otherwise corrupt source
-        from being laundered into "pristine" by a candidate that merely
-        happens to bind every anchor.
+      * it does not ALREADY contain the replacement of a row that survives
+        its own application. A row whose replacement contains its own anchor
+        -- the insertion style, 2 of the shipped 70 -- still binds that
+        anchor exactly once after it is applied, so without this clause the
+        applied state passes as pristine and then serves as a BASE from
+        which one MORE row is reachable. That silently doubles the one-row
+        budget and certifies a two-rows-applied source, which is a state
+        nothing measured. Measured before shipping, because two neighbouring
+        requirements were refuted this round for exactly this reason: 0 of
+        the 9 pristine sources contain such a replacement, so this clause
+        false-alarms on nothing. It is deliberately NOT the blanket rule
+        "no candidate may contain any replacement" -- a deletion-style row's
+        replacement necessarily sits inside its own intact anchor, so the
+        blanket form is unsatisfiable on 2 other real rows.
+      * `live` is reachable from it in zero or one row applications. Narrow
+        but real: a generated candidate normally reaches `live` by
+        construction, since rewriting a replacement back to its anchor makes
+        that the anchor's only occurrence and re-applying restores the same
+        bytes. It bites when an anchor SELF-OVERLAPS, so that the rewrite
+        creates an occurrence which is not the first one `str.replace`
+        would find, and the round trip lands on different bytes.
 
     Returns every accepted candidate; the caller needs only whether the list
     is non-empty. Raises FreshnessRefusedError if enumeration exceeds
@@ -991,6 +1008,10 @@ def _accepted_pristine_states(live: str, rows: list[dict]) -> list[str]:
     shipped corpus peaks at 3 candidates across all 71 of its reachable
     states, so a blow-up means the input is not what this gate was built for.
     """
+    self_surviving = [
+        row for row in rows
+        if row["anchor"] and row["replacement"].count(row["anchor"]) >= 1
+    ]
     candidates = [live]
     for row in rows:
         rep = row["replacement"]
@@ -1011,6 +1032,8 @@ def _accepted_pristine_states(live: str, rows: list[dict]) -> list[str]:
     accepted = []
     for cand in candidates:
         if not all(cand.count(row["anchor"]) == 1 for row in rows):
+            continue
+        if any(row["replacement"] in cand for row in self_surviving):
             continue
         reachable = {cand}
         for row in rows:
@@ -1045,14 +1068,32 @@ def check_anchor_freshness(
 
     An empty return is the only green.
 
-    RESIDUAL, stated exactly: the verdict is that every published anchor
-    BINDS, not that the tree is pristine. For an insertion-style row -- one
-    whose anchor is a substring of its own replacement -- the applied state
-    is accepted, correctly, because that anchor still resolves exactly once;
-    this gate does not claim to detect that such a row is applied. Drift
-    that displaces no anchor is likewise invisible to it. Whether the suite
-    would actually KILL any mutant is the battery's verdict, never this
-    gate's.
+    RESIDUALS, stated exactly -- what a green here does NOT claim:
+
+      * It says every published anchor BINDS, not that the tree is
+        pristine. Drift that displaces no anchor and ships no row's
+        replacement text is invisible.
+      * It is a per-MODULE verdict, not a per-ROW one. Rows sharing one
+        identical anchor -- 70 shipped rows collapse to 67 distinct
+        (module, anchor) pairs, `core`'s 9 rows to 6 anchors -- are
+        observationally aliased: green means the anchor set resolves, and
+        no observer can read off which row a state carries. The row count
+        is the corpus denominator, never a count of independent verdicts.
+      * It places the bytes in an equivalence class, it does not date them.
+        Unrelated drift that happens to leave the file looking exactly like
+        some row's applied state is accepted as that applied state, because
+        with no external history the two are the same bytes. Widening the
+        gate to catch this would mean re-admitting a snapshot, which is the
+        false-alarm failure this design exists to avoid.
+      * Green is not "this mutant would be killed". That is the battery's
+        verdict, and only ever the battery's.
+
+    NOT a residual, recorded so it is not re-introduced: the applied state
+    of an insertion-style row used to be accepted as pristine-in-itself,
+    which let one MORE row be reached from it and certified a
+    two-rows-applied source. The self-surviving clause in
+    _accepted_pristine_states closes that; such a state is now accepted
+    through the genuine pristine candidate instead.
     """
     problems: list[str] = []
     if sum(len(rows) for rows in table.values()) == 0:

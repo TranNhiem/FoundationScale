@@ -31,11 +31,16 @@ mutate.check_anchor_freshness. No leg reads, doctors or asserts on the text
 of any real MODULE_PATHS source: every MUST_FIRE and every shape control is
 a synthetic corpus over a tmp_path file the test wrote itself.
 
-Residual, stated honestly: the verdict is that anchors BIND, not that the
-tree is pristine. An insertion-style row's applied state is accepted, which
-is correct -- its anchor still resolves exactly once -- and this gate does
-not claim to notice that such a row is applied. Whether the suite would kill
-any mutant is the battery's verdict, never this gate's.
+Residuals, stated honestly. The verdict is that anchors BIND, not that the
+tree is pristine: drift displacing no anchor is invisible. It is per-MODULE,
+not per-ROW -- the 70 rows carry only 67 distinct (module, anchor) pairs, so
+rows sharing an anchor are aliased and a green is not 70 independent
+verdicts. It classifies bytes, it does not date them: unrelated drift that
+happens to land on some row's applied state reads as that applied state,
+because with no external history the two are the same bytes -- and closing
+that would mean re-admitting a snapshot, the false alarm this design exists
+to avoid. And whether the suite would kill any mutant is the battery's
+verdict, never this gate's.
 """
 
 import importlib.util
@@ -50,6 +55,12 @@ MUTATIONS_JSON = ROOT / "tools" / "mutations.json"
 JSON_ROWS, JSON_MODS = 62, 8
 EMBEDDED_ROWS, EMBEDDED_MODS = 8, 1
 TOTAL_ROWS, TOTAL_MODS = 70, 9
+# Rows are the corpus denominator; distinct (module, anchor) pairs are the
+# DISTINGUISHABILITY denominator. They differ because `core` publishes 9 rows
+# over 6 anchors, so a green verdict there resolves the anchor set and cannot
+# say which of the aliased rows a state carries. Pinned so neither figure can
+# be quoted as the other.
+DISTINCT_ANCHORS = 67
 
 
 def _load_mutate():
@@ -134,6 +145,15 @@ def test_must_pass_shipped_corpus_binds_every_anchor_exactly_once():
     table = mutate.load_table(None)
     assert sum(len(rows) for rows in table.values()) == TOTAL_ROWS, denominator
     assert len(table) == TOTAL_MODS, denominator
+    distinct = len(
+        {(mod, r["anchor"]) for mod, rows in table.items() for r in rows}
+    )
+    assert distinct == DISTINCT_ANCHORS, (
+        f"distinguishability denominator drifted: {distinct} distinct "
+        f"(module, anchor) pair(s) behind {TOTAL_ROWS} row(s). A green "
+        "verdict resolves the ANCHOR set; rows sharing an anchor are "
+        "aliased and are not independent verdicts."
+    )
     paths = {mod: ROOT / rel for mod, rel in mutate.MODULE_PATHS.items()}
     problems = mutate.check_anchor_freshness(table, paths)
     assert problems == [], (
@@ -299,24 +319,128 @@ def test_must_fire_anchor_matching_twice_is_refused(tmp_path):
     assert any("dup-row" in p and "2x" in p for p in problems), problems
 
 
+def _accepted_without_reachability(live, rows):
+    """The shipped enumeration with the REACHABILITY clause stripped out.
+
+    Used only as a counterfactual inside the two legs below, so each can
+    prove WHICH clause produced its red instead of asserting it.
+    """
+    cands = [live]
+    for r in rows:
+        at = live.find(r["replacement"])
+        while at != -1:
+            cands.append(
+                live[:at] + r["anchor"] + live[at + len(r["replacement"]):]
+            )
+            at = live.find(r["replacement"], at + 1)
+    return [c for c in cands if all(c.count(r["anchor"]) == 1 for r in rows)]
+
+
 def test_must_fire_two_rows_applied_at_once_is_refused(tmp_path):
     """MUST_FIRE, reasoned to red: the battery applies ONE row per leg, so a
     source carrying two is a state nothing measured.
 
-    This is the leg that pins the reachability clause. Drop it and any text
-    that happens to bind every anchor is accepted as pristine.
+    Attribution, stated rather than assumed: this leg reds on EXACTLY-ONCE,
+    not on reachability -- no candidate here binds both anchors, which the
+    counterfactual below pins. It is therefore not a control on the
+    reachability clause; that one is the self-overlap leg.
     """
     mutate = _load_mutate()
     first = _row("first-row", "a = 1", "a = 0")
     second = _row("second-row", "b = 2", "b = 0")
+    live = "a = 0\nb = 0\n"
     doubled = tmp_path / "doubled.py"
-    doubled.write_text("a = 0\nb = 0\n", "utf-8")
+    doubled.write_text(live, "utf-8")
     problems = mutate.check_anchor_freshness(
         {"doubled": [first, second]}, {"doubled": doubled}
     )
     assert any(
         "first-row" in p and "second-row" in p for p in problems
     ), problems
+    assert _accepted_without_reachability(live, [first, second]) == [], (
+        "attribution claim broken: this fixture is supposed to red on "
+        "exactly-once alone, so the reachability-stripped predicate must "
+        "also accept nothing"
+    )
+
+
+def test_must_fire_self_overlapping_anchor_pins_reachability(tmp_path):
+    """MUST_FIRE, reasoned to red, and the ONLY leg that pins reachability.
+
+    Rewriting a replacement back to its anchor normally makes that the
+    anchor's sole occurrence, so re-applying restores the same bytes and
+    reachability holds by construction. It bites only when the anchor
+    SELF-OVERLAPS: here the rewrite yields a candidate whose first
+    "x\\nx\\nx\\n" is NOT the one just created, so `str.replace(..., 1)`
+    edits a different site and the round trip lands elsewhere.
+
+    The counterfactual is asserted, not asserted-about: exactly-once alone
+    ACCEPTS this candidate, and only the reachability clause refuses it. Cut
+    that clause and this leg goes green -- which is what makes it a control.
+    """
+    mutate = _load_mutate()
+    row = _row("overlap-row", "x\nx\nx\n", "y\n")
+    live = "x\nx\ny\n"
+    src = tmp_path / "overlap.py"
+    src.write_text(live, "utf-8")
+    slack = _accepted_without_reachability(live, [row])
+    assert len(slack) == 1, (
+        "fixture defect: exactly-once must ACCEPT here, or the leg would "
+        f"red for the wrong reason; got {slack!r}"
+    )
+    assert slack[0].replace(row["anchor"], row["replacement"], 1) != live, (
+        "fixture defect: the round trip must MISS, or reachability has "
+        "nothing to refuse"
+    )
+    problems = mutate.check_anchor_freshness({"overlap": [row]}, {"overlap": src})
+    assert any("overlap-row" in p for p in problems), problems
+
+
+def test_must_fire_insertion_row_cannot_base_a_second_row(tmp_path):
+    """MUST_FIRE against the composition hole: an insertion-style row's
+    applied state must not serve as a pristine BASE.
+
+    Such a row still binds its own anchor after it is applied. Accept that
+    state as pristine and the gate's one-row budget silently becomes two,
+    certifying a source carrying BOTH rows -- a state nothing measured. Two
+    shipped rows have this shape, so the hole is reachable in production,
+    and `tools/mutate.py` can strand a mutant on SIGTERM beside a live leg.
+
+    The three legal states are asserted green in the same breath, so the
+    repair cannot be the useless one of refusing insertion rows outright.
+    """
+    mutate = _load_mutate()
+    ins = _row("ins-row", "a = 1\n", "a = 1\n# planted\n")
+    ordinary = _row("ord-row", "b = 2\n", "b = 0\n")
+    rows = [ins, ordinary]
+    assert ins["anchor"] in ins["replacement"], (
+        "fixture defect: this leg needs a row that SURVIVES its own "
+        "application, or there is no composition to refuse"
+    )
+    pristine = "a = 1\nb = 2\n"
+    both = pristine.replace(ins["anchor"], ins["replacement"], 1).replace(
+        ordinary["anchor"], ordinary["replacement"], 1
+    )
+    src = tmp_path / "compose.py"
+    for label, text in [
+        ("pristine", pristine),
+        ("applied:ins-row", pristine.replace(ins["anchor"], ins["replacement"], 1)),
+        ("applied:ord-row", pristine.replace(
+            ordinary["anchor"], ordinary["replacement"], 1)),
+    ]:
+        src.write_text(text, "utf-8")
+        problems = mutate.check_anchor_freshness({"c": rows}, {"c": src})
+        assert problems == [], f"{label} is a legal state and must green: {problems}"
+    assert both.count(ins["anchor"]) == 1, (
+        "fixture defect: the whole hole depends on the insertion row's "
+        "anchor STILL binding once in the two-applied state"
+    )
+    src.write_text(both, "utf-8")
+    problems = mutate.check_anchor_freshness({"c": rows}, {"c": src})
+    assert any("ins-row" in p or "ord-row" in p for p in problems), (
+        "two rows are applied at once and the gate certified it fresh: the "
+        f"insertion row was laundered into a pristine base. {problems}"
+    )
 
 
 def test_must_fire_row_that_edits_nothing_is_refused(tmp_path):
