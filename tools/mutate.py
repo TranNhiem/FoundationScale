@@ -981,19 +981,27 @@ def _accepted_pristine_states(live: str, rows: list[dict]) -> list[str]:
         was eight leading spaces becoming four, and a tolerant matcher
         greens it.
       * it does not ALREADY contain the replacement of a row that survives
-        its own application. A row whose replacement contains its own anchor
-        -- the insertion style, 2 of the shipped 70 -- still binds that
-        anchor exactly once after it is applied, so without this clause the
-        applied state passes as pristine and then serves as a BASE from
-        which one MORE row is reachable. That silently doubles the one-row
-        budget and certifies a two-rows-applied source, which is a state
-        nothing measured. Measured before shipping, because two neighbouring
-        requirements were refuted this round for exactly this reason: 0 of
-        the 9 pristine sources contain such a replacement, so this clause
-        false-alarms on nothing. It is deliberately NOT the blanket rule
-        "no candidate may contain any replacement" -- a deletion-style row's
-        replacement necessarily sits inside its own intact anchor, so the
-        blanket form is unsatisfiable on 2 other real rows.
+        its own application. An insertion-style row -- 2 of the shipped 70 --
+        still binds its anchor exactly once after it is applied, so without
+        this clause the applied state passes as pristine and then serves as
+        a BASE from which one MORE row is reachable. That silently doubles
+        the one-row budget and certifies a two-rows-applied source, which is
+        a state nothing measured.
+
+        This closes composition for every shape the pinned corpus can
+        reach: the real-corpus shape guard requires every anchor surviving
+        application to be insertion-style. It is NOT a general closure. An
+        anchor can also survive through overlap, as "xx" survives replacing
+        the first "xx" in "xxx" by "x". No shipped row has that shape.
+
+        The stronger legal-predecessor closure was attempted and measured
+        against the real corpus: it rejected 2 of 9 healthy pristine sources
+        and the true base behind 15 real applied states. A false alarm costs
+        what a false green costs, so that remedy is refused. This clause is
+        also deliberately NOT the blanket rule "no candidate may contain any
+        replacement": a deletion-style row's replacement necessarily sits
+        inside its own intact anchor, making the blanket form unsatisfiable
+        on the 2 shipped deletion-style rows.
       * `live` is reachable from it in zero or one row applications. Narrow
         but real: a generated candidate normally reaches `live` by
         construction, since rewriting a replacement back to its anchor makes
@@ -1055,24 +1063,34 @@ def check_anchor_freshness(
     emit_run_manifest rows sat outside the only table anything checked. A
     --module narrowing must never be passed in as if it were the corpus.
 
-    Fail-closed enumerations, one problem string per finding, ALL findings
-    accumulated and returned together so a single red names every offender
-    at once: a zero-row corpus; a module publishing 0 rows beside measured
-    ones; a row with an empty anchor or replacement; a row whose replacement
+    Fail-closed enumerations, one problem string per finding, accumulated
+    ACROSS modules and returned together: a zero-row corpus; a module
+    publishing 0 rows beside measured ones; a row with an empty anchor or
+    replacement; a row whose replacement
     EQUALS its anchor (that mutation edits nothing, so the battery would
     score a guaranteed survivor as a real mutant); a corpus module absent
     from `paths`; a source that will not read or will not decode; candidate
     enumeration blowing past its bound; and finally the substantive verdict,
-    no pristine state accounting for the live bytes, which names each row
-    whose anchor does not bind exactly once and its counts.
+    no pristine state accounting for the live bytes. Within one module the
+    blank-row enumeration masks that module's later findings for this run,
+    and a zero-row corpus returns before module examination. When at least one
+    anchor fails exactly-once it names that row and counts; when every
+    anchor binds exactly once it uses the fallback's different semantics,
+    naming the self-surviving row whose replacement is present when that is
+    the observable cause, otherwise naming the self-surviving/reachability
+    clauses as the remaining possible causes.
 
     An empty return is the only green.
 
     RESIDUALS, stated exactly -- what a green here does NOT claim:
 
       * It says every published anchor BINDS, not that the tree is
-        pristine. Drift that displaces no anchor and ships no row's
-        replacement text is invisible.
+        pristine. Drift that displaces no anchor is invisible unless it
+        ships replacement text from one of the 2 self-surviving insertion
+        rows among the shipped 70. The other 68 replacement strings are
+        never consulted. The blanket replacement rule is unsatisfiable
+        because the 2 deletion-style rows' replacement text necessarily
+        occurs inside their own intact anchor.
       * It is a per-MODULE verdict, not a per-ROW one. Rows sharing one
         identical anchor -- 70 shipped rows collapse to 67 distinct
         (module, anchor) pairs, `core`'s 9 rows to 6 anchors -- are
@@ -1088,12 +1106,16 @@ def check_anchor_freshness(
       * Green is not "this mutant would be killed". That is the battery's
         verdict, and only ever the battery's.
 
-    NOT a residual, recorded so it is not re-introduced: the applied state
-    of an insertion-style row used to be accepted as pristine-in-itself,
-    which let one MORE row be reached from it and certified a
-    two-rows-applied source. The self-surviving clause in
-    _accepted_pristine_states closes that; such a state is now accepted
-    through the genuine pristine candidate instead.
+    Within the pinned shipped corpus, the applied state of an
+    insertion-style row is NOT a residual: the self-surviving clause keeps
+    it from becoming a pristine base, and the genuine reconstructed pristine
+    candidate accepts the state instead. Outside those shapes the general
+    composition hole is a DECLARED residual: an overlap-surviving row can
+    still become a pristine base. The real-corpus MUST_PASS shape guard
+    makes that residual unreachable by construction. The measured
+    predecessor remedy -- 2 of 9 pristine false alarms and 15 rejected
+    applied-state bases -- was refused rather than silently traded for a
+    false-alarm class.
     """
     problems: list[str] = []
     if sum(len(rows) for rows in table.values()) == 0:
@@ -1151,19 +1173,45 @@ def check_anchor_freshness(
             problems.append(f"{mod}: {exc}")
             continue
         if not accepted:
-            blamed = [r for r in rows if live.count(r["anchor"]) != 1] or rows
+            blamed = [r for r in rows if live.count(r["anchor"]) != 1]
             counts = "; ".join(
                 f"{r['name']} anchor {live.count(r['anchor'])}x, "
                 f"replacement {live.count(r['replacement'])}x"
-                for r in blamed
+                for r in (blamed or rows)
             )
-            problems.append(
-                f"{mod}: no pristine state accounts for these bytes over "
-                f"{len(rows)} row(s) -- at least one anchor no longer binds "
-                "exactly once, and reverting any single row does not repair "
-                f"it; re-derive the offending row(s) against the current "
-                f"source. Live counts: {counts}"
-            )
+            if blamed:
+                problems.append(
+                    f"{mod}: no pristine state accounts for these bytes over "
+                    f"{len(rows)} row(s) -- at least one anchor no longer "
+                    "binds exactly once, and reverting any single row does "
+                    "not repair it; re-derive the offending row(s) against "
+                    f"the current source. Live counts: {counts}"
+                )
+            else:
+                self_surviving_hits = [
+                    r["name"]
+                    for r in rows
+                    if r["replacement"].count(r["anchor"]) >= 1
+                    and r["replacement"] in live
+                ]
+                if self_surviving_hits:
+                    reason = (
+                        "the live bytes contain self-surviving replacement "
+                        "text for "
+                        + ", ".join(self_surviving_hits)
+                        + "; that applied state is refused as a pristine base"
+                    )
+                else:
+                    reason = (
+                        "every reconstructed candidate fails the "
+                        "self-surviving or reachability clause"
+                    )
+                problems.append(
+                    f"{mod}: no pristine state accounts for these bytes over "
+                    f"{len(rows)} row(s) -- every anchor binds exactly once, "
+                    "yet no reconstructed candidate is accepted; "
+                    f"{reason}. Live counts: {counts}"
+                )
     return problems
 
 
