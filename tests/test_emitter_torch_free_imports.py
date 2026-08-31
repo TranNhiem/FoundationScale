@@ -40,14 +40,41 @@ estate exists to catch) and a census that sees ZERO torch sites tree-wide (a
 detector that cannot find the shipped :762 sample is measuring nothing, and a
 blind detector must not pass). Syntax errors and unreadable files propagate
 as RED (doctrine 4: unreadable is not empty, missing is not zero).
+STATIC'S DECLARED BLIND SPOT, so no reader mistakes its scope: the census
+matches ``ast.Import`` and ``ast.ImportFrom`` only. A dynamic import --
+``importlib.import_module("torch")`` or ``__import__("torch")`` -- is an
+ast.Call and is therefore INVISIBLE to it. So "the static census found no
+import-time torch site" means no torch STATEMENT, not no torch import, and
+the static leg alone must never be quoted as the latter. The dynamic leg is
+what closes this: it asserts on the child's sys.modules, which a dynamic
+import populates exactly as a statement does, so the pair covers what
+neither covers alone. This is a scope note, not a defect -- but an
+undeclared scope would have been one.
 DYNAMIC -- run_import_probe executes ``sys.executable -I -c``: the child
-imports the target BY PATH, then __import__s the docstring-named torch-free
-header parser foundationscale.checkpoint.dcp_meta, then reports which
-forbidden-root modules sit in ITS sys.modules. -I strips environment,
-PYTHONPATH, user site and cwd, so the parent asserts the child's rc FIRST,
-then its post-check marker, then empty stderr -- a dead child is RED, never
-"torch absent" -- and requires >=1 foundationscale module in the child (an
-unexercised chain is UNMEASURED, doctrine 1).
+imports the target BY PATH, then DRIVES the census function
+``_declared_fqns_from_base`` on a provably-absent path -- the function's own
+lazy-import block is the measured event, never a paraphrase of it -- then
+__import__s every module that block names, all THREE of them
+(foundationscale.checkpoint.dcp, foundationscale.checkpoint.dcp_meta,
+foundationscale.gates.checkpoint_gates; denominator 3/3. This file pinned
+dcp_meta alone, 1/3 BY NAME, for its first life -- but MEASURED 2026-08-31,
+importing dcp_meta in a clean ``-I`` child also lands dcp transitively, so
+2 of 3 were in fact exercised and exactly ONE, checkpoint_gates, was
+genuinely unobserved. The widening is worth making and the earlier gap was
+real, but it was one module wide, not two: overstating a gap is the same
+class of defect as overstating coverage, and doctrine 5 is symmetric),
+then reports which forbidden-root modules sit in ITS sys.modules,
+which chain modules LANDED (chain_loaded must EQUAL CHAIN_MODULES: zero
+chain imports executed fails, never passes vacuously -- two empty
+collections comparing equal is the all([]) shape), and the census drive's
+outcome -- EmitUnmeasured raised from the read stage over a path that cannot
+exist is the positive evidence the lazy-import block was REACHED, because
+with all three chain modules resident in the child's sys.modules its imports
+provably cleared. -I strips environment, PYTHONPATH, user site and cwd, so
+the parent asserts the child's rc FIRST, then its post-check marker, then
+empty stderr -- a dead child is RED, never "torch absent" -- and still
+requires >=1 foundationscale module in the child (an unexercised chain is
+UNMEASURED, doctrine 1).
 
 MUST_FIRE is observed in THIS run, with causes separated and zero dependence
 on whether the host has torch installed (no skips):
@@ -69,6 +96,17 @@ on whether the host has torch installed (no skips):
   never read green. On a torch-less host its red is a refused chain -- right
   colour, wrong reason -- so red-via-detection is asserted additionally only
   when the chain completes; the certified firings are the legs above.
+* chain override: a tmp COPY of chain module dcp_meta carrying a hoisted
+  module-scope ``import torch``, pre-registered in the child's sys.modules
+  AHEAD of the real module's resolution -- a sys.path shadow only wins
+  against namespace-package trees (PEP 420 scan order), and this file
+  refuses to pin which shape foundationscale is, so "ahead" is made
+  explicit, never left to machinery that answers differently per tree shape
+  -- must flip the verdict red. Never-green unconditionally;
+  detection-attributed when the chain completes, under the same
+  right-colour/wrong-reason split as quarantine. The source file is read as
+  INPUT to build a runnable copy, never asserted on as text, so a battery
+  row rewriting dcp_meta.py cannot turn this leg into a text tripwire.
 
 Denominators (doctrine 2) are stated in every assertion message, and each
 MUST_PASS leg prints a DENOMINATOR line into the captured run record.
@@ -78,15 +116,19 @@ evidence): it cannot prove the emitter RUNS on a bare login node -- the
 child is the test host's interpreter under -I (an approximation of
 PYTHONNOUSERSITE=1, not the verification plane), so a module-scope dependency
 on some OTHER third-party package absent on the plane would read green here.
-It executes the module-scope import chain only: argparse/main() paths are
-never driven, and ``_training_stack_entries`` is never CALLED -- importing
+It executes the module-scope import chain plus ONE census-function drive
+over a provably-absent path -- the drive proves the lazy-import block runs
+and refuses honestly, and parses no real checkpoint, so the census's
+tensor-filtering semantics stay out of scope -- and no more:
+argparse/main() paths are never driven, and
+``_training_stack_entries`` is never CALLED -- importing
 torch where available is that function's documented job (:779-791), so
 driving it is a designed false red. The probe matches the exact root
 ``torch`` and its submodules; torchvision/torchaudio are deliberately out of
 scope. A module-scope ``import torch; del sys.modules["torch"]`` would evade
 the dynamic half but not the static one; deliberate smuggling is out of
-scope. Five short-lived child interpreters per run are a cost, not a
-coverage gap.
+scope. Six short-lived child interpreters per run (the chain-override leg
+adds one) are a cost, not a coverage gap.
 """
 
 from __future__ import annotations
@@ -112,19 +154,47 @@ SENTINEL_NAME = "fs_torch_position_sentinel"
 FUNCTION_LOCAL_SENTINEL = "fs_torch_function_local_sentinel"
 PROBE_TIMEOUT_SECONDS = 120
 
-# Chain modules the child imports after exec_module: the torch-free-by-design
-# DCP header parser the emitter's own docstring names (listing lines 11-17).
-CHAIN_MODULES: tuple[str, ...] = ("foundationscale.checkpoint.dcp_meta",)
+# Chain modules the child drives after exec_module: the FULL lazy-import
+# block of _declared_fqns_from_base, all THREE modules the census needs to
+# run -- the torch-free-by-design DCP header parser the emitter's own
+# docstring names (listing lines 11-17), its sibling format reader, and the
+# gates' own expert-family classifiers. Denominator 3/3: this constant once
+# pinned dcp_meta alone (1/3 by name). MEASURED 2026-08-31 in a clean -I
+# child: importing dcp_meta also lands dcp transitively, so that pin really
+# exercised 2 of 3, and checkpoint_gates alone was unobserved. Naming all
+# three removes the dependence on an import edge no test asserts -- dcp's
+# coverage was a side effect of dcp_meta's imports, and a refactor that
+# dropped that edge would have silently narrowed the control to 1/3 with no
+# leg going red. The child's chain_loaded report must EQUAL this set, never
+# a subset: a missing one is UNMEASURED, never green.
+CHAIN_MODULES: tuple[str, ...] = (
+    "foundationscale.checkpoint.dcp",
+    "foundationscale.checkpoint.dcp_meta",
+    "foundationscale.gates.checkpoint_gates",
+)
+
+# Paths of the three chain modules above, constant-named so the static
+# coverage proof (MUST_CENSUS_FILES) and the chain-override MUST_FIRE leg
+# quote the same files the dynamic chain drives -- never a second spelling
+# that could drift from CHAIN_MODULES.
+DCP_PATH = SRC_ROOT / "foundationscale" / "checkpoint" / "dcp.py"
+DCP_META_PATH = SRC_ROOT / "foundationscale" / "checkpoint" / "dcp_meta.py"
+CHECKPOINT_GATES_PATH = (
+    SRC_ROOT / "foundationscale" / "gates" / "checkpoint_gates.py"
+)
 
 # Files the static walk must prove it covered: the emitter itself, the
 # module-scope chain target quoted from its import block (lines 95-118 hold
-# `from foundationscale.provenance.manifest import ...`), and the header
-# parser named above. Package __init__ files are NOT required: namespace
-# packages are legal, and missing-is-not-zero must not red a healthy tree.
+# `from foundationscale.provenance.manifest import ...`), and every module
+# on the census lazy-import chain. Package __init__ files are NOT required:
+# namespace packages are legal, and missing-is-not-zero must not red a
+# healthy tree.
 MUST_CENSUS_FILES: tuple[Path, ...] = (
     EMITTER_PATH,
     SRC_ROOT / "foundationscale" / "provenance" / "manifest.py",
-    SRC_ROOT / "foundationscale" / "checkpoint" / "dcp_meta.py",
+    DCP_PATH,
+    DCP_META_PATH,
+    CHECKPOINT_GATES_PATH,
 )
 
 # Verdict line marker. Keep in sync with the literal inside _CHILD_PROGRAM;
@@ -145,10 +215,29 @@ import sys
 target = sys.argv[1]
 extra_paths = sys.argv[2]
 forbidden_root = sys.argv[3]
-chain = sys.argv[4:]
+override_spec = sys.argv[4]
+chain = sys.argv[5:]
 for entry in extra_paths.split(os.pathsep):
     if entry and entry not in sys.path:
         sys.path.insert(0, entry)
+if override_spec != "-":
+    override_name, _, override_path = override_spec.partition("=")
+    o_spec = importlib.util.spec_from_file_location(override_name, override_path)
+    if o_spec is None or o_spec.loader is None:
+        blob = {"stage": "override", "error": override_spec}
+        print("FS_TORCHFREE_RESULT " + json.dumps(blob))
+        raise SystemExit(3)
+    o_module = importlib.util.module_from_spec(o_spec)
+    sys.modules[override_name] = o_module
+    try:
+        o_spec.loader.exec_module(o_module)
+    except BaseException as exc:
+        blob = {
+            "stage": "override",
+            "error": type(exc).__name__ + ": " + str(exc),
+        }
+        print("FS_TORCHFREE_RESULT " + json.dumps(blob))
+        raise SystemExit(3) from exc
 spec = importlib.util.spec_from_file_location("fs_module_under_probe", target)
 if spec is None or spec.loader is None:
     print("FS_TORCHFREE_RESULT " + json.dumps({"stage": "spec", "error": target}))
@@ -157,6 +246,24 @@ module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 try:
     spec.loader.exec_module(module)
+    census = {
+        "driven": False,
+        "outcome": "function-absent",
+        "absent_existed": None,
+    }
+    absent = os.path.join(
+        os.path.dirname(os.path.abspath(target)),
+        ".__fs_torchfree_absent_probe__",
+    )
+    census["absent_existed"] = os.path.exists(absent)
+    census_fn = getattr(module, "_declared_fqns_from_base", None)
+    if census_fn is not None:
+        census["driven"] = True
+        try:
+            census_fn(absent)
+            census["outcome"] = "returned-normally"
+        except Exception as exc:
+            census["outcome"] = type(exc).__name__
     for name in chain:
         __import__(name)
 except BaseException as exc:
@@ -177,6 +284,8 @@ blob = {
     "hits": hits,
     "foundationscale_modules": fs_modules,
     "modules_loaded": len(sys.modules),
+    "chain_loaded": sorted(name for name in chain if name in sys.modules),
+    "census": census,
 }
 print("FS_TORCHFREE_RESULT " + json.dumps(blob))
 """
@@ -329,6 +438,7 @@ def run_import_probe(
     forbidden_root: str,
     extra_paths: Iterable[Path] = (),
     chain: Iterable[str] = CHAIN_MODULES,
+    override: tuple[str, Path] | None = None,
 ) -> ProbeResult:
     """Import ``target`` in a FRESH ``-I`` interpreter, then audit the root.
 
@@ -338,11 +448,25 @@ def run_import_probe(
     green by dying": import failures come back in-band with rc 3, and
     ``_checked_payload`` turns a nonzero rc, a missing marker, or a dirty
     stderr into RED.
+
+    ``override=(name, path)`` pre-registers ``path`` in the child's
+    sys.modules under ``name`` BEFORE the target or the chain can resolve
+    it -- the deterministic form of "doctored copy ahead of the real one".
+    A sys.path shadow is only authoritative against namespace-package trees
+    (PEP 420), and this file refuses to pin one tree shape, so "ahead" is
+    explicit registration, never path order. The override executes at module
+    scope in the child, so a doctored chain module's import-time behaviour
+    is measured exactly as an honest import's would be; a dead override
+    returns in-band at stage "override" with rc 3, never as silence.
     """
     joined = os.pathsep.join(str(path) for path in extra_paths)
+    override_spec = "-"
+    if override is not None:
+        override_name, override_path = override
+        override_spec = f"{override_name}={override_path}"
     proc = subprocess.run(
         [sys.executable, "-I", "-c", _CHILD_PROGRAM,
-         str(target), joined, forbidden_root, *chain],
+         str(target), joined, forbidden_root, override_spec, *chain],
         capture_output=True,
         text=True,
         check=False,
@@ -390,22 +514,24 @@ def _write_module(tmp_path: Path, name: str) -> Path:
     return path
 
 
-def _doctored_emitter(tmp_path: Path, injected_import: str) -> tuple[Path, int]:
-    """The shipped emitter with one import line injected at LEGAL module scope.
+def _doctored_module(
+    source_path: Path, tmp_path: Path, injected_import: str
+) -> tuple[Path, int]:
+    """``source_path`` with one import line injected at LEGAL module scope.
 
     The probe line lands immediately after the last ``from __future__``
     statement (and the module docstring, if any): still module scope,
     where the detectors must see it, but at a position Python can run.
     Returns the doctored path and the 1-based number of the injected line,
     so callers pin position against a MEASURED value, never against a
-    constant the emitter's shape can silently move. The text is compiled
+    constant the source's shape can silently move. The text is compiled
     before it is written; the helper fails closed rather than hand back a
     file Python cannot run -- an illegal injection point is a broken
     control masquerading as detector evidence, never a measurement.
     """
     import ast  # local: the parser is needed only by this measurement
 
-    source = EMITTER_PATH.read_text(encoding="utf-8")
+    source = source_path.read_text(encoding="utf-8")
     body = ast.parse(source).body
     index = 0
     if (
@@ -426,7 +552,7 @@ def _doctored_emitter(tmp_path: Path, injected_import: str) -> tuple[Path, int]:
     lines.insert(cut, f"{injected_import}\n")
     text = "".join(lines)
     injected_lineno = cut + 1
-    doctored = tmp_path / EMITTER_PATH.name
+    doctored = tmp_path / source_path.name
     error = None
     try:
         compile(text, str(doctored), "exec")
@@ -441,6 +567,19 @@ def _doctored_emitter(tmp_path: Path, injected_import: str) -> tuple[Path, int]:
     )
     doctored.write_text(text, encoding="utf-8")
     return doctored, injected_lineno
+
+
+def _doctored_emitter(tmp_path: Path, injected_import: str) -> tuple[Path, int]:
+    """The shipped emitter with one import line injected at LEGAL module scope.
+
+    Thin wrapper over :func:`_doctored_module` pinning the source to the real
+    emitter, so the existing legs keep their exact semantics while the
+    chain-override MUST_FIRE leg reuses the same measured-injection machinery
+    on a census-chain module. In both cases the source file is read as INPUT
+    to build a runnable copy -- never asserted on as text, so a mutation row
+    touching the source cannot turn any of these legs into a text tripwire.
+    """
+    return _doctored_module(EMITTER_PATH, tmp_path, injected_import)
 
 
 def test_tree_census_finds_torch_only_off_the_import_path() -> None:
@@ -574,16 +713,30 @@ def test_static_detector_fires_on_module_scope_torch(tmp_path: Path) -> None:
 
 def test_fresh_interpreter_import_leaves_torch_absent() -> None:
     """GREEN (dynamic): the emitter's chain, exercised in a fresh child,
-    leaves torch out of the child's sys.modules (M2 pinned).
+    leaves torch out of the child's sys.modules (M2 pinned), with the census
+    function DRIVEN as the vacuity guard.
 
     rc is asserted first, then the post-check verdict, then stderr: a dead
-    child is RED, never 'torch absent'. The child must also prove the chain
-    ran -- >=1 foundationscale module loaded, since the emitter's
-    module-scope block (lines 95-118) imports
-    foundationscale.provenance.manifest -- else the verdict is UNMEASURED.
+    child is RED, never 'torch absent'. The child must prove the WHOLE chain
+    ran: all THREE modules named in the lazy-import block of
+    ``_declared_fqns_from_base`` must sit in its sys.modules (denominator
+    3/3; this file pinned 1/3 by name once, which MEASURED as 2/3 exercised
+    because dcp arrives transitively via dcp_meta -- checkpoint_gates was
+    the one genuinely blind module), on top of the >=1 foundationscale module the
+    emitter's module-scope block (lines 95-118) loads. The vacuity guard is
+    the census drive: ``_declared_fqns_from_base`` called with a
+    provably-absent path must report the read-stage refusal EmitUnmeasured
+    with every chain module loaded -- positive evidence the lazy-import
+    block was REACHED. Zero chain imports executed fails by the chain_loaded
+    equality; an unexercised chain is UNMEASURED (doctrine 1).
     """
     assert EMITTER_PATH.is_file(), (
         f"emitter missing at {EMITTER_PATH}; missing is not zero"
+    )
+    assert CHAIN_MODULES, (
+        "CHAIN_MODULES itself must be nonempty: chain_loaded == "
+        "sorted(CHAIN_MODULES) over two empty collections is the all([]) "
+        "shape this file exists to refuse"
     )
     result = run_import_probe(EMITTER_PATH, TORCH_ROOT, [SRC_ROOT])
     payload = _checked_payload(result, context="torch-free import MUST_PASS")
@@ -592,15 +745,49 @@ def test_fresh_interpreter_import_leaves_torch_absent() -> None:
         "module-scope import chain never ran; 'torch absent' over an "
         "unexercised chain is UNMEASURED (doctrine 1)"
     )
+    chain_loaded = payload["chain_loaded"]
+    assert chain_loaded == sorted(CHAIN_MODULES), (
+        "chain denominator failed: the census lazy-import block names "
+        f"{len(CHAIN_MODULES)} modules {sorted(CHAIN_MODULES)} and the child "
+        f"reports {len(chain_loaded)} loaded {chain_loaded}; every missing "
+        "one is a module whose torch-freedom is UNMEASURED, and UNMEASURED "
+        "never passes (the prior 1/3-by-name chain measured 2/3 in fact, "
+        "dcp arriving transitively via dcp_meta, leaving checkpoint_gates "
+        "as the single blind module -- one gap, not two)"
+    )
+    census = payload["census"]
+    assert census["driven"], (
+        "vacuity guard: _declared_fqns_from_base was not found or not "
+        "driven on the exec'd emitter; a lazy-import block that never runs "
+        "is not measured (doctrine 6: a control that never RUNS is not one)"
+    )
+    assert census["absent_existed"] is False, (
+        "the census-drive probe path unexpectedly exists; the drive measured "
+        "a real artifact, not the provably-absent path it was built around, "
+        "so the positive evidence below is contaminated"
+    )
+    assert census["outcome"] == "EmitUnmeasured", (
+        "census drive outcome must be EmitUnmeasured: with all three chain "
+        "modules in the child's sys.modules the lazy imports provably "
+        "cleared, so the refusal can only have come from the read stage over "
+        f"an absent base -- the block was REACHED. Outcome "
+        f"{census['outcome']!r} instead means either an import failed (the "
+        "lazy block broke -- RED by detection) or the census returned "
+        "normally over an absent base (the all([]) shape wearing a census's "
+        "clothes -- RED by refusal); both are measured negatives"
+    )
     assert payload["hits"] == [], (
         "importing the emitter's chain pulled torch into a fresh "
         f"interpreter: {payload['hits']} present; "
         f"{payload['modules_loaded']} modules loaded after exec of "
-        f"{EMITTER_PATH.name} by path plus chain {list(CHAIN_MODULES)}"
+        f"{EMITTER_PATH.name} by path, census drive, plus chain "
+        f"{list(CHAIN_MODULES)}"
     )
     print(
-        "DENOMINATOR runtime leg: emitter by path + "
-        f"{len(CHAIN_MODULES)} chain module(s); 0/"
+        "DENOMINATOR runtime leg: emitter by path; chain "
+        f"{len(chain_loaded)}/{len(CHAIN_MODULES)} loaded "
+        f"({', '.join(chain_loaded)}); census drive driven="
+        f"{census['driven']} outcome={census['outcome']}; 0/"
         f"{payload['modules_loaded']} loaded modules torch-rooted; "
         "foundationscale modules in child: "
         f"{payload['foundationscale_modules']}"
@@ -706,3 +893,76 @@ def test_doctored_torch_copy_never_reads_green(tmp_path: Path) -> None:
     # Else: torch is absent here and the red is a refused chain -- right
     # colour only by accident. That is why the certified firings rest on the
     # controlled-name and static-position legs above, never on this one.
+
+
+def test_doctored_chain_module_copy_flips_the_verdict_red(tmp_path: Path) -> None:
+    """MUST_FIRE (chain override), observed: the widened 3/3 chain can burn.
+
+    Widening CHAIN_MODULES from 1/3-by-name to 3/3 only counts if the probe
+    can OBSERVE a hostile module-scope ``import torch`` on a chain module
+    other than the one it always imported. (Scale, stated honestly: the old
+    pin exercised 2 of 3 in practice because dcp rode in transitively on
+    dcp_meta; the widening closes one genuinely blind module,
+    checkpoint_gates, and removes the reliance on an unasserted import edge
+    for the other. That is a smaller win than "two-thirds blind" implied,
+    and it is still a win.) This leg doctors a tmp COPY of
+    foundationscale/checkpoint/dcp_meta.py and hands it to the child as an
+    explicit sys.modules override, pre-registered ahead of the real module's
+    resolution. (Why an override and not a sys.path shadow: a shadow tree
+    only outranks a NAMESPACE portion per PEP 420 scan order -- a regular
+    package later in path silently wins -- and this file refuses to pin
+    which tree shape foundationscale is, so sys.path precedence would be
+    tree-shape-dependent: exactly the host-dependence the -I child exists to
+    remove.) The real file is read as INPUT to build a runnable copy, never
+    asserted on as text, so a battery row rewriting dcp_meta.py cannot make
+    this leg red for content reasons -- its red is produced by the injected
+    line alone.
+
+    Verdict: never-green unconditionally, and when the chain completes
+    (torch importable on the host, per the project-venv measurement) the red
+    must be DETECTION -- 'torch' observed in the child's sys.modules -- with
+    the full three-module chain still loaded so nothing except the
+    observation could have fired. On a torch-less host the red is a refused
+    override import (rc 3, stage "override"): right colour, wrong reason,
+    the same caveat split as the emitter quarantine leg.
+    """
+    doctored, _ = _doctored_module(
+        DCP_META_PATH,
+        tmp_path,
+        "import torch  # MUST_FIRE: hoisted onto the census chain",
+    )
+    result = run_import_probe(
+        EMITTER_PATH,
+        TORCH_ROOT,
+        [SRC_ROOT],
+        override=("foundationscale.checkpoint.dcp_meta", doctored),
+    )
+    completed = (
+        result.returncode == 0
+        and result.payload is not None
+        and result.payload.get("stage") == "checked"
+    )
+    green = completed and result.stderr == "" and not result.payload["hits"]
+    assert not green, (
+        "a module-scope `import torch` on chain module dcp_meta (tmp copy, "
+        "override-registered ahead of the real one) read GREEN -- the "
+        "widened 3/3 chain is still blind exactly where it was widened "
+        f"(rc={result.returncode}, payload={result.payload})"
+    )
+    if completed:
+        assert "torch" in result.payload["hits"], (
+            "the chain completed yet the red is not 'torch observed in the "
+            "child' -- so what fired? "
+            f"hits={result.payload['hits']}, stderr={result.stderr!r}"
+        )
+        assert result.payload["chain_loaded"] == sorted(CHAIN_MODULES), (
+            "with the doctored copy in place the other chain modules must "
+            "still load; if the chain broke, the red is a refused chain "
+            "wearing detection's colours "
+            f"({result.payload['chain_loaded']} of {sorted(CHAIN_MODULES)})"
+        )
+    # Else: torch is absent here and the red is a refused override import
+    # (rc 3, stage 'override') -- right colour, measured reason recorded
+    # in-band. That is why the never-green claim above is the certified
+    # content, and detection attribution is asserted only on hosts where
+    # the chain verifiably completed, exactly as in the quarantine leg.
