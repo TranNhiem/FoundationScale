@@ -84,6 +84,19 @@ src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RET", "ARG", "PTH"]
+# UP038 (non-pep604-isinstance) was deprecated and then removed upstream, so
+# whether it fires is a property of the linter binary rather than of this
+# source tree. MEASURED 2026-08-30: the same commit is clean under ruff 0.16.4
+# and reports 21 UP038 violations under ruff 0.9.10 — the version shipped in
+# the H100 estate's `nemo-automodel-26-04.sif`. A gate whose verdict depends on
+# which machine ran it states no coverage, which is the defect #83 fixed for
+# the gates' own interpreter; this line fixes the same defect for the linter.
+# Ignoring it makes both toolchains agree. Modern ruff warns that the code is
+# removed and exits 0, which is the intended outcome: the warning is the
+# audit trail. Deliberately NOT fixed by rewriting the 21 call sites — they sit
+# in mutation-battery target modules, and editing anchored text to satisfy a
+# retired lint rule would confound the battery's attribution for no gain.
+ignore = ["UP038"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ARG"]
