@@ -1,0 +1,72 @@
+# The publish set: every file that ships in the public repository, one per line.
+#
+# This file exists because the build ran three clean scans over three honest denominators and
+# still published four estate identifiers (#157). Each scan knew what IT covered; nothing knew
+# what was SHIPPED, so h100/upstream/*.sh and *.py fell between the categories and were
+# reported clean by never being read. build_h100_plane.sh now computes coverage against this
+# list and refuses UNMEASURED (95) if any line here is in no scan category.
+#
+# Deliberately absent -- the estate's own artifacts, which this framework generalizes but does
+# not own. They are operator-supplied build inputs; the stages that need them resolve them by
+# measurement and refuse with a named message when they are missing:
+#   h100/upstream/launchers__launch_fs_h100.sh   base text for apply_113.py (carries estate
+#                                                paths that patch_estate_roots.py removes)
+#   h100/upstream/launchers__fs_container_backend.sh  stale snapshot; zero consumers
+#   h100/upstream/tools__fs_train.py             zero consumers in the published build
+#   <framework repo>/launchers/fs_container_backend.sh  resolved by apply_splice.py (#156)
+.gitignore
+README.md
+apply_113.py
+apply_117.py
+apply_splice.py
+build_h100_plane.sh
+emit_ckpt_adjudicator.py
+estate.env.example
+extract_fs_model_root.py
+extract_fs_train.py
+extract_stage.py
+fs_estate_pat.py
+gate_artifact_linkage.py
+gate_build_inputs.py
+gate_ckpt_naming_agreement.py
+gate_env_drift.py
+gate_launch_contract.py
+gate_launch_doc.py
+h100/DELIVERABLE_B_validation_report.md
+h100/DELIVERABLE_E_matrix.md
+h100/EVIDENCE.md
+h100/LAUNCH.md
+h100/PUBLISH_SET.txt
+h100/backend_splice.json
+h100/fix_113.json
+h100/fix_117.json
+h100/fs_train.json
+h100/gate133.json
+h100/gen/fs_ckpt_adjudicator.py
+h100/gen/fs_container_backend.bound.sh
+h100/gen/fs_container_backend.spliced.sh
+h100/gen/fs_model_root.py
+h100/gen/fs_train.fixed.py
+h100/gen/launch_fs_h100.fixed.sh
+h100/gen/test_fs_ckpt_adjudicator.py
+h100/gen/test_fs_model_root.py
+h100/upstream/README.md
+h100_backend_splice.py
+patch_adjudicator_binding.py
+patch_alloc_nodefault.py
+patch_bind_closure.py
+patch_bindpop.py
+patch_collective_probe.py
+patch_env_drift.py
+patch_estate_roots.py
+patch_fs_model_root.py
+patch_fs_train.py
+patch_fs_train_model_root.py
+patch_launch_topology.py
+patch_launcher_interpreter.py
+patch_list_separators.py
+patch_partition_knob.py
+patch_plane_dir.py
+patch_resume_env.py
+patch_wlm_allocation.py
+gate_exit_contract.py
