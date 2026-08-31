@@ -112,7 +112,11 @@ ignore = ["UP038"]
 "tools/preflight.py" = ["ARG001"]
 
 [tool.mypy]
-mypy_path = "src"
+# tools/ is on the path, not merely checked: live_save_gate imports its sibling
+# real_checkpoint_probe, and without this mypy reports import-not-found. Silencing
+# THAT with ignore_missing_imports is the exact failure the comment below describes,
+# so the sibling is made to resolve instead.
+mypy_path = ["src", "tools"]
 python_version = "3.10"
 # The package ships strict; sloppy types in gate code are how an all([]) sneaks in.
 disallow_untyped_defs = true
@@ -153,3 +157,15 @@ follow_imports_for_stubs = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+
+# preflight is not type-clean yet: 23 errors measured 2026-08-31 (11 missing-annotation,
+# 12 substantive — several are `x >= None` comparisons, which is precisely the class only
+# a type checker finds). It is exempted so the REST of tools/ can be checked at all,
+# because the alternative on offer was checking none of it: `mypy src` left the live
+# emitter and the live gate unchecked, and that is how a 3-tuple annotation sat over a
+# 4-tuple return (#105) with the suite green. The exemption is stated WITH its
+# denominator rather than left silent — a quiet exclusion reads exactly like coverage.
+# Delete this block when the 23 land; do not grow it to cover a new file.
+[[tool.mypy.overrides]]
+module = "preflight"
+ignore_errors = true

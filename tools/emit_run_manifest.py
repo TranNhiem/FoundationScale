@@ -428,7 +428,9 @@ def _enable_moe_block_flag(config: dict[str, Any]) -> tuple[bool | None, str]:
     return None, ""
 
 
-def _declared_fqns_from_base(base_ckpt: Path) -> tuple[tuple[str, ...], str, int]:
+def _declared_fqns_from_base(
+    base_ckpt: Path,
+) -> tuple[tuple[str, ...], str, int, tuple[str, ...]]:
     """Census the independent base artifact's REAL tensors (never the blobs).
 
     The inventory read is lazy-imported so this module stays loadable even

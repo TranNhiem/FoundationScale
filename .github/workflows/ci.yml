@@ -151,7 +151,16 @@ jobs:
       - name: Ruff format
         run: ruff format --check src tests tools
       - name: Mypy
-        run: mypy src
+        # The two LIVE tools are checked, for the same reason Ruff checks tools/ above:
+        # `mypy src` left the emitter and the gate unchecked, and that is exactly how
+        # _declared_fqns_from_base carried a 3-tuple annotation over a 4-tuple return
+        # (#105) with the whole suite green -- mypy names it twice, at the return and
+        # at the 4-way unpack, so this step is the control that defect never had.
+        # Named individually rather than as `tools`: tools/__init__.py makes the dir a
+        # package while live_save_gate imports its sibling script-style, so the same
+        # file resolves under two module names and mypy refuses the directory. The
+        # remaining tools/ modules are unchecked -- stated, not implied.
+        run: mypy src tools/emit_run_manifest.py tools/live_save_gate.py
       - name: Pytest (coverage floor 90; skips are failures — FS_FORBID_SKIPS)
         # --cov-fail-under=90 against a measured 93.6% total. The floor was 70 when
         # written, sized around gates/fixtures.py at 63% and gates/controls.py at

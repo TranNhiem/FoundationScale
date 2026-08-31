@@ -47,7 +47,7 @@ fmt:
 # three Pythons. Same command, same source, different answer, because the environment
 # differed. That is the repository's own thesis pointed at its Makefile.
 typecheck:
-	mypy src
+	mypy src tools/emit_run_manifest.py tools/live_save_gate.py
 
 controls:
 	python -m foundationscale.gates.controls
