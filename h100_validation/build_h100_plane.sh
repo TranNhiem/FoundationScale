@@ -59,6 +59,13 @@ ADJTEST=$GEN/test_fs_ckpt_adjudicator.py
 # suite for the #86 reason -- a contract suite that ships and never runs is passing
 # legs nobody executed. It carries the subject's 12 self-test controls into the build.
 PFTEST=test_fs_argv_preflight.py
+# #197: the scalar reader's harness (#179), hand-written and at the build root like PFTEST.
+# It shipped and was published for a campaign while running nowhere, excused by a role-file
+# row that said "run by pytest in CI" -- an attestation with no evidence attached. That is
+# #86 again. The comment below states the rule for GENERATED suites; the denominator was the
+# defect, so the rule is now enforced over every file declaring role `test`, by
+# gate_stage_orphans.py, which reads THIS invocation to derive what actually executes.
+SCTEST=test_fs_ckpt_scalars.py
 
 # Order is load-bearing where noted; the rest is stable for reproducibility.
 #   apply_113        generates the launcher
@@ -886,8 +893,8 @@ if [[ "${FS_SKIP_SUITE:-0}" == 1 ]]; then
   suite="WAIVED (FS_SKIP_SUITE=1)"
   echo "  $suite — the generated suite was NOT run"
 elif [[ -x "$PY" ]] && "$PY" -c 'import pytest' 2>/dev/null; then
-  "$PY" -m pytest "$MRTEST" "$ADJTEST" "$PFTEST" -q || { echo "SUITE RED" >&2; exit 5; }
-  suite="$("$PY" -m pytest "$MRTEST" "$ADJTEST" "$PFTEST" -q 2>/dev/null | tail -1)"
+  "$PY" -m pytest "$MRTEST" "$ADJTEST" "$PFTEST" "$SCTEST" -q || { echo "SUITE RED" >&2; exit 5; }
+  suite="$("$PY" -m pytest "$MRTEST" "$ADJTEST" "$PFTEST" "$SCTEST" -q 2>/dev/null | tail -1)"
 else
   echo "  UNMEASURED (95): no pytest at '$PY'. Set FS_PYTEST to an interpreter that has it," >&2
   echo "  or FS_SKIP_SUITE=1 to waive explicitly. Not running a suite is not passing it." >&2

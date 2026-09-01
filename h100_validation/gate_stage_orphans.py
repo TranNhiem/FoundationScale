@@ -30,6 +30,16 @@ WHAT IT MEASURES
   none, or covering no partitioned file at all) is RED: a declaration list that
   accumulates rows covering nothing is how the next instance of this class hides.
 
+  The role 'test' is a VERB, not a noun: it means the build's pytest invocation
+  EXECUTES the file. The executed set is DERIVED from the build script's own
+  '-m pytest' lines -- variables resolved from the script's assignments, never a
+  list retyped by hand, which is a list that lags -- and a declared test whose
+  basename is not in that set is TEST_NEVER_RUN (RED): its legs ship and nothing
+  runs them (#197, reopening #86). If no pytest invocation can be found in the
+  build script the class is UNMEASURED, never silently zero: all([]) is True,
+  and a check that cannot run reporting "0 findings" reads exactly like a clean
+  tree.
+
 DENOMINATOR
   |RUN ∪ SHIP ∪ CANDIDATE|, printed with the per-bucket counts. Zero parseable
   stages or zero shipped .py entries is UNMEASURED (95), never PASS -- all([]) is
@@ -42,6 +52,10 @@ WHAT IT DOES NOT COVER
     scope is printed, and it is not a claim about every file in the directory.
   * The runtime-artifact role is ATTESTED, NOT MEASURED: the gate checks only that
     the file exists, says so in the output, and counts the rows carrying the role.
+  * Whether a runner OUTSIDE this build (CI, a developer's shell) executes a
+    declared test: the gate measures only this build's pytest invocation. An
+    attestation that some other runner executes the file is not a measurement
+    this gate can make.
 
 --propose
   Writes a candidate STAGE_ROLES.tsv to STDOUT for every file that would need a
@@ -89,6 +103,38 @@ _FROM_RE = re.compile(r"^\s*from\s+([A-Za-z_][A-Za-z0-9_]*)\s+import\b")
 _IMPORT_RE = re.compile(r"^\s*import\s+(.+)$")
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _DEF_TEST_RE = re.compile(r"^\s*def\s+test_", re.M)
+_PYTEST_VAR_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+
+
+def _names_in(text, names):
+    """Return the subset of `names` that occurs in `text` at a filename boundary.
+
+    A bare `name in text` test enrols a name that appears only inside a LONGER
+    name (#199: `fs_ckpt_scalars.py` was enrolled by `test_fs_ckpt_scalars.py`,
+    a file named nowhere in the build script), so each name is matched with an
+    anchor on both sides. The two anchor classes are deliberately asymmetric:
+
+    * The lookbehind excludes [A-Za-z0-9_.-] -- every character that can appear
+      inside a filename stem. It must NOT exclude '/', because
+      '$GEN/test_fs_model_root.py' is a genuine reference and the leading path
+      component is not part of the name.
+    * The lookahead excludes only [A-Za-z0-9_]. A trailing '.' or '-' after
+      '.py' is punctuation in prose, not a longer filename, and excluding them
+      would drop real references written mid-sentence in a comment; but
+      'foo.pyc' must not enrol 'foo.py', which is why the alphanumerics and
+      underscore are there.
+
+    The pattern is compiled per name -- a small re.compile per call is fine at
+    this scale, and one giant alternation is deliberately not built, because
+    the per-name result is what the caller needs.
+    """
+    found = set()
+    for name in names:
+        pattern = re.compile(
+            r"(?<![A-Za-z0-9_.\-])" + re.escape(name) + r"(?![A-Za-z0-9_])")
+        if pattern.search(text):
+            found.add(name)
+    return found
 
 
 def _basename(path):
@@ -202,14 +248,51 @@ def modules_imported(text):
     return mods
 
 
+def pytest_invoked(build_text):
+    """Basenames the build script's pytest invocation runs, DERIVED from the
+    script's own '-m pytest' lines -- never a list retyped by hand, which is a
+    list that lags (#183's discipline: take the set from the script, not from a
+    literal). Returns None only when no pytest invocation exists at all: that is
+    the state where the gate has no oracle and must say so. Variables after
+    '-m pytest' are resolved from the script's own assignments (first match
+    wins, the assignment in force at the invocation -- the build assigns these
+    once at the top); an unresolvable name contributes nothing and is NOT an
+    error, because a shell variable can come from the environment and inventing
+    a red from an unresolved name would be a false claim. $GEN-style prefixes
+    are not expanded: the comparison is over basenames, and read_declarations
+    already keys on the path, so two declared tests cannot share one."""
+    tails = []
+    for line in build_text.splitlines():
+        idx = line.find("-m pytest")
+        if idx >= 0:
+            tails.append(line[idx + len("-m pytest"):])
+    if not tails:
+        return None
+    invoked = set()
+    for tail in tails:
+        for token in tail.split():
+            token = token.strip("\"'")
+            if token.endswith(".py"):
+                invoked.add(_basename(token))
+        for name in _PYTEST_VAR_RE.findall(tail):
+            m = re.search(r"^\s*%s=(.+?)\s*$" % name, build_text, re.M)
+            if m is None:
+                continue
+            value = m.group(1).strip().strip("\"'")
+            if value:
+                invoked.add(_basename(value))
+    return invoked
+
+
 class Refs(object):
     """Every textual reference the partition needs, precomputed by the caller so
     the partition itself never touches the filesystem."""
 
-    def __init__(self, build_refs, importers, def_test):
+    def __init__(self, build_refs, importers, def_test, pytest_run):
         self.build_refs = frozenset(build_refs)  # basenames occurring literally in the build script
         self.importers = dict((m, frozenset(s)) for m, s in importers.items())  # module -> ship entries importing it
         self.def_test = frozenset(def_test)  # relative paths containing a `def test_` definition
+        self.pytest_run = None if pytest_run is None else frozenset(pytest_run)  # basenames the build's pytest invocation runs; None = no invocation found, class UNMEASURED
 
 
 def derive_disk_and_refs(root, build_text, ship, declarations):
@@ -225,7 +308,7 @@ def derive_disk_and_refs(root, build_text, ship, declarations):
     names = set(root_files)
     names.update(_basename(e) for e in ship)
     names.update(_basename(p) for p in declarations)
-    build_refs = set(n for n in names if n in build_text)
+    build_refs = _names_in(build_text, names)
 
     importers = {}
     for entry in ship:
@@ -247,7 +330,9 @@ def derive_disk_and_refs(root, build_text, ship, declarations):
         if _DEF_TEST_RE.search(text):
             def_test.add(rel)
 
-    return on_disk, Refs(build_refs, importers, def_test)
+    pytest_run = pytest_invoked(build_text)
+
+    return on_disk, Refs(build_refs, importers, def_test, pytest_run)
 
 
 def partition(run, ship, on_disk, refs, declarations):
@@ -372,6 +457,28 @@ def partition(run, ship, on_disk, refs, declarations):
                 "declaration covers no partitioned file",
             ))
 
+    # TEST_NEVER_RUN: role 'test' is a VERB -- the build's pytest invocation must
+    # execute the file. refs.pytest_run is None when no invocation could be found;
+    # that state is carried into the report as UNMEASURED below, NOT reported as
+    # zero findings -- all([]) is True, and a check that cannot run reporting
+    # "0 findings" reads exactly like a clean tree.
+    if refs.pytest_run is not None:
+        for path in sorted(declarations):
+            role, _reason = declarations[path]
+            if role != "test":
+                continue
+            if _basename(path) not in refs.pytest_run:
+                findings.append((
+                    path, "TEST_NEVER_RUN",
+                    "declared test but the build's pytest invocation never "
+                    "names it, so its legs are shipped and never executed "
+                    "(#197, reopening #86) — add it to the invocation in %s, "
+                    "or, if it genuinely belongs to a runner outside this "
+                    "build, change its role; an attestation that some other "
+                    "runner executes it is not a measurement this gate can "
+                    "make" % BUILD_SCRIPT,
+                ))
+
     return {
         "buckets": {
             "RUN_AND_SHIPPED": frozenset(run_and_shipped),
@@ -384,18 +491,22 @@ def partition(run, ship, on_disk, refs, declarations):
         "candidate_by_ref": frozenset(by_ref),
         "findings": tuple(sorted(findings)),
         "runtime_attested": frozenset(runtime_attested),
+        "pytest_run": refs.pytest_run,
     }
 
 
 def run_controls(run, ship, on_disk, refs, declarations, real):
-    """Four MUST_FIRE drills over mutated argument copies (never the filesystem)
-    and one MUST_PASS re-derivation. Returns (lines, failures, fired, total)."""
+    """Six MUST_FIRE drills (five over mutated argument copies, one over
+    synthesized text -- never the filesystem), one MUST_PASS enrolment leg
+    over synthesized text, and one MUST_PASS re-derivation. Returns (lines,
+    failures, fired, total)."""
     lines = []
     failures = []
     fired = 0
-    total = 4
+    total = 0
     ras = sorted(real["buckets"]["RUN_AND_SHIPPED"])
 
+    total += 1
     if not ras:
         failures.append(
             "MUST_FIRE/RUN_NOT_SHIPPED: no RUN_AND_SHIPPED file exists to mutate — "
@@ -417,6 +528,7 @@ def run_controls(run, ship, on_disk, refs, declarations, real):
                 "RUN_NOT_SHIPPED finding named it" % victim
             )
 
+    total += 1
     synth = "patch_ctl_neither_mustfire.py"
     on_disk2 = set(on_disk)
     on_disk2.add(synth)
@@ -432,6 +544,7 @@ def run_controls(run, ship, on_disk, refs, declarations, real):
             "MUST_FIRE/NEITHER: injected %s but no NEITHER finding named it" % synth
         )
 
+    total += 1
     ghost = "patch_ctl_missing_mustfire.py"
     run2 = list(run)
     run2.append(ghost)
@@ -448,6 +561,7 @@ def run_controls(run, ship, on_disk, refs, declarations, real):
             "finding named it" % ghost
         )
 
+    total += 1
     if not ras:
         failures.append(
             "MUST_FIRE/STALE_DECLARATION: no RUN_AND_SHIPPED file exists to "
@@ -470,11 +584,91 @@ def run_controls(run, ship, on_disk, refs, declarations, real):
                 "finding named it" % victim
             )
 
+    total += 1
+    if refs.pytest_run is None:
+        lines.append(
+            "MUST_FIRE/TEST_NEVER_RUN    UNMEASURED (no oracle): no '-m pytest' "
+            "invocation could be read from %s; the drill did not fire" % BUILD_SCRIPT
+        )
+    else:
+        executed_tests = sorted(
+            path for path in declarations
+            if declarations[path][0] == "test"
+            and _basename(path) in refs.pytest_run)
+        if not executed_tests:
+            failures.append(
+                "MUST_FIRE/TEST_NEVER_RUN: oracle present, no victim — the "
+                "pytest executed set was derived, but no declared test file "
+                "sits in it; the control cannot be constructed"
+            )
+        else:
+            victim = executed_tests[0]
+            refs2 = Refs(refs.build_refs, refs.importers, refs.def_test,
+                         set(refs.pytest_run) - {_basename(victim)})
+            p = partition(run, ship, on_disk, refs2, declarations)
+            if any(f[0] == victim and f[1] == "TEST_NEVER_RUN" for f in p["findings"]):
+                fired += 1
+                lines.append(
+                    "MUST_FIRE/TEST_NEVER_RUN    mutated: removed %s from the "
+                    "pytest executed set; observed: RED, and the finding names "
+                    "%s" % (victim, victim)
+                )
+            else:
+                failures.append(
+                    "MUST_FIRE/TEST_NEVER_RUN: removed %s from the pytest "
+                    "executed set but no TEST_NEVER_RUN finding named it" % victim
+                )
+
+    # The two anchoring controls run over SYNTHESIZED text, not the filesystem:
+    # tightening the CANDIDATE matcher is itself a way to shrink a denominator
+    # silently (#199), so the matcher is drilled in both directions -- a name
+    # inside a longer name must NOT enrol, and a path-prefixed name must STILL
+    # enrol. The victim is a name not already enrolled if one exists (so the
+    # negative leg is a real drill, not a tautology), else any name.
+    ctl_names = set(f for f in on_disk if "/" not in f and f.endswith(".py"))
+    ctl_names.update(_basename(e) for e in ship)
+    ctl_names.update(_basename(p) for p in declarations)
+    unenrolled = sorted(n for n in ctl_names if n not in refs.build_refs)
+    victim = unenrolled[0] if unenrolled else sorted(ctl_names)[0]
+
+    total += 1
+    if _names_in("X=zzq_%s" % victim, {victim}):
+        failures.append(
+            "MUST_FIRE/SUFFIX_NOT_ENROLLED: synthesized 'X=zzq_%s' and the "
+            "helper enrolled %s — a name is being enrolled from inside a "
+            "longer name (#199); the control is failing" % (victim, victim)
+        )
+    else:
+        fired += 1
+        lines.append(
+            "MUST_FIRE/SUFFIX_NOT_ENROLLED mutated: synthesized 'X=zzq_%s'; "
+            "observed: the must-not-enrol leg held — _names_in returned it "
+            "EMPTY" % victim
+        )
+
+    total += 1
+    if _names_in("X=$GEN/%s" % victim, {victim}) == {victim}:
+        fired += 1
+        lines.append(
+            "MUST_PASS/PATH_PREFIXED_STILL_ENROLLED synthesized 'X=$GEN/%s'; "
+            "observed: the must-still-enrol leg held — _names_in returned "
+            "exactly that victim" % victim
+        )
+    else:
+        failures.append(
+            "MUST_PASS/PATH_PREFIXED_STILL_ENROLLED: synthesized 'X=$GEN/%s' "
+            "but the helper did not return exactly %s — an over-tightened "
+            "anchor would drop every path-prefixed reference and the gate "
+            "would report a smaller, cleaner-looking denominator with "
+            "nothing red" % (victim, victim)
+        )
+
     again = partition(run, ship, on_disk, refs, declarations)
     if again == real:
         lines.append(
             "MUST_PASS                   re-derived the real partition after %d "
-            "drills; observed: identical to the pre-drill partition, field by field" % total
+            "of %d controls fired; observed: identical to the pre-drill "
+            "partition, field by field" % (fired, total)
         )
     else:
         failures.append(
@@ -534,6 +728,16 @@ def print_report(root, run, ship, on_disk, declarations, real,
         ", ".join("%s=%d" % (k, neither_counts[k]) for k in sorted(neither_counts)) or "none"))
     print("  NOTE: role runtime-artifact is ATTESTED, NOT MEASURED (existence "
           "only) — %d row(s) carry it" % len(real["runtime_attested"]))
+    declared_tests = sorted(p for p in declarations if declarations[p][0] == "test")
+    if real["pytest_run"] is None:
+        print("  NOTE: role test is UNMEASURED — no '-m pytest' invocation was "
+              "found in %s, so the set of executed tests cannot be derived; "
+              "TEST_NEVER_RUN is not adjudicated (%d declared test(s)) and "
+              "this run cannot be GREEN" % (BUILD_SCRIPT, len(declared_tests)))
+    else:
+        print("  NOTE: role test is MEASURED against the pytest invocation "
+              "derived from %s — %d basename(s) executed, %d declared test(s) "
+              "checked" % (BUILD_SCRIPT, len(real["pytest_run"]), len(declared_tests)))
 
     findings = real["findings"]
     if findings:
@@ -558,6 +762,13 @@ def print_report(root, run, ship, on_disk, declarations, real,
         print("STAGE-ORPHAN GATE RED — %d stage(s), %d shipped module(s), %d "
               "candidate(s); %d finding(s); %d/%d drills fired" % (
                   len(run_set), len(ship), len(candidate), len(findings), fired, total))
+    elif real["pytest_run"] is None:
+        print("STAGE-ORPHAN GATE UNMEASURED — %d unique stage file(s) from %d "
+              "entr(ies), %d shipped module(s), %d candidate(s); no '-m "
+              "pytest' invocation could be read from %s, so whether every "
+              "declared test runs is UNMEASURED, not GREEN; %d/%d drills "
+              "fired" % (len(run_set), len(run), len(ship), len(candidate),
+                         BUILD_SCRIPT, fired, total))
     else:
         # "%d stage(s)" was ambiguous against the build's own `BUILD GREEN — N stages`,
         # which counts ENTRIES: this line counts unique FILES, and the two differ whenever
@@ -685,6 +896,8 @@ def main():
 
     if control_failures:
         return EXIT_REFUSE
+    if not real["findings"] and real["pytest_run"] is None:
+        return EXIT_UNMEASURED
     return EXIT_RED if real["findings"] else EXIT_PASS
 
 
