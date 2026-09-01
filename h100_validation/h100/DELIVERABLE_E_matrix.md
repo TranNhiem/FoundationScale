@@ -247,7 +247,7 @@ and none of them present, held out of the build by the same mechanism. #190 is t
 five stages that ran and never shipped. The four together say that this build had **two**
 independent membership lists and no gate reading either one against the other, so a fix could be
 absent from execution or absent from publication and the build was green in both cases. All six
-files are now wired in and the plane builds green at 37 stages. **How many other stages are in
+files are now wired in and the plane builds green at 38 stages. **How many other stages are in
 this state is UNMEASURED**: a one-off audit today found two remaining files in neither list, of
 which `patch_gate_launch_contract.py` is superseded — its sentinel is absent from
 `gate_launch_contract.py`, but the hard-coded build-host `ROOT` it existed to remove is already
@@ -360,7 +360,7 @@ write while any of their own gates is red.
 
 | Property | Status | How it was measured |
 |---|---|---|
-| stages green | **37/37** | full run, red stage aborts the build. Restated 2026-09-01 from a stale `17/17`, and again from a stale `36/36` when #182 landed as stage 37 -- that second staleness survived the gate's first pass because the gate only read `N/D stages`, with the noun AFTER the numbers, and this cell puts it before. The pattern now reads both orders: the count is now derived by `gate_doc_stage_count.py` from the build script's own `STAGES` array on every build, because a denominator that is retyped by hand is a denominator that lags (#194). |
+| stages green | **38/38** | full run; a red stage aborts the build. The number is derived by `gate_doc_stage_count.py` from the build script's own `STAGES` array on every build (#194) -- a denominator that is retyped by hand is a denominator that lags. See the note below on why this cell now carries only the number. |
 | bidirectional env drift | **green** | `gate_env_drift.py`, all 3 detectors drilled with planted violations |
 | public-repo blocklist | **0 hits / 5 files** | plus a planted-string control proving the pattern is live (1/1) |
 | parse | **5/5** | `bash -n` ×2 and `py_compile` ×3 — each artifact checked by its own language's parser |
@@ -368,6 +368,20 @@ write while any of their own gates is red.
 | input/output partition | **4/4** | every file the build touches is a declared artifact or a documented upstream; I1 drilled with a planted file each run |
 | **from scratch** | **true** (since #136) | the un-generated intermediate is now removed and rebuilt every run |
 | **deterministic** | **true** | two consecutive full rebuilds → byte-identical sha256 on all 5 artifacts |
+
+
+**Why that cell is now bare, and a defect it exposed (#196).** It used to carry both the live
+number and the story of its own restatements -- from a stale `17/17`, then from a stale
+`36/36` when #182 landed, then from a stale `37/37` when #183 landed as stage 37 and displaced
+#182's stage to 38. That was a mistake, and a measured one. `gate_doc_stage_count.py` exempts
+a claim whose surrounding text carries a historical marker (`restated`, `stale \``, `earlier`,
+and six others), and the exemption is scoped to the whole table cell. So the one cell most
+likely to go stale -- the cell whose subject is going stale -- was the one cell the gate could
+not read. Control, run 2026-09-02: planting `**99/99**` in the old cell left the gate green at
+rc=0, `claims=2 agree=1 historical=1 stale=0`. The number and its history are now separated,
+so the number is inside the gate's denominator and this paragraph, which is genuinely about
+the past, is outside it. The general rule the gate cannot yet enforce: a historical marker
+must not be able to shield a present-tense claim that shares its cell.
 
 Determinism is the property that makes the rest auditable: without it "the gates were green"
 refers to a build nobody can reproduce. It was only checkable after #136, because until then
@@ -416,3 +430,4 @@ with 8 ranks. What remains unexercised, with the denominator that keeps it hones
 | operator-facing text naming a file nothing ships | **CLOSED (#182)** | The launcher's `PROBE denominator:` line told operators that `FS_ITERATION_BUDGET` and `FS_EARLY_SAVE_STEPS` are read by `tools/fs_train.py` — a file with **0 consumers**, shipped by no stage, present in neither the publish set nor the repository. Seven sites across three shipped files repeated it, one of them naming a second phantom, `run_recipe.py`, that the finding never mentioned. All seven now name **the engine entrypoint given in `FS_ENGINE_LAUNCH_CMD`**, which is the real seam and is operator-supplied, so no filename is asserted at all. Build stage 37, `patch_engine_entrypoint_naming.py`: a **census** of every `*.py` token in operator-facing text (comments plus quoted `printf`/`echo`/`fail` strings) against `PUBLISH_SET.txt` ∪ the repository's `git ls-files`, `17/17` static gates, `10/10` controls. Its first run taught the denominator rule that now governs the plane's detectors: scoped to the publish set alone it produced **6 false REDs out of 9**, because that list enumerates only the `h100_validation/` subtree; and where the repository half cannot be resolved a not-found token is **95 UNMEASURED, never 5**. Note for anyone verifying a clone: running the stage against the published tree exits **96 REFUSE**, because its pre-image anchor is gone once it has been applied — that is the refuse-rather-than-guess guard working, not a failure, and it is true of every patch stage here. The census's verdict on the post-image is exercised inside the stage by control `CENSUS_GREEN_ON_THE_REAL_POST_IMAGE`; the way to re-verify a clone is `bash build_h100_plane.sh`, not to run a single stage |
 | absolute line citations into a generated launcher | OPEN as a maintenance cost, detected not prevented | LAUNCH.md cites the launcher by absolute line number (`L:543`). Stage 37 added two comment lines at :481, and **32 citation numbers at or after that point shifted by +2** — 9 of them past the point where the L2 gate could still resolve them, which is how the shift was caught. The gate is the right shape (it refused a build over stale pointers, and its MUST_FIRE drills a renumbered citation red), but the repair is manual re-anchoring on every stage that changes the launcher's length. The structural fix would be symbolic anchors resolved at gate time instead of typed line numbers; not attempted here, and recorded so the next stage author expects the churn |
 | stale status lines in shipped docs | **CLOSED for the stage count (#194)** — open as a class | LAUNCH.md led operators with "Phase 3 … has **never** been executed" for a full campaign after 37310 executed 8/8 legs, and four documents carried three different stage counts (`17/17`, `33`, `36`) for one build. Understatement is the same defect as overstatement: a status line that lags its evidence is unreliable in both directions. The stage count is now derived, not retyped — `gate_doc_stage_count.py` reads the build script's `STAGES` array and refuses on disagreement, with a planted-mismatch control. The narrative status lines were corrected by hand against the job record and are **not** machine-checked; that residual is stated rather than closed |
+| argv validated only after an allocation is burned | **PARTIALLY CLOSED at build time (#183)** -- chain path only, UNMEASURED on hardware | The finding: on the pre-image launcher, 49 guards run before the first `sbatch`, and exactly 4 knobs are first guarded only inside the allocation, so a mistyped trainer flag cost four queued jobs plus a scheduler wait. The fix: build stage 37 of 38 atomically installs `fs_argv_preflight.py` byte for byte and splices its call above the chain driver's first `sbatch`, because a spliced call whose callee did not ship is the orphan class filed as #136, #188, #189 and #190; a sha256 control compares source and installed copy. The accepted mode set is derived from the backend's `case "$mode" in ...)` alternatives, and the harness proves derivation by adding a fourth alternative and requiring it to appear. Exit mapping is asymmetric: 5 and 96 refuse, 95 warns and proceeds. **Residuals:** coverage is submit-chain only, so direct single-job `sbatch` remains uncovered; no cluster job has run the spliced block, so on-hardware behaviour is UNMEASURED. |

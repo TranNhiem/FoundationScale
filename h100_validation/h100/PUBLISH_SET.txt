@@ -30,6 +30,8 @@ extract_stage.py
 # partitions that directory into declared artifacts and documented upstreams, and a file
 # that is neither is the #136/#137 state. Declaring them in PRODUCED to quiet the gate
 # would have asserted a producer that does not exist.
+fs_argv_preflight.py
+test_fs_argv_preflight.py
 fs_ckpt_scalars.py
 test_fs_ckpt_scalars.py
 fs_estate_pat.py
@@ -50,6 +52,7 @@ h100/fix_113.json
 h100/fix_117.json
 h100/fs_train.json
 h100/gate133.json
+h100/gen/fs_argv_preflight.py
 h100/gen/fs_ckpt_adjudicator.py
 h100/gen/fs_container_backend.bound.sh
 h100/gen/fs_container_backend.spliced.sh
@@ -122,4 +125,5 @@ gate_doc_stage_count.py
 # text UNION the shipped set -- is the detector for a class the four named anchors were only
 # instances of, and a clone that gets the corrected text without the census gets the state
 # back the first time someone writes a filename into a comment.
+patch_argv_preflight.py
 patch_engine_entrypoint_naming.py

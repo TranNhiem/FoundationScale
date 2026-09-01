@@ -54,6 +54,11 @@ MRTEST=$GEN/test_fs_model_root.py
 # Generated, and its suite generated with it, for the same reason as the model-root pair.
 ADJ=$GEN/fs_ckpt_adjudicator.py
 ADJTEST=$GEN/test_fs_ckpt_adjudicator.py
+# #183: the login-node argv preflight's certification harness. Unlike the two above it
+# is hand-written rather than generated, so it lives at the build root; it is in the
+# suite for the #86 reason -- a contract suite that ships and never runs is passing
+# legs nobody executed. It carries the subject's 12 self-test controls into the build.
+PFTEST=test_fs_argv_preflight.py
 
 # Order is load-bearing where noted; the rest is stable for reproducibility.
 #   apply_113        generates the launcher
@@ -304,6 +309,20 @@ STAGES=(
                               # The stage is byte-idempotent, so re-running it after the last
                               # launcher-touching stage costs nothing when the invariant holds
                               # and goes red the moment some future stage breaks it.
+  patch_argv_preflight.py     # #183: every guard on FS_ENGINE_LAUNCH_CMD sat BELOW the
+                              # SLURM_JOB_ID gate (first read :817, unset caught :819, bad
+                              # mode :841), so a typo was paid for with four queued jobs and
+                              # a scheduler wait. Measured: 49 guards run before the first
+                              # sbatch and exactly 4 knobs are first guarded inside the
+                              # allocation. Installs fs_argv_preflight.py into the plane
+                              # directory and splices a call to it above the chain driver's
+                              # first submit -- the two halves are ATOMIC, because a call
+                              # site whose callee did not ship is #188/#189/#190 again.
+                              # RED refuses before anything is queued; UNMEASURED warns and
+                              # proceeds, since a foreign entrypoint readable only inside
+                              # the container must not be blocked by its own diagnostic.
+                              # Must precede patch_engine_entrypoint_naming.py so the block's
+                              # operator-facing text falls inside that stage's census.
   patch_engine_entrypoint_naming.py # #182: the launch plane's operator-facing text named
                               # tools/fs_train.py as the reader of two knobs, a program
                               # PUBLISH_SET.txt itself declares has "zero consumers in the
@@ -867,8 +886,8 @@ if [[ "${FS_SKIP_SUITE:-0}" == 1 ]]; then
   suite="WAIVED (FS_SKIP_SUITE=1)"
   echo "  $suite — the generated suite was NOT run"
 elif [[ -x "$PY" ]] && "$PY" -c 'import pytest' 2>/dev/null; then
-  "$PY" -m pytest "$MRTEST" "$ADJTEST" -q || { echo "SUITE RED" >&2; exit 5; }
-  suite="$("$PY" -m pytest "$MRTEST" "$ADJTEST" -q 2>/dev/null | tail -1)"
+  "$PY" -m pytest "$MRTEST" "$ADJTEST" "$PFTEST" -q || { echo "SUITE RED" >&2; exit 5; }
+  suite="$("$PY" -m pytest "$MRTEST" "$ADJTEST" "$PFTEST" -q 2>/dev/null | tail -1)"
 else
   echo "  UNMEASURED (95): no pytest at '$PY'. Set FS_PYTEST to an interpreter that has it," >&2
   echo "  or FS_SKIP_SUITE=1 to waive explicitly. Not running a suite is not passing it." >&2

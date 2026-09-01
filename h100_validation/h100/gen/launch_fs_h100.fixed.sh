@@ -653,6 +653,45 @@ adjudicate_tree() {
 
 if [[ -z "${SLURM_JOB_ID:-}" && "${FS_SUBMIT_CHAIN:-0}" == 1 ]]; then
   # Login-node chain driver. Probe -> production -> resume(afterok: a REAL resume) + post-mortem(afterany: reporting only).
+  # fs183: the operator's ACTUAL engine command, checked on the login node BEFORE any
+  # allocation is burned. Every existing guard on FS_ENGINE_LAUNCH_CMD sits below the
+  # SLURM_JOB_ID gate -- unset is caught at :819 and a malformed mode at :841 -- which means
+  # a typo cost four queued jobs and a scheduler wait to discover. The preflight is host-side
+  # and torch-free precisely so it can run here, where the interpreter may be 3.6.8.
+  # FS_GPUS_PER_NODE is required and already validated above this splice point (req_env at
+  # :225, integer at :344, > 0 at :345), so it is passed UNCONDITIONALLY: the emptiness a
+  # conditional append would guard against cannot occur here.
+  fs183_pf_args=( --launch-cmd "${FS_ENGINE_LAUNCH_CMD:-}" --backend "$FS_PLANE_DIR/$BACKEND_NAME" --procs-per-node "$FS_GPUS_PER_NODE" )
+  # Pass --mode only when the operator set one. FS_ENGINE_LAUNCH_MODE is required-with-no-default
+  # and read at :841, but a child process sees it only if it was exported; passing an empty
+  # value would make the preflight adjudicate an empty string as a mode, whereas omitting the
+  # flag lets it report C3 as UNMEASURED ("nothing to check").
+  [[ -n "${FS_ENGINE_LAUNCH_MODE:-}" ]] && fs183_pf_args+=( --mode "$FS_ENGINE_LAUNCH_MODE" )
+  if [[ ! -r "$FS_PLANE_DIR/fs_argv_preflight.py" ]]; then
+    # A plane staged before this check existed is not a broken plane, and refusing to submit
+    # because a diagnostic is missing would make the diagnostic worse than the defect it
+    # finds. Absence of the checker is UNMEASURED, and it names its own remedy.
+    printf 'ARGV PREFLIGHT unmeasured -- %s/fs_argv_preflight.py is not readable, so the engine command was NOT checked before submit. Remedy: redeploy the plane directory from the build (it ships this file alongside %s). Proceeding.\n' \
+      "$FS_PLANE_DIR" "$BACKEND_NAME" >&2
+  else
+    fs183_pf_rc=0
+    # Bare python3, deliberately no knob: the launcher already spells the host interpreter
+    # as python3 (:582, :749), and the preflight is 3.6.8-clean precisely so that bare
+    # python3 on a login node is sufficient. A knob introduced here and declared nowhere
+    # would be a knob with no reader.
+    python3 "$FS_PLANE_DIR/fs_argv_preflight.py" "${fs183_pf_args[@]}" || fs183_pf_rc=$?
+    case "$fs183_pf_rc" in
+      0) ;;
+      95)
+        # UNMEASURED must not block: a foreign engine entrypoint that lives only inside the
+        # container is legitimately unreadable from here, and refusing every such launch would
+        # make the plane engine-specific. It must also never be reported as a pass.
+        printf 'ARGV PREFLIGHT unmeasured -- proceeding to submit; the checks above say which oracle was missing. This is NOT a clean bill of health.\n' >&2 ;;
+      5)  fail 5 "argv preflight RED: the engine command names flags the entrypoint does not declare, or a mode the backend does not accept. Refusing before submitting; nothing was queued." ;;
+      96) fail 96 "argv preflight REFUSE: FS_ENGINE_LAUNCH_CMD is unset or does not tokenize. Refusing before submitting; nothing was queued." ;;
+      *)  fail 96 "argv preflight returned undeclared exit code $fs183_pf_rc; the plane's contract is 0/5/95/96" ;;
+    esac
+  fi
   probe_jid="$(PROBE=1 FS_SUBMIT_CHAIN=0 sbatch --partition="$FS_PARTITION" --parsable --export=ALL,PROBE=1,FS_SUBMIT_CHAIN=0 "$FS_PLANE_DIR/$(basename "$0")")"
   [[ "$probe_jid" =~ ^[0-9]+$ ]] || fail 96 "probe submit did not return a job id: '$probe_jid'"
   prod_jid="$(PROBE=0 FS_SUBMIT_CHAIN=0 sbatch --partition="$FS_PARTITION" --parsable --dependency="afterok:$probe_jid" --export=ALL,PROBE=0,FS_SUBMIT_CHAIN=0 "$FS_PLANE_DIR/$(basename "$0")")"

@@ -55,6 +55,12 @@ PRODUCED = {
     # test beside a generated module drifts the moment the module's rule changes.
     "fs_ckpt_adjudicator.py",
     "test_fs_ckpt_adjudicator.py",
+    # #183: the login-node argv preflight. Unlike its neighbours this one is not synthesised
+    # from a template -- patch_argv_preflight.py COPIES it from the hand-authored source at
+    # the build root. It is still produced: the copy is what the plane ships and what the
+    # spliced call resolves, the build root holds the input, and nothing but the stage writes
+    # here. Declaring the copy is what keeps the two in the same direction #137 established.
+    "fs_argv_preflight.py",
 }
 
 # Interpreter byproducts, not artifacts. Named rather than pattern-matched so the exclusion
