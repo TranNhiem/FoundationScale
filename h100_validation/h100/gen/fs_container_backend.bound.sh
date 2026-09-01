@@ -214,8 +214,8 @@ fs_backend_init() {
     NCCL_NET_PLUGIN                # fs129: must cross: selects/disables the container's NCCL net
                                    #   plugin; the collective probe and the payload must agree
 
-    FS_ITERATION_BUDGET            # must cross: L4 wires tools/fs_train.py to read it,
-                                   #   and fs_train.py runs INSIDE the container
+    FS_ITERATION_BUDGET            # must cross: L4 wires the engine entrypoint (FS_ENGINE_LAUNCH_CMD) to read it,
+                                   #   and the engine entrypoint runs INSIDE the container
     FS_EARLY_SAVE_STEPS            # must cross: same reader, same reason
     FS_RESUME_CKPT                 # fs122: must cross: the resume leg's checkpoint
                                    #   path. Was exported as SINGULARITYENV_FS_RESUME_CKPT,

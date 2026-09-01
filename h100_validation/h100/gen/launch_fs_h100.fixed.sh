@@ -477,14 +477,16 @@ if [[ "$PROBE" == 1 ]]; then
   mkdir -p -- "$OUT_DIR"
   # L4: knobs with no reader are a false claim of configurability. Track provenance, validate the
   # denominators, and state them in the log. Both vars are on FS_ENV_ALLOWLIST, so they now cross
-  # the container boundary and are read by tools/fs_train.py, which fatals in probe phase with no
+  # the container boundary and are read by the engine entrypoint named in FS_ENGINE_LAUNCH_CMD.
+  # No filename appears here because the entrypoint is operator-supplied: naming one would be a
+  # claim about the operator's engine, not about this launcher. It must fatal in probe phase with no
   # effective budget (env or config) -- an unbounded 'probe' is not a probe.
   if [[ -n "${FS_ITERATION_BUDGET:-}" ]]; then budget_src=env; else FS_ITERATION_BUDGET=20; budget_src=default; fi
   if [[ -n "${FS_EARLY_SAVE_STEPS:-}" ]]; then save_src=env; else FS_EARLY_SAVE_STEPS=5; save_src=default; fi
   [[ "$FS_ITERATION_BUDGET" =~ ^[0-9]+$ && "$FS_ITERATION_BUDGET" -gt 0 ]] || fail 96 "probe FS_ITERATION_BUDGET must be a positive integer (value='$FS_ITERATION_BUDGET', source=$budget_src); an unbounded probe is not a probe"
   [[ "$FS_EARLY_SAVE_STEPS" =~ ^[0-9]+$ && "$FS_EARLY_SAVE_STEPS" -gt 0 ]] || fail 96 "probe FS_EARLY_SAVE_STEPS must be a positive integer (value='$FS_EARLY_SAVE_STEPS', source=$save_src)"
   [[ "$FS_EARLY_SAVE_STEPS" -lt "$FS_ITERATION_BUDGET" ]] || fail 96 "probe early-save steps ($FS_EARLY_SAVE_STEPS) must be < iteration budget ($FS_ITERATION_BUDGET) (source=$save_src); an early save that cannot fire is not evidence"
-  printf 'PROBE denominator: FS_ITERATION_BUDGET=%s (source=%s) FS_EARLY_SAVE_STEPS=%s (source=%s); consumed in-container via FS_ENV_ALLOWLIST by tools/fs_train.py\n' "$FS_ITERATION_BUDGET" "$budget_src" "$FS_EARLY_SAVE_STEPS" "$save_src"
+  printf 'PROBE denominator: FS_ITERATION_BUDGET=%s (source=%s) FS_EARLY_SAVE_STEPS=%s (source=%s); consumed in-container via FS_ENV_ALLOWLIST by the engine entrypoint named in FS_ENGINE_LAUNCH_CMD\n' "$FS_ITERATION_BUDGET" "$budget_src" "$FS_EARLY_SAVE_STEPS" "$save_src"
 else
   OUT_DIR="$OUT_DIR_STABLE"
   mkdir -p -- "$OUT_DIR"

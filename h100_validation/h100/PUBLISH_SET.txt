@@ -118,3 +118,8 @@ h100/STAGE_ROLES.tsv
 # that receives the documents and not the gate that keeps their one countable claim true
 # gets the state the finding names.
 gate_doc_stage_count.py
+# #182: the engine-entrypoint naming stage. Ships because its census -- operator-facing
+# text UNION the shipped set -- is the detector for a class the four named anchors were only
+# instances of, and a clone that gets the corrected text without the census gets the state
+# back the first time someone writes a filename into a comment.
+patch_engine_entrypoint_naming.py

@@ -201,8 +201,8 @@ fs_backend_init() {
     TOKENIZERS_PARALLELISM         # must cross: avoid fork warnings / tokenizer deadlock risk
     TORCH_NCCL_ASYNC_ERROR_HANDLING # must cross: fail fast instead of hanging on NCCL error
     NCCL_DEBUG                     # must cross: preserve NCCL diagnostics inside container
-    FS_ITERATION_BUDGET            # must cross: L4 wires tools/fs_train.py to read it,
-                                   #   and fs_train.py runs INSIDE the container
+    FS_ITERATION_BUDGET            # must cross: L4 wires the engine entrypoint (FS_ENGINE_LAUNCH_CMD) to read it,
+                                   #   and the engine entrypoint runs INSIDE the container
     FS_EARLY_SAVE_STEPS            # must cross: same reader, same reason
     NCCL_SOCKET_IFNAME
     GLOO_SOCKET_IFNAME
@@ -540,7 +540,7 @@ fs_gpu_drain_wait() {
 
 # ---------------------------------------------------------------------------
 # fs_launch_python <gpus> — echoes the string that replaces bare `python3` in
-# front of run_recipe.py. Under sbatch the 4 ranks were supplied by
+# front of whatever FS_ENGINE_LAUNCH_CMD names. Under sbatch the 4 ranks were supplied by
 # --ntasks-per-node=4 (four python3 processes). Off-Slurm, ONE enroot start
 # runs ONE torchrun, which forks the same 4 ranks. Entrypoint, recipe flags
 # and CLI overrides downstream are IDENTICAL either way — one definition of

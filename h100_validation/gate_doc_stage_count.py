@@ -124,6 +124,22 @@ CLAIM_PATTERNS = (
     # followed by a noun, not a count. Measured false positive on the first run.
     re.compile(r"(?<![-\w/#])(?P<n>\d{1,3})[- ]stage\b"),
     re.compile(r"(?<![-\w/#])(?P<n>\d{1,3})\s+stages?\b"),
+    # NOUN BEFORE THE NUMBERS. Deliverable E's compatibility matrix writes the claim as a
+    # table cell, `| stages green | **36/36** |`, and the first pattern above requires the
+    # noun AFTER the fraction -- so that cell sat in no denominator and went stale by a
+    # whole stage while the gate reported the file clean. Measured 2026-09-01 when #182
+    # landed as stage 37. The window is bounded and may not cross a '/', so an unrelated
+    # fraction further along the line (`8/8 legs`) cannot be captured by a distant 'stage'.
+    # Narrowed after its first run: unqualified, this matched three modifier uses in
+    # DELIVERABLE_E ("build stage 34, 5/5 controls", "stage counts (`17/17`)") and
+    # manufactured three false REDs. Two independent narrowings, each with its own reason,
+    # rather than an allowlist of the three lines:
+    #   PLURAL only -- a count claim written noun-first is always plural ("stages green:
+    #     36/36"); singular `stage N` is an ordinal and `stage counts` is a modifier.
+    #   NO DIGIT in the window -- so `stages 34, 5/5` cannot bind the fraction across an
+    #     intervening number even in the plural.
+    # Both are drilled by MUST_PASS/SINGULAR_STAGE_IS_A_MODIFIER_NOT_A_COUNT.
+    re.compile(r"\bstages\b[^\n/\d]{0,24}?(?<![\w/])(?P<n>\d{1,3})\s*/\s*(?P<d>\d{1,3})(?![\w/])"),
 )
 
 # Past tense, or an explicit restatement. Lowercased substring match on the whole line.
@@ -236,6 +252,24 @@ _C_WRONG = "The plane builds green at %d stages and every stage is wired in.\n"
 _C_HIST = "E.5 reported %d/%d stages green, measured 2026-08-31.\n"
 _C_NOHIST = "E.5 says %d/%d stages green.\n"
 _C_NONE = "This document states no countable stage claim at all.\n"
+# Noun BEFORE the numbers -- the notation Deliverable E's matrix uses and the one this
+# gate was blind to until 2026-09-01. Kept as a distinct fixture from _C_NOHIST so that a
+# regression in either word order is attributable to one control rather than to "the
+# fraction rule".
+_C_TABLE = "| stages green | **%d/%d** |\n"
+# The bound on the new pattern's window, stated as a document. `stages` and `8/8` are on
+# one line but 35 characters apart, so the fraction belongs to the legs and not to the
+# stages. If the window is ever widened past 24 this control goes red instead of the claim
+# quietly becoming wrong.
+_C_FARFRAC = "The %d stages are green and the resume proof is 8/8 legs.\n"
+# The two modifier uses the unqualified noun-first pattern read as count claims on its
+# first run. Line 1 is a real claim, so agree>=1 proves the scanner actually read this
+# document -- without it "0 red" would be satisfied by a scanner that read nothing.
+_C_MODIFIER = (
+    "The plane builds green at %d stages.\n"
+    "That stage landed as build stage 34 (5/5 controls fired), and the citation gate's "
+    "stage counts (`17/17`) were re-derived.\n"
+)
 
 
 def _plant(tmp, name, body):
@@ -255,6 +289,9 @@ def run_controls(expected, uniq=None):
         n_hist = _plant(tmp, "hist.md", _C_HIST % (expected - 1, expected - 1))
         n_nohist = _plant(tmp, "nohist.md", _C_NOHIST % (expected - 1, expected - 1))
         n_none = _plant(tmp, "none.md", _C_NONE)
+        n_table = _plant(tmp, "table.md", _C_TABLE % (expected - 1, expected - 1))
+        n_far = _plant(tmp, "far.md", _C_FARFRAC % expected)
+        n_mod = _plant(tmp, "mod.md", _C_MODIFIER % expected)
 
         _, (_, _, bad) = scan_corpus(root, expected, (n_wrong,))
         out.append((
@@ -293,6 +330,34 @@ def run_controls(expected, uniq=None):
                 "a doc claiming the %d unique FILES rather than the %d ENTRIES: %d red"
                 % (uniq, expected, len(bad_u)),
             ))
+
+        # The measured miss. `| stages green | **36/36** |` sat in no denominator for a
+        # whole stage because the fraction rule required the noun AFTER the numbers, and
+        # the file it lives in was reported clean the entire time. Two legs, because the
+        # widening has two ways to be wrong: too narrow (the cell stays invisible) and too
+        # greedy (an unrelated fraction on a line that happens to say "stages" is read as
+        # a stage count).
+        _, (_, _, bad_t) = scan_corpus(root, expected, (n_table,))
+        out.append((
+            "MUST_FIRE/NOUN_BEFORE_THE_FRACTION_IS_STILL_A_CLAIM",
+            len(bad_t) == 1 and str(expected - 1) in bad_t[0][2],
+            "table-cell notation `| stages green | **N/N** |`: %d red" % len(bad_t),
+        ))
+        _, (agree_f, _, bad_f) = scan_corpus(root, expected, (n_far,))
+        out.append((
+            "MUST_PASS/A_DISTANT_FRACTION_IS_NOT_A_STAGE_CLAIM",
+            agree_f >= 1 and not bad_f,
+            "`%d stages ... 8/8 legs` (35 chars apart): agree=%d red=%d"
+            % (expected, agree_f, len(bad_f)),
+        ))
+
+        _, (agree_m, _, bad_m) = scan_corpus(root, expected, (n_mod,))
+        out.append((
+            "MUST_PASS/SINGULAR_STAGE_IS_A_MODIFIER_NOT_A_COUNT",
+            agree_m >= 1 and not bad_m,
+            "`build stage 34 (5/5` + `stage counts (\\`17/17\\``: agree=%d red=%d"
+            % (agree_m, len(bad_m)),
+        ))
 
         _, (agree, hist, bad) = scan_corpus(root, expected, (n_none,))
         out.append((

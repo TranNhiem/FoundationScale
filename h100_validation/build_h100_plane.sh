@@ -304,6 +304,31 @@ STAGES=(
                               # The stage is byte-idempotent, so re-running it after the last
                               # launcher-touching stage costs nothing when the invariant holds
                               # and goes red the moment some future stage breaks it.
+  patch_engine_entrypoint_naming.py # #182: the launch plane's operator-facing text named
+                              # tools/fs_train.py as the reader of two knobs, a program
+                              # PUBLISH_SET.txt itself declares has "zero consumers in the
+                              # published build". The real reader is whatever
+                              # FS_ENGINE_LAUNCH_CMD names -- the model-agnostic seam -- so
+                              # naming one estate's script there was both false and a
+                              # re-introduction of the coupling the seam removes. Seven edits
+                              # across three shipped files, applied all-or-nothing.
+                              #
+                              # LAST deliberately, and it is the only stage that must be: it
+                              # carries a CENSUS over the operator-facing text of all three
+                              # produced files, so it has to read the FINAL text. Run earlier,
+                              # it would certify an intermediate no operator ever sees. The
+                              # census is why this is a stage and not a sed -- it found
+                              # run_recipe.py, which the finding never named.
+                              #
+                              # Needs $FS_PUBLISHED_REPO_ROOT when the build tree is not itself
+                              # the published repository. The census denominator is
+                              # PUBLISH_SET.txt UNION the enclosing repo's tracked files,
+                              # because the publish set covers only the h100_validation/
+                              # subtree and a citation to a root-level file is TRUE (measured:
+                              # 6 of 9 tokens were false REDs on the publish set alone). In a
+                              # clone the stage walks up to .git and resolves with no config;
+                              # here it does not, and an unresolvable half is UNMEASURED 95,
+                              # never RED -- absence of visibility is not evidence of absence.
 )
 
 echo "=== rebuilding from scratch (removing generated artifacts first) ==="
