@@ -310,6 +310,16 @@ def _census(files, shipped, repo):
                       "distinguish \"this file does not exist\" from \"this file is provided "
                       "by a part of the repository the stage cannot see\" -- absence of "
                       "visibility is not evidence of absence")
+        # State the remedy, not just the state. A build tree that is not itself a clone has
+        # no .git to walk up to, so this is the ORDINARY outcome there, not a broken build --
+        # and a reader who is only told "unresolved" has no way to know that. Put the fix in
+        # the diagnostic rather than in a document: a document drifts away from the code that
+        # needs it (that is finding #194), a message emitted by the code cannot.
+        report.append("REMEDY: point the stage at the published repository -- "
+                      "FS_PUBLISHED_REPO_ROOT=<path to the clone> -- or run it from inside "
+                      "one. This state is expected in a build tree that is not itself a "
+                      "checkout; it is UNMEASURED (95) and not RED (5) precisely because the "
+                      "stage will not guess which of the two it is looking at.")
         return "UNMEASURED", report
     if bad:
         report.append(f"RED: {len(bad)} basename(s) in neither half of a fully resolved "
@@ -495,13 +505,19 @@ def _controls(pre, post, shipped, repo):
     plane9 = pathlib.Path(tempfile.mkdtemp(prefix=MARK + "_plane9_"))
     try:
         root9, how9 = _resolve_repo_root(plane9, None)
-        verdict9, _report9 = _census([("repo_half_case", text8)], shipped, None)
+        verdict9, report9 = _census([("repo_half_case", text8)], shipped, None)
         rc9 = {"GREEN": 0, "RED": 5, "UNMEASURED": 95}[verdict9]
-        fired9 = root9 is None and verdict9 == "UNMEASURED" and rc9 == 95
+        # The remedy line is prose emitted by this stage, so it is exactly the kind of text
+        # that rots unnoticed. Assert the operator-actionable token itself -- the env var
+        # spelled the way it must be typed -- rather than a paraphrase of it, so the control
+        # cannot pass against a message that has drifted into naming something else.
+        named9 = any("FS_PUBLISHED_REPO_ROOT=" in ln for ln in report9)
+        fired9 = root9 is None and verdict9 == "UNMEASURED" and rc9 == 95 and named9
         notes.append(f"MUST_FIRE/UNRESOLVED_REPO_IS_UNMEASURED_NOT_RED: the same token "
                      f"({root_level}) with no FS_PUBLISHED_REPO_ROOT passed and no .git above "
                      f"the fixture plane directory ({how9}); observed state {verdict9}, exit "
-                     f"code {rc9} -- UNMEASURED and NOT RED")
+                     f"code {rc9} -- UNMEASURED and NOT RED; report names the remedy "
+                     f"`FS_PUBLISHED_REPO_ROOT=`: {named9}")
     finally:
         shutil.rmtree(plane9, ignore_errors=True)
     ok += int(fired9)
