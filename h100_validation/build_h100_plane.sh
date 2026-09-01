@@ -84,6 +84,41 @@ STAGES=(
   patch_collective_probe.py   # #129: mounts and torch were verified, a COLLECTIVE was
                               # not. Touches both shell artifacts and re-runs the drift
                               # gate itself, so it goes last of the two-file stages.
+  patch_fabric_tripwire.py    # #163 BLOCKER: the s9 pre-launch tripwire hard-coded ONE
+                              # estate's IMEX master endpoint, so the backend refused every
+                              # Slurm launch on any site without a host of that name -- it
+                              # is what killed job 37280 on the H100 estate. Replaced by the
+                              # required-no-default knob FS_FABRIC_TRIPWIRE (host:port, or
+                              # the explicit sentinel `none` to DECLARE that this estate has
+                              # no pre-launch fabric check). Same stage also repairs fs_die,
+                              # which exited 1 at all 72 call sites and so collapsed the
+                              # published 0/5/95/96 contract into one state. Backend-only,
+                              # and it rewrites the fs_die DEFINITION, so it must follow
+                              # every stage that adds fs_die call sites.
+  patch_nv_runtime.py         # #167 BLOCKER: the singularity arm built its exec argv with
+                              # no --nv, so no host NVIDIA driver user-space library was
+                              # bound in. Silent: libcuda.so.1 still resolves out of the
+                              # image's CUDA compat layer, so torch.cuda.is_available()
+                              # and device_count() both report green and the run dies at
+                              # the FIRST NCCL collective on libnvidia-ml.so.1 (job 37284,
+                              # 8/8 ranks). Adds the flag AND the R6 probe that measures
+                              # the capability instead of trusting the argv. Must follow
+                              # patch_fabric_tripwire.py: its refusals are `fs_die 96`,
+                              # which only means 96 once fs163 has made fs_die code-aware.
+  patch_master_addr.py        # #168 BLOCKER: fs_compose_launch expands ${MASTER_ADDR:?...}
+                              # and its message names fs_backend_init as the producer, but
+                              # the ONLY producer was the off-Slurm arm's local default.
+                              # On a Slurm allocation nothing minted it, so the composer
+                              # aborted in expansion after every real probe had passed --
+                              # bind verification, drain gate, container entry, the torch
+                              # and NVML probes, and a real 8-rank all_reduce (job 37291).
+                              # fs116's own comment admits the asymmetry it left: deriving
+                              # MASTER_PORT next to MASTER_ADDR "would have covered only
+                              # the off-Slurm branch". Mints the pair in one place. Must
+                              # follow patch_fabric_tripwire.py for the same reason #167
+                              # does -- its refusals are `fs_die 96`; its own C3/C4/C5
+                              # controls enforce that ordering, since a pre-fs163 fs_die
+                              # would exit 1 and they would go red rather than pass.
   extract_fs_train.py         # the training entrypoint is the third generated artifact
   patch_fs_train.py           # #134: bounds guard read the flag, so every env-sourced
                               # launch refused. Must follow the extract.
@@ -100,6 +135,56 @@ STAGES=(
                               # dir. Must follow BOTH patch_fs_train.py (it patches that
                               # file) and extract_fs_model_root.py (PRE-2 requires the
                               # resolver to be co-located).
+  patch_fsdp_wrap_policy.py   # #172: the size-based FSDP policy is structure-blind. On job
+                              # 37300 it wrapped Qwen3's 388,956,160-param embedding into its
+                              # own FULL_SHARD unit that re-shards after the embedding
+                              # forward, so the TIED lm_head then read the flat 1-D shard:
+                              # `mat (1024x2560), vec (48619520)`, and 48,619,520 = 388,956,160/8
+                              # on all 8 ranks. Replaced by transformer_auto_wrap_policy keyed
+                              # on the model's OWN _no_split_modules, so the model-specific
+                              # fact stays in the model. It rewrites build_runtime, which
+                              # patch_fs_train_model_root.py must have finished with first.
+  patch_train_phase_balance.py # #173: with #172 fixed, job 37304 trained for real -- loss
+                              # 1.2414 -> 0.5841 over steps 10..50 of 200 -- and then refused:
+                              # "cannot begin save while train is open". The run trains TWICE
+                              # (0->early, save, resume, early->budget) but the train phase was
+                              # opened for segment 1 and closed for segment 2, so each half hid
+                              # the other and the train->save boundary had never executed. Two
+                              # insertions restore the pair; the stage also ships an AST balance
+                              # gate over _run, so no future edit can open or close a phase
+                              # asymmetrically. Edits _run, not build_runtime, so it does not
+                              # collide with #172 -- but keep it after, one owner per pass.
+  patch_resume_proof_attribution.py # #177: the resume proof compared every rank's post-restore
+                              # loss against ONE manifest scalar (rank 0's) and all-reduced MAX,
+                              # so a single number answered two questions -- restore fidelity AND
+                              # cross-rank agreement -- and could not attribute its own failure.
+                              # Job 37319 reported after_resume and before_save BIT-IDENTICAL on
+                              # rank 0 while that statistic read 0.17570888996124268; the eight
+                              # rank payloads of the refused checkpoint hold exactly that spread,
+                              # a quantity fully determined BEFORE the save. Each rank's own
+                              # pre-save value was already on disk in its own payload, so the fix
+                              # needs no format change and is backward-compatible: compare each
+                              # rank against ITSELF for the tolerance, report cross-rank spread as
+                              # its own named measurement, and declare fixed_eval_rank_invariance
+                              # UNMEASURED when the ranks diverge. A real lossy restore stays RED
+                              # and outranks divergence. Edits resume_and_prove, not _run, so it
+                              # does not collide with #173 -- but keep it after, one owner per pass.
+  patch_resume_tolerance_split.py # #192: the stage above left ONE tolerance deciding two
+                              # unrelated questions. `--resume-tolerance` gated restore
+                              # fidelity (RED, final) AND cross-rank agreement (an instrument
+                              # property, measurable before any checkpoint exists). Job 37336
+                              # at 0.0005 measured restore_delta 0.0 with both spreads
+                              # 0.2940967082977295 and abstained; job 37319, the same arm at
+                              # 10.0, recorded zero abstentions -- a cross-rank pass bought by
+                              # raising the knob that also governs restore, where a delta of
+                              # 9.9 is a PASS. This stage splits them: `--resume-tolerance`
+                              # keeps its name and means RESTORE only; the optional
+                              # `--rank-agreement-tolerance` carries the absolute cross-rank
+                              # claim. Unset, the before-save spread self-calibrates only the
+                              # PRESERVATION question -- rank_invariant may be True ONLY under
+                              # an explicit tolerance, because a floor derived from the same
+                              # run it judges cannot certify that run's absolute agreement.
+                              # Must run AFTER #177, which authors the function it edits.
   emit_ckpt_adjudicator.py    # #141: the adjudicator the launcher's required knob has been
                               # asking for since #68 wired the call sites. Independent of
                               # the shell artifacts -- order here is free.
@@ -140,6 +225,79 @@ STAGES=(
                               # reason that it RELOCATES an already-corrected split site and
                               # introduces no new one; the re-run of patch_list_separators.py
                               # below turns that from an argument into a measurement.
+  patch_adjudicate_denominator.py # #188: #175's fix was authored and never installed. This
+                              # stage was in neither STAGES nor PUBLISH_SET.txt, so the
+                              # launcher kept shipping the one-liner `while read` loop whose
+                              # body drains its own process substitution. MEASURED on jobs
+                              # 37341/37342/37344: a tree holding 3 checkpoint dirs was
+                              # adjudicated 1 dir deep, three separate times, under the banner
+                              # "ADJUDICATE complete". The replacement collects the dirs into
+                              # an array first and reports "adjudicated=N of M", so the
+                              # denominator is printed and a short sweep cannot read as a
+                              # full one. Runs before the fs187 stage below only because it
+                              # edits an earlier region; their anchors do not overlap.
+  patch_postmortem_adjudicate.py # #187: the post-mortem afterany link printed one sentence
+                              # and exited 0 -- PASS over zero adjudications, in exactly the
+                              # case the link exists for (production died, so the ordinary
+                              # path returns before adjudicate_tree and nothing ever reads the
+                              # checkpoints the failed run left behind). Placed here, last of
+                              # the launcher-touching stages, for two reasons: its edit-2
+                              # anchor is the training-launch line that launch_topology,
+                              # wlm_allocation, launcher_interpreter and collective_probe all
+                              # rewrite, so it must follow every one of them; and running it
+                              # before the second patch_list_separators.py below puts its two
+                              # new blocks inside that stage's re-measured invariant.
+  patch_launcher_exit_discipline.py # #189, which REOPENS #174/#169/#171. All three were
+                              # recorded fixed and none of them was: `fs175:` occurred 0x in
+                              # both generated artifacts, the launcher carried 0 traps, and
+                              # line 851 still handed the backend's hard-stop helper "$$" --
+                              # the launcher's OWN pid -- so on every failure bash took
+                              # SIGTERM's default action and the END line and the exit below
+                              # it were both unreachable, along with the helper's enroot
+                              # force-remove arm. The fix was authored, verified and committed
+                              # into neither this list nor PUBLISH_SET.txt: the third instance
+                              # of the orphan-stage class after #136 and #188, and the reason
+                              # #191 exists. Placed after every launcher-touching stage above
+                              # because its OLD_BLOCK anchor is the failure path that follows
+                              # the training launch those stages rewrite, and before the second
+                              # patch_list_separators.py below so its new blocks fall inside
+                              # that stage's re-measured invariant.
+  patch_postmortem_verdict_scope.py # #193, which REGRESSES #187. The stage above inserts
+                              # #171's success-arm verdict mapper ABOVE the shared adjudication
+                              # tail that #187 deliberately routes the post-mortem link into.
+                              # The mapper has an unstated precondition -- a trainer ran and was
+                              # supposed to declare a verdict -- which the post-mortem arm
+                              # violates by construction, so it maps to 95 and exits before
+                              # adjudicate_tree is ever called. Measured: job 37344 (pre-#189)
+                              # reached the tail and printed
+                              # `END rc=0 phase=post-mortem checkpoint_saves_adjudicated=1`;
+                              # job 37347 (post-#189) printed `END rc=0 mapped_rc=95 phase=train
+                              # FAILED (...)`, 0 ADJUDICATE lines, sacct FAILED 95:0. This stage
+                              # scopes the mapper to FS_SKIP_TRAIN != 1 and logs the deliberate
+                              # non-application on the other arm. Necessarily placed directly
+                              # after the exit-discipline stage, whose output is its anchor, and
+                              # before the second patch_list_separators.py for the same reason
+                              # that stage gives. The lesson is #193's own: a fix that inserts a
+                              # guard on a shared path owes a drill on every arm that path
+                              # serves, and the launcher enumerates its arms in one FS_PHASE
+                              # variable -- #189 drilled one of three.
+  patch_launch_provenance.py  # #180: the composed launch command was executed and recorded
+                              # nowhere. Job 37319's own 936-line log contains the launch
+                              # command 0 times, --resume-tolerance 0 times, and
+                              # --model-path/--dataset-path/--sequence-length 0 times combined,
+                              # so no run in this campaign is reproducible from its own output
+                              # -- and the trainer's resume knob is flag-only, meaning a value
+                              # that can arrive ONLY on a command line was held by no artifact.
+                              # This writes ${RUN_LOG%.log}.provenance.json immediately before
+                              # exec, on the training arm only: the post-mortem arm launches no
+                              # trainer, so a record there would assert a run that never
+                              # happened. The path is derived from RUN_LOG by suffix
+                              # substitution rather than recomputed from LOG_DIR and the job id
+                              # (#150: two computations of one name diverge). Placed here, after
+                              # every stage that rewrites the exec line or the composer, because
+                              # its three anchors are those stages' output; and before the
+                              # second patch_list_separators.py so the new block is inside that
+                              # pass's denominator rather than after it.
   patch_list_separators.py    # SECOND application, deliberately. The invariant "no unfixed
                               # split site survives" was previously enforced by ordering
                               # alone, i.e. by a comment -- and a comment is not a detector.
@@ -186,6 +344,62 @@ python3 gate_exit_contract.py || {
         echo "  enough Python files to scan. Not scanning is not passing." >&2
         exit 95 ;;
     *)  echo "EXIT-CONTRACT GATE unexpected rc=$rc" >&2 ;;
+  esac
+  exit 5
+}
+
+echo -e "\n=== standing gate: stage/publish-set orphans (#191) ==="
+# Four findings came out of the gap between the two membership lists this script keeps --
+# the STAGES array above, and h100/PUBLISH_SET.txt. #136 (a producer in neither list, under
+# a header claiming "rebuilt from scratch"), #188 (an adjudicator fix regenerated away on
+# every build), #189 (the self-kill fix, recorded as three separate closed findings and
+# present in the artifact zero times) and #190 (five stages that ran and never shipped).
+# A fix that is correct, committed, and in no execution list is indistinguishable from a
+# fix that was never written, and until this gate nothing read either list against the
+# other. Roles for the files that are legitimately in exactly one list are declared in
+# h100/STAGE_ROLES.tsv and MEASURED here -- a declaration the gate cannot check is a
+# comment, not a contract.
+python3 gate_stage_orphans.py || {
+  rc=$?
+  case $rc in
+    5)  echo "STAGE-ORPHAN GATE RED (rc=5) — a file is in a state the contract forbids:" >&2
+        echo "  a stage that runs and does not ship, or a candidate in neither list with no" >&2
+        echo "  declaration. See the per-file lines above." >&2 ;;
+    95) echo "STAGE-ORPHAN GATE UNMEASURED (rc=95 -> build 95) — the gate could not derive its" >&2
+        echo "  own inputs (STAGES array, publish set, or h100/STAGE_ROLES.tsv). Not deriving" >&2
+        echo "  is not passing." >&2
+        exit 95 ;;
+    96) echo "STAGE-ORPHAN GATE REFUSE (rc=96) — a control failed or a role is unknown. A" >&2
+        echo "  detector that cannot be shown to fire has not been shown to work." >&2
+        exit 96 ;;
+    *)  echo "STAGE-ORPHAN GATE unexpected rc=$rc" >&2 ;;
+  esac
+  exit 5
+}
+
+echo -e "\n=== doc stage-count agreement (#194) ==="
+# The stage count is DERIVED here and was TYPED in four published documents, so every new
+# stage silently falsified four sentences at once. LAUNCH.md said 17/17, Deliverable B said
+# 33, E said 17/17, and this script printed 36. Same shape as #157 and #190: a claim whose
+# denominator has no producer. It ran the other way too -- LAUNCH.md's lead box told
+# operators Phase 3 had "never been executed" for a full campaign after job 37310 executed
+# 8/8 legs. Understatement is the same defect as overstatement.
+# Runs here, after every stage, for the same reason as the gate above: it reads the STAGES
+# array and must not read it before the array has been executed.
+python3 gate_doc_stage_count.py || {
+  rc=$?
+  case $rc in
+    5)  echo "DOC STAGE-COUNT GATE RED (rc=5) — a shipped document states a stage count the" >&2
+        echo "  build does not have. Fix the sentence, or make it past tense if it is" >&2
+        echo "  deliberately about an earlier build. See the per-claim lines above." >&2 ;;
+    95) echo "DOC STAGE-COUNT GATE UNMEASURED (rc=95 -> build 95) — zero claims matched, or the" >&2
+        echo "  STAGES array could not be parsed. A scanner that matches nothing cannot tell a" >&2
+        echo "  clean corpus from a broken pattern." >&2
+        exit 95 ;;
+    96) echo "DOC STAGE-COUNT GATE REFUSE (rc=96) — a control failed. A detector that cannot be" >&2
+        echo "  shown to fire has not been shown to work." >&2
+        exit 96 ;;
+    *)  echo "DOC STAGE-COUNT GATE unexpected rc=$rc" >&2 ;;
   esac
   exit 5
 }

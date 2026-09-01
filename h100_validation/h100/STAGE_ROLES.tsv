@@ -1,0 +1,64 @@
+# h100/STAGE_ROLES.tsv -- the declaration file read by gate_stage_orphans.py (#191).
+#
+# Why this file exists: build_h100_plane.sh keeps a STAGES=( ) array of the files the
+# build EXECUTES, and h100/PUBLISH_SET.txt lists the files it SHIPS. Four findings came
+# out of the gap between them -- #136, #188, #189 and the mirrored #190 -- every one of
+# them a fix that was authored, verified and committed and then did nothing, because a
+# fix in no execution list is indistinguishable from a fix that was never written.
+# gate_stage_orphans.py partitions every candidate file against both lists. A file that
+# is in exactly one list, or in neither, is a finding UNLESS a row here declares why,
+# with a role the gate can MEASURE.
+#
+# Every row below was reviewed by hand. `--propose` emits a candidate list; it is a
+# starting point and it guessed several of these wrong (it labelled the trainer, the
+# model-root resolver and two pytest modules as `gate` purely because their basenames
+# appear in the build script). A detector that authors the contract it then verifies is
+# checking its own homework, so the gate never writes this file.
+#
+# Columns: path<TAB>role<TAB>reason
+# Roles and what the gate measures about each:
+#   gate            basename occurs as a literal in build_h100_plane.sh
+#   build-driver    same measurement; a producer invoked directly, not an adjudicator
+#   library         module is imported by at least one OTHER shipped file
+#   test            basename starts test_, or the file holds a `def test_`
+#   runtime-artifact  existence only -- ATTESTED, NOT MEASURED. Counted in the output.
+#   superseded      in NEITHER list, and basename occurs 0x in the build script
+#   developer-tool  measured identically to superseded
+#
+# ---------------------------------------------------------------------------------
+# SHIPPED_NOT_RUN -- published, and not a member of STAGES. Every row states which of
+# the two ways of being reached applies: invoked directly by the build script, imported
+# by something that is, executed by pytest, or executed on the cluster at run time.
+# ---------------------------------------------------------------------------------
+
+extract_stage.py	build-driver	Invoked directly by build_h100_plane.sh (2 references), not through STAGES -- it is the extractor the stage loop calls, so it cannot itself be a stage without recursion. A producer, not an adjudicator, hence build-driver rather than gate.
+h100_backend_splice.py	build-driver	Invoked directly by build_h100_plane.sh to splice the backend; the same producer-not-adjudicator distinction as extract_stage.py. #136 was a stage in this position that was in NEITHER list, which is why the direct-invocation direction is measured at all.
+fs_estate_pat.py	library	The shared redaction vocabulary from #155. Imported by 10 other shipped files (apply_113, extract_fs_model_root, extract_fs_train, emit_ckpt_adjudicator, extract_stage, gate_launch_contract, patch_bind_closure, patch_launch_topology, patch_estate_roots, patch_collective_probe). Before #155 this vocabulary was hard-coded in three build files, so the denylist published the estate it protected.
+gate_artifact_linkage.py	gate	Build gate, invoked by build_h100_plane.sh outside the STAGES loop because it runs after every stage has produced its artifact and reads the whole set at once.
+gate_build_inputs.py	gate	Build gate; partitions h100/gen/ into declared artifacts and documented upstreams. A file that is neither is the #136/#137 state.
+gate_ckpt_naming_agreement.py	gate	Build gate (#150): the writer and the adjudicator must agree on the checkpoint directory name, or the cross-validation leg is inert on every checkpoint this framework produces.
+gate_env_drift.py	gate	Build gate (#116): pins FS_ENV_ALLOWLIST against the launcher's own exports so the two cannot drift. #115 was seven exported vars silently dropped.
+gate_exit_contract.py	gate	Build gate (#161): censuses every exit site against the published 0/5/95/96 contract. Runs last in the build script.
+gate_launch_contract.py	gate	Build gate (#127): the required-knob detector over the launcher's guards.
+gate_launch_doc.py	gate	Build gate (#154/#184/#185): every citation and every required knob in LAUNCH.md must resolve against the shipped launcher.
+gate_stage_orphans.py	gate	This gate. Wired into build_h100_plane.sh directly rather than through STAGES because it reads the STAGES array itself and must run after every stage has executed. It is also in PUBLISH_SET.txt: a gate that closes the orphan class while being an orphan itself would be the fifth instance of that class, not the end of it.
+gate_doc_stage_count.py	gate	Build gate (#194): every stage-count claim in a shipped document is read against this script's own STAGES array. Wired directly rather than through STAGES for the same reason as the gate above -- it reads the array and must run after the array has executed.
+fs_ckpt_scalars.py	runtime-artifact	ATTESTED, not measured. Hand-written torch-free checkpoint scalar reader (#178), executed on the cluster's login node where host python is 3.6.8 and torch is absent. Not produced by any stage and not invoked by the build.
+test_fs_ckpt_scalars.py	test	In-tree certification harness for fs_ckpt_scalars.py (#179); basename starts test_, run by pytest in CI, never by the build script.
+h100/gen/fs_train.fixed.py	runtime-artifact	ATTESTED, not measured. The trainer. Generated into h100/gen/ by the extract/patch stages and executed inside the container by torchrun. `--propose` guessed `gate` here because the basename appears in the build script -- it appears there as a stage OUTPUT path, which is the opposite of being a gate.
+h100/gen/fs_model_root.py	runtime-artifact	ATTESTED, not measured. The model-root resolver (#133): "the model root" means three different things on one estate, so resolution is measured at run time rather than joined. Generated artifact, executed in-container.
+h100/gen/fs_ckpt_adjudicator.py	runtime-artifact	ATTESTED, not measured. The checkpoint adjudicator (#141/#146/#175/#188), generated by emit_ckpt_adjudicator.py and executed by the launcher at run time on the cluster.
+h100/gen/test_fs_model_root.py	test	pytest module for the generated model-root resolver; basename starts test_. Generated, shipped, run by pytest -- never by the build script.
+h100/gen/test_fs_ckpt_adjudicator.py	test	pytest module for the generated adjudicator; basename starts test_. Same reasoning.
+
+# ---------------------------------------------------------------------------------
+# NEITHER -- in the repository, in neither list, deliberately. These rows are the ones
+# most worth re-reading: "kept around, harmless" is precisely the state #136, #188 and
+# #189 were in, and the only thing separating those from these is that these are
+# declared and measured to be unreachable from the build.
+# ---------------------------------------------------------------------------------
+
+patch_gate_launch_contract.py	superseded	Its sentinel is absent from gate_launch_contract.py, so this stage's edit is not present by this route. The hard-coded build-host ROOT it existed to remove IS gone, by another route, so the effect is present and the stage is not. Kept as the record of that; basename occurs 0x in the build script.
+apply_phase3.py	superseded	The Phase-3 one-off gate over the first generated trainer, checked against the R1-R9 it was commissioned to. Every requirement it covered is now enforced by a stage or a gate in the current plane; it names no file the current build produces and occurs 0x in the build script.
+apply_json_edits.py	developer-tool	Applies a reviewed JSON replacement list to staged modules, fail-closed on any anchor that does not occur exactly once. Orchestration tooling used to land reviewed edits; it is not part of the build plane and must not ship -- a published edit-applier invites edits that bypass the stages.
+apply_md_edits.py	developer-tool	The markdown counterpart of apply_json_edits.py, same reasoning. Both are deliberately absent from PUBLISH_SET.txt.

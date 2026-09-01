@@ -25,6 +25,13 @@ estate.env.example
 extract_fs_model_root.py
 extract_fs_train.py
 extract_stage.py
+# The torch-free checkpoint scalar reader and its suite (#178/#179). Hand-written SOURCE,
+# not generated, so they live here at the root and not in h100/gen/ -- gate_build_inputs.py
+# partitions that directory into declared artifacts and documented upstreams, and a file
+# that is neither is the #136/#137 state. Declaring them in PRODUCED to quiet the gate
+# would have asserted a producer that does not exist.
+fs_ckpt_scalars.py
+test_fs_ckpt_scalars.py
 fs_estate_pat.py
 gate_artifact_linkage.py
 gate_build_inputs.py
@@ -32,6 +39,7 @@ gate_ckpt_naming_agreement.py
 gate_env_drift.py
 gate_launch_contract.py
 gate_launch_doc.py
+h100/DELIVERABLE_A_architecture_review.md
 h100/DELIVERABLE_B_validation_report.md
 h100/DELIVERABLE_E_matrix.md
 h100/EVIDENCE.md
@@ -52,6 +60,7 @@ h100/gen/test_fs_ckpt_adjudicator.py
 h100/gen/test_fs_model_root.py
 h100/upstream/README.md
 h100_backend_splice.py
+patch_adjudicate_denominator.py
 patch_adjudicator_binding.py
 patch_alloc_nodefault.py
 patch_bind_closure.py
@@ -59,6 +68,22 @@ patch_bindpop.py
 patch_collective_probe.py
 patch_env_drift.py
 patch_estate_roots.py
+# #190: these five RAN and never SHIPPED. build_h100_plane.sh is published and its STAGES list
+# invokes all of them, so a clone had a build script referencing five files it did not have.
+# The coverage gate ran one direction only -- it refuses when a line HERE is in no scan
+# category, and never asked whether a stage that runs is shipped. Same shape as #157, mirrored.
+patch_fabric_tripwire.py
+patch_fsdp_wrap_policy.py
+patch_master_addr.py
+patch_nv_runtime.py
+patch_train_phase_balance.py
+# #189: the launcher exit-discipline stage (#174/#169/#171), orphaned in both lists until now.
+patch_launcher_exit_discipline.py
+# #193: scopes the stage above to the arm it was written for. #189's guard sits on a path
+# #187 shares with the post-mortem link, where no trainer runs and no verdict line can
+# exist, so the guard's precondition is violated on every invocation of that arm and the
+# adjudication tail below it is dead code. Shipped next to the stage it corrects.
+patch_postmortem_verdict_scope.py
 patch_fs_model_root.py
 patch_fs_train.py
 patch_fs_train_model_root.py
@@ -67,6 +92,29 @@ patch_launcher_interpreter.py
 patch_list_separators.py
 patch_partition_knob.py
 patch_plane_dir.py
+patch_postmortem_adjudicate.py
 patch_resume_env.py
+patch_resume_proof_attribution.py
+# #192: splits the single tolerance the stage above spends on two questions. Ships with
+# it because the two stages edit one function in sequence, and a clone that receives the
+# attribution fix without the split gets a proof whose only cross-rank knob disables the
+# restore RED.
+patch_resume_tolerance_split.py
+# #180: the launch-provenance writer. Ships because a clone that runs the build gets a
+# launcher whose every phase writes a record next to its log, and a clone that does not
+# get this stage gets the state the finding names -- a framework that can train, resume
+# and adjudicate, and cannot tell you afterwards what it ran.
+patch_launch_provenance.py
 patch_wlm_allocation.py
 gate_exit_contract.py
+# #191: the gate that closes the orphan-stage class (#136/#188/#189/#190), and its
+# declaration file. Both lines are here for the reason the gate exists: a gate that
+# refuses orphans while being an orphan itself would be the fifth instance of the
+# class, not the end of it. STAGE_ROLES.tsv ships because a clone that receives the
+# gate and not its contract gets a 95 on the first build, which is honest but useless.
+gate_stage_orphans.py
+h100/STAGE_ROLES.tsv
+# #194: the doc stage-count gate. Ships for the same reason as the gate above -- a clone
+# that receives the documents and not the gate that keeps their one countable claim true
+# gets the state the finding names.
+gate_doc_stage_count.py

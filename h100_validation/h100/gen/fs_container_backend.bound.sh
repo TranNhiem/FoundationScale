@@ -52,10 +52,11 @@
 #       surviving ranks hang forever. The gate below polls with a bounded
 #       timeout, and the timeout is a REFUSAL, not a warning that proceeds.
 #   s8e an ssh inside a heredoc needs -n; this file contains no such ssh.
-#   s9  the master:8081 tripwire is a STANDING RULE before any Slurm submit.
-#       It is moot off-Slurm (no prolog runs) and must NOT be deleted from the
-#       sbatch path — the slurm arm enforces it, timeout-bounded so a dead
-#       master fails CLOSED instead of hanging a job that could have been good.
+#   s9  FS_FABRIC_TRIPWIRE is a STANDING RULE knob before any Slurm submit:
+#       required, no default; host:port is probed, the sentinel none is a logged
+#       declaration by THIS ESTATE that no pre-launch fabric tripwire exists. It is
+#       moot off-Slurm and must NOT be deleted from the sbatch path — timeout-bounded,
+#       so a dead endpoint fails CLOSED instead of hanging a job that could have been good.
 #
 # Operator knobs: FS_BACKEND=auto|slurm|enroot (default auto — inside a real
 #   allocation (SLURM_JOB_ID set, not by us) -> slurm; otherwise enroot).
@@ -73,7 +74,16 @@ fi
 # Everything below is safe under both: fallible commands sit in conditions,
 # carry `|| true`, or refuse via fs_die. Bash 5.2 is the estate standard.
 
-fs_die() { echo "FATAL: $*" >&2; exit 1; }
+# fs163: the plane contract is 0=PASS, 5=RED, 95=UNMEASURED, 96=REFUSE; bare exit 1
+# made every backend refusal indistinguishable from an interpreter error. The numeric
+# prefix is opt-in, so the existing call sites keep their meaning and gain REFUSE (96);
+# a message whose first word is a contract token would be swallowed as an rc and G4 refuses it.
+fs_die() {
+  local rc=96
+  case "${1:-}" in 0|5|95|96) rc="$1"; shift ;; esac
+  echo "FATAL[$rc]: $*" >&2
+  exit "$rc"
+}
 
 fs_selftest_torch_provenance() {
   local host_leak=${HOME:-/root}/.local/lib/python3.12/site-packages/torch/__init__.py
@@ -310,8 +320,27 @@ fs_backend_init() {
     # BEFORE submit from the login node; inside the job it is a cheap
     # re-assertion. `timeout` bounds the connect: an unroutable master must
     # fail CLOSED (refuse the launch), never HUNG.
-    ( timeout 15 bash -c '(exec 3<>/dev/tcp/master/8081)' ) || \
-      fs_die "standing-rule tripwire: master:8081 is not reachable from here (s9). Refusing a Slurm launch."
+    # fs163: FS_FABRIC_TRIPWIRE is REQUIRED, NO DEFAULT -- the FS_ALLOWED_NODE /
+    # FS_CONTAINER_RUNTIME contract. An unconfigured guard is a disabled standing rule.
+    [[ -n "${FS_FABRIC_TRIPWIRE:-}" ]] || \
+      fs_die 96 "FS_FABRIC_TRIPWIRE is unset/empty (required, no default by design). The framework refuses to guess a cluster's fabric topology; set host:port, or the sentinel none to declare no pre-launch fabric tripwire."
+    if [[ "${FS_FABRIC_TRIPWIRE}" == "none" ]]; then
+      printf 'NOTICE: fs163: THIS ESTATE DECLARES no pre-launch fabric tripwire (FS_FABRIC_TRIPWIRE=none)\n'
+    else
+      # Validate before use: this value is interpolated into a bash -c string, and an
+      # unvalidated interpolation is how a knob becomes a command channel.
+      fs_trip="${FS_FABRIC_TRIPWIRE}"
+      if [[ ! "$fs_trip" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*:[0-9]{1,5}$ ]]; then
+        fs_die 96 "malformed FS_FABRIC_TRIPWIRE (need host:port or none): '$fs_trip' -- refusing before it reaches bash -c"
+      fi
+      fs_trip_host="${fs_trip%:*}"; fs_trip_port="${fs_trip##*:}"
+      if (( 10#$fs_trip_port < 1 || 10#$fs_trip_port > 65535 )); then
+        fs_die 96 "malformed FS_FABRIC_TRIPWIRE port in '$fs_trip' (need 1-65535) -- refusing before it reaches bash -c"
+      fi
+      ( timeout 15 bash -c "(exec 3<>/dev/tcp/${fs_trip_host}/${fs_trip_port})" ) || \
+        fs_die 96 "standing-rule tripwire: ${fs_trip_host}:${fs_trip_port} is not reachable from here (s9). Refusing a Slurm launch."
+      printf 'NOTICE: fs163: fabric tripwire reached at %s:%s; PASS is attributable, not the absence of a failure\n' "$fs_trip_host" "$fs_trip_port"
+    fi
     FS_USE_TORCHRUN=0
   else
     # ------------------------- local ALLOCATION arm --------------------------
@@ -406,6 +435,41 @@ fs_backend_init() {
   # pass this. A drill that cannot fail proves nothing.
   fs_selftest_torch_provenance >/dev/null || fs_die "fs_backend_init: torch-provenance self-test FAILED; the detector that keeps host torch out of the container cannot certify itself, so nothing downstream may trust it"
 
+  # --- fs168: mint MASTER_ADDR ------------------------------------------------
+  # fs_compose_launch's torchrun arm expands ${MASTER_ADDR:?...} and names
+  # fs_backend_init as the producer, but the only producer was the off-Slurm arm's
+  # local default; on a Slurm allocation nothing minted it and the composer died in
+  # expansion after every real probe had passed. This is fs116's acknowledged
+  # asymmetry, one variable over: fs116's own comment admits that deriving
+  # MASTER_PORT next to MASTER_ADDR "would have covered only the off-Slurm branch"
+  # -- MASTER_ADDR was never given the converged-tail treatment MASTER_PORT got.
+  # Minted HERE, at the same converged tail, so every allocation arm passes through
+  # exactly one mint.
+  #
+  # The FIRST host of the allocation is the rendezvous convention torchrun expects:
+  # node_rank 0 binds the store there and every other rank connects to it. scontrol
+  # show hostnames expands the job's node list one host per line; head -n 1 takes
+  # the first.
+  #
+  # SLURMD_NODENAME is deliberately NOT a fallback: it names the LOCAL node, so on a
+  # multi-node job every node would elect itself master and the ranks would split
+  # into N one-node worlds that hang instead of erroring -- a silent failure, which
+  # is worse than the refusal.
+  #
+  # A launcher that already derived MASTER_ADDR under sbatch wins: the derivation
+  # runs only when the variable is empty, and the workload manager is not consulted
+  # when it is not needed.
+  if [[ -z "${MASTER_ADDR:-}" ]]; then
+    if [[ "$FS_ALLOCATION" == slurm ]]; then
+      command -v scontrol >/dev/null 2>&1 || fs_die 96 "fs_backend_init: cannot derive MASTER_ADDR -- scontrol is not on PATH on a Slurm allocation; refusing to guess a rendezvous host"
+      [[ -n "${SLURM_JOB_NODELIST:-}" ]] || fs_die 96 "fs_backend_init: cannot derive MASTER_ADDR -- SLURM_JOB_NODELIST is unset/empty on a Slurm allocation; refusing to guess a rendezvous host"
+      MASTER_ADDR="$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)"
+      [[ -n "$MASTER_ADDR" ]] || fs_die 96 "fs_backend_init: scontrol show hostnames '$SLURM_JOB_NODELIST' produced no host; refusing to mint an empty MASTER_ADDR"
+    fi
+  fi
+  [[ -n "${MASTER_ADDR:-}" ]] || fs_die 96 "fs_backend_init: MASTER_ADDR is empty at the converged tail (FS_ALLOCATION='$FS_ALLOCATION'); refusing to let an empty rendezvous address reach the composer"
+  export MASTER_ADDR
+  # --- end fs168 ---
   # --- fs116: mint MASTER_PORT ------------------------------------------------
   # It was on FS_ENV_ALLOWLIST and consumed by fs_launch_python's
   # ${MASTER_PORT:?...} while being produced by NOTHING in either file. That is
@@ -1287,7 +1351,19 @@ fi
       /*) host_roots+=("$PWD") ;;
       *) fs_die "run_in_container: \$PWD is not absolute ('$PWD') — the singularity arm's host-root census cannot classify it against the implicit CWD bind; refusing rather than declaring a census that may be short one host root (doctrine 4)." ;;
     esac
-    local -a sargs=(exec --no-home --pwd "$spwd")
+    # fs167: --nv is not an estate fact; it is what "this container needs the
+    # GPU" MEANS for singularity -- it binds the host NVIDIA driver user-space
+    # libraries (libcuda, libnvidia-ml, ...) into the container. The enroot arm
+    # gets the same libraries from its own hooks, so no flag exists there. The
+    # flag is unconditional because this framework refuses to launch without
+    # GPUs at all: FS_GPUS_PER_NODE is required, the drain gate requires
+    # nvidia-smi, and the fs129 collective probe requires a working collective
+    # -- there is no CPU-only arm for a knob to serve. Without it the failure
+    # is silent: libcuda.so.1 resolves out of the image CUDA compat layer, so
+    # every cheap check is green while libnvidia-ml.so.1 is missing, and the
+    # first NCCL collective dies (job 37284, all 8 ranks, ncclSystemError).
+    # The R6 probe below measures the capability rather than trusting this argv.
+    local -a sargs=(exec --nv --no-home --pwd "$spwd")
     # fs117 (R2): the DECLARED plane, materialised the singularity way —
     # one --bind per entry from the SAME fs_bind_spec the enroot arm
     # reads; this arm consults no other declared-path source. --no-home
@@ -1355,6 +1431,45 @@ fi
       fs_die "run_in_container: the singularity-arm torch probe produced NO path — torch cannot be imported or its __file__ cannot be read; refuse (R5): unreadable is not empty, missing is not zero, and neither is 'fine' (doctrine 4)."
     fs_assert_torch_provenance "$torch_file" || \
       fs_die "run_in_container: torch resolved to '$torch_file', OUTSIDE the container prefix (expected /usr/local/lib/python3.*/dist-packages; the leaked prefix /home/*/.local/lib/python3.*/site-packages is refused). One image, two torch majors — the leak the containment legs exist to stop made it past them; refusing the launch (R5)."
+    # fs167 (R6): the --nv above is a CLAIM about an argv; this leg MEASURES the
+    # capability it claims to deliver -- after entry, from inside, through the same
+    # sargs, the same image, and the same allocation dispatch as the payload launch
+    # (srun on a slurm allocation, direct otherwise), exactly like the fs117 R4 and
+    # R5 legs above. The defect shape is silent: libcuda.so.1 resolves out of the
+    # image CUDA compat layer, so is_available() and even device_count() report
+    # green while libnvidia-ml.so.1 -- the library NCCL opens at its first
+    # collective -- is absent (job 37284: all 8 ranks, ncclSystemError, every
+    # cheaper check green). The probe loads libnvidia-ml.so.1 with ctypes and
+    # prints torch.cuda.device_count() WITH its denominator -- FS_GPUS_PER_NODE,
+    # the expected count this backend already knows. A count of 0 is
+    # UNMEASURED-shaped and refuses; a count != expected refuses; any nonzero rc
+    # is a refusal. Unmeasured is never PASS.
+    local -a fs167_probe=(singularity "${sargs[@]}" "$FS_CONTAINER_SQSH" \
+      env ${forward_env[@]+"${forward_env[@]}"} PYTHONNOUSERSITE=1 \
+      python3 -c 'import ctypes, sys
+expected = int(sys.argv[1])
+try:
+    ctypes.CDLL("libnvidia-ml.so.1")
+except OSError as exc:
+    print("fs167: REFUSE: libnvidia-ml.so.1 did not load in-container (%s) -- the image CUDA compat layer resolves libcuda.so.1 at every cheaper level and masks exactly this gap; --nv is what binds the driver user-space libraries" % exc, file=sys.stderr)
+    sys.exit(1)
+import torch
+n = torch.cuda.device_count()
+if n == 0:
+    print("fs167: REFUSE: torch.cuda.device_count() is 0 of %d expected -- a zero count is UNMEASURED-shaped, never a PASS" % expected, file=sys.stderr)
+    sys.exit(1)
+if n != expected:
+    print("fs167: REFUSE: torch.cuda.device_count() is %d of %d expected -- the visible set does not match the allocation" % (n, expected), file=sys.stderr)
+    sys.exit(1)
+print("fs167: NVML loadable in-container; torch reports %d of %d expected visible device(s)" % (n, expected))
+' "$FS_GPUS_PER_NODE")
+    if [[ "$FS_ALLOCATION" == slurm ]]; then
+      srun "${fs167_probe[@]}" || \
+        fs_die 96 "run_in_container: the fs167 NVML/device-count probe REFUSED (or failed to run) -- libnvidia-ml.so.1 must load in-container AND torch must report exactly FS_GPUS_PER_NODE visible device(s), printed with its denominator; the image CUDA compat layer keeps libcuda.so.1 green at every cheaper level, so this leg is the only measurement that sees the defect (fs167 R6, doctrine 4). Refusing the launch."
+    else
+      "${fs167_probe[@]}" || \
+        fs_die 96 "run_in_container: the fs167 NVML/device-count probe REFUSED (or failed to run) -- libnvidia-ml.so.1 must load in-container AND torch must report exactly FS_GPUS_PER_NODE visible device(s), printed with its denominator; the image CUDA compat layer keeps libcuda.so.1 green at every cheaper level, so this leg is the only measurement that sees the defect (fs167 R6, doctrine 4). Refusing the launch."
+    fi
     cmd=(singularity "${sargs[@]}" "$FS_CONTAINER_SQSH" \
       env ${forward_env[@]+"${forward_env[@]}"} PYTHONNOUSERSITE=1 \
       bash ${norc:+$norc} -c "$FS_CONTAINER_WRAPPER" fs-container-tripwire "${host_roots[@]}" -- "$@")
@@ -1386,9 +1501,108 @@ fi
 # ---------------------------------------------------------------------------
 fs_hard_stop_training() {
   local pid=$1
+  # fs175: finding #174 -- refuse suicide. On job 37304 the launcher handed
+  # this helper $$, its OWN pid, and with no trap anywhere bash took SIGTERM's
+  # default action and died on the spot: the END line never ran (a 452-line
+  # log of a failed run holds zero END and zero FATAL lines), the exit never
+  # ran (sacct: 37304.batch CANCELLED ExitCode 0:15 = signal 15, which an
+  # orchestrator reads as a human cancel, not a framework-declared state), and
+  # everything below the kill -- the grace, the KILL, the enroot force-remove
+  # that exists so no orphaned rank survives -- was unreachable. The helper's
+  # real callers (the full-FT live tripwires) pass the TRAINING pid; killing
+  # yourself is never what a caller means, so make it unrepresentable HERE
+  # rather than fixing the one call site.
+  if [[ "$pid" == "$$" ]]; then
+    echo "fs_hard_stop_training: REFUSING to signal pid $pid -- it is the calling shell's own pid; a self-kill is never what a caller means (fs175/#174)" >&2
+    return 1
+  fi
   kill -TERM "$pid" 2>/dev/null
   sleep 20
   kill -KILL "$pid" 2>/dev/null || true
+  if [[ "${FS_BACKEND:-}" == enroot && -n "${RIC_ACTIVE_CONTAINER:-}" ]]; then
+    echo "TRIPWIRE: force-removing enroot container '$RIC_ACTIVE_CONTAINER' so no orphaned rank survives" >&2
+    enroot remove --force "$RIC_ACTIVE_CONTAINER" >/dev/null 2>&1 || true
+    rm -f "${ENROOT_DATA_PATH:-$HOME/.enroot}/.fs-provenance/$RIC_ACTIVE_CONTAINER.src" || true
+    RIC_ACTIVE_CONTAINER=""
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# fs175: verdict mapping + kill-free container cleanup (findings #169/#171/#174)
+#
+# fs_map_run_verdict <rc> <logfile> -- map an observed srun rc and the run log
+# onto the plane's four-state exit contract (0 PASS, 5 RED, 95 UNMEASURED,
+# 96 REFUSE). Echoes the mapped code on stdout and a human-readable reason
+# (naming the parsed verdict) on stderr, and returns 0 ALWAYS -- the CALLER
+# exits, so a mapping problem can never masquerade as a mapped state.
+#
+# Why this exists: torchrun flattens the trainer's declared state. The
+# trainer's namespace is 0 measured / 2 ContractError / 3 OperationFailure-or-
+# UNMEASURED; on job 37304 it returned 2, torchrun reported 'failed
+# (exitcode: 2) local_rank: 0', and srun surfaced 1 -- a declared UNMEASURED
+# became a generic failure. The authoritative record survives the flattening
+# as TEXT: exactly one RUN_SUMMARY_JSON line carrying "verdict":"MEASURED" or
+# "verdict":"UNMEASURED", rank-0 gated so ranks never race. Measured caveat:
+# the log is tee'd more than once -- 37304's single summary line appears 3x in
+# launch.37304.log -- so take the LAST match and never COUNT matches.
+# Whitespace around the JSON colon is tolerated. sed/grep only, no python: the
+# login node's host python is 3.6.8 and this runs OUTSIDE the container. This
+# lives in the backend, not a launcher, because it is framework doctrine, not
+# an H100 fact -- the GB200 launchers need the identical mapping, and
+# duplicating it is how the two drift.
+#
+# Mapping (fail-closed):
+#   verdict UNMEASURED, any rc -> 95  the declaration outranks the rc
+#   verdict MEASURED,   rc 0   -> 0   the only pass
+#   verdict MEASURED,   rc!=0  -> 5   rank 0 measured but something else died
+#   no verdict line,    rc!=0  -> 5   an undeclared death is a FAILURE
+#   no verdict line,    rc 0   -> 95  the vacuous-pass hole, closed
+#   logfile missing/unreadable -> 95  cannot read the evidence
+# ---------------------------------------------------------------------------
+fs_map_run_verdict() {
+  local rc=$1 logfile=$2
+  case "$rc" in (*[!0-9]*|"") rc=1 ;; esac  # a non-numeric rc is a death, not a pass
+  if [[ ! -r "$logfile" ]]; then
+    echo "fs_map_run_verdict: verdict=NONE rc=$rc mapped=95 -- logfile '$logfile' missing/unreadable; cannot read the evidence" >&2
+    echo 95
+    return 0
+  fi
+  local verdict
+  verdict="$(grep 'RUN_SUMMARY_JSON' "$logfile" 2>/dev/null | tail -n 1 | sed -n 's/.*"verdict"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  case "$verdict" in
+    UNMEASURED)
+      echo "fs_map_run_verdict: verdict=UNMEASURED rc=$rc mapped=95 -- the trainer declared UNMEASURED; the declaration outranks the rc" >&2
+      echo 95 ;;
+    MEASURED)
+      if [[ "$rc" -eq 0 ]]; then
+        echo "fs_map_run_verdict: verdict=MEASURED rc=0 mapped=0 -- the only pass" >&2
+        echo 0
+      else
+        echo "fs_map_run_verdict: verdict=MEASURED rc=$rc mapped=5 -- rank 0 measured but something else died; never launder to 0" >&2
+        echo 5
+      fi ;;
+    *)
+      if [[ "$rc" -ne 0 ]]; then
+        echo "fs_map_run_verdict: verdict=NONE rc=$rc mapped=5 -- no verdict line; an undeclared death is a FAILURE, not an abstention" >&2
+        echo 5
+      else
+        echo "fs_map_run_verdict: verdict=NONE rc=0 mapped=95 -- no verdict line; exited clean having declared nothing (the vacuous-pass hole, closed)" >&2
+        echo 95
+      fi ;;
+  esac
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# fs175: fs_cleanup_orphans -- the enroot force-remove arm of
+# fs_hard_stop_training WITHOUT any kill, for callers that have already reaped
+# their children (srun has returned; the ranks are already gone) and only need
+# container cleanup. Force-removal frees the ~25 GiB unpack; the next launch
+# re-creates it. Our own provenance record is removed with it -- it attested a
+# container lifetime that just ended (keeping it would trip the stale-record
+# refusal in fs_enroot_ensure).
+# ---------------------------------------------------------------------------
+fs_cleanup_orphans() {
   if [[ "${FS_BACKEND:-}" == enroot && -n "${RIC_ACTIVE_CONTAINER:-}" ]]; then
     echo "TRIPWIRE: force-removing enroot container '$RIC_ACTIVE_CONTAINER' so no orphaned rank survives" >&2
     enroot remove --force "$RIC_ACTIVE_CONTAINER" >/dev/null 2>&1 || true

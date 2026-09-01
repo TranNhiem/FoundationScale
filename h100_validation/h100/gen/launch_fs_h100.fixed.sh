@@ -181,7 +181,26 @@ BACKEND="$FS142_PLANE_DIR/$BACKEND_NAME"
 source "$BACKEND"
 # fs142 plane resolver: END
 
-fail() { local rc="$1"; shift; printf 'FATAL[%s]: %s\n' "$rc" "$*" >&2; exit "$rc"; }
+# fs175: finding #169 -- the plane publishes exactly four states: 0 PASS, 5 RED,
+# 95 UNMEASURED, 96 REFUSE. The measured census of this choke point's call sites
+# was 49x rc 96, 1x rc 95, and 1x rc 124 (the compose refusal below): 124 is in
+# no namespace this plane publishes, and nothing forbade the next violation. So
+# the contract is now enforced HERE, at the single exit choke point: an
+# out-of-contract first argument is itself a REFUSE. This must NOT recurse
+# through fail (a fail that calls fail on bad input never exits), so the bad-rc
+# arm prints directly and exits 96. The FATAL[%s]: %s format is unchanged for
+# legal codes, so no log consumer breaks.
+fail() {
+  local rc="${1:-}"
+  if [[ $# -gt 0 ]]; then shift; fi
+  case "$rc" in
+    0|5|95|96) ;;
+    *) printf 'FATAL[96]: fail() called with out-of-contract rc=%s (want one of: 0 5 95 96): %s\n' "$rc" "$*" >&2; exit 96 ;;
+  esac
+  printf 'FATAL[%s]: %s\n' "$rc" "$*" >&2
+  exit "$rc"
+}
+
 require_cmd() { command -v "$1" >/dev/null 2>&1 || fail 96 "missing required command: $1"; }
 req_env() { local n="$1"; [[ -n "${!n:-}" ]] || fail 96 "required environment variable unset or empty: $n"; }
 
@@ -535,6 +554,12 @@ RUN_LOG="$LOG_DIR/launch.${SLURM_JOB_ID:-interactive}.log"
 # by line number; do not re-move the parse without re-homing its consumers.
 
 checkpoint_observed=0
+# fs176: the walker's INDEPENDENT denominator, published before any adjudicator
+# runs. Measured on job 37308: two checkpoint saves on disk against a reported
+# denominator of 1, the early save skipped, and the run PASSED. The positivity
+# refusal below cannot catch that shape; only observed == found can, and the
+# coverage check needs this number to exist whether or not a walk truncated.
+checkpoint_found=0
 run_adjudicators() {
   local ckpt="$1" phase="$2" ok=0 seen=0
   [[ -d "$ckpt" ]] || { printf 'ADJUDICATOR-SKIP rc=96 checkpoint_dir_missing=%s\n' "$ckpt"; return 96; }
@@ -573,11 +598,55 @@ run_adjudicators() {
 }
 
 adjudicate_tree() {
-  local root="$1" phase="$2" n=0 d
+  # fs176: collect first, iterate second. Measured on job 37308 -- a run that
+  # PASSED. The output tree held TWO checkpoint saves (the early save the resume
+  # proof depends on, and the final save) while this plane reported a denominator
+  # of 1 and exited 0: the old body invoked the per-checkpoint runner INSIDE the
+  # streaming read loop, the container runtime and interpreter inherited that
+  # stdin and drained it, and iteration 2's read hit EOF, so only the FIRST
+  # directory find emitted was ever adjudicated. The count was incremented inside
+  # the same truncated loop, so numerator and denominator were cut together and
+  # the report stayed self-consistent -- a denominator derived from the stream it
+  # measures cannot detect its own truncation. And the bare call discarded the
+  # runner's rc while the `|| ar=$?` call site suppresses errexit throughout
+  # this body, so a per-checkpoint REFUSE was dropped twice over.
+  #
+  # Structure now: (1) the collection loop forks NOTHING in its body, so its
+  # stdin cannot be stolen; (2) every runner invocation is fed </dev/null, so a
+  # child that wants stdin gets devnull, never the framework's iterator; (3) the
+  # found count is measured from the array BEFORE any adjudicator runs -- an
+  # independent denominator -- and the processed count must equal it or the walk
+  # REFUSES 96, because an iterator that lost entries is a framework defect, not
+  # a checkpoint result; (4) per-checkpoint verdicts are captured explicitly and
+  # the WORST outcome is returned by construction, since the call site suppresses
+  # errexit. Message vocabulary (ADJUDICATE / rc=) is kept; fields are ADDED,
+  # none renamed.
+  local root="$1" phase="$2" d rc=0
+  local -a dirs=()
   [[ -d "$root" ]] || { printf 'ADJUDICATE rc=96 root_missing=%s\n' "$root" >&2; return 96; }
-  while IFS= read -r -d '' d; do n=$((n+1)); run_adjudicators "$d" "$phase"; done < <(find "$root" -type d \( -name 'checkpoint*' -o -name 'ckpt*' -o -name 'step_*' \) -print0 2>/dev/null)
-  [[ "$n" -gt 0 ]] || { printf 'ADJUDICATE rc=95 no_checkpoints_found root=%s phase=%s\n' "$root" "$phase" >&2; return 95; }
-  printf 'ADJUDICATE complete root=%s phase=%s checkpoint_dirs=%s\n' "$root" "$phase" "$n"
+  while IFS= read -r -d '' d; do dirs+=("$d"); done < <(find "$root" -type d \( -name 'checkpoint*' -o -name 'ckpt*' -o -name 'step_*' \) -print0 2>/dev/null)
+  local found=${#dirs[@]} processed=0 ok=0 abstain=0 refuse=0
+  checkpoint_found=$found
+  [[ "$found" -gt 0 ]] || { printf 'ADJUDICATE rc=95 no_checkpoints_found root=%s phase=%s found=0\n' "$root" "$phase" >&2; return 95; }
+  for d in "${dirs[@]}"; do
+    rc=0
+    run_adjudicators "$d" "$phase" </dev/null || rc=$?
+    processed=$((processed+1))
+    case $rc in
+      0)  ok=$((ok+1)) ;;
+      95) abstain=$((abstain+1)) ;;
+      96) refuse=$((refuse+1)) ;;
+      *)
+        printf 'ADJUDICATE rc=96 original_rc=%s ckpt=%s -- undeclared exit code mapped to 96\n' "$rc" "$d" >&2
+        refuse=$((refuse+1))
+        ;;
+    esac
+  done
+  [[ "$processed" -eq "$found" ]] || { printf 'ADJUDICATE rc=96 iterator_truncated processed=%s found=%s root=%s phase=%s -- the walk lost entries; a framework defect, not a checkpoint result\n' "$processed" "$found" "$root" "$phase" >&2; return 96; }
+  printf 'ADJUDICATE complete root=%s phase=%s adjudicated=%s of %s checkpoint dir(s) ok=%s abstain=%s refuse=%s\n' "$root" "$phase" "$processed" "$found" "$ok" "$abstain" "$refuse"
+  if (( refuse > 0 )); then return 96; fi
+  if (( abstain > 0 )); then return 95; fi
+  return 0
 }
 
 if [[ -z "${SLURM_JOB_ID:-}" && "${FS_SUBMIT_CHAIN:-0}" == 1 ]]; then
@@ -595,8 +664,17 @@ if [[ -z "${SLURM_JOB_ID:-}" && "${FS_SUBMIT_CHAIN:-0}" == 1 ]]; then
 fi
 
 if [[ "${FS_PHASE:-}" == post-mortem ]]; then
-  printf 'POST-MORTEM afterany adjudication link reached; reporting only, no training launched. OUT_DIR=%s\n' "$OUT_DIR" | tee -a "$RUN_LOG"
-  exit 0
+  # fs187: this link fires afterany precisely so it runs when production DIED -- the
+  # checkpoints a failed run left on disk are the ones most worth reading. The
+  # unconditional zero-exit that used to stand here recorded PASS over zero
+  # adjudications: all([]) in a Slurm job costume. (The literal is elided rather
+  # than written out because the stage that emits this branch post-condition-scans
+  # it, and a scanner that matches its own explanatory prose has no denominator.)
+  # The skip flag set below is deliberately launcher-internal -- NOT
+  # exported, NOT on any allowlist: an operator-settable "skip the training" flag
+  # on a training launcher is a way to produce a green run that trained nothing.
+  FS_SKIP_TRAIN=1
+  printf 'POST-MORTEM afterany adjudication link reached; no training launched, the checkpoint tree production left behind is adjudicated below. OUT_DIR=%s\n' "$OUT_DIR" | tee -a "$RUN_LOG"
 fi
 
 if [[ "${FS_PHASE:-}" == resume ]]; then
@@ -735,6 +813,7 @@ echo "fs129: collective probe PASS -- all_reduce verified across world=$visible 
 # Engine remains pluggable. The core launcher does not name NeMo/Megatron/Gemma/Qwen.
 # The selected engine adapter must provide a complete in-container command in CONFIG_FILE or FS_ENGINE_LAUNCH_CMD.
 LAUNCH_CMD="${FS_ENGINE_LAUNCH_CMD:-}"
+LAUNCH_CMD_RAW="$LAUNCH_CMD"  fs180: captured the operator-supplied command before the composer rewrites LAUNCH_CMD at ingestion; without this capture the record could only ever hold the composed form and 'what the operator asked for' would be lost.
 [[ -n "$LAUNCH_CMD" ]] || fail 96 "FS_ENGINE_LAUNCH_CMD unset; engine adapter/config must provide launch command"
 
 # fs123: the write-only `mounts=(...)` array that stood here is DELETED. Measured: zero
@@ -758,7 +837,7 @@ LAUNCH_CMD="${FS_ENGINE_LAUNCH_CMD:-}"
 # "<world_size_source>\t<final_cmd>"; parsing on the first tab keeps engine
 # commands with spaces intact.
 TOPO_OUT="$(fs_compose_launch "${FS_ENGINE_LAUNCH_MODE:-}" "$FS_GPUS_PER_NODE" "$LAUNCH_CMD")" \
-  || fail 124 "fs_compose_launch refused: ${TOPO_OUT:-<no output>}"
+  || fail 96 "fs_compose_launch refused: ${TOPO_OUT:-<no output>}"
 WORLD_SIZE_SOURCE="${TOPO_OUT%%$'\t'*}"
 LAUNCH_CMD="${TOPO_OUT#*$'\t'}"
 WORLD_SIZE=$(( FS_GPUS_PER_NODE * ${SLURM_NNODES:-1} ))
@@ -775,14 +854,254 @@ fs_begin_log_tee "$RUN_LOG" || true
 printf 'BEGIN phase=%s probe=%s out=%s image=%s model_dir=%s dataset_dir=%s config=%s gpus=%s\n' "${FS_PHASE:-train}" "$PROBE" "$OUT_DIR" "$IMAGE" "$MODEL_DIR" "$DATASET_DIR" "$CONFIG_FILE" "$FS_GPUS_PER_NODE"
 printf 'LAUNCH_TOPOLOGY mode=%s gpus=%s world_size=%s world_size_source=%s\n' "${FS_ENGINE_LAUNCH_MODE:-unset}" "$FS_GPUS_PER_NODE" "$WORLD_SIZE" "$WORLD_SIZE_SOURCE" | tee -a "$RUN_LOG"
 
-set +e
-run_in_container --workdir "$OUT_DIR" "${top_args[@]}" -- bash -lc "$LAUNCH_CMD" 2>&1 | tee -a "$RUN_LOG"
-rc="${PIPESTATUS[0]}"
-set -e
+if [[ "${FS_SKIP_TRAIN:-0}" == 1 ]]; then
+  # fs187: only the training launch is skipped. Backend init, runtime setup, the
+  # bind plane, the in-container GPU census and fs_compose_launch have all already
+  # run on the ordinary path above, and the shared adjudication tail below is what
+  # produces the verdict -- reused verbatim, not duplicated.
+  printf 'POST-MORTEM: no training launched; adjudicating the checkpoint tree production left behind. OUT_DIR=%s\n' "$OUT_DIR" | tee -a "$RUN_LOG"
+  rc=0
+else
+  set +e
+# --- fs180: launch provenance writer (finding #180) ----------
+# WHY: a completed 8-GPU job's own 936-line log held zero occurrences of the
+# launch command, zero of --resume-tolerance, and zero combined of
+# --model-path/--dataset-path/--sequence-length: the run logged everything
+# about itself except what ran. The trainer's resume knob is flag-only
+# (sourced with no environment name) and required, so a value that can only
+# arrive on a command line was recorded by nothing, and reconstructing a
+# four-hour-old run's invocation from its artifacts was attempted and
+# failed. This block writes what ACTUALLY runs, placed after the composer
+# rewrote LAUNCH_CMD -- the executed command, not the requested one.
+# The path is DERIVED from RUN_LOG by suffix substitution, never recomputed
+# from LOG_DIR and SLURM_JOB_ID (finding #150: a writer and a reader
+# computing one name two ways disagree). Redaction is by NAME only --
+# value-shape matching misfires on paths and misses short values -- and
+# every substitution is counted, because a record that has been altered
+# must say so: redactions=0 may be treated as exact, redactions>0 means
+# values must be re-supplied by hand. The write is fully guarded: a
+# failure degrades to an announced write=FAILED state, never a failed
+# launch. The name pattern is assembled from single-character classes so
+# matching is case-insensitive without a literal word list in this file.
+FS180_PROV_PATH="${RUN_LOG%.log}.provenance.json"
+FS180_REDACTS=0
+_FS180_NPAT="[Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]"
+_FS180_NPAT="${_FS180_NPAT}|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Pp][Aa][Ss][Ss][Ww][Dd]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]"
+
+fs180_json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  s="${s//[[:cntrl:]]/}"
+  printf '%s' "$s"
+}
+
+fs180_redact_cmd() {
+  # Input: $1. Output: FS180_REDACTED. Side effect: FS180_REDACTS is
+  # incremented once per substitution, across the --flag VALUE, --flag=VALUE
+  # and NAME=VALUE forms.
+  #
+  # fs180 MEASURED: the first draft rebuilt the string with ${s/\"$m\"/...},
+  # whose pattern carries literal double quotes that a command line does not
+  # have. No substitution ever landed, the loop condition stayed true, and one
+  # --api-key flag hung bash for >60s -- immediately before exec, on every
+  # launch. The rewrite consumes the string left to right: each iteration
+  # appends the prefix plus the redacted form to out and advances rest past
+  # the match, so termination is structural rather than a side effect of the
+  # replacement happening to match. Every ${var%%"$m"*} and ${var#"$pre$m"}
+  # quotes its pattern, which is what makes bash match it literally; unquoted,
+  # a command line containing * or [ would splice itself.
+  local s="$1" out="" rest="$1" re m v flag pre
+  re="--[A-Za-z0-9_-]*(${_FS180_NPAT})[A-Za-z0-9_-]*[[:space:]]+([^[:space:]\"'<][^[:space:]]*)"
+  while [[ "$rest" =~ $re ]]; do
+    m="${BASH_REMATCH[0]}"
+    v="${BASH_REMATCH[2]}"
+    flag="${m%"$v"}"
+    pre="${rest%%"$m"*}"
+    out="${out}${pre}${flag}<redacted>"
+    rest="${rest#"$pre$m"}"
+    FS180_REDACTS=$((FS180_REDACTS + 1))
+  done
+  s="${out}${rest}"; out=""; rest="$s"
+  re="--[A-Za-z0-9_-]*(${_FS180_NPAT})[A-Za-z0-9_-]*=[^[:space:]\"'<][^[:space:]]*"
+  while [[ "$rest" =~ $re ]]; do
+    m="${BASH_REMATCH[0]}"
+    pre="${rest%%"$m"*}"
+    out="${out}${pre}${m%%=*}=<redacted>"
+    rest="${rest#"$pre$m"}"
+    FS180_REDACTS=$((FS180_REDACTS + 1))
+  done
+  s="${out}${rest}"; out=""; rest="$s"
+  re="[A-Za-z0-9_]*(${_FS180_NPAT})[A-Za-z0-9_]*=[^[:space:]\"'<][^[:space:]]*"
+  while [[ "$rest" =~ $re ]]; do
+    m="${BASH_REMATCH[0]}"
+    pre="${rest%%"$m"*}"
+    out="${out}${pre}${m%%=*}=<redacted>"
+    rest="${rest#"$pre$m"}"
+    FS180_REDACTS=$((FS180_REDACTS + 1))
+  done
+  # A redacted value begins with '<', which every value class above excludes,
+  # so a site already substituted can never be counted a second time.
+  FS180_REDACTED="${out}${rest}"
+}
+
+fs180_emit_provenance() {
+  # stdout: one JSON object. Called with its output redirected to
+  # FS180_PROV_PATH inside an if-condition, so any failure here degrades to
+  # the announced write=FAILED state and can never abort the launch.
+  local esc_composed esc_raw mode_json top_json top_state job_json env_body ent v val
+  local unexp_body dcl flags
+  fs180_redact_cmd "${LAUNCH_CMD:-}"
+  esc_composed="$(fs180_json_escape "$FS180_REDACTED")"
+  fs180_redact_cmd "${LAUNCH_CMD_RAW:-}"
+  esc_raw="$(fs180_json_escape "$FS180_REDACTED")"
+  if [[ -n "${FS_ENGINE_LAUNCH_MODE:-}" ]]; then
+    mode_json="\"$(fs180_json_escape "$FS_ENGINE_LAUNCH_MODE")\""
+  else
+    # explicit null, never a silent omission: a reader must be able to
+    # distinguish 'not set' from 'the writer forgot'.
+    mode_json="null"
+  fi
+  top_json="null"; top_state="absent"
+  if [[ "${top_args[@]+set}" == set && "${#top_args[@]}" -gt 0 ]]; then
+    val="$(printf '%s ' "${top_args[@]}")"; val="${val% }"
+    top_json="\"$(fs180_json_escape "$val")\""
+    top_state="present"
+  fi
+  if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    job_json="\"$(fs180_json_escape "$SLURM_JOB_ID")\""
+  else
+    job_json="null"
+  fi
+  # The fs_env half: the trainer's knobs arrive as env AND as argv, so both
+  # halves must be on record for the pair to be reproducible. Name-based
+  # redaction keeps the name and replaces the value with the marker.
+  env_body=""
+  unexp_body=""
+  while IFS= read -r v; do
+    [[ -n "$v" ]] || continue
+    # fs180: declare -p prints the flags as the second word -- reading them
+    # that way, instead of globbing the whole line for an x, keeps a VALUE
+    # containing x from being read as the export flag.
+    dcl="$(declare -p "$v" 2>/dev/null)"; flags="${dcl#declare }"; flags="${flags%% *}"
+    if [[ "$flags" != *x* ]]; then
+      if [[ -n "$unexp_body" ]]; then unexp_body="${unexp_body}, "; fi
+      unexp_body="${unexp_body}\"$(fs180_json_escape "$v")\""
+    fi
+    if [[ "$v" =~ (${_FS180_NPAT}) ]]; then
+      FS180_REDACTS=$((FS180_REDACTS + 1))
+      ent="  \"$(fs180_json_escape "$v")\": \"<redacted>\""
+    else
+      if [[ "${!v+x}" == x ]]; then val="${!v}"; else val=""; fi
+      ent="  \"$(fs180_json_escape "$v")\": \"$(fs180_json_escape "$val")\""
+    fi
+    if [[ -n "$env_body" ]]; then
+      env_body="${env_body},
+${ent}"
+    else
+      env_body="$ent"
+    fi
+  # fs180 MEASURED: compgen -e lists only EXPORTED names, and the launcher
+  # sets FS_ITERATION_BUDGET and FS_EARLY_SAVE_STEPS with a bare assignment
+  # on the resume arm. run_in_container forwards by NAME from an allowlist,
+  # so those two reach the trainer while an exported-only census would have
+  # silently dropped the pair of numbers that define the resume segment --
+  # a reproducibility record omitting exactly what it exists to hold.
+  # compgen -v is the shell's own set; the export state is recorded per name
+  # rather than used as a filter, so the record states its denominator.
+  done < <(compgen -v FS_ | LC_ALL=C sort)
+  printf '{\n'
+  printf '  \"launch_cmd_composed\": \"%s\",\n' "$esc_composed"
+  printf '  \"launch_cmd_raw\": \"%s\",\n' "$esc_raw"
+  printf '  \"engine_launch_mode\": %s,\n' "$mode_json"
+  printf '  \"world_size\": %s,\n' "${WORLD_SIZE:-null}"
+  printf '  \"world_size_source\": \"%s\",\n' "$(fs180_json_escape "${WORLD_SIZE_SOURCE:-}")"
+  printf '  \"gpus_per_node\": %s,\n' "${FS_GPUS_PER_NODE:-null}"
+  printf '  \"top_args\": %s,\n' "$top_json"
+  printf '  \"top_args_state\": \"%s\",\n' "$top_state"
+  printf '  \"out_dir\": \"%s\",\n' "$(fs180_json_escape "${OUT_DIR:-}")"
+  printf '  \"image\": \"%s\",\n' "$(fs180_json_escape "${IMAGE:-}")"
+  printf '  \"model_dir\": \"%s\",\n' "$(fs180_json_escape "${MODEL_DIR:-}")"
+  printf '  \"dataset_dir\": \"%s\",\n' "$(fs180_json_escape "${DATASET_DIR:-}")"
+  printf '  \"config_file\": \"%s\",\n' "$(fs180_json_escape "${CONFIG_FILE:-}")"
+  printf '  \"phase\": \"%s\",\n' "$(fs180_json_escape "${FS_PHASE:-train}")"
+  printf '  \"probe\": %s,\n' "${PROBE:-null}"
+  printf '  \"job_id\": %s,\n' "$job_json"
+  # hostname is deliberately NOT emitted: it is estate-identifying and this
+  # record is written onto a shared filesystem.
+  printf '  \"nodes\": %s,\n' "${SLURM_NNODES:-1}"
+  printf '  \"fs_env_scope\": \"%s\",\n' 'every FS_ name this shell held at launch (compgen -v), not only the exported subset; export state is recorded per name in fs_env_not_exported rather than used as a filter'
+  printf '  \"fs_env\": {\n%s\n  },\n' "$env_body"
+  printf '  \"fs_env_not_exported\": [%s],\n' "$unexp_body"
+  printf '  \"redactions\": %s\n' "$FS180_REDACTS"
+  printf '}\n'
+}
+
+if fs180_emit_provenance > "$FS180_PROV_PATH" 2>/dev/null; then
+  printf 'PROVENANCE path=%s write=ok redactions=%s\n' "$FS180_PROV_PATH" "$FS180_REDACTS" | tee -a "$RUN_LOG" || true
+else
+  # degraded, not failed -- and it SAYS so, so a silent gap can never pass
+  # for a record.
+  printf 'PROVENANCE path=%s write=FAILED redactions=%s (launch continues; run is degraded, not failed)\n' "$FS180_PROV_PATH" "$FS180_REDACTS" | tee -a "$RUN_LOG" || true
+fi
+unset -f fs180_json_escape fs180_redact_cmd fs180_emit_provenance 2>/dev/null || true
+unset _FS180_NPAT FS180_REDACTED FS180_PROV_PATH FS180_REDACTS
+# --- end fs180 ---------------------------------------------------------------
+  run_in_container --workdir "$OUT_DIR" "${top_args[@]}" -- bash -lc "$LAUNCH_CMD" 2>&1 | tee -a "$RUN_LOG"
+  rc="${PIPESTATUS[0]}"
+  set -e
+fi
 if [[ "$rc" -ne 0 ]]; then
-  fs_hard_stop_training "$$" || true
-  printf 'END rc=%s phase=train FAILED\n' "$rc" | tee -a "$RUN_LOG"
-  exit "$rc"
+  # fs175: finding #174 -- the line this replaces handed the hard-stop helper
+  # $$, the launcher's OWN pid, and with no trap anywhere bash took SIGTERM's
+  # default action and died on the spot: on job 37304 the END line never ran
+  # (a 452-line log of a failed run holds zero END and zero FATAL lines), the
+  # exit never ran (sacct: 37304.batch CANCELLED ExitCode 0:15 = signal 15,
+  # which an orchestrator reads as a human cancel, not a declared state), and
+  # the helper's enroot force-remove -- the arm that exists so no orphaned
+  # rank survives -- was unreachable. srun has already returned here, so the
+  # ranks are already reaped and only container cleanup remains.
+  fs_cleanup_orphans || true
+  # fs175: finding #171 -- do NOT propagate $rc verbatim: torchrun flattened
+  # the trainer's declared state into it (on 37304: trainer rc 2 -> torchrun
+  # 'failed (exitcode: 2) local_rank: 0' -> srun 1), so a declared UNMEASURED
+  # surfaced as a generic failure. Map (rc, log) through the backend's verdict
+  # mapper; the END line carries the raw srun rc AND the mapped code AND the
+  # parsed verdict, so the flattening is visible in the log rather than
+  # silently corrected.
+  fs175_reason="${RUN_LOG}.fs175_reason"
+  mapped_rc="$(fs_map_run_verdict "$rc" "$RUN_LOG" 2>"$fs175_reason")" || fail 96 "fs175: verdict mapper unavailable/failed (backend drift); refusing to guess a state"
+  map_reason="$(cat "$fs175_reason" 2>/dev/null || true)"; rm -f "$fs175_reason"
+  printf 'END rc=%s mapped_rc=%s phase=train FAILED (%s)\n' "$rc" "$mapped_rc" "$map_reason" | tee -a "$RUN_LOG"
+  exit "$mapped_rc"
+fi
+# fs193: finding #193 -- the mapper below has an unstated precondition: a
+# trainer ran and was supposed to declare a verdict. The post-mortem arm
+# violates it (no trainer ran, so the run log carries no verdict line by
+# construction), and an unguarded mapper on that arm maps to 95 and leaves
+# before the adjudication tail is ever reached -- measured on job 37347,
+# 51 log lines, zero adjudications. The mapper is therefore scoped to the
+# arm that launched a trainer; the post-mortem arm's verdict source is the
+# shared adjudication tail, which is what fs187 routed it to.
+if [[ "${FS_SKIP_TRAIN:-0}" != 1 ]]; then
+  # fs175: finding #171, success arm -- rc==0 is not PASS until the trainer's
+  # declaration is checked: a run that exits clean having declared nothing is the
+  # vacuous-pass hole, and before this block it fell straight through to
+  # adjudication. Map (rc, log) and refuse anything that is not 0 BEFORE
+  # adjudicating. This is the whole point of the doctrine and it costs these
+  # lines only.
+  fs175_reason="${RUN_LOG}.fs175_reason"
+  mapped_rc="$(fs_map_run_verdict "$rc" "$RUN_LOG" 2>"$fs175_reason")" || fail 96 "fs175: verdict mapper unavailable/failed (backend drift); refusing to guess a state"
+  map_reason="$(cat "$fs175_reason" 2>/dev/null || true)"; rm -f "$fs175_reason"
+  if [[ "$mapped_rc" != 0 ]]; then
+    printf 'END rc=%s mapped_rc=%s phase=train FAILED (%s)\n' "$rc" "$mapped_rc" "$map_reason" | tee -a "$RUN_LOG"
+    exit "$mapped_rc"
+  fi
+else
+  printf 'fs193: trainer-verdict mapper deliberately not applied on this arm -- no trainer was launched, so there is no declaration to check; the adjudication tail below is the verdict source for this arm\n' | tee -a "$RUN_LOG"
 fi
 
 # Probe must have produced an early-save checkpoint in *_probe; production must produce saves in stable OUT_DIR.
@@ -793,6 +1112,12 @@ if [[ "$ar" -ne 0 ]]; then
   printf 'END rc=%s phase=adjudicate FAILED observed_saves=%s\n' "$ar" "$checkpoint_observed" | tee -a "$RUN_LOG"
   exit "$ar"
 fi
-[[ "$checkpoint_observed" -gt 0 ]] || fail 95 'no checkpoint-save units observed after training; UNMEASURED is not PASS'
-printf 'END rc=0 phase=%s checkpoint_saves_adjudicated=%s\n' "${FS_PHASE:-train}" "$checkpoint_observed" | tee -a "$RUN_LOG"
+[[ "$checkpoint_observed" -gt 0 ]] || fail 95 'no checkpoint-save units observed to adjudicate; UNMEASURED is not PASS'
+# fs176: positivity is not coverage. Job 37308 PASSED with the observed counter
+# at 1 against TWO checkpoint saves on disk; the early save the resume proof
+# depends on was never adjudicated and the -gt 0 refusal above certified 1-of-2
+# as full. Compare against the independent denominator measured BEFORE any
+# adjudicator ran: partial coverage is RED, not PASS.
+[[ "$checkpoint_observed" -eq "$checkpoint_found" ]] || fail 5 "fs176: partial adjudication coverage: observed=${checkpoint_observed} found=${checkpoint_found}; only a fraction of the checkpoint saves on disk was adjudicated -- partial coverage is not PASS"
+printf 'END rc=0 phase=%s checkpoint_saves_adjudicated=%s checkpoint_saves_found=%s\n' "${FS_PHASE:-train}" "$checkpoint_observed" "$checkpoint_found" | tee -a "$RUN_LOG"
 exit 0
