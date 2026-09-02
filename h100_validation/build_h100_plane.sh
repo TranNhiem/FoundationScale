@@ -197,6 +197,77 @@ STAGES=(
                               # an explicit tolerance, because a floor derived from the same
                               # run it judges cannot certify that run's absolute agreement.
                               # Must run AFTER #177, which authors the function it edits.
+  patch_fsdp_buffer_order.py  # #202 BLOCKER, and the CAUSE the two stages above could only
+                              # observe as an effect. sync_module_states=True broadcasts module
+                              # state by POSITION -- torch's _sync_module_states flattens
+                              # named_buffers() into a list and _broadcast_coalesced pairs
+                              # element i with element i, reading the name only to test the
+                              # ignore-list. HuggingFace rotary embeddings register their
+                              # buffers from list(set(config.layer_types)), and CPython
+                              # randomises string hashing per process, so two ranks of ONE
+                              # torchrun job enumerate the same four [64] float32 tables in
+                              # different orders and FSDP writes the full-attention RoPE table
+                              # into the sliding-attention slot. Shape-compatible, so no error
+                              # and no warning. Measured at 7 ranks pre-first-forward: 4 of 5
+                              # buffers divergent, 0 of 341 parameters, 2 distinct enumeration
+                              # orders, and two eval losses (2.437912 / 3.540419) on
+                              # byte-identical input -- which is exactly the spread #192 was
+                              # splitting a tolerance to accommodate. Name-sorting each
+                              # module's _buffers before FSDP sees it makes the order a
+                              # property of the names; an UNSORTED rank-0 broadcast was
+                              # measured NOT to fix it, because positional pairing is the bug.
+                              # Ships its own proof (model_state_rank_invariance) and REFUSES
+                              # if the ranks still disagree. Not Gemma-specific: the same
+                              # idiom is in gemma3, gemma3n, gemma4, modernbert,
+                              # modernbert_decoder and t5gemma2. Must follow #172 (it anchors
+                              # on that stage's tied-parameter control) and #177/#192 (it
+                              # inserts its metric above theirs).
+  patch_eval_collective_invariance.py
+                              # #206 BLOCKER, and the second defect in this file whose whole
+                              # existence was a divisibility accident. evaluate_held_out shards
+                              # the held-out rows `position % world_size == rank` and then calls
+                              # an FSDP-wrapped forward once per batch of its own shard, so the
+                              # NUMBER of parameter all-gathers a rank issues is a function of
+                              # how the data happened to fall. At world=8 over 8 rows every rank
+                              # ran one trip and the loop was accidentally uniform -- which is
+                              # the only shape Phase 3 ever measured. At world=7 over the same
+                              # 8 rows rank 0 owns two rows and everyone else owns one, so rank
+                              # 0 enters a second forward while the other six are already
+                              # blocked in the terminal 4-element reduction. Measured on job
+                              # 37368: SeqNum=3142 is _ALLGATHER_BASE NumelIn=3834588
+                              # NumelOut=26842116 on rank 0 and ALLREDUCE NumelIn=4 NumelOut=4
+                              # on ranks 1/5/6, last completed work 3141 everywhere, SIGABRT on
+                              # all seven ranks after the 600 s NCCL watchdog. The remedy is
+                              # structural, not a divisibility precondition pushed onto the
+                              # operator: the trip count becomes a global constant agreed by
+                              # all_reduce(MAX) BEFORE the first forward, short ranks run a
+                              # padding trip whose result enters no numerator and no
+                              # denominator, and the padding count rides the reduction that
+                              # already exists so the run publishes the very shape that used to
+                              # be fatal. Must follow every stage that edits evaluate_held_out
+                              # or the eval packet; inert at world=8, which is control C3.
+  patch_optional_claim_state.py
+                              # #207, and the thing running #192 on hardware found. #192 gave
+                              # the resume proof a three-valued rank_agreement_absolute --
+                              # True certified, False refuted, None never asked -- and the
+                              # ledger entry one layer up collapsed it back to two, so "the
+                              # operator did not declare a tolerance" was reported as "this
+                              # machine could not measure it" and sank the run verdict.
+                              # Measured on job 37369: six of six phases MEASURED, held-out
+                              # eval 8 of 8 examples, resume PROVED at restore_delta 0.0, and
+                              # RUN_SUMMARY verdict UNMEASURED off that single metric -- rank 0
+                              # exit 3, launcher 95, sacct FAILED. Because the flag is named in
+                              # no operator document and the chain's first link is
+                              # --dependency=afterok, the DEFAULT configuration could not
+                              # advance past its own probe. not_requested becomes a real ledger
+                              # state: recorded, printed by both payload writers, does not sink
+                              # the verdict -- and _walk keeps recursing through it, so an
+                              # unmeasured child cannot hide under a not_requested parent (C5).
+                              # A refuted claim stays in the sinking set (C3); only its prose is
+                              # corrected, the old arm having claimed "distinct bit-identical
+                              # values across ranks" on the same line as three spreads of 0.0.
+                              # Must follow patch_resume_tolerance_split.py, whose field it
+                              # reads.
   emit_ckpt_adjudicator.py    # #141: the adjudicator the launcher's required knob has been
                               # asking for since #68 wired the call sites. Independent of
                               # the shell artifacts -- order here is free.

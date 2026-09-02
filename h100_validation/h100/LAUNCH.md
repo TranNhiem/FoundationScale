@@ -6,7 +6,7 @@
 > resume PROVED. The full four-job submit chain has completed end to end with every link
 > COMPLETED 0:0 (37340→37341→37342→37343), and a second model family ran the same argv on
 > the same corpus (Gemma-3-1b, 37336) with one declared abstention rather than a pass. The
-> build plane is green at 38 stages (E.5). **This document tells you how to launch, and the
+> build plane is green at 41 stages (E.5). **This document tells you how to launch, and the
 > launch trains — on two small models, on one node, in one container runtime.** That
 > denominator is the limit of the claim, and §8 is the list of everything outside it.
 >
@@ -302,7 +302,7 @@ trainer refuses to guess which of two dataset descriptions you meant.
 ## 4. The artifact map
 
 Every file under `h100/gen/` is **GENERATED** by `build_h100_plane.sh` (Deliverable C,
-38 stages green, byte-identical across rebuilds). **Hand-editing any of them is
+41 stages green, byte-identical across rebuilds). **Hand-editing any of them is
 prohibited**: a hand edit puts the fix in the file you read and leaves it out of the file
 that runs. Change the stage, rebuild.
 
@@ -514,7 +514,7 @@ Three items that used to head this list have been struck, because they ran:
   recorded in these sources.
 
 What **is** measured (so the list above is read at its true size): the build plane is green
-at 38 stages (E.5); the model-root resolver's 8/8 estate rows reproduce their independent
+at 41 stages (E.5); the model-root resolver's 8/8 estate rows reproduce their independent
 measurements with the refusals firing on real data (E.2); the 8-rank NCCL collective passes
 with `NCCL_NET_PLUGIN=none`, with NVLS and P2P/CUMEM still selected and both detector
 controls observed (E.3); Phase 3 ran 8/8 legs (37310); the four-job chain completed end to

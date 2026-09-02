@@ -75,7 +75,10 @@ patch_estate_roots.py
 # invokes all of them, so a clone had a build script referencing five files it did not have.
 # The coverage gate ran one direction only -- it refuses when a line HERE is in no scan
 # category, and never asked whether a stage that runs is shipped. Same shape as #157, mirrored.
+patch_eval_collective_invariance.py
+patch_optional_claim_state.py
 patch_fabric_tripwire.py
+patch_fsdp_buffer_order.py
 patch_fsdp_wrap_policy.py
 patch_master_addr.py
 patch_nv_runtime.py

@@ -247,7 +247,7 @@ and none of them present, held out of the build by the same mechanism. #190 is t
 five stages that ran and never shipped. The four together say that this build had **two**
 independent membership lists and no gate reading either one against the other, so a fix could be
 absent from execution or absent from publication and the build was green in both cases. All six
-files are now wired in and the plane builds green at 38 stages. **How many other stages are in
+files are now wired in and the plane builds green at 41 stages. **How many other stages are in
 this state is UNMEASURED**: a one-off audit today found two remaining files in neither list, of
 which `patch_gate_launch_contract.py` is superseded — its sentinel is absent from
 `gate_launch_contract.py`, but the hard-coded build-host `ROOT` it existed to remove is already
@@ -360,7 +360,7 @@ write while any of their own gates is red.
 
 | Property | Status | How it was measured |
 |---|---|---|
-| stages green | **38/38** | full run; a red stage aborts the build. The number is derived by `gate_doc_stage_count.py` from the build script's own `STAGES` array on every build (#194) -- a denominator that is retyped by hand is a denominator that lags. See the note below on why this cell now carries only the number. |
+| stages green | **41/41** | full run; a red stage aborts the build. The number is derived by `gate_doc_stage_count.py` from the build script's own `STAGES` array on every build (#194) -- a denominator that is retyped by hand is a denominator that lags. See the note below on why this cell now carries only the number. |
 | bidirectional env drift | **green** | `gate_env_drift.py`, all 3 detectors drilled with planted violations |
 | public-repo blocklist | **0 hits / 5 files** | plus a planted-string control proving the pattern is live (1/1) |
 | parse | **5/5** | `bash -n` ×2 and `py_compile` ×3 — each artifact checked by its own language's parser |

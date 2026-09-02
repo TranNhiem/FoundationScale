@@ -47,7 +47,7 @@ import tempfile
 TARGET = pathlib.Path(__file__).resolve().parent / "h100" / "gen" / "launch_fs_h100.fixed.sh"
 MARK = "fs180"
 TAG = MARK + ":"
-N_CONTROLS = 8
+N_CONTROLS = 10
 
 # Needles are ASSEMBLED from fragments, never one literal: this stage counts
 # them in the target, and a source that contains its own needle is inside its
@@ -62,7 +62,12 @@ BLOCK_MARK = "# --- " + TAG + " launch provenance writer (finding #180)"
 END_MARK = "# --- end " + MARK + " "
 RAW_MARK = TAG + " captured the operator-supplied command before the composer "
 
-RAW_LINE = ('LAUNCH_CMD_RAW="$LAUNCH_CMD"  ' + RAW_MARK + "rewrites LAUNCH_CMD at "
+# The "# " is load-bearing and was MISSING until it was measured on hardware: without it
+# bash parses `fs180:` as a command word and the launcher dies `command not found`, rc 127,
+# after the allocation is granted and the collective probe has already passed (job 37366).
+# `bash -n` cannot catch this -- a bare word followed by prose is SYNTACTICALLY VALID, so the
+# build's "parse clean" gate was true and useless here. G11 below is the gate that can see it.
+RAW_LINE = ('LAUNCH_CMD_RAW="$LAUNCH_CMD"  # ' + RAW_MARK + "rewrites LAUNCH_CMD at "
             "ingestion; without this capture the record could only ever hold the "
             "composed form and 'what the operator asked for' would be lost.\n")
 
@@ -282,6 +287,40 @@ def _logsite_census(text: str) -> list[tuple[int, str]]:
     return hits
 
 
+_MARKER_RE = re.compile(r"(?:fs|fix)\d+[a-z]?:\s")
+
+
+def _marker_scan(text: str) -> tuple[int, list[tuple[int, str]]]:
+    """Every fsNNN:/fixNN: marker in `text`, and those of them bash would EXECUTE.
+
+    A marker is inert if a '#' opens a comment before it, or if it sits inside an
+    unclosed quote (printf/echo prose). Anything else is a bare command word, which
+    `bash -n` accepts and the shell then fails on at rc 127. Returns (total, bare) so
+    the caller can state a denominator instead of only a count of hits: a scan that
+    reports "0 bare" over 0 markers examined has measured nothing.
+    """
+    total = 0
+    bare: list[tuple[int, str]] = []
+    for no, ln in enumerate(text.splitlines(), 1):
+        for m in _MARKER_RE.finditer(ln):
+            total += 1
+            before = ln[:m.start()]
+            if "#" in before:
+                continue
+            if before.count("'") % 2 == 1 or before.count('"') % 2 == 1:
+                continue
+            bare.append((no, ln.strip()[:100]))
+    return total, bare
+
+
+def _marker_total(text: str) -> int:
+    return _marker_scan(text)[0]
+
+
+def _uncommented_markers(text: str) -> list[tuple[int, str]]:
+    return _marker_scan(text)[1]
+
+
 def _transform(text: str) -> tuple[str, dict[str, int], bool]:
     counts = {"assign": text.count(A_ASSIGN), "recompose": text.count(A_RE),
               "exec": text.count(A_EXEC)}
@@ -352,6 +391,18 @@ def _gate_results(pre: str, new: str, counts: dict[str, int]) -> list[tuple[str,
     gres.append(("G10", '"host' + 'name"' not in new,
                  "estate-identifying host name key is absent from the record "
                  "contract (omitted by design, not merely empty)"))
+    # G11 exists because G8 cannot see this class. `foo=bar  fs180: prose` parses fine --
+    # bash reads `fs180:` as a command word -- so `bash -n` returns clean and the launcher
+    # still dies rc 127 at runtime. Measured on hardware, job 37366, at launcher L:857, one
+    # line after a PASSING 7-rank collective probe. The denominator is stated on purpose:
+    # this ranges over EVERY marker in the post-image, not just the one this stage inserts,
+    # because the defect class belongs to the artifact and not to its most recent author.
+    bare = _uncommented_markers(new)
+    gres.append(("G11", not bare,
+                 f"every fsNNN/fixNN marker in the post-image is commented or quoted "
+                 f"({_marker_total(new)} marker(s) examined, {len(bare)} bare)"
+                 + ("" if not bare else "; bare at line(s) "
+                    + ", ".join(str(n) for n, _ in bare))))
     return gres
 
 
@@ -651,6 +702,42 @@ def _controls(new: str) -> tuple[int, list[str]]:
             f"exported_not_named={isinstance(unexp, list) and 'FS_EXPORTED_KNOB' not in unexp}, "
             f"scope_stated={isinstance(rec.get('fs_env_scope'), str)}) "
             + ("PASS" if good else "FAIL " + (p.stderr or "")[:300]))
+
+        # C9 MUST_FIRE -- the marker scanner must go RED on the exact defect that was
+        # measured on hardware, and it must do so for the RIGHT REASON: not because
+        # the text looks odd, but because bash actually executes the marker. So the
+        # fixture is run, not merely matched. `bash -n` is run alongside to pin the
+        # reason G8 could not see this: the same bytes are syntactically valid.
+        planted = ('LAUNCH_CMD_RAW="$LAUNCH_CMD"  ' + MARK + ": captured the "
+                   "operator-supplied command\n")
+        seen = _uncommented_markers(planted)
+        pn = _run_bash("set -e\nLAUNCH_CMD=x\n" + planted)
+        with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as tf:
+            tf.write(planted)
+            syn_name = tf.name
+        syn = subprocess.run(["bash", "-n", syn_name], capture_output=True, text=True)
+        os.unlink(syn_name)
+        good = (len(seen) == 1 and pn.returncode == 127 and syn.returncode == 0)
+        ok += int(good)
+        notes.append(
+            f"C9 MUST_FIRE bare marker: scanner flags {len(seen)} of 1 planted, the "
+            f"fixture really dies rc={pn.returncode} (need 127 'command not found'), "
+            f"and bash -n calls the same bytes clean (rc={syn.returncode}, need 0) -- "
+            "which is why G8 cannot stand in for G11 "
+            + ("PASS" if good else "FAIL " + (pn.stderr or syn.stderr or "")[:300]))
+
+        # C10 MUST_PASS -- the scanner must NOT fire on the three inert forms, or it
+        # would redden 71 of the 72 markers the artifact legitimately carries.
+        inert = ("# " + MARK + ": a leading comment\n"
+                 'X=1  # ' + MARK + ": a trailing comment\n"
+                 "printf 'NOTICE: " + MARK + ": prose inside quotes\\n'\n")
+        tot, bare2 = _marker_scan(inert)
+        good = (tot == 3 and not bare2)
+        ok += int(good)
+        notes.append(
+            f"C10 MUST_PASS inert forms: {tot} of 3 markers examined, {len(bare2)} "
+            "flagged (need 0) across leading-comment, trailing-comment and quoted-prose "
+            + ("PASS" if good else "FAIL"))
     return ok, notes
 
 

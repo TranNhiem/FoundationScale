@@ -393,8 +393,16 @@ class DenominatedCount:
 class MeasurementLedger:
     """Accumulate unmeasured facts so the outcome degrades fail-closed."""
 
+    # --- fs207: an optional claim the operator did not request is not an unmeasured one.
+    # "unmeasured" means this machine could not decide the claim: no oracle, no data, a
+    # detector that could not fire. "not_requested" means it could have, and was not asked
+    # -- the only missing input is an operator declaration. Folding the second into the
+    # first made every default-configured run report UNMEASURED while all six of its phases
+    # measured (job 37369), and through the chain's afterok first link that made the
+    # documented default unable to advance past its own probe.
     def __init__(self) -> None:
         self.unmeasured: list[str] = []
+        self.not_requested: list[str] = []
 
     def check(self, namespace: str, payload: Mapping[str, Any]) -> None:
         for key, value in payload.items():
@@ -404,9 +412,15 @@ class MeasurementLedger:
         if isinstance(value, Mapping):
             if value.get("status") in {"unmeasured", "invalid_denominator", "UNVERIFIED"}:
                 self.unmeasured.append(path)
-            else:
-                for key, child in value.items():
-                    self._walk(f"{path}.{key}", child)
+                return
+            if value.get("status") == "not_requested":
+                # fs207: recorded, and the verdict is NOT sunk -- but recursion CONTINUES.
+                # The branch above stops because a condemned subtree is already condemned;
+                # stopping here would let an unmeasured child hide under a not_requested
+                # parent, which is the laundering direction this state could be abused in.
+                self.not_requested.append(path)
+            for key, child in value.items():
+                self._walk(f"{path}.{key}", child)
 
 
 @dataclass(frozen=True)
@@ -578,6 +592,10 @@ def _phase_summary(
         payload["unmeasured"] = sorted(ledger.unmeasured)
     else:
         payload["verdict"] = "MEASURED"
+    if ledger.not_requested:
+        # fs207: printed whenever non-empty, on BOTH verdicts. An abstention that is
+        # recorded and never shown is a denominator that shrank without saying so.
+        payload["not_requested"] = sorted(set(ledger.not_requested))
     _print_json("PHASE_JSON", payload)
     machine.end(phase)
     return payload
@@ -1029,6 +1047,219 @@ def _check_tied_parameters(model, declared_names, census):
 # --- end fs172 ---
 
 
+# --- fs202: cross-rank module-state order ---
+
+BUFFER_ORDER_CENSUS: dict = {}
+RANK_INVARIANCE_CENSUS: dict = {}
+
+
+def _normalise_buffer_order(model):
+    """Give named_buffers() an order every rank agrees on, BEFORE FSDP is constructed.
+
+    FSDP(sync_module_states=True) broadcasts module state by POSITION: torch's
+    _sync_module_states walks named_buffers() into a flat list and _broadcast_coalesced
+    pairs element i with element i. The name is read only to test the ignore-list. So
+    when two ranks enumerate the same buffers in different orders -- which HuggingFace
+    rotary embeddings do, because they register from list(set(config.layer_types)) and
+    CPython randomises string hashing per process -- the collective silently writes one
+    buffer's contents into a different buffer. Shape-compatible tensors make it quiet.
+
+    Buffer order carries no semantics: attribute lookup, state_dict and
+    _non_persistent_buffers_set are all keyed by NAME. So re-keying each module's
+    _buffers into sorted order is observable only to the iteration FSDP performs, and
+    it moves the order from a property of the process's hash seed to a property of the
+    names, which every rank already agrees on.
+
+    Sorting within a module is sufficient only if the MODULE walk is rank-invariant.
+    That is a second claim and it is measured, not assumed: if the ranks still disagree
+    after normalisation the run is REFUSED, because the alternative is eight ranks
+    training on different tables under one reported loss.
+    """
+    import hashlib
+
+    modules_total = 0
+    modules_reordered = 0
+    buffers_total = 0
+    for _mod_name, mod in model.named_modules():
+        modules_total += 1
+        names = list(mod._buffers.keys())
+        buffers_total += len(names)
+        if len(names) < 2:
+            continue
+        ordered = sorted(names)
+        if ordered == names:
+            continue
+        kept = dict(mod._buffers)
+        mod._buffers.clear()
+        for name in ordered:
+            mod._buffers[name] = kept[name]
+        modules_reordered += 1
+
+    walk = [n for n, _ in model.named_modules()]
+    buf_order = [n for n, _ in model.named_buffers(remove_duplicate=False)]
+
+    def _digest(seq):
+        return hashlib.sha256("\x00".join(seq).encode("utf-8")).hexdigest()[:16]
+
+    census = {
+        "modules_total": modules_total,
+        "modules_reordered": modules_reordered,
+        "buffers_total": buffers_total,
+        "module_walk_digest": _digest(walk),
+        "buffer_order_digest": _digest(buf_order),
+        "world_size": 1,
+        "cross_rank": "unmeasured",
+        "distinct_module_walks": None,
+        "distinct_buffer_orders": None,
+        "reason": "",
+    }
+    if not (dist.is_available() and dist.is_initialized()):
+        census["reason"] = (
+            "torch.distributed is not initialised; cross-rank enumeration order is not "
+            "a question one process can answer, so this is UNMEASURED, not agreement"
+        )
+        return census
+    world = dist.get_world_size()
+    census["world_size"] = world
+    if world < 2:
+        census["reason"] = (
+            "world_size=1: zero cross-rank comparisons are possible, and zero "
+            "comparisons is UNMEASURED, never PASS"
+        )
+        return census
+
+    gathered = [None] * world
+    dist.all_gather_object(
+        gathered, (census["module_walk_digest"], census["buffer_order_digest"])
+    )
+    walks = {g[0] for g in gathered}
+    orders = {g[1] for g in gathered}
+    census["distinct_module_walks"] = len(walks)
+    census["distinct_buffer_orders"] = len(orders)
+    agreed = len(walks) == 1 and len(orders) == 1
+    census["cross_rank"] = "agreed" if agreed else "divergent"
+    if not agreed:
+        raise OperationFailure(
+            "load", "buffer_order",
+            f"{type(model).__name__}: after name-sorting every module's buffer dict the "
+            f"ranks STILL enumerate module state differently -- {len(walks)} distinct "
+            f"module walk(s) and {len(orders)} distinct buffer order(s) across {world} "
+            "rank(s). FSDP(sync_module_states=True) matches tensors by POSITION, so "
+            "continuing would broadcast one rank's buffer into a different buffer on "
+            "another rank and diverge the model with no error and no warning. Refusing "
+            "is the only honest outcome: the divergence is undetectable downstream "
+            "except as an unexplained per-rank loss spread.",
+        )
+    return census
+
+
+def _model_state_rank_invariance(model, group=None):
+    """Prove, after the FSDP construction, that replicated module state agrees bitwise.
+
+    Denominators are scoped to what is actually rank-invariant, in BOTH directions.
+
+    Buffers are replicated under FULL_SHARD, so their bytes must match and are compared
+    as sha256 over the raw bytes -- not as an allclose, because #202 is a swap of two
+    valid tables and a tolerance would admit it.
+
+    Parameters are NOT replicated. use_orig_params=True with FULL_SHARD gives every rank
+    a different slice, and an uneven division makes even the local shapes differ
+    legitimately, so comparing parameter values -- or shapes -- would manufacture a
+    false RED. The only rank-invariant property is the NAME ORDER, which is also the
+    property that matters for a positional collective, so that is the only parameter
+    claim made and it says so in its own scope field.
+    """
+    import hashlib
+
+    def _digest(tensor):
+        flat = tensor.detach().cpu().contiguous().flatten()
+        if flat.numel() == 0:
+            return "empty"
+        try:
+            raw = flat.view(torch.uint8).numpy().tobytes()
+        except Exception:
+            raw = flat.to(torch.float64).numpy().tobytes()
+        return hashlib.sha256(raw).hexdigest()
+
+    buf = [(n, _digest(b)) for n, b in model.named_buffers(remove_duplicate=False)]
+    par = [n for n, _ in model.named_parameters(remove_duplicate=False)]
+    result = {
+        "status": "UNMEASURED",
+        "world_size": 1,
+        "buffers": {
+            "denominator": len(buf),
+            "compared": 0,
+            "divergent": 0,
+            "divergent_names": [],
+            "scope": "bitwise sha256 over raw bytes; buffers are replicated, so equality is required",
+        },
+        "params": {
+            "denominator": len(par),
+            "compared": 0,
+            "name_order_identical": None,
+            "scope": (
+                "NAME ORDER only -- FULL_SHARD with use_orig_params gives each rank a "
+                "different slice and an uneven split makes local shapes differ "
+                "legitimately, so a value or shape comparison would be a false RED"
+            ),
+        },
+        "reason": "",
+    }
+    if not (dist.is_available() and dist.is_initialized()):
+        result["reason"] = "torch.distributed is not initialised; no cross-rank comparison exists"
+        return result
+    world = dist.get_world_size(group=group)
+    result["world_size"] = world
+    if world < 2:
+        result["reason"] = (
+            "world_size=1: zero cross-rank comparisons are possible, and zero "
+            "comparisons is UNMEASURED, never PASS"
+        )
+        return result
+    if not buf and not par:
+        result["reason"] = "the model declares neither buffers nor parameters; nothing to compare"
+        return result
+
+    gathered = [None] * world
+    dist.all_gather_object(gathered, (buf, par), group=group)
+
+    buf_names = [n for n, _ in gathered[0][0]]
+    if any([n for n, _ in g[0]] != buf_names for g in gathered[1:]):
+        result["status"] = "RED"
+        result["reason"] = (
+            "the ranks do not agree on the buffer NAME order, so no positional "
+            "collective over module state can be correct"
+        )
+        return result
+    result["buffers"]["compared"] = len(buf_names)
+    divergent = [
+        n
+        for i, (n, d0) in enumerate(gathered[0][0])
+        if any(g[0][i][1] != d0 for g in gathered[1:])
+    ]
+    result["buffers"]["divergent"] = len(divergent)
+    result["buffers"]["divergent_names"] = divergent[:16]
+
+    par_ok = all(g[1] == gathered[0][1] for g in gathered[1:])
+    result["params"]["compared"] = len(par)
+    result["params"]["name_order_identical"] = par_ok
+
+    if divergent or not par_ok:
+        result["status"] = "RED"
+        result["reason"] = (
+            f"{len(divergent)} of {len(buf_names)} buffer(s) differ bitwise across "
+            f"{world} rank(s); parameter name order identical={par_ok}"
+        )
+    else:
+        result["status"] = "PASS"
+        result["reason"] = (
+            f"{len(buf_names)} buffer(s) bitwise identical and {len(par)} parameter "
+            f"name(s) in identical order across {world} rank(s)"
+        )
+    return result
+# --- end fs202 ---
+
+
 def build_runtime(artifacts: LoadArtifacts, config: RunConfig) -> RuntimeBundle:
     """Shard immediately so checkpoint scale is not multiplied by the process count."""
     rank = int(os.environ["RANK"])
@@ -1049,6 +1280,10 @@ def build_runtime(artifacts: LoadArtifacts, config: RunConfig) -> RuntimeBundle:
     # Pre-wrap the pointers are real, and unit membership is already fixed by the
     # policy resolved above. An untied model records a measured tied_groups=0.
     _check_tied_parameters(model, wrap_census["declared_names"], WRAP_POLICY_CENSUS)
+    # fs202: normalise buffer enumeration order BEFORE the FSDP construction.
+    # sync_module_states broadcasts module state by POSITION, so this must precede
+    # it; afterwards the collective has already run and the damage is done.
+    BUFFER_ORDER_CENSUS.update(_normalise_buffer_order(model))
     try:
         sharded = FSDP(
             model,
@@ -1060,6 +1295,8 @@ def build_runtime(artifacts: LoadArtifacts, config: RunConfig) -> RuntimeBundle:
         )
     except Exception as exc:
         raise OperationFailure("load", "sharding", f"FSDP construction failed: {exc}") from exc
+    # fs202: and prove it. A fix nothing measures is the #86 shape.
+    RANK_INVARIANCE_CENSUS.update(_model_state_rank_invariance(sharded))
     try:
         optimizer = torch.optim.AdamW(
             sharded.parameters(), lr=float(config.learning_rate.value)
@@ -1713,8 +1950,35 @@ def resume_and_prove(
         # unmeasured set under this exact name -- a DECLARED UNMEASURED that names
         # the instrument (the divergence precedes any checkpoint), never a pass and
         # never a resume failure.
+        # fs202: the CAUSE-side companion to the fs178 entry below, which measures
+        # the downstream symptom. When FSDP's positional sync swaps two hash-ordered
+        # buffers the eval losses diverge, and fs178 could report only THAT the ranks
+        # disagreed, never why. UNMEASURED is a declared state here, not a pass.
+        "model_state_rank_invariance": {
+            "status": {"PASS": "measured", "RED": "measured", "UNMEASURED": "unmeasured"}.get(
+                RANK_INVARIANCE_CENSUS.get("status", "UNMEASURED"), "unmeasured"
+            ),
+            "verdict": RANK_INVARIANCE_CENSUS.get("status", "UNMEASURED"),
+            "buffers": RANK_INVARIANCE_CENSUS.get("buffers", {}),
+            "params": RANK_INVARIANCE_CENSUS.get("params", {}),
+            "buffer_order": dict(BUFFER_ORDER_CENSUS),
+            "display": (
+                "cross-rank module state "
+                + str(RANK_INVARIANCE_CENSUS.get("status", "UNMEASURED"))
+                + ": " + str(RANK_INVARIANCE_CENSUS.get("reason", "not run"))
+            ),
+        },
         "fixed_eval_rank_invariance": {
-            "status": "measured" if continuity["rank_invariant"] else "unmeasured",
+            # fs207: three states, because fs192 already computed three. `rank_invariant`
+            # is True only on the certified arm, so `else` served both "refuted" and
+            # "never asked" and reported both as unmeasured.
+            "status": (
+                "measured"
+                if continuity["rank_agreement_absolute"] is True
+                else "unmeasured"
+                if continuity["rank_agreement_absolute"] is False
+                else "not_requested"
+            ),
             "pre_save_per_rank": continuity["pre_per_rank"],
             "after_resume_per_rank": continuity["post_per_rank"],
             "cross_rank_spread_before_save": continuity["cross_rank_spread_before_save"],
@@ -1725,17 +1989,30 @@ def resume_and_prove(
             "rank_agreement_preserved": continuity["rank_agreement_preserved"],
             "cross_rank_spread_delta": continuity["cross_rank_spread_delta"],
             "display": (
+                # fs207: the old else arm asserted "takes distinct bit-identical values
+                # across ranks" on the same line as three spreads of 0.0. It described the
+                # refuted case and was reached by the never-asked case as well.
                 "fixed-eval rank agreement MEASURED within the explicit "
                 "rank-agreement tolerance "
                 f"{continuity['rank_agreement_tolerance']:.8g}"
-                if continuity["rank_invariant"]
-                else "fixed-eval rank invariance UNMEASURED: the fixed-eval loss "
-                "takes distinct bit-identical values across ranks (spread before "
+                if continuity["rank_agreement_absolute"] is True
+                else "fixed-eval rank agreement REFUTED under the explicit "
+                "rank-agreement tolerance "
+                f"{continuity['rank_agreement_tolerance']:.8g}: spread before "
                 f"save {continuity['cross_rank_spread_before_save']}, spread after "
                 f"resume {continuity['cross_rank_spread_after_resume']}, spread "
-                f"delta {continuity['cross_rank_spread_delta']}); the restore "
+                f"delta {continuity['cross_rank_spread_delta']}; the restore "
                 "verdict stands on its own per-rank terms against the restore "
                 f"tolerance {tolerance:.8g}"
+                if continuity["rank_agreement_absolute"] is False
+                else "fixed-eval rank agreement NOT REQUESTED: no rank-agreement "
+                "tolerance was declared, so the absolute cross-rank claim was not "
+                "put to this run. Pass --rank-agreement-tolerance to request it. "
+                f"Observed spread before save {continuity['cross_rank_spread_before_save']}, "
+                f"after resume {continuity['cross_rank_spread_after_resume']}, "
+                f"delta {continuity['cross_rank_spread_delta']}; the restore verdict "
+                "stands on its own per-rank terms against the restore tolerance "
+                f"{tolerance:.8g}"
             ),
         },
         "continuity_verdict": {
@@ -1955,6 +2232,59 @@ def train_steps(
     return global_step, peak_memory, ledger
 
 
+# --- fs206: rank-invariant collective counting for the held-out evaluation --------------
+EVAL_TRIP_CENSUS: dict[str, Any] = {}
+
+
+def _agreed_max(local: int, what: str) -> int:
+    """Raise a per-rank count to the global maximum so a loop's collectives can match.
+
+    A collective inside a per-rank loop is safe only when every rank runs the loop the same
+    number of times, and that agreement must be reached with a collective every rank is
+    guaranteed to arrive at -- BEFORE the loop. Reaching it afterwards is precisely the
+    deadlock this exists to prevent.
+
+    At world_size 1, or with no initialised process group, the answer is recorded as
+    UNMEASURED rather than as agreement: a single rank cannot disagree with itself, and
+    calling that a PASS would be the vacuous truth this framework refuses to publish.
+    """
+    if not (dist.is_available() and dist.is_initialized()):
+        EVAL_TRIP_CENSUS[what] = {
+            "local": int(local),
+            "agreed": int(local),
+            "world_size": 1,
+            "status": "unmeasured",
+            "reason": "UNMEASURED: no initialised process group, so no rank could disagree",
+        }
+        return int(local)
+    world = int(dist.get_world_size())
+    if world <= 1:
+        EVAL_TRIP_CENSUS[what] = {
+            "local": int(local),
+            "agreed": int(local),
+            "world_size": world,
+            "status": "unmeasured",
+            "reason": "UNMEASURED: a single rank cannot disagree with itself",
+        }
+        return int(local)
+    device = (
+        torch.device("cuda", torch.cuda.current_device())
+        if torch.cuda.is_available()
+        else torch.device("cpu")
+    )
+    holder = torch.tensor([int(local)], dtype=torch.int64, device=device)
+    dist.all_reduce(holder, op=dist.ReduceOp.MAX)
+    agreed = int(holder.item())
+    EVAL_TRIP_CENSUS[what] = {
+        "local": int(local),
+        "agreed": agreed,
+        "world_size": world,
+        "status": "measured",
+        "reason": f"{what}: this rank owned {int(local)}, the world agreed on {agreed}",
+    }
+    return agreed
+
+
 def evaluate_held_out(
     bundle: RuntimeBundle,
     context: DatasetContext,
@@ -1967,27 +2297,62 @@ def evaluate_held_out(
         if position % bundle.world_size == bundle.rank
     ]
     sequence_length = int(config.sequence_length.value)
+    batch_size = max(1, int(config.batch_size.value))
+    # fs206: every trip below calls an FSDP-wrapped forward, and every such forward issues
+    # parameter all-gathers. `rows` is sharded `position % world_size == rank`, so when the
+    # held-out count is not a multiple of the world size the low ranks own one more row than
+    # the high ranks -- one more trip, one more all-gather, matched by nobody, while the
+    # short ranks are already blocked in the terminal reduction below. Measured, not feared:
+    # job 37368 (world=7, 8 held-out rows) deadlocked with rank 0 in _ALLGATHER_BASE and
+    # ranks 1/5/6 in the 4-element ALLREDUCE at the same SeqNum 3142, and NCCL's watchdog
+    # SIGABRTed all seven ranks 600 s later. It never fired in development because that ran
+    # world=8 over 8 rows, which divides. So the trip count must be a GLOBAL constant agreed
+    # before the first forward, never a per-rank consequence of how the data happened to fall.
+    trips = _agreed_max((len(rows) + batch_size - 1) // batch_size, "held-out eval trips")
+    # A rank that has run out of real rows still has to enter the forward, so it repeats a
+    # row every rank can name. Its result is discarded: padding enters no numerator and no
+    # denominator, which is why `measured_rows` below still counts only this rank's own rows.
+    pad_index = context.eval_rows[0] if context.eval_rows else None
+    padding_trips = 0
     loss_sum = 0.0
     token_total = 0
     failures = 0
     bundle.model.eval()
     with torch.no_grad():
-        for offset in range(0, len(rows), int(config.batch_size.value)):
-            chosen = rows[offset : offset + int(config.batch_size.value)]
-            texts = [_text_at(context, index) for index in chosen]
+        for trip in range(trips):
+            offset = trip * batch_size
+            chosen = rows[offset : offset + batch_size]
+            if chosen:
+                texts = [_text_at(context, index) for index in chosen]
+            elif pad_index is None:
+                # Unreachable by construction: pad_index is None only when eval_rows is
+                # empty, and then every rank's local trip count is 0, so `trips` is 0 and
+                # this loop does not run. It raises rather than breaking on purpose -- a
+                # `break` here would be a rank-dependent exit from a collective region,
+                # which is the exact defect fs206 exists to remove.
+                raise OperationFailure(
+                    "fs206: a padding trip was required with no held-out row to pad"
+                )
+            else:
+                padding_trips += 1
+                texts = [_text_at(context, pad_index)]
             try:
                 batch = _make_batch(bundle, texts, sequence_length)
                 output = bundle.model(**batch)
                 loss = getattr(output, "loss", None)
                 if loss is None or loss.ndim != 0 or not torch.isfinite(loss).item():
                     raise ValueError("invalid scalar held-out loss")
-                loss_sum += float(loss.float().item()) * len(chosen)
-                token_total += int(batch["attention_mask"].detach().sum().item())
+                if chosen:
+                    loss_sum += float(loss.float().item()) * len(chosen)
+                    token_total += int(batch["attention_mask"].detach().sum().item())
             except Exception:
-                failures += len(chosen)
+                if chosen:
+                    failures += len(chosen)
     measured_rows = max(0, len(rows) - failures)
     packet = torch.tensor(
-        [loss_sum, measured_rows, token_total, failures],
+        # fs206: the padding count rides the reduction that already exists rather than
+        # buying a second collective, so publishing it costs nothing and cannot desync.
+        [loss_sum, measured_rows, token_total, failures, float(padding_trips)],
         dtype=torch.float64,
         device=bundle.device,
     )
@@ -2012,6 +2377,14 @@ def evaluate_held_out(
             int(packet[2].item()), int(packet[2].item()), "held-out tokens"
         ).payload(),
         "loss": loss_payload,
+        # fs206: nonzero exactly when the pre-fix code would have deadlocked. Published, not
+        # merely fixed -- an operator reading this record can see that the world did not
+        # divide the held-out set evenly and that the framework absorbed it.
+        "padding_trips": DenominatedCount(
+            int(packet[4].item()),
+            trips * bundle.world_size,
+            "padding trips across all ranks (uneven held-out shard)",
+        ).payload(),
     }
 
 
@@ -2226,12 +2599,14 @@ def _run(config: RunConfig) -> int:
         },
     }
     ledger.check("run", summary_metrics)
+    # fs207: only `unmeasured` sinks the run. `not_requested` is reported beside it.
     verdict = "UNMEASURED" if ledger.unmeasured else "MEASURED"
     _print_json(
         "RUN_SUMMARY_JSON",
         {
             "verdict": verdict,
             "unmeasured": sorted(set(ledger.unmeasured)),
+            "not_requested": sorted(set(ledger.not_requested)),
             "dataset_origin": context.origin,
             "real_data": context.real_flag,
             "synthetic_seed": context.seed,

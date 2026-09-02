@@ -854,7 +854,7 @@ echo "fs129: collective probe PASS -- all_reduce verified across world=$visible 
 # Engine remains pluggable. The core launcher does not name NeMo/Megatron/Gemma/Qwen.
 # The selected engine adapter must provide a complete in-container command in CONFIG_FILE or FS_ENGINE_LAUNCH_CMD.
 LAUNCH_CMD="${FS_ENGINE_LAUNCH_CMD:-}"
-LAUNCH_CMD_RAW="$LAUNCH_CMD"  fs180: captured the operator-supplied command before the composer rewrites LAUNCH_CMD at ingestion; without this capture the record could only ever hold the composed form and 'what the operator asked for' would be lost.
+LAUNCH_CMD_RAW="$LAUNCH_CMD"  # fs180: captured the operator-supplied command before the composer rewrites LAUNCH_CMD at ingestion; without this capture the record could only ever hold the composed form and 'what the operator asked for' would be lost.
 [[ -n "$LAUNCH_CMD" ]] || fail 96 "FS_ENGINE_LAUNCH_CMD unset; engine adapter/config must provide launch command"
 
 # fs123: the write-only `mounts=(...)` array that stood here is DELETED. Measured: zero
