@@ -980,7 +980,20 @@ if [[ -z "${MASTER_ADDR:-}" ]]; then
   export MASTER_ADDR=${MASTER_ADDR:-$(hostname)}
 fi
 unset WANDB_MODE                                                  # dense-launcher W&B handling
-if [[ -f "$HOME/.foxbrain_secrets.sh" ]]; then source "$HOME/.foxbrain_secrets.sh" >/dev/null 2>&1 || true; fi
+# fs204: the secrets file is an OPERATOR-SITE convention, not a framework fact. This
+# was hard-coded to one person's filename in $HOME, which did two bad things at once:
+# it published a personal credential path from a public repository, and on every other
+# machine the test silently failed so the launcher looked configured while sourcing
+# nothing. Now it is a knob with NO default -- a training framework must not invent a
+# path it will read credentials from. Unset means source nothing, which is correct.
+if [[ -n "${FS_SECRETS_FILE:-}" ]]; then
+  if [[ -f "${FS_SECRETS_FILE}" ]]; then
+    # shellcheck source=/dev/null
+    source "${FS_SECRETS_FILE}" >/dev/null 2>&1 || true
+  else
+    echo "WARN: FS_SECRETS_FILE=${FS_SECRETS_FILE} is set but not a file; sourcing nothing" >&2
+  fi
+fi
 if [[ -z "${WANDB_API_KEY:-}" ]]; then echo "WARN: no WANDB_API_KEY -> WANDB_MODE=offline (wandb sync later)"; export WANDB_MODE=offline; fi
 export WANDB_API_KEY="${WANDB_API_KEY:-}" WANDB_PROJECT=FoxBrain-Gemma4-E4B-SFT
 export WANDB_DIR=$OUT_DIR/wandb WANDB_SILENT=true
