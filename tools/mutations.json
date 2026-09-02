@@ -335,7 +335,7 @@
       "why": "The module's own MUST-PASS half (doctrine 3). Anchor occurs once (the only `total = 0` in _count_controls)."
     }
   ],
-  "live_save_gate": [
+  "adjudication": [
     {
       "name": "any-fired-floor-deleted",
       "what": "A controls sweep in which NOTHING fired passes unremarked — the tool's sweep-level all([]): an artifact whose detectors were all inapplicable, unconstructable or silent prints CLEAR because nobody re-stated that the run proved nothing about the detectors.",

@@ -189,7 +189,10 @@ MODULE_PATHS = {
     "parity": "src/foundationscale/verify/parity.py",
     "checkpoint_gates": "src/foundationscale/gates/checkpoint_gates.py",
     "controls": "src/foundationscale/gates/controls.py",
-    "live_save_gate": "tools/live_save_gate.py",
+    # The decision API these rows mutate moved out of the script into the
+    # library (T2_lib_script_boundary#0); tools/live_save_gate.py is now an
+    # argparse wrapper and carries none of the anchors.
+    "adjudication": "src/foundationscale/gates/adjudication.py",
     # #85: the emission adjudicator becomes nameable by mutation rows.
     "emit_run_manifest": "tools/emit_run_manifest.py",
 }

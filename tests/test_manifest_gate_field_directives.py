@@ -19,7 +19,7 @@ novel directive shape on the unexecuted branch that matches neither the
 regex nor the pins is the stated residual, not a hidden one.
 
 MUST_PASS: today's emitted strings name zero gate fields absent from
-tools/live_save_gate.py, over a denominator of 3 emitted entries.
+src/foundationscale/gates/adjudication.py, over a denominator of 3 emitted entries.
 MUST_FIRE: the detector is fed a planted directive and must flag it --
 observed red on every run, so the detector cannot rot quietly and a
 zero-directive manifest can never masquerade as a passed measurement.
@@ -37,7 +37,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_PATH = ROOT / "tools" / "live_save_gate.py"
+# The gate's decision API is a library module since T2_lib_script_boundary#0.
+GATE_PATH = ROOT / "src" / "foundationscale" / "gates" / "adjudication.py"
 EMITTER_PATH = ROOT / "tools" / "emit_run_manifest.py"
 
 DIRECTIVE = re.compile(
@@ -152,7 +153,8 @@ def test_must_pass_emitted_strings_name_no_gate_field_the_gate_lacks():
     bad = _violations(named, gate_src)
     assert not bad, (
         f"{len(named)} gate-field directive(s) in emitted strings; "
-        f"{len(bad)} never written by tools/live_save_gate.py: {bad} "
+        f"{len(bad)} never written by "
+        f"src/foundationscale/gates/adjudication.py: {bad} "
         f"(#83 shape)"
     )
 

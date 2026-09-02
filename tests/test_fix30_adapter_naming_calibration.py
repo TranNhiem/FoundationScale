@@ -37,7 +37,10 @@ TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-import live_save_gate as lsg  # noqa: E402  (sys.path fixup precedes the tools import)
+# The decision API is a library module since T2_lib_script_boundary#0;
+# tools/live_save_gate.py is now an argparse wrapper over it. The sys.path
+# fixup above stays: adjudication imports real_checkpoint_probe as a sibling.
+from foundationscale.gates import adjudication as lsg  # noqa: E402 (path fixup first)
 
 # The estate shape is the INVARIANT here: these two literals are what the
 # measured stack writes, whatever vintage the tool under test is. The

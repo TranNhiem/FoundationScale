@@ -26,7 +26,6 @@ naming the calibration duty instead of skipping, per FS_FORBID_SKIPS.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import struct
 import sys
@@ -39,33 +38,50 @@ import foundationscale
 from foundationscale.gates.core import Coverage, GateResult, Verdict
 
 
-# Same by-path tool-loading idiom as tests/test_hunt_finding_repairs.py, with
-# one addition: the tool's own directory goes onto sys.path BEFORE exec,
-# because live_save_gate.py imports its sibling real_checkpoint_probe.py as a
-# top-level module (script semantics). Without this, the probe import fails
-# silently-when-lucky and every derive path would exit 3 with "refusing to
-# re-derive declared counts by paraphrase".
-def _load_gate():
+# The subject under test is the LIBRARY module, imported normally.
+#
+# It used to be `tools/live_save_gate.py`, loaded by path through
+# spec_from_file_location with a sys.modules pre-registration so @dataclass
+# could resolve string annotations. That apparatus existed only because the
+# decision API lived in a script; T2_lib_script_boundary#0 moved the API into
+# foundationscale.gates.adjudication and left the script as an argparse
+# wrapper, so the apparatus is gone.
+#
+# Binding `lsg` to the DEFINING module is load-bearing, not cosmetic. This file
+# monkeypatches module-level names (_probe_derive_declared, _split_expert_layouts,
+# _ALWAYS_GATES, ...) to drive the gates into their refusal arms. A re-export
+# binds a NAME, not the defining module's globals: patching the wrapper would
+# leave every one of those controls inert while still reporting green.
+#
+# tools/ still goes onto sys.path first, because the adjudication module imports
+# real_checkpoint_probe as a sibling top-level module. Without it the probe
+# import fails silently-when-lucky and every derive path exits 3 with "refusing
+# to re-derive declared counts by paraphrase".
+def _tools_on_path() -> None:
     pkg_file = Path(foundationscale.__file__).resolve()
     for candidate in pkg_file.parents:
-        tool_path = candidate / "tools" / "live_save_gate.py"
-        if tool_path.is_file():
-            if str(tool_path.parent) not in sys.path:
-                sys.path.insert(0, str(tool_path.parent))
-            spec = importlib.util.spec_from_file_location("live_save_gate", tool_path)
-            module = importlib.util.module_from_spec(spec)
-            sys.modules.setdefault(spec.name, module)
-            spec.loader.exec_module(module)
-            return module
+        tools_dir = candidate / "tools"
+        if (tools_dir / "real_checkpoint_probe.py").is_file():
+            if str(tools_dir) not in sys.path:
+                sys.path.insert(0, str(tools_dir))
+            return
     raise AssertionError(
-        "tools/live_save_gate.py not found beside the installed foundationscale "
-        "package -- run these tests from a repo checkout; silently skipping them "
-        "would be a vacuous green"
+        "tools/real_checkpoint_probe.py not found beside the installed "
+        "foundationscale package -- run these tests from a repo checkout; "
+        "silently skipping them would be a vacuous green"
     )
 
 
-lsg = _load_gate()
+_tools_on_path()
 
+# The CLI is the OTHER half of the split: argparse + exit-code mapping stayed
+# in tools/live_save_gate.py, so the exit-code tests below must call THAT
+# module's main(). The direction of the re-export hazard reverses here --
+# main() reads the wrapper's own global `adjudicate_checkpoint`, so the
+# tool-bug test patches lsg_cli, not lsg.
+import live_save_gate as lsg_cli  # noqa: E402 (path fixup first)
+
+from foundationscale.gates import adjudication as lsg  # noqa: E402 (path fixup first)
 
 # ---------------------------------------------------------------------------
 # Real-artifact writers (no torch, no safetensors needed for the HF layouts)
@@ -765,10 +781,11 @@ class TestLoraDiscrimination:
     def test_healthy_lora_over_moe_base_is_adjudicated_in_adapter_scope(
         self, tmp_path
     ):
-        """[RED-UNDER-MUTANT live_save_gate/adapter-scope-inherits-base-expert-
+        """[RED-UNDER-MUTANT adjudication/adapter-scope-inherits-base-expert-
         denominator; GREEN-ON-SHIPPED] MUST_FIRE for the MINT_ZERO_ONLY_IN_PROBE
         declared exception (`if not spec.frozen_regex and not expert_stems:` --
-        live_save_gate.py:1211's census-side spelling since the #78 restructure;
+        the census-side spelling in adjudication.lora_structural_findings since
+        the #78 restructure;
         the pre-#78 text named `expert_targets`, the retired HF-header oracle.
         The docstring is updated, never the assertions -- the same drift class
         as the two corpus rows repaired tonight).
@@ -1646,7 +1663,7 @@ class TestUnderfillAndDropBuilders:
     def test_drop_receives_no_credit_for_a_block_naming_no_injected_loss(
         self, monkeypatch
     ):
-        """[RED-UNDER-MUTANT live_save_gate/drop-control-credits-without-naming;
+        """[RED-UNDER-MUTANT adjudication/drop-control-credits-without-naming;
         GREEN-ON-SHIPPED] MUST_FIRE for the self-attribution line
         (`fired = res.blocking and bool(named)`).
 
@@ -1701,7 +1718,7 @@ class TestUnderfillAndDropBuilders:
         assert set(out["dropped"]).isdisjoint({ghost})
 
     def test_drop_receives_no_credit_for_an_error_verdict(self, monkeypatch):
-        """[RED-UNDER-MUTANT live_save_gate/drop-control-credits-without-naming;
+        """[RED-UNDER-MUTANT adjudication/drop-control-credits-without-naming;
         GREEN-ON-SHIPPED] The second illegitimate-credit shape the builder's
         own docstring names ("an ERROR/VACUOUS answer carries no 'missing'
         evidence at all"): the detector CRASHES on the injected copy.
@@ -2017,7 +2034,7 @@ class TestExitCodes:
             [f"layers.{i}.self_attn.{w}"
              for i in range(6) for w in ("q_proj", "v_proj")],
         )
-        code = lsg.main([str(ckpt), "--run-kind", "lora",
+        code = lsg_cli.main([str(ckpt), "--run-kind", "lora",
                          "--base-model-dir", str(base),
                          "--train-config", str(cfg),
                          "--adapter-prefix", "",
@@ -2042,7 +2059,7 @@ class TestExitCodes:
         base, _ = _dense_base_with_ckpt(tmp_path)
         truncated = dict(list(_dense_full_tensors().items())[:4])
         ckpt = _materialize_artifact(tmp_path, truncated, name="trunc")
-        code = lsg.main([str(ckpt), "--run-kind", "full",
+        code = lsg_cli.main([str(ckpt), "--run-kind", "full",
                          "--base-model-dir", str(base),
                          "--train-config", str(_write_cfg(tmp_path, {}))])
         assert code == 1
@@ -2052,7 +2069,7 @@ class TestExitCodes:
         failures, it does not treat them as verdicts. Red if: the
         `except GateUnmeasured` mapping to EXIT_UNMEASURED is changed to 1."""
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
-        code = lsg.main([str(tmp_path / "no-such-ckpt"), "--run-kind", "full",
+        code = lsg_cli.main([str(tmp_path / "no-such-ckpt"), "--run-kind", "full",
                          "--base-model-dir", str(base),
                          "--train-config", str(_write_cfg(tmp_path, {}))])
         assert code == 3
@@ -2061,7 +2078,7 @@ class TestExitCodes:
         """[PASSES-BEFORE] Independent source A absent = cannot measure. Red
         if: BaseModel.load's missing-dir raise is weakened to an empty model."""
         ckpt = _materialize_artifact(tmp_path, _dense_full_tensors())
-        code = lsg.main([str(ckpt), "--run-kind", "full",
+        code = lsg_cli.main([str(ckpt), "--run-kind", "full",
                          "--base-model-dir", str(tmp_path / "no-base"),
                          "--train-config", str(_write_cfg(tmp_path, {}))])
         assert code == 3
@@ -2071,7 +2088,7 @@ class TestExitCodes:
         a SUPPLIED path that does not exist is a measurement failure. Red if:
         _load_train_config's is_file() guard is deleted."""
         base, ckpt = _dense_base_with_ckpt(tmp_path)
-        code = lsg.main([str(ckpt), "--run-kind", "full",
+        code = lsg_cli.main([str(ckpt), "--run-kind", "full",
                          "--base-model-dir", str(base),
                          "--train-config", str(tmp_path / "ghost.json")])
         assert code == 3
@@ -2083,7 +2100,7 @@ class TestExitCodes:
         base, ckpt, _cfg = _healthy_lora(tmp_path)
         bad = _write_cfg(tmp_path, {"peft_scheme": "lora", "lora_rank": "eight"},
                          name="bad-rank.json")
-        code = lsg.main([str(ckpt), "--run-kind", "lora",
+        code = lsg_cli.main([str(ckpt), "--run-kind", "lora",
                          "--base-model-dir", str(base), "--train-config", str(bad)])
         assert code == 3
 
@@ -2095,7 +2112,7 @@ class TestExitCodes:
         junk = tmp_path / "junk-ckpt"
         junk.mkdir()
         (junk / "model.safetensors").write_bytes(b"not a safetensors file")
-        code = lsg.main([str(junk), "--run-kind", "full",
+        code = lsg_cli.main([str(junk), "--run-kind", "full",
                          "--base-model-dir", str(base),
                          "--train-config", str(_write_cfg(tmp_path, {}))])
         assert code == 3
@@ -2106,10 +2123,10 @@ class TestExitCodes:
         if: the broad `except Exception` mapping is deleted (the traceback
         would then escape main and the process would exit 1 via the
         interpreter -- a verdict-shaped accident)."""
-        monkeypatch.setattr(lsg, "adjudicate_checkpoint",
+        monkeypatch.setattr(lsg_cli, "adjudicate_checkpoint",
                             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
         base, ckpt, cfg = _healthy_lora(tmp_path)
-        code = lsg.main([str(ckpt), "--run-kind", "lora",
+        code = lsg_cli.main([str(ckpt), "--run-kind", "lora",
                          "--base-model-dir", str(base), "--train-config", str(cfg)])
         assert code == 3
 
@@ -2664,7 +2681,7 @@ class TestAdapterNamingAgreement:
         by fixture drift -- a refused measurement that never reached the
         artifact is exactly the property under test."""
         base, ckpt, cfg = _healthy_lora(tmp_path)
-        code = lsg.main([str(ckpt), "--run-kind", "lora",
+        code = lsg_cli.main([str(ckpt), "--run-kind", "lora",
                          "--base-model-dir", str(base),
                          "--train-config", str(cfg),
                          "--adapter-prefix", "",
@@ -2965,7 +2982,7 @@ class TestAdapterPrefixDemand:
         launcher-facing shape of the demand: refused measurement, not a
         checkpoint verdict."""
         base, ckpt, cfg = _healthy_lora(tmp_path)
-        code = lsg.main([str(ckpt), "--run-kind", "lora",
+        code = lsg_cli.main([str(ckpt), "--run-kind", "lora",
                          "--base-model-dir", str(base),
                          "--train-config", str(cfg)])
         assert code == 3

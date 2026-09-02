@@ -27,7 +27,6 @@ one drop, 336-style zero-overlap indictment on 8 fixture fqns, etc.).
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import math
 import struct
@@ -47,20 +46,14 @@ def _import_gate_module():
         entry = str(root / sub)
         if entry not in sys.path:
             sys.path.insert(0, entry)
-    spec = importlib.util.spec_from_file_location(
-        "live_save_gate_under_test", root / "tools" / "live_save_gate.py"
-    )
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    # Register BEFORE exec: @dataclass resolves string annotations (the module
-    # is `from __future__ import annotations`) via sys.modules[cls.__module__],
-    # which is None for a spec-loaded module that was never registered --
-    # collection then dies in dataclasses._is_type, not in anything under test.
-    # Same idiom as tests/test_live_save_gate.py:57, under a distinct name so
-    # the two modules stay separate objects.
-    sys.modules.setdefault(spec.name, mod)
-    spec.loader.exec_module(mod)
-    return mod
+    # The decision API is a library module (T2_lib_script_boundary#0). It was
+    # previously spec-loaded from tools/live_save_gate.py under a distinct
+    # module name; that script is now an argparse wrapper that re-exports, and
+    # a re-export binds a NAME, not the defining module's globals -- so the
+    # _measure monkeypatch below would be inert against the wrapper.
+    from foundationscale.gates import adjudication
+
+    return adjudication
 
 
 LSG = _import_gate_module()

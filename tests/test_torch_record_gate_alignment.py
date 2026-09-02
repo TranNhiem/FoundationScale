@@ -6,8 +6,9 @@ writes no torch field ... (grep -c torch_record tools/live_save_gate.py
 reads 0)" while the gate already wrote one, and the leg standing guard
 pinned the STRING, never the GATE. This module connects the two sides.
 
-GATE side, read statically and BY NAME: the AST of tools/live_save_gate.py
-is parsed; the function _interpreter_provenance must exist and its record
+GATE side, read statically and BY NAME: the AST of
+src/foundationscale/gates/adjudication.py is parsed; the function
+_interpreter_provenance must exist and its record
 must carry the torch_record key. No count is grepped out of prose -- the
 key's presence is re-derived from code on every run. An unparsable gate
 errors the parse -- unreadable is not empty. A parsed gate WITHOUT the
@@ -49,7 +50,14 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-GATE_PATH = REPO_ROOT / "tools" / "live_save_gate.py"
+# The gate's decision API is a library module since T2_lib_script_boundary#0;
+# tools/live_save_gate.py is an argparse wrapper that re-exports it. Parsing
+# the wrapper would find no FunctionDef and raise LookupError -- which is the
+# correct fail-closed behaviour for a moved seam, and the reason this pointer
+# has to move with it rather than being widened to "either file".
+GATE_PATH = (
+    REPO_ROOT / "src" / "foundationscale" / "gates" / "adjudication.py"
+)
 TOOLS_DIR = str(REPO_ROOT / "tools")
 if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
