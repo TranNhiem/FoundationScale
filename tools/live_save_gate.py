@@ -92,7 +92,20 @@ Every denominator comes from a source the run under judgment did not write:
                              FQN rename that defeats declared_fqns)
 
 The checkpoint's own metadata and the run's own manifest are NEVER denominator
-sources. ``load_manifest`` is not called anywhere in this file.
+sources. The decision code this claim is about now lives in
+``foundationscale.gates.adjudication``, which calls neither ``load_manifest``
+nor ``CheckpointGateContext.from_path``: it builds its context from
+denominators resolved independently of the artifact under judgement. Scoping
+the claim to THIS file would make it true by construction -- the file is an
+argparse wrapper and has no denominator logic left to constrain.
+
+The library gate does not share that policy, and the difference is load-bearing
+(#218). ``CheckpointGateContext.from_path(path)`` without an explicit
+``declared=`` takes its four denominators off the manifest sitting beside the
+checkpoint, and ``_coerce`` routes any bare path there -- so ``gate.run(path)``
+can judge a save against a declaration that save wrote. The launchers avoid it
+by deriving the declaration from an independent base checkpoint, but that is
+their discipline, not the library's guarantee.
 
 Exit codes
 ----------
