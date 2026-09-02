@@ -150,6 +150,119 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         regex=re.compile(r"(?P<num>" + NUMBER + r") shell LOC in `?launchers/`?"),
         bindings=(("launch_sh_loc", "num"),),
     ),
+    # --- #240: the mermaid inventory and its prose twin -------------------
+    #
+    # These eight anchors exist because of a number that was never right, not
+    # one that rotted. D2 stated `tools/` at 11,226 LOC; at a38781b, the commit
+    # that WROTE the clause, tools/ was 8,838, and at HEAD it is 8,695 -- the
+    # figure matches no commit in the history. The clause's own file count (8)
+    # was correct that day, so the denominator really was tools/ and the LOC
+    # was simply wrong from birth.
+    #
+    # It survived a full drift-gate rollout because tools_loc carried no
+    # PatternSpec: the gate reported it among the 30 UNMEASURED keys and read
+    # CLEAR, and UNMEASURED next to CLEAR reads as covered. A drift gate
+    # catches numbers that ROT. Nothing catches a number that was wrong the day
+    # it was written except putting it in a denominator, which is what these do.
+    #
+    # Mermaid node labels are anchored on their node text (`tools/<br/>`, not a
+    # bare `N Python files`) for the #233 reason: an unanchored shape would
+    # match every node in the diagram and blame whichever key was checked first.
+    PatternSpec(
+        label="tools/ contains N Python LOC (tools_loc)",
+        # evidence: docs/review/D2_current_architecture.md
+        #   "while `tools/` contains 8,695 Python LOC."
+        regex=re.compile(r"`?tools/`? contains (?P<num>" + NUMBER + r") Python LOC"),
+        bindings=(("tools_loc", "num"),),
+    ),
+    PatternSpec(
+        label="mermaid tools/ node pair (tools_files+tools_loc)",
+        # evidence: docs/review/D2_current_architecture.md
+        #   'TOOLS["tools/<br/>9 Python files / 8,695 LOC"]'
+        regex=re.compile(
+            r"tools/<br/>(?P<files>" + NUMBER + r") Python files / (?P<loc>" + NUMBER + r") LOC"
+        ),
+        bindings=(("tools_files", "files"), ("tools_loc", "loc")),
+    ),
+    PatternSpec(
+        label="mermaid tests/ node pair (tests_files+tests_loc)",
+        # evidence: docs/review/D2_current_architecture.md
+        #   'TESTS["tests/<br/>54 Python files / 28,288 LOC"]'
+        regex=re.compile(
+            r"tests/<br/>(?P<files>" + NUMBER + r") Python files / (?P<loc>" + NUMBER + r") LOC"
+        ),
+        bindings=(("tests_files", "files"), ("tests_loc", "loc")),
+    ),
+    PatternSpec(
+        label="mermaid src/-as-importer node pair (src_files+src_loc)",
+        # evidence: docs/review/D2_current_architecture.md
+        #   'SRC["src/ as importer<br/>24 Python files / 18,706 LOC"]'
+        regex=re.compile(
+            r"src/ as importer<br/>(?P<files>"
+            + NUMBER
+            + r") Python files / (?P<loc>"
+            + NUMBER
+            + r") LOC"
+        ),
+        bindings=(("src_files", "files"), ("src_loc", "loc")),
+    ),
+    PatternSpec(
+        label="mermaid src/foundationscale node pair (src_files+src_loc)",
+        # evidence: docs/review/D2_current_architecture.md
+        #   'FS["src/foundationscale<br/>24 Python files / 18,706 LOC<br/>..."]'
+        # Same two keys as the node above and that is correct, not duplication:
+        # src/ contains no .py outside the package (measured 0), so the two
+        # nodes state one quantity twice and must never be allowed to disagree.
+        regex=re.compile(
+            r"src/foundationscale<br/>(?P<files>"
+            + NUMBER
+            + r") Python files / (?P<loc>"
+            + NUMBER
+            + r") LOC"
+        ),
+        bindings=(("src_files", "files"), ("src_loc", "loc")),
+    ),
+    PatternSpec(
+        label="mermaid gates/ node file count (gates_files)",
+        # evidence: docs/review/D2_current_architecture.md
+        #   'GATES["gates/<br/>9 files / 10,059 LOC"]'
+        # Only the file count is bound: the census has no gates_loc key, so the
+        # LOC in this label sits in NO denominator and is not claimed measured.
+        regex=re.compile(r"gates/<br/>(?P<num>" + NUMBER + r") files /"),
+        bindings=(("gates_files", "num"),),
+    ),
+    PatternSpec(
+        label="N private names cross the shim boundary (shim_private)",
+        # evidence: docs/review/D2_current_architecture.md
+        #   "and 60 private names still cross the boundary through the
+        #    `tools/live_save_gate.py` compatibility shim."
+        regex=re.compile(r"(?P<num>" + NUMBER + r") private names still cross the boundary"),
+        bindings=(("shim_private", "num"),),
+    ),
+    PatternSpec(
+        label="mermaid import edges, per source node (imports_tests+imports_tools+imports_src)",
+        # evidence: docs/review/D2_current_architecture.md
+        #   'TESTS -->|"94 Python import statements"| FS'
+        # One regex, three keys, keyed on the SOURCE node -- the three edges are
+        # textually identical apart from that node, so anchoring on the phrase
+        # alone would bind all three to whichever key came first.
+        regex=re.compile(
+            r"TESTS -->\|\"(?P<tests>"
+            + NUMBER
+            + r") Python import statements\"\| FS\n"
+            + r"\s*TOOLS -->\|\"(?P<tools>"
+            + NUMBER
+            + r") Python import statements\"\| FS\n"
+            + r"\s*SRC -->\|\"(?P<src>"
+            + NUMBER
+            + r") Python import statements"
+        ),
+        bindings=(
+            ("imports_tests", "tests"),
+            ("imports_tools", "tools"),
+            ("imports_src", "src"),
+        ),
+    ),
 )
 
 # Historical masks, CLAUSE-level (rule 3). Each swallows the dead claim and
@@ -384,12 +497,28 @@ def build_parser() -> argparse.ArgumentParser:
 
 ControlFn = Callable[[Path], tuple[bool, str]]
 
+# Fixture oracle, deliberately NOT the live census: these are the values the
+# controls below assert against, so they must be stable literals. Every key any
+# PatternSpec binds appears here -- a pattern whose key is absent is skipped by
+# scan() and would sit in the self-test's blind spot rather than in its
+# denominator, which is the #240 shape one layer down.
 SELF_CENSUS: Final[dict[str, int]] = {
     "decisions_loc": 982,
     "h100_loc": 31313,
     "h100_files": 63,
     "launch_sh_loc": 9274,
     "launch_py_loc": 1615,
+    "tools_files": 9,
+    "tools_loc": 8695,
+    "tests_files": 54,
+    "tests_loc": 28288,
+    "src_files": 24,
+    "src_loc": 18706,
+    "gates_files": 9,
+    "shim_private": 60,
+    "imports_tests": 94,
+    "imports_tools": 12,
+    "imports_src": 26,
 }
 
 
@@ -509,8 +638,47 @@ def self_test() -> int:
         ok = gate_exit_code(rep) == EXIT_UNMEASURED
         return ok, f"exit={gate_exit_code(rep)}"
 
+    def c_mermaid_node(root: Path) -> tuple[bool, str]:
+        # #240: the clause that was false at birth lived in a mermaid node
+        # label, not in prose. Every pattern before #240 anchored on sentence
+        # text, so a diagram could state any number it liked and the gate read
+        # CLEAR over it. This asserts the node label is a SITE -- and that the
+        # pair rewrites together, since a node carries files and LOC in one
+        # label and half a corrected node is a worse artifact than none.
+        doc = mk(
+            root / "mermaid",
+            "d.md",
+            '  TOOLS["tools/<br/>9 Python files / 11,226 LOC"]\n',
+        )
+        rep = scan_doc(doc)
+        texts = {doc: doc.read_text(encoding="utf-8")}
+        rewritten = apply_rewrites(plan_rewrites(rep), texts)
+        after = doc.read_text(encoding="utf-8")
+        ok = rep.drifted == 1 and rewritten == 2 and "9 Python files / 8,695 LOC" in after
+        return ok, f"drifted={rep.drifted} tokens={rewritten}"
+
+    def c_import_edges(root: Path) -> tuple[bool, str]:
+        # The three edges are textually identical apart from their source node,
+        # so this pins that each number reaches its OWN key: the doc is built
+        # with tools' and src' counts correct and only tests' wrong, and the
+        # gate must blame imports_tests alone.
+        doc = mk(
+            root / "edges",
+            "d.md",
+            '  TESTS -->|"78 Python import statements"| FS\n'
+            '  TOOLS -->|"12 Python import statements"| FS\n'
+            '  SRC -->|"26 Python import statements, source not disaggregated"| FS\n',
+        )
+        rep = scan_doc(doc)
+        stats = per_key(rep)
+        wrong = sorted(k for k, s in stats.items() if s[2])
+        ok = wrong == ["imports_tests"]
+        return ok, f"blamed={wrong}"
+
     controls: list[tuple[str, str, ControlFn]] = [
         ("association", "MUST_PASS", c_association),
+        ("mermaid node pair is a site, and rewrites whole", "MUST_FIRE", c_mermaid_node),
+        ("three identical edges, each number to its own key", "MUST_FIRE", c_import_edges),
         ("anchored clause, wrong number, blamed on right key", "MUST_FIRE", c_wrong_anchor),
         ("anchored clause, right number, counts as agreement", "MUST_PASS", c_right_anchor),
         ("pair, LOC-only drift, one site, both tokens rewritten", "MUST_FIRE", c_pair_partial),

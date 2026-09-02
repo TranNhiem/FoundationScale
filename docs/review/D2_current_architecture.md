@@ -80,9 +80,9 @@ flowchart TB
 
 ### What the diagram establishes — and what it deliberately does not
 
-- The operational plane is shell and tool-heavy: `launchers/` contains 9,484 shell LOC plus 1,615 Python LOC, while `tools/` contains 11,226 Python LOC. `h100_validation/` adds another 31,313 Python LOC and 4,986 shell LOC.
+- The operational plane is shell and tool-heavy: `launchers/` contains 9,495 shell LOC plus 1,615 Python LOC, while `tools/` contains 8,695 Python LOC. `h100_validation/` adds another 31,313 Python LOC and 4,986 shell LOC.
 - The installed package is consumed by tools, but the measured `run_event` call-site count is **0 in both `tools/` and `h100_validation/`**. No evidence shows an actual trainer firing the lifecycle engine.
-- The package's three-line `__init__.py` exports nothing, so there is still no top-level public surface. The production save-gate decision function `adjudicate_checkpoint` **is now importable** from `foundationscale.gates.adjudication` (moved during this review, T2#0), but it is reachable only by its fully-qualified submodule path, and 63 private names still cross the boundary through the `tools/live_save_gate.py` compatibility shim.
+- The package's three-line `__init__.py` exports nothing, so there is still no top-level public surface. The production save-gate decision function `adjudicate_checkpoint` **is now importable** from `foundationscale.gates.adjudication` (moved during this review, T2#0), but it is reachable only by its fully-qualified submodule path, and 60 private names still cross the boundary through the `tools/live_save_gate.py` compatibility shim.
 - There is **no load-side path after saving**: the `Lifecycle` enum has no `RESUME`, `LOAD`, `BEFORE_LOAD`, or `RESTORE` member.
 - The generated/estate trainer path is **UNMEASURED**. The dotted trainer edges are evidence gaps, not claims that no trainer exists anywhere in the repository.
 
@@ -92,23 +92,23 @@ The census reports counts per importing area, not unique dependencies or a file-
 
 ```mermaid
 flowchart TB
-  TESTS["tests/<br/>47 Python files / 25,689 LOC"]
-  TOOLS["tools/<br/>8 Python files / 11,226 LOC"]
-  SRC["src/ as importer<br/>17 Python files / 16,213 LOC"]
+  TESTS["tests/<br/>54 Python files / 28,288 LOC"]
+  TOOLS["tools/<br/>9 Python files / 8,695 LOC"]
+  SRC["src/ as importer<br/>24 Python files / 18,706 LOC"]
 
-  FS["src/foundationscale<br/>17 Python files / 16,213 LOC<br/>root __init__.py exports nothing"]
+  FS["src/foundationscale<br/>24 Python files / 18,706 LOC<br/>root __init__.py exports nothing"]
 
-  GATES["gates/<br/>7 files / 6,768 LOC"]
+  GATES["gates/<br/>9 files / 10,059 LOC"]
   CKPT["checkpoint/<br/>3 files / 2,199 LOC"]
-  PROV["provenance/<br/>2 files / 2,584 LOC"]
+  PROV["provenance/<br/>2 files / 2,704 LOC"]
   VERIFY["verify/<br/>2 files / 1,054 LOC"]
   TOPO["topology.py<br/>1 file / 1,005 LOC"]
   INTEG["integrate.py<br/>1 file / 54 LOC"]
   ROOT["root __init__.py<br/>1 file / 3 LOC"]
 
-  TESTS -->|"78 Python import statements"| FS
-  TOOLS -->|"16 Python import statements"| FS
-  SRC -->|"5 Python import statements, source not disaggregated"| FS
+  TESTS -->|"94 Python import statements"| FS
+  TOOLS -->|"12 Python import statements"| FS
+  SRC -->|"26 Python import statements, source not disaggregated"| FS
 
   FS -->|"contains"| GATES
   FS -->|"contains"| CKPT
@@ -154,7 +154,7 @@ This table uses the declared scope in the question as the reference architecture
 | Distributed runtime | Zero distributed-collective occurrences in the package | **MISSING from package** |
 | Parallel topology model | `foundationscale.topology` includes construction-time product validation | **PRESENT as library; production trainer use UNMEASURED** |
 | Target-hardware profiles | `_PROFILE_DATA` contains only `slurm-generic` and `local-single-node`; neither is MNNVL-capable | **MISSING H100/H200/GB200/GB300 profiles** |
-| Launch orchestration | 9,484 shell LOC in `launchers/`; preflight is scoped to one Gemma-4-E4B / GB200-tray launch; census denominator control is hardwired to one launcher | **ESTATE-ONLY, not a package launcher API** |
+| Launch orchestration | 9,495 shell LOC in `launchers/`; preflight is scoped to one Gemma-4-E4B / GB200-tray launch; census denominator control is hardwired to one launcher | **ESTATE-ONLY, not a package launcher API** |
 | In-process lifecycle hooks | Lifecycle members are referenced for `FIRST_SAVE`, `SAVE`, `STEP_ZERO`, `LAUNCH`, `EXPORT`, and `PROMOTE`, but `run_event` has zero production call sites in tools or validation estate | **MISSING trainer seam** |
 | Checkpoint readers and metadata | `checkpoint/dcp.py`, `checkpoint/dcp_meta.py`, `open_weights`, `read_metadata`, chunk reads, and fail-closed format sniffing exist | **PRESENT; end-to-end trainer consumption UNMEASURED** |
 | Trainer-owned checkpoint saving | No measured trainer body, no lifecycle caller, and no training constructs in the package | **MISSING/UNMEASURED** |
