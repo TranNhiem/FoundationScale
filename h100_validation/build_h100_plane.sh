@@ -401,6 +401,21 @@ STAGES=(
                               # the container must not be blocked by its own diagnostic.
                               # Must precede patch_engine_entrypoint_naming.py so the block's
                               # operator-facing text falls inside that stage's census.
+  patch_node_shape.py         # #204 and #153, which are the same header literals. The
+                              # #SBATCH block hard-coded one estate's node shape
+                              # (gpus-per-node, cpus-per-task, mem) and a seven-day --time,
+                              # so the plane could be submitted on exactly one machine
+                              # shape and no other. #153 is the walltime half: FS_WALLTIME
+                              # was refused against a compiled-in constant that ran BEFORE
+                              # the live sinfo probe, so the hard-coded oracle beat the
+                              # measured one and a CORRECT ten-day walltime on a ten-day
+                              # partition was refused. Follows fs152 exactly: an #SBATCH
+                              # line is a comment to the shell, so the directives are
+                              # DELETED and their values travel on every sbatch invocation
+                              # where expansion actually happens. Must run BEFORE
+                              # patch_engine_entrypoint_naming.py, whose census has to read
+                              # the final operator-facing text -- this stage rewrites the
+                              # launcher's header prose.
   patch_engine_entrypoint_naming.py # #182: the launch plane's operator-facing text named
                               # tools/fs_train.py as the reader of two knobs, a program
                               # PUBLISH_SET.txt itself declares has "zero consumers in the

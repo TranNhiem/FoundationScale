@@ -3,20 +3,31 @@
 # fs152: the submit partition is an INPUT (FS_PARTITION, required, no default),
 # not a property of this file -- see the guard directly below the #SBATCH block.
 # Estate facts measured 2026-08-30; do not generalize them into core defaults.
-# CRITICAL WALLTIME: the partition named by FS_PARTITION has a finite maximum
-# (7-00:00:00 in the estate this launcher was measured against). The GB200 standing rule
-# --time=10-00:00:00 is REJECTED by this partition at submit time. Do not 'fix' this back.
+# CRITICAL WALLTIME (fs204/fs153): the maximum walltime is a property of the
+# submit PARTITION, measured at submit time by the sinfo probe below -- never a
+# property of this file. A ten-day standing rule is NOT portable: the same request
+# is correctly ACCEPTED on a partition that allows it and correctly REFUSED where
+# it exceeds the measured maximum. Do not re-bake any duration into this header;
+# the knob is FS_WALLTIME (required, no default), proven against the oracle below.
 # fs152: the `#SBATCH --partition=...` directive that stood here is DELETED, not
 # parameterised in place -- an #SBATCH line is a comment to the shell, so an
 # expanded-looking form would silently mean something different from what it
 # says. The partition now travels as --partition="$FS_PARTITION" on the sbatch
 # invocation below, where expansion actually happens.
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=8
+# fs204: the four estate-shaped directives -- gpus-per-node, cpus-per-task, mem and
+# time -- are DELETED from this header, not parameterised in place. An #SBATCH line
+# is a comment to the shell (fs152), so a variable written into one never expands
+# and the directive would silently mean something other than what it says. These
+# four are properties of the ESTATE'S HARDWARE -- its GPUs per node, its CPUs per
+# task, its memory and its partition walltime window -- not of this launcher. They
+# now travel as REAL flags on every sbatch invocation below, where expansion
+# happens, fed by FS_GPUS_PER_NODE / FS_CPUS_PER_TASK / FS_MEM / FS_WALLTIME, all
+# required with no defaults (a default would re-bake the shape this stage removes).
+# RETAINED around them: nodes=1, ntasks-per-node=1, job-name, output and error are
+# this launcher's own topology contract -- one task per node, torchrun fans out to
+# the GPUs inside the allocation -- and name no estate fact.
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=96
-#SBATCH --mem=800G
-#SBATCH --time=7-00:00:00
 #SBATCH --job-name=fs-h100
 #SBATCH --output=%x.%j.out
 #SBATCH --error=%x.%j.err
@@ -26,6 +37,18 @@
 # and FS_ALLOWED_PATH_ROOTS. An unconfigured guard is a disabled standing rule; a
 # default here would be the deleted literal compiled back in.
 [[ -n "${FS_PARTITION:-}" ]] || { echo "REFUSE 96: FS_PARTITION is unset (required, no default by design). Set it to this estate's Slurm submit partition -- the framework refuses to guess a cluster layout." >&2; exit 96; }
+# --- fs204: estate node-shape knobs, REQUIRED WITH NO DEFAULTS ------------------
+# The same contract as FS_PARTITION directly above and the FS_ALLOWED_NODE /
+# FS_CONTAINER_RUNTIME / FS_ALLOWED_PATH_ROOTS family (#123): an unconfigured guard
+# is a disabled standing rule, and a default here would be the deleted estate shape
+# compiled back in. This block sits ABOVE set -Eeuo pipefail and before fail() is
+# defined, so it uses the raw { echo ... >&2; exit 96; } idiom, exactly like the
+# FS_PARTITION guard it extends.
+[[ -n "${FS_CPUS_PER_TASK:-}" ]] || { echo "REFUSE 96: FS_CPUS_PER_TASK is unset (required, no default by design). Set it to this estate's CPUs per training task -- the framework refuses to guess a cluster layout." >&2; exit 96; }
+[[ "$FS_CPUS_PER_TASK" =~ ^[0-9]+$ && "$FS_CPUS_PER_TASK" -gt 0 ]] || { echo "REFUSE 96: FS_CPUS_PER_TASK must be a positive integer; got '$FS_CPUS_PER_TASK'." >&2; exit 96; }
+[[ -n "${FS_MEM:-}" ]] || { echo "REFUSE 96: FS_MEM is unset (required, no default by design). Set it to this estate's per-node memory spec (digits, optional K/M/G/T suffix) -- the framework refuses to guess a cluster layout." >&2; exit 96; }
+[[ "$FS_MEM" =~ ^[0-9]+[KMGT]?$ ]] || { echo "REFUSE 96: FS_MEM must match ^[0-9]+[KMGT]?$; got '$FS_MEM'." >&2; exit 96; }
+[[ -n "${FS_WALLTIME:-}" ]] || { echo "REFUSE 96: FS_WALLTIME is unset (required, no default by design). Set it to the submit walltime for this estate's partition; the VALUE is proven against the measured partition maximum below -- the framework refuses to guess a cluster layout." >&2; exit 96; }
 
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -347,10 +370,11 @@ unset _adj
 PROBE="$PROBE"
 [[ "$PROBE" == 0 || "$PROBE" == 1 ]] || fail 96 "PROBE must be exactly 0 or 1; got '$PROBE'"
 
-# Do not let a stale/GB200 walltime leak in through the environment.
-if [[ -n "${FS_WALLTIME:-}" && "$FS_WALLTIME" != 7-00:00:00 ]]; then
-  fail 96 "FS_WALLTIME='$FS_WALLTIME' conflicts with ${FS_PARTITION} max 7-00:00:00; refusing instead of clamping"
-fi
+# fs153: the hard-coded FS_WALLTIME comparison that stood here is DELETED. It was a
+# second, stale oracle for the partition's maximum, and it ran BEFORE the live
+# sinfo probe -- so it refused requests the probe would have proven legal, and a
+# correct multi-day walltime died against a baked-in constant. One oracle remains:
+# the measured maximum below.
 # One parser, two call sites. Slurm durations arrive as [D-]HH:MM:SS, D-HH:MM, D-HH, MM:SS, or MM.
 # Prints seconds on stdout; rc=1 on anything unparseable. UNLIMITED/INFINITE are returned rc=1 and
 # must be handled EXPLICITLY by callers, never silently admitted or rejected.
@@ -372,8 +396,9 @@ fs_tl_seconds() {
   printf '%s\n' "$(( d*86400 + h*3600 + m*60 + s ))"
 }
 
-# The partition is the oracle for the maximum; the answer is hard-coded nowhere (the FS_WALLTIME
-# literal refusal above is a separate, deliberate stale-GB200 guard and stays).
+# fs153: the partition is THE ONLY oracle for the maximum. The answer is hard-coded
+# nowhere -- the stale literal comparison that once ran above this probe is deleted,
+# and FS_WALLTIME itself is proven against this measured value directly below it.
 part_max="$(sinfo -h -p "$FS_PARTITION" -o '%l' 2>/dev/null | head -n1 || true)"
 [[ -n "$part_max" ]] || fail 96 "$FS_PARTITION partition max probe returned nothing; UNMEASURED is not PASS"
 max_unlimited=0
@@ -381,6 +406,18 @@ if [[ "$part_max" == UNLIMITED ]]; then
   max_unlimited=1
 else
   max_sec="$(fs_tl_seconds "$part_max")" || fail 96 "unparseable ${FS_PARTITION} partition max '$part_max'; UNMEASURED is not PASS"
+fi
+
+# fs153: prove the REQUESTED walltime against the MEASURED maximum -- the check the
+# deleted stale-guard could never perform, because it compared against a constant.
+# fs_tl_seconds returns rc=1 for UNLIMITED and INFINITE, so an unbounded request is
+# refused here as not-a-finite-duration; a finite request under an UNLIMITED
+# partition maximum is admitted explicitly, never vacuously.
+wt_sec="$(fs_tl_seconds "$FS_WALLTIME")" || fail 96 "FS_WALLTIME='$FS_WALLTIME' is not a finite Slurm duration; UNMEASURED is not PASS"
+if [[ "$max_unlimited" == 0 ]]; then
+  (( wt_sec <= max_sec )) || fail 96 "FS_WALLTIME='$FS_WALLTIME' (${wt_sec}s) exceeds the measured ${FS_PARTITION} partition max '$part_max' (${max_sec}s); refusing instead of clamping"
+else
+  echo "NOTICE: $FS_PARTITION partition maximum is UNLIMITED; finite FS_WALLTIME='$FS_WALLTIME' (${wt_sec}s) admitted"
 fi
 
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
@@ -692,13 +729,13 @@ if [[ -z "${SLURM_JOB_ID:-}" && "${FS_SUBMIT_CHAIN:-0}" == 1 ]]; then
       *)  fail 96 "argv preflight returned undeclared exit code $fs183_pf_rc; the plane's contract is 0/5/95/96" ;;
     esac
   fi
-  probe_jid="$(PROBE=1 FS_SUBMIT_CHAIN=0 sbatch --partition="$FS_PARTITION" --parsable --export=ALL,PROBE=1,FS_SUBMIT_CHAIN=0 "$FS_PLANE_DIR/$(basename "$0")")"
+  probe_jid="$(PROBE=1 FS_SUBMIT_CHAIN=0 sbatch --partition="$FS_PARTITION" --gpus-per-node="$FS_GPUS_PER_NODE" --cpus-per-task="$FS_CPUS_PER_TASK" --mem="$FS_MEM" --time="$FS_WALLTIME" --parsable --export=ALL,PROBE=1,FS_SUBMIT_CHAIN=0 "$FS_PLANE_DIR/$(basename "$0")")"
   [[ "$probe_jid" =~ ^[0-9]+$ ]] || fail 96 "probe submit did not return a job id: '$probe_jid'"
-  prod_jid="$(PROBE=0 FS_SUBMIT_CHAIN=0 sbatch --partition="$FS_PARTITION" --parsable --dependency="afterok:$probe_jid" --export=ALL,PROBE=0,FS_SUBMIT_CHAIN=0 "$FS_PLANE_DIR/$(basename "$0")")"
+  prod_jid="$(PROBE=0 FS_SUBMIT_CHAIN=0 sbatch --partition="$FS_PARTITION" --gpus-per-node="$FS_GPUS_PER_NODE" --cpus-per-task="$FS_CPUS_PER_TASK" --mem="$FS_MEM" --time="$FS_WALLTIME" --parsable --dependency="afterok:$probe_jid" --export=ALL,PROBE=0,FS_SUBMIT_CHAIN=0 "$FS_PLANE_DIR/$(basename "$0")")"
   [[ "$prod_jid" =~ ^[0-9]+$ ]] || fail 96 "production submit did not return a job id: '$prod_jid'"
-  resume_jid="$(sbatch --partition="$FS_PARTITION" --parsable --dependency="afterok:$prod_jid" --export=ALL,FS_PHASE=resume,PROBE=0,FS_SUBMIT_CHAIN=0 "$FS_PLANE_DIR/$(basename "$0")")"
+  resume_jid="$(sbatch --partition="$FS_PARTITION" --gpus-per-node="$FS_GPUS_PER_NODE" --cpus-per-task="$FS_CPUS_PER_TASK" --mem="$FS_MEM" --time="$FS_WALLTIME" --parsable --dependency="afterok:$prod_jid" --export=ALL,FS_PHASE=resume,PROBE=0,FS_SUBMIT_CHAIN=0 "$FS_PLANE_DIR/$(basename "$0")")"
   [[ "$resume_jid" =~ ^[0-9]+$ ]] || fail 96 "resume submit did not return a job id: '$resume_jid'"
-  postmortem_jid="$(sbatch --partition="$FS_PARTITION" --parsable --dependency="afterany:$prod_jid" --export=ALL,FS_PHASE=post-mortem,PROBE=0,FS_SUBMIT_CHAIN=0 "$FS_PLANE_DIR/$(basename "$0")")"
+  postmortem_jid="$(sbatch --partition="$FS_PARTITION" --gpus-per-node="$FS_GPUS_PER_NODE" --cpus-per-task="$FS_CPUS_PER_TASK" --mem="$FS_MEM" --time="$FS_WALLTIME" --parsable --dependency="afterany:$prod_jid" --export=ALL,FS_PHASE=post-mortem,PROBE=0,FS_SUBMIT_CHAIN=0 "$FS_PLANE_DIR/$(basename "$0")")"
   [[ "$postmortem_jid" =~ ^[0-9]+$ ]] || fail 96 "post-mortem submit did not return a job id: '$postmortem_jid'"
   printf 'CHAIN probe=%s production=%s resume_afterok=%s postmortem_afterany=%s\n' "$probe_jid" "$prod_jid" "$resume_jid" "$postmortem_jid"
   exit 0
@@ -761,7 +798,20 @@ if [[ "${FS_PHASE:-}" == resume ]]; then
 fi
 
 [[ -n "${SLURM_JOB_ID:-}" ]] || fail 96 'not in a Slurm allocation; submit with sbatch (or FS_SUBMIT_CHAIN=1 on login node)'
-[[ "${SLURM_GPUS_PER_NODE:-$FS_GPUS_PER_NODE}" == "$FS_GPUS_PER_NODE" ]] || fail 96 "SLURM_GPUS_PER_NODE mismatch: ${SLURM_GPUS_PER_NODE:-unset} vs $FS_GPUS_PER_NODE"
+# fs204: three states, never a vacuous pass. The comparison that stood here gave
+# SLURM_GPUS_PER_NODE a parameter-expansion default of the very value it was being
+# compared against, so the equality held BY CONSTRUCTION whenever Slurm exported
+# nothing -- an
+# absent observable reported as agreement. Set: compare, refuse 96 on mismatch.
+# Unset: UNMEASURED, stated, and continue -- NOT a refusal (that would make the
+# plane specific to Slurm builds that export the variable) and NOT called a pass:
+# the binding measurement of the same quantity is the in-container
+# torch.cuda.device_count() comparison against FS_GPUS_PER_NODE ~25 lines below.
+if [[ -n "${SLURM_GPUS_PER_NODE:-}" ]]; then
+  [[ "$SLURM_GPUS_PER_NODE" == "$FS_GPUS_PER_NODE" ]] || fail 96 "SLURM_GPUS_PER_NODE mismatch: $SLURM_GPUS_PER_NODE vs $FS_GPUS_PER_NODE"
+else
+  echo "UNMEASURED: SLURM_GPUS_PER_NODE is not exported by this Slurm build; treated as unmeasured, never pass. The binding measurement is the in-container torch.cuda.device_count() comparison vs FS_GPUS_PER_NODE below."
+fi
 
 SUBMIT_DIR="$OUT_DIR/_submit"; mkdir -p -- "$SUBMIT_DIR"
 fs_backend_init "$SUBMIT_DIR"

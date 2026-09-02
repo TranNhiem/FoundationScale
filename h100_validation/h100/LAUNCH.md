@@ -6,7 +6,7 @@
 > resume PROVED. The full four-job submit chain has completed end to end with every link
 > COMPLETED 0:0 (37340→37341→37342→37343), and a second model family ran the same argv on
 > the same corpus (Gemma-3-1b, 37336) with one declared abstention rather than a pass. The
-> build plane is green at 41 stages (E.5). **This document tells you how to launch, and the
+> build plane is green at 42 stages (E.5). **This document tells you how to launch, and the
 > launch trains — on two small models, on one node, in one container runtime.** That
 > denominator is the limit of the claim, and §8 is the list of everything outside it.
 >
@@ -147,10 +147,7 @@ For the full probe → production → resume → post-mortem chain instead, expo
 `FS_SUBMIT_CHAIN=1` and run the launcher **on the login node** (it submits the chain
 itself). See §6.
 
-Leave `FS_WALLTIME` unset. The `#SBATCH --time=7-00:00:00` directive is correct for the
-partition named by `$FS_PARTITION`; any other value is refused, not clamped — **including
-legitimately shorter values** (launcher walltime guard; see the known limitation at the
-end of §7 before you are tempted to set one).
+Set and export the per-submit resource knobs before invoking `sbatch`: `FS_CPUS_PER_TASK`, `FS_MEM` and `FS_WALLTIME` are now required with no default, the same contract as `FS_PARTITION` and `FS_GPUS_PER_NODE`; unset ⇒ REFUSE 96. The shape measured on the estate this plane was validated against is `FS_CPUS_PER_TASK=96 FS_MEM=800G FS_WALLTIME=7-00:00:00` — quoted as an example of the FORM, not as a default. Nothing in the framework supplies these numbers. These facts no longer live in the header — an `#SBATCH` line is a shell comment and cannot expand a variable — so `--gpus-per-node`, `--cpus-per-task`, `--mem` and `--time` travel on the `sbatch` command line. `FS_WALLTIME` is a value knob: the launcher measures the named partition's maximum with `sinfo` at submit time, accepts a ten-day value on a ten-day partition, refuses it on a seven-day one, and quotes the measured maximum.
 
 Do not set `FS_PLANE_DIR` unless you need to override plane resolution: the launcher
 resolves the plane directory automatically (§3, bypass controls; §7). If you do set it,
@@ -167,7 +164,7 @@ measurement**, and both are now enforced: gate rule L2 resolves every citation i
 document against the file its own notation names — 71 citations, 71 resolved — and a
 notation it cannot map to a file is a counted miss, not a citation it quietly skips.
 Two separate drifts made that necessary. On the launcher side, a self-contained
-plane-directory resolver (fs142) took L:34–182 and pushed every later line down. On the
+plane-directory resolver (fs142) took L:57–205 and pushed every later line down. On the
 backend side, 8 of the 12 B: pointers had gone stale by consistent offsets (+9, +29, +64)
 as the container backend grew; each was re-anchored to the line where its subject
 actually occurs. Before that, L2's denominator was 59 — it read only the L: notation and
@@ -185,21 +182,23 @@ gate's count misses the names reached through locals and the array-length test.
 
 | Name | What it is | If unset | Enforced |
 |---|---|---|---|
-| `FS_PARTITION` | this estate's Slurm submit partition. The `#SBATCH --partition=` directive was **deleted, not parameterised** (fs152): an `#SBATCH` line is a comment to the shell, so the partition travels as `--partition="$FS_PARTITION"` on the sbatch invocation, where expansion actually happens (L:9–13) | exit 96 refuse — "required, no default by design … the framework refuses to guess a cluster layout" (a default would be the deleted literal compiled back in) | L:28; carried on every chain `sbatch` at L:695–701 |
+| `FS_PARTITION` | this estate's Slurm submit partition. The `#SBATCH --partition=` directive was **deleted, not parameterised** (fs152): an `#SBATCH` line is a comment to the shell, so the partition travels as `--partition="$FS_PARTITION"` on the sbatch invocation, where expansion actually happens (L:12–16) | exit 96 refuse — "required, no default by design … the framework refuses to guess a cluster layout" (a default would be the deleted literal compiled back in) | L:39; carried on every chain `sbatch` at L:732–738 |
 | `FS_ALLOCATION` | who allocated the nodes; must be exactly `slurm` on this launcher | exit 96 refuse (`${FS_ALLOCATION:-}` empty fallback preserves required-no-default under `set -u`, #126) | B:169; launcher prologue |
 | `FS_ALLOWED_NODE` | node this plane is permitted to run on (standing safety rule) | exit 96 refuse | B:299 |
 | `FS_CONTAINER_RUNTIME` | container runtime; must be exactly `singularity` | exit 96 refuse | B:154; launcher prologue |
-| `FS_ALLOWED_PATH_ROOTS` | space/tab-separated absolute roots reachable in-container | exit 96 refuse — "no default by design … refuses to guess a filesystem layout" | L:246 |
-| `FS_ENGINE_LAUNCH_MODE` | who forks ranks: `torchrun` / `wlm` / `self` | exit refuse, "required, no default" (read via local `mode`) | B:677; demanded by `fs_compose_launch` at L:870–871 |
+| `FS_ALLOWED_PATH_ROOTS` | space/tab-separated absolute roots reachable in-container | exit 96 refuse — "no default by design … refuses to guess a filesystem layout" | L:269 |
+| `FS_ENGINE_LAUNCH_MODE` | who forks ranks: `torchrun` / `wlm` / `self` | exit refuse, "required, no default" (read via local `mode`) | B:677; demanded by `fs_compose_launch` at L:920–921 |
 | `FS_CONTAINER_SQSH` | container image path, operator-supplied (R7) | exit refuse | B:1336 |
-| `FS_BIND_PATHS` | array of host paths bound into the container; **derived** by the launcher from `MODEL_DIR`, `DATASET_DIR`, `dirname(CONFIG_FILE)`, `OUT_DIR`, each adjudicator spec's dirname (fs146(b), L:336–340), and `FS_EXTRA_BIND_PATHS` | zero entries ⇒ exit 96 — "a derivation bug, not a legal empty set" | L:545 (array-length test); derivation loop L:527–536 |
-| `FS_CHECKPOINT_ADJUDICATORS` | space/tab/newline-separated adjudicator commands, one per word; each invoked as `<cmd> <ckpt_dir> <phase> <out_dir>`. Every spec is containment-checked against `FS_ALLOWED_PATH_ROOTS` (fs146(a)): a spec outside every declared root is **REFUSED** (exit 96, naming the offending spec *and* the declared roots), never skipped — and each spec's dirname is then bound into the container (fs146(b)), because a refused-after-hours knob was finding #146 | exit 96 refuse — `all([])!=PASS` (read via local `ADJUDICATORS_RAW`) | L:292 (empty refuse), L:291–315 (zero specs); containment L:315–325 |
-| `FS_ENGINE_LAUNCH_CMD` | complete in-container engine command | exit 96 refuse (read via local `LAUNCH_CMD`) | L:857 |
-| `FS_NCCL_NET_PLUGIN` | NCCL net-plugin selection; measured correct value on this estate is **`none`** | collective probe refuses the launch; without the fix the 8-rank all_reduce **SIGSEGVs** inside the first collective (E.3, measured) | L:436, L:446, L:848 |
+| `FS_BIND_PATHS` | array of host paths bound into the container; **derived** by the launcher from `MODEL_DIR`, `DATASET_DIR`, `dirname(CONFIG_FILE)`, `OUT_DIR`, each adjudicator spec's dirname (fs146(b), L:359–363), and `FS_EXTRA_BIND_PATHS` | zero entries ⇒ exit 96 — "a derivation bug, not a legal empty set" | L:582 (array-length test); derivation loop L:564–573 |
+| `FS_CHECKPOINT_ADJUDICATORS` | space/tab/newline-separated adjudicator commands, one per word; each invoked as `<cmd> <ckpt_dir> <phase> <out_dir>`. Every spec is containment-checked against `FS_ALLOWED_PATH_ROOTS` (fs146(a)): a spec outside every declared root is **REFUSED** (exit 96, naming the offending spec *and* the declared roots), never skipped — and each spec's dirname is then bound into the container (fs146(b)), because a refused-after-hours knob was finding #146 | exit 96 refuse — `all([])!=PASS` (read via local `ADJUDICATORS_RAW`) | L:315 (empty refuse), L:314–338 (zero specs); containment L:338–348 |
+| `FS_CPUS_PER_TASK` | CPUs per task, carried to `sbatch` as `--cpus-per-task` because an `#SBATCH` line is a comment and cannot expand it | exit 96 refuse — required, no default | presence refusal before queueing; interpolated on the submit command line |
+| `FS_MEM` | memory request, carried to `sbatch` as `--mem` for the same comment-expansion reason | exit 96 refuse — required, no default | presence refusal before queueing; interpolated on the submit command line |
+| `FS_WALLTIME` | walltime request, carried to `sbatch` as `--time`; a value knob compared against the named partition's maximum **measured** by `sinfo` at submit time. A ten-day value is accepted on a ten-day partition and refused on a seven-day one; the refusal quotes the measured maximum, not a constant | exit 96 refuse — required, no default; over the measured maximum ⇒ 96 | presence refusal; live `sinfo` probe and comparison at submit time |
+| `FS_ENGINE_LAUNCH_CMD` | complete in-container engine command | exit 96 refuse (read via local `LAUNCH_CMD`) | L:907 |
+| `FS_NCCL_NET_PLUGIN` | NCCL net-plugin selection; measured correct value on this estate is **`none`** | collective probe refuses the launch; without the fix the 8-rank all_reduce **SIGSEGVs** inside the first collective (E.3, measured) | L:473, L:483, L:898 |
 | `FS_FABRIC_TRIPWIRE` | pre-launch fabric probe, `host:port` or the sentinel `none` (fs163). The value is format-validated *before* it is interpolated into a `bash -c` string, and the connect is time-bounded so an unroutable master fails CLOSED rather than hanging. `none` is not "disabled": it is the estate **declaring** it has no pre-launch fabric to probe, which is the honest value where there is no IMEX plane — the sentinel exists so that "no tripwire" is a decision on the record instead of an omission | exit 96 refuse — "required, no default by design … the framework refuses to guess a cluster's fabric topology" | B:325 (presence), B:334 / B:338 (format and port range) |
 
-Value note: `FS_WALLTIME`, if set, must be exactly `7-00:00:00` — but it is
-VALIDATED-IF-SET, not REQUIRED; leave it unset (below, and §7's known limitation).
+Value note: `FS_WALLTIME` is now REQUIRED with no default (the `FS_PARTITION` / `FS_GPUS_PER_NODE` contract) and is compared against the partition maximum measured by `sinfo` at submit time; the hard-coded literal oracle and its run-first ordering are gone (§7).
 
 ### CONDITIONALLY REQUIRED — required only on one branch
 
@@ -211,7 +210,7 @@ VALIDATED-IF-SET, not REQUIRED; leave it unset (below, and §7's known limitatio
 
 | Name | What it is | If set | Enforced |
 |---|---|---|---|
-| `FS_NCCL_IB_HCA` | InfiniBand HCA pinning | exit 96 refuse — pinning is unmeasured on the partition named by `$FS_PARTITION`; leave unset unless measured and validated | L:414 |
+| `FS_NCCL_IB_HCA` | InfiniBand HCA pinning | exit 96 refuse — pinning is unmeasured on the partition named by `$FS_PARTITION`; leave unset unless measured and validated | L:451 |
 
 The measurement narrowing this refusal now exists (#130); the table reports what the code
 **does**, not what it should do.
@@ -220,12 +219,11 @@ The measurement narrowing this refusal now exists (#130); the table reports what
 
 | Name | What it is | If set to a bad value | Enforced |
 |---|---|---|---|
-| `FS_NCCL_SOCKET_IFNAME` | socket interface name | must resolve via `ip link show`, else 96. **Known defect (#131): validated then discarded — a knob with no reader** | L:411 |
-| `FS_WALLTIME` | walltime override | anything other than `7-00:00:00` ⇒ 96 refuse — a hard-coded literal guard that runs **before** the live `sinfo` probe of the partition named by `$FS_PARTITION`: it refuses instead of clamping, and it refuses legitimately *shorter* values too (§7 known limitation) | L:351–352 (literal oracle); live `sinfo` oracle at L:377–384, comparison L:386–406 |
-| `FS_GPUS_PER_NODE` | GPUs per node | must be integer > 0 (L:344–345); cross-checked against `SLURM_GPUS_PER_NODE` | L:344–345, L:764. **Note:** the launcher's own `req_env` also refuses when unset (L:225) — set it (§2) even though the value checks are the validated-if-set part |
-| `FS_ITERATION_BUDGET` | positive integer step budget | must be positive int; must exceed `FS_EARLY_SAVE_STEPS` | L:486, L:488 |
-| `FS_EARLY_SAVE_STEPS` | steps before early save | must be positive int and `<` the budget, "an early save that cannot fire is not evidence" | L:487–488 |
-| `FS_BACKEND` | legacy selector | restricted to `slurm-singularity`/`singularity`; has a real default (`slurm-singularity`) | L:218–219 |
+| `FS_NCCL_SOCKET_IFNAME` | socket interface name | must resolve via `ip link show`, else 96. **Known defect (#131): validated then discarded — a knob with no reader** | L:448 |
+| `FS_GPUS_PER_NODE` | GPUs per node | must be integer > 0 (L:367–368). Agreement with `SLURM_GPUS_PER_NODE` is checked only when Slurm exports it; when Slurm does not, the launcher prints an explicit UNMEASURED line and defers to the in-container `torch.cuda.device_count()` count, which is the real binding check | L:367–368; `req_env` presence refusal — set it (§2); the absent-`SLURM_GPUS_PER_NODE` case is UNMEASURED, not default-agreement |
+| `FS_ITERATION_BUDGET` | positive integer step budget | must be positive int; must exceed `FS_EARLY_SAVE_STEPS` | L:523, L:525 |
+| `FS_EARLY_SAVE_STEPS` | steps before early save | must be positive int and `<` the budget, "an early save that cannot fire is not evidence" | L:524–525 |
+| `FS_BACKEND` | legacy selector | restricted to `slurm-singularity`/`singularity`; has a real default (`slurm-singularity`) | L:241–242 |
 
 ### ENVIRONMENT — minted by the script, never an operator input
 
@@ -237,9 +235,9 @@ The measurement narrowing this refusal now exists (#130); the table reports what
 
 | Name | Default |
 |---|---|
-| `FS_BACKEND` | `slurm-singularity` (L:218) |
+| `FS_BACKEND` | `slurm-singularity` (L:241) |
 | `FS_USE_TORCHRUN` | `0`/`1` (B:344, B:423) |
-| `FS_EARLY_SAVE_STEPS`, `FS_ITERATION_BUDGET` | on the resume path, default through `FS_RESUME_*` (L:744–745); in probe phase, `5` and `20` with source logged (launcher probe block, L:484–485) |
+| `FS_EARLY_SAVE_STEPS`, `FS_ITERATION_BUDGET` | on the resume path, default through `FS_RESUME_*` (L:781–782); in probe phase, `5` and `20` with source logged (launcher probe block, L:521–522) |
 
 ### Bypass controls and launcher-observed names not in the oracle's published buckets
 
@@ -247,10 +245,10 @@ Listed, not silently classified. The oracle is emphatic about the first one:
 
 | Name | What it is |
 |---|---|
-| `FS_SUBMIT_CHAIN` | `=1` on a login node runs the four-job submit chain (§6). **It must NOT be classified REQUIRED.** The L:763 guard is on `SLURM_JOB_ID`; `FS_SUBMIT_CHAIN` appears only inside its quoted refusal message — it is what you set to *bypass* the check. A proximity read of that line inverts the knob's meaning. |
-| `FS_PLANE_DIR` | **OPTIONAL** operator override naming the plane directory. Resolution is **automatic** and ordered (fs142 resolver, L:34–182): step 1 verifies that `$FS_PLANE_DIR`, if set, contains a readable `fs_container_backend.bound.sh` (L:85–101); step 2 falls back to `SCRIPT_DIR` so a direct `bash launch…` invocation keeps working with no new operator variable (L:106–118); step 3 asks the workload manager for the submitted script's original path (`scontrol show job` on slurm, L:59–80) and **verifies the sibling backend there** rather than trusting the claim (L:120–148); step 4 refuses with `FATAL[142]`, printing all three attempted answers and the last directory searched (L:154–163). The verified answer is exported so later jobs and child processes inherit it (L:178). **Warning:** the submit chain re-submits the launcher *through* this variable — every one of the four `sbatch` calls addresses `"$FS_PLANE_DIR/$(basename "$0")"` (L:695–701) — so overriding it wrongly breaks the entire probe → production → resume → post-mortem chain, not one job. Only set it to override a mis-resolution. |
-| `FS_EXTRA_BIND_PATHS` | optional space-separated escape hatch for paths the launcher cannot infer (e.g., a code tree, a scratch root); word-split on purpose (launcher fs117 block, L:523–529). Since fs146(b) the adjudicator dirnames join the bind plane automatically, so pointing this at the adjudicator's tree is now redundant but harmless (de-duplicated, L:523–535) |
-| `FS_PHASE` | `train` (default) / `resume` / `post-mortem`, set by the chain driver on the resume and post-mortem hops (launcher chain block, L:699, L:701) |
+| `FS_SUBMIT_CHAIN` | `=1` on a login node runs the four-job submit chain (§6). **It must NOT be classified REQUIRED.** The L:800 guard is on `SLURM_JOB_ID`; `FS_SUBMIT_CHAIN` appears only inside its quoted refusal message — it is what you set to *bypass* the check. A proximity read of that line inverts the knob's meaning. |
+| `FS_PLANE_DIR` | **OPTIONAL** operator override naming the plane directory. Resolution is **automatic** and ordered (fs142 resolver, L:57–205): step 1 verifies that `$FS_PLANE_DIR`, if set, contains a readable `fs_container_backend.bound.sh` (L:108–124); step 2 falls back to `SCRIPT_DIR` so a direct `bash launch…` invocation keeps working with no new operator variable (L:129–141); step 3 asks the workload manager for the submitted script's original path (`scontrol show job` on slurm, L:82–103) and **verifies the sibling backend there** rather than trusting the claim (L:143–171); step 4 refuses with `FATAL[142]`, printing all three attempted answers and the last directory searched (L:177–186). The verified answer is exported so later jobs and child processes inherit it (L:201). **Warning:** the submit chain re-submits the launcher *through* this variable — every one of the four `sbatch` calls addresses `"$FS_PLANE_DIR/$(basename "$0")"` (L:732–738) — so overriding it wrongly breaks the entire probe → production → resume → post-mortem chain, not one job. Only set it to override a mis-resolution. |
+| `FS_EXTRA_BIND_PATHS` | optional space-separated escape hatch for paths the launcher cannot infer (e.g., a code tree, a scratch root); word-split on purpose (launcher fs117 block, L:560–566). Since fs146(b) the adjudicator dirnames join the bind plane automatically, so pointing this at the adjudicator's tree is now redundant but harmless (de-duplicated, L:560–572) |
+| `FS_PHASE` | `train` (default) / `resume` / `post-mortem`, set by the chain driver on the resume and post-mortem hops (launcher chain block, L:736, L:738) |
 
 ### 3b. The trainer's own knobs (#170, #181)
 
@@ -302,14 +300,14 @@ trainer refuses to guess which of two dataset descriptions you meant.
 ## 4. The artifact map
 
 Every file under `h100/gen/` is **GENERATED** by `build_h100_plane.sh` (Deliverable C,
-41 stages green, byte-identical across rebuilds). **Hand-editing any of them is
+42 stages green, byte-identical across rebuilds). **Hand-editing any of them is
 prohibited**: a hand edit puts the fix in the file you read and leaves it out of the file
 that runs. Change the stage, rebuild.
 
 | Artifact | What it is | Reads / read by |
 |---|---|---|
-| `h100/gen/launch_fs_h100.fixed.sh` | the sbatch-submitting launcher (~800 lines; the fs142 plane-directory resolver occupies L:34–182 at the top) | resolves the plane directory (operator override → `SCRIPT_DIR` → workload-manager `Command=` path, refusing `FATAL[142]` if none verify); sources the backend from the resolved directory; derives `FS_BIND_PATHS`; invokes adjudicator entries; composes the launch command |
-| `h100/gen/fs_container_backend.bound.sh` | container-runtime backend (`run_in_container`, bind materialization, guards) | sourced by the launcher (from `$FS_PLANE_DIR`, L:179–181); consumes `FS_BIND_PATHS`, `FS_ALLOWED_NODE`, `FS_CONTAINER_RUNTIME`, `FS_ENGINE_LAUNCH_MODE`; built from the spliced base below |
+| `h100/gen/launch_fs_h100.fixed.sh` | the sbatch-submitting launcher (~800 lines; the fs142 plane-directory resolver occupies L:57–205 at the top) | resolves the plane directory (operator override → `SCRIPT_DIR` → workload-manager `Command=` path, refusing `FATAL[142]` if none verify); sources the backend from the resolved directory; derives `FS_BIND_PATHS`; invokes adjudicator entries; composes the launch command |
+| `h100/gen/fs_container_backend.bound.sh` | container-runtime backend (`run_in_container`, bind materialization, guards) | sourced by the launcher (from `$FS_PLANE_DIR`, L:202–204); consumes `FS_BIND_PATHS`, `FS_ALLOWED_NODE`, `FS_CONTAINER_RUNTIME`, `FS_ENGINE_LAUNCH_MODE`; built from the spliced base below |
 | `h100/gen/fs_container_backend.spliced.sh` | **intermediate**: backend base text from the upstream repo (#136) | read by the backend stages; removed and rebuilt every run; not shipped |
 | `h100/gen/fs_train.fixed.py` | in-container training entrypoint | runs inside the container via `run_in_container`; reads `FS_ITERATION_BUDGET`/`FS_EARLY_SAVE_STEPS` across the allowlisted boundary; imports the resolver below |
 | `h100/gen/fs_model_root.py` | model-root resolver (#133): config searched per-depth, shallowest populated depth wins, bind closure not declared root | imported by the training entrypoint via the stage-C binding (`load_artifacts` → `resolve_model_root`); before that binding it was an orphan — 12 green tests, zero callers |
@@ -392,10 +390,10 @@ produced. Direct single-job submission (`sbatch`, §2) skips the chain and is th
 form for a first bring-up.
 
 Two things to know about how the chain addresses the launcher. Every hop carries the
-submit partition explicitly as `--partition="$FS_PARTITION"` (L:695–701), so unset
+submit partition explicitly as `--partition="$FS_PARTITION"` (L:732–738), so unset
 `FS_PARTITION` is refused before the first job id exists. And every hop re-submits the
 launcher **through the resolved plane directory**, as `"$FS_PLANE_DIR/$(basename "$0")"`
-(L:695–701): the resolver's answer (or your override) is inherited by all four jobs, so a
+(L:732–738): the resolver's answer (or your override) is inherited by all four jobs, so a
 wrong `FS_PLANE_DIR` override breaks the probe → production → resume → post-mortem chain
 uniformly, not at a single hop.
 
@@ -422,35 +420,39 @@ The preflight runs on the submit-chain path only -- the login-node branch taken 
 
 | Symptom | Cause | Fix | Status |
 |---|---|---|---|
-| `FATAL[142]: … remedy: set and export FS_PLANE_DIR=<directory containing fs_container_backend.bound.sh>` (older builds: `FATAL: fs_container_backend.sh not readable at /var/spool/slurmd/job<N>/...`) | `sbatch` stages **and renames** the script to `slurm_script`, so the directory beside `BASH_SOURCE` is the spool directory holding no siblings; `SLURM_SUBMIT_DIR` was only the submit-time CWD and is deliberately not trusted | #142 resolver (L:34–182): try the operator override `FS_PLANE_DIR`, then `SCRIPT_DIR`, then the workload-manager-recorded `Command=` path — each candidate accepted only if the backend is **readable beside it**; if all three fail, the refusal prints every attempt and the last directory searched. The remedy `export FS_PLANE_DIR=<plane dir>` still works and is now *step 1* of the resolver; the chain inherits the winning answer (§6) | **FIXED** (#142; the defect itself was measured on a real staged 8×H100 job and the resolver ships in the launcher header) |
+| `FATAL[142]: … remedy: set and export FS_PLANE_DIR=<directory containing fs_container_backend.bound.sh>` (older builds: `FATAL: fs_container_backend.sh not readable at /var/spool/slurmd/job<N>/...`) | `sbatch` stages **and renames** the script to `slurm_script`, so the directory beside `BASH_SOURCE` is the spool directory holding no siblings; `SLURM_SUBMIT_DIR` was only the submit-time CWD and is deliberately not trusted | #142 resolver (L:57–205): try the operator override `FS_PLANE_DIR`, then `SCRIPT_DIR`, then the workload-manager-recorded `Command=` path — each candidate accepted only if the backend is **readable beside it**; if all three fail, the refusal prints every attempt and the last directory searched. The remedy `export FS_PLANE_DIR=<plane dir>` still works and is now *step 1* of the resolver; the chain inherits the winning answer (§6) | **FIXED** (#142; the defect itself was measured on a real staged 8×H100 job and the resolver ships in the launcher header) |
 | Refusal naming your `FS_ALLOWED_PATH_ROOTS` **value** when the value was right | the variable documented itself "space-separated" while the script's safety `IFS=$'\n\t'` made spaces not split — a two-root value read as one impossible root. Prose and parser disagreed | #139: function-local `IFS=$' \t\n'` at the split sites, prose and parser now agree in both directions; `patch_list_separators.py` is **last** of the launcher-touching stages so no later stage can reintroduce a split site | **FIXED** (#139; visible in the build stage list and both launcher slices) |
-| Adjudicator exists on the host, fails inside the container | historically the bind plane derived from `MODEL_DIR`, `DATASET_DIR`, `dirname(CONFIG_FILE)`, `OUT_DIR` **only**; an adjudicator outside those trees wasn't mounted, and the knob *itself* was unchecked at startup (#146) | #146 (a): every spec is containment-checked against `FS_ALLOWED_PATH_ROOTS` at startup and refused (exit 96) if outside every root — refused, not skipped (L:315–325); (b): each spec's dirname now joins the bind-plane derivation automatically (L:336–340, consumed at L:527). `FS_EXTRA_BIND_PATHS` remains the escape hatch for trees the launcher cannot infer (a code tree, a scratch root) | **FIXED** (#146) for adjudicators under declared roots; the escape hatch still covers what inference cannot see |
-| `sbatch: error: ERROR: The number of GPUs is not specified.` | the partition named by `$FS_PARTITION` rejects a job with no `--gpus-per-node` | the static `#SBATCH --gpus-per-node=8` directive in the launcher prologue | **FIXED** (directive present in the shipped prologue) |
-| `FATAL[96]: FS_WALLTIME='…' conflicts with <partition> max 7-00:00:00; refusing instead of clamping` — **including when your value is legitimately shorter** | see the known limitation below: the wrong oracle runs first | leave `FS_WALLTIME` unset; the `#SBATCH --time=7-00:00:00` directive already requests the maximum and the live probe (second oracle) verifies it against the real partition | **KNOWN LIMITATION** (fail-closed; see below) |
+| Adjudicator exists on the host, fails inside the container | historically the bind plane derived from `MODEL_DIR`, `DATASET_DIR`, `dirname(CONFIG_FILE)`, `OUT_DIR` **only**; an adjudicator outside those trees wasn't mounted, and the knob *itself* was unchecked at startup (#146) | #146 (a): every spec is containment-checked against `FS_ALLOWED_PATH_ROOTS` at startup and refused (exit 96) if outside every root — refused, not skipped (L:338–348); (b): each spec's dirname now joins the bind-plane derivation automatically (L:359–363, consumed at L:564). `FS_EXTRA_BIND_PATHS` remains the escape hatch for trees the launcher cannot infer (a code tree, a scratch root) | **FIXED** (#146) for adjudicators under declared roots; the escape hatch still covers what inference cannot see |
+| `sbatch: error: ERROR: The number of GPUs is not specified.` | the partition named by `$FS_PARTITION` rejects a job with no `--gpus-per-node` | the prologue no longer carries a static directive (an `#SBATCH` line is a comment); `--gpus-per-node="$FS_GPUS_PER_NODE"` travels on every `sbatch` invocation, and unset `FS_GPUS_PER_NODE` is refused 96 before anything is queued | **FIXED** (estate shape moved from a header literal to a required command-line knob) |
+| `FATAL[96]: FS_WALLTIME='…' (…s) exceeds the measured <partition> partition max '…' (…s); refusing instead of clamping` | the value knob is compared against the named partition's maximum measured by `sinfo` at submit time; the message quotes that measured maximum, so a ten-day value is accepted on a ten-day partition and refused only where the measured maximum is shorter | set `FS_WALLTIME` within the measured maximum for `$FS_PARTITION`; shorter and longer values are judged by the live probe alone | **FIXED** (#153; one oracle, the measured one) |
 | `FATAL[5]` argv-preflight refusal on a login node, with no job id printed | The named flag is not declared by the entrypoint the command names, or the mode is not one the backend accepts; the refusal happens before anything is queued. | Correct the flag against that entrypoint's parser, or choose a mode from the backend's accepted `case "$mode" in ...)` set, then rerun the submit chain. | **FIXED** (#183; submit-chain path only -- a direct single-job `sbatch` submission is still uncovered). |
 
-### Known limitation: the walltime guard consults two oracles, and the wrong one runs first
+### Closed limitation (#153): the walltime guard now has one measured oracle
 
-Stated plainly, without excuse: maximum walltime is asserted by two different oracles
-that can disagree.
+Stated plainly: maximum walltime is asserted by a single oracle. The compiled-in literal that ran before the probe is deleted, the four node-shape directives are out of the header because an `#SBATCH` line is a shell comment, and `FS_WALLTIME` is required and compared only against `sinfo -h -p "$FS_PARTITION" -o '%l'` measured at submit time.
 
-* **Oracle 1 — a hard-coded literal, running first (L:351–353).** If `FS_WALLTIME` is set
-  to anything other than exactly `7-00:00:00`, the launcher refuses with exit 96. The
-  refusal message names the partition in `$FS_PARTITION`, but the 7-day figure is a
-  literal compiled into the file: this oracle asserts a maximum for a partition **it
-  never probed**. The inline comment keeps it deliberately, as a guard against the old
-  estate's 10-day rule leaking in through the environment.
-* **Oracle 2 — a correct live probe (L:377–384; comparison L:386–406).** The launcher
-  asks `sinfo` for the real `MaxTime` of whatever partition `$FS_PARTITION` actually
-  names, parses it (handling `UNLIMITED` explicitly rather than guessing), and *proves*
-  the submitted `TimeLimit` fits — refusing when it cannot prove it.
+* **Former oracle 1 — deleted.** The compiled-in `7-00:00:00` literal that refused
+  legitimately shorter values before any probe is gone, and with it the claim of a
+  maximum for a partition never probed. A ten-day request is now accepted on a ten-day
+  partition and refused on a seven-day one, with the measured figure quoted.
+* **The surviving oracle — a live probe (L:402–411; pre-submit comparison L:413–421;
+  post-submit proof L:423–435).** The launcher asks `sinfo` for the real `MaxTime` of
+  whatever partition `$FS_PARTITION` actually names, parses it (handling `UNLIMITED`
+  explicitly rather than guessing), and *proves* both the requested `FS_WALLTIME` and
+  the scheduler's own reported `TimeLimit` fit — refusing when it cannot prove it.
 
-Because oracle 1 runs first, it refuses values oracle 2 would accept — most importantly
-**shorter** ones. `FS_WALLTIME=0-02:00:00` for a cheap smoke run is refused before the
-live probe ever executes, so a cheap smoke run through `FS_WALLTIME` is currently
-impossible. The behaviour is fail-closed in both directions: nothing is clamped, nothing
-is silently admitted, and a walltime the scheduler would have accepted is refused along
-with one it would reject. The remedy today is what §2 says: leave `FS_WALLTIME` unset.
+What changes for you: a short walltime is now a legal request. `FS_WALLTIME=0-02:00:00`
+for a cheap smoke run is admitted, because the only question asked is whether the value
+fits the measured maximum, and two hours fits every partition this plane can name.
+The behaviour is still fail-closed — nothing is clamped and nothing is silently
+admitted — but it is now fail-closed against a *measurement* instead of against a
+constant, so the set of refused values is the set the scheduler would refuse.
+
+One thing did get stricter, deliberately: `FS_WALLTIME` is required with no default
+(§2). There is no longer a compiled-in value to fall back to, because a default here is
+one estate's maximum smuggled back into a framework meant to run on several. On a
+partition whose maximum is `UNLIMITED` the launcher prints a NOTICE and admits any
+finite request; an infinite request is refused as not-a-finite-duration.
 
 ---
 
@@ -498,8 +500,8 @@ Three items that used to head this list have been struck, because they ran:
   (#131) — setting it changes nothing downstream.
 * **The flag-form CLI** (`--model --dataset --num-gpus --config`). **Not implemented.**
 * **`FS_PLANE_DIR` resolver fallbacks on a full chain.** No longer "remedy named,
-  implementation missing": the fs142 resolver ships in the launcher header (L:34–182,
-  override at L:85–101, export at L:178), and the staging defect it fixes was itself
+  implementation missing": the fs142 resolver ships in the launcher header (L:57–205,
+  override at L:108–124, export at L:201), and the staging defect it fixes was itself
   measured on a real staged job. What remains unobserved is a complete four-hop chain
   exercising the resolved plane directory end-to-end — which is the chain item above,
   not a separate unknown.
@@ -514,7 +516,7 @@ Three items that used to head this list have been struck, because they ran:
   recorded in these sources.
 
 What **is** measured (so the list above is read at its true size): the build plane is green
-at 41 stages (E.5); the model-root resolver's 8/8 estate rows reproduce their independent
+at 42 stages (E.5); the model-root resolver's 8/8 estate rows reproduce their independent
 measurements with the refusals firing on real data (E.2); the 8-rank NCCL collective passes
 with `NCCL_NET_PLUGIN=none`, with NVLS and P2P/CUMEM still selected and both detector
 controls observed (E.3); Phase 3 ran 8/8 legs (37310); the four-job chain completed end to

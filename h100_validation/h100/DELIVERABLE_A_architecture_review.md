@@ -97,11 +97,12 @@ Per-seam notes:
   LAUNCH.md §8 as UNMEASURED effect) — a knob that claims configurability it does not
   have, and the review should not count it as a seam.
 * **Partition and walltime.** The partition seam is real and well-built (required, no
-  default, deleted directive rather than a parameterised comment). The walltime is the
-  residual estate fact: oracle 1 is the literal `7-00:00:00`, oracle 2 is the live probe,
-  and oracle 1 runs first. Fail-closed in both directions, but a framework that refuses
-  `FS_WALLTIME=0-02:00:00` on a partition it never asked is carrying one estate's maximum
-  in its vocabulary.
+  default, deleted directive rather than a parameterised comment). The walltime residual
+  is closed by #153: the literal `7-00:00:00` oracle that ran before the probe is
+  deleted, and walltime is judged by a single oracle — the partition maximum measured by
+  `sinfo` at submit time. `FS_WALLTIME=0-02:00:00` and a ten-day request are each
+  accepted or refused against the partition the launcher actually asked, with the
+  measured maximum quoted; no estate's maximum remains in the framework's vocabulary.
 * **Adjudicators.** The seam is real and the registry is the right shape — a second
   format is one reader plus one entry, and the driver's comment says why no
   format-specific branch belongs in a generic gate. The denominator is 1 format

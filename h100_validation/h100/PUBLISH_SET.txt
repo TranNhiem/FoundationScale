@@ -129,4 +129,9 @@ gate_doc_stage_count.py
 # instances of, and a clone that gets the corrected text without the census gets the state
 # back the first time someone writes a filename into a comment.
 patch_argv_preflight.py
+# #204/#153: the node-shape and walltime stage. Ships for the same reason as the partition
+# stage it copies -- a clone that receives a launcher with no shape directives and not the
+# stage that removed them has no record of why the header is thin, and the first person to
+# "restore" the convenient defaults puts one estate's hardware back into the shared plane.
+patch_node_shape.py
 patch_engine_entrypoint_naming.py
