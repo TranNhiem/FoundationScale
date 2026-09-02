@@ -45,3 +45,6 @@ redaction-map*
 
 # Mutation-battery run output (regenerated per run, never committed)
 artifacts/mutation-battery-report.json
+
+# Measured by `make countables`; an oracle is never committed (#220).
+.countables_census.json

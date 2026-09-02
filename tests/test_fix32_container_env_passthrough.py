@@ -286,9 +286,9 @@ fi
 # must be present in the --env stream on the CURRENT tree AND after the patch.
 KEEP_FORWARDED = {
     "PYTHONPATH": "/extras:/repo/src:/repo/3rdparty/Megatron-LM",  # README trap 1: EXTRAS first
-    "PYTHONNOUSERSITE": "1",   # s7: ~/.local CPU-only torch shadows the CUDA build without it
+    "PYTHONNOUSERSITE": "1",  # s7: ~/.local CPU-only torch shadows the CUDA build without it
     "CUDA_VISIBLE_DEVICES": "0,1,2,3",
-    "USER": "testuser",        # enroot's own wrapper dies under set -u without it (measured)
+    "USER": "testuser",  # enroot's own wrapper dies under set -u without it (measured)
     "LOGNAME": "testuser",
     "LANG": "en_US.UTF-8",
     "LC_CTYPE": "UTF-8",
@@ -309,6 +309,7 @@ KEEP_FORWARDED = {
     "RIC_ACTIVE_CONTAINER": "fs32-test",
 }
 
+
 # The convicted family — measured dangerous or structurally dangerous per the
 # fix32 classification. Values chosen to be loud if they leak.
 def _denylisted(home: Path) -> dict[str, str]:
@@ -328,6 +329,7 @@ def _denylisted(home: Path) -> dict[str, str]:
         "_CE_M": "",
     }
 
+
 # Caller-shell residue excluded before fix32 and required unchanged by it.
 RESIDUE = ("_", "PWD", "OLDPWD", "SHLVL")
 
@@ -344,15 +346,18 @@ class Scenario:
         self.home = tmp_path / "home"
         self.image = tmp_path / "image"
         self.log = tmp_path / "stub.log"
-        for d in (self.bin_dir, self.home / ".local/bin", self.home / "anaconda3/bin",
-                  self.image / "opt/venv/bin"):
+        for d in (
+            self.bin_dir,
+            self.home / ".local/bin",
+            self.home / "anaconda3/bin",
+            self.image / "opt/venv/bin",
+        ):
             d.mkdir(parents=True, exist_ok=True)
         (self.home / "prev").mkdir(parents=True, exist_ok=True)
         self.log.write_text("")
         # Measured host shape: anaconda lives UNDER $HOME, i.e. inside the one
         # tree both executor arms bind-mount — the invariant the tripwire reads.
-        for stubbed in (self.home / "anaconda3/bin/python3",
-                        self.image / "opt/venv/bin/python3"):
+        for stubbed in (self.home / "anaconda3/bin/python3", self.image / "opt/venv/bin/python3"):
             stubbed.write_text(STUB_PYTHON)
             stubbed.chmod(0o755)
         (self.bin_dir / "enroot").write_text(STUB_ENROOT)
@@ -366,9 +371,13 @@ class Scenario:
             f"{self.bin_dir}:{self.home}/.local/bin:{self.home}/anaconda3/bin:/usr/bin:/bin"
         )
 
-    def env(self, drill: bool, srun_image_env: bool,
-            ssh_drill: bool = False,
-            extra_env: dict[str, str] | None = None) -> dict[str, str]:
+    def env(
+        self,
+        drill: bool,
+        srun_image_env: bool,
+        ssh_drill: bool = False,
+        extra_env: dict[str, str] | None = None,
+    ) -> dict[str, str]:
         env: dict[str, str] = {
             "PATH": self.host_path,
             "HOME": str(self.home),
@@ -394,19 +403,19 @@ class Scenario:
             env.update(extra_env)
         return env
 
-    def run(self, *, drill: bool = False, srun_image_env: bool = False,
-            ssh_drill: bool = False, extra_env: dict[str, str] | None = None,
-            payload: tuple[str, ...] = ("true",)) -> subprocess.CompletedProcess[str]:
+    def run(
+        self,
+        *,
+        drill: bool = False,
+        srun_image_env: bool = False,
+        ssh_drill: bool = False,
+        extra_env: dict[str, str] | None = None,
+        payload: tuple[str, ...] = ("true",),
+    ) -> subprocess.CompletedProcess[str]:
         # Drives the SHIPPED backend: source it, mint only what run_in_container
         # reads without a full fs_backend_init/runtime_setup cycle (ENROOT_NAME;
         # FS_BACKEND arrives via env), then call it exactly as the launchers do.
-        script = (
-            "set -uo pipefail\n"
-            'source "$1"\n'
-            "shift\n"
-            'export ENROOT_NAME=fs32-test\n'
-            '"$@"\n'
-        )
+        script = 'set -uo pipefail\nsource "$1"\nshift\nexport ENROOT_NAME=fs32-test\n"$@"\n'
         return subprocess.run(
             [BASH, "-s", "--", str(BACKEND), "run_in_container", "--", *payload],
             # `bash -s` reads the program from stdin; without input= it reads an
@@ -415,8 +424,9 @@ class Scenario:
             # executes 0 statements cannot certify anything (doctrine 1), so the
             # script must actually be delivered.
             input=script,
-            env=self.env(drill=drill, srun_image_env=srun_image_env,
-                         ssh_drill=ssh_drill, extra_env=extra_env),
+            env=self.env(
+                drill=drill, srun_image_env=srun_image_env, ssh_drill=ssh_drill, extra_env=extra_env
+            ),
             text=True,
             capture_output=True,
             timeout=120,
@@ -424,8 +434,11 @@ class Scenario:
         )
 
     def records(self, prefix: str) -> list[str]:
-        return [line[len(prefix) + 1:] for line in self.log.read_text().splitlines()
-                if line.startswith(prefix + ":")]
+        return [
+            line[len(prefix) + 1 :]
+            for line in self.log.read_text().splitlines()
+            if line.startswith(prefix + ":")
+        ]
 
     def env_stream(self) -> dict[str, str]:
         """name -> value of every --env the shipped loop handed the container."""
@@ -446,6 +459,7 @@ class Scenario:
 # ---------------------------------------------------------------------------
 # Task A legs — the --env stream itself (measured at the stub boundary).
 # ---------------------------------------------------------------------------
+
 
 def test_enroot_keeps_load_bearing_forwarding_and_drops_residue(tmp_path: Path) -> None:
     """ANTI-OVERREACH CONTROL: PASSES on the current tree and PASSES after the
@@ -519,6 +533,7 @@ def test_enroot_invocation_shape_mounts_roots_wrapper(tmp_path: Path) -> None:
 # end to end through the stub container runtime.
 # ---------------------------------------------------------------------------
 
+
 def test_tripwire_must_fire_when_host_path_is_rearmed(tmp_path: Path) -> None:
     """MUST_FIRE (doctrine 3). The drill knob FS_REARM_HOST_PATH_FORWARD=1
     re-creates the measured case 1 verbatim: PATH is forwarded, the stub
@@ -576,6 +591,7 @@ def test_tripwire_must_pass_on_a_clean_launch(tmp_path: Path) -> None:
 # broken; neither claims it is now fixed. That measurement is still owed.
 # ---------------------------------------------------------------------------
 
+
 def test_slurm_arm_refuses_if_client_env_wins__conditional(tmp_path: Path) -> None:
     """FAILS before (TRIPWIRE:absent; rc 0). After: under the hypothesis that
     --export=ALL's client env reaches the container wholesale, the tripwire
@@ -590,7 +606,7 @@ def test_slurm_arm_refuses_if_client_env_wins__conditional(tmp_path: Path) -> No
     args = sc.payload_args()
     assert args.get(0) == "bash" and args.get(1) == "-c"
     assert args.get(3) == "fs-container-tripwire"
-    assert args.get(4) == str(sc.home)   # slurm arm declares exactly one host root
+    assert args.get(4) == str(sc.home)  # slurm arm declares exactly one host root
     assert args.get(5) == "--"
     assert proc.returncode == 95
     assert f"resolved python3 : {sc.home}/anaconda3/bin/python3" in proc.stderr
@@ -663,8 +679,8 @@ PREDICATE_TABLE = {
     "LANG": "forward",
     "LC_CTYPE": "forward",
     "NCCL_SOCKET_IFNAME": "forward",
-    "NCCL_SOME_FUTURE_PIN": "forward",   # denylist, not allowlist: the unknown
-    "FS_SOME_FUTURE_KNOB": "forward",    # minted families must default to flow
+    "NCCL_SOME_FUTURE_PIN": "forward",  # denylist, not allowlist: the unknown
+    "FS_SOME_FUTURE_KNOB": "forward",  # minted families must default to flow
     "SLURM_JOB_ID": "forward",
     "MASTER_ADDR": "forward",
     "RIC_ACTIVE_CONTAINER": "forward",
@@ -692,7 +708,10 @@ def test_denylist_predicate_is_named_and_total() -> None:
     proc = subprocess.run(
         [BASH, "-s", "--", str(BACKEND), *PREDICATE_TABLE],
         input=script,  # see the driver above: `bash -s` without input= runs nothing
-        text=True, capture_output=True, timeout=60, check=False,
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
     )
     verdicts = dict(line.split(":", 1) for line in proc.stdout.splitlines() if ":" in line)
     mismatches = {
@@ -711,13 +730,19 @@ def test_denylist_comment_cites_the_measurement() -> None:
     requires the denylist to cite the case-1-vs-case-3 measurement so the next
     reader cannot mistake the exclusion list for taste."""
     text = BACKEND.read_text()
-    for needle in ("case 1 vs case 3", "fs_env_forward_denylisted()",
-                   "FS_REARM_HOST_PATH_FORWARD",
-                   # fix37 strengthening (declared): the classification must now
-                   # also cite the SSH measurement, name the mechanism, pin the
-                   # honest CATEGORY marker, and name the second drill.
-                   "SSH_CLIENT", "SSH2_CLIENT", "SSH_SOURCE_BASHRC",
-                   "CATEGORY", "FS_REARM_SSH_SESSION_FORWARD"):
+    for needle in (
+        "case 1 vs case 3",
+        "fs_env_forward_denylisted()",
+        "FS_REARM_HOST_PATH_FORWARD",
+        # fix37 strengthening (declared): the classification must now
+        # also cite the SSH measurement, name the mechanism, pin the
+        # honest CATEGORY marker, and name the second drill.
+        "SSH_CLIENT",
+        "SSH2_CLIENT",
+        "SSH_SOURCE_BASHRC",
+        "CATEGORY",
+        "FS_REARM_SSH_SESSION_FORWARD",
+    ):
         assert needle in text, f"missing load-bearing citation/name: {needle!r}"
 
 
@@ -733,11 +758,12 @@ def test_denylist_comment_cites_the_measurement() -> None:
 # in the module docstring as H1/H2.
 # ---------------------------------------------------------------------------
 
+
 # The 14 fix37 convictions, exported with loud values: 2 measured sshd-rc
 # triggers, 9 CATEGORY host-session descriptors, 3 startup-file pointers.
 def _fix37_convicted(home: Path) -> dict[str, str]:
     return {
-        "SSH_CLIENT": "10.62.207.17 46126 22",   # the measured host value (fix37_shared.md)
+        "SSH_CLIENT": "10.62.207.17 46126 22",  # the measured host value (fix37_shared.md)
         "SSH2_CLIENT": "10.62.207.17 46126 22",  # measured DIRTY though unset on this host
         "SSH_CONNECTION": "10.62.207.17 46126 10.62.0.4 22",
         "SSH_TTY": "/dev/pts/7",
@@ -748,7 +774,7 @@ def _fix37_convicted(home: Path) -> dict[str, str]:
         "XDG_SESSION_ID": "4242",
         "XDG_SESSION_CLASS": "user",
         "XDG_SESSION_TYPE": "tty",
-        "BASH_ENV": str(home / "bashrc-loud"),   # --norc does NOT disarm this one
+        "BASH_ENV": str(home / "bashrc-loud"),  # --norc does NOT disarm this one
         "ENV": str(home / "sh-env-loud"),
         "ZDOTDIR": str(home / "zdot-loud"),
     }
@@ -796,8 +822,7 @@ def test_ssh_drill_re_arms_both_conjuncts__decision_only(tmp_path: Path) -> None
     over a genuinely contaminated resolution — is owed to the <compute-node> rerun
     (module docstring, H1), exactly the part a sandbox cannot honestly
     reproduce."""
-    triggers = {"SSH_CLIENT": "10.62.207.17 46126 22",
-                "SSH2_CLIENT": "10.62.207.17 46126 22"}
+    triggers = {"SSH_CLIENT": "10.62.207.17 46126 22", "SSH2_CLIENT": "10.62.207.17 46126 22"}
     sc = Scenario(tmp_path / "ssh", "enroot")
     proc = sc.run(ssh_drill=True, extra_env=triggers, payload=("true",))
     assert "DRILL: FS_REARM_SSH_SESSION_FORWARD=1 — re-arming" in proc.stderr, (
@@ -864,9 +889,11 @@ def test_slurm_arm_carries_norc_and_scrub__conditional(tmp_path: Path) -> None:
     remains UNMEASURED and this test claims nothing about it. FAILS before
     (no --norc flag word, no SCRUB marker), PASSES after."""
     sc = Scenario(tmp_path, "slurm")
-    proc = sc.run(srun_image_env=True,
-                  extra_env={"SSH_CLIENT": "10.62.207.17 46126 22"},
-                  payload=("python3", "-c", "pass"))
+    proc = sc.run(
+        srun_image_env=True,
+        extra_env={"SSH_CLIENT": "10.62.207.17 46126 22"},
+        payload=("python3", "-c", "pass"),
+    )
     assert proc.returncode == 0, f"conditional pass-leg refused: {proc.stderr!r}"
     assert sc.records("FLAG") == ["--norc"], (
         f"slurm-arm wrapper invocation carries {sc.records('FLAG')!r}; --export=ALL "

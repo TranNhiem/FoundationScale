@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import importlib
 import json
 import math
 import os
@@ -31,7 +30,7 @@ import struct
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, TypedDict
+from typing import Any, TypedDict
 
 from foundationscale.checkpoint.dcp import CheckpointFormatError
 from foundationscale.checkpoint.dcp_meta import CheckpointMetadata, read_metadata
@@ -82,102 +81,23 @@ from foundationscale.gates.checkpoint_gates import (
 )
 from foundationscale.gates.core import Gate, GateResult, Verdict
 
-
-# Reuse the probe's independent-declaration machinery and its REAL-artifact
-# alias control verbatim. Importing a sibling tool: works when invoked as
-# `python tools/live_save_gate.py` (script dir on sys.path) and as
-# `python -m tools.live_save_gate` from the repo root; if NEITHER import path
-# resolves, alias controls degrade to "unconstructable" (-> BLOCKING), never
-# to a silent skip.
-# The two probe helpers this file consumes, declared BEFORE the try as
-# explicitly OPTIONAL callables carrying the probe's real parameter types
-# (the signatures shared from tools/real_checkpoint_probe.py). Why: the
-# degradation contract narrated above -- probe unimportable -> controls
-# unconstructable -> BLOCKING -- is load-bearing runtime code, but the old
-# tree bound these names to the imported FUNCTION types and smothered the
-# None-assignment conflicts with two `# type: ignore[assignment]`s. Mypy
-# then reasoned from the triumphant type instead of the honest one and
-# reported the `if _probe_alias_control is None:` guard in control_alias
-# UNREACHABLE -- the type system asserting that a fail-closed path cannot
-# happen, directly above runtime code that exists for exactly that case
-# (doctrine 5 stacked on doctrine 4). The ignores were doomed in any case:
-# warn_unused_ignores makes "no longer necessary" into "error", and an
-# honest Optional declaration makes them exactly that.
-# Protocols, not bare Callables: a Callable[...] states parameter TYPES but
-# erases parameter NAMES, so it silently reclassifies every parameter as
-# positional-only. Both of these helpers are called by keyword at least once
-# (`baseline=` at the sharded alias leg; `expert_family_census=` once the
-# two-source dense contract is wired through), and a bare Callable turns each
-# of those honest call sites into a type error -- the declaration would be
-# NARROWER than the contract it claims to describe, which is the same
-# too-broad-claim defect wearing the opposite sign. The Protocols carry the
-# probe's real names, its keyword-only marker, and its defaults, so a probe
-# signature that drifts is named HERE, at the assignment, and a caller that
-# spells a keyword wrong is named at the call.
-class _DeriveDeclaredFn(Protocol):
-    def __call__(
-        self,
-        config: dict[str, Any],
-        *,
-        expert_family_census: int | None = ...,
-        expert_family_sample: tuple[str, ...] = ...,
-    ) -> dict[str, Any]: ...
-
-
-class _AliasControlFn(Protocol):
-    def __call__(
-        self, ctx: CheckpointGateContext, n: int, baseline: GateResult | None
-    ) -> dict[str, Any]: ...
-
-
-_probe_derive_declared: _DeriveDeclaredFn | None = None
-_probe_alias_control: _AliasControlFn | None = None
-_PROBE_IMPORT_ERROR: str | None = None
-try:
-    # Script-shaped invocation (tools/ on sys.path). The helpers import
-    # under temporary names so that each imported name is bound exactly once
-    # across the two arms -- the same-name rebindings across arms were the
-    # no-redef half of this error group -- and the assignments then serve
-    # double duty: they fill the declared slots AND type-check the probe's
-    # real signatures against those slots, so a drifting probe signature is
-    # named HERE, at import time, rather than at some distant call site.
-    from real_checkpoint_probe import (
-        derive_declared as _imported_derive_declared,
-    )
-    from real_checkpoint_probe import (
-        run_alias_control as _imported_alias_control,
-    )
-    _probe_derive_declared = _imported_derive_declared
-    _probe_alias_control = _imported_alias_control
-except ImportError as _e1:
-    try:
-        # Package-shaped invocation (python -m tools.live_save_gate from the
-        # repo root), resolved via importlib BY DESIGN. Whether the module
-        # "tools.real_checkpoint_probe" exists is a property of the CALLER's
-        # sys.path -- a runtime fact no static import statement here can
-        # express. Under this tool's measured mypy invocation (cwd=tools/)
-        # that path can never resolve, so the static form paid one
-        # import-not-found forever; a scoped `type: ignore` would merely
-        # invert the problem, becoming an unused-ignore error in every
-        # environment where the path DOES resolve. The dynamic call keeps
-        # the second path, keeps it second, and keeps its failure loud in
-        # the same place. The helpers are re-fetched by attribute so that an
-        # importable module missing a NAME degrades identically: the static
-        # form folded "module unresolved" and "name absent from module"
-        # into one ImportError; the dynamic form splits them into
-        # ImportError and AttributeError, and both are caught below --
-        # one degradation contract, zero silent skips.
-        _probe_pkg = importlib.import_module("tools.real_checkpoint_probe")
-        _probe_derive_declared = _probe_pkg.derive_declared
-        _probe_alias_control = _probe_pkg.run_alias_control
-    except (ImportError, AttributeError):
-        # Semantics preserved exactly from the static form: both helper
-        # names keep their pre-try None (the explicit None-assignments of
-        # the old final arm are now the initializers, and the degradation
-        # consumers -- derive_declared_block, control_alias -- read None
-        # precisely as before), and the recorded error stays the FIRST
-        # failure's repr, not the fallback's.
-        _PROBE_IMPORT_ERROR = repr(_e1)
+# The probe's independent-declaration machinery and its REAL-artifact alias
+# control now live IN the package: foundationscale.gates.probe. Defect #219:
+# they used to be imported from the sibling script tools/real_checkpoint_probe.py
+# behind a try/except ImportError ladder with a _PROBE_IMPORT_ERROR sentinel,
+# but tools/ is not distributed ([tool.setuptools.packages.find]
+# where = ["src"]), so on a clean pip install the ladder always fell through
+# and every call into the decision path refused -- the headline API was
+# unusable exactly where it was installed. The dependency is inverted (same
+# rule as T2_lib_script_boundary#0: the library owns the logic, the script is
+# a thin CLI that imports it back), so this import either succeeds or the
+# package does not load at all, which is the correct fail-closed behaviour.
+# The ladder, the sentinel, the Optional-typed slots and the Protocol
+# declarations that served them are all dead and removed. The alias names
+# keep the pre-inversion slot names so every downstream call site in this
+# file resolves byte-identically.
+from foundationscale.gates.probe import derive_declared as _probe_derive_declared
+from foundationscale.gates.probe import run_alias_control as _probe_alias_control
 
 EXIT_CLEAR = 0
 EXIT_BLOCKED = 1
@@ -195,9 +115,16 @@ _ALWAYS_GATES: tuple[type[Gate], ...] = (
 )
 
 _ST_DTYPE = {
-    "BF16": "bfloat16", "F16": "float16", "F32": "float32", "F64": "float64",
-    "I8": "int8", "U8": "uint8", "I16": "int16", "I32": "int32",
-    "I64": "int64", "BOOL": "bool",
+    "BF16": "bfloat16",
+    "F16": "float16",
+    "F32": "float32",
+    "F64": "float64",
+    "I8": "int8",
+    "U8": "uint8",
+    "I16": "int16",
+    "I32": "int32",
+    "I64": "int64",
+    "BOOL": "bool",
 }
 
 # Candidate keys in a launcher-resolved training config. # UNVERIFIED: the
@@ -300,9 +227,7 @@ _DEFAULT_ADAPTER_SUFFIXES = (_DEFAULT_ADAPTER_SUFFIX_A, _DEFAULT_ADAPTER_SUFFIX_
 _CANONICAL_LORA_LAYOUT_RE = re.compile(
     r"\.adapter\.adapter_(?:q|k|v|up|gate)\.linear_(?:in|out)\.weight$"
 )
-_SELF_MOUNTED_ADAPTER_LAYOUT_RE = re.compile(
-    r"(?<!\.adapter)\.linear_(?:in|out)\.weight$"
-)
+_SELF_MOUNTED_ADAPTER_LAYOUT_RE = re.compile(r"(?<!\.adapter)\.linear_(?:in|out)\.weight$")
 
 
 def _verify_adapter_naming_agreement(
@@ -358,9 +283,7 @@ def _verify_adapter_naming_agreement(
     problems: list[str] = []
     for label, suffix in (("--adapter-suffix-a", suffix_a), ("--adapter-suffix-b", suffix_b)):
         if not isinstance(suffix, str) or not suffix:
-            problems.append(
-                f"{label} must be a non-empty literal string, got {suffix!r}"
-            )
+            problems.append(f"{label} must be a non-empty literal string, got {suffix!r}")
             continue
         candidate = f"{adapter_prefix}{parent_stem}{suffix}"
         match = recognizer.search(candidate)
@@ -563,22 +486,25 @@ def _load_fqn_map(path: Path) -> tuple[tuple[str, ...], str]:
         seq = obj.get("declared_fqns", obj.get("fqns"))
         if seq is None:
             raise GateUnmeasured(
-                f"--fqn-map object must carry a 'declared_fqns' (or 'fqns') list: {path}")
+                f"--fqn-map object must carry a 'declared_fqns' (or 'fqns') list: {path}"
+            )
     elif isinstance(obj, list):
         seq = obj
     else:
         raise GateUnmeasured(
-            f"--fqn-map must be a JSON list or object, got {type(obj).__name__}: {path}")
+            f"--fqn-map must be a JSON list or object, got {type(obj).__name__}: {path}"
+        )
     bad = [s for s in seq if not isinstance(s, str) or not s]
     if bad:
         raise GateUnmeasured(
-            f"--fqn-map contains {len(bad)} non-string/empty entries "
-            f"(first: {bad[0]!r}): {path}")
+            f"--fqn-map contains {len(bad)} non-string/empty entries (first: {bad[0]!r}): {path}"
+        )
     fqns = tuple(seq)
     if not fqns:
         raise GateUnmeasured(
             f"--fqn-map declares ZERO fqns: {path} -- delete the flag or populate "
-            f"the map; an empty denominator cannot adjudicate anything")
+            f"the map; an empty denominator cannot adjudicate anything"
+        )
     return fqns, (
         f"--fqn-map file {path} ({len(fqns)} artifact-namespace FQNs; provenance: "
         f"exported by the planner/operator at submit time, never read from the run)"
@@ -639,9 +565,7 @@ def _load_adapter_modules(path: Path, *, judged_dir: Path) -> _AdapterModuleCens
             f"tree is itself unverifiable here, and that refuses; it never "
             f"defaults to trusted"
         ) from exc
-    if census_resolved == judged_resolved or census_resolved.is_relative_to(
-        judged_resolved
-    ):
+    if census_resolved == judged_resolved or census_resolved.is_relative_to(judged_resolved):
         raise GateUnmeasured(
             f"--adapter-modules resolves INSIDE the tree under judgment "
             f"(census {census_resolved} vs judged {judged_resolved}) -- a "
@@ -654,9 +578,7 @@ def _load_adapter_modules(path: Path, *, judged_dir: Path) -> _AdapterModuleCens
     try:
         obj = json.loads(census_resolved.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise GateUnmeasured(
-            f"--adapter-modules unreadable: {path} ({exc!r})"
-        ) from exc
+        raise GateUnmeasured(f"--adapter-modules unreadable: {path} ({exc!r})") from exc
     provenance = ""
     if isinstance(obj, dict):
         seq = obj.get("adapter_modules", obj.get("modules"))
@@ -672,8 +594,7 @@ def _load_adapter_modules(path: Path, *, judged_dir: Path) -> _AdapterModuleCens
         seq = obj
     else:
         raise GateUnmeasured(
-            f"--adapter-modules must be a JSON list or object, got "
-            f"{type(obj).__name__}: {path}"
+            f"--adapter-modules must be a JSON list or object, got {type(obj).__name__}: {path}"
         )
     if not isinstance(seq, list):
         raise GateUnmeasured(
@@ -695,10 +616,14 @@ def _load_adapter_modules(path: Path, *, judged_dir: Path) -> _AdapterModuleCens
             out_d = entry.get("out_features")
             in_d = entry.get("in_features")
             if (
-                isinstance(fqn, str) and fqn
-                and isinstance(out_d, int) and not isinstance(out_d, bool)
-                and isinstance(in_d, int) and not isinstance(in_d, bool)
-                and out_d > 0 and in_d > 0
+                isinstance(fqn, str)
+                and fqn
+                and isinstance(out_d, int)
+                and not isinstance(out_d, bool)
+                and isinstance(in_d, int)
+                and not isinstance(in_d, bool)
+                and out_d > 0
+                and in_d > 0
             ):
                 stems.append(fqn)
                 dims[fqn] = (out_d, in_d)
@@ -735,18 +660,22 @@ def _load_adapter_modules(path: Path, *, judged_dir: Path) -> _AdapterModuleCens
     basis = (
         f"--adapter-modules file {path} ({len(stems)} artifact-namespace "
         "module stems"
-        + (f", parent dims for all {len(stems)}" if dims
-           else ", no parent dims -- shape check abstains by name")
+        + (
+            f", parent dims for all {len(stems)}"
+            if dims
+            else ", no parent dims -- shape check abstains by name"
+        )
         + provenance
-        + ("" if provenance else
-           "; NO producer provenance recorded in-file -- the loader verified "
-           "shape/uniqueness/dims/independence-from-the-judged-tree only, "
-           "not who wrote it")
+        + (
+            ""
+            if provenance
+            else "; NO producer provenance recorded in-file -- the loader verified "
+            "shape/uniqueness/dims/independence-from-the-judged-tree only, "
+            "not who wrote it"
+        )
         + ")"
     )
-    return _AdapterModuleCensus(
-        stems=tuple(sorted(stems)), dims=dims or None, basis=basis
-    )
+    return _AdapterModuleCensus(stems=tuple(sorted(stems)), dims=dims or None, basis=basis)
 
 
 def _first_key(cfg: dict[str, Any], keys: tuple[str, ...]) -> tuple[Any, str] | tuple[None, None]:
@@ -769,16 +698,20 @@ class TrainSpec:
     cfg_source: str
 
 
-def resolve_train_spec(cfg: dict[str, Any], cfg_source: str,
-                       run_kind_arg: str, frozen_arg: str | None) -> TrainSpec:
+def resolve_train_spec(
+    cfg: dict[str, Any], cfg_source: str, run_kind_arg: str, frozen_arg: str | None
+) -> TrainSpec:
     kind, kbasis = run_kind_arg, ""
     if run_kind_arg == "auto":
         raw, key = _first_key(cfg, _KIND_KEYS)
         if raw is None:
-            kind, kbasis = "auto", (
-                f"no peft/kind key ({'/'.join(_KIND_KEYS)}) in {cfg_source}; "
-                f"kind will be inferred from the artifact AFTER measurement and "
-                f"populations cross-checked (denominators stay independent)"
+            kind, kbasis = (
+                "auto",
+                (
+                    f"no peft/kind key ({'/'.join(_KIND_KEYS)}) in {cfg_source}; "
+                    f"kind will be inferred from the artifact AFTER measurement and "
+                    f"populations cross-checked (denominators stay independent)"
+                ),
             )
         elif "lora" in str(raw).lower() or str(raw).lower() in {"peft", "adapter"}:
             kind, kbasis = "lora", f"{cfg_source}: {key}={raw!r}"
@@ -795,11 +728,12 @@ def resolve_train_spec(cfg: dict[str, Any], cfg_source: str,
         # Chain, don't amputate: an operator staring at UNMEASURED deserves to
         # see what int() actually choked on (the raw value is already in our
         # message; the interpreter's own complaint is the corroboration).
-        raise GateUnmeasured(
-            f"lora rank value {rank_raw!r} at key {rkey!r} is not an int"
-        ) from exc
-    rbasis = (f"{cfg_source}: {rkey}={rank}" if rank is not None
-              else f"no rank key ({'/'.join(_RANK_KEYS)}) in {cfg_source}")
+        raise GateUnmeasured(f"lora rank value {rank_raw!r} at key {rkey!r} is not an int") from exc
+    rbasis = (
+        f"{cfg_source}: {rkey}={rank}"
+        if rank is not None
+        else f"no rank key ({'/'.join(_RANK_KEYS)}) in {cfg_source}"
+    )
 
     tgt_raw, tkey = _first_key(cfg, _TARGET_KEYS)
     if isinstance(tgt_raw, str):
@@ -808,12 +742,15 @@ def resolve_train_spec(cfg: dict[str, Any], cfg_source: str,
         targets = tuple(str(s) for s in tgt_raw)
     else:
         targets = ()
-    tbasis = (f"{cfg_source}: {tkey}={list(targets)}" if targets
-              else f"no target key ({'/'.join(_TARGET_KEYS)}) — recorded for "
-                   f"provenance only: since #78 the adapter declared set derives "
-                   f"from the --adapter-modules live-module census, not from "
-                   f"targets x base header, a cross-namespace product measured "
-                   f"disjoint from every save this estate can produce")
+    tbasis = (
+        f"{cfg_source}: {tkey}={list(targets)}"
+        if targets
+        else f"no target key ({'/'.join(_TARGET_KEYS)}) — recorded for "
+        f"provenance only: since #78 the adapter declared set derives "
+        f"from the --adapter-modules live-module census, not from "
+        f"targets x base header, a cross-namespace product measured "
+        f"disjoint from every save this estate can produce"
+    )
 
     fz_raw, fkey = _first_key(cfg, _FREEZE_KEYS)
     fre: re.Pattern[str] | None = None
@@ -893,7 +830,9 @@ def _lora_target_attaches(stem: str, fqn: str, target: str) -> bool:
 
 
 def derive_declared_block(
-    base: BaseModel, spec: TrainSpec, artifact_real_fqns: set[str],
+    base: BaseModel,
+    spec: TrainSpec,
+    artifact_real_fqns: set[str],
     adapter_prefix: str,
     adapter_suffixes: tuple[str, str] = _DEFAULT_ADAPTER_SUFFIXES,
     fqn_map: tuple[tuple[str, ...], str] | None = None,
@@ -902,11 +841,6 @@ def derive_declared_block(
     # ignored by the full branch, which keeps its own two sources.
     adapter_modules: _AdapterModuleCensus | None = None,
 ) -> Declared:
-    if _probe_derive_declared is None:
-        raise GateUnmeasured(
-            f"probe helpers unimportable ({_PROBE_IMPORT_ERROR}); refusing to "
-            f"re-derive declared counts by paraphrase"
-        )
     notes: list[str] = []
     # --- Bridge to the probe's two-source dense contract (fix25) ------------
     # INVARIANT (grep anchor MINT_ZERO_ONLY_IN_PROBE): no code path in this
@@ -986,9 +920,7 @@ def derive_declared_block(
     layers_basis = f"base config.json via probe derive_declared: {d['basis']['num_moe_layers']}"
 
     base_keys = set(base.tensors)
-    in_scope = (
-        {f for f in base_keys if not (spec.frozen_regex and spec.frozen_regex.search(f))}
-    )
+    in_scope = {f for f in base_keys if not (spec.frozen_regex and spec.frozen_regex.search(f))}
 
     # Expert byte volume: layout-invariant total from the BASE HEADER, so it
     # stays a valid denominator even when the artifact uses DCP/Megatron FQNs.
@@ -1207,8 +1139,7 @@ def derive_declared_block(
             )
         expected_expert_bytes = None
         bytes_basis = (
-            "adapter checkpoints carry no base expert weights; "
-            "base expert volume is out of scope"
+            "adapter checkpoints carry no base expert weights; base expert volume is out of scope"
         )
     else:
         declared_full = tuple(sorted(in_scope))
@@ -1265,14 +1196,23 @@ def derive_declared_block(
                 f"(declared experts={num_experts}); no byte denominator"
             )
 
-    return Declared(fqns, fqns_basis, num_experts, experts_basis,
-                    num_moe_layers, layers_basis, expected_expert_bytes,
-                    bytes_basis, derived_adapter, notes,
-                    adapter_modules=(
-                        tuple(adapter_modules.stems)
-                        if (spec.run_kind == "lora" and adapter_modules is not None)
-                        else ()
-                    ))
+    return Declared(
+        fqns,
+        fqns_basis,
+        num_experts,
+        experts_basis,
+        num_moe_layers,
+        layers_basis,
+        expected_expert_bytes,
+        bytes_basis,
+        derived_adapter,
+        notes,
+        adapter_modules=(
+            tuple(adapter_modules.stems)
+            if (spec.run_kind == "lora" and adapter_modules is not None)
+            else ()
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1309,8 +1249,9 @@ def _context(meta: CheckpointMetadata, decl: Declared, origin: str) -> Checkpoin
 
 
 def _real(meta: CheckpointMetadata) -> list[tuple[str, Any]]:
-    return [(f, tm) for f, tm in meta.tensors.items()
-            if not (tm.is_extra_state or "_extra_state" in f)]
+    return [
+        (f, tm) for f, tm in meta.tensors.items() if not (tm.is_extra_state or "_extra_state" in f)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1368,7 +1309,8 @@ def _is_non_adapter_namespace(fqn: str) -> bool:
 
 
 def _infer_auto_kind(
-    real_fqns: set[str], markers: re.Pattern[str],
+    real_fqns: set[str],
+    markers: re.Pattern[str],
 ) -> tuple[str, str]:
     """Auto-run-kind inference over the JUDGED population only.
 
@@ -1390,7 +1332,8 @@ def _infer_auto_kind(
             f"in non-adapter checkpoint namespaces "
             f"{sorted(_NON_ADAPTER_CHECKPOINT_NAMESPACE_ROOTS)} -- zero "
             f"adapter-namespace entries to measure, so there is no fraction to "
-            f"classify; pin --run-kind rather than let the tool guess")
+            f"classify; pin --run-kind rather than let the tool guess"
+        )
     marked = sum(1 for f in judged if markers.search(f))
     # #80 denominator: pre-patch this was marked / len(real_fqns). On the
     # measured production save the error is invisible (the fraction is ~0.99
@@ -1404,17 +1347,23 @@ def _infer_auto_kind(
     # both sites.
     frac = marked / len(judged)
     kind = "lora" if frac >= 0.6 else "full"
-    basis = (f"auto: {marked}/{len(judged)} adapter-namespace tensors carry an "
-             f"adapter marker ({frac:.2f}), with {excluded} non-adapter "
-             f"checkpoint namespace entries excluded from the denominator per "
-             f"#80 -> {kind!r}; corroborate with --run-kind when the train "
-             f"config has no peft key")
+    basis = (
+        f"auto: {marked}/{len(judged)} adapter-namespace tensors carry an "
+        f"adapter marker ({frac:.2f}), with {excluded} non-adapter "
+        f"checkpoint namespace entries excluded from the denominator per "
+        f"#80 -> {kind!r}; corroborate with --run-kind when the train "
+        f"config has no peft key"
+    )
     return kind, basis
 
 
 def cross_check_population(
-    kind: str, real_fqns: set[str], base: BaseModel, decl: Declared,
-    adapter_marker: re.Pattern[str], modules_to_save: frozenset[str],
+    kind: str,
+    real_fqns: set[str],
+    base: BaseModel,
+    decl: Declared,
+    adapter_marker: re.Pattern[str],
+    modules_to_save: frozenset[str],
 ) -> list[str]:
     """Blocking reasons arising from artifact-vs-declared-mode disagreement."""
     reasons: list[str] = []
@@ -1436,8 +1385,7 @@ def cross_check_population(
         if not real_fqns:
             reasons.append("MODE/lora: adapter checkpoint contains zero real tensors")
         contaminated = sorted(
-            f for f in real_fqns
-            if f in base.tensors and f not in modules_to_save
+            f for f in real_fqns if f in base.tensors and f not in modules_to_save
         )
         if contaminated:
             reasons.append(
@@ -1488,8 +1436,10 @@ def cross_check_population(
                 f"zero units judged is UNMEASURED, never PASS"
             )
         unmarked = sorted(
-            f for f in real_fqns
-            if not adapter_marker.search(f) and f not in modules_to_save
+            f
+            for f in real_fqns
+            if not adapter_marker.search(f)
+            and f not in modules_to_save
             and not _is_non_adapter_namespace(f)
         )
         if unmarked:
@@ -1505,7 +1455,10 @@ def cross_check_population(
 
 
 def lora_structural_findings(
-    real: list[tuple[str, Any]], base: BaseModel, decl: Declared, spec: TrainSpec,
+    real: list[tuple[str, Any]],
+    base: BaseModel,
+    decl: Declared,
+    spec: TrainSpec,
     *,
     adapter_prefix: str = "",
     adapter_suffix: str = _DEFAULT_ADAPTER_SUFFIX_RE,
@@ -1553,15 +1506,12 @@ def lora_structural_findings(
     # unexplained vacuity count. Canonical first: its FQNs also satisfy the
     # self-mounted pattern one segment deeper, and each tensor may appear
     # under exactly one layout name -- see the constants' comment above.
-    canonical_foreign = sorted(
-        f for f, _tm in real if _CANONICAL_LORA_LAYOUT_RE.search(f)
-    )
+    canonical_foreign = sorted(f for f, _tm in real if _CANONICAL_LORA_LAYOUT_RE.search(f))
     canonical_foreign_set = set(canonical_foreign)
     self_mounted_foreign = sorted(
         f
         for f, _tm in real
-        if f not in canonical_foreign_set
-        and _SELF_MOUNTED_ADAPTER_LAYOUT_RE.search(f)
+        if f not in canonical_foreign_set and _SELF_MOUNTED_ADAPTER_LAYOUT_RE.search(f)
     )
     for fqn, tm in real:
         m = stripped.search(fqn)
@@ -1574,7 +1524,7 @@ def lora_structural_findings(
             # clothing. Strip it only where present -- a prefix that matches
             # nothing is not silently corrected, it just falls through to the
             # phantom check, which is where naming disagreements belong.
-            stem = stem[len(adapter_prefix):]
+            stem = stem[len(adapter_prefix) :]
         if census_parents is not None:
             # #78: for a Megatron-namespace save the HF header names NONE of
             # these parents (measured 336/336 phantom on a healthy artifact
@@ -1659,9 +1609,7 @@ def lora_structural_findings(
 # ---------------------------------------------------------------------------
 
 
-def _attributed_status(
-    res: GateResult, base_res: GateResult | None
-) -> tuple[str, bool, str]:
+def _attributed_status(res: GateResult, base_res: GateResult | None) -> tuple[str, bool, str]:
     """Resolve (status, confounded, inconclusive_reason) for one injected-defect run.
 
     Verbatim discipline from the probe's Finding-2 repair (pinned by
@@ -1680,22 +1628,31 @@ def _attributed_status(
       * non-blocking -> "not_fired" (a true negative, and the loop blocks on it).
     """
     if base_res is None:
-        return ("inconclusive", True,
-                "no baseline verdict for this detector was supplied, so a block "
-                "on the injected copy cannot be attributed to the injection")
+        return (
+            "inconclusive",
+            True,
+            "no baseline verdict for this detector was supplied, so a block "
+            "on the injected copy cannot be attributed to the injection",
+        )
     if base_res.blocking:
-        return ("inconclusive", True,
-                f"baseline {base_res.verdict.value}: the unmodified artifact "
-                f"already blocks this detector, so blocking on the injected copy "
-                f"is not evidence the injection was seen")
+        return (
+            "inconclusive",
+            True,
+            f"baseline {base_res.verdict.value}: the unmodified artifact "
+            f"already blocks this detector, so blocking on the injected copy "
+            f"is not evidence the injection was seen",
+        )
     if res.verdict is Verdict.FAIL:
         return ("fired", False, "")
     if res.blocking:
-        return ("inconclusive", False,
-                f"detector answered the injected defect with {res.verdict.value}, "
-                f"a blocking verdict that is not FAIL -- a malfunction (ERROR) or "
-                f"a coverage failure, not a detection; crediting it would be the "
-                f"verifier-exception-counted-as-pass fallacy")
+        return (
+            "inconclusive",
+            False,
+            f"detector answered the injected defect with {res.verdict.value}, "
+            f"a blocking verdict that is not FAIL -- a malfunction (ERROR) or "
+            f"a coverage failure, not a detection; crediting it would be the "
+            f"verifier-exception-counted-as-pass fallacy",
+        )
     return ("not_fired", False, "")
 
 
@@ -1726,31 +1683,46 @@ def control_drop(
     (ctx, baselines) builder arity is what _CONTROL_BUILDERS invokes; this
     control simply has nothing to attribute against."""
     if not ctx.declared_fqns:
-        return {"control": "drop", "status": "unconstructable", "reason":
-                "no declared_fqns (independent denominator absent) -- there is "
-                "nothing for a completeness verdict to be measured against; the "
-                "drop control cannot be built, and an unexercised detector "
-                "proves nothing (treated as BLOCKING by this tool)"}
+        return {
+            "control": "drop",
+            "status": "unconstructable",
+            "reason": "no declared_fqns (independent denominator absent) -- there is "
+            "nothing for a completeness verdict to be measured against; the "
+            "drop control cannot be built, and an unexercised detector "
+            "proves nothing (treated as BLOCKING by this tool)",
+        }
     declared = set(ctx.declared_fqns)
-    eligible = [t for t in ctx.tensors
-                if t.kind == "tensor" and "_extra_state" not in t.fqn and t.fqn in declared]
+    eligible = [
+        t
+        for t in ctx.tensors
+        if t.kind == "tensor" and "_extra_state" not in t.fqn and t.fqn in declared
+    ]
     if not eligible:
-        return {"control": "drop", "status": "unconstructable", "reason":
-                "zero overlap between present tensors and the independent declared "
-                "set -- that mismatch is itself already a blocking gate verdict"}
+        return {
+            "control": "drop",
+            "status": "unconstructable",
+            "reason": "zero overlap between present tensors and the independent declared "
+            "set -- that mismatch is itself already a blocking gate verdict",
+        }
     step = max(1, len(eligible) // n)
     targets = [t.fqn for t in eligible[::step][:n]]
     modified = dataclasses.replace(
-        ctx, tensors=tuple(t for t in ctx.tensors if t.fqn not in set(targets)))
+        ctx, tensors=tuple(t for t in ctx.tensors if t.fqn not in set(targets))
+    )
     res = SaveCompletenessGate().run(modified)
-    evidence = (res.to_dict().get("evidence") or {})
+    evidence = res.to_dict().get("evidence") or {}
     missing = set(evidence.get("missing", []))
     named = sorted(set(targets) & missing)
     fired = res.blocking and bool(named)
-    return {"control": "drop", "status": "fired" if fired else "not_fired",
-            "dropped": targets, "verdict": res.verdict.value, "detail": res.detail,
-            "named_dropped": named,
-            "confounded": None}
+    return {
+        "control": "drop",
+        "status": "fired" if fired else "not_fired",
+        "dropped": targets,
+        "verdict": res.verdict.value,
+        "detail": res.detail,
+        "named_dropped": named,
+        "confounded": None,
+    }
 
 
 def control_alias(
@@ -1785,16 +1757,25 @@ def control_alias(
     layout."""
     candidates = _expert_weight_candidates(ctx.tensors)
     if not candidates:
-        return {"control": "alias", "status": "inapplicable", "reason":
-                f"artifact declares and contains no expert tensors (num_experts="
-                f"{ctx.num_experts}) -- the aliasing claim does not exist here; "
-                f"the drop control is the load-bearing MUST_FIRE on this artifact"}
+        return {
+            "control": "alias",
+            "status": "inapplicable",
+            "reason": f"artifact declares and contains no expert tensors (num_experts="
+            f"{ctx.num_experts}) -- the aliasing claim does not exist here; "
+            f"the drop control is the load-bearing MUST_FIRE on this artifact",
+        }
     base_res = (baselines or {}).get(ExpertDistinctnessGate.id)
     shard_groups, stacked, _unknown = _split_expert_layouts(candidates)
     if any(len(m) >= 2 for m in shard_groups.values()):
-        if _probe_alias_control is None:
-            return {"control": "alias", "status": "unconstructable", "reason":
-                    f"probe alias control unimportable ({_PROBE_IMPORT_ERROR})"}
+        # No "unimportable" guard here any more. The alias control used to be
+        # imported from an unpackaged tools/ script behind a sentinel, so this
+        # branch had to carry an 'unconstructable' refusal for the case where
+        # the import had failed -- which is exactly what a `pip install` gave
+        # you (#219). The helper now lives in `foundationscale.gates.probe`, so
+        # it either imports with the package or the package does not load at
+        # all. The refusal became unreachable, and an unreachable DECLARED
+        # state is itself a defect (#200), so it is gone rather than left to
+        # look like coverage it no longer provides.
         out = _probe_alias_control(ctx, n, baseline=base_res)
         out["control"] = "alias(sharded, probe-verbatim)"
         if out.get("status") == "skipped":
@@ -1835,27 +1816,34 @@ def control_alias(
         by_stem.setdefault(_layer_normalized_stem(t.fqn), []).append(t)
     pairs = [m for m in by_stem.values() if len(m) >= 2]
     if not pairs:
-        return {"control": "alias", "status": "inapplicable", "reason":
-                "expert tensors exist but neither a shard group nor two same-stem "
-                "stacked tensors (different layers) exist to alias"}
+        return {
+            "control": "alias",
+            "status": "inapplicable",
+            "reason": "expert tensors exist but neither a shard group nor two same-stem "
+            "stacked tensors (different layers) exist to alias",
+        }
     victims = pairs[0][:2]
     victim_fqns = {t.fqn for t in victims}
     injected = dataclasses.replace(
-        ctx, tensors=tuple(
+        ctx,
+        tensors=tuple(
             dataclasses.replace(t, storage_id=_ALIAS_STORAGE_ID) if t.fqn in victim_fqns else t
-            for t in ctx.tensors))
+            for t in ctx.tensors
+        ),
+    )
     res = ExpertDistinctnessGate().run(injected)
     status, confounded, inconclusive_reason = _attributed_status(res, base_res)
-    return {"control": "alias(stacked-cross-layer)",
-            "status": status,
-            "aliased": sorted(victim_fqns),
-            "verdict": res.verdict.value,
-            "detail": res.detail,
-            "confounded": confounded,
-            "baseline_verdict": (base_res.verdict.value if base_res is not None
-                                 else "absent"),
-            "inconclusive_reason": inconclusive_reason,
-            "leg_observed": "storage span" in res.detail}
+    return {
+        "control": "alias(stacked-cross-layer)",
+        "status": status,
+        "aliased": sorted(victim_fqns),
+        "verdict": res.verdict.value,
+        "detail": res.detail,
+        "confounded": confounded,
+        "baseline_verdict": (base_res.verdict.value if base_res is not None else "absent"),
+        "inconclusive_reason": inconclusive_reason,
+        "leg_observed": "storage span" in res.detail,
+    }
 
 
 def control_underfill(
@@ -1869,16 +1857,25 @@ def control_underfill(
     candidates = _expert_weight_candidates(ctx.tensors)
     _sg, stacked, _u = _split_expert_layouts(candidates)
     if not ctx.num_experts:
-        return {"control": "underfill", "status": "inapplicable", "reason":
-                "no declared expert count for this artifact's scope"}
+        return {
+            "control": "underfill",
+            "status": "inapplicable",
+            "reason": "no declared expert count for this artifact's scope",
+        }
     if not stacked:
-        return {"control": "underfill", "status": "inapplicable", "reason":
-                "no stacked expert tensors (sharded layouts are exercised by "
-                "the alias and drop controls instead)"}
+        return {
+            "control": "underfill",
+            "status": "inapplicable",
+            "reason": "no stacked expert tensors (sharded layouts are exercised by "
+            "the alias and drop controls instead)",
+        }
     if ctx.num_experts < 8:
-        return {"control": "underfill", "status": "unconstructable", "reason":
-                f"declared experts={ctx.num_experts} < 8; the 1/8 incident ratio "
-                f"cannot be reproduced without degenerating to zero"}
+        return {
+            "control": "underfill",
+            "status": "unconstructable",
+            "reason": f"declared experts={ctx.num_experts} < 8; the 1/8 incident ratio "
+            f"cannot be reproduced without degenerating to zero",
+        }
     # Victim selection is byte-priced, and a missing price is not a low
     # price: TensorMeta.implied_nbytes is int | None (None when the
     # metadata cannot price a tensor), and the old max() key made that both
@@ -1900,38 +1897,44 @@ def control_underfill(
         if cand_nbytes is not None:
             size_known.append((cand, cand_nbytes))
     if not size_known:
-        return {"control": "underfill", "status": "unconstructable", "reason":
-                f"0 of {len(stacked)} stacked expert tensors expose a "
-                f"derivable byte size (implied_nbytes is None on every "
-                f"candidate) -- the underfill cannot be measured, and an "
-                f"unexercised detector proves nothing (treated as BLOCKING "
-                f"by this tool)"}
+        return {
+            "control": "underfill",
+            "status": "unconstructable",
+            "reason": f"0 of {len(stacked)} stacked expert tensors expose a "
+            f"derivable byte size (implied_nbytes is None on every "
+            f"candidate) -- the underfill cannot be measured, and an "
+            f"unexercised detector proves nothing (treated as BLOCKING "
+            f"by this tool)",
+        }
     victim, victim_nbytes = max(size_known, key=lambda priced: priced[1])
     small = (max(1, ctx.num_experts // 8),) + tuple(victim.shape[1:])
     injected = dataclasses.replace(
-        ctx, tensors=tuple(
-            dataclasses.replace(t, shape=small) if t.fqn == victim.fqn else t
-            for t in ctx.tensors))
+        ctx,
+        tensors=tuple(
+            dataclasses.replace(t, shape=small) if t.fqn == victim.fqn else t for t in ctx.tensors
+        ),
+    )
     res = ExpertDistinctnessGate().run(injected)
     base_res = (baselines or {}).get(ExpertDistinctnessGate.id)
     status, confounded, inconclusive_reason = _attributed_status(res, base_res)
-    return {"control": "underfill",
-            "status": status,
-            "tensor": victim.fqn,
-            "shape": [victim.shape, small],
-            # Denominator disclosure for the exclusion above (doctrine 2):
-            # how many stacked candidates could be byte-priced at all, and
-            # the chosen victim's honest price, so a partial exclusion can
-            # never read as a sweep over the full candidate population.
-            "candidates": f"{len(size_known)} of {len(stacked)} stacked "
-                          f"expert tensors byte-priced; victim prices at "
-                          f"{victim_nbytes} bytes",
-            "verdict": res.verdict.value,
-            "detail": res.detail,
-            "confounded": confounded,
-            "baseline_verdict": (base_res.verdict.value if base_res is not None
-                                 else "absent"),
-            "inconclusive_reason": inconclusive_reason}
+    return {
+        "control": "underfill",
+        "status": status,
+        "tensor": victim.fqn,
+        "shape": [victim.shape, small],
+        # Denominator disclosure for the exclusion above (doctrine 2):
+        # how many stacked candidates could be byte-priced at all, and
+        # the chosen victim's honest price, so a partial exclusion can
+        # never read as a sweep over the full candidate population.
+        "candidates": f"{len(size_known)} of {len(stacked)} stacked "
+        f"expert tensors byte-priced; victim prices at "
+        f"{victim_nbytes} bytes",
+        "verdict": res.verdict.value,
+        "detail": res.detail,
+        "confounded": confounded,
+        "baseline_verdict": (base_res.verdict.value if base_res is not None else "absent"),
+        "inconclusive_reason": inconclusive_reason,
+    }
 
 
 _CONTROL_BUILDERS = {"drop": control_drop, "alias": control_alias, "underfill": control_underfill}
@@ -2057,11 +2060,7 @@ def _resolve_expected_interpreter(cli_expected: str | None) -> str | None:
     normalization -- an expectation this tool cannot parse is an expectation
     it cannot have met, and adjudicating anyway would manufacture
     attribution."""
-    raw = (
-        cli_expected
-        if cli_expected is not None
-        else os.environ.get(_EXPECTED_INTERPRETER_ENV)
-    )
+    raw = cli_expected if cli_expected is not None else os.environ.get(_EXPECTED_INTERPRETER_ENV)
     if raw is None or not raw.strip():
         return None
     value = raw.strip().lower()
@@ -2188,8 +2187,8 @@ def _refusal_interpreter_entry() -> dict[str, Any]:
 def adjudicate_checkpoint(
     ckpt_dir: str | os.PathLike[str],
     *,
-    event: str = "save",                     # "save" | "first_save"
-    run_kind: str = "auto",                  # "auto" | "full" | "lora"
+    event: str = "save",  # "save" | "first_save"
+    run_kind: str = "auto",  # "auto" | "full" | "lora"
     base_model_dir: str | os.PathLike[str] | None = None,
     train_config_path: str | os.PathLike[str] | None = None,
     overrides: dict[str, Any] | None = None,  # --set key=value, merged over config
@@ -2223,9 +2222,7 @@ def adjudicate_checkpoint(
     # even on a full-FT adjudication that would never consult them (silently
     # ignoring contradictory operator input is its own doctrine violation).
     # With untouched defaults this is a sub-microsecond no-op proof.
-    _verify_adapter_naming_agreement(
-        adapter_suffix_re, adapter_prefix or "", adapter_suffixes
-    )
+    _verify_adapter_naming_agreement(adapter_suffix_re, adapter_prefix or "", adapter_suffixes)
 
     # #83: attribute this run to a measured interpreter BEFORE anything is
     # measured. Built once here and shipped verbatim in the CLEAR/BLOCKED
@@ -2235,27 +2232,34 @@ def adjudicate_checkpoint(
     interpreter_entry = _interpreter_report_entry(expected_interpreter)
 
     base_dir = (
-        Path(base_model_dir) if base_model_dir
-        else Path(os.environ.get("HF_MODEL",  # launcher-set in this estate
-                  "<CLUSTER_HOME>/pretraining_weights/Vision-Language-Models/"
-                  "Google/Gemma4/gemma-4-E4B-it"))
+        Path(base_model_dir)
+        if base_model_dir
+        else Path(
+            os.environ.get(
+                "HF_MODEL",  # launcher-set in this estate
+                "<CLUSTER_HOME>/pretraining_weights/Vision-Language-Models/"
+                "Google/Gemma4/gemma-4-E4B-it",
+            )
+        )
     )
-    base = BaseModel.load(base_dir)                      # independent source A
+    base = BaseModel.load(base_dir)  # independent source A
     cfg, cfg_source = _load_train_config(
-        Path(train_config_path) if train_config_path else None)  # independent source B
+        Path(train_config_path) if train_config_path else None
+    )  # independent source B
     if overrides:
         cfg = {**cfg, **overrides}
         cfg_source += " + --set overrides"
     spec = resolve_train_spec(cfg, cfg_source, run_kind, frozen_arg=None)
 
-    meta = _measure(ckpt_path)                           # the artifact
+    meta = _measure(ckpt_path)  # the artifact
     real = _real(meta)
     real_fqns = {f for f, _ in real}
     if not real:
         raise GateUnmeasured(
             f"checkpoint at {ckpt_path} exposes zero real tensor entries -- read_metadata "
             f"already refuses zero-key sources; an empty artifact reaches this branch only "
-            f"via a reader change, measured as UNMEASURED not CLEAR")
+            f"via a reader change, measured as UNMEASURED not CLEAR"
+        )
 
     # Resolve 'auto' kind now that populations exist; denominators stay
     # independent -- only the KIND classification may consult the artifact,
@@ -2333,9 +2337,7 @@ def adjudicate_checkpoint(
     # this tool cannot honour must fail closed, not ride along inert.
     adapter_modules_loaded: _AdapterModuleCensus | None = None
     if adapter_modules is not None:
-        adapter_modules_loaded = _load_adapter_modules(
-            Path(adapter_modules), judged_dir=ckpt_path
-        )
+        adapter_modules_loaded = _load_adapter_modules(Path(adapter_modules), judged_dir=ckpt_path)
 
     # Independent source C (optional): the planner/operator-exported FQN map.
     # Loaded BEFORE derivation so a missing or empty map is UNMEASURED, never a
@@ -2344,8 +2346,13 @@ def adjudicate_checkpoint(
     if fqn_map is not None:
         fqn_map_loaded = _load_fqn_map(Path(fqn_map))
     decl = derive_declared_block(
-        base, spec, real_fqns, pinned_adapter_prefix, adapter_suffixes,
-        fqn_map=fqn_map_loaded, adapter_modules=adapter_modules_loaded,
+        base,
+        spec,
+        real_fqns,
+        pinned_adapter_prefix,
+        adapter_suffixes,
+        fqn_map=fqn_map_loaded,
+        adapter_modules=adapter_modules_loaded,
     )
     ctx = _context(meta, decl, f"{meta.origin} [gates=live; base={base_dir}; cfg={cfg_source}]")
 
@@ -2355,19 +2362,25 @@ def adjudicate_checkpoint(
     results = [g.run(ctx) for g in gates]
 
     blocking = [r for r in results if r.blocking]
-    reasons = [f"{r.gate_id}={r.verdict.value}: {r.detail.split(chr(10))[0][:200]}"
-               for r in blocking]
-    reasons += cross_check_population(kind, real_fqns, base, decl, markers,
-                                      frozenset(modules_to_save))
+    reasons = [
+        f"{r.gate_id}={r.verdict.value}: {r.detail.split(chr(10))[0][:200]}" for r in blocking
+    ]
+    reasons += cross_check_population(
+        kind, real_fqns, base, decl, markers, frozenset(modules_to_save)
+    )
     if kind == "lora":
         reasons += lora_structural_findings(
-            real, base, decl, spec,
-            adapter_prefix=pinned_adapter_prefix, adapter_suffix=adapter_suffix_re,
-            census_parents=(frozenset(decl.adapter_modules)
-                            if decl.adapter_modules else None),
+            real,
+            base,
+            decl,
+            spec,
+            adapter_prefix=pinned_adapter_prefix,
+            adapter_suffix=adapter_suffix_re,
+            census_parents=(frozenset(decl.adapter_modules) if decl.adapter_modules else None),
         )
-    extras_blocking = [
-        n for n in decl.notes if "outside the declared set" in n] if strict_extras else []
+    extras_blocking = (
+        [n for n in decl.notes if "outside the declared set" in n] if strict_extras else []
+    )
     reasons += extras_blocking
 
     # Framework self-check, verbatim discipline from the probe: PASS over zero
@@ -2388,8 +2401,13 @@ def adjudicate_checkpoint(
     for name in controls:
         build = _CONTROL_BUILDERS.get(name)
         if build is None:
-            control_reports.append({"control": name, "status": "unconstructable",
-                                    "reason": f"unknown control {name!r}"})
+            control_reports.append(
+                {
+                    "control": name,
+                    "status": "unconstructable",
+                    "reason": f"unknown control {name!r}",
+                }
+            )
             continue
         control_reports.append(build(ctx, baseline_by_gate))
     any_fired = False
@@ -2398,12 +2416,16 @@ def adjudicate_checkpoint(
         if st == "fired":
             any_fired = True
         elif st == "not_fired":
-            reasons.append(f"MUST_FIRE control {c['control']} stayed QUIET on real "
-                           f"content -- the detector cannot be trusted on this artifact")
+            reasons.append(
+                f"MUST_FIRE control {c['control']} stayed QUIET on real "
+                f"content -- the detector cannot be trusted on this artifact"
+            )
         elif st == "unconstructable":
-            reasons.append(f"MUST_FIRE control {c['control']} could not be built on "
-                           f"this artifact: {c.get('reason')} (an unexercised detector "
-                           f"proves nothing -> BLOCKING)")
+            reasons.append(
+                f"MUST_FIRE control {c['control']} could not be built on "
+                f"this artifact: {c.get('reason')} (an unexercised detector "
+                f"proves nothing -> BLOCKING)"
+            )
         elif st == "inconclusive":
             # The control RAN but the experiment proves nothing: the unmodified
             # artifact already blocks the detector (confounded), no baseline was
@@ -2414,9 +2436,11 @@ def adjudicate_checkpoint(
             # whole life exercised and never credited, and the any_fired floor
             # alone only catches the case where NOTHING else fired.
             why = c.get("inconclusive_reason") or c.get("reason") or "no reason stated"
-            reasons.append(f"MUST_FIRE control {c['control']} is INCONCLUSIVE: {why}"
-                           f" -- an exercised-but-unattributable control proves "
-                           f"nothing -> BLOCKING")
+            reasons.append(
+                f"MUST_FIRE control {c['control']} is INCONCLUSIVE: {why}"
+                f" -- an exercised-but-unattributable control proves "
+                f"nothing -> BLOCKING"
+            )
         elif st in ("inapplicable", "skipped"):
             # The control's claim is absent on this artifact (dense => no
             # aliasing claim); "skipped" is the probe's word for the same fact.
@@ -2424,12 +2448,16 @@ def adjudicate_checkpoint(
             # floor below still requires a DIFFERENT control to have fired.
             pass
         else:
-            reasons.append(f"MUST_FIRE control {c.get('control')} returned an "
-                           f"unrecognized status {st!r} -- a control vocabulary this "
-                           f"loop cannot read is an unproven detector -> BLOCKING")
+            reasons.append(
+                f"MUST_FIRE control {c.get('control')} returned an "
+                f"unrecognized status {st!r} -- a control vocabulary this "
+                f"loop cannot read is an unproven detector -> BLOCKING"
+            )
     if not any_fired:
-        reasons.append("no MUST_FIRE control fired on this artifact -- the run "
-                       "proved nothing about the detectors")
+        reasons.append(
+            "no MUST_FIRE control fired on this artifact -- the run "
+            "proved nothing about the detectors"
+        )
 
     exit_code = EXIT_BLOCKED if reasons else EXIT_CLEAR
     verdict = "CLEAR" if exit_code == EXIT_CLEAR else "BLOCKED"
@@ -2481,9 +2509,18 @@ def adjudicate_checkpoint(
         except OSError as exc:
             raise GateUnmeasured(f"could not write --json report {json_out}: {exc}") from exc
 
-    return GateDecision(str(ckpt_path), event, kind, verdict, exit_code,
-                        gate_dicts, control_reports, reasons,
-                        declared_basis, report)
+    return GateDecision(
+        str(ckpt_path),
+        event,
+        kind,
+        verdict,
+        exit_code,
+        gate_dicts,
+        control_reports,
+        reasons,
+        declared_basis,
+        report,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2509,9 +2546,11 @@ def _record_refusal(args: argparse.Namespace, message: str) -> None:
     classification -- before ever claiming it, per the same fix.
     """
     if not args.json_out:
-        print("live_gate refusal record: NO --json path was given, so this "
-              "refusal exists nowhere on disk -- the caller waived the record",
-              file=sys.stderr)
+        print(
+            "live_gate refusal record: NO --json path was given, so this "
+            "refusal exists nowhere on disk -- the caller waived the record",
+            file=sys.stderr,
+        )
         return
     record = {
         "checkpoint": str(args.ckpt_dir),

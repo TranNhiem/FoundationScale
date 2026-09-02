@@ -3679,6 +3679,216 @@ else
   ok "$wfy_msg"
 fi
 
+echo "== fix238-gatewiring: countables_drift + packaging_reachability real legs =="
+
+# --- finding #238: two gate files (checks/countables_drift.py,
+# checks/packaging_reachability.py) enter the repo in the same commit as
+# these legs. The anti-orphan gate scans every launchers/*.py + checks/*.py
+# and refuses any basename with no word-boundary call site in this suite, so
+# both would be indicted as orphans on arrival. A comment-mention would
+# satisfy the grep and measure NOTHING, so what follows are real legs that
+# execute both gates and put their denominators on the wire.
+#
+# ENVIRONMENT (measured, not assumed): the CI job that runs this suite
+# installs NOTHING -- no setup-python, no pip -- so every invocation below is
+# the runner's bare system `python3` (both gates are stdlib-only, verified on
+# Python 3.9.6), and every invocation carries `-S`. The `-S` is load-bearing,
+# not hygiene: packaging_reachability's verdict otherwise depends on whether
+# foundationscale happens to be pip-installed in the ambient environment
+# (MEASURED: rc=0 installed, rc=95 not), so the same suite text would go
+# green on one runner and abstain on another -- an environment-dependent
+# verdict, which is this repo's #83/#229 defect class. `-S` drops
+# site-packages and forces the not-installed condition in BOTH environments,
+# so the verdict below is a property of the gate, not of the host.
+
+# --- MUST_PASS: countables_drift self-test (checks/countables_drift.py) -----
+# MEASURED: `python3 -S checks/countables_drift.py --self-test` exits rc=0
+# and its last line is exactly
+#   self-test denominator: 8 of 8 controls (3 MUST_FIRE, 5 MUST_PASS)
+# rc=0 alone is NOT the measurement: a self-test whose control set silently
+# shrinks to 1 still exits 0, so the trailing "N of N controls" is parsed and
+# held to a FLOOR of N >= 8 -- the claim counts what the self-test examined
+# (doctrine 2), and a shrunken control set goes red here. If the wording of
+# that line ever changes, THIS leg goes red and must be updated in the same
+# commit -- unreadable is not empty, and unparseable is not passing.
+if [ ! -r "checks/countables_drift.py" ]; then
+  f238_msg="MUST_PASS FAILED (countables_drift self-test) UNMEASURED:"
+  f238_msg="$f238_msg checks/countables_drift.py is not readable -- unreadable is not"
+  f238_msg="$f238_msg empty (doctrine 4); the gate cannot run, so 0 of 8 controls were measured"
+  no "$f238_msg"
+else
+  f238_rc=0
+  f238_out=$(python3 -S checks/countables_drift.py --self-test 2>&1) || f238_rc=$?
+  f238_last=$(printf '%s\n' "$f238_out" | tail -n 1)
+  f238_have=$(printf '%s\n' "$f238_last" |
+    sed -n 's/^self-test denominator: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls.*/\1/p')
+  f238_want=$(printf '%s\n' "$f238_last" |
+    sed -n 's/^self-test denominator: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls.*/\2/p')
+  if [ "$f238_rc" -ne 0 ]; then
+    f238_msg="MUST_PASS FAILED (countables_drift self-test): rc=$f238_rc over the gate's"
+    f238_msg="$f238_msg own 8-control fixture set -- output:"
+    f238_msg="$f238_msg $(printf '%s\n' "$f238_out" | tr '\n' ' ')"
+    no "$f238_msg"
+  elif [ -z "$f238_have" ] || [ -z "$f238_want" ]; then
+    f238_msg="MUST_PASS FAILED (countables_drift self-test) UNMEASURED: rc=0 but the last"
+    f238_msg="$f238_msg line is not the declared 'self-test denominator: N of N controls'"
+    f238_msg="$f238_msg wording -- the measuring unit printed no denominator (doctrine 2);"
+    f238_msg="$f238_msg update this leg in the same commit as the wording change."
+    f238_msg="$f238_msg Last line: $f238_last"
+    no "$f238_msg"
+  elif [ "$f238_have" -ne "$f238_want" ]; then
+    f238_msg="MUST_PASS FAILED (countables_drift self-test): denominator $f238_have of"
+    f238_msg="$f238_msg $f238_want controls is not self-consistent -- the self-test examined"
+    f238_msg="$f238_msg fewer controls than it claims to have (doctrine 2)"
+    no "$f238_msg"
+  elif [ "$f238_have" -lt 8 ]; then
+    f238_msg="MUST_PASS FAILED (countables_drift self-test): control set shrank to"
+    f238_msg="$f238_msg $f238_have of $f238_want, below the measured floor of 8 -- a self-test"
+    f238_msg="$f238_msg that quietly drops controls still exits 0, so the floor is the control"
+    no "$f238_msg"
+  else
+    f238_msg="MUST_PASS countables_drift self-test: rc=0 under python3 -S, denominator"
+    f238_msg="$f238_msg $f238_have of $f238_want controls (>= the measured floor of 8): $f238_last"
+    ok "$f238_msg"
+  fi
+fi
+
+# --- MUST_FIRE: countables_drift refuses an empty denominator ----------------
+# MEASURED: `python3 -S checks/countables_drift.py` with NO path arguments at
+# all exits rc=96 exactly -- the declared REFUSE code. The assertion is 96,
+# not merely nonzero: collapsing it to nonzero would accept a crash (rc=1/2)
+# as a control firing, and a crashed detector is not a discriminating one.
+# This is doctrine 1 pinned as a control: all([]) is True, so a gate asked to
+# certify a corpus it never read (0 of 0 units) must REFUSE -- zero units is
+# UNMEASURED, never PASS.
+if [ ! -r "checks/countables_drift.py" ]; then
+  f238_msg="MUST_FIRE UNREACHABLE (countables_drift empty-denominator refusal)"
+  f238_msg="$f238_msg UNMEASURED: checks/countables_drift.py is not readable -- unreadable"
+  f238_msg="$f238_msg is not empty (doctrine 4); the refusal cannot be exercised, 0 of 1"
+  f238_msg="$f238_msg refusal paths measured"
+  no "$f238_msg"
+else
+  f238_rc=0
+  f238_out=$(python3 -S checks/countables_drift.py 2>&1) || f238_rc=$?
+  if [ "$f238_rc" -eq 96 ]; then
+    f238_msg="MUST_FIRE countables_drift: invoked over 0 of 0 path arguments it refused"
+    f238_msg="$f238_msg with rc=96 (REFUSE), declining to certify a corpus it never read --"
+    f238_msg="$f238_msg zero units is UNMEASURED, never PASS (doctrine 1)"
+    ok "$f238_msg"
+  else
+    f238_msg="MUST_FIRE UNREACHABLE (countables_drift empty-denominator refusal): rc=$f238_rc"
+    f238_msg="$f238_msg over 0 path arguments, expected exactly 96 -- rc=0 would launder an"
+    f238_msg="$f238_msg empty corpus into a PASS (doctrine 1), and any other nonzero collapses"
+    f238_msg="$f238_msg a crash into a control firing; output:"
+    f238_msg="$f238_msg $(printf '%s\n' "$f238_out" | tr '\n' ' ')"
+    no "$f238_msg"
+  fi
+fi
+
+# --- MUST_PASS: packaging_reachability self-test -----------------------------
+# MEASURED: `python3 -S checks/packaging_reachability.py --self-test` exits
+# rc=0 and its last line is exactly
+#   SELF-TEST DENOMINATOR: 7 of 7 -- 5x MUST_FIRE produced nonzero finding counts; 2x MUST_PASS stayed clean over a nonzero denominator
+# Same floor reasoning as countables_drift: rc=0 survives a control set that
+# silently shrinks to 1, so "N of N" is parsed and held to N >= 7. A wording
+# change reds THIS leg and is updated in the same commit.
+if [ ! -r "checks/packaging_reachability.py" ]; then
+  f238_msg="MUST_PASS FAILED (packaging_reachability self-test) UNMEASURED:"
+  f238_msg="$f238_msg checks/packaging_reachability.py is not readable -- unreadable is not"
+  f238_msg="$f238_msg empty (doctrine 4); the gate cannot run, so 0 of 7 controls were measured"
+  no "$f238_msg"
+else
+  f238_rc=0
+  f238_out=$(python3 -S checks/packaging_reachability.py --self-test 2>&1) || f238_rc=$?
+  f238_last=$(printf '%s\n' "$f238_out" | tail -n 1)
+  f238_have=$(printf '%s\n' "$f238_last" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) .*/\1/p')
+  f238_want=$(printf '%s\n' "$f238_last" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) .*/\2/p')
+  if [ "$f238_rc" -ne 0 ]; then
+    f238_msg="MUST_PASS FAILED (packaging_reachability self-test): rc=$f238_rc over the"
+    f238_msg="$f238_msg gate's own 7-control fixture set -- output:"
+    f238_msg="$f238_msg $(printf '%s\n' "$f238_out" | tr '\n' ' ')"
+    no "$f238_msg"
+  elif [ -z "$f238_have" ] || [ -z "$f238_want" ]; then
+    f238_msg="MUST_PASS FAILED (packaging_reachability self-test) UNMEASURED: rc=0 but the"
+    f238_msg="$f238_msg last line is not the declared 'SELF-TEST DENOMINATOR: N of N' wording"
+    f238_msg="$f238_msg -- the measuring unit printed no denominator (doctrine 2); update this"
+    f238_msg="$f238_msg leg in the same commit as the wording change. Last line: $f238_last"
+    no "$f238_msg"
+  elif [ "$f238_have" -ne "$f238_want" ]; then
+    f238_msg="MUST_PASS FAILED (packaging_reachability self-test): denominator $f238_have"
+    f238_msg="$f238_msg of $f238_want controls is not self-consistent -- the self-test examined"
+    f238_msg="$f238_msg fewer controls than it claims to have (doctrine 2)"
+    no "$f238_msg"
+  elif [ "$f238_have" -lt 7 ]; then
+    f238_msg="MUST_PASS FAILED (packaging_reachability self-test): control set shrank to"
+    f238_msg="$f238_msg $f238_have of $f238_want, below the measured floor of 7 -- a self-test"
+    f238_msg="$f238_msg that quietly drops controls still exits 0, so the floor is the control"
+    no "$f238_msg"
+  else
+    f238_msg="MUST_PASS packaging_reachability self-test: rc=0 under python3 -S,"
+    f238_msg="$f238_msg denominator $f238_have of $f238_want controls (>= the measured floor"
+    f238_msg="$f238_msg of 7): $f238_last"
+    ok "$f238_msg"
+  fi
+fi
+
+# --- MUST_FIRE: packaging_reachability declares abstention -------------------
+# MEASURED: `python3 -S checks/packaging_reachability.py` (foundationscale
+# forced not-installed by -S, see the banner comment) exits rc=95 exactly --
+# the declared UNMEASURED code -- and its last line begins
+#   UNMEASURED: distribution 'foundationscale' is not installed
+# This is finding #56's rule pinned as a control: an abstaining gate must
+# publish a DECLARED abstention state, never exit 0 -- rc=0 here would
+# launder an unmeasured distribution into a pass. The reason text is required
+# alongside the code so that a future rc=95 raised for an unrelated cause
+# cannot read as THIS control firing, and any other nonzero (a crash, rc=1/2)
+# is not discrimination.
+if [ ! -r "checks/packaging_reachability.py" ]; then
+  f238_msg="MUST_FIRE UNREACHABLE (packaging_reachability declared abstention)"
+  f238_msg="$f238_msg UNMEASURED: checks/packaging_reachability.py is not readable --"
+  f238_msg="$f238_msg unreadable is not empty (doctrine 4); the abstention cannot be"
+  f238_msg="$f238_msg exercised, 0 of 1 abstention paths measured"
+  no "$f238_msg"
+else
+  f238_rc=0
+  f238_out=$(python3 -S checks/packaging_reachability.py 2>&1) || f238_rc=$?
+  f238_last=$(printf '%s\n' "$f238_out" | tail -n 1)
+  if [ "$f238_rc" -ne 95 ]; then
+    f238_msg="MUST_FIRE UNREACHABLE (packaging_reachability declared abstention):"
+    f238_msg="$f238_msg rc=$f238_rc with foundationscale forced not-installed under -S,"
+    f238_msg="$f238_msg expected exactly 95 -- rc=0 would launder the abstention into a pass"
+    f238_msg="$f238_msg (#56), any other nonzero is a crash, not a declared state; output:"
+    f238_msg="$f238_msg $(printf '%s\n' "$f238_out" | tr '\n' ' ')"
+    no "$f238_msg"
+  elif ! printf '%s\n' "$f238_last" |
+      grep -q "^UNMEASURED: distribution 'foundationscale' is not installed"; then
+    f238_msg="MUST_FIRE UNREACHABLE (packaging_reachability declared abstention): rc=95"
+    f238_msg="$f238_msg but the last line does not name the not-installed reason -- an"
+    f238_msg="$f238_msg rc=95 raised for an unrelated cause must not read as this control"
+    f238_msg="$f238_msg firing (#56). Last line: $f238_last"
+    no "$f238_msg"
+  else
+    f238_msg="MUST_FIRE packaging_reachability: 0 of 1 distributions (foundationscale)"
+    f238_msg="$f238_msg installed under -S, and the gate published a DECLARED abstention --"
+    f238_msg="$f238_msg rc=95 with reason, never exit 0 (#56): $f238_last"
+    ok "$f238_msg"
+  fi
+fi
+
+# --- named abstention: the CLEAR direction of packaging_reachability ---------
+# Under `-S` site-packages is dropped on EVERY host, so on this wire the
+# packaging gate can only ever be measured in its not-installed direction
+# (leg above). Its CLEAR direction -- rc=0 with foundationscale genuinely
+# installed and importable -- is unreachable here BY CONSTRUCTION, and an
+# unreachable direction is a zero-run denominator, which doctrine 1 says must
+# be recorded by name so it can never read as coverage. `make packaging`
+# covers the installed direction in an installed environment. Recorded as 0
+# of 1 directions; adds 0 to pass and 0 to fail.
+printf '  ABSTAIN  fix238-gatewiring: packaging_reachability CLEAR direction (rc=0 with foundationscale installed and importable) — 0 of 1 directions measurable under python3 -S on this wire; `make packaging` covers the installed direction in an installed environment; adds 0 to pass and 0 to fail\n'
+abstain=$((abstain+1))
+
 echo "== fix78-orphan: every launchers/*.py and checks/*.py harness helper carries at least one call site in this suite (anti-orphan, #86 class) =="
 # This control was earned the hard way: the F78 census-writer driver
 # shipped a full round with ZERO call sites while its two legs burned red

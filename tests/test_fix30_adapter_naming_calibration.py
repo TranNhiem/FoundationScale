@@ -47,7 +47,7 @@ from foundationscale.gates import adjudication as lsg  # noqa: E402 (path fixup 
 # calibration under test is the variable; fixtures pinned to
 # lsg._DEFAULT_ADAPTER_SUFFIX_* would tautologically follow the patch and
 # could never FAIL on the pre-fix tree.
-_MB_SUFFIX_A = ".adapter.linear_in.weight"   # (rank, in_features)
+_MB_SUFFIX_A = ".adapter.linear_in.weight"  # (rank, in_features)
 _MB_SUFFIX_B = ".adapter.linear_out.weight"  # (out_features, rank)
 _MB_SUFFIX_RE = r"\.adapter\.linear_(?:in|out)\.weight$"
 
@@ -157,14 +157,20 @@ def test_default_calibration_binds_every_estate_adapter_to_its_parent() -> None:
     prefixed = [(f"savewrap.{f}", tm) for f, tm in real]
     assert (
         lsg.lora_structural_findings(
-            prefixed, base, decl, spec,
+            prefixed,
+            base,
+            decl,
+            spec,
             adapter_prefix="savewrap.",
             adapter_suffix=lsg._DEFAULT_ADAPTER_SUFFIX_RE,
         )
         == []
     )
     wrong = lsg.lora_structural_findings(
-        prefixed, base, decl, spec,
+        prefixed,
+        base,
+        decl,
+        spec,
         adapter_prefix="",
         adapter_suffix=lsg._DEFAULT_ADAPTER_SUFFIX_RE,
     )
@@ -199,10 +205,7 @@ def test_retired_hf_peft_calibration_is_fatal_on_the_estate_shape() -> None:
         adapter_suffix=hf_re,
     )
     assert len(findings) == 1
-    assert (
-        f"lora: 0 of {N_TENSORS} real tensors could be bound to a base "
-        f"parent" in findings[0]
-    )
+    assert f"lora: 0 of {N_TENSORS} real tensors could be bound to a base parent" in findings[0]
 
     # Fail-before leg: on the pre-fix tree the shipped defaults ARE this
     # calibration and this assertion fails; after the patch it guards the

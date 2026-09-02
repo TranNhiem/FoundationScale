@@ -100,9 +100,7 @@ def _join_adjacent_string_literals(src):
 
 
 def _load_emitter():
-    spec = importlib.util.spec_from_file_location(
-        "emit_run_manifest_under_control", EMITTER_PATH
-    )
+    spec = importlib.util.spec_from_file_location("emit_run_manifest_under_control", EMITTER_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {EMITTER_PATH}")  # FAIL CLOSED
     mod = importlib.util.module_from_spec(spec)
@@ -120,9 +118,7 @@ def _load_gate():
     # independent measurement of the same python (sys.executable, find_spec)
     # taken in this very process. A load failure is a test failure (FAIL
     # CLOSED), never a skip.
-    spec = importlib.util.spec_from_file_location(
-        "live_save_gate_under_control", GATE_PATH
-    )
+    spec = importlib.util.spec_from_file_location("live_save_gate_under_control", GATE_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {GATE_PATH}")  # FAIL CLOSED
     mod = importlib.util.module_from_spec(spec)
@@ -162,17 +158,14 @@ def test_must_pass_emitted_strings_name_no_gate_field_the_gate_lacks():
 def test_must_fire_planted_directive_is_flagged():
     gate_src = GATE_PATH.read_text(encoding="utf-8")
     probe = [
-        "cross-check against the gate's never_written_field_qz; "
-        "a mismatch indicts the measurement"
+        "cross-check against the gate's never_written_field_qz; a mismatch indicts the measurement"
     ]
     named = _fields_named_in(probe)
     assert named == ["never_written_field_qz"]
     assert _violations(named, gate_src) == ["never_written_field_qz"]
 
 
-def test_regression_pin_83_torch_record_is_written_and_truthful(
-    tmp_path, monkeypatch
-):
+def test_regression_pin_83_torch_record_is_written_and_truthful(tmp_path, monkeypatch):
     """INVERTED PIN. This function was the absence pin ("torch_record" not
     in gate_src); its own comment ordered that it go red in the change that
     implements gate-side provenance and be updated in that same change. This
@@ -207,9 +200,7 @@ def test_regression_pin_83_torch_record_is_written_and_truthful(
         "this same interpreter -- the record is authored, not measured"
     )
     if detected_here:
-        assert prov["torch_record"]["dist_version"] == (
-            importlib.metadata.version("torch")
-        )
+        assert prov["torch_record"]["dist_version"] == (importlib.metadata.version("torch"))
     else:
         assert prov["torch_record"]["origin"] is None
     # MUST_PASS of the adjudication half: the truthful expectation passes
@@ -241,9 +232,7 @@ def test_regression_pin_83_torch_record_is_written_and_truthful(
     refusal = json.loads(refusal_path.read_text(encoding="utf-8"))
     assert refusal["verdict"] == "UNMEASURED"
     assert refusal["interpreter"]["python_executable"] == sys.executable
-    assert refusal["interpreter"]["torch_record"]["detected"] is (
-        detected_here
-    )
+    assert refusal["interpreter"]["torch_record"]["detected"] is (detected_here)
     # The env channel: fallback resolves when the kwarg abstains, and the
     # kwarg wins when both speak. The resolver only validates vocabulary and
     # precedence; adjudication itself is the referee's job.
@@ -313,13 +302,9 @@ def test_regression_pins_historical_wording_absent_from_emitter_source():
     # wording reads green on that shape while the artifact ships false --
     # the exact #83 evasion this control exists against. Joining only
     # ever ADDS the across-literal spellings an interpreter would see.
-    emit_src = _join_adjacent_string_literals(
-        EMITTER_PATH.read_text(encoding="utf-8")
-    )
+    emit_src = _join_adjacent_string_literals(EMITTER_PATH.read_text(encoding="utf-8"))
     for phrase in HISTORICAL_PHRASES:
-        assert phrase not in emit_src, (
-            f"historical #83 wording returned to the emitter: {phrase!r}"
-        )
+        assert phrase not in emit_src, f"historical #83 wording returned to the emitter: {phrase!r}"
     # MUST_FIRE for this detector itself (doctrine 3): its only red to
     # date was a false alarm on honest prose, so it had never been
     # observed firing and was not yet a control. The historical wording

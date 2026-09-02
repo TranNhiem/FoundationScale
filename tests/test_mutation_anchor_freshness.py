@@ -16,12 +16,12 @@ costs. The corpus is its own inverse map, so the gate asks whether SOME
 pristine text exists that binds every anchor exactly once and reaches the
 live bytes in zero or one applications.
 
-Denominator: 62 JSON rows over 8 modules + 8 EMBEDDED_TABLE rows over 1
-module = 70 rows over 9 modules, pinned as constants below. Silent row
+Denominator: 64 JSON rows over 8 modules + 9 EMBEDDED_TABLE rows over 1
+module = 73 rows over 9 modules, pinned as constants below. Silent row
 deletion reds here rather than shrinking the denominator; a legitimate corpus
 change updates the pins.
 
-Shape denominator: 2 insertion-style rows and 2 deletion-style rows, pinned
+Shape denominator: 3 insertion-style rows and 2 deletion-style rows, pinned
 below for the same reason. A shape count of zero must never be used merely
 to green a corpus edit: at zero that shape is unexercised by the real
 corpus and its corresponding control has become vacuous.
@@ -42,12 +42,12 @@ synthetic corpus over a tmp_path file the test wrote itself.
 
 Residuals, stated honestly. The verdict is that anchors BIND, not that the
 tree is pristine. Drift displacing no anchor is invisible unless it carries
-replacement text from one of the 2 self-surviving insertion rows among the
-shipped 70; the other 68 replacement strings are never freshness signals.
+replacement text from one of the 3 self-surviving insertion rows among the
+shipped 73; the other 70 replacement strings are never freshness signals.
 A blanket replacement rule would reject the 2 deletion-style rows whose
 replacement necessarily occurs inside their intact anchor. The verdict is
-per-MODULE, not per-ROW -- the 70 rows carry only 67 distinct (module,
-anchor) pairs, so rows sharing an anchor are aliased and a green is not 70
+per-MODULE, not per-ROW -- the 73 rows carry only 70 distinct (module,
+anchor) pairs, so rows sharing an anchor are aliased and a green is not 73
 independent verdicts. It classifies bytes, it does not date them: unrelated
 drift that lands on some row's applied state reads as that applied state,
 because with no external history the two are the same bytes. The general
@@ -67,21 +67,21 @@ ROOT = Path(__file__).resolve().parent.parent
 MUTATE_PY = ROOT / "tools" / "mutate.py"
 MUTATIONS_JSON = ROOT / "tools" / "mutations.json"
 
-JSON_ROWS, JSON_MODS = 62, 8
-EMBEDDED_ROWS, EMBEDDED_MODS = 8, 1
-TOTAL_ROWS, TOTAL_MODS = 70, 9
+JSON_ROWS, JSON_MODS = 64, 8
+EMBEDDED_ROWS, EMBEDDED_MODS = 9, 1
+TOTAL_ROWS, TOTAL_MODS = 73, 9
 # Rows are the corpus denominator; distinct (module, anchor) pairs are the
 # DISTINGUISHABILITY denominator. They differ because `core` publishes 9 rows
 # over 6 anchors, so a green verdict there resolves the anchor set and cannot
 # say which of the aliased rows a state carries. Pinned so neither figure can
 # be quoted as the other.
-DISTINCT_ANCHORS = 67
+DISTINCT_ANCHORS = 70
 # Row-shape counts are pins, not prose trivia. They are the reason the
 # insertion composition control and deletion exactly-once control exercise
 # real shipped shapes. Do not set either pin to 0 merely to pass after a
 # corpus edit: a 0 means the shape is unexercised and its control is
 # vacuous, which must red until an explicit reasoning round retires it.
-INSERTION_STYLE_ROWS = 2
+INSERTION_STYLE_ROWS = 3
 DELETION_STYLE_ROWS = 2
 
 
@@ -104,25 +104,21 @@ def _load_mutate():
 
 def _row(name, anchor, replacement):
     return {
-        "name": name, "what": "synthetic",
-        "anchor": anchor, "replacement": replacement,
+        "name": name,
+        "what": "synthetic",
+        "anchor": anchor,
+        "replacement": replacement,
     }
 
 
 def _insertion_style(row):
     """True when the replacement text contains the anchor."""
-    return (
-        bool(row["anchor"])
-        and row["replacement"].count(row["anchor"]) >= 1
-    )
+    return bool(row["anchor"]) and row["replacement"].count(row["anchor"]) >= 1
 
 
 def _deletion_style(row):
     """True when the anchor text contains its replacement."""
-    return (
-        bool(row["replacement"])
-        and row["anchor"].count(row["replacement"]) >= 1
-    )
+    return bool(row["replacement"]) and row["anchor"].count(row["replacement"]) >= 1
 
 
 def _green_in_every_state(mutate, tmp_path, mod, pristine, rows):
@@ -143,15 +139,14 @@ def _green_in_every_state(mutate, tmp_path, mod, pristine, rows):
     for label, text in states:
         src.write_text(text, "utf-8")
         problems = mutate.check_anchor_freshness({mod: rows}, {mod: src})
-        assert problems == [], (
-            f"{mod} [{label}] must certify fresh; got:\n"
-            + "\n".join(f"  {p}" for p in problems)
+        assert problems == [], f"{mod} [{label}] must certify fresh; got:\n" + "\n".join(
+            f"  {p}" for p in problems
         )
     return states
 
 
 def test_must_pass_shipped_corpus_binds_every_anchor_exactly_once():
-    """MUST_PASS over the real shipped corpus: 70 rows, 9 modules, 0
+    """MUST_PASS over the real shipped corpus: 73 rows, 9 modules, 0
     problems, with the per-source split stated.
 
     The gate reconstructs pristine per module from the LIVE bytes, so this
@@ -170,23 +165,17 @@ def test_must_pass_shipped_corpus_binds_every_anchor_exactly_once():
         f"= {json_rows + emb_rows} rows over "
         f"{len(set(data) | set(mutate.EMBEDDED_TABLE))} module(s)"
     )
-    assert (json_rows, len(data)) == (JSON_ROWS, JSON_MODS), (
-        f"JSON half drifted: {denominator}"
-    )
+    assert (json_rows, len(data)) == (JSON_ROWS, JSON_MODS), f"JSON half drifted: {denominator}"
     assert (emb_rows, len(mutate.EMBEDDED_TABLE)) == (
         EMBEDDED_ROWS,
         EMBEDDED_MODS,
     ), f"embedded half drifted: {denominator}"
-    assert len(mutate.MODULE_PATHS) == TOTAL_MODS, (
-        f"module map drifted: {denominator}"
-    )
+    assert len(mutate.MODULE_PATHS) == TOTAL_MODS, f"module map drifted: {denominator}"
     table = mutate.load_table(None)
     assert sum(len(rows) for rows in table.values()) == TOTAL_ROWS, denominator
     assert len(table) == TOTAL_MODS, denominator
     corpus_rows = [row for rows in table.values() for row in rows]
-    insertion_rows = [
-        row for row in corpus_rows if _insertion_style(row)
-    ]
+    insertion_rows = [row for row in corpus_rows if _insertion_style(row)]
     deletion_rows = [row for row in corpus_rows if _deletion_style(row)]
     assert len(insertion_rows) == INSERTION_STYLE_ROWS, (
         f"insertion-style shape denumerator drifted: "
@@ -198,9 +187,7 @@ def test_must_pass_shipped_corpus_binds_every_anchor_exactly_once():
         f"{len(deletion_rows)} of {TOTAL_ROWS} row(s). A count of 0 would "
         "leave this shape unexercised and its control vacuous."
     )
-    distinct = len(
-        {(mod, r["anchor"]) for mod, rows in table.items() for r in rows}
-    )
+    distinct = len({(mod, r["anchor"]) for mod, rows in table.items() for r in rows})
     assert distinct == DISTINCT_ANCHORS, (
         f"distinguishability denominator drifted: {distinct} distinct "
         f"(module, anchor) pair(s) behind {TOTAL_ROWS} row(s). A green "
@@ -216,7 +203,7 @@ def test_must_pass_shipped_corpus_binds_every_anchor_exactly_once():
 
 
 def test_must_pass_non_insertion_anchors_never_survive_application():
-    """MUST_PASS admissibility control over all 70 rows / 9 real modules.
+    """MUST_PASS admissibility control over all 73 rows / 9 real modules.
 
     An insertion-style anchor survives its own application by construction;
     any OTHER survivor is the overlap shape left uncovered by the
@@ -230,7 +217,7 @@ def test_must_pass_non_insertion_anchors_never_survive_application():
     It is sound because the property is invariant under any single-row
     application, which was MEASURED rather than argued:
 
-      * over all 79 states the battery can reach (9 pristine + 70 singly
+      * over all 82 states the battery can reach (9 pristine + 73 singly
         applied), survivors = 0; and
       * 0 rows have a replacement that introduces another row's anchor, so
         applying one row cannot mint an occurrence for a different row.
@@ -247,9 +234,7 @@ def test_must_pass_non_insertion_anchors_never_survive_application():
     mutate = _load_mutate()
     table = mutate.load_table(None)
     paths = {mod: ROOT / rel for mod, rel in mutate.MODULE_PATHS.items()}
-    assert (
-        sum(len(rows) for rows in table.values()), len(table)
-    ) == (TOTAL_ROWS, TOTAL_MODS)
+    assert (sum(len(rows) for rows in table.values()), len(table)) == (TOTAL_ROWS, TOTAL_MODS)
     survivors = []
     measured = 0
     for mod in sorted(table):
@@ -382,12 +367,7 @@ def test_must_pass_nested_anchors_are_fresh_pristine_and_applied(tmp_path):
         "fixture defect: this leg must exercise one anchor strictly NESTED "
         "inside another, or it tests nothing"
     )
-    pristine = (
-        "def score(a, b):\n"
-        "    if a and b:\n"
-        "        return a + b\n"
-        "    return 0\n"
-    )
+    pristine = "def score(a, b):\n    if a and b:\n        return a + b\n    return 0\n"
     rows = [
         _row("outer-row", outer, "    if True:\n        return a - b\n"),
         _row("inner-row", inner, "        return a * b\n"),
@@ -443,9 +423,7 @@ def _accepted_without_reachability(live, rows):
     for r in rows:
         at = live.find(r["replacement"])
         while at != -1:
-            cands.append(
-                live[:at] + r["anchor"] + live[at + len(r["replacement"]):]
-            )
+            cands.append(live[:at] + r["anchor"] + live[at + len(r["replacement"]) :])
             at = live.find(r["replacement"], at + 1)
     return [c for c in cands if all(c.count(r["anchor"]) == 1 for r in rows)]
 
@@ -465,12 +443,8 @@ def test_must_fire_two_rows_applied_at_once_is_refused(tmp_path):
     live = "a = 0\nb = 0\n"
     doubled = tmp_path / "doubled.py"
     doubled.write_text(live, "utf-8")
-    problems = mutate.check_anchor_freshness(
-        {"doubled": [first, second]}, {"doubled": doubled}
-    )
-    assert any(
-        "first-row" in p and "second-row" in p for p in problems
-    ), problems
+    problems = mutate.check_anchor_freshness({"doubled": [first, second]}, {"doubled": doubled})
+    assert any("first-row" in p and "second-row" in p for p in problems), problems
     assert _accepted_without_reachability(live, [first, second]) == [], (
         "attribution claim broken: this fixture is supposed to red on "
         "exactly-once alone, so the reachability-stripped predicate must "
@@ -503,8 +477,7 @@ def test_must_fire_self_overlapping_anchor_pins_reachability(tmp_path):
         f"red for the wrong reason; got {slack!r}"
     )
     assert slack[0].replace(row["anchor"], row["replacement"], 1) != live, (
-        "fixture defect: the round trip must MISS, or reachability has "
-        "nothing to refuse"
+        "fixture defect: the round trip must MISS, or reachability has nothing to refuse"
     )
     problems = mutate.check_anchor_freshness({"overlap": [row]}, {"overlap": src})
     assert any("overlap-row" in p for p in problems), problems
@@ -539,8 +512,7 @@ def test_must_fire_insertion_row_cannot_base_a_second_row(tmp_path):
     for label, text in [
         ("pristine", pristine),
         ("applied:ins-row", pristine.replace(ins["anchor"], ins["replacement"], 1)),
-        ("applied:ord-row", pristine.replace(
-            ordinary["anchor"], ordinary["replacement"], 1)),
+        ("applied:ord-row", pristine.replace(ordinary["anchor"], ordinary["replacement"], 1)),
     ]:
         src.write_text(text, "utf-8")
         problems = mutate.check_anchor_freshness({"c": rows}, {"c": src})
@@ -586,13 +558,10 @@ def test_must_fire_overlap_survivor_is_the_declared_limitation(tmp_path):
     assert (
         pristine.count(rows[0]["anchor"]),
         pristine.count(rows[1]["anchor"]),
-    ) == (1, 1), (
-        "fixture defect: both anchors must bind exactly once before either "
-        "row is applied"
+    ) == (1, 1), "fixture defect: both anchors must bind exactly once before either row is applied"
+    assert pristine.replace("xx", "x", 1).count("xx") == 1, (
+        "fixture defect: the overlap row must SURVIVE its own application"
     )
-    assert (
-        pristine.replace("xx", "x", 1).count("xx") == 1
-    ), "fixture defect: the overlap row must SURVIVE its own application"
     accepted = mutate._accepted_pristine_states(both, rows)
     assert accepted == ["xxb\n"], (
         "known limitation changed silently: the general overlap-survivor "
@@ -600,9 +569,7 @@ def test_must_fire_overlap_survivor_is_the_declared_limitation(tmp_path):
     )
     src = tmp_path / "overlap_delete.py"
     src.write_text(both, "utf-8")
-    problems = mutate.check_anchor_freshness(
-        {"overlap-delete": rows}, {"overlap-delete": src}
-    )
+    problems = mutate.check_anchor_freshness({"overlap-delete": rows}, {"overlap-delete": src})
     assert problems == [], (
         "known limitation changed silently: today's overlapping two-row "
         f"state is declared as a false green, got {problems}"
@@ -620,9 +587,7 @@ def test_must_fire_row_that_edits_nothing_is_refused(tmp_path):
     problems = mutate.check_anchor_freshness(
         {"noop": [_row("noop-row", same, same)]}, {"noop": src}
     )
-    assert any(
-        "noop-row" in p and "edits nothing" in p for p in problems
-    ), problems
+    assert any("noop-row" in p and "edits nothing" in p for p in problems), problems
 
 
 def test_must_fire_candidate_blowup_refuses_rather_than_searching(tmp_path):
@@ -635,9 +600,7 @@ def test_must_fire_candidate_blowup_refuses_rather_than_searching(tmp_path):
     """
     mutate = _load_mutate()
     src = tmp_path / "flood.py"
-    body = "UNIQUE_ANCHOR_LINE\n" + "z = 0\n" * (
-        mutate.MAX_FRESHNESS_CANDIDATES + 40
-    )
+    body = "UNIQUE_ANCHOR_LINE\n" + "z = 0\n" * (mutate.MAX_FRESHNESS_CANDIDATES + 40)
     src.write_text(body, "utf-8")
     row = _row("flood-row", "UNIQUE_ANCHOR_LINE\n", "z = 0\n")
     assert body.count(row["anchor"]) == 1, (
@@ -645,9 +608,7 @@ def test_must_fire_candidate_blowup_refuses_rather_than_searching(tmp_path):
         "would red on the verdict instead of on the bound"
     )
     problems = mutate.check_anchor_freshness({"flood": [row]}, {"flood": src})
-    assert any("candidate enumeration exceeded" in p for p in problems), (
-        problems
-    )
+    assert any("candidate enumeration exceeded" in p for p in problems), problems
 
 
 def test_must_fire_fail_closed_on_every_enumerated_refusal(tmp_path):
@@ -666,9 +627,7 @@ def test_must_fire_fail_closed_on_every_enumerated_refusal(tmp_path):
         {"ghost": [good], "live": [good], "empty": [], "gone": [good]},
         {"live": live, "empty": live, "gone": tmp_path / "missing.py"},
     )
-    assert any(
-        "ghost" in p and "no source mapping" in p for p in problems
-    ), problems
+    assert any("ghost" in p and "no source mapping" in p for p in problems), problems
     assert any("gone" in p and "cannot read" in p for p in problems), problems
     assert any("empty" in p and "0 rows" in p for p in problems), problems
     assert not any("live-row" in p for p in problems), problems
@@ -681,6 +640,4 @@ def test_must_fire_fail_closed_on_every_enumerated_refusal(tmp_path):
     blank = mutate.check_anchor_freshness(
         {"blank": [_row("blank-row", "", "x = 3")]}, {"blank": live}
     )
-    assert any(
-        "blank-row" in p and "empty anchor" in p for p in blank
-    ), blank
+    assert any("blank-row" in p and "empty anchor" in p for p in blank), blank

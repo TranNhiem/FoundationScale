@@ -80,6 +80,10 @@ __all__ = [
     "ExpertByteVolumeGate",
     "SaveCompletenessGate",
     "FirstSaveGate",
+    # Naming vocabulary, shared with whoever produces the declaration these
+    # gates adjudicate against. See the note beside their definitions.
+    "mentions_expert",
+    "matches_expert_family",
 ]
 
 _DTYPE_BYTES: dict[str, int] = {
@@ -367,6 +371,27 @@ def _matches_expert_family(fqn: str) -> bool:
         or _PER_EXPERT_MEMBER_RE.match(fqn)
         or _STACKED_WEIGHT_RE.match(fqn)
     )
+
+
+# PUBLIC, and deliberately so. The producer of a run's declaration has to sort
+# tensor names into dense-vs-expert with the SAME vocabulary this module
+# adjudicates them by; a second copy of the three regexes above, living in the
+# training entry point, is #150's exact shape — a writer and a reader each
+# internally consistent, never introduced, drifting on the first model whose
+# layout only one of them learned about. Exported as names rather than
+# re-implemented so that drift is impossible rather than merely unlikely.
+#
+# The two answer DIFFERENT questions and the difference is load-bearing:
+#   mentions_expert       — is this name expert-related AT ALL? The broad test.
+#                           Used to decide whether a model may be declared dense,
+#                           where the fail-closed answer is "any mention at all
+#                           means do not declare dense".
+#   matches_expert_family — is this an expert WEIGHT in a layout this module can
+#                           actually verify? The narrow test. Used to price
+#                           expected bytes, where counting a name we cannot
+#                           verify would inflate a denominator.
+mentions_expert = _expert_named
+matches_expert_family = _matches_expert_family
 
 
 def _expert_weights(ctx: CheckpointGateContext) -> list[TensorMeta]:
@@ -1865,12 +1890,8 @@ class FirstSaveGate(Gate):
         # door is VACUOUS, and VACUOUS landed in `blocking` above before any of
         # this pricing runs). Everything else — NOT_ESTABLISHED, or an
         # undeclared None from an unaudited call site — stays in.
-        inapplicable = [
-            r for r in skipped if r.abstention is AbstentionKind.NOT_APPLICABLE
-        ]
-        unresolved = [
-            r for r in skipped if r.abstention is not AbstentionKind.NOT_APPLICABLE
-        ]
+        inapplicable = [r for r in skipped if r.abstention is AbstentionKind.NOT_APPLICABLE]
+        unresolved = [r for r in skipped if r.abstention is not AbstentionKind.NOT_APPLICABLE]
         applicable = len(self._subgates) - len(inapplicable)
         # Coverage still counts VERIFIED properties against the applicable
         # total. ok() enforces the rest by construction: an unverified-but-

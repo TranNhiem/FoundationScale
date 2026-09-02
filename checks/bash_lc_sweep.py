@@ -31,18 +31,23 @@ Doctrine wiring:
 Output avoids the verify_summary-ingested tokens by design: no 'green',
 'passed', or 'SUMMARY' on any path, and no suite domain prefix at line start.
 """
+
+from __future__ import annotations
+
 import re
 import sys
 from pathlib import Path
 
-BLOCKER2_FIXED = "bash -lc 'python3 \"$1\"' _ \"$COT_PROBE_PY\""
-BLOCKER2_BROKEN = "bash -lc \"python3 $COT_PROBE_PY\""
+BLOCKER2_FIXED = 'bash -lc \'python3 "$1"\' _ "$COT_PROBE_PY"'
+BLOCKER2_BROKEN = 'bash -lc "python3 $COT_PROBE_PY"'
 
 
 def classify(files):
     if len(files) < 2:
-        print(f"BASH-LC RED: the sweep requires both launchers on argv; got"
-              f" {len(files)} -- a partial sweep is UNMEASURED (doctrine 1)")
+        print(
+            f"BASH-LC RED: the sweep requires both launchers on argv; got"
+            f" {len(files)} -- a partial sweep is UNMEASURED (doctrine 1)"
+        )
         return 1
     total = 0
     unsafe = []
@@ -65,12 +70,15 @@ def classify(files):
             while j < len(line) and line[j] in " \t":
                 j += 1
             if j >= len(line) or line[j] not in "'\"":
-                audited.append(f"{fn}:{n} [non-literal argument -- enumerated for a human,"
-                               " counted as examined]")
+                audited.append(
+                    f"{fn}:{n} [non-literal argument -- enumerated for a human,"
+                    " counted as examined]"
+                )
                 continue
             if line[j] == "'":
-                audited.append(f"{fn}:{n} [single-quoted source; expansions passed as data"
-                               " ($1-style)]")
+                audited.append(
+                    f"{fn}:{n} [single-quoted source; expansions passed as data ($1-style)]"
+                )
                 continue
             k = j + 1
             body = []
@@ -92,38 +100,49 @@ def classify(files):
                 if ch == "'":
                     inner_single = not inner_single
                 elif ch == "$" and not inner_single:
-                    if body[idx:idx + 2] == "$(":
-                        hits.append("$(...) executes in the OUTER shell and its stdout"
-                                    " splices into inner SOURCE")
+                    if body[idx : idx + 2] == "$(":
+                        hits.append(
+                            "$(...) executes in the OUTER shell and its stdout"
+                            " splices into inner SOURCE"
+                        )
                         idx += 1
                     else:
                         m = re.match(r"\$\{?[A-Za-z_][A-Za-z_0-9]*\}?", body[idx:])
                         if m:
-                            hits.append(f"{m.group(0)} expanded bare -- the outer shell"
-                                        " splices the value into the inner shell's SOURCE"
-                                        " text (word-splits; $(...) content executes)")
+                            hits.append(
+                                f"{m.group(0)} expanded bare -- the outer shell"
+                                " splices the value into the inner shell's SOURCE"
+                                " text (word-splits; $(...) content executes)"
+                            )
                             idx += len(m.group(0)) - 1
                 idx += 1
             if hits:
                 unsafe.append(f"{fn}:{n} {' | '.join(hits)}")
             else:
-                audited.append(f"{fn}:{n} [double-quoted source; every expansion nested"
-                               " inside inner single quotes -- the :513/:1002 idiom;"
-                               " a single quote in the value would reopen it]")
-    print(f"BASH-LC sweep: examined {total} 'bash -lc' site(s) across"
-          f" {len(files)} launcher file(s)")
+                audited.append(
+                    f"{fn}:{n} [double-quoted source; every expansion nested"
+                    " inside inner single quotes -- the :513/:1002 idiom;"
+                    " a single quote in the value would reopen it]"
+                )
+    print(
+        f"BASH-LC sweep: examined {total} 'bash -lc' site(s) across {len(files)} launcher file(s)"
+    )
     for s in audited:
         print(f"  audited: {s}")
     if total == 0:
-        print("BASH-LC RED: 0 sites found, but both launchers visibly use 'bash -lc'"
-              " -- zero means the sweep broke, i.e. UNMEASURED (doctrine 1)")
+        print(
+            "BASH-LC RED: 0 sites found, but both launchers visibly use 'bash -lc'"
+            " -- zero means the sweep broke, i.e. UNMEASURED (doctrine 1)"
+        )
         return 1
     if unsafe:
-        print(f"BASH-LC RED: {len(unsafe)} unsafe site(s) splice outer-shell"
-              " expansions into inner SOURCE text:")
+        print(
+            f"BASH-LC RED: {len(unsafe)} unsafe site(s) splice outer-shell"
+            " expansions into inner SOURCE text:"
+        )
         for u in unsafe:
             print(f"  RED: {u}")
-        print("  pass paths as data instead:  bash -lc 'python3 \"$1\"' _ \"$VAR\"")
+        print('  pass paths as data instead:  bash -lc \'python3 "$1"\' _ "$VAR"')
         return 1
     print(f"BASH-LC ok: {total}/{total} sites audited clean, 0 unsafe")
     return 0
@@ -134,14 +153,18 @@ def reinstate(src, dst):
         with Path(src).open(encoding="utf-8") as f:
             t = f.read()
     except OSError as e:
-        print(f"BASH-LC MUST_FIRE SETUP RED: unreadable {src}: {e}"
-              " -- unreadable is not empty (doctrine 4)")
+        print(
+            f"BASH-LC MUST_FIRE SETUP RED: unreadable {src}: {e}"
+            " -- unreadable is not empty (doctrine 4)"
+        )
         return 1
     if t.count(BLOCKER2_FIXED) != 1:
-        print(f"BASH-LC MUST_FIRE SETUP RED: fixed probe line occurs"
-              f" {t.count(BLOCKER2_FIXED)} time(s) in {src}; expected exactly 1"
-              " -- cannot isolate the reinstatement; has the fix landed,"
-              " or has it been reverted?")
+        print(
+            f"BASH-LC MUST_FIRE SETUP RED: fixed probe line occurs"
+            f" {t.count(BLOCKER2_FIXED)} time(s) in {src}; expected exactly 1"
+            " -- cannot isolate the reinstatement; has the fix landed,"
+            " or has it been reverted?"
+        )
         return 1
     t = t.replace(BLOCKER2_FIXED, BLOCKER2_BROKEN, 1)
     try:

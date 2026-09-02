@@ -85,9 +85,7 @@ def test_refusal_class_names_an_unreadable_checkpoint() -> None:
 
 def test_refusal_class_everything_else_is_the_rc92_class() -> None:
     other1 = _refusal_class("base model dir not found: /nope")
-    other2 = _refusal_class(
-        "unexpected failure above (a tool bug is not a checkpoint verdict)"
-    )
+    other2 = _refusal_class("unexpected failure above (a tool bug is not a checkpoint verdict)")
     assert other1 == "other_unmeasured" and other2 == "other_unmeasured", (
         f"got {other1!r}/{other2!r}: every cause the calibration does not "
         "name must default AWAY from the calibrated arm -- an unknown "

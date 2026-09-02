@@ -55,9 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # the wrapper would find no FunctionDef and raise LookupError -- which is the
 # correct fail-closed behaviour for a moved seam, and the reason this pointer
 # has to move with it rather than being widened to "either file".
-GATE_PATH = (
-    REPO_ROOT / "src" / "foundationscale" / "gates" / "adjudication.py"
-)
+GATE_PATH = REPO_ROOT / "src" / "foundationscale" / "gates" / "adjudication.py"
 TOOLS_DIR = str(REPO_ROOT / "tools")
 if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
@@ -130,9 +128,7 @@ def _emitter_torch_record_texts(monkeypatch) -> list[str]:
     return texts
 
 
-def _torch_provenance_contradictions(
-    gate_source: str, emitter_texts: list[str]
-) -> list[str]:
+def _torch_provenance_contradictions(gate_source: str, emitter_texts: list[str]) -> list[str]:
     """Contradictions between the gate's REAL record and the emitter's
     shipped text, refused in BOTH directions -- a false alarm costs what
     a false green costs.
@@ -217,9 +213,7 @@ def test_must_fire_gate_side_doctored(tmp_path, monkeypatch):
     assert len(contradictions) == 2
 
     gutted = tmp_path / "live_save_gate_gutted.py"
-    gutted.write_text(
-        "def _unrelated_helper():\n    return {}\n", encoding="utf-8"
-    )
+    gutted.write_text("def _unrelated_helper():\n    return {}\n", encoding="utf-8")
     with pytest.raises(LookupError):
         _torch_provenance_contradictions(
             gutted.read_text(encoding="utf-8"),
@@ -237,8 +231,7 @@ def test_must_fire_emitter_reasserts_the_retraction(tmp_path, monkeypatch):
     texts = _emitter_torch_record_texts(monkeypatch)
     doctored_arm = tmp_path / "abstained_arm.txt"
     doctored_arm.write_text(
-        texts[1]
-        + " Gate-side torch provenance is not implemented: the "
+        texts[1] + " Gate-side torch provenance is not implemented: the "
         "adjudicating gate writes no torch field on any exit path.",
         encoding="utf-8",
     )

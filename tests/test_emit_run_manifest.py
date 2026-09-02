@@ -65,6 +65,7 @@ erm = _load("emit_run_manifest_under_test", EMITTER_PATH)
 
 # ---- --lora: the five-entry abstention record producer ----
 
+
 def test_lora_abstention_record_records_five_entries():
     entries = erm._lora_abstention_record_entries(3)
     # DENOMINATOR: every declared key survives the zip, in declared order.
@@ -96,6 +97,7 @@ def test_zip_is_strict_raises_on_drift(monkeypatch):
 
 # ---- --lora: the on-disk enforcement leg ----
 
+
 def _load_emit_run_manifest_module():
     """Load the real emitter exactly as it ships, so the record keys,
     values, and source token below cannot drift from the producer whose
@@ -107,12 +109,8 @@ def _load_emit_run_manifest_module():
     import importlib.util
     from pathlib import Path
 
-    emitter = (
-        Path(__file__).resolve().parents[1] / "tools" / "emit_run_manifest.py"
-    )
-    spec = importlib.util.spec_from_file_location(
-        "emit_run_manifest_under_test", emitter
-    )
+    emitter = Path(__file__).resolve().parents[1] / "tools" / "emit_run_manifest.py"
+    spec = importlib.util.spec_from_file_location("emit_run_manifest_under_test", emitter)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {emitter}")  # FAIL CLOSED
     mod = importlib.util.module_from_spec(spec)
@@ -208,9 +206,7 @@ def test_must_fire_incomplete_record_never_reads_complete():
     # verifier signature or a bug in this fixture errors RED, matching
     # the emitter's vocabulary rule (a tool bug is not a verdict).
     mod = _load_emit_run_manifest_module()
-    record_text = _real_on_disk_lora_abstention_record(
-        mod, drop="declared.preexisting_iter_dirs"
-    )
+    record_text = _real_on_disk_lora_abstention_record(mod, drop="declared.preexisting_iter_dirs")
     refusal = None
     try:
         state, present, total = mod._enforce_lora_abstention_record(
@@ -239,18 +235,14 @@ def test_drill_armed_still_counts_the_omission():
     # also have credited a drifted signature as fire. Units examined:
     # 1 armed real-format record carrying 0 of 5 fields.
     mod = _load_emit_run_manifest_module()
-    drilled = _real_on_disk_lora_abstention_record(
-        mod, drop=list(mod._LORA_ABSTENTION_RECORD_KEYS)
-    )
+    drilled = _real_on_disk_lora_abstention_record(mod, drop=list(mod._LORA_ABSTENTION_RECORD_KEYS))
     try:
         state, present, total = mod._enforce_lora_abstention_record(
             drilled, saves_observed=0, drill_armed=True
         )
     except (mod.EmitRefused, mod.EmitUnmeasured):
         return  # a raised refusal while armed IS the control firing
-    assert present < total, (
-        f"armed drill must still read absent: {present}/{total} state={state!r}"
-    )
+    assert present < total, f"armed drill must still read absent: {present}/{total} state={state!r}"
 
 
 # ---- --lora: the real main() entry point kills the stated survivors ----
@@ -413,9 +405,7 @@ def test_main_lora_drill_armed_with_saves_is_refused_rc_1(tmp_path, monkeypatch,
     for i in range(3):
         (ckpt_dir / f"iter_{i:07d}").mkdir()
     measured = erm._count_save_dirs(ckpt_dir)
-    assert measured == 3, (
-        f"arm 1 needs saves_observed > 0; emitter's own counter saw {measured}"
-    )
+    assert measured == 3, f"arm 1 needs saves_observed > 0; emitter's own counter saw {measured}"
     rc = erm.main(
         [
             "--lora",
@@ -448,6 +438,7 @@ def test_main_lora_drill_armed_with_saves_is_refused_rc_1(tmp_path, monkeypatch,
 
 
 # ---- #83: the torch_record provenance the emitter now ships ----
+
 
 def test_torch_record_names_gate_provenance_without_frozen_counts(monkeypatch):
     # DENOMINATOR: python_executable, python_version, torch_record -- 3
@@ -499,6 +490,7 @@ def test_torch_record_names_gate_provenance_without_frozen_counts(monkeypatch):
 
 # ---- the mutation rows over this module are real and anchored ----
 
+
 def _table_rows(tree):
     paths, rows = None, None
     for node in tree.body:
@@ -521,8 +513,7 @@ class RecoveryRefusedError(Exception):
 
 def _is_pristine_over(text, rows):
     return all(
-        text.count(row["anchor"]) == 1 and text.count(row["replacement"]) == 0
-        for row in rows
+        text.count(row["anchor"]) == 1 and text.count(row["replacement"]) == 0 for row in rows
     )
 
 
@@ -810,9 +801,7 @@ def test_must_fire_recovery_refuses_states_outside_the_state_set(tmp_path):
     control = mutate.EMBEDDED_TABLE["emit_run_manifest"][-1]
     assert control.get("must_survive") is True
     all_rows = [*rows, control]
-    pristine = _recover_pristine_bytes(
-        EMITTER_PATH.read_text(encoding="utf-8"), all_rows
-    )
+    pristine = _recover_pristine_bytes(EMITTER_PATH.read_text(encoding="utf-8"), all_rows)
     refusals = []
 
     def expect_refusal(label, doctored, names):
@@ -826,9 +815,7 @@ def test_must_fire_recovery_refuses_states_outside_the_state_set(tmp_path):
             message = ""
         assert message, f"{label}: doctored state was ACCEPTED"
         for name in names:
-            assert name in message, (
-                f"{label}: refusal did not name {name}:\n{message}"
-            )
+            assert name in message, f"{label}: refusal did not name {name}:\n{message}"
         refusals.append(message)
 
     # State 1 of 3: two rows applied simultaneously. Search for a pair
@@ -836,7 +823,7 @@ def test_must_fire_recovery_refuses_states_outside_the_state_set(tmp_path):
     # can be found the state is UNBUILT and this test FAILS, never skips.
     pair = None
     for i, first in enumerate(rows):
-        for second in rows[i + 1:]:
+        for second in rows[i + 1 :]:
             applied = pristine.replace(first["anchor"], first["replacement"], 1)
             if applied.count(second["anchor"]) != 1:
                 continue
@@ -850,8 +837,7 @@ def test_must_fire_recovery_refuses_states_outside_the_state_set(tmp_path):
         if pair is not None:
             break
     assert pair is not None, (
-        "no two rows co-apply cleanly; the two-applied state is unbuilt: "
-        "UNMEASURED, never PASS"
+        "no two rows co-apply cleanly; the two-applied state is unbuilt: UNMEASURED, never PASS"
     )
     first, second, applied = pair
     expect_refusal("two_rows_applied", applied, (first["name"], second["name"]))
@@ -862,9 +848,7 @@ def test_must_fire_recovery_refuses_states_outside_the_state_set(tmp_path):
         if doctored.count(row["anchor"]) == 2:
             dup = (row, doctored)
             break
-    assert dup is not None, (
-        "anchor-duplicated state unbuilt: UNMEASURED, never PASS"
-    )
+    assert dup is not None, "anchor-duplicated state unbuilt: UNMEASURED, never PASS"
     expect_refusal("anchor_duplicated", dup[1], (dup[0]["name"],))
     # State 3 of 3: a replacement shipped into an otherwise pristine tree.
     shipped = None
@@ -873,9 +857,7 @@ def test_must_fire_recovery_refuses_states_outside_the_state_set(tmp_path):
         if doctored.count(row["anchor"]) == 1 and doctored.count(row["replacement"]) == 1:
             shipped = (row, doctored)
             break
-    assert shipped is not None, (
-        "shipped-replacement state unbuilt: UNMEASURED, never PASS"
-    )
+    assert shipped is not None, "shipped-replacement state unbuilt: UNMEASURED, never PASS"
     expect_refusal("replacement_shipped", shipped[1], (shipped[0]["name"],))
     assert len(refusals) == 3, (
         f"{len(refusals)} refusal(s) observed, expected 3 -- one per "
@@ -956,7 +938,7 @@ def test_complement_muster_refuses_and_names_unpublished_module(capsys):
     # run. Units examined: 1 injected table over a 2-module registry, of
     # which 1 module (core) is published and 1 (emit_run_manifest) is
     # mapped-but-unpublished. The refusal must fire AND name the module
-    # with its expected row count (8 embedded rows) -- "table incomplete"
+    # with its expected row count (9 embedded rows) -- "table incomplete"
     # is not a denominator.
     mutate = _load_mutate_module()
     paths = {
@@ -966,7 +948,7 @@ def test_complement_muster_refuses_and_names_unpublished_module(capsys):
     data = {"core": [{"name": "n", "what": "w", "anchor": "a", "replacement": "b"}]}
     blob = _refusal_text(mutate._validate_table, capsys, data, paths, complete=True)
     assert "emit_run_manifest" in blob, "no refusal, or a refusal that names nothing"
-    assert "8" in blob, "refusal did not state the expected row count"
+    assert "9" in blob, "refusal did not state the expected row count"
 
 
 def test_dual_source_for_embedded_rows_is_refused(tmp_path, monkeypatch, capsys):
@@ -989,9 +971,13 @@ def test_dual_source_for_embedded_rows_is_refused(tmp_path, monkeypatch, capsys)
 def test_shipped_pair_passes_completeness_muster(capsys):
     # MUST_PASS on the real shipped pair. Units examined: 9 registered
     # modules (8 published in tools/mutations.json + emit_run_manifest
-    # merged from EMBEDDED_TABLE); 70 rows in total (62 JSON rows per the
-    # shipped census + 7 EMIT_RUN_MANIFEST_ROWS + 1 inert must-pass
+    # merged from EMBEDDED_TABLE); 73 rows in total (64 JSON rows per the
+    # shipped census + 8 EMIT_RUN_MANIFEST_ROWS + 1 inert must-pass
     # control); plus the filtered --module emit_run_manifest path.
+    # The totals are PINNED, not derived: a derived count would agree with
+    # any table, including one that silently lost rows. #221 moved 62 -> 64
+    # (two manifest topology rows) and 7 -> 8 (the emitter wiring row); the
+    # pin is what made that visible instead of quiet.
     import json
 
     mutate = _load_mutate_module()
@@ -1001,10 +987,10 @@ def test_shipped_pair_passes_completeness_muster(capsys):
     assert set(data) == set(mutate.MODULE_PATHS)
     assert len(data) == 9
     assert all(data.values())
-    assert sum(len(rows) for rows in data.values()) == 70  # 62 JSON + 8 embedded
+    assert sum(len(rows) for rows in data.values()) == 73  # 64 JSON + 9 embedded
     emit = data["emit_run_manifest"]
     n_const = len(mutate.EMIT_RUN_MANIFEST_ROWS)
-    assert n_const == 7  # census leg: row growth reddens this by design
+    assert n_const == 8  # census leg: row growth reddens this by design
     assert emit[:n_const] == mutate.EMIT_RUN_MANIFEST_ROWS  # merged unedited
     assert len(emit) == n_const + 1
     control = emit[-1]

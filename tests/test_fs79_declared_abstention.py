@@ -129,9 +129,7 @@ def _full_ft_text() -> str:
     )
     return _bare_manifest(
         declared=_full_ft_declared(),
-        config=_config_with_entries(
-            entries, emit_mod._FULL_FT_BYTES_ABSTENTION_SOURCE
-        ),
+        config=_config_with_entries(entries, emit_mod._FULL_FT_BYTES_ABSTENTION_SOURCE),
     ).to_json()
 
 
@@ -157,9 +155,7 @@ class TestSerializationContractB1(unittest.TestCase):
         keys = list(emit_mod._LORA_ABSTENTION_RECORD_KEYS) + list(
             emit_mod._FULL_FT_BYTES_ABSTENTION_RECORD_KEYS
         )
-        config = _config_with_entries(
-            [(key, "pinned") for key in keys], "measured:test-harness"
-        )
+        config = _config_with_entries([(key, "pinned") for key in keys], "measured:test-harness")
         text = _bare_manifest(config=config).to_json()
         loaded = json.loads(text)
         for key in keys:
@@ -182,18 +178,12 @@ class TestFullFtBytesAbstentionB2(unittest.TestCase):
             declared_fqn_count=10, expert_family_census=2
         )
         keys = [key for key, _value in entries]
-        self.assertEqual(
-            keys, list(emit_mod._FULL_FT_BYTES_ABSTENTION_RECORD_KEYS)
-        )
+        self.assertEqual(keys, list(emit_mod._FULL_FT_BYTES_ABSTENTION_RECORD_KEYS))
         self.assertEqual(len(entries), len(emit_mod._LORA_ABSTENTION_RECORD_KEYS))
-        self.assertTrue(
-            all(key.startswith("declared.expected_expert_bytes.") for key in keys)
-        )
+        self.assertTrue(all(key.startswith("declared.expected_expert_bytes.") for key in keys))
         self.assertTrue(all(value.strip() for _key, value in entries))
         by_key = dict(entries)
-        self.assertEqual(
-            by_key["declared.expected_expert_bytes.status"], "abstained"
-        )
+        self.assertEqual(by_key["declared.expected_expert_bytes.status"], "abstained")
         # The abstention must state what it measured: its denominators live
         # in the context field, machine-checkably (doctrine 2).
         context = by_key["declared.expected_expert_bytes.context"]
@@ -204,9 +194,7 @@ class TestFullFtBytesAbstentionB2(unittest.TestCase):
         entries = emit_mod._full_ft_bytes_abstention_entries(
             declared_fqn_count=10, expert_family_census=2
         )
-        config = _config_with_entries(
-            entries, emit_mod._FULL_FT_BYTES_ABSTENTION_SOURCE
-        )
+        config = _config_with_entries(entries, emit_mod._FULL_FT_BYTES_ABSTENTION_SOURCE)
         text = _bare_manifest(declared=_full_ft_declared(), config=config).to_json()
         loaded = json.loads(text)
         for key, _value in entries:
@@ -229,18 +217,14 @@ class TestFullFtBytesAbstentionB2(unittest.TestCase):
         frozen = resolver.freeze()
         for key in emit_mod._FULL_FT_BYTES_ABSTENTION_RECORD_KEYS:
             self.assertIn(key, frozen)
-            self.assertEqual(
-                frozen[key].source, emit_mod._FULL_FT_BYTES_ABSTENTION_SOURCE
-            )
+            self.assertEqual(frozen[key].source, emit_mod._FULL_FT_BYTES_ABSTENTION_SOURCE)
 
 
 class TestFullFtSerializedRecordB3(unittest.TestCase):
     def test_must_pass_on_an_intact_record(self) -> None:
         present, total = emit_mod._enforce_full_ft_declared_on_disk(_full_ft_text())
         self.assertEqual(present, total)
-        self.assertEqual(
-            total, len(emit_mod._FULL_FT_BYTES_ABSTENTION_RECORD_KEYS)
-        )
+        self.assertEqual(total, len(emit_mod._FULL_FT_BYTES_ABSTENTION_RECORD_KEYS))
 
     def test_must_fire_on_a_bare_null_declared_block(self) -> None:
         # The store/serializer dropped the populated block to bare null.
@@ -249,18 +233,14 @@ class TestFullFtSerializedRecordB3(unittest.TestCase):
         )
         bad = _bare_manifest(
             declared=None,
-            config=_config_with_entries(
-                entries, emit_mod._FULL_FT_BYTES_ABSTENTION_SOURCE
-            ),
+            config=_config_with_entries(entries, emit_mod._FULL_FT_BYTES_ABSTENTION_SOURCE),
         ).to_json()
         with self.assertRaises(emit_mod.EmitUnmeasured):
             emit_mod._enforce_full_ft_declared_on_disk(bad)
 
     def test_must_fire_on_declared_fqns_emptied_on_disk(self) -> None:
         good = _full_ft_text()
-        bad = re.sub(
-            r'"declared_fqns": \[[^]]*\]', '"declared_fqns": []', good, count=1
-        )
+        bad = re.sub(r'"declared_fqns": \[[^]]*\]', '"declared_fqns": []', good, count=1)
         # The transform must really have happened, or this MUST_FIRE proves
         # nothing about the empty-array shape.
         self.assertNotEqual(bad, good)
@@ -347,9 +327,7 @@ class TestBareNullDrillB4(unittest.TestCase):
         self.assertEqual(total, len(emit_mod._LORA_ABSTENTION_RECORD_KEYS))
 
     def test_zero_saves_is_named_not_exercised_never_a_pass(self) -> None:
-        entries = [
-            (key, "stated") for key in emit_mod._LORA_ABSTENTION_RECORD_KEYS
-        ]
+        entries = [(key, "stated") for key in emit_mod._LORA_ABSTENTION_RECORD_KEYS]
         text = _bare_manifest(
             declared=None,
             config=_config_with_entries(entries, "measured:test-harness"),

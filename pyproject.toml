@@ -48,8 +48,39 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.7",
 ]
+train = [
+    # The training entry point (`foundationscale.train`) owns no nn.Module of its
+    # own: it validates the declared topology and profile, hands the step to
+    # `transformers.Trainer`, and runs the save gates on the result. These three
+    # are what that delegation costs, and they enter the process ONLY inside
+    # train/loop.py's guarded import — the package itself stays torch-free.
+    #
+    # This extra existed as a COMMENT in train/cli.py's docstring for one release
+    # and as a real extra in nothing. `loop.py` prints `pip install
+    # 'foundationscale[train]'` as the remedy on its missing-dependency refusal,
+    # so the one operator guaranteed to run it was the one it could not help
+    # (#224). checks/packaging_reachability.py is what keeps that from recurring.
+    "torch>=2.1",
+    "transformers>=4.40",
+    "datasets>=2.18",
+    # transformers does NOT declare accelerate, but `Trainer` requires it and
+    # raises ImportError from inside TrainingArguments.__post_init__ -- long
+    # after the guarded import in train/loop.py has already succeeded. Same
+    # shape as the numpy/safetensors note above, and found the same way: by
+    # RUNNING the path rather than by reading the imports.
+    #
+    # Worth stating plainly, because it is #224 recursing. That finding was
+    # "packaging shipped as a docstring". Its fix declared the three modules
+    # loop.py names in an import statement -- and was still wrong, because a
+    # dependency list written by reading source is a claim, and only executing
+    # the path measures it. The first real train() run found two more (#225).
+    "accelerate>=1.1",
+]
 all = [
-    "foundationscale[checkpoint,dev]",
+    # `all` must mean all, or it is a name that lies. CI does NOT install this —
+    # it pins .[checkpoint,dev] precisely so transformers stays absent and
+    # train()'s guarded-import refusal path is exercised on a host without it.
+    "foundationscale[checkpoint,dev,train]",
 ]
 
 [project.urls]
@@ -61,6 +92,12 @@ Repository = "https://github.com/TranNhiem/FoundationScale"
 # registered gate's controls and fails the build if any MUST_FIRE control does not
 # block — or if the registry is empty, which is the vacuous pass one level up.
 foundationscale-controls = "foundationscale.gates.controls:main"
+# argparse in train/cli.py sets prog="foundationscale-train", so --help and
+# --version have always told the operator to run this name. Until #224 it was
+# registered nowhere, and the only working invocation was
+# `python -m foundationscale.train.cli`. Two tests asserted the STRING appeared
+# in the output; neither asked the packaging system whether the name resolved.
+foundationscale-train = "foundationscale.train.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -112,10 +149,19 @@ ignore = ["UP038"]
 "tools/preflight.py" = ["ARG001"]
 
 [tool.mypy]
-# tools/ is on the path, not merely checked: live_save_gate imports its sibling
-# real_checkpoint_probe, and without this mypy reports import-not-found. Silencing
-# THAT with ignore_missing_imports is the exact failure the comment below describes,
-# so the sibling is made to resolve instead.
+# tools/ is on the path, not merely checked. Several test modules and the
+# launcher plane import the tools/ scripts as top-level siblings, and without
+# this mypy reports import-not-found. Silencing THAT with ignore_missing_imports
+# is the exact failure the comment below describes, so the siblings are made to
+# resolve instead.
+#
+# This used to read "live_save_gate imports its sibling real_checkpoint_probe".
+# That dependency ran the wrong way and finding #219 inverted it: the decision
+# machinery lives in foundationscale.gates.probe, and tools/real_checkpoint_probe.py
+# is now the thin CLI that imports the package. No library module reaches into
+# tools/ any more -- which is the property that lets the package decide from a
+# wheel, where [tool.setuptools.packages.find] where = ["src"] means tools/ is
+# not installed at all.
 mypy_path = ["src", "tools"]
 python_version = "3.10"
 # The package ships strict; sloppy types in gate code are how an all([]) sneaks in.
@@ -129,7 +175,11 @@ warn_unreachable = true
 # exist, so the module could not be imported at all while mypy reported success. Scope
 # the exemption to the third-party names that actually need it.
 [[tool.mypy.overrides]]
-module = ["torch.*", "safetensors.*"]
+# transformers/datasets join torch here for the same reason: they are OPTIONAL
+# extras (foundationscale[train]), absent in CI by design, and reached only
+# inside train/loop.py's guarded import. Listed BY NAME, never globally -- a
+# blanket ignore_missing_imports is what once hid a broken first-party import.
+module = ["torch.*", "safetensors.*", "transformers.*", "datasets.*"]
 ignore_missing_imports = true
 
 # numpy needs more than ignore_missing_imports: it SHIPS stubs, and the problem is

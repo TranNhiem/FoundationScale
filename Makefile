@@ -22,9 +22,15 @@
 #     script, and the faithful mirror of a script is the same script. Dropping
 #     it from `make check` would make `check` weaker than CI, which is its own
 #     vacuous pass, so fidelity won over brevity here.
-#   * `mutation` mirrors the mutation job (~2 min; a surviving mutant fails it).
+#   * `mutation` mirrors the mutation job (a surviving mutant fails it). Budget
+#     ~35 minutes, not the "~2 min" this line claimed until #234: the corpus is
+#     73 rows over 9 modules and each scoreable row runs the whole suite, so the
+#     wall time is 69 x a full pytest run, not one. An understated cost is not a
+#     harmless comment — it is the reason a developer reaches for `make test`
+#     and skips the one target that certifies the detectors, and it is measured
+#     here rather than estimated because estimating it is how it got wrong.
 
-.PHONY: install test lint fmt typecheck controls mutation skip-guard-probe check clean
+.PHONY: install test lint fmt typecheck controls packaging countables mutation skip-guard-probe check clean
 
 install:
 	pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
@@ -32,13 +38,22 @@ install:
 test:
 	pytest --cov=foundationscale --cov-report=term-missing --cov-fail-under=90
 
+# checks/ joined this list with #231. It was the one directory of executable
+# gates that no linter, no formatter and no typechecker saw, and the exclusion
+# read as coverage: on the day it was added, 2 of its 3 files were unformatted
+# and all 3 lacked the `from __future__ import annotations` that every tools/
+# gate carries. That last omission was not cosmetic -- a PEP 604 annotation in
+# a class body is evaluated at definition time, so all three died at IMPORT
+# with a TypeError and exit 1 on Python 3.9, which is the interpreter class the
+# login node actually has (#138). A gate that cannot start states no verdict,
+# and exit 1 is outside the 0/5/95/96 namespace it claims to publish.
 lint:
-	ruff check src tests tools
-	ruff format --check src tests tools
+	ruff check src tests tools checks
+	ruff format --check src tests tools checks
 
 fmt:
-	ruff check --fix src tests tools
-	ruff format src tests tools
+	ruff check --fix src tests tools checks
+	ruff format src tests tools checks
 
 # Run this in the SAME environment as `install` creates — one with [checkpoint].
 # mypy without torch checks a different program: MetadataIndex becomes Any, and an
@@ -46,14 +61,65 @@ fmt:
 # A torch-free typecheck passed this tree; CI, which installs torch, failed it on all
 # three Pythons. Same command, same source, different answer, because the environment
 # differed. That is the repository's own thesis pointed at its Makefile.
+# tools/real_checkpoint_probe.py joined this list with finding #219. It is now a
+# thin CLI over foundationscale.gates.probe, the same shape live_save_gate.py has
+# over gates/adjudication.py, and a boundary wrapper that is not typechecked is a
+# re-export list nobody reads: mypy is what notices when the library's signature
+# moves out from under the CLI that forwards to it.
+#
+# checks/ is NOT in this list, and that is a stated exclusion rather than an
+# implied one (#231). Denominator: 3 of 3 files under checks/ are unchecked,
+# carrying 10 mypy errors -- 5 no-untyped-def, 1 missing types-PyYAML stub, and
+# 2 in packaging_reachability.py that are deliberate and would need silencing
+# rather than fixing (an EntryPoints.get fallback that only executes on the
+# pre-3.10 shape mypy cannot see, and an ArgumentParser.exit override that
+# always raises and so wants NoReturn). Ruff and ruff format DO cover checks/
+# as of #231; mypy is the remaining half and is tracked, not forgotten.
 typecheck:
-	mypy src tools/emit_run_manifest.py tools/live_save_gate.py
+	mypy src tools/emit_run_manifest.py tools/live_save_gate.py tools/real_checkpoint_probe.py
 
+# python3, not python: bare `python` does not exist on modern macOS or most
+# Linux distributions, so `make check` died with command-not-found for any
+# developer who had not activated a virtualenv. CI never saw it — setup-python
+# provides `python` — so the only machine this file exists to serve was the
+# only machine it did not run on (#232).
 controls:
-	python -m foundationscale.gates.controls
+	python3 -m foundationscale.gates.controls
+
+# Mirrors the two steps in CI's `controls` job. Self-test first: a detector whose
+# controls misbehave has no licence to report a verdict, so the real run must not
+# be reachable without it. Deliberately NOT `&&`-joined into one line — CI runs
+# them as two steps and a combined recipe would hide which half failed.
+#
+# This gate is why the target exists at all: it caught a false RED on itself.
+# Its first version asked `shutil.which(ep.name)` and reported both console
+# scripts unreachable on a tree where pip had installed both correctly — the
+# only fact it had measured was that the developer ran `.venv/bin/python3`
+# instead of sourcing `activate`. Existence is now resolved against the
+# interpreter's own script directory and the install record, and PATH is
+# reported as operator convenience that can never be red.
+packaging:
+	python3 checks/packaging_reachability.py --self-test
+	python3 checks/packaging_reachability.py
+
+# Mirrors the three steps in CI's countables leg (#220). The census is measured,
+# never committed -- see the ci.yml comment for why a frozen oracle is worse than
+# no oracle. It lands in the working tree, so `clean` removes it and .gitignore
+# keeps it out of a commit.
+#
+# Note the census counts tools/countables_census.py itself: it is inside its own
+# denominator. That is correct, not a bug -- tools_loc means "LOC under tools/",
+# and the producer lives there. Editing the producer moves tools_loc, which is
+# exactly the kind of drift this gate exists to catch.
+CENSUS := $(CURDIR)/.countables_census.json
+
+countables:
+	python3 checks/countables_drift.py --self-test
+	python3 tools/countables_census.py --no-coverage --out $(CENSUS)
+	python3 checks/countables_drift.py --census $(CENSUS) docs README.md
 
 mutation:
-	FS_FORBID_SKIPS=1 python tools/mutate.py
+	FS_FORBID_SKIPS=1 python3 tools/mutate.py
 
 skip-guard-probe:
 	@printf '%s\n' \
@@ -85,10 +151,10 @@ skip-guard-probe:
 	}; \
 	echo "skip-guard-probe: guard fired and named its probe, as CI requires"
 
-check: lint typecheck skip-guard-probe test controls mutation
+check: lint typecheck skip-guard-probe test controls packaging countables mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \
 		.pytest_cache .mypy_cache .ruff_cache .cache \
-		.coverage .coverage.* coverage.xml htmlcov
+		.coverage .coverage.* coverage.xml htmlcov .countables_census.json
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +

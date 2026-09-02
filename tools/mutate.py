@@ -201,7 +201,12 @@ _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")
 
 # tools/emit_run_manifest.py mutants (#85). Rows carry exactly _REQUIRED_KEYS;
 # binding to the module is by anchor uniqueness inside the file, which is why
-# MODULE_PATHS names the file first. The list carries 7 MUST-FIRE rows.
+# MODULE_PATHS names the file first. The list's LENGTH is deliberately not
+# stated here: it said "7 MUST-FIRE rows" from the day it was written until
+# #221 appended topology-check-unwired and made it 8, and nothing was red for
+# the interval -- a count in prose sits in no denominator and no gate, so it
+# can only rot. `tools/mutate.py --list` prints the live per-module figure and
+# tests/test_emit_run_manifest.py pins shape over however many rows there are.
 # KNOWN, re-observed on every test run: tests/test_emit_run_manifest.py pins
 # shape, keys, and per-row anchor uniqueness, over however many rows the
 # list carries. EXPECTED, not yet measured by the battery: the five rows
@@ -218,9 +223,9 @@ _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")
 # Publication caveat, updated: from the day this list was planted, its
 # battery denominator was 0 -- mutations.json never carried the rows and
 # nothing refused. This repair closes both flanks: load_table publishes
-# the list by MERGE (EMBEDDED_TABLE: these 7 rows + 1 inert must-pass
-# control = a module denominator of 8; the constant stays the single
-# source and any copy appearing in the JSON is itself a refusal), and
+# the list by MERGE (EMBEDDED_TABLE: the rows above plus 1 inert
+# must-pass control; the constant stays the single source and any copy
+# appearing in the JSON is itself a refusal), and
 # _validate_table(complete=True) makes ANY mapped-but-unpublished module
 # a die() that names it with its expected row count. A denominator of 0
 # for this module is no longer a silence; it is a refusal -- red, never
@@ -269,12 +274,12 @@ EMIT_RUN_MANIFEST_ROWS = [
         # match the other's site, so the two producers are two measurements.
         "anchor": (
             '        "abstained",\n'
-            '        (\n'
+            "        (\n"
             '            "pricing expert bytes requires knowing which FQN pattern the byte "'
         ),
         "replacement": (
             '        "present",\n'
-            '        (\n'
+            "        (\n"
             '            "pricing expert bytes requires knowing which FQN pattern the byte "'
         ),
     },
@@ -318,6 +323,20 @@ EMIT_RUN_MANIFEST_ROWS = [
         ),
         "anchor": '    drill_bare_null = os.environ.get(_DRILL_BARE_NULL_ENV) == "1"',
         "replacement": '    drill_bare_null = os.environ.get(_DRILL_BARE_NULL_ENV) == "0"',
+    },
+    {
+        "name": "emit_run_manifest.topology-check-unwired",
+        "what": (
+            "#221. The emitter computes the topology verdict and then acts on "
+            "nothing, so an impossible layout is minted with the refusal "
+            "sitting one line above it, unreachable. This is the orphan-fix "
+            "shape the repo has been bitten by three times (#188, #189, #193): "
+            "authored, tested at the unit, never wired. The dataclass-level "
+            "legs all stay green under this mutant -- only the two emitter "
+            "MUST_FIRE legs can see it, which is why they exist."
+        ),
+        "anchor": "    if topology_verdict.blocking:",
+        "replacement": "    if False:  # noqa: SIM223",
     },
 ]
 
@@ -869,10 +888,7 @@ EMBEDDED_TABLE: dict[str, list[dict]] = {
                 "the whole run is void -- exit 2."
             ),
             "anchor": "        str(preexisting_saves),\n",
-            "replacement": (
-                "        str(preexisting_saves),"
-                "  # inert must-pass control\n"
-            ),
+            "replacement": ("        str(preexisting_saves),  # inert must-pass control\n"),
             "must_survive": True,
         },
     ],
@@ -1020,8 +1036,7 @@ def _accepted_pristine_states(live: str, rows: list[dict]) -> list[str]:
     states, so a blow-up means the input is not what this gate was built for.
     """
     self_surviving = [
-        row for row in rows
-        if row["anchor"] and row["replacement"].count(row["anchor"]) >= 1
+        row for row in rows if row["anchor"] and row["replacement"].count(row["anchor"]) >= 1
     ]
     candidates = [live]
     for row in rows:
@@ -1038,7 +1053,7 @@ def _accepted_pristine_states(live: str, rows: list[dict]) -> list[str]:
                     "corpus peaks at 3 candidates, so this input is not "
                     "what the freshness gate was built for"
                 )
-            candidates.append(live[:at] + row["anchor"] + live[at + len(rep):])
+            candidates.append(live[:at] + row["anchor"] + live[at + len(rep) :])
             at = live.find(rep, at + 1)
     accepted = []
     for cand in candidates:
@@ -1132,13 +1147,11 @@ def check_anchor_freshness(
         rows = table[mod]
         if not rows:
             problems.append(
-                f"{mod}: 0 rows published beside measured modules -- "
-                "unmeasured, never fresh"
+                f"{mod}: 0 rows published beside measured modules -- unmeasured, never fresh"
             )
             continue
         blank = [
-            r.get("name", "?") for r in rows
-            if not r.get("anchor") or not r.get("replacement")
+            r.get("name", "?") for r in rows if not r.get("anchor") or not r.get("replacement")
         ]
         if blank:
             problems.append(
@@ -1194,8 +1207,7 @@ def check_anchor_freshness(
                 self_surviving_hits = [
                     r["name"]
                     for r in rows
-                    if r["replacement"].count(r["anchor"]) >= 1
-                    and r["replacement"] in live
+                    if r["replacement"].count(r["anchor"]) >= 1 and r["replacement"] in live
                 ]
                 if self_surviving_hits:
                     reason = (
@@ -1242,10 +1254,14 @@ exit status — CI relies on 1 and 2 being different:
      half fired zero times, and exit 0 there is 0 killed of 0 fired
 
 MUST-PASS CONTROL
-  One table row is flagged "must_survive": an inert, comment-only edit that
-  changes no behaviour, so the suite MUST let it pass. It is the negative
-  control half of the detector — a table of MUST_FIRE mutants without it is
-  a detector that fires no matter what. A control reported ALIVE passes and
+  Table rows flagged "must_survive" are inert, comment-only edits that change
+  no behaviour, so the suite MUST let them pass. (This text used to say "one
+  table row"; the table now carries several, and the run's own MUST-PASS line
+  prints the derived count. A help string that states a countable it does not
+  derive goes stale on the commit that adds the next row — finding #220.)
+  They are the negative control half of the detector — a table of MUST_FIRE
+  mutants without one is a detector that fires no matter what. A control
+  reported ALIVE passes and
   is excluded from the caught= denominator and the killed/alive tallies; a
   control reported KILLED fails the whole battery (exit 2), because a kill
   with no fault behind it proves attribution unsound. The MUST-PASS line
@@ -1357,14 +1373,11 @@ def main(
     # still caught by that catch — this guard exists so the common case
     # (a table that has outgrown the tree) refuses cheaply and by name.
     missing_files = [
-        (mod, resolved_paths[mod])
-        for mod in sorted(table)
-        if not resolved_paths[mod].is_file()
+        (mod, resolved_paths[mod]) for mod in sorted(table) if not resolved_paths[mod].is_file()
     ]
     if missing_files:
         named = "\n".join(
-            f"  {mod}: resolves to {path} — no such file"
-            for mod, path in missing_files
+            f"  {mod}: resolves to {path} — no such file" for mod, path in missing_files
         )
         print(
             f"{len(missing_files)} of {len(table)} table module(s) point at "
@@ -1540,16 +1553,10 @@ def main(
                     "modules": {
                         module: {
                             "killed": [
-                                {"name": n, "attribution": list(attr)}
-                                for n, attr in r["killed"]
+                                {"name": n, "attribution": list(attr)} for n, attr in r["killed"]
                             ],
-                            "alive": [
-                                {"name": n, "what": w} for n, w in r["alive"]
-                            ],
-                            "unscored": [
-                                {"name": n, "reason": why}
-                                for n, why in r["unscored"]
-                            ],
+                            "alive": [{"name": n, "what": w} for n, w in r["alive"]],
+                            "unscored": [{"name": n, "reason": why} for n, why in r["unscored"]],
                             "na": [{"name": n, "what": w} for n, w in r["na"]],
                             "control_passed": list(r["control_passed"]),
                             "control_failed": [

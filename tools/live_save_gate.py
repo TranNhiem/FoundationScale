@@ -171,6 +171,22 @@ import traceback
 # what the moved functions read, because they read their own module's globals.
 # Patch `foundationscale.gates.adjudication` instead. The suites that do this
 # were migrated with the move; see tests/test_live_save_gate.py.
+#
+# The surface is 94 names, and it used to be 98. Finding #219 inverted the
+# probe dependency -- the declaration machinery moved INTO the package as
+# foundationscale.gates.probe, so the try/except ImportError ladder that used
+# to reach sideways into tools/real_checkpoint_probe.py is gone. Four names
+# went with it: `_PROBE_IMPORT_ERROR` (the sentinel), `_DeriveDeclaredFn` and
+# `_AliasControlFn` (the Protocols that typed the slots the ladder filled), and
+# `Protocol` itself (re-exported only because those two needed it). They are
+# not deprecated aliases kept for a release; they name machinery that no longer
+# exists, and re-exporting a name for a thing that is gone would advertise a
+# compatibility this file cannot provide. The shrink is deliberate, and it is
+# pinned in both directions rather than by a count: tests/test_reexport_surface.py
+# derives the library's unconditional surface from its AST and fails if any of
+# it is missing here, while re-listing a name the library no longer defines
+# fails harder still -- as an ImportError at the top of this file, which is how
+# the four were found.
 # ---------------------------------------------------------------------------
 from foundationscale.gates.adjudication import (
     _ALIAS_STORAGE_ID,  # noqa: F401
@@ -194,7 +210,6 @@ from foundationscale.gates.adjudication import (
     _MEGATRON_BRIDGE_ADAPTER_SUFFIX_RE,  # noqa: F401
     _MEGATRON_BRIDGE_ADAPTER_SUFFIXES,  # noqa: F401
     _NON_ADAPTER_CHECKPOINT_NAMESPACE_ROOTS,  # noqa: F401
-    _PROBE_IMPORT_ERROR,  # noqa: F401
     _RANK_KEYS,  # noqa: F401
     _REFUSAL_ADAPTER_CENSUS_UNAVAILABLE,  # noqa: F401
     _REFUSAL_ADAPTER_PREFIX_UNPINNED,  # noqa: F401
@@ -222,17 +237,14 @@ from foundationscale.gates.adjudication import (
     GateResult,  # noqa: F401
     GateUnmeasured,  # noqa: F401
     Path,  # noqa: F401
-    Protocol,  # noqa: F401
     SaveCompletenessGate,  # noqa: F401
     TensorMeta,  # noqa: F401
     TrainSpec,  # noqa: F401
     TypedDict,  # noqa: F401
     Verdict,  # noqa: F401
     _AdapterModuleCensus,  # noqa: F401
-    _AliasControlFn,  # noqa: F401
     _attributed_status,  # noqa: F401
     _context,  # noqa: F401
-    _DeriveDeclaredFn,  # noqa: F401
     _expert_named,  # noqa: F401
     _expert_weight_candidates,  # noqa: F401
     _expert_weights,  # noqa: F401
@@ -283,98 +295,129 @@ def main(argv: list[str] | None = None) -> int:
         prog="live_save_gate",
         description="Adjudicate a checkpoint written by a live training run. "
         "Exit 0=CLEAR, 1=BLOCKED (a verdict, a quiet control, or an "
-        "unconstructable control), 3=could not measure.")
+        "unconstructable control), 3=could not measure.",
+    )
     p.add_argument("ckpt_dir")
     p.add_argument("--event", choices=("save", "first_save"), default="save")
     p.add_argument("--run-kind", choices=("auto", "full", "lora"), default="auto")
-    p.add_argument("--base-model-dir", default=None,
-                   help="default: $HF_MODEL, then the estate Gemma-4 E4B path")
-    p.add_argument("--train-config", default=None,
-                   help="launcher-RESOLVED config (JSON or KEY=VALUE dump)")
-    p.add_argument("--set", dest="sets", action="append", default=[],
-                   metavar="KEY=VALUE", help="train-config overrides (repeatable)")
+    p.add_argument(
+        "--base-model-dir",
+        default=None,
+        help="default: $HF_MODEL, then the estate Gemma-4 E4B path",
+    )
+    p.add_argument(
+        "--train-config", default=None, help="launcher-RESOLVED config (JSON or KEY=VALUE dump)"
+    )
+    p.add_argument(
+        "--set",
+        dest="sets",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="train-config overrides (repeatable)",
+    )
     p.add_argument("--controls", default="drop,alias,underfill")
     p.add_argument("--adapter-marker", default=r"(?:lora_[AB]|adapter)")
-    p.add_argument("--adapter-prefix", default=None,
-                   help="adapter FQN prefix: a CONSTANT LEADING SEGMENT an "
-                   "adapter save carries before the base-module stem WITHIN "
-                   "ONE naming convention (an HF-PEFT 'base_model.model.'-"
-                   "style wrapper root), DISTINCT from the suffix naming "
-                   "calibrated below. REAL USE, narrowed by measurement "
-                   "(#78): this knob repairs an in-namespace wrapper segment "
-                   "ONLY. It cannot bridge an HF-vs-Megatron namespace split "
-                   "-- measured on <compute-node> against a real, healthy PROBE "
-                   "save: pinning '' still produced BLOCKED with 0 declared, "
-                   "because the save's module names live in a different "
-                   "NAMESPACE than the HF base header the old oracle "
-                   "consulted; no prefix value makes those intersect. The "
-                   "old recipe ('run once with '' asserted, read the phantom "
-                   "stems, pin that segment') is RETIRED for this estate -- "
-                   "valid only where saves and the declared source share one "
-                   "namespace. For a namespace split the denominator is "
-                   "--adapter-modules (default REFUSAL, exit 3). For lora "
-                   "the default remains REFUSAL rather than a silently "
-                   "guessed empty prefix; '' is asserted deliberately. "
-                   "Full-FT adjudication never consults this knob.")
-    p.add_argument("--adapter-suffix", default=_DEFAULT_ADAPTER_SUFFIX_RE,
-                   help="regex RECOGNIZING adapter FQN suffixes for the "
-                   "structural binding sweep. Default (fix30): the measured "
-                   "Megatron-Bridge shape, matching BOTH --adapter-suffix-a/-b "
-                   "literals below; the HF PEFT convention remains available "
-                   "for explicit pinning as the _HF_PEFT_ADAPTER_* preset. "
-                   "Any replacement must match the generator literals "
-                   "exactly: that agreement is verified at startup and any "
-                   "disagreement refuses adjudication before a verdict "
-                   "exists. Calibrate ONCE against one saved adapter -- "
-                   "together with the generator templates -- then pin it in "
-                   "the wrapper script.")
-    p.add_argument("--adapter-suffix-a", default=_DEFAULT_ADAPTER_SUFFIX_A,
-                   help="literal template GENERATING the expected FQN suffix "
-                   "of the (rank, in_features) adapter matrix. Default "
-                   "'.adapter.linear_in.weight' (fix30, measured: "
-                   "Megatron-Bridge's ParallelLinearAdapter saves linear_in "
-                   "as (dim, in_features) under '<module>.adapter.'); the HF "
-                   "PEFT '.lora_A.weight'/'/.lora_B.weight' pair survives as "
-                   "_HF_PEFT_ADAPTER_SUFFIXES for estates that train with HF "
-                   "peft. Generator and recognizer are deliberately different "
-                   "knobs of different types -- a regex cannot generate -- "
-                   "and only their agreement is mandatory.")
-    p.add_argument("--adapter-suffix-b", default=_DEFAULT_ADAPTER_SUFFIX_B,
-                   help="literal template GENERATING the expected FQN suffix "
-                   "of the (out_features, rank) adapter matrix. Default "
-                   "'.adapter.linear_out.weight' (Megatron-Bridge, measured); "
-                   "the HF PEFT second half is '.lora_B.weight'.")
-    p.add_argument("--adapter-modules", default=None, metavar="PATH",
-                   help="JSON census of the adapter TARGET modules in the "
-                   "artifact's own namespace -- THE lora declared denominator "
-                   "(#78): a list of module FQNs, or an object carrying "
-                   "'adapter_modules' entries that are strings or "
-                   "{'fqn','out_features','in_features'} plus optional "
-                   "'source'. PRODUCER: the launcher at submit time, from the "
-                   "step-(5) live-module census over the BASE tree (today "
-                   "that census computes the names with the shipped matcher; "
-                   "persisting them -- with parent dims where available -- to "
-                   "fs_gate/adapter-modules.json and passing this flag is the "
-                   "producer wiring owed by the launcher side). NEVER the "
-                   "checkpoint under judgment: the tool refuses a census "
-                   "whose path resolves inside it, refuses an empty, "
-                   "duplicate-ridden or partially-dimmed one, and (exit 3, "
-                   "refusal_class adapter_census_unavailable) refuses a lora "
-                   "adjudication carried no census at all. FULL "
-                   "INDEPENDENCE, stated not faked: that census shares the "
-                   "trainer's matcher with the run; a planner/"
-                   "conversion-pipeline-produced, versioned expectation "
-                   "frozen at conversion time (the --fqn-map producer's "
-                   "shape, discharged by whoever owns conversion) is the "
-                   "fully independent form -- the residual is named in every "
-                   "report's declared basis until that exists. Ignored for "
-                   "full runs, which have their own two sources.")
-    p.add_argument("--fqn-map", default=None, metavar="PATH",
-                   help="JSON list (or {'declared_fqns': [...]}) of the "
-                   "artifact-namespace FQNs a FULL checkpoint must contain. The "
-                   "denominator the low-overlap basis text points at: export it "
-                   "from the parallelism planner at submit time, never from the "
-                   "run under judgment.")
+    p.add_argument(
+        "--adapter-prefix",
+        default=None,
+        help="adapter FQN prefix: a CONSTANT LEADING SEGMENT an "
+        "adapter save carries before the base-module stem WITHIN "
+        "ONE naming convention (an HF-PEFT 'base_model.model.'-"
+        "style wrapper root), DISTINCT from the suffix naming "
+        "calibrated below. REAL USE, narrowed by measurement "
+        "(#78): this knob repairs an in-namespace wrapper segment "
+        "ONLY. It cannot bridge an HF-vs-Megatron namespace split "
+        "-- measured on <compute-node> against a real, healthy PROBE "
+        "save: pinning '' still produced BLOCKED with 0 declared, "
+        "because the save's module names live in a different "
+        "NAMESPACE than the HF base header the old oracle "
+        "consulted; no prefix value makes those intersect. The "
+        "old recipe ('run once with '' asserted, read the phantom "
+        "stems, pin that segment') is RETIRED for this estate -- "
+        "valid only where saves and the declared source share one "
+        "namespace. For a namespace split the denominator is "
+        "--adapter-modules (default REFUSAL, exit 3). For lora "
+        "the default remains REFUSAL rather than a silently "
+        "guessed empty prefix; '' is asserted deliberately. "
+        "Full-FT adjudication never consults this knob.",
+    )
+    p.add_argument(
+        "--adapter-suffix",
+        default=_DEFAULT_ADAPTER_SUFFIX_RE,
+        help="regex RECOGNIZING adapter FQN suffixes for the "
+        "structural binding sweep. Default (fix30): the measured "
+        "Megatron-Bridge shape, matching BOTH --adapter-suffix-a/-b "
+        "literals below; the HF PEFT convention remains available "
+        "for explicit pinning as the _HF_PEFT_ADAPTER_* preset. "
+        "Any replacement must match the generator literals "
+        "exactly: that agreement is verified at startup and any "
+        "disagreement refuses adjudication before a verdict "
+        "exists. Calibrate ONCE against one saved adapter -- "
+        "together with the generator templates -- then pin it in "
+        "the wrapper script.",
+    )
+    p.add_argument(
+        "--adapter-suffix-a",
+        default=_DEFAULT_ADAPTER_SUFFIX_A,
+        help="literal template GENERATING the expected FQN suffix "
+        "of the (rank, in_features) adapter matrix. Default "
+        "'.adapter.linear_in.weight' (fix30, measured: "
+        "Megatron-Bridge's ParallelLinearAdapter saves linear_in "
+        "as (dim, in_features) under '<module>.adapter.'); the HF "
+        "PEFT '.lora_A.weight'/'/.lora_B.weight' pair survives as "
+        "_HF_PEFT_ADAPTER_SUFFIXES for estates that train with HF "
+        "peft. Generator and recognizer are deliberately different "
+        "knobs of different types -- a regex cannot generate -- "
+        "and only their agreement is mandatory.",
+    )
+    p.add_argument(
+        "--adapter-suffix-b",
+        default=_DEFAULT_ADAPTER_SUFFIX_B,
+        help="literal template GENERATING the expected FQN suffix "
+        "of the (out_features, rank) adapter matrix. Default "
+        "'.adapter.linear_out.weight' (Megatron-Bridge, measured); "
+        "the HF PEFT second half is '.lora_B.weight'.",
+    )
+    p.add_argument(
+        "--adapter-modules",
+        default=None,
+        metavar="PATH",
+        help="JSON census of the adapter TARGET modules in the "
+        "artifact's own namespace -- THE lora declared denominator "
+        "(#78): a list of module FQNs, or an object carrying "
+        "'adapter_modules' entries that are strings or "
+        "{'fqn','out_features','in_features'} plus optional "
+        "'source'. PRODUCER: the launcher at submit time, from the "
+        "step-(5) live-module census over the BASE tree (today "
+        "that census computes the names with the shipped matcher; "
+        "persisting them -- with parent dims where available -- to "
+        "fs_gate/adapter-modules.json and passing this flag is the "
+        "producer wiring owed by the launcher side). NEVER the "
+        "checkpoint under judgment: the tool refuses a census "
+        "whose path resolves inside it, refuses an empty, "
+        "duplicate-ridden or partially-dimmed one, and (exit 3, "
+        "refusal_class adapter_census_unavailable) refuses a lora "
+        "adjudication carried no census at all. FULL "
+        "INDEPENDENCE, stated not faked: that census shares the "
+        "trainer's matcher with the run; a planner/"
+        "conversion-pipeline-produced, versioned expectation "
+        "frozen at conversion time (the --fqn-map producer's "
+        "shape, discharged by whoever owns conversion) is the "
+        "fully independent form -- the residual is named in every "
+        "report's declared basis until that exists. Ignored for "
+        "full runs, which have their own two sources.",
+    )
+    p.add_argument(
+        "--fqn-map",
+        default=None,
+        metavar="PATH",
+        help="JSON list (or {'declared_fqns': [...]}) of the "
+        "artifact-namespace FQNs a FULL checkpoint must contain. The "
+        "denominator the low-overlap basis text points at: export it "
+        "from the parallelism planner at submit time, never from the "
+        "run under judgment.",
+    )
     p.add_argument("--modules-to-save", default="")
     p.add_argument("--strict-extras", action="store_true")
     p.add_argument("--json", dest="json_out", default=None)
@@ -406,17 +449,17 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_UNMEASURED
     except Exception:
         traceback.print_exc()
-        refusal = (
-            "unexpected failure above (a tool bug is not a checkpoint verdict)"
-        )
+        refusal = "unexpected failure above (a tool bug is not a checkpoint verdict)"
         print(f"live_gate could not measure: {refusal}", file=sys.stderr)
         _record_refusal(args, refusal)
         return EXIT_UNMEASURED
 
     _h(f"live save gate: {d.checkpoint} (event={d.event}, kind={d.run_kind})")
     inv = d.report["inventory"]
-    print(f"  artifact      : {inv['origin']} [{inv['format']}] "
-          f"{inv['real_tensors']:,} real / {inv['entries_total']:,} entries")
+    print(
+        f"  artifact      : {inv['origin']} [{inv['format']}] "
+        f"{inv['real_tensors']:,} real / {inv['entries_total']:,} entries"
+    )
     print(f"  independent   : base {inv['base_source']} ({inv['base_tensors']:,} tensors)")
     _h("declared denominators -- provenance (independent sources only)")
     for k, v in d.declared_basis.items():

@@ -160,8 +160,7 @@ def test_lora_emission_persists_abstention_record_five_of_five(
     rc, out_dir = _run_lora(tmp_path, "lora-null")
     captured = capsys.readouterr()
     assert rc == 0, (
-        f"plain --lora emission REFUSED (rc={rc}); captured output:\n"
-        f"{captured.out}{captured.err}"
+        f"plain --lora emission REFUSED (rc={rc}); captured output:\n{captured.out}{captured.err}"
     )
 
     text = _disk_manifest_text(out_dir)
@@ -251,8 +250,7 @@ def test_lora_abstention_record_drop_one_detected_all_five(
         variant = text.replace(needle, '"control.dropped_key":', 1)
         missing = emit._abstention_markers_absent(variant)
         assert len(missing) == 1 and any(key in str(m) for m in missing), (
-            f"dropping {key} must flag exactly that one field (1 of 5); "
-            f"oracle reported {missing!r}"
+            f"dropping {key} must flag exactly that one field (1 of 5); oracle reported {missing!r}"
         )
 
 
@@ -368,12 +366,8 @@ def test_lora_training_stack_records_are_first_class_honest(
         f"torch_record is neither an in-emitter measurement nor a stated "
         f"abstention -- a guessed version string is the #83 lie: {torch_record!r}"
     )
-    assert _value_of(container["training_stack.python_executable"]) == (
-        sys.executable or "<unset>"
-    )
-    assert _value_of(container["training_stack.python_version"]) == (
-        platform.python_version()
-    )
+    assert _value_of(container["training_stack.python_executable"]) == (sys.executable or "<unset>")
+    assert _value_of(container["training_stack.python_version"]) == (platform.python_version())
     source = _source_of(container["training_stack.torch_record"])
     if source is not None:
         assert source == "measured:training-stack"

@@ -146,10 +146,13 @@ jobs:
       - name: Ruff
         # tools/ is included: the mutation runner is the thing that decides
         # whether the suite is trustworthy, so it is not exempt from the checks
-        # the suite is held to.
-        run: ruff check src tests tools
+        # the suite is held to. checks/ is included for the same reason and was
+        # added by #231 -- the standing legs below (WF-YAML, BASH-LC) and the
+        # packaging gate all live there, so it held three of this workflow's own
+        # controls while being the one directory no linter read.
+        run: ruff check src tests tools checks
       - name: Ruff format
-        run: ruff format --check src tests tools
+        run: ruff format --check src tests tools checks
       - name: Mypy
         # The two LIVE tools are checked, for the same reason Ruff checks tools/ above:
         # `mypy src` left the emitter and the gate unchecked, and that is exactly how
@@ -160,7 +163,11 @@ jobs:
         # package while live_save_gate imports its sibling script-style, so the same
         # file resolves under two module names and mypy refuses the directory. The
         # remaining tools/ modules are unchecked -- stated, not implied.
-        run: mypy src tools/emit_run_manifest.py tools/live_save_gate.py
+        # checks/ is likewise unchecked here, with its denominator on the wire:
+        # 3 of 3 files, 10 errors (5 no-untyped-def, 1 missing types-PyYAML stub,
+        # 2 deliberate back-compat shapes in packaging_reachability.py). Ruff now
+        # covers checks/ (#231); mypy is the tracked remainder.
+        run: mypy src tools/emit_run_manifest.py tools/live_save_gate.py tools/real_checkpoint_probe.py
       - name: Pytest (coverage floor 90; skips are failures — FS_FORBID_SKIPS)
         # --cov-fail-under=90 against a measured 93.6% total. The floor was 70 when
         # written, sized around gates/fixtures.py at 63% and gates/controls.py at
@@ -199,11 +206,74 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install
+        # [checkpoint], not just [dev] -- and this is the SAME lesson the `check`
+        # job and the Makefile's `install` target already learned, landing in a
+        # third place it was never applied (the #230 class: a fix that reached
+        # some of its sites).
+        #
+        # MEASURED: this job has failed on every run since the weight-parity
+        # controls landed. In one Python 3.12 venv, `.[dev]` gives exit 1 with
+        # four `checkpoint.weight_parity` fixtures raising ModuleNotFoundError
+        # and the gate reporting "0 of 1 MUST_PASS control(s) reached PASS";
+        # adding [checkpoint] to that same venv gives exit 0, 10/10 gates. Only
+        # the extra differed, so the extra is the cause.
+        #
+        # Note WHICH way it failed, because it is the good direction: torch's
+        # absence did not quietly shrink the denominator to the nine gates that
+        # do not need it. #56's rule fired -- every healthy fixture for that gate
+        # abstained, so healthy-input behaviour was verified zero times, and a
+        # gate proven only able to block is unproven in the direction that gets
+        # gates disabled. The machinery was right; this job's environment was
+        # not. Do not "fix" this by relaxing the gate.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[checkpoint,dev]" --extra-index-url https://download.pytorch.org/whl/cpu
       - name: Run gate controls
         run: python -m foundationscale.gates.controls
+
+      # Packaging reachability (#224). Runs in THIS job because it is the only
+      # one that both installs the distribution and installs nothing heavy: the
+      # gate must be able to distinguish "the target does not resolve" from
+      # "the target needs an optional extra this host does not have", and a job
+      # with [train] installed could never exercise the second.
+      #
+      # --self-test FIRST and as a separate step. If the controls do not behave
+      # the real verdict is worthless, and a combined step would let a broken
+      # detector report CLEAR over the repository. Both steps are load-bearing:
+      # the second is the measurement, the first is the licence to believe it.
+      - name: Packaging reachability controls (MUST_FIRE/MUST_PASS)
+        run: python3 checks/packaging_reachability.py --self-test
+      - name: Packaging reachability (declared names must resolve)
+        run: python3 checks/packaging_reachability.py
+
+      # Countables drift (#220). The shipped documents state numbers ABOUT this
+      # tree -- LOC, file counts -- and until now nothing kept them true; #220
+      # found 9 drifted sites, 2 of which UNDERSTATED the repository.
+      #
+      # Three steps, in this order, for three different reasons:
+      #
+      #  1. --self-test first, same rule as the packaging gate above. The first
+      #     version of this gate passed its own self-test while returning 865
+      #     FALSE drifts on the real repository, because it inferred from
+      #     proximity which countable each bare number claimed and no control
+      #     exercised that association axis (#233). An uncontrolled axis is an
+      #     unmeasured axis wearing a verdict, so the controls are the licence.
+      #  2. The census is MEASURED here, never committed. A checked-in oracle
+      #     would go stale the first time anyone touched the tree, and the gate
+      #     would then enforce yesterday's numbers with full confidence -- it
+      #     would not merely stop working, it would start lying.
+      #  3. --no-coverage: the anchored patterns need LOC and file counts, none
+      #     of which require a test run. The census CAN derive coverage keys,
+      #     and the `check` job's pytest step is where those get measured;
+      #     paying for a second suite run here would buy nothing this gate reads.
+      #     The gate prints which census keys it can and cannot see, so the
+      #     narrower census is visible in the output rather than assumed.
+      - name: Countables drift controls (MUST_FIRE/MUST_PASS)
+        run: python3 checks/countables_drift.py --self-test
+      - name: Measure the countables census (the oracle, never committed)
+        run: python3 tools/countables_census.py --no-coverage --out "$RUNNER_TEMP/census.json"
+      - name: Countables drift (shipped numbers vs the measured tree)
+        run: python3 checks/countables_drift.py --census "$RUNNER_TEMP/census.json" docs README.md
 
   launchers:
     name: launcher contracts (a silent suite fails this job)
@@ -297,16 +367,45 @@ jobs:
 
           verify_summary() {
             # Returns 0 only when the suite's summary line exists, reports
-            # exactly 0 failures, and covers >= 134 controls. Every refusal
+            # exactly 0 failures, and covers >= 154 controls. Every refusal
             # names what failed and echoes the offending line so the operator
-            # can act. Pinned to the suite's '<passed>/<total> ... <n> failed'
-            # summary (a bare '<n> passed' without the fraction is accepted
-            # too); if the suite ever rewords it, THIS step must go red and be
-            # updated in the same commit — unreadable is not empty. `set --`
-            # runs only after $1 is saved into log, since it rebinds the
-            # function's positional parameters.
+            # can act. Accepts '<passed>/<total> ... <n> failed' or a bare
+            # '<n> passed ... <n> failed'; if the suite rewords it beyond both,
+            # THIS step must go red and be updated in the same commit —
+            # unreadable is not empty. `set --` runs only after $1 is saved
+            # into log, since it rebinds the function's positional parameters.
+            #
+            # THE LOCATOR IS THE BUG THIS COMMENT ONCE DESCRIBED (#237). It read
+            #     grep -i 'summary'
+            # while the suite's final line has the shape `controls: <n> passed,
+            # 0 failed` (154 at the time of writing; the floor below is the one
+            # place that number lives),
+            # which contains no such word. So `line` came back empty, the
+            # function refused at the first branch, and this job was RED on
+            # every run for 5+ commits over a suite that was 150/150 green.
+            # Every parse branch below — including the bare-'<n> passed' branch
+            # the old comment advertised — sat behind a word the emitter never
+            # writes: the documented acceptance was unreachable, the claim
+            # broader than the clause delivered (#104's shape).
+            #
+            # Read MUST_FIRE leg 2's comment below: "A checker that only greps
+            # for the word 'summary' looks exactly like this from the outside".
+            # That is precisely what this was, and leg 2 could not catch it
+            # because leg 2's own fixture contains the word. All three doctored
+            # fixtures were written in a shape the suite does not emit, so they
+            # exercised a path the real log never took — a positive control
+            # must plant the EXACT text the real producer writes and run the
+            # EXACT matcher, or it certifies a different program. Legs 4-6 below
+            # close that: they carry the suite's real wording verbatim.
+            #
+            # The locator now matches EITHER the literal word (kept so a future
+            # reworded 'SUMMARY:' line still lands) OR the semantic shape the
+            # parser actually needs: a pass count and a failure count on one
+            # line. It is still strictly fail-closed — no match is a refusal.
             local log=$1 line frac failed passed_n passed total
-            line=$(printf '%s\n' "$log" | { grep -i 'summary' || true; } | tail -n 1)
+            line=$(printf '%s\n' "$log" \
+              | { grep -iE 'summary|[0-9]+[[:space:]]*(passed|green)[^0-9]+[0-9]+[[:space:]]*failed' || true; } \
+              | tail -n 1)
             if [ -z "$line" ]; then
               echo "::error::no summary line in suite output — a run that never" >&2
               echo "::error::prints its summary has measured nothing CI may credit." >&2
@@ -339,8 +438,16 @@ jobs:
               echo "::error::summary reports $failed failed control(s): $line" >&2
               return 1
             fi
-            if [ "$((10#$total))" -lt 134 ]; then
-              echo "::error::summary covers $total controls; 134 were measured when this" >&2
+            # Floor raised 134 -> 150 (#237) -> 154 (#238). 134 was the count
+            # when this gate was written; the suite measured 150 the day the
+            # locator was fixed, and 154 once #238 wired countables_drift.py and
+            # packaging_reachability.py in as four real legs. A floor below the
+            # live count lets that many controls vanish in silence, which is the
+            # same quiet-shrink move the floor exists to refuse. The rule is
+            # mechanical: any commit that adds or removes legs re-measures the
+            # suite and moves this number in the SAME commit.
+            if [ "$((10#$total))" -lt 154 ]; then
+              echo "::error::summary covers $total controls; 154 were measured when this" >&2
               echo "::error::gate was written. A quietly shrunk suite is the empty-registry" >&2
               echo "::error::move, one directory down. Remove controls on purpose and lower" >&2
               echo "::error::this floor in the same commit — or not at all." >&2
@@ -379,6 +486,52 @@ jobs:
             exit 1
           fi
           echo "verify_summary fired on all three doctored logs (MUST_FIRE legs 1-3) — proven able to refuse."
+          # ------------------------------------------------------------------
+          # Legs 4-6 (#237): the axis legs 1-3 never touched — CAN THIS READER
+          # SEE ITS OWN PRODUCER? Legs 1-3 are all written as
+          # 'SUMMARY: <n>/<n> controls passed, <n> failed', a shape
+          # launchers/test_launcher_contracts.sh has never emitted. Three legs
+          # can be green over a format the real suite does not produce, and were
+          # for 5+ commits while the real path refused a 150/150 run. Proving a
+          # detector refuses garbage says nothing about whether it can read the
+          # one input it exists to read.
+          #
+          # So these carry the suite's ACTUAL final line verbatim —
+          # `controls: 150 passed, 0 failed` — and drive it through the SAME
+          # verify_summary the real log goes through. If the suite rewords its
+          # tally, leg 4 goes red HERE, naming the reader/producer split, rather
+          # than the job failing downstream with "no summary line" and being
+          # read as a suite failure.
+          #
+          # 4 is MUST_PASS (the reader sees the producer). 5 and 6 are MUST_FIRE
+          # in that same real shape, so the failure-count and floor checks are
+          # proven reachable THROUGH the new locator and not only through the
+          # legacy 'summary' word.
+          # ------------------------------------------------------------------
+          mustpass_4='controls: 150 passed, 0 failed'
+          mustfire_5='controls: 150 passed, 1 failed'
+          mustfire_6='controls: 12 passed, 0 failed'
+          if ! verify_summary "$mustpass_4"; then
+            echo "::error::summary verifier REFUSED the suite's real summary line"
+            echo "::error::('$mustpass_4'). The reader cannot see its own producer —"
+            echo "::error::that is #237 exactly, and it makes every green below unearned."
+            echo "::error::Reconcile the locator with launchers/test_launcher_contracts.sh"
+            echo "::error::in this commit; do NOT relax the checks underneath it."
+            exit 1
+          fi
+          if verify_summary "$mustfire_5" 2>/dev/null; then
+            echo "::error::summary verifier ACCEPTED doctored log 5 ('1 failed' in the"
+            echo "::error::suite's REAL wording). The failure-count check is reachable via"
+            echo "::error::the legacy 'summary' word but not via the line actually emitted."
+            exit 1
+          fi
+          if verify_summary "$mustfire_6" 2>/dev/null; then
+            echo "::error::summary verifier ACCEPTED doctored log 6 (suite shrunk to 12,"
+            echo "::error::in the REAL wording). The control floor is decorative on the"
+            echo "::error::only line shape this job will ever actually parse."
+            exit 1
+          fi
+          echo "verify_summary read the suite's real summary shape and refused both of its mutations (legs 4-6) — the reader is proven able to see its own producer."
           # ------------------------------------------------------------------
           # Leg WF-YAML (control for the BLOCKER-1 class). One column-zero line
           # inside a block scalar killed this entire file; dead file -> zero

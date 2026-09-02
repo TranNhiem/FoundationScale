@@ -395,37 +395,38 @@ def _read_json_mapping(path: Path, owner: str) -> dict[str, Any]:
 
 
 def _enable_moe_block_flag(config: dict[str, Any]) -> tuple[bool | None, str]:
-    """Read the AFFIRMATIVE MoE declaration, ``text_config`` scope before top level.
+    """Read the AFFIRMATIVE MoE declaration through the model-adapter seam.
 
-    Returns ``(flag, dotted_scope_name)``; ``(None, "")`` means the key is
+    Observable shape is unchanged: ``(flag, scope_name)`` where ``scope_name``
+    is ``"text_config"`` or ``"top level"``, and ``(None, "")`` means the key is
     absent in both scopes (Mixtral-class configs never carry it — absence is
     fine, it just means classification rests on the routed-count keys alone).
-    A present-but-non-boolean value is a REFUSAL: a string ``"false"`` that
-    truthy-parses as MoE — or a typo'd ``ture`` that parses as nothing — is
-    exactly the kind of quiet misclassification this flag was read to prevent.
+    A present-but-non-boolean value is still a REFUSAL: a string ``"false"``
+    that truthy-parses as MoE — or a typo'd ``ture`` that parses as nothing —
+    is exactly the kind of quiet misclassification this flag was read to
+    prevent.
+
+    What moved is WHERE the dialect lives. ``enable_moe_block`` is Gemma-family
+    vocabulary, and hard-coding it here made the emitter's core carry one
+    family's semantics; the selected adapter now owns flag precedence, and a
+    new family extends the framework by registering an adapter in
+    :mod:`foundationscale.models.adapters` instead of by patching this
+    function's understood-key set. The scopes searched are pinned to
+    ``_NESTED_LM_SCOPE_KEY`` on BOTH sides, so this reader can never look
+    somewhere :func:`declared_from_hf_config` does not.
     """
-    # The key name is read through the manifest module's single definition
-    # (imported above): the probe reads the same constant, so the emitter and
-    # the probe can never drift on WHICH key is affirmative. The rendered
-    # strings are byte-identical to the literals they replace.
-    scopes: list[tuple[str, dict[str, Any]]] = []
-    nested = config.get("text_config")
-    if isinstance(nested, dict):
-        scopes.append((f"text_config.{_ENABLE_MOE_BLOCK_KEY}", nested))
-    scopes.append((_ENABLE_MOE_BLOCK_KEY, config))
-    for dotted, scope in scopes:
-        if _ENABLE_MOE_BLOCK_KEY not in scope:
-            continue
-        raw = scope[_ENABLE_MOE_BLOCK_KEY]
-        if not isinstance(raw, bool):
-            raise EmitRefused(
-                f"{dotted} is present but not a JSON boolean ({raw!r}); a stated "
-                f"declaration of the wrong type is refused, not coerced — coerce "
-                f"it and a quoted 'false' would classify as MoE while looking "
-                f"like a config fact"
-            )
-        return raw, dotted.rsplit(f".{_ENABLE_MOE_BLOCK_KEY}", 1)[0] or "top level"
-    return None, ""
+    try:
+        from foundationscale.models.adapters import AdapterRefusal, select_adapter
+    except ImportError as exc:  # pragma: no cover - deployment wiring
+        raise EmitUnmeasured(
+            "cannot import the model-adapter registry; the affirmative MoE flag "
+            "cannot be read through the declared family seam, so classification "
+            f"is unmeasured rather than defaulted dense: {exc}"
+        ) from exc
+    try:
+        return select_adapter(config).enable_moe_block_flag(config)
+    except AdapterRefusal as exc:
+        raise EmitRefused(str(exc)) from exc
 
 
 def _declared_fqns_from_base(
@@ -480,9 +481,7 @@ def _declared_fqns_from_base(
     # other rule would let the declared set and the judged set count different
     # populations while both calling themselves tensors.
     real = [
-        fqn
-        for fqn, tm in meta.tensors.items()
-        if not (tm.is_extra_state or "_extra_state" in fqn)
+        fqn for fqn, tm in meta.tensors.items() if not (tm.is_extra_state or "_extra_state" in fqn)
     ]
     fqns = sorted(real)
     excluded = len(meta.tensors) - len(fqns)
@@ -504,9 +503,7 @@ def _declared_fqns_from_base(
     # experts. The _expert_named half is included on purpose: an unrecognized
     # MoE layout must still count, because fail-closed-on-unknown is the
     # gates' rule too.
-    expert_fqns = sorted(
-        fqn for fqn in real if _expert_named(fqn) or _matches_expert_family(fqn)
-    )
+    expert_fqns = sorted(fqn for fqn in real if _expert_named(fqn) or _matches_expert_family(fqn))
     return tuple(fqns), meta.format, excluded, tuple(expert_fqns)
 
 
@@ -608,9 +605,7 @@ def derive_declared_full_ft(
                 f"({producer.num_experts}) which the false flag disables — "
                 f"recorded here instead of silently obeyed or silently dropped"
             )
-        core = replace(
-            producer, num_experts=0, num_moe_layers=None, moe_layer_basis=basis
-        )
+        core = replace(producer, num_experts=0, num_moe_layers=None, moe_layer_basis=basis)
         mode_note = "dense (enable_moe_block=false; base census: 0 expert-family tensors)"
     elif flag is True:
         suffix = f"; MoE affirmed by {flag_scope}.enable_moe_block=true"
@@ -665,9 +660,7 @@ def derive_declared_full_ft(
     return declared, info
 
 
-def _record_effective_pairs(
-    resolver: ConfigResolver, pairs: list[str]
-) -> None:
+def _record_effective_pairs(resolver: ConfigResolver, pairs: list[str]) -> None:
     """Enter the launcher's resolved knobs into the config block.
 
     Values arrive stringified from argv, which is honest: the emitter records
@@ -734,9 +727,7 @@ def _record_stated_entries(
         try:
             resolver.record_effective(key, value, source)
         except ValueError as exc:
-            raise EmitRefused(
-                f"invalid in-manifest record entry {key!r}: {exc}"
-            ) from exc
+            raise EmitRefused(f"invalid in-manifest record entry {key!r}: {exc}") from exc
 
 
 def _training_stack_entries() -> list[tuple[str, str]]:
@@ -1052,9 +1043,7 @@ def _enforce_full_ft_declared_on_disk(record_text: str) -> tuple[int, int]:
             "to emit empty, and the gates would now read a fabricated "
             "UNKNOWN where a denominator existed. Failing closed"
         )
-    if '"declared_fqns":' not in record_text or _EMPTY_DECLARED_FQNS_RE.search(
-        record_text
-    ):
+    if '"declared_fqns":' not in record_text or _EMPTY_DECLARED_FQNS_RE.search(record_text):
         raise EmitUnmeasured(
             "a full-ft emission censused a NON-EMPTY declared_fqns in "
             "memory, but the serialized manifest has the key missing or "
@@ -1063,9 +1052,7 @@ def _enforce_full_ft_declared_on_disk(record_text: str) -> tuple[int, int]:
             "one persistence layer out. Failing closed"
         )
     missing = [
-        key
-        for key in _FULL_FT_BYTES_ABSTENTION_RECORD_KEYS
-        if f'"{key}":' not in record_text
+        key for key in _FULL_FT_BYTES_ABSTENTION_RECORD_KEYS if f'"{key}":' not in record_text
     ]
     if missing:
         raise EmitUnmeasured(
@@ -1223,9 +1210,7 @@ def _emit(args: argparse.Namespace) -> int:
     lora_preexisting_saves = 0
     full_ft_bytes_entries: list[tuple[str, str]] | None = None
     if args.full_ft:
-        declared, info = derive_declared_full_ft(
-            args.base_checkpoint, ckpt_dir, args.hf_config
-        )
+        declared, info = derive_declared_full_ft(args.base_checkpoint, ckpt_dir, args.hf_config)
         full_ft_bytes_entries = _full_ft_bytes_abstention_entries(
             declared_fqn_count=info["declared_fqn_count"],
             expert_family_census=info["expert_family_census"],
@@ -1247,9 +1232,7 @@ def _emit(args: argparse.Namespace) -> int:
         declared_line = f"declared block: {_LORA_ABSTENTION}"
         lora_preexisting_saves = _count_save_dirs(ckpt_dir)
         if not drill_bare_null:
-            lora_abstention_entries = _lora_abstention_record_entries(
-                lora_preexisting_saves
-            )
+            lora_abstention_entries = _lora_abstention_record_entries(lora_preexisting_saves)
         # else: the drill IS the omission. With the record suppressed, the
         # on-disk verifier after store.save MUST refuse this emission; if it
         # does not, every non-drill assurance this file gives about #79 is
@@ -1262,17 +1245,11 @@ def _emit(args: argparse.Namespace) -> int:
     # #83 (manifest side) on EVERY run; #79's abstention record on every
     # non-drilled LoRA run. Both are in-manifest facts authored here, at the
     # point they were decided, with sources that name the emitter, not the CLI.
-    _record_stated_entries(
-        resolver, _training_stack_entries(), _TRAINING_STACK_SOURCE
-    )
+    _record_stated_entries(resolver, _training_stack_entries(), _TRAINING_STACK_SOURCE)
     if lora_abstention_entries is not None:
-        _record_stated_entries(
-            resolver, lora_abstention_entries, _LORA_ABSTENTION_SOURCE
-        )
+        _record_stated_entries(resolver, lora_abstention_entries, _LORA_ABSTENTION_SOURCE)
     if full_ft_bytes_entries is not None:
-        _record_stated_entries(
-            resolver, full_ft_bytes_entries, _FULL_FT_BYTES_ABSTENTION_SOURCE
-        )
+        _record_stated_entries(resolver, full_ft_bytes_entries, _FULL_FT_BYTES_ABSTENTION_SOURCE)
 
     # Deduplicated allowlist: the module default first, launcher extras after;
     # the allowlist is stored IN the manifest, so what was excluded stays
@@ -1312,6 +1289,37 @@ def _emit(args: argparse.Namespace) -> int:
             raise EmitRefused(f"--artifact expects NAME=PATH, got {pair!r}")
         artifacts[name.strip()] = value
 
+    topology = Topology(
+        nodes=args.nodes,
+        gpus_per_node=args.gpus_per_node,
+        tensor_parallel=args.tp,
+        pipeline_parallel=args.pp,
+        data_parallel=args.dp,
+        expert_parallel=args.ep,
+        context_parallel=args.cp,
+    )
+    # #221. The record used to accept an arithmetically impossible layout --
+    # measured: nodes=2 x gpus_per_node=8 (16 GPUs) with degrees multiplying to
+    # 32 -- and round-trip it into the artifact intact, so a fingerprint whose
+    # stated purpose is to distinguish runs by topology could not distinguish a
+    # possible one from an impossible one.
+    #
+    # Checked HERE, at the one site that mints a new record, and NOT in the
+    # dataclass: manifests already on disk must keep loading, impossible ones
+    # most of all, because reading them is how an incident gets diagnosed.
+    #
+    # Only INCONSISTENT refuses. An UNMEASURED leg (a degree the launcher never
+    # recorded) is stated in the receipt instead of raising EmitUnmeasured: the
+    # alternative is emitting NO provenance because one degree is unknown,
+    # which loses the whole record to protect one field of it. What must not
+    # happen -- and does not -- is an undecidable leg reading as a pass.
+    topology_verdict = topology.consistency()
+    if topology_verdict.blocking:
+        raise EmitRefused(
+            f"refusing to mint a manifest for an arithmetically impossible "
+            f"topology: {topology_verdict.detail}"
+        )
+
     store = ManifestStore(out_dir / _STORE_SUBDIR)
     attempt = store.allocate_attempt(args.run_id)
     try:
@@ -1321,15 +1329,7 @@ def _emit(args: argparse.Namespace) -> int:
             code=code,
             config=resolver.freeze(),
             environment=environment,
-            topology=Topology(
-                nodes=args.nodes,
-                gpus_per_node=args.gpus_per_node,
-                tensor_parallel=args.tp,
-                pipeline_parallel=args.pp,
-                data_parallel=args.dp,
-                expert_parallel=args.ep,
-                context_parallel=args.cp,
-            ),
+            topology=topology,
             job_id=args.job_id,
             artifact_paths=artifacts,
             declared=declared,
@@ -1420,13 +1420,22 @@ def _emit(args: argparse.Namespace) -> int:
     # "captured" without "N of M".
     print(f"run manifest emitted for run_id={args.run_id!r} attempt={attempt}")
     print(f"  canonical store record : {saved}")
-    print(f"  discovery link         : {link} ({discovery_note}; newest-first "
-          f"attempt-*.json glob in load_manifest finds it beside any iter_* save)")
+    print(
+        f"  discovery link         : {link} ({discovery_note}; newest-first "
+        f"attempt-*.json glob in load_manifest finds it beside any iter_* save)"
+    )
     print(f"  fingerprint            : {manifest.fingerprint()}")
-    print(f"  environment            : {environment.captured}/{environment.source_var_count} "
-          f"variables captured under {len(prefixes)} prefixes ({', '.join(prefixes)})")
+    print(
+        f"  environment            : {environment.captured}/{environment.source_var_count} "
+        f"variables captured under {len(prefixes)} prefixes ({', '.join(prefixes)})"
+    )
     print(f"  effective config       : {len(manifest.config)} entr(ies) recorded")
     print(f"  code provenance        : status={code.status.value} commit={code.commit}")
+    # Printed on every emission, including CONSISTENT. A verdict that only
+    # appears when something is wrong leaves the reader unable to tell "checked
+    # and fine" from "never checked" -- the distinction this whole plane exists
+    # to keep. INCONSISTENT never reaches here; it refused above.
+    print(f"  topology               : {topology_verdict.verdict} ({topology_verdict.detail})")
     print(f"  {declared_line}")
     if lora_record_report:
         print(f"  {lora_record_report}")

@@ -870,9 +870,7 @@ class Gate(ABC):
         """
         if not reason.strip():
             raise ValueError("skip() requires a reason — an unexplained skip is a hole")
-        return self._result(
-            Verdict.SKIP, Coverage.none("units"), detail=reason, abstention=kind
-        )
+        return self._result(Verdict.SKIP, Coverage.none("units"), detail=reason, abstention=kind)
 
     def _result(
         self,

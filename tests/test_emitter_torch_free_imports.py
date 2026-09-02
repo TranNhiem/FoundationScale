@@ -179,9 +179,7 @@ CHAIN_MODULES: tuple[str, ...] = (
 # that could drift from CHAIN_MODULES.
 DCP_PATH = SRC_ROOT / "foundationscale" / "checkpoint" / "dcp.py"
 DCP_META_PATH = SRC_ROOT / "foundationscale" / "checkpoint" / "dcp_meta.py"
-CHECKPOINT_GATES_PATH = (
-    SRC_ROOT / "foundationscale" / "gates" / "checkpoint_gates.py"
-)
+CHECKPOINT_GATES_PATH = SRC_ROOT / "foundationscale" / "gates" / "checkpoint_gates.py"
 
 # Files the static walk must prove it covered: the emitter itself, the
 # module-scope chain target quoted from its import block (lines 95-118 hold
@@ -316,10 +314,7 @@ class ImportSite:
     def is_torch(self) -> bool:
         """True only for an ABSOLUTE import of the ``torch`` root or below."""
         root = TORCH_ROOT
-        return (
-            self.level == 0
-            and (self.module == root or self.module.startswith(root + "."))
-        )
+        return self.level == 0 and (self.module == root or self.module.startswith(root + "."))
 
     def render(self) -> str:
         """One-line evidence for assertion messages."""
@@ -373,15 +368,11 @@ def _census_one_file(path: Path) -> list[ImportSite]:
             deferred = True
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                sites.append(
-                    ImportSite(path, node.lineno, alias.name, "import", 0,
-                               not deferred)
-                )
+                sites.append(ImportSite(path, node.lineno, alias.name, "import", 0, not deferred))
             return
         elif isinstance(node, ast.ImportFrom):
             sites.append(
-                ImportSite(path, node.lineno, node.module or "", "from",
-                           node.level, not deferred)
+                ImportSite(path, node.lineno, node.module or "", "from", node.level, not deferred)
             )
             return
         elif isinstance(node, ast.If) and _guards_type_checking(node.test):
@@ -416,9 +407,7 @@ def _tree_python_files() -> list[Path]:
     found: list[Path] = []
     for root in (SRC_ROOT, TOOLS_ROOT):
         if not root.is_dir():
-            raise CensusRefusedError(
-                f"expected source root missing: {root} -- missing is not zero"
-            )
+            raise CensusRefusedError(f"expected source root missing: {root} -- missing is not zero")
         found.extend(root.rglob("*.py"))
     return found
 
@@ -465,8 +454,17 @@ def run_import_probe(
         override_name, override_path = override
         override_spec = f"{override_name}={override_path}"
     proc = subprocess.run(
-        [sys.executable, "-I", "-c", _CHILD_PROGRAM,
-         str(target), joined, forbidden_root, override_spec, *chain],
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            _CHILD_PROGRAM,
+            str(target),
+            joined,
+            forbidden_root,
+            override_spec,
+            *chain,
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -476,7 +474,7 @@ def run_import_probe(
     for line in proc.stdout.splitlines():
         if line.startswith(_MARKER):
             try:
-                payload = json.loads(line[len(_MARKER):])
+                payload = json.loads(line[len(_MARKER) :])
             except json.JSONDecodeError:
                 payload = None
     return ProbeResult(proc.returncode, proc.stdout, proc.stderr, payload)
@@ -489,9 +487,7 @@ def _checked_payload(result: ProbeResult, *, context: str) -> dict[str, Any]:
         "that dies before checking is RED, never 'target absent'.\n"
         f"stderr:\n{result.stderr}\nstdout:\n{result.stdout}"
     )
-    assert (
-        result.payload is not None and result.payload.get("stage") == "checked"
-    ), (
+    assert result.payload is not None and result.payload.get("stage") == "checked", (
         f"{context}: probe child exited 0 but printed no parseable verdict; "
         "the check over its sys.modules never ran, and a check that did not "
         f"run is UNMEASURED, not green (doctrine 1).\nstdout:\n{result.stdout}"
@@ -514,9 +510,7 @@ def _write_module(tmp_path: Path, name: str) -> Path:
     return path
 
 
-def _doctored_module(
-    source_path: Path, tmp_path: Path, injected_import: str
-) -> tuple[Path, int]:
+def _doctored_module(source_path: Path, tmp_path: Path, injected_import: str) -> tuple[Path, int]:
     """``source_path`` with one import line injected at LEGAL module scope.
 
     The probe line lands immediately after the last ``from __future__``
@@ -543,9 +537,7 @@ def _doctored_module(
         index = 1  # the first statement is the module docstring
     cut = body[0].end_lineno if index else 0
     for node in body[index:]:
-        if not (
-            isinstance(node, ast.ImportFrom) and node.module == "__future__"
-        ):
+        if not (isinstance(node, ast.ImportFrom) and node.module == "__future__"):
             break
         cut = node.end_lineno or node.lineno
     lines = source.splitlines(keepends=True)
@@ -598,9 +590,7 @@ def test_tree_census_finds_torch_only_off_the_import_path() -> None:
     )
     walk = _tree_python_files()
     out_of_walk = [str(path) for path in MUST_CENSUS_FILES if path not in walk]
-    assert not out_of_walk, (
-        f"the census walk lost files it must cover: {out_of_walk}"
-    )
+    assert not out_of_walk, f"the census walk lost files it must cover: {out_of_walk}"
     census = census_import_sites(walk)
     torch_sites = census.torch_sites()
     assert torch_sites, (
@@ -730,9 +720,7 @@ def test_fresh_interpreter_import_leaves_torch_absent() -> None:
     block was REACHED. Zero chain imports executed fails by the chain_loaded
     equality; an unexercised chain is UNMEASURED (doctrine 1).
     """
-    assert EMITTER_PATH.is_file(), (
-        f"emitter missing at {EMITTER_PATH}; missing is not zero"
-    )
+    assert EMITTER_PATH.is_file(), f"emitter missing at {EMITTER_PATH}; missing is not zero"
     assert CHAIN_MODULES, (
         "CHAIN_MODULES itself must be nonempty: chain_loaded == "
         "sorted(CHAIN_MODULES) over two empty collections is the all([]) "
@@ -808,9 +796,7 @@ def test_dynamic_detector_fires_on_controlled_module_scope_import(
     and the child did not merely die.
     """
     _write_module(tmp_path, SENTINEL_NAME)
-    doctored, _ = _doctored_emitter(
-        tmp_path, f"import {SENTINEL_NAME}  # MUST_FIRE: module scope"
-    )
+    doctored, _ = _doctored_emitter(tmp_path, f"import {SENTINEL_NAME}  # MUST_FIRE: module scope")
     fired = run_import_probe(doctored, SENTINEL_NAME, [SRC_ROOT, tmp_path])
     payload = _checked_payload(fired, context="dynamic MUST_FIRE")
     assert payload["hits"] == [SENTINEL_NAME], (
@@ -846,9 +832,7 @@ def test_function_local_import_never_executed_stays_green(
         + f"    import {FUNCTION_LOCAL_SENTINEL}  # local: must NOT fire\n",
         encoding="utf-8",
     )
-    result = run_import_probe(
-        doctored, FUNCTION_LOCAL_SENTINEL, [SRC_ROOT, tmp_path]
-    )
+    result = run_import_probe(doctored, FUNCTION_LOCAL_SENTINEL, [SRC_ROOT, tmp_path])
     payload = _checked_payload(result, context="function-local symmetry")
     assert payload["hits"] == [], (
         "the detector fired on a FUNCTION-LOCAL import that never executed; "

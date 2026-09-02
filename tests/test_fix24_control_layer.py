@@ -135,9 +135,9 @@ def test_provenance_reconciliation_names_gate_from_unwalked_module() -> None:
     assert len(findings) == 1
     assert "test.probe" in findings[0]
     assert "never reached" in findings[0]
-    assert controls_harness._uncertified_provenance_findings(
-        registry, {type(probe).__module__}
-    ) == []
+    assert (
+        controls_harness._uncertified_provenance_findings(registry, {type(probe).__module__}) == []
+    )
 
 
 def test_package_census_classifies_known_first_party_packages() -> None:
@@ -237,8 +237,7 @@ def test_package_census_stays_quiet_for_a_reviewed_gate_free_sibling(
     monkeypatch.setattr(
         controls_harness,
         "_KNOWN_GATELESS_PACKAGES",
-        controls_harness._KNOWN_GATELESS_PACKAGES
-        | {"foundationscale.fscensus_probe_reviewed"},
+        controls_harness._KNOWN_GATELESS_PACKAGES | {"foundationscale.fscensus_probe_reviewed"},
     )
     assert controls_harness._unclassified_package_findings() == []
 
@@ -418,9 +417,7 @@ def test_expert_alias_gate_refuses_the_boolean_zero() -> None:
     never the dense SKIP) and the detail names the offense.
     """
     gate = ExpertAliasGate()
-    result = gate.run(
-        ExpertCheckContext(tensors={}, expert_index={}, declared_expert_count=False)
-    )
+    result = gate.run(ExpertCheckContext(tensors={}, expert_index={}, declared_expert_count=False))
     assert result.verdict is Verdict.VACUOUS
     assert result.blocking
     assert "non-negative integer" in result.detail

@@ -23,14 +23,19 @@ Doctrine wiring:
 Output avoids the verify_summary-ingested tokens by design: no 'green',
 'passed', or 'SUMMARY' on any path, and no suite domain prefix at line start.
 """
+
+from __future__ import annotations
+
 import re
 import sys
 from pathlib import Path
 
-BLOCKER1_FIXED = ("          mustfire_1=$'launchers: 8/8 watchdog checks green\\n"
-                  "contracts: 126/126 green'\n")
-BLOCKER1_BROKEN = ("          mustfire_1='launchers: 8/8 watchdog checks green\n"
-                   "contracts: 126/126 green'\n")
+BLOCKER1_FIXED = (
+    "          mustfire_1=$'launchers: 8/8 watchdog checks green\\ncontracts: 126/126 green'\n"
+)
+BLOCKER1_BROKEN = (
+    "          mustfire_1='launchers: 8/8 watchdog checks green\ncontracts: 126/126 green'\n"
+)
 
 
 def structural_check(text):
@@ -63,10 +68,12 @@ def structural_check(text):
                 if content is not None and ind < base and nxt < len(lines):
                     nind = len(lines[nxt]) - len(lines[nxt].lstrip(" "))
                     if nind >= content:
-                        return (f"line {j + 1} at indent {ind} under-cuts the block scalar"
-                                f" opened at line {i + 1} (base {base}), then"
-                                f" line {nxt + 1} re-indents to {nind} -- the"
-                                " column-zero-continuation shape")
+                        return (
+                            f"line {j + 1} at indent {ind} under-cuts the block scalar"
+                            f" opened at line {i + 1} (base {base}), then"
+                            f" line {nxt + 1} re-indents to {nind} -- the"
+                            " column-zero-continuation shape"
+                        )
                 break
             if content is not None and ind < content:
                 break
@@ -81,6 +88,7 @@ def audit(paths):
         return 1
     try:
         import yaml
+
         have_yaml = True
     except ImportError:
         yaml = None
@@ -88,8 +96,10 @@ def audit(paths):
     if have_yaml:
         mode = "full YAML parse via PyYAML"
     else:
-        mode = ("STRUCTURAL INDENTATION SCAN ONLY (PyYAML not importable here) -- "
-                "NOT a full YAML parse (doctrine 5)")
+        mode = (
+            "STRUCTURAL INDENTATION SCAN ONLY (PyYAML not importable here) -- "
+            "NOT a full YAML parse (doctrine 5)"
+        )
     bad = 0
     for p in paths:
         try:
@@ -104,8 +114,7 @@ def audit(paths):
                 yaml.safe_load(text)
             except Exception as e:
                 first = str(e).splitlines()
-                print(f"WF-YAML RED-unparseable {p}:"
-                      f" {first[0] if first else 'unknown YAML error'}")
+                print(f"WF-YAML RED-unparseable {p}: {first[0] if first else 'unknown YAML error'}")
                 bad += 1
         else:
             prob = structural_check(text)
@@ -115,8 +124,10 @@ def audit(paths):
     if bad:
         print(f"WF-YAML RED: {bad} of {len(paths)} workflow file(s) refused under {mode}")
         return 1
-    print(f"WF-YAML ok: examined {len(paths)} workflow file(s);"
-          f" {len(paths)}/{len(paths)} accepted by {mode}")
+    print(
+        f"WF-YAML ok: examined {len(paths)} workflow file(s);"
+        f" {len(paths)}/{len(paths)} accepted by {mode}"
+    )
     return 0
 
 
@@ -128,9 +139,11 @@ def doctor(path):
         print(f"WF-YAML DOCTOR RED: unreadable {path}: {e} -- unreadable is not empty (doctrine 4)")
         return 1
     if BLOCKER1_FIXED not in t:
-        print(f"WF-YAML DOCTOR RED: the fixed mustfire_1 needle is not in {path}"
-              " -- cannot rebuild BLOCKER 1; has the fix landed,"
-              " or has it been reverted?")
+        print(
+            f"WF-YAML DOCTOR RED: the fixed mustfire_1 needle is not in {path}"
+            " -- cannot rebuild BLOCKER 1; has the fix landed,"
+            " or has it been reverted?"
+        )
         return 1
     t = t.replace(BLOCKER1_FIXED, BLOCKER1_BROKEN, 1)
     try:
@@ -139,8 +152,10 @@ def doctor(path):
     except OSError as e:
         print(f"WF-YAML DOCTOR RED: cannot write {path}: {e}")
         return 1
-    print("WF-YAML DOCTOR ok: copy now carries BLOCKER 1's original two-line"
-          " column-zero form verbatim")
+    print(
+        "WF-YAML DOCTOR ok: copy now carries BLOCKER 1's original two-line"
+        " column-zero form verbatim"
+    )
     return 0
 
 

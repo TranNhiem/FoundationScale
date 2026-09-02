@@ -1174,12 +1174,54 @@ def capture_code_provenance(
 
 
 @dataclass(frozen=True)
+class TopologyConsistency:
+    """Whether a recorded topology is arithmetically possible, and on what basis.
+
+    Three states, not two. ``UNMEASURED`` exists because a degree may be
+    ``None`` -- "never recorded" -- and a check that cannot see a field must
+    say so rather than assume a 1. Precedence is RED > UNMEASURED > CONSISTENT:
+    a decidable leg that FAILS outranks an undecidable one, so a record with a
+    missing ``context_parallel`` and an impossible expert split is
+    ``INCONSISTENT``, not excused into an abstention.
+    """
+
+    verdict: str  # "CONSISTENT" | "INCONSISTENT" | "UNMEASURED"
+    detail: str
+
+    @property
+    def blocking(self) -> bool:
+        return self.verdict == "INCONSISTENT"
+
+
+@dataclass(frozen=True)
 class Topology:
     """The parallel layout the run used, as *effective* integers.
 
     Topology decides numerics (a TP change is a different reduction order and, as
     the audit's vocab-clamp incident showed, sometimes a different *semantics*), so
     it belongs in the fingerprint.
+
+    VOCABULARY -- read this before wiring this class to
+    :class:`foundationscale.topology.Topology`. The two classes carry fields
+    that LOOK like the same quantities and are not:
+
+    * ``data_parallel`` here is Megatron's ``data_parallel_size``, taken from
+      the launcher's ``--dp``. World size is ``tp x pp x cp x dp``; expert
+      parallelism is carved OUT of the data-parallel group and does not
+      multiply into it.
+    * ``dp`` there is the count of complete model replicas,
+      ``world / (tp x pp x ep x cp)``, and that class's construction gate
+      requires ``dp x tp x pp x ep x cp == total``.
+
+    The two conventions coincide exactly when ``ep == 1`` and diverge for every
+    MoE layout above it. Measured on one 8-GPU node with TP=PP=CP=1: an
+    ordinary DP=8/EP=8 run is ``dp=8, ep=8`` in this vocabulary and
+    ``dp=1, ep=8`` in that one. Passing this record's numbers into that class
+    unconverted rejects every MoE run; passing the replica count instead
+    records a different quantity under a field named ``data_parallel``. So the
+    validation below is written in THIS class's vocabulary rather than
+    delegating -- the shared words are the trap, and the reason it has never
+    bitten is that the other class currently has no production consumer.
 
     ``context_parallel`` was added after the estate measured the then-required
     launcher knob (``--cp``) being consumed and silently discarded: CP=1 and
@@ -1198,6 +1240,82 @@ class Topology:
     data_parallel: int
     expert_parallel: int | None = None
     context_parallel: int | None = None
+
+    def consistency(self) -> TopologyConsistency:
+        """Is this layout arithmetically possible? Checked in Megatron vocabulary.
+
+        Deliberately NOT called from ``__post_init__`` or :meth:`from_dict`.
+        Records already on disk must keep loading -- including impossible ones,
+        which is precisely when an auditor needs to read them. Validation
+        belongs where a NEW record is minted; loading an old record and being
+        told what is wrong with it is the more useful behaviour than refusing
+        to open it.
+
+        Two legs, each with its own decidability:
+
+        * world size: ``tp x pp x cp x dp == nodes x gpus_per_node``. Needs
+          ``context_parallel``; older records carry ``None`` there and this leg
+          abstains rather than substituting the 1 no launcher stated.
+        * expert split: ``data_parallel % expert_parallel == 0``. Expert
+          parallelism partitions the data-parallel group, so a DP that the EP
+          width does not divide cannot be laid out at all. Needs
+          ``expert_parallel``; ``None`` abstains.
+
+        Returns:
+            A :class:`TopologyConsistency` naming the arithmetic it used, so a
+            verdict can be read without re-deriving it.
+        """
+        total = self.nodes * self.gpus_per_node
+        failures: list[str] = []
+        abstentions: list[str] = []
+        checked: list[str] = []
+
+        if self.context_parallel is None:
+            abstentions.append(
+                "world size: context_parallel was never recorded, so "
+                "tp x pp x cp x dp cannot be formed (not assumed to be 1)"
+            )
+        else:
+            product = (
+                self.tensor_parallel
+                * self.pipeline_parallel
+                * self.context_parallel
+                * self.data_parallel
+            )
+            arithmetic = (
+                f"tp({self.tensor_parallel}) x pp({self.pipeline_parallel}) x "
+                f"cp({self.context_parallel}) x dp({self.data_parallel}) = {product} "
+                f"vs nodes({self.nodes}) x gpus_per_node({self.gpus_per_node}) = {total}"
+            )
+            if product != total:
+                failures.append(f"world size: {arithmetic}")
+            else:
+                checked.append(f"world size: {arithmetic}")
+
+        if self.expert_parallel is None:
+            abstentions.append(
+                "expert split: expert_parallel was never recorded, so dp % ep "
+                "cannot be formed (not assumed to be 1 -- state ep=1 to make "
+                "this leg decidable on a run with no expert parallelism)"
+            )
+        else:
+            arithmetic = (
+                f"dp({self.data_parallel}) % ep({self.expert_parallel}) = "
+                f"{self.data_parallel % self.expert_parallel}"
+            )
+            if self.data_parallel % self.expert_parallel:
+                failures.append(
+                    f"expert split: {arithmetic}; expert parallelism partitions the "
+                    f"data-parallel group, so ep must divide dp"
+                )
+            else:
+                checked.append(f"expert split: {arithmetic}")
+
+        if failures:
+            return TopologyConsistency("INCONSISTENT", "; ".join(failures))
+        if abstentions:
+            return TopologyConsistency("UNMEASURED", "; ".join(abstentions))
+        return TopologyConsistency("CONSISTENT", "; ".join(checked))
 
     def to_dict(self) -> dict[str, object]:
         return {

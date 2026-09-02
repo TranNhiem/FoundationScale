@@ -70,7 +70,9 @@ def _write_safetensors(path: Path, tensors: dict[str, tuple[tuple[int, ...], str
         code, width = _ST_ENCODINGS[dtype]
         nbytes = math.prod(shape) * width
         header[fqn] = {
-            "dtype": code, "shape": list(shape), "data_offsets": [offset, offset + nbytes]
+            "dtype": code,
+            "shape": list(shape),
+            "data_offsets": [offset, offset + nbytes],
         }
         offset += nbytes
     encoded = json.dumps(header).encode("utf-8")
@@ -249,9 +251,7 @@ def test_declared_zero_with_basis_round_trips_and_first_save_goes_one_of_one() -
     declared = DeclaredCheckpoint(
         num_experts=0,
         declared_fqns=("model.layers.0.self_attn.q_proj.weight",),
-        moe_layer_basis=(
-            "dense: enable_moe_block=false AND base census 0 expert-family tensors"
-        ),
+        moe_layer_basis=("dense: enable_moe_block=false AND base census 0 expert-family tensors"),
     )
     assert DeclaredCheckpoint.from_dict(declared.to_dict()).num_experts == 0
     ctx = CheckpointGateContext(
@@ -355,8 +355,13 @@ def _emit_args(run_id: str, out_dir: Path, ckpt_dir: Path, base: Path, config: P
         "1",
         "--cp",
         "2",
+        # 1 node x 8 GPUs = 8, and tp x pp x cp x dp must equal it. This tuple
+        # read dp=8 with cp=2 until #221 landed a consistency check at the mint
+        # site and refused it: 1x1x2x8 = 16 on an 8-GPU allocation. Nothing had
+        # ever checked, which is the whole of #221 -- the defect reached the
+        # repo's own fixtures, not only its records.
         "--dp",
-        "8",
+        "4",
         "--full-ft",
         "--base-checkpoint",
         str(base),
@@ -432,9 +437,7 @@ def test_emit_refuses_dense_flag_against_expert_base(tmp_path: Path) -> None:
     )
     out_dir = tmp_path / "run-root"
     out_dir.mkdir()
-    rc = emit.main(
-        _emit_args("contradiction", out_dir, out_dir / "ckpts", base_dir, config_path)
-    )
+    rc = emit.main(_emit_args("contradiction", out_dir, out_dir / "ckpts", base_dir, config_path))
     assert rc == emit.EXIT_REFUSED
 
 

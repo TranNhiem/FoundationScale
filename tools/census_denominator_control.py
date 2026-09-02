@@ -61,27 +61,29 @@ NUMERIC_GUARD = re.compile(r"^[1-9][0-9]*$")
 PURE_INT = re.compile(r"^(0|[1-9][0-9]*)$")
 
 GARBAGE_ROOTS = {
-    (
-        "bare name->record mapping (the pre-#88 comment's imaginary "
-        "'flat' contract)"
-    ): json.dumps({
-        "module.decoder.layers.0.self_attn.linear_qkv": {
-            "fqn": "module.decoder.layers.0.self_attn.linear_qkv",
-            "out_features": 3072,
-            "in_features": 2048,
-        },
-        "module.decoder.layers.0.self_attn.linear_proj": {
-            "fqn": "module.decoder.layers.0.self_attn.linear_proj",
-            "out_features": 2048,
-            "in_features": 2048,
-        },
-    }),
-    "object missing 'adapter_modules'": json.dumps({
-        "module_inventory": ["a", "b", "c"],
-        "producer": "not the census writer",
-    }),
-    "wrapped object whose 'adapter_modules' member is not a list":
-        json.dumps({"adapter_modules": {"count": 168}, "source": "garbage"}),
+    ("bare name->record mapping (the pre-#88 comment's imaginary 'flat' contract)"): json.dumps(
+        {
+            "module.decoder.layers.0.self_attn.linear_qkv": {
+                "fqn": "module.decoder.layers.0.self_attn.linear_qkv",
+                "out_features": 3072,
+                "in_features": 2048,
+            },
+            "module.decoder.layers.0.self_attn.linear_proj": {
+                "fqn": "module.decoder.layers.0.self_attn.linear_proj",
+                "out_features": 2048,
+                "in_features": 2048,
+            },
+        }
+    ),
+    "object missing 'adapter_modules'": json.dumps(
+        {
+            "module_inventory": ["a", "b", "c"],
+            "producer": "not the census writer",
+        }
+    ),
+    "wrapped object whose 'adapter_modules' member is not a list": json.dumps(
+        {"adapter_modules": {"count": 168}, "source": "garbage"}
+    ),
     "scalar root": "17",
 }
 
@@ -94,10 +96,7 @@ def pre_fix_len_of_root(d: object) -> int:
     Never 'repair' this function; it is the red half of the control."""
     if isinstance(d, (dict, list)):
         return len(d)
-    raise TypeError(
-        f"census root is {type(d).__name__}, not an object/array of "
-        f"module records"
-    )
+    raise TypeError(f"census root is {type(d).__name__}, not an object/array of module records")
 
 
 def true_declared_count(obj: object, path: Path) -> int:
@@ -185,9 +184,7 @@ def main() -> int:
                 f"found -- cannot prove the controlled counter is the "
                 f"production counter."
             )
-        if "count_census_modules.py" not in LAUNCHER.read_text(
-            encoding="utf-8"
-        ):
+        if "count_census_modules.py" not in LAUNCHER.read_text(encoding="utf-8"):
             raise SystemExit(
                 f"CONTROL FAIL (wiring): {LAUNCHER.name} never names "
                 f"count_census_modules.py -- production drifted from the "
@@ -240,7 +237,8 @@ def main() -> int:
         # MUST_PASS leg 1 -- the shipped counter on the same payload.
         cp = subprocess.run(
             [sys.executable, str(COUNTER), str(census)],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if cp.returncode != 0:
             raise SystemExit(
@@ -275,11 +273,10 @@ def main() -> int:
             junk.write_text(text, encoding="utf-8")
             cp = subprocess.run(
                 [sys.executable, str(COUNTER), str(junk)],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
-            if cp.returncode != 0 and not PURE_INT.fullmatch(
-                cp.stdout.strip()
-            ):
+            if cp.returncode != 0 and not PURE_INT.fullmatch(cp.stdout.strip()):
                 refused += 1
             else:
                 raise SystemExit(

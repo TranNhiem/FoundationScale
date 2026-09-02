@@ -97,8 +97,11 @@ def _write_safetensors(path: Path, tensors: dict[str, tuple[tuple[int, ...], str
     for fqn in sorted(tensors):
         shape, dtype = tensors[fqn]
         nbytes = prod(shape) * _ST_NBYTES[dtype]
-        header[fqn] = {"dtype": dtype, "shape": list(shape),
-                       "data_offsets": [offset, offset + nbytes]}
+        header[fqn] = {
+            "dtype": dtype,
+            "shape": list(shape),
+            "data_offsets": [offset, offset + nbytes],
+        }
         offset += nbytes
     blob = json.dumps(header).encode("utf-8")
     path.write_bytes(struct.pack("<Q", len(blob)) + blob + b"\x00" * offset)
@@ -131,7 +134,8 @@ def _materialize_artifact(tmp_path: Path, tensors: dict, *, name: str = "ckpt") 
         for fqn in shard:
             weight_map[fqn] = fname
     (d2 / "model.safetensors.index.json").write_text(
-        json.dumps({"metadata": {}, "weight_map": weight_map}), encoding="utf-8")
+        json.dumps({"metadata": {}, "weight_map": weight_map}), encoding="utf-8"
+    )
     try:
         lsg._measure(d2)
         return d2
@@ -145,9 +149,16 @@ def _materialize_artifact(tmp_path: Path, tensors: dict, *, name: str = "ckpt") 
 
         d3 = tmp_path / f"{name}-dcp"
         d3.mkdir()
-        sd = {fqn: torch.zeros(*shape, dtype=getattr(torch, {"F32": "float32",
-              "BF16": "bfloat16", "F16": "float16", "I64": "int64"}[dtype]))
-              for fqn, (shape, dtype) in tensors.items()}
+        sd = {
+            fqn: torch.zeros(
+                *shape,
+                dtype=getattr(
+                    torch,
+                    {"F32": "float32", "BF16": "bfloat16", "F16": "float16", "I64": "int64"}[dtype],
+                ),
+            )
+            for fqn, (shape, dtype) in tensors.items()
+        }
         dcp.save(sd, storage_writer=FileSystemWriter(str(d3)))
         try:
             lsg._measure(d3)
@@ -225,8 +236,11 @@ def _census(stems, *, dims=None, source="fix45 test fixture"):
         )
     basis = (
         f"in-memory test census ({len(stems)} artifact-namespace module stems"
-        + (f", parent dims for all {len(stems)}" if dims
-           else ", no parent dims -- shape check abstains by name")
+        + (
+            f", parent dims for all {len(stems)}"
+            if dims
+            else ", no parent dims -- shape check abstains by name"
+        )
         + f"; producer: {source})"
     )
     return lsg._AdapterModuleCensus(
@@ -248,8 +262,7 @@ def _census_file(dirpath, stems, *, dims=None, source="fix45 test fixture"):
     else:
         doc = {
             "adapter_modules": [
-                {"fqn": s, "out_features": built.dims[s][0],
-                 "in_features": built.dims[s][1]}
+                {"fqn": s, "out_features": built.dims[s][0], "in_features": built.dims[s][1]}
                 for s in built.stems
             ],
             "source": source,
@@ -271,12 +284,16 @@ def _lora_census_stems() -> tuple[str, ...]:
     (`_megatron_named_lora_tensors` is defined beside the adapter-naming
     tests, below) resolve at call time -- the idiom `_lora_tensors` itself
     already documents above."""
-    return tuple(sorted({
-        key[: -len(suffix)]
-        for key in _megatron_named_lora_tensors()
-        for suffix in lsg._MEGATRON_BRIDGE_ADAPTER_SUFFIXES
-        if key.endswith(suffix)
-    }))
+    return tuple(
+        sorted(
+            {
+                key[: -len(suffix)]
+                for key in _megatron_named_lora_tensors()
+                for suffix in lsg._MEGATRON_BRIDGE_ADAPTER_SUFFIXES
+                if key.endswith(suffix)
+            }
+        )
+    )
 
 
 # Fixture populations. Denominators are arithmetic, stated in one place:
@@ -292,8 +309,11 @@ def _lora_census_stems() -> tuple[str, ...]:
 #                 and the fixture, not the verdict, was the thing that was wrong.
 #                 Calibrate the fixture, never the assertion.
 def _dense_full_tensors() -> dict:
-    return {f"layers.{i}.self_attn.{w}.weight": ((8, 8), "F32")
-            for i in range(6) for w in ("q_proj", "v_proj")}
+    return {
+        f"layers.{i}.self_attn.{w}.weight": ((8, 8), "F32")
+        for i in range(6)
+        for w in ("q_proj", "v_proj")
+    }
 
 
 def _lora_tensors(prefix: str = "") -> dict:
@@ -345,20 +365,30 @@ def _moe_full_tensors() -> dict:
 # and under the landed contract only an affirmative statement makes that
 # assumption true. It also makes the suite STRICTER: the present-null path
 # and the corroborated-mint path are now exercised end to end.
-DENSE_CFG = {"model_type": "calibration-dense",
-             "text_config": {"num_hidden_layers": 6, "hidden_size": 8,
-                             "enable_moe_block": False, "num_experts": None}}
-MOE_CFG = {"model_type": "calibration-moe", "num_experts": 8, "num_moe_layers": 2,
-           "text_config": {"num_experts": 8, "num_moe_layers": 2, "num_hidden_layers": 2}}
-LORA_TRAIN = {"peft_scheme": "lora", "lora_rank": 4,
-              "lora_targets": ["q_proj", "v_proj"]}
+DENSE_CFG = {
+    "model_type": "calibration-dense",
+    "text_config": {
+        "num_hidden_layers": 6,
+        "hidden_size": 8,
+        "enable_moe_block": False,
+        "num_experts": None,
+    },
+}
+MOE_CFG = {
+    "model_type": "calibration-moe",
+    "num_experts": 8,
+    "num_moe_layers": 2,
+    "text_config": {"num_experts": 8, "num_moe_layers": 2, "num_hidden_layers": 2},
+}
+LORA_TRAIN = {"peft_scheme": "lora", "lora_rank": 4, "lora_targets": ["q_proj", "v_proj"]}
 
 
 def _probe_declared_or_calibrate(cfg: dict, want_experts, want_layers):
     """Guard for the one thing testable only against the real probe: its
     config-key schema. Loud, pinnable, never skipped."""
     assert lsg._probe_derive_declared is not None, (
-        "probe import failed -- the sys.path insertion in _load_gate regressed")
+        "probe import failed -- the sys.path insertion in _load_gate regressed"
+    )
     d = lsg._probe_derive_declared(cfg)
     if d.get("num_experts") != want_experts or d.get("num_moe_layers") != want_layers:
         raise AssertionError(
@@ -389,12 +419,14 @@ def _control_by_prefix(decision, prefix: str) -> dict:
             return c
     raise AssertionError(
         f"no control named {prefix!r}* in {decision.controls!r} -- the report "
-        f"dropped a control; that absence must be loud, not defaulted")
+        f"dropped a control; that absence must be loud, not defaulted"
+    )
 
 
 def _gr(verdict: Verdict, gate_id: str, detail: str = "") -> GateResult:
-    return GateResult(gate_id=gate_id, verdict=verdict,
-                      coverage=Coverage(2, "units"), detail=detail)
+    return GateResult(
+        gate_id=gate_id, verdict=verdict, coverage=Coverage(2, "units"), detail=detail
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -413,8 +445,8 @@ class TestHealthyFull:
         legitimate declared-zero-expert scope and MUST be CLEAR-able."""
         base, ckpt = _dense_base_with_ckpt(tmp_path)
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}))
+            ckpt, run_kind="full", base_model_dir=base, train_config_path=_write_cfg(tmp_path, {})
+        )
         assert d.exit_code == 0, (
             f"healthy full must be CLEAR, got {d.exit_code}: {d.blocking_reasons}"
         )
@@ -447,19 +479,23 @@ class TestHealthyFull:
         base = _make_base(tmp_path, _moe_full_tensors(), MOE_CFG, name="fs-base")
         ckpt = _materialize_artifact(tmp_path, _moe_full_tensors(), name="fs-ckpt")
         d = lsg.adjudicate_checkpoint(
-            ckpt, event="first_save", run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}))
+            ckpt,
+            event="first_save",
+            run_kind="full",
+            base_model_dir=base,
+            train_config_path=_write_cfg(tmp_path, {}),
+        )
         assert d.exit_code == 0, (
             f"first_save composite must not red a healthy sharded-MoE artifact; "
             f"got {d.blocking_reasons} -- the first reason names the failing "
-            f"gate verbatim; calibrate the fixture, never these assertions")
+            f"gate verbatim; calibrate the fixture, never these assertions"
+        )
         # Denominators on the wire (doctrine 2): 34 real tensors (2 q_proj +
         # 8 experts x 2 layers x 2 projections), 4 verdicts (3 always-gates
         # + the FIRST_SAVE composite), composite claiming 3 of 3 verified.
         assert d.report["inventory"]["real_tensors"] == 34
         assert len(d.gate_results) == 4
-        composite = next(g for g in d.gate_results
-                         if g["gate"] == "checkpoint.first_save")
+        composite = next(g for g in d.gate_results if g["gate"] == "checkpoint.first_save")
         assert composite["verdict"] == "PASS"
         assert "verified at first save" in str(composite["detail"])
 
@@ -478,11 +514,14 @@ class TestHealthyFull:
         old test's red-maker, preserved)."""
         base, ckpt = _dense_base_with_ckpt(tmp_path)
         d = lsg.adjudicate_checkpoint(
-            ckpt, event="first_save", run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}))
+            ckpt,
+            event="first_save",
+            run_kind="full",
+            base_model_dir=base,
+            train_config_path=_write_cfg(tmp_path, {}),
+        )
         assert d.exit_code == 0, f"dense first-save must be CLEAR post-LG3: {d.blocking_reasons}"
-        composite = next(g for g in d.gate_results
-                         if g["gate"] == "checkpoint.first_save")
+        composite = next(g for g in d.gate_results if g["gate"] == "checkpoint.first_save")
         assert composite["verdict"] == "PASS"
         # The denominator pricing, asserted numerically (doctrine 2):
         assert composite["checked"] == 1 and composite["expected"] == 1
@@ -497,7 +536,9 @@ class TestHealthyFull:
         assert by_gate["checkpoint.expert_distinctness"]["abstention"] == "not_applicable"
         assert by_gate["checkpoint.expert_bytes"]["abstention"] == "not_applicable"
         assert set(composite["evidence"].get("inapplicable") or ()) == {
-            "checkpoint.expert_distinctness", "checkpoint.expert_bytes"}
+            "checkpoint.expert_distinctness",
+            "checkpoint.expert_bytes",
+        }
 
 
 class TestModeConfusion:
@@ -510,8 +551,8 @@ class TestModeConfusion:
         truncated = dict(list(_dense_full_tensors().items())[:4])  # lost 8 of 12
         ckpt = _materialize_artifact(tmp_path, truncated, name="trunc")
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}))
+            ckpt, run_kind="full", base_model_dir=base, train_config_path=_write_cfg(tmp_path, {})
+        )
         assert d.exit_code == 1
         assert d.run_kind == "full"  # never re-labeled as an adapter
         assert any("MODE/full" in r for r in d.blocking_reasons)
@@ -537,10 +578,13 @@ class TestModeConfusion:
         # (the two MODE/lora appends in cross_check_population) are untouched,
         # and nothing below asserts anything about the adapter denominator.
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base,
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
             train_config_path=_write_cfg(tmp_path, LORA_TRAIN),
             adapter_prefix="",
-            adapter_modules=_census_file(tmp_path, _lora_census_stems()))
+            adapter_modules=_census_file(tmp_path, _lora_census_stems()),
+        )
         assert d.exit_code == 1
         assert any("MODE/lora" in r and "BASE-WEIGHT" in r for r in d.blocking_reasons)
         assert any("MODE/lora" in r and "adapter marker" in r for r in d.blocking_reasons)
@@ -550,8 +594,8 @@ class TestModeConfusion:
         line is flipped."""
         base, ckpt = _dense_base_with_ckpt(tmp_path)
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="auto", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}))
+            ckpt, run_kind="auto", base_model_dir=base, train_config_path=_write_cfg(tmp_path, {})
+        )
         assert d.run_kind == "full" and "auto:" in d.declared_basis["run_kind"]
         assert d.exit_code == 0
 
@@ -566,7 +610,8 @@ class TestFrozenScopeAndExtras:
         ckpt = _materialize_artifact(tmp_path, keep, name="frozen")
         cfg = _write_cfg(tmp_path, {"frozen_regex": r"layers\.5\."})
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base, train_config_path=cfg)
+            ckpt, run_kind="full", base_model_dir=base, train_config_path=cfg
+        )
         assert d.exit_code == 0, f"{d.blocking_reasons}"
         assert d.report["inventory"]["real_tensors"] == 10
 
@@ -578,8 +623,8 @@ class TestFrozenScopeAndExtras:
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
         ckpt = _materialize_artifact(tmp_path, tensors, name="extra")
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}))
+            ckpt, run_kind="full", base_model_dir=base, train_config_path=_write_cfg(tmp_path, {})
+        )
         assert d.exit_code == 0
         assert any("outside the declared set" in n for n in d.declared_basis["notes"])
 
@@ -590,8 +635,12 @@ class TestFrozenScopeAndExtras:
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
         ckpt = _materialize_artifact(tmp_path, tensors, name="extra")
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}), strict_extras=True)
+            ckpt,
+            run_kind="full",
+            base_model_dir=base,
+            train_config_path=_write_cfg(tmp_path, {}),
+            strict_extras=True,
+        )
         assert d.exit_code == 1
         assert any("outside the declared set" in r for r in d.blocking_reasons)
 
@@ -628,9 +677,13 @@ class TestLoraDiscrimination:
         modules x 2 naming templates"; every assertion below is untouched."""
         base, ckpt, cfg = _healthy_lora(tmp_path)
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
             adapter_prefix="",
-            adapter_modules=_census_file(tmp_path, _lora_census_stems()))
+            adapter_modules=_census_file(tmp_path, _lora_census_stems()),
+        )
         assert d.exit_code == 0, f"healthy lora must be CLEAR: {d.blocking_reasons}"
         assert d.run_kind == "lora"
         inv = d.report["inventory"]
@@ -649,11 +702,11 @@ class TestLoraDiscrimination:
         base header -- that would manufacture a denominator and let this pass."""
         base, ckpt, cfg = _healthy_lora(tmp_path)
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base, train_config_path=cfg)
+            ckpt, run_kind="full", base_model_dir=base, train_config_path=cfg
+        )
         assert d.exit_code == 1
         assert "fqn-map" in d.declared_basis["fqns"]  # the remediation is named
-        assert any("VACUOUS" in g["verdict"] or g["verdict"] == "VACUOUS"
-                   for g in d.gate_results)
+        assert any("VACUOUS" in g["verdict"] or g["verdict"] == "VACUOUS" for g in d.gate_results)
 
     def test_lora_contamination_by_base_weights_blocks(self, tmp_path):
         """[PASSES-BEFORE] Red if: the contaminated append in the lora branch
@@ -663,15 +716,20 @@ class TestLoraDiscrimination:
         contaminated append remains the sole named red-maker, and the
         verbatim base FQN below is still foreign to the census-derived
         declared set exactly as it was foreign to the old one."""
-        tensors = {**_lora_tensors(),
-                   "layers.0.self_attn.q_proj.weight": ((8, 8), "F32")}  # verbatim base FQN
+        tensors = {
+            **_lora_tensors(),
+            "layers.0.self_attn.q_proj.weight": ((8, 8), "F32"),
+        }  # verbatim base FQN
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
         ckpt = _materialize_artifact(tmp_path, tensors, name="lora-dirty")
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base,
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
             train_config_path=_write_cfg(tmp_path, LORA_TRAIN),
             adapter_prefix="",
-            adapter_modules=_census_file(tmp_path, _lora_census_stems()))
+            adapter_modules=_census_file(tmp_path, _lora_census_stems()),
+        )
         assert d.exit_code == 1
         assert any("BASE-WEIGHT" in r for r in d.blocking_reasons)
 
@@ -690,13 +748,19 @@ class TestLoraDiscrimination:
         independent. Assertions strengthened: the derived adapter count and
         the drop control's fire are now pinned, not implied by the verdict."""
         base, ckpt, _cfg = _healthy_lora(tmp_path)
-        cfg = _write_cfg(tmp_path, {"lora_rank": 4,
-                                    "lora_targets": ["q_proj", "v_proj"]},
-                         name="no-kind-key.json")
+        cfg = _write_cfg(
+            tmp_path,
+            {"lora_rank": 4, "lora_targets": ["q_proj", "v_proj"]},
+            name="no-kind-key.json",
+        )
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="auto", base_model_dir=base, train_config_path=cfg,
+            ckpt,
+            run_kind="auto",
+            base_model_dir=base,
+            train_config_path=cfg,
             adapter_prefix="",
-            adapter_modules=_census_file(tmp_path, _lora_census_stems()))
+            adapter_modules=_census_file(tmp_path, _lora_census_stems()),
+        )
         assert d.run_kind == "lora" and "auto:" in d.declared_basis["run_kind"]
         assert d.exit_code == 0, f"{d.blocking_reasons}"
         # Denominator provenance pinned (#78, fix45-C1): 24 = 12 census
@@ -738,13 +802,15 @@ class TestLoraDiscrimination:
         base, ckpt, _cfg = _healthy_lora(tmp_path)
         with pytest.raises(lsg.GateUnmeasured) as exc_info:
             lsg.adjudicate_checkpoint(
-                ckpt, run_kind="auto", base_model_dir=base,
+                ckpt,
+                run_kind="auto",
+                base_model_dir=base,
                 train_config_path=_write_cfg(tmp_path, {}, name="empty-cfg.json"),
-                adapter_prefix="")
+                adapter_prefix="",
+            )
         msg = str(exc_info.value)
         assert msg.startswith("--adapter-modules was not supplied")
-        assert (lsg._refusal_class(msg)
-                == lsg._REFUSAL_ADAPTER_CENSUS_UNAVAILABLE)
+        assert lsg._refusal_class(msg) == lsg._REFUSAL_ADAPTER_CENSUS_UNAVAILABLE
 
     def test_lora_without_targets_abstains_and_blocks(self, tmp_path):
         """[CONVERTED BY fix45-C1 INTO A REFUSAL TEST -- the SECOND of the
@@ -767,20 +833,16 @@ class TestLoraDiscrimination:
         sentence guarded -- no GateUnmeasured reaches pytest.raises and
         this test is red."""
         base, ckpt, _ = _healthy_lora(tmp_path)
-        cfg = _write_cfg(tmp_path, {"peft_scheme": "lora", "lora_rank": 4},
-                         name="no-targets.json")
+        cfg = _write_cfg(tmp_path, {"peft_scheme": "lora", "lora_rank": 4}, name="no-targets.json")
         with pytest.raises(lsg.GateUnmeasured) as exc_info:
             lsg.adjudicate_checkpoint(
-                ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
-                adapter_prefix="")
+                ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg, adapter_prefix=""
+            )
         msg = str(exc_info.value)
         assert msg.startswith("--adapter-modules was not supplied")
-        assert (lsg._refusal_class(msg)
-                == lsg._REFUSAL_ADAPTER_CENSUS_UNAVAILABLE)
+        assert lsg._refusal_class(msg) == lsg._REFUSAL_ADAPTER_CENSUS_UNAVAILABLE
 
-    def test_healthy_lora_over_moe_base_is_adjudicated_in_adapter_scope(
-        self, tmp_path
-    ):
+    def test_healthy_lora_over_moe_base_is_adjudicated_in_adapter_scope(self, tmp_path):
         """[RED-UNDER-MUTANT adjudication/adapter-scope-inherits-base-expert-
         denominator; GREEN-ON-SHIPPED] MUST_FIRE for the MINT_ZERO_ONLY_IN_PROBE
         declared exception (`if not spec.frozen_regex and not expert_stems:` --
@@ -823,35 +885,39 @@ class TestLoraDiscrimination:
         VACUOUS door on declared-8/examined-0, exit flips to 1, red on the
         first assertion, exactly as the mutant analysis above demands."""
         _probe_declared_or_calibrate(MOE_CFG, 8, 2)
-        base = _make_base(tmp_path, _moe_full_tensors(), MOE_CFG,
-                          name="lom-base")
+        base = _make_base(tmp_path, _moe_full_tensors(), MOE_CFG, name="lom-base")
         adapters = {}
         for ly in range(2):
             stem = f"layers.{ly}.self_attn.q_proj"
             adapters[f"{stem}.adapter.linear_in.weight"] = ((4, 8), "F32")
             adapters[f"{stem}.adapter.linear_out.weight"] = ((8, 4), "F32")
         ckpt = _materialize_artifact(tmp_path, adapters, name="lom")
-        cfg = _write_cfg(tmp_path, {"peft_scheme": "lora", "lora_rank": 4,
-                                    "lora_targets": ["q_proj"]})
+        cfg = _write_cfg(
+            tmp_path, {"peft_scheme": "lora", "lora_rank": 4, "lora_targets": ["q_proj"]}
+        )
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
             adapter_prefix="",
             adapter_modules=_census_file(
-                tmp_path,
-                [f"layers.{ly}.self_attn.q_proj" for ly in range(2)]))
+                tmp_path, [f"layers.{ly}.self_attn.q_proj" for ly in range(2)]
+            ),
+        )
         assert d.exit_code == 0, (
             f"healthy LoRA-of-MoE must CLEAR in adapter scope, got "
             f"{d.exit_code}: {d.blocking_reasons} -- under the mutant the "
             f"first reasons are the expert gates blocking on experts this "
-            f"adapter was never declared to contain")
+            f"adapter was never declared to contain"
+        )
         assert "ADAPTER SCOPE" in d.declared_basis["num_experts"]
         inv = d.report["inventory"]
         assert inv["real_tensors"] == 4 and inv["base_tensors"] == 34
         assert "4 adapter tensors" in d.declared_basis["fqns"]
         by_gate = {g["gate"]: g for g in d.gate_results}
         assert by_gate["checkpoint.expert_distinctness"]["verdict"] == "SKIP"
-        assert (by_gate["checkpoint.expert_distinctness"]["abstention"]
-                == "not_applicable")
+        assert by_gate["checkpoint.expert_distinctness"]["abstention"] == "not_applicable"
         assert by_gate["checkpoint.expert_bytes"]["verdict"] == "SKIP"
         # The mint must also reach the CONTROL layer's view of the context:
         # alias inapplicability carries num_experts=0 only if the exception
@@ -861,9 +927,7 @@ class TestLoraDiscrimination:
         assert "num_experts=0" in str(alias.get("reason"))
         assert _control_by_prefix(d, "drop")["status"] == "fired"
 
-    def test_adapter_scope_mint_does_not_apply_when_adapters_target_experts(
-        self, tmp_path
-    ):
+    def test_adapter_scope_mint_does_not_apply_when_adapters_target_experts(self, tmp_path):
         """[FAILS-BEFORE on the fix38 lines marked [new]; the original three
         assertions are PASSES-BEFORE fences, kept byte-for-byte -- stated per
         the house rule] Over-application fence for the adapter-scope mint,
@@ -912,20 +976,29 @@ class TestLoraDiscrimination:
         attention stems as expert flips leg B red (mint dies)."""
         _probe_declared_or_calibrate(MOE_CFG, 8, 2)
         spec = lsg.resolve_train_spec(
-            {"peft_scheme": "lora", "lora_rank": 4,
-             "lora_targets": ["linear_fc1", "linear_fc2"]},
-            "test://cfg", "lora", None)
+            {"peft_scheme": "lora", "lora_rank": 4, "lora_targets": ["linear_fc1", "linear_fc2"]},
+            "test://cfg",
+            "lora",
+            None,
+        )
         base = lsg.BaseModel(
-            model_dir=tmp_path, config=MOE_CFG,
-            tensors={k: (v[0], "float32")
-                     for k, v in _moe_full_tensors().items()},
-            tensors_source="test://synthetic")
+            model_dir=tmp_path,
+            config=MOE_CFG,
+            tensors={k: (v[0], "float32") for k, v in _moe_full_tensors().items()},
+            tensors_source="test://synthetic",
+        )
         decl = lsg.derive_declared_block(
-            base, spec, set(), "",
+            base,
+            spec,
+            set(),
+            "",
             adapter_modules=_census(
                 f"layers.{ly}.experts.{e}.{p}"
-                for ly in range(2) for e in range(8)
-                for p in ("linear_fc1", "linear_fc2")))
+                for ly in range(2)
+                for e in range(8)
+                for p in ("linear_fc1", "linear_fc2")
+            ),
+        )
         assert decl.num_experts == 8
         assert decl.num_moe_layers == 2
         assert "ADAPTER SCOPE" not in decl.experts_basis
@@ -935,9 +1008,9 @@ class TestLoraDiscrimination:
         # base's real expert parent stems) were classified expert-family by
         # the gates' own name atoms and found resident. The pre-#78 "2 of 2"
         # counted config targets; post-#78 the census prices modules.
-        assert any(
-            "ADAPTER SCOPE RETAINS EXPERTS: 32 of 32" in n for n in decl.notes
-        ), f"mint retention note missing or miscounted: {decl.notes!r}"
+        assert any("ADAPTER SCOPE RETAINS EXPERTS: 32 of 32" in n for n in decl.notes), (
+            f"mint retention note missing or miscounted: {decl.notes!r}"
+        )
         # [new] fix38 positive control, the leg that makes this fence
         # convicting: the SAME base with a census of non-expert stems only.
         # Pre-fix38 the dead census minted nothing for any non-empty list,
@@ -945,23 +1018,24 @@ class TestLoraDiscrimination:
         # census classifier to have examined both attention stems and found
         # 0 of 2 expert-resident.
         attention_spec = lsg.resolve_train_spec(
-            {"peft_scheme": "lora", "lora_rank": 4,
-             "lora_targets": ["q_proj"]},
-            "test://cfg", "lora", None)
+            {"peft_scheme": "lora", "lora_rank": 4, "lora_targets": ["q_proj"]},
+            "test://cfg",
+            "lora",
+            None,
+        )
         attention_decl = lsg.derive_declared_block(
-            base, attention_spec, set(), "",
-            adapter_modules=_census(
-                f"layers.{ly}.self_attn.q_proj" for ly in range(2)))
+            base,
+            attention_spec,
+            set(),
+            "",
+            adapter_modules=_census(f"layers.{ly}.self_attn.q_proj" for ly in range(2)),
+        )
         assert attention_decl.num_experts == 0
         assert attention_decl.num_moe_layers == 0
-        assert ("ADAPTER SCOPE: 0 of 2 census modules"
-                in attention_decl.experts_basis)
+        assert "ADAPTER SCOPE: 0 of 2 census modules" in attention_decl.experts_basis
         assert "base model's own declaration was 8" in attention_decl.experts_basis
 
-
-    def test_unknown_targets_over_moe_base_abstain_and_keep_the_base_denominator(
-        self, tmp_path
-    ):
+    def test_unknown_targets_over_moe_base_abstain_and_keep_the_base_denominator(self, tmp_path):
         """[REPAIRED BY fix45-C1 -- red under #78 until re-homed; the
         red-maker the test always carried survives, named below] MUST_FIRE
         for the false-green direction of the adapter-scope mint, re-homed
@@ -999,40 +1073,42 @@ class TestLoraDiscrimination:
         fires under an uninterpretable scope filter, and exit flips to 0 --
         red on the first assertion; the false-green direction stays named."""
         _probe_declared_or_calibrate(MOE_CFG, 8, 2)
-        base = _make_base(tmp_path, _moe_full_tensors(), MOE_CFG,
-                          name="unkm-base")
+        base = _make_base(tmp_path, _moe_full_tensors(), MOE_CFG, name="unkm-base")
         adapters = {}
         for ly in range(2):
             stem = f"layers.{ly}.self_attn.q_proj"
             adapters[f"{stem}.adapter.linear_in.weight"] = ((4, 8), "F32")
             adapters[f"{stem}.adapter.linear_out.weight"] = ((8, 4), "F32")
         ckpt = _materialize_artifact(tmp_path, adapters, name="unkm")
-        cfg = _write_cfg(tmp_path, {"peft_scheme": "lora", "lora_rank": 4,
-                                    "frozen_regex": r"layers\.5\."},
-                         name="unknown-targets-moe.json")
+        cfg = _write_cfg(
+            tmp_path,
+            {"peft_scheme": "lora", "lora_rank": 4, "frozen_regex": r"layers\.5\."},
+            name="unknown-targets-moe.json",
+        )
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
             adapter_prefix="",
             adapter_modules=_census_file(
-                tmp_path,
-                [f"layers.{ly}.self_attn.q_proj" for ly in range(2)]))
+                tmp_path, [f"layers.{ly}.self_attn.q_proj" for ly in range(2)]
+            ),
+        )
         # The run BLOCKS -- the stated, blocking refusal-to-mint (exit 1),
         # consistent with the low-overlap full-FT precedent; the exit-3
         # refusal is reserved for the no-census state and pinned by the two
         # named refusal conversions in this class.
         assert d.exit_code == 1
         assert "ADAPTER SCOPE" not in d.declared_basis["num_experts"]
-        assert any("adapter-scope expert mint refused" in n
-                   for n in d.declared_basis["notes"])
+        assert any("adapter-scope expert mint refused" in n for n in d.declared_basis["notes"])
         inv = d.report["inventory"]
         assert inv["real_tensors"] == 4 and inv["base_tensors"] == 34
         by_gate = {g["gate"]: g for g in d.gate_results}
         assert by_gate["checkpoint.expert_distinctness"]["verdict"] == "VACUOUS"
         assert by_gate["checkpoint.expert_bytes"]["verdict"] == "VACUOUS"
-        assert "8 experts" in str(
-            by_gate["checkpoint.expert_distinctness"]["detail"])
-        assert ("4 adapter tensors = 2 census modules"
-                in d.declared_basis["fqns"])
+        assert "8 experts" in str(by_gate["checkpoint.expert_distinctness"]["detail"])
+        assert "4 adapter tensors = 2 census modules" in d.declared_basis["fqns"]
 
 
 class TestLoraStructuralBinding:
@@ -1060,15 +1136,17 @@ class TestLoraStructuralBinding:
         namespace); the ghost stem is absent from it, so the phantom leg
         fires on the same wrong FQN as before, and binding each healthy
         adapter to its census parent remains the mechanism under test."""
-        tensors = {**_lora_tensors(),
-                   "ghost.mod.adapter.linear_in.weight": ((4, 8), "F32")}
+        tensors = {**_lora_tensors(), "ghost.mod.adapter.linear_in.weight": ((4, 8), "F32")}
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
         ckpt = _materialize_artifact(tmp_path, tensors, name="lora-ghost")
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base,
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
             train_config_path=_write_cfg(tmp_path, LORA_TRAIN),
             adapter_prefix="",
-            adapter_modules=_census_file(tmp_path, _lora_census_stems()))
+            adapter_modules=_census_file(tmp_path, _lora_census_stems()),
+        )
         assert d.exit_code == 1
         assert any("phantom modules" in r for r in d.blocking_reasons)
 
@@ -1099,12 +1177,15 @@ class TestLoraStructuralBinding:
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
         ckpt = _materialize_artifact(tmp_path, tensors, name="lora-badrank")
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base,
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
             train_config_path=_write_cfg(tmp_path, LORA_TRAIN),
             adapter_prefix="",
             adapter_modules=_census_file(
-                tmp_path, _lora_census_stems(),
-                dims={s: (8, 8) for s in _lora_census_stems()}))
+                tmp_path, _lora_census_stems(), dims={s: (8, 8) for s in _lora_census_stems()}
+            ),
+        )
         assert d.exit_code == 1
         assert any("violate the declared" in r for r in d.blocking_reasons)
 
@@ -1120,9 +1201,13 @@ class TestLoraStructuralBinding:
         # binding strips; the census names base-tree modules, which is
         # exactly what the launch-time census would record.
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
             adapter_prefix="base_model.model.",
-            adapter_modules=_census_file(tmp_path, _lora_census_stems()))
+            adapter_modules=_census_file(tmp_path, _lora_census_stems()),
+        )
         assert d.exit_code == 0, f"correctly-pinned prefix must be CLEAR: {d.blocking_reasons}"
         # #80: 31 real = 24 judged adapters + 7 set-aside save-state entries
         # (6 optimizer.* + 1 rng_state); the inventory counts the physical
@@ -1149,12 +1234,16 @@ class TestLoraStructuralBinding:
         # assertions are unchanged; the refusal-for-inconsistent-knobs arm
         # stays pinned by TestAdapterNamingAgreement.
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
             adapter_prefix="",
             adapter_marker=r"(?:lora_[AB]|delta_[AB])",
             adapter_suffix_re=r"\.delta_[AB]$",
             adapter_suffixes=(".delta_A", ".delta_B"),
-            adapter_modules=_census_file(tmp_path, _lora_census_stems()))
+            adapter_modules=_census_file(tmp_path, _lora_census_stems()),
+        )
         assert d.exit_code == 1
         # #80: the vacuity sweep's denominator is the EXAMINED artifact
         # population -- the structural name-search runs over every real
@@ -1166,8 +1255,7 @@ class TestLoraStructuralBinding:
         # true again would blind the sweep to the excused namespace
         # (fail-open). Teeth unchanged: exit 1, vacuity named, zero bound
         # over the full 31-entry artifact.
-        assert any("0 of 31" in r and "vacuous detector" in r
-                   for r in d.blocking_reasons)
+        assert any("0 of 31" in r and "vacuous detector" in r for r in d.blocking_reasons)
 
 
 # ---------------------------------------------------------------------------
@@ -1186,8 +1274,8 @@ class TestFqnMap:
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
         ckpt = _materialize_artifact(tmp_path, _renamed_full_tensors(), name="dcp")
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}))
+            ckpt, run_kind="full", base_model_dir=base, train_config_path=_write_cfg(tmp_path, {})
+        )
         assert d.exit_code == 1
         assert "--fqn-map" in d.declared_basis["fqns"]
 
@@ -1200,8 +1288,12 @@ class TestFqnMap:
         map_path = tmp_path / "fqn-map.json"
         map_path.write_text(json.dumps(sorted(_renamed_full_tensors())), encoding="utf-8")
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}), fqn_map=map_path)
+            ckpt,
+            run_kind="full",
+            base_model_dir=base,
+            train_config_path=_write_cfg(tmp_path, {}),
+            fqn_map=map_path,
+        )
         assert d.exit_code == 0, f"{d.blocking_reasons}"
         assert "--fqn-map" in d.declared_basis["fqns"]
         assert _control_by_prefix(d, "drop")["status"] == "fired"
@@ -1212,11 +1304,16 @@ class TestFqnMap:
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
         ckpt = _materialize_artifact(tmp_path, _renamed_full_tensors(), name="dcp")
         map_path = tmp_path / "stale-map.json"
-        map_path.write_text(json.dumps([f"stale.{k}" for k in _dense_full_tensors()]),
-                            encoding="utf-8")
+        map_path.write_text(
+            json.dumps([f"stale.{k}" for k in _dense_full_tensors()]), encoding="utf-8"
+        )
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}), fqn_map=map_path)
+            ckpt,
+            run_kind="full",
+            base_model_dir=base,
+            train_config_path=_write_cfg(tmp_path, {}),
+            fqn_map=map_path,
+        )
         assert d.exit_code == 1
         assert any("zero names" in n for n in d.declared_basis["notes"])
 
@@ -1254,9 +1351,14 @@ class TestFqnMap:
         # list") -- feeding it keeps the test's subject (the full-model map
         # must not reattach to an adapter run) measurable at all.
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
-            fqn_map=map_path, adapter_prefix="",
-            adapter_modules=_census_file(tmp_path, _lora_census_stems()))
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
+            fqn_map=map_path,
+            adapter_prefix="",
+            adapter_modules=_census_file(tmp_path, _lora_census_stems()),
+        )
         assert d.exit_code == 0, f"{d.blocking_reasons}"
         assert any("IGNORED" in n for n in d.declared_basis["notes"])
 
@@ -1287,8 +1389,7 @@ class TestControlFloors:
         assertion in this class moved."""
         return _census_file(
             tmp_path,
-            [f"layers.{i}.self_attn.{w}"
-             for i in range(6) for w in ("q_proj", "v_proj")],
+            [f"layers.{i}.self_attn.{w}" for i in range(6) for w in ("q_proj", "v_proj")],
         )
 
     def test_empty_control_sweep_blocks_via_any_fired_floor(self, tmp_path):
@@ -1298,9 +1399,14 @@ class TestControlFloors:
         _floor_census); assertions and red-makers unchanged."""
         base, ckpt, cfg = _healthy_lora(tmp_path)
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
-            adapter_prefix="", controls=(),
-            adapter_modules=self._floor_census(tmp_path))
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
+            adapter_prefix="",
+            controls=(),
+            adapter_modules=self._floor_census(tmp_path),
+        )
         assert d.exit_code == 1
         assert any("no MUST_FIRE control fired" in r for r in d.blocking_reasons)
 
@@ -1311,9 +1417,14 @@ class TestControlFloors:
         red-makers unchanged."""
         base, ckpt, cfg = _healthy_lora(tmp_path)
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
-            adapter_prefix="", controls=("telemetry",),
-            adapter_modules=self._floor_census(tmp_path))
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
+            adapter_prefix="",
+            controls=("telemetry",),
+            adapter_modules=self._floor_census(tmp_path),
+        )
         assert d.exit_code == 1
         assert d.controls[0]["status"] == "unconstructable"
 
@@ -1325,13 +1436,19 @@ class TestControlFloors:
         fix45: vehicle census added (see _floor_census); assertions and
         red-makers unchanged."""
         monkeypatch.setattr(
-            lsg.SaveCompletenessGate, "run",
-            lambda self, c: _gr(Verdict.PASS, lsg.SaveCompletenessGate.id, "quiet fake"))
+            lsg.SaveCompletenessGate,
+            "run",
+            lambda self, c: _gr(Verdict.PASS, lsg.SaveCompletenessGate.id, "quiet fake"),
+        )
         base, ckpt, cfg = _healthy_lora(tmp_path)
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
             adapter_prefix="",
-            adapter_modules=self._floor_census(tmp_path))
+            adapter_modules=self._floor_census(tmp_path),
+        )
         assert d.exit_code == 1
         assert _control_by_prefix(d, "drop")["status"] == "not_fired"
         assert any("stayed QUIET" in r for r in d.blocking_reasons)
@@ -1343,17 +1460,27 @@ class TestControlFloors:
         patch the reason names INCONCLUSIVE and why.
         fix45: vehicle census added (see _floor_census); assertions and
         red-makers unchanged."""
-        monkeypatch.setitem(lsg._CONTROL_BUILDERS, "x",
-                            lambda ctx, bl: {"control": "x", "status": "inconclusive",
-                                             "inconclusive_reason": "synthesized"})
+        monkeypatch.setitem(
+            lsg._CONTROL_BUILDERS,
+            "x",
+            lambda ctx, bl: {
+                "control": "x",
+                "status": "inconclusive",
+                "inconclusive_reason": "synthesized",
+            },
+        )
         base, ckpt, cfg = _healthy_lora(tmp_path)
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
-            adapter_prefix="", controls=("x",),
-            adapter_modules=self._floor_census(tmp_path))
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
+            adapter_prefix="",
+            controls=("x",),
+            adapter_modules=self._floor_census(tmp_path),
+        )
         assert d.exit_code == 1
-        assert any("INCONCLUSIVE" in r and "synthesized" in r
-                   for r in d.blocking_reasons)
+        assert any("INCONCLUSIVE" in r and "synthesized" in r for r in d.blocking_reasons)
 
     def test_skipped_only_lands_on_the_floor_not_on_silence(self, tmp_path, monkeypatch):
         """[PASSES-BEFORE] 'skipped' (probe vocabulary for inapplicable) is
@@ -1361,13 +1488,19 @@ class TestControlFloors:
         is deleted.
         fix45: vehicle census added (see _floor_census); assertions and
         red-makers unchanged."""
-        monkeypatch.setitem(lsg._CONTROL_BUILDERS, "x",
-                            lambda ctx, bl: {"control": "x", "status": "skipped"})
+        monkeypatch.setitem(
+            lsg._CONTROL_BUILDERS, "x", lambda ctx, bl: {"control": "x", "status": "skipped"}
+        )
         base, ckpt, cfg = _healthy_lora(tmp_path)
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
-            adapter_prefix="", controls=("x",),
-            adapter_modules=self._floor_census(tmp_path))
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
+            adapter_prefix="",
+            controls=("x",),
+            adapter_modules=self._floor_census(tmp_path),
+        )
         assert d.exit_code == 1
         assert any("no MUST_FIRE control fired" in r for r in d.blocking_reasons)
 
@@ -1378,33 +1511,47 @@ class TestControlFloors:
         new, and it is what the library caller matches on.)
         fix45: vehicle census added (see _floor_census); assertions and
         red-makers unchanged."""
-        monkeypatch.setitem(lsg._CONTROL_BUILDERS, "x",
-                            lambda ctx, bl: {"control": "x", "status": "sparkly"})
+        monkeypatch.setitem(
+            lsg._CONTROL_BUILDERS, "x", lambda ctx, bl: {"control": "x", "status": "sparkly"}
+        )
         base, ckpt, cfg = _healthy_lora(tmp_path)
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
-            adapter_prefix="", controls=("x",),
-            adapter_modules=self._floor_census(tmp_path))
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
+            adapter_prefix="",
+            controls=("x",),
+            adapter_modules=self._floor_census(tmp_path),
+        )
         assert d.exit_code == 1
-        assert any("unrecognized status" in r and "sparkly" in r
-                   for r in d.blocking_reasons)
+        assert any("unrecognized status" in r and "sparkly" in r for r in d.blocking_reasons)
 
     def test_framework_tripwire_pass_over_zero_checked_blocks(self, tmp_path, monkeypatch):
         """[PASSES-BEFORE] Red if: the `if r.verdict is Verdict.PASS and
         r.coverage.checked == 0` loop is deleted.
         fix45: vehicle census added (see _floor_census); assertions and
         red-makers unchanged."""
+
         class _VacuousOk:
             def run(self, ctx):
-                return GateResult(gate_id="test.vacuous", verdict=Verdict.PASS,
-                                  coverage=Coverage(0, "units"), detail="all([])")
+                return GateResult(
+                    gate_id="test.vacuous",
+                    verdict=Verdict.PASS,
+                    coverage=Coverage(0, "units"),
+                    detail="all([])",
+                )
 
         monkeypatch.setattr(lsg, "_ALWAYS_GATES", (_VacuousOk,))
         base, ckpt, cfg = _healthy_lora(tmp_path)
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
             adapter_prefix="",
-            adapter_modules=self._floor_census(tmp_path))
+            adapter_modules=self._floor_census(tmp_path),
+        )
         assert d.exit_code == 1
         assert any("framework invariant breach" in r for r in d.blocking_reasons)
 
@@ -1418,28 +1565,35 @@ class TestStackedAliasAttribution:
 
     def _ctx(self):
         tm = lambda fqn: lsg.TensorMeta(  # noqa: E731 -- fixture-local shorthand
-            fqn=fqn, shape=(16, 4), dtype="float32",
-            storage_id=f"store://{fqn}", kind="tensor")
+            fqn=fqn, shape=(16, 4), dtype="float32", storage_id=f"store://{fqn}", kind="tensor"
+        )
         return lsg.CheckpointGateContext(
             tensors=(tm("L0.moe.experts.weight"), tm("L1.moe.experts.weight")),
             declared_fqns=("L0.moe.experts.weight", "L1.moe.experts.weight"),
-            num_experts=16, num_moe_layers=2,
-            expected_expert_bytes=None, origin="test://synthetic")
+            num_experts=16,
+            num_moe_layers=2,
+            expected_expert_bytes=None,
+            origin="test://synthetic",
+        )
 
     def _pin_stacked(self, monkeypatch):
         monkeypatch.setattr(lsg, "_expert_weight_candidates", lambda ts: list(ts))
         monkeypatch.setattr(lsg, "_split_expert_layouts", lambda c: ({}, list(c), []))
-        monkeypatch.setattr(lsg, "_layer_normalized_stem",
-                            lambda f: f.split(".", 1)[1] if "." in f else f)
+        monkeypatch.setattr(
+            lsg, "_layer_normalized_stem", lambda f: f.split(".", 1)[1] if "." in f else f
+        )
 
     def test_confounded_baseline_is_inconclusive_not_fired(self, monkeypatch):
         """[FAILS-BEFORE -- Edits 1/2] mirror of the probe's
         test_blocking_baseline_is_inconclusive_not_fired, now for THIS tool."""
         self._pin_stacked(monkeypatch)
-        monkeypatch.setattr(lsg.ExpertDistinctnessGate, "run",
-                            lambda self, c: _gr(Verdict.FAIL, self.id))
-        out = lsg.control_alias(self._ctx(), {lsg.ExpertDistinctnessGate.id:
-                                _gr(Verdict.FAIL, lsg.ExpertDistinctnessGate.id)})
+        monkeypatch.setattr(
+            lsg.ExpertDistinctnessGate, "run", lambda self, c: _gr(Verdict.FAIL, self.id)
+        )
+        out = lsg.control_alias(
+            self._ctx(),
+            {lsg.ExpertDistinctnessGate.id: _gr(Verdict.FAIL, lsg.ExpertDistinctnessGate.id)},
+        )
         assert out["status"] == "inconclusive" and out["confounded"] is True
         assert "baseline" in out["inconclusive_reason"]
 
@@ -1448,10 +1602,13 @@ class TestStackedAliasAttribution:
         malfunction, not a detection: inconclusive, confounded False. The old
         code credited res.blocking -- i.e., it credited the crash."""
         self._pin_stacked(monkeypatch)
-        monkeypatch.setattr(lsg.ExpertDistinctnessGate, "run",
-                            lambda self, c: _gr(Verdict.ERROR, self.id))
-        out = lsg.control_alias(self._ctx(), {lsg.ExpertDistinctnessGate.id:
-                                _gr(Verdict.PASS, lsg.ExpertDistinctnessGate.id)})
+        monkeypatch.setattr(
+            lsg.ExpertDistinctnessGate, "run", lambda self, c: _gr(Verdict.ERROR, self.id)
+        )
+        out = lsg.control_alias(
+            self._ctx(),
+            {lsg.ExpertDistinctnessGate.id: _gr(Verdict.PASS, lsg.ExpertDistinctnessGate.id)},
+        )
         assert out["status"] == "inconclusive" and out["confounded"] is False
         assert out["verdict"] == "ERROR"
 
@@ -1461,20 +1618,26 @@ class TestStackedAliasAttribution:
         _attributed_status, and test_error_verdict_is_not_credited goes red
         with this one still green -- the pair is the detector's two controls.]"""
         self._pin_stacked(monkeypatch)
-        monkeypatch.setattr(lsg.ExpertDistinctnessGate, "run",
-                            lambda self, c: _gr(Verdict.FAIL, self.id))
-        out = lsg.control_alias(self._ctx(), {lsg.ExpertDistinctnessGate.id:
-                                _gr(Verdict.PASS, lsg.ExpertDistinctnessGate.id)})
+        monkeypatch.setattr(
+            lsg.ExpertDistinctnessGate, "run", lambda self, c: _gr(Verdict.FAIL, self.id)
+        )
+        out = lsg.control_alias(
+            self._ctx(),
+            {lsg.ExpertDistinctnessGate.id: _gr(Verdict.PASS, lsg.ExpertDistinctnessGate.id)},
+        )
         assert out["status"] == "fired" and out["confounded"] is False
         assert out["baseline_verdict"] == "PASS"
 
     def test_acceptance_stays_not_fired(self, monkeypatch):
         """[FAILS-BEFORE -- arity] True negative naming preserved."""
         self._pin_stacked(monkeypatch)
-        monkeypatch.setattr(lsg.ExpertDistinctnessGate, "run",
-                            lambda self, c: _gr(Verdict.PASS, self.id))
-        out = lsg.control_alias(self._ctx(), {lsg.ExpertDistinctnessGate.id:
-                                _gr(Verdict.PASS, lsg.ExpertDistinctnessGate.id)})
+        monkeypatch.setattr(
+            lsg.ExpertDistinctnessGate, "run", lambda self, c: _gr(Verdict.PASS, self.id)
+        )
+        out = lsg.control_alias(
+            self._ctx(),
+            {lsg.ExpertDistinctnessGate.id: _gr(Verdict.PASS, lsg.ExpertDistinctnessGate.id)},
+        )
         assert out["status"] == "not_fired"
 
 
@@ -1491,31 +1654,43 @@ class TestProbeAliasSpellings:
     and confound the baseline, which is fixture arithmetic, not a verdict."""
 
     def _probe_ctx(self, fqns):
-        tms = tuple(lsg.TensorMeta(fqn=f, shape=(4, 4), dtype="float32",
-                                   storage_id=f"store://{f}", kind="tensor")
-                    for f in fqns)
+        tms = tuple(
+            lsg.TensorMeta(
+                fqn=f, shape=(4, 4), dtype="float32", storage_id=f"store://{f}", kind="tensor"
+            )
+            for f in fqns
+        )
         return lsg.CheckpointGateContext(
-            tensors=tms, declared_fqns=tuple(fqns),
-            num_experts=8, num_moe_layers=1,
-            expected_expert_bytes=None, origin="test://synthetic")
+            tensors=tms,
+            declared_fqns=tuple(fqns),
+            num_experts=8,
+            num_moe_layers=1,
+            expected_expert_bytes=None,
+            origin="test://synthetic",
+        )
 
     def _run_control(self, ctx, n=4):
         assert lsg._probe_alias_control is not None, (
             "probe unimportable -- the sys.path insertion in _load_gate "
-            "regressed; fix the loader, never this guard")
+            "regressed; fix the loader, never this guard"
+        )
         baseline = lsg.ExpertDistinctnessGate().run(ctx)
         assert not baseline.blocking, (
             f"fixture drifted: 16-of-16 healthy experts must PASS pre-"
             f"injection ({baseline.detail}) -- calibrate the fixture, never "
-            f"the assertion")
+            f"the assertion"
+        )
         return lsg._probe_alias_control(ctx, n, baseline=baseline)
 
     def test_probe_alias_control_fires_on_global_spelling(self):
         """[FAILS-BEFORE -- Edits 1/2] The spelling the hand-rolled loop read
         as 'fused': pre-patch this returns skipped; post-patch it aliases 4
         members of a same-stem group onto one storage and FIRES."""
-        fqns = [f"m.layers.0.experts.{i}.{p}.weight"
-                for p in ("linear_fc1", "linear_fc2") for i in range(8)]
+        fqns = [
+            f"m.layers.0.experts.{i}.{p}.weight"
+            for p in ("linear_fc1", "linear_fc2")
+            for i in range(8)
+        ]
         out = self._run_control(self._probe_ctx(fqns))
         assert out["status"] == "fired", f"{out!r}"
         assert out["confounded"] is False
@@ -1528,8 +1703,11 @@ class TestProbeAliasSpellings:
         any regrouping that narrows (not widens) the eligible population goes
         red here -- this is also the only local net for the
         not-provided-here tests/test_hunt_finding_repairs.py contract."""
-        fqns = [f"m.layers.0.mlp.experts.experts.linear_fc{p}.weight{i}"
-                for p in (1, 2) for i in range(8)]
+        fqns = [
+            f"m.layers.0.mlp.experts.experts.linear_fc{p}.weight{i}"
+            for p in (1, 2)
+            for i in range(8)
+        ]
         out = self._run_control(self._probe_ctx(fqns))
         assert out["status"] == "fired", f"{out!r}"
         assert out["confounded"] is False
@@ -1543,14 +1721,24 @@ class TestRouterControlDivergence:
     an honest shard group and only the guard's reaction is under test."""
 
     def _sharded_router_ctx(self):
-        tms = tuple(lsg.TensorMeta(fqn=f"m.layers.0.experts.{i}.w.weight",
-                                   shape=(4, 4), dtype="float32",
-                                   storage_id=f"s{i}", kind="tensor")
-                    for i in range(8))
+        tms = tuple(
+            lsg.TensorMeta(
+                fqn=f"m.layers.0.experts.{i}.w.weight",
+                shape=(4, 4),
+                dtype="float32",
+                storage_id=f"s{i}",
+                kind="tensor",
+            )
+            for i in range(8)
+        )
         return lsg.CheckpointGateContext(
-            tensors=tms, declared_fqns=tuple(t.fqn for t in tms),
-            num_experts=8, num_moe_layers=1,
-            expected_expert_bytes=None, origin="test://synthetic")
+            tensors=tms,
+            declared_fqns=tuple(t.fqn for t in tms),
+            num_experts=8,
+            num_moe_layers=1,
+            expected_expert_bytes=None,
+            origin="test://synthetic",
+        )
 
     def test_routed_in_then_skipped_rewrites_to_unconstructable(self, monkeypatch):
         """[FAILS-BEFORE -- Edit 4] Pre-patch the probe's 'skipped' passed
@@ -1559,10 +1747,13 @@ class TestRouterControlDivergence:
         'unconstructable', probe's own status preserved, original reason
         embedded (auditable divergence, not a laundered one)."""
         monkeypatch.setattr(
-            lsg, "_probe_alias_control",
+            lsg,
+            "_probe_alias_control",
             lambda ctx, n, baseline=None: {
                 "status": "skipped",
-                "reason": "synthesized: control declines after routing"})
+                "reason": "synthesized: control declines after routing",
+            },
+        )
         out = lsg.control_alias(self._sharded_router_ctx(), {})
         assert out["status"] == "unconstructable"
         assert out["probe_status"] == "skipped"
@@ -1576,11 +1767,18 @@ class TestRouterControlDivergence:
         minted by the probe would be re-labeled -- the symmetric doctrine-5
         defect this fence exists to accuse."""
         monkeypatch.setattr(
-            lsg, "_probe_alias_control",
+            lsg,
+            "_probe_alias_control",
             lambda ctx, n, baseline=None: {
-                "status": "fired", "confounded": False, "verdict": "FAIL",
-                "detail": "synthesized fire", "baseline_verdict": "PASS",
-                "aliased_fqns": [], "inconclusive_reason": ""})
+                "status": "fired",
+                "confounded": False,
+                "verdict": "FAIL",
+                "detail": "synthesized fire",
+                "baseline_verdict": "PASS",
+                "aliased_fqns": [],
+                "inconclusive_reason": "",
+            },
+        )
         out = lsg.control_alias(self._sharded_router_ctx(), {})
         assert out["status"] == "fired"
         assert out["control"] == "alias(sharded, probe-verbatim)"
@@ -1594,44 +1792,76 @@ class TestUnderfillAndDropBuilders:
         monkeypatch.setattr(lsg, "_expert_weight_candidates", lambda ts: [])
         monkeypatch.setattr(lsg, "_split_expert_layouts", lambda c: ({}, [], []))
         ctx = lsg.CheckpointGateContext(
-            tensors=(), declared_fqns=None, num_experts=0, num_moe_layers=0,
-            expected_expert_bytes=None, origin="test://synthetic")
+            tensors=(),
+            declared_fqns=None,
+            num_experts=0,
+            num_moe_layers=0,
+            expected_expert_bytes=None,
+            origin="test://synthetic",
+        )
         assert lsg.control_underfill(ctx, {})["status"] == "inapplicable"
 
     def test_underfill_unconstructable_below_eight_experts(self, monkeypatch):
         """[PASSES-BEFORE] The incident ratio cannot be reproduced below 8
         without degenerating to zero. Red if: the `< 8` guard is deleted --
         the control would then inject a same-shaped tensor and read not_fired."""
-        tm = lsg.TensorMeta(fqn="L0.moe.experts.weight", shape=(4, 4),
-                            dtype="float32", storage_id="s", kind="tensor")
+        tm = lsg.TensorMeta(
+            fqn="L0.moe.experts.weight",
+            shape=(4, 4),
+            dtype="float32",
+            storage_id="s",
+            kind="tensor",
+        )
         monkeypatch.setattr(lsg, "_expert_weight_candidates", lambda ts: [tm])
         monkeypatch.setattr(lsg, "_split_expert_layouts", lambda c: ({}, [tm], []))
         ctx = lsg.CheckpointGateContext(
-            tensors=(tm,), declared_fqns=(tm.fqn,), num_experts=4, num_moe_layers=1,
-            expected_expert_bytes=None, origin="test://synthetic")
+            tensors=(tm,),
+            declared_fqns=(tm.fqn,),
+            num_experts=4,
+            num_moe_layers=1,
+            expected_expert_bytes=None,
+            origin="test://synthetic",
+        )
         assert lsg.control_underfill(ctx, {})["status"] == "unconstructable"
 
     def test_underfill_error_is_not_credited(self, monkeypatch):
         """[FAILS-BEFORE -- Edits 1/3] Same FAIL-only rule as the alias leg."""
-        tm = lsg.TensorMeta(fqn="L0.moe.experts.weight", shape=(16, 4),
-                            dtype="float32", storage_id="s", kind="tensor")
+        tm = lsg.TensorMeta(
+            fqn="L0.moe.experts.weight",
+            shape=(16, 4),
+            dtype="float32",
+            storage_id="s",
+            kind="tensor",
+        )
         monkeypatch.setattr(lsg, "_expert_weight_candidates", lambda ts: [tm])
         monkeypatch.setattr(lsg, "_split_expert_layouts", lambda c: ({}, [tm], []))
-        monkeypatch.setattr(lsg.ExpertDistinctnessGate, "run",
-                            lambda self, c: _gr(Verdict.ERROR, self.id))
+        monkeypatch.setattr(
+            lsg.ExpertDistinctnessGate, "run", lambda self, c: _gr(Verdict.ERROR, self.id)
+        )
         ctx = lsg.CheckpointGateContext(
-            tensors=(tm,), declared_fqns=(tm.fqn,), num_experts=16, num_moe_layers=1,
-            expected_expert_bytes=None, origin="test://synthetic")
-        out = lsg.control_underfill(ctx, {lsg.ExpertDistinctnessGate.id:
-                                    _gr(Verdict.PASS, lsg.ExpertDistinctnessGate.id)})
+            tensors=(tm,),
+            declared_fqns=(tm.fqn,),
+            num_experts=16,
+            num_moe_layers=1,
+            expected_expert_bytes=None,
+            origin="test://synthetic",
+        )
+        out = lsg.control_underfill(
+            ctx, {lsg.ExpertDistinctnessGate.id: _gr(Verdict.PASS, lsg.ExpertDistinctnessGate.id)}
+        )
         assert out["status"] == "inconclusive" and out["verdict"] == "ERROR"
 
     def test_drop_unconstructable_without_declared_set(self):
         """[PASSES-BEFORE] Red if: the `if not ctx.declared_fqns` guard is
         deleted (the unexercised-detector reason would change class)."""
         ctx = lsg.CheckpointGateContext(
-            tensors=(), declared_fqns=None, num_experts=0, num_moe_layers=0,
-            expected_expert_bytes=None, origin="test://synthetic")
+            tensors=(),
+            declared_fqns=None,
+            num_experts=0,
+            num_moe_layers=0,
+            expected_expert_bytes=None,
+            origin="test://synthetic",
+        )
         out = lsg.control_drop(ctx, {})
         assert out["status"] == "unconstructable"
 
@@ -1639,30 +1869,45 @@ class TestUnderfillAndDropBuilders:
         """[FAILS-BEFORE -- arity] The self-attribution contract: crediting
         requires the rerun to NAME an injected loss. The honest fake computes
         missing = declared - present, like the real gate is documented to do."""
+
         def honest(self, c):
             present = {t.fqn for t in c.tensors}
             missing = sorted(set(c.declared_fqns or ()) - present)
             if missing:
-                return GateResult(gate_id=self.id, verdict=Verdict.FAIL,
-                                  coverage=Coverage(len(present), "tensors",
-                                                    expected=len(c.declared_fqns or ())),
-                                  detail="missing", evidence={"missing": missing})
+                return GateResult(
+                    gate_id=self.id,
+                    verdict=Verdict.FAIL,
+                    coverage=Coverage(len(present), "tensors", expected=len(c.declared_fqns or ())),
+                    detail="missing",
+                    evidence={"missing": missing},
+                )
             return _gr(Verdict.PASS, self.id)
 
         monkeypatch.setattr(lsg.SaveCompletenessGate, "run", honest)
-        tms = tuple(lsg.TensorMeta(fqn=f"m.{i}.weight", shape=(2, 2), dtype="float32",
-                                   storage_id=f"s{i}", kind="tensor") for i in range(4))
+        tms = tuple(
+            lsg.TensorMeta(
+                fqn=f"m.{i}.weight",
+                shape=(2, 2),
+                dtype="float32",
+                storage_id=f"s{i}",
+                kind="tensor",
+            )
+            for i in range(4)
+        )
         declared = tuple(t.fqn for t in tms)
         ctx = lsg.CheckpointGateContext(
-            tensors=tms, declared_fqns=declared, num_experts=0, num_moe_layers=0,
-            expected_expert_bytes=None, origin="test://synthetic")
+            tensors=tms,
+            declared_fqns=declared,
+            num_experts=0,
+            num_moe_layers=0,
+            expected_expert_bytes=None,
+            origin="test://synthetic",
+        )
         out = lsg.control_drop(ctx, {}, n=2)
         assert out["status"] == "fired"
         assert out["named_dropped"] and set(out["named_dropped"]) <= set(out["dropped"])
 
-    def test_drop_receives_no_credit_for_a_block_naming_no_injected_loss(
-        self, monkeypatch
-    ):
+    def test_drop_receives_no_credit_for_a_block_naming_no_injected_loss(self, monkeypatch):
         """[RED-UNDER-MUTANT adjudication/drop-control-credits-without-naming;
         GREEN-ON-SHIPPED] MUST_FIRE for the self-attribution line
         (`fired = res.blocking and bool(named)`).
@@ -1687,15 +1932,24 @@ class TestUnderfillAndDropBuilders:
         neither. Gate monkeypatched per the in-repo hunt-file precedent;
         readers untouched."""
         present = tuple(
-            lsg.TensorMeta(fqn=f"m.{i}.weight", shape=(2, 2), dtype="float32",
-                           storage_id=f"s{i}", kind="tensor")
-            for i in range(4))
+            lsg.TensorMeta(
+                fqn=f"m.{i}.weight",
+                shape=(2, 2),
+                dtype="float32",
+                storage_id=f"s{i}",
+                kind="tensor",
+            )
+            for i in range(4)
+        )
         ghost = "ghost.preexisting.weight"  # declared, never written: the baseline hole
         ctx = lsg.CheckpointGateContext(
             tensors=present,
             declared_fqns=tuple(t.fqn for t in present) + (ghost,),
-            num_experts=0, num_moe_layers=0,
-            expected_expert_bytes=None, origin="test://synthetic")
+            num_experts=0,
+            num_moe_layers=0,
+            expected_expert_bytes=None,
+            origin="test://synthetic",
+        )
 
         def blocks_for_the_preexisting_hole(self, c):
             # The deployed gate's documented evidence shape (an enumerated
@@ -1703,14 +1957,14 @@ class TestUnderfillAndDropBuilders:
             # one difference under test: the named loss is NOT injected --
             # this block stood before the drop ran.
             return GateResult(
-                gate_id=self.id, verdict=Verdict.FAIL,
-                coverage=Coverage(len(c.tensors), "tensors",
-                                  expected=len(c.declared_fqns or ())),
+                gate_id=self.id,
+                verdict=Verdict.FAIL,
+                coverage=Coverage(len(c.tensors), "tensors", expected=len(c.declared_fqns or ())),
                 detail="declared tensor never written: ghost.preexisting.weight",
-                evidence={"missing": [ghost]})
+                evidence={"missing": [ghost]},
+            )
 
-        monkeypatch.setattr(lsg.SaveCompletenessGate, "run",
-                            blocks_for_the_preexisting_hole)
+        monkeypatch.setattr(lsg.SaveCompletenessGate, "run", blocks_for_the_preexisting_hole)
         out = lsg.control_drop(ctx, {}, n=2)
         assert out["status"] == "not_fired"
         assert out["verdict"] == "FAIL"
@@ -1730,17 +1984,31 @@ class TestUnderfillAndDropBuilders:
         alias/underfill legs (_attributed_status); the drop leg is the same
         doctrine one door down. Denominator as in the twin above: 4 present
         of 4 declared, 2 dropped, and the rerun examined nothing it reported."""
-        tms = tuple(lsg.TensorMeta(fqn=f"m.{i}.weight", shape=(2, 2),
-                                   dtype="float32", storage_id=f"s{i}",
-                                   kind="tensor") for i in range(4))
+        tms = tuple(
+            lsg.TensorMeta(
+                fqn=f"m.{i}.weight",
+                shape=(2, 2),
+                dtype="float32",
+                storage_id=f"s{i}",
+                kind="tensor",
+            )
+            for i in range(4)
+        )
         ctx = lsg.CheckpointGateContext(
-            tensors=tms, declared_fqns=tuple(t.fqn for t in tms),
-            num_experts=0, num_moe_layers=0,
-            expected_expert_bytes=None, origin="test://synthetic")
+            tensors=tms,
+            declared_fqns=tuple(t.fqn for t in tms),
+            num_experts=0,
+            num_moe_layers=0,
+            expected_expert_bytes=None,
+            origin="test://synthetic",
+        )
         monkeypatch.setattr(
-            lsg.SaveCompletenessGate, "run",
-            lambda self, c: _gr(Verdict.ERROR, self.id,
-                                "RuntimeError: synthesized crash on injection"))
+            lsg.SaveCompletenessGate,
+            "run",
+            lambda self, c: _gr(
+                Verdict.ERROR, self.id, "RuntimeError: synthesized crash on injection"
+            ),
+        )
         out = lsg.control_drop(ctx, {}, n=2)
         assert out["status"] == "not_fired"
         assert out["verdict"] == "ERROR"
@@ -1754,97 +2022,82 @@ class TestUnderfillAndDropBuilders:
 
 
 class TestProbeImportDegradation:
-    """Group (1) controls. Runtime semantics were deliberately kept
-    byte-for-byte (an honest Optional declaration cannot change them), so
-    the runtime tests are labeled as invariance fences per this file's
-    convention -- no false failure is minted to satisfy a label
-    (doctrine 5 is symmetric). The FAILS-BEFORE carrier for the group is
-    the type-level test below: pre-patch, mypy proved the degrade guard
-    unreachable behind two type-ignore[assignment]s, and that fact is read
-    here from the module's own __annotations__."""
+    """Group (1) controls -- now a single leg, and the shrink is the finding.
 
-    def _sharded_router_ctx(self):
-        """The classifier geometry TestRouterControlDivergence already proves
-        routes sharded under the REAL _split_expert_layouts on this tree."""
-        tms = tuple(
-            lsg.TensorMeta(fqn=f"m.layers.0.experts.{i}.w.weight",
-                           shape=(4, 4), dtype="float32", storage_id=f"s{i}",
-                           kind="tensor")
-            for i in range(8))
-        return lsg.CheckpointGateContext(
-            tensors=tms, declared_fqns=tuple(t.fqn for t in tms),
-            num_experts=8, num_moe_layers=1,
-            expected_expert_bytes=None, origin="test://synthetic")
+    This class used to hold four. Three of them pinned a DEGRADED state: the
+    probe helpers were reached through a try/except ImportError ladder, so the
+    two slots were ``Optional``, and the consumers carried ``is None`` guards
+    that answered ``unconstructable`` / refused-to-paraphrase when the import
+    had failed. The three legs were, respectively, the Optional declaration
+    read off ``__annotations__``, the null-alias-control degrade, and the
+    null-derive-helper refusal.
 
-    def test_probe_helper_slots_are_optional_at_type_level(self):
-        """[FAILS-BEFORE] The fail-before carrier for group (1). Pre-patch
-        the two helper names are bound by imports and by ignored
-        assignments and carry NO module-level annotation at all, so the
-        __annotations__ lookups below raise KeyError -- red -- which is
-        exactly what mypy could not see: it proved the `is None` guard
-        unreachable behind the ignored assignments. Post-patch both slots
-        are declared Optional before the try, so the fail-closed degrade
-        path is visible to the type system, read here from the module's
-        own PEP-563 annotation strings."""
-        anns = lsg.__annotations__
-        assert "None" in anns["_probe_derive_declared"]
-        assert "None" in anns["_probe_alias_control"]
+    Finding #219 established that the ladder's fallback arm was reaching into
+    ``tools/``, which ``[tool.setuptools.packages.find] where = ["src"]`` does
+    not distribute -- so on a clean install the import ALWAYS failed and the
+    degraded state was not a rare fallback but the only state a wheel could
+    reach. The fix moved the machinery into ``foundationscale.gates.probe``.
+    The slots are now plain top-level imports: they cannot be None, the guards
+    are unreachable, and an unreachable DECLARED state is itself a defect
+    (#200). Guards and tests went together.
 
-    def test_null_probe_alias_control_degrades_to_unconstructable(self, monkeypatch):
-        """[PASSES-BEFORE and PASSES-AFTER -- invariance fence, labeled per
-        this file's convention: the degrade path was runtime-live on the
-        old tree too; the patch made it type-level live, and minting a
-        fake fail-before here would be the doctrine-5 symmetric defect.
-        Red-maker: deletion or relaxation of the
-        `if _probe_alias_control is None:` guard in control_alias's
-        sharded leg -- the statement mypy called unreachable.]"""
-        monkeypatch.setattr(lsg, "_probe_alias_control", None)
-        out = lsg.control_alias(self._sharded_router_ctx(), {})
-        assert out["status"] == "unconstructable"
-        assert "probe alias control unimportable" in out["reason"]
-
-    def test_null_probe_derive_helper_refuses_to_paraphrase(self, tmp_path,
-                                                            monkeypatch):
-        """[PASSES-BEFORE and PASSES-AFTER -- invariance fence] The other
-        consumer of the same slots refuses to re-derive by paraphrase.
-        Red-maker: deletion of the None guard at the top of
-        derive_declared_block."""
-        monkeypatch.setattr(lsg, "_probe_derive_declared", None)
-        spec = lsg.resolve_train_spec({}, "test://cfg", "full", None)
-        base = lsg.BaseModel(
-            model_dir=tmp_path, config=DENSE_CFG,
-            tensors={"x.weight": ((2, 2), "float32")},
-            tensors_source="test://synthetic")
-        with pytest.raises(lsg.GateUnmeasured, match="paraphrase"):
-            lsg.derive_declared_block(base, spec, set(), "")
+    They are deleted rather than kept green by monkeypatching, because a test
+    that sets a slot to None to observe a refusal would be measuring a state
+    the module no longer has -- it would report coverage of a path that cannot
+    occur. What replaces them is narrower and stronger: the surviving leg below
+    asserts the slots are the IN-PACKAGE definitions by identity, and
+    ``tests/test_gates_probe_packaging.py`` proves the decision path can derive
+    a declared block with only ``src/`` on ``sys.path``, with a MUST_FIRE half
+    that doctors the package to confirm the check can still go red.
+    """
 
     def test_normal_import_paths_leave_the_real_probe_control_wired(self):
         """[PASSES-BEFORE and PASSES-AFTER -- MUST_PASS fence for group (1)]
-        Both import paths still land on the probe's REAL helpers after the
+        The slots still land on the probe's REAL helpers after the
         restructure, and the real sharded alias control still runs through
-        the rewired Optional slots to 'fired' on the global-spelling
-        geometry that TestProbeAliasSpellings already proves green against
-        the live gate and probe. Red-makers: any edit that empties BOTH
-        import paths (the slots go None and the first asserts die), or a
-        rewiring that stops routing sharded work to the probe-verbatim
-        control (the last two asserts)."""
-        assert lsg._probe_derive_declared is not None
-        assert lsg._probe_alias_control is not None
-        assert lsg._PROBE_IMPORT_ERROR is None
-        fqns = [f"m.layers.0.experts.{i}.{p}.weight"
-                for p in ("linear_fc1", "linear_fc2") for i in range(8)]
-        tms = tuple(lsg.TensorMeta(fqn=f, shape=(4, 4), dtype="float32",
-                                   storage_id=f"store://{f}", kind="tensor")
-                    for f in fqns)
+        them to 'fired' on the global-spelling geometry that
+        TestProbeAliasSpellings already proves green against the live gate
+        and probe. Red-makers: a rewiring that leaves a slot unbound or
+        bound to a paraphrase (the first asserts), or one that stops routing
+        sharded work to the probe-verbatim control (the last two).
+
+        There used to be two import paths and an ``_PROBE_IMPORT_ERROR``
+        sentinel, and this leg asserted the sentinel was None -- which only
+        ever said "the fallback ladder found the helpers SOMEWHERE". Finding
+        #219 showed that somewhere was ``tools/``, which is not distributed,
+        so the assertion was green in a checkout and unreachable in a wheel.
+        The ladder is gone. The replacement asserts identity against
+        ``foundationscale.gates.probe``, which is a strictly narrower claim:
+        not merely bound, but bound to the in-package definition."""
+        from foundationscale.gates import probe as fs_probe
+
+        assert lsg._probe_derive_declared is fs_probe.derive_declared
+        assert lsg._probe_alias_control is fs_probe.run_alias_control
+        fqns = [
+            f"m.layers.0.experts.{i}.{p}.weight"
+            for p in ("linear_fc1", "linear_fc2")
+            for i in range(8)
+        ]
+        tms = tuple(
+            lsg.TensorMeta(
+                fqn=f, shape=(4, 4), dtype="float32", storage_id=f"store://{f}", kind="tensor"
+            )
+            for f in fqns
+        )
         ctx = lsg.CheckpointGateContext(
-            tensors=tms, declared_fqns=tuple(fqns),
-            num_experts=8, num_moe_layers=1,
-            expected_expert_bytes=None, origin="test://synthetic")
+            tensors=tms,
+            declared_fqns=tuple(fqns),
+            num_experts=8,
+            num_moe_layers=1,
+            expected_expert_bytes=None,
+            origin="test://synthetic",
+        )
         baseline = lsg.ExpertDistinctnessGate().run(ctx)
         assert not baseline.blocking, (
             f"fixture drifted: 16-of-16 healthy experts must PASS "
             f"pre-injection ({baseline.detail}) -- calibrate the fixture, "
-            f"never the assertion")
+            f"never the assertion"
+        )
         out = lsg.control_alias(ctx, {lsg.ExpertDistinctnessGate.id: baseline})
         assert out["status"] == "fired", f"{out!r}"
         assert out["control"] == "alias(sharded, probe-verbatim)"
@@ -1858,19 +2111,23 @@ class TestUnderfillVictimBytePricing:
     patch and the docstrings say so -- a stated abstention, not a skip."""
 
     def _tm(self, fqn, shape=(16, 4)):
-        return lsg.TensorMeta(fqn=fqn, shape=shape, dtype="float32",
-                              storage_id=f"store://{fqn}", kind="tensor")
+        return lsg.TensorMeta(
+            fqn=fqn, shape=shape, dtype="float32", storage_id=f"store://{fqn}", kind="tensor"
+        )
 
     def _ctx(self, tms):
         return lsg.CheckpointGateContext(
-            tensors=tuple(tms), declared_fqns=tuple(t.fqn for t in tms),
-            num_experts=16, num_moe_layers=1,
-            expected_expert_bytes=None, origin="test://synthetic")
+            tensors=tuple(tms),
+            declared_fqns=tuple(t.fqn for t in tms),
+            num_experts=16,
+            num_moe_layers=1,
+            expected_expert_bytes=None,
+            origin="test://synthetic",
+        )
 
     def _route_stacked(self, monkeypatch, tms):
         monkeypatch.setattr(lsg, "_expert_weight_candidates", lambda ts: list(tms))
-        monkeypatch.setattr(lsg, "_split_expert_layouts",
-                            lambda c: ({}, list(c), []))
+        monkeypatch.setattr(lsg, "_split_expert_layouts", lambda c: ({}, list(c), []))
 
     def test_all_candidates_unpriced_blocks_and_names_zero_of_n(self, monkeypatch):
         """[FAILS-BEFORE] MUST_FIRE for group (2). On the current tree
@@ -1883,11 +2140,11 @@ class TestUnderfillVictimBytePricing:
         instance-stored value (a data descriptor on the class shadows any
         instance attribute); raising=False covers the name living only on
         instances."""
-        tms = [self._tm("L0.moe.experts.weight"),
-               self._tm("L1.moe.experts.weight")]
+        tms = [self._tm("L0.moe.experts.weight"), self._tm("L1.moe.experts.weight")]
         self._route_stacked(monkeypatch, tms)
-        monkeypatch.setattr(lsg.TensorMeta, "implied_nbytes",
-                            property(lambda self: None), raising=False)
+        monkeypatch.setattr(
+            lsg.TensorMeta, "implied_nbytes", property(lambda self: None), raising=False
+        )
         out = lsg.control_underfill(self._ctx(tms), {})
         assert out["status"] == "unconstructable"
         assert "0 of 2" in out["reason"]
@@ -1901,18 +2158,23 @@ class TestUnderfillVictimBytePricing:
         Pre-patch the mixed None/int key comparison TypeErrors -- red.
         This is the argued repair's one deliberate behaviour change, made
         load-bearing: it is loud in the emitted record, not silent."""
-        tms = [self._tm("L0.moe.experts.weight", shape=(16, 1024)),
-               self._tm("L1.moe.experts.weight")]
+        tms = [
+            self._tm("L0.moe.experts.weight", shape=(16, 1024)),
+            self._tm("L1.moe.experts.weight"),
+        ]
         self._route_stacked(monkeypatch, tms)
         monkeypatch.setattr(
-            lsg.TensorMeta, "implied_nbytes",
+            lsg.TensorMeta,
+            "implied_nbytes",
             property(lambda self: None if self.fqn.startswith("L0") else 64),
-            raising=False)
+            raising=False,
+        )
         monkeypatch.setattr(
-            lsg.ExpertDistinctnessGate, "run",
-            lambda self, c: _gr(Verdict.FAIL, self.id, "synthesized fire"))
-        baseline = {lsg.ExpertDistinctnessGate.id:
-                    _gr(Verdict.PASS, lsg.ExpertDistinctnessGate.id)}
+            lsg.ExpertDistinctnessGate,
+            "run",
+            lambda self, c: _gr(Verdict.FAIL, self.id, "synthesized fire"),
+        )
+        baseline = {lsg.ExpertDistinctnessGate.id: _gr(Verdict.PASS, lsg.ExpertDistinctnessGate.id)}
         out = lsg.control_underfill(self._ctx(tms), baseline)
         assert out["status"] == "fired"
         assert out["tensor"] == tms[1].fqn
@@ -1946,8 +2208,8 @@ class TestMoeIntegration:
         carries the gate verdict verbatim for the calibrator."""
         base, ckpt = self._moe(tmp_path)
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}))
+            ckpt, run_kind="full", base_model_dir=base, train_config_path=_write_cfg(tmp_path, {})
+        )
         assert d.exit_code == 0, f"{d.blocking_reasons}"
         # 2 q_proj + 8 experts x 2 layers x 2 projections = 34; see the fixture
         # arithmetic block. Kept as a literal so a silent change to the fixture
@@ -1966,16 +2228,20 @@ class TestMoeIntegration:
         faked per the hunt-file precedent; readers untouched."""
         base, ckpt = self._moe(tmp_path)
         d0 = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}))
+            ckpt, run_kind="full", base_model_dir=base, train_config_path=_write_cfg(tmp_path, {})
+        )
         assert d0.exit_code == 0, (  # fixture-drift guard, hunt-file style
             f"fixture drifted: healthy MoE must be CLEAR pre-patch-state "
-            f"({d0.blocking_reasons}); calibrate the fixture, never the assertion")
-        monkeypatch.setattr(lsg.ExpertDistinctnessGate, "run",
-                            lambda self, c: _gr(Verdict.FAIL, self.id, "pre-existing"))
+            f"({d0.blocking_reasons}); calibrate the fixture, never the assertion"
+        )
+        monkeypatch.setattr(
+            lsg.ExpertDistinctnessGate,
+            "run",
+            lambda self, c: _gr(Verdict.FAIL, self.id, "pre-existing"),
+        )
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}))
+            ckpt, run_kind="full", base_model_dir=base, train_config_path=_write_cfg(tmp_path, {})
+        )
         assert d.exit_code == 1
         alias = _control_by_prefix(d, "alias")
         assert alias["status"] == "inconclusive", f"{alias!r}"
@@ -1999,8 +2265,8 @@ class TestMoeIntegration:
 
         monkeypatch.setattr(lsg.ExpertDistinctnessGate, "run", crash_after_baseline)
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}))
+            ckpt, run_kind="full", base_model_dir=base, train_config_path=_write_cfg(tmp_path, {})
+        )
         assert d.exit_code == 1
         alias = _control_by_prefix(d, "alias")
         assert alias["status"] == "inconclusive"
@@ -2031,15 +2297,25 @@ class TestExitCodes:
         out = tmp_path / "report.json"
         census = _census_file(
             tmp_path,
-            [f"layers.{i}.self_attn.{w}"
-             for i in range(6) for w in ("q_proj", "v_proj")],
+            [f"layers.{i}.self_attn.{w}" for i in range(6) for w in ("q_proj", "v_proj")],
         )
-        code = lsg_cli.main([str(ckpt), "--run-kind", "lora",
-                         "--base-model-dir", str(base),
-                         "--train-config", str(cfg),
-                         "--adapter-prefix", "",
-                         "--adapter-modules", str(census),
-                         "--json", str(out)])
+        code = lsg_cli.main(
+            [
+                str(ckpt),
+                "--run-kind",
+                "lora",
+                "--base-model-dir",
+                str(base),
+                "--train-config",
+                str(cfg),
+                "--adapter-prefix",
+                "",
+                "--adapter-modules",
+                str(census),
+                "--json",
+                str(out),
+            ]
+        )
         assert code == 0
         rpt = json.loads(out.read_text(encoding="utf-8"))
         assert rpt["exit_code"] == 0
@@ -2059,9 +2335,17 @@ class TestExitCodes:
         base, _ = _dense_base_with_ckpt(tmp_path)
         truncated = dict(list(_dense_full_tensors().items())[:4])
         ckpt = _materialize_artifact(tmp_path, truncated, name="trunc")
-        code = lsg_cli.main([str(ckpt), "--run-kind", "full",
-                         "--base-model-dir", str(base),
-                         "--train-config", str(_write_cfg(tmp_path, {}))])
+        code = lsg_cli.main(
+            [
+                str(ckpt),
+                "--run-kind",
+                "full",
+                "--base-model-dir",
+                str(base),
+                "--train-config",
+                str(_write_cfg(tmp_path, {})),
+            ]
+        )
         assert code == 1
 
     def test_cli_unmeasured_is_exactly_three_for_missing_checkpoint(self, tmp_path):
@@ -2069,18 +2353,34 @@ class TestExitCodes:
         failures, it does not treat them as verdicts. Red if: the
         `except GateUnmeasured` mapping to EXIT_UNMEASURED is changed to 1."""
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
-        code = lsg_cli.main([str(tmp_path / "no-such-ckpt"), "--run-kind", "full",
-                         "--base-model-dir", str(base),
-                         "--train-config", str(_write_cfg(tmp_path, {}))])
+        code = lsg_cli.main(
+            [
+                str(tmp_path / "no-such-ckpt"),
+                "--run-kind",
+                "full",
+                "--base-model-dir",
+                str(base),
+                "--train-config",
+                str(_write_cfg(tmp_path, {})),
+            ]
+        )
         assert code == 3
 
     def test_cli_unmeasured_three_for_missing_base(self, tmp_path):
         """[PASSES-BEFORE] Independent source A absent = cannot measure. Red
         if: BaseModel.load's missing-dir raise is weakened to an empty model."""
         ckpt = _materialize_artifact(tmp_path, _dense_full_tensors())
-        code = lsg_cli.main([str(ckpt), "--run-kind", "full",
-                         "--base-model-dir", str(tmp_path / "no-base"),
-                         "--train-config", str(_write_cfg(tmp_path, {}))])
+        code = lsg_cli.main(
+            [
+                str(ckpt),
+                "--run-kind",
+                "full",
+                "--base-model-dir",
+                str(tmp_path / "no-base"),
+                "--train-config",
+                str(_write_cfg(tmp_path, {})),
+            ]
+        )
         assert code == 3
 
     def test_cli_unmeasured_three_for_missing_train_config_path(self, tmp_path):
@@ -2088,9 +2388,17 @@ class TestExitCodes:
         a SUPPLIED path that does not exist is a measurement failure. Red if:
         _load_train_config's is_file() guard is deleted."""
         base, ckpt = _dense_base_with_ckpt(tmp_path)
-        code = lsg_cli.main([str(ckpt), "--run-kind", "full",
-                         "--base-model-dir", str(base),
-                         "--train-config", str(tmp_path / "ghost.json")])
+        code = lsg_cli.main(
+            [
+                str(ckpt),
+                "--run-kind",
+                "full",
+                "--base-model-dir",
+                str(base),
+                "--train-config",
+                str(tmp_path / "ghost.json"),
+            ]
+        )
         assert code == 3
 
     def test_cli_unmeasured_three_for_unparseable_rank(self, tmp_path):
@@ -2098,10 +2406,20 @@ class TestExitCodes:
         coerced to a default. Red if: the int() coercion grows a try/except-
         pass (i.e., the existing GateUnmeasured raise is what saves it)."""
         base, ckpt, _cfg = _healthy_lora(tmp_path)
-        bad = _write_cfg(tmp_path, {"peft_scheme": "lora", "lora_rank": "eight"},
-                         name="bad-rank.json")
-        code = lsg_cli.main([str(ckpt), "--run-kind", "lora",
-                         "--base-model-dir", str(base), "--train-config", str(bad)])
+        bad = _write_cfg(
+            tmp_path, {"peft_scheme": "lora", "lora_rank": "eight"}, name="bad-rank.json"
+        )
+        code = lsg_cli.main(
+            [
+                str(ckpt),
+                "--run-kind",
+                "lora",
+                "--base-model-dir",
+                str(base),
+                "--train-config",
+                str(bad),
+            ]
+        )
         assert code == 3
 
     def test_cli_unmeasured_three_for_unreadable_artifact(self, tmp_path):
@@ -2112,9 +2430,17 @@ class TestExitCodes:
         junk = tmp_path / "junk-ckpt"
         junk.mkdir()
         (junk / "model.safetensors").write_bytes(b"not a safetensors file")
-        code = lsg_cli.main([str(junk), "--run-kind", "full",
-                         "--base-model-dir", str(base),
-                         "--train-config", str(_write_cfg(tmp_path, {}))])
+        code = lsg_cli.main(
+            [
+                str(junk),
+                "--run-kind",
+                "full",
+                "--base-model-dir",
+                str(base),
+                "--train-config",
+                str(_write_cfg(tmp_path, {})),
+            ]
+        )
         assert code == 3
 
     def test_cli_tool_bug_is_three_not_a_verdict(self, tmp_path, monkeypatch):
@@ -2123,11 +2449,23 @@ class TestExitCodes:
         if: the broad `except Exception` mapping is deleted (the traceback
         would then escape main and the process would exit 1 via the
         interpreter -- a verdict-shaped accident)."""
-        monkeypatch.setattr(lsg_cli, "adjudicate_checkpoint",
-                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+        monkeypatch.setattr(
+            lsg_cli,
+            "adjudicate_checkpoint",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
         base, ckpt, cfg = _healthy_lora(tmp_path)
-        code = lsg_cli.main([str(ckpt), "--run-kind", "lora",
-                         "--base-model-dir", str(base), "--train-config", str(cfg)])
+        code = lsg_cli.main(
+            [
+                str(ckpt),
+                "--run-kind",
+                "lora",
+                "--base-model-dir",
+                str(base),
+                "--train-config",
+                str(cfg),
+            ]
+        )
         assert code == 3
 
 
@@ -2150,8 +2488,9 @@ class TestBaseModelReader:
             _write_safetensors(base / name, shard)
             for fqn in shard:
                 weight_map[fqn] = name
-        (base / "model.safetensors.index.json").write_text(json.dumps(
-            {"metadata": {}, "weight_map": weight_map}))
+        (base / "model.safetensors.index.json").write_text(
+            json.dumps({"metadata": {}, "weight_map": weight_map})
+        )
         (base / "config.json").write_text(json.dumps(DENSE_CFG))
         loaded = lsg.BaseModel.load(base)
         assert len(loaded.tensors) == 12
@@ -2162,8 +2501,7 @@ class TestBaseModelReader:
         base = tmp_path / "b"
         base.mkdir()
         (base / "config.json").write_text("{}")
-        (base / "model.safetensors.index.json").write_text(
-            json.dumps({"weight_map": {}}))
+        (base / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {}}))
         with pytest.raises(lsg.GateUnmeasured, match="empty weight_map"):
             lsg.BaseModel.load(base)
 
@@ -2171,8 +2509,9 @@ class TestBaseModelReader:
         """[PASSES-BEFORE] Byte pricing on a guessed dtype prices wrong; the
         tool refuses. Red if: the `dtype is None` raise becomes a default."""
         path = tmp_path / "odd.safetensors"
-        blob = json.dumps({"x.w": {"dtype": "FP8_E4M3", "shape": [2, 2],
-                                   "data_offsets": [0, 4]}}).encode()
+        blob = json.dumps(
+            {"x.w": {"dtype": "FP8_E4M3", "shape": [2, 2], "data_offsets": [0, 4]}}
+        ).encode()
         path.write_bytes(struct.pack("<Q", len(blob)) + blob + b"\x00" * 4)
         with pytest.raises(lsg.GateUnmeasured, match="unrecognized safetensors"):
             lsg._read_safetensors_header(path)
@@ -2191,7 +2530,8 @@ class TestTrainSpecResolution:
         """[PASSES-BEFORE] Red if: the int() coercion is deleted (rank None
         downstream -> lora derivation abstains where it should not)."""
         spec = lsg.resolve_train_spec(
-            {"peft_scheme": "lora", "lora_rank": "8"}, "test://cfg", "auto", None)
+            {"peft_scheme": "lora", "lora_rank": "8"}, "test://cfg", "auto", None
+        )
         assert spec.run_kind == "lora" and spec.lora_rank == 8
 
     def test_missing_kind_key_defers_with_stated_basis(self, tmp_path):
@@ -2233,16 +2573,17 @@ class TestMoeOverride:
         1-2 pass pre-patch via the illegitimate mint and pass post-patch via
         the legitimate one: they are kept as the pin that the mint itself
         still happens."""
-        cfg = {"model_type": "calibration-gemma4-dense",
-               "text_config": {"num_moe_layers": 2,
-                               "enable_moe_block": False,
-                               "num_experts": None}}
+        cfg = {
+            "model_type": "calibration-gemma4-dense",
+            "text_config": {"num_moe_layers": 2, "enable_moe_block": False, "num_experts": None},
+        }
         spec = lsg.resolve_train_spec({}, "test://cfg", "full", None)
         base = lsg.BaseModel(
-            model_dir=tmp_path, config=cfg,
-            tensors={k: (v[0], "float32")
-                     for k, v in _dense_full_tensors().items()},
-            tensors_source="test://synthetic")
+            model_dir=tmp_path,
+            config=cfg,
+            tensors={k: (v[0], "float32") for k, v in _dense_full_tensors().items()},
+            tensors_source="test://synthetic",
+        )
         decl = lsg.derive_declared_block(base, spec, set(), "", r"\.(lora_[AB])$")
         assert decl.num_experts == 0
         assert "enable_moe_block=false" in decl.experts_basis
@@ -2259,16 +2600,18 @@ class TestMoeOverride:
         mint-without-basis the verbatim fix25 failure reported. Post-patch
         the probe refuses to pick a winner and abstains; UNKNOWN and
         gates-block are named in the basis (doctrine 4)."""
-        cfg = {**MOE_CFG,
-               "text_config": {"num_experts": 8, "num_moe_layers": 2,
-                               "enable_moe_block": False}}
+        cfg = {
+            **MOE_CFG,
+            "text_config": {"num_experts": 8, "num_moe_layers": 2, "enable_moe_block": False},
+        }
         _probe_declared_or_calibrate(MOE_CFG, 8, 2)
         spec = lsg.resolve_train_spec({}, "test://cfg", "full", None)
         base = lsg.BaseModel(
-            model_dir=tmp_path, config=cfg,
-            tensors={k: (v[0], "float32")
-                     for k, v in _dense_full_tensors().items()},
-            tensors_source="test://synthetic")
+            model_dir=tmp_path,
+            config=cfg,
+            tensors={k: (v[0], "float32") for k, v in _dense_full_tensors().items()},
+            tensors_source="test://synthetic",
+        )
         decl = lsg.derive_declared_block(base, spec, set(), "", r"\.(lora_[AB])$")
         assert decl.num_experts is None
         assert "contradicts itself" in decl.experts_basis
@@ -2285,14 +2628,17 @@ class TestMoeOverride:
         2 layers x 2 projections), and the contradiction blocks. Pre-patch
         the override mints 0 despite the experts sitting in the header --
         red on the first assertion."""
-        cfg = {"model_type": "calibration-laundering-attempt",
-               "text_config": {"enable_moe_block": False, "num_experts": None}}
+        cfg = {
+            "model_type": "calibration-laundering-attempt",
+            "text_config": {"enable_moe_block": False, "num_experts": None},
+        }
         spec = lsg.resolve_train_spec({}, "test://cfg", "full", r"\.experts\.")
         base = lsg.BaseModel(
-            model_dir=tmp_path, config=cfg,
-            tensors={k: (v[0], "float32")
-                     for k, v in _moe_full_tensors().items()},
-            tensors_source="test://synthetic")
+            model_dir=tmp_path,
+            config=cfg,
+            tensors={k: (v[0], "float32") for k, v in _moe_full_tensors().items()},
+            tensors_source="test://synthetic",
+        )
         decl = lsg.derive_declared_block(base, spec, set(), "", r"\.(lora_[AB])$")
         assert decl.num_experts is None
         assert "CONTRADICTION" in decl.experts_basis
@@ -2319,22 +2665,26 @@ class TestDenseBridgeEndToEnd:
         machine-readable not_applicable, the alias control is inapplicable
         (recorded, and covered by the drop control per the exit-code
         contract), and every denominator is on the wire."""
-        estate_cfg = {"model_type": "calibration-estate-dense",
-                      "text_config": {"num_hidden_layers": 6, "hidden_size": 8,
-                                      "enable_moe_block": False,
-                                      "num_experts": None}}
+        estate_cfg = {
+            "model_type": "calibration-estate-dense",
+            "text_config": {
+                "num_hidden_layers": 6,
+                "hidden_size": 8,
+                "enable_moe_block": False,
+                "num_experts": None,
+            },
+        }
         base = _make_base(tmp_path, _dense_full_tensors(), estate_cfg)
         ckpt = _materialize_artifact(tmp_path, _dense_full_tensors())
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}))
+            ckpt, run_kind="full", base_model_dir=base, train_config_path=_write_cfg(tmp_path, {})
+        )
         assert d.exit_code == 0, f"{d.blocking_reasons}"
         assert d.report["inventory"]["real_tensors"] == 12
         assert d.report["inventory"]["base_tensors"] == 12
         assert "enable_moe_block=false" in d.declared_basis["num_experts"]
         assert "corroborated" in d.declared_basis["num_experts"]
-        assert any("expert-family census: 0 of 12" in n
-                   for n in d.declared_basis["notes"])
+        assert any("expert-family census: 0 of 12" in n for n in d.declared_basis["notes"])
         by_gate = {g["gate"]: g for g in d.gate_results}
         assert by_gate["checkpoint.expert_distinctness"]["verdict"] == "SKIP"
         assert by_gate["checkpoint.expert_distinctness"]["abstention"] == "not_applicable"
@@ -2358,8 +2708,11 @@ def _stacked_moe_full_tensors() -> dict:
     stacked expert count 4 == num_moe_layers 2 x family width 2, so neither the
     byte gate's coverage nor the cross-check fires for extraneous reasons: the
     ONLY thing left to block is the composite's not-established leg."""
-    t = {f"model.language_model.layers.{ly}.attn.{w}.weight": ((8, 8), "F32")
-         for ly in range(3) for w in ("q_proj", "v_proj")}
+    t = {
+        f"model.language_model.layers.{ly}.attn.{w}.weight": ((8, 8), "F32")
+        for ly in range(3)
+        for w in ("q_proj", "v_proj")
+    }
     for ly in range(2):
         for proj, inner in (("gate_up_proj", (16, 32)), ("down_proj", (32, 16))):
             t[f"model.language_model.layers.{ly}.experts.{proj}"] = ((8, *inner), "BF16")
@@ -2369,29 +2722,48 @@ def _stacked_moe_full_tensors() -> dict:
 class TestFirstSaveCompositeDenominator:
     def _ctx(self, tensors, *, declared, experts, layers, expected_bytes):
         return lsg.CheckpointGateContext(
-            tensors=tensors, declared_fqns=declared, num_experts=experts,
-            num_moe_layers=layers, expected_expert_bytes=expected_bytes,
-            origin="test://synthetic")
+            tensors=tensors,
+            declared_fqns=declared,
+            num_experts=experts,
+            num_moe_layers=layers,
+            expected_expert_bytes=expected_bytes,
+            origin="test://synthetic",
+        )
 
     def _dense_ctx(self):
         tms = tuple(
-            lsg.TensorMeta(fqn=f"model.layers.{i}.attn.weight", shape=(4, 4),
-                           dtype="float32", storage_id=f"sd{i}", kind="tensor")
-            for i in range(4))
-        return self._ctx(tms, declared=tuple(t.fqn for t in tms),
-                         experts=0, layers=0, expected_bytes=0)
+            lsg.TensorMeta(
+                fqn=f"model.layers.{i}.attn.weight",
+                shape=(4, 4),
+                dtype="float32",
+                storage_id=f"sd{i}",
+                kind="tensor",
+            )
+            for i in range(4)
+        )
+        return self._ctx(
+            tms, declared=tuple(t.fqn for t in tms), experts=0, layers=0, expected_bytes=0
+        )
 
     def _stacked_ctx(self):
         tms = tuple(
             lsg.TensorMeta(
                 fqn=f"model.language_model.layers.{ly}.experts.{proj}",
-                shape=(8, *inner), dtype="bfloat16",
-                storage_id=f"st-{ly}-{proj}", kind="tensor")
+                shape=(8, *inner),
+                dtype="bfloat16",
+                storage_id=f"st-{ly}-{proj}",
+                kind="tensor",
+            )
             for ly in range(2)
-            for proj, inner in (("gate_up_proj", (16, 32)), ("down_proj", (32, 16))))
+            for proj, inner in (("gate_up_proj", (16, 32)), ("down_proj", (32, 16)))
+        )
         return self._ctx(
-            tms, declared=tuple(t.fqn for t in tms), experts=8, layers=2,
-            expected_bytes=sum(t.implied_nbytes for t in tms))
+            tms,
+            declared=tuple(t.fqn for t in tms),
+            experts=8,
+            layers=2,
+            expected_bytes=sum(t.implied_nbytes for t in tms),
+        )
 
     def test_dense_shrinks_denominator_and_names_inapplicable(self):
         """[FAILS-BEFORE] The gate-level core of LG3: positively declared dense
@@ -2405,7 +2777,9 @@ class TestFirstSaveCompositeDenominator:
         assert "checkpoint.expert_bytes" in result.detail
         assert "3/3" not in result.detail
         assert set(result.evidence["inapplicable"]) == {
-            "checkpoint.expert_distinctness", "checkpoint.expert_bytes"}
+            "checkpoint.expert_distinctness",
+            "checkpoint.expert_bytes",
+        }
         expert_result = lsg.ExpertDistinctnessGate().run(self._dense_ctx())
         assert expert_result.verdict is Verdict.SKIP
         assert expert_result.abstention.value == "not_applicable"  # AttributeError pre-patch
@@ -2417,12 +2791,12 @@ class TestFirstSaveCompositeDenominator:
         stays UNDERCOVERED at exactly 2/3 on both trees; the new pin is that
         the distinctness SKIP is machine-readably 'not_established'."""
         result = lsg.FirstSaveGate().run(self._stacked_ctx())
-        assert result.verdict is Verdict.UNDERCOVERED       # fence (both trees)
-        assert result.coverage.checked == 2                 # fence
-        assert result.coverage.expected == 3                # fence
-        assert "not established" in result.detail           # fence
+        assert result.verdict is Verdict.UNDERCOVERED  # fence (both trees)
+        assert result.coverage.checked == 2  # fence
+        assert result.coverage.expected == 3  # fence
+        assert "not established" in result.detail  # fence
         distinct = lsg.ExpertDistinctnessGate().run(self._stacked_ctx())
-        assert distinct.verdict is Verdict.SKIP             # fence
+        assert distinct.verdict is Verdict.SKIP  # fence
         assert distinct.abstention.value == "not_established"  # FAILS-BEFORE (AttributeError)
 
     def test_unknown_provenance_still_blocks_closed(self):
@@ -2433,17 +2807,22 @@ class TestFirstSaveCompositeDenominator:
         take the VACUOUS door, the composite FAILS, and no shrink-capable
         abstention kind is minted anywhere on the path."""
         tms = tuple(
-            lsg.TensorMeta(fqn=f"model.layers.{i}.attn.weight", shape=(4, 4),
-                           dtype="float32", storage_id=f"sm{i}", kind="tensor")
-            for i in range(2))
-        ctx = self._ctx(tms, declared=None, experts=None, layers=None,
-                        expected_bytes=None)
+            lsg.TensorMeta(
+                fqn=f"model.layers.{i}.attn.weight",
+                shape=(4, 4),
+                dtype="float32",
+                storage_id=f"sm{i}",
+                kind="tensor",
+            )
+            for i in range(2)
+        )
+        ctx = self._ctx(tms, declared=None, experts=None, layers=None, expected_bytes=None)
         result = lsg.FirstSaveGate().run(ctx)
-        assert result.verdict is Verdict.FAIL               # fence
+        assert result.verdict is Verdict.FAIL  # fence
         for gate in (lsg.ExpertDistinctnessGate, lsg.ExpertByteVolumeGate):
             res = gate().run(ctx)
-            assert res.verdict is Verdict.VACUOUS           # fence
-            assert res.abstention is None                   # FAILS-BEFORE (AttributeError)
+            assert res.verdict is Verdict.VACUOUS  # fence
+            assert res.abstention is None  # FAILS-BEFORE (AttributeError)
 
     def test_declared_experts_absent_never_shrinks(self):
         """[FAILS-BEFORE on the abstention-is-None lines; verdicts fence] The
@@ -2452,19 +2831,26 @@ class TestFirstSaveCompositeDenominator:
         inapplicable. If this path ever minted NOT_APPLICABLE, the composite
         would verify 1/1 and pass the incident's twin."""
         tms = tuple(
-            lsg.TensorMeta(fqn=f"model.layers.{i}.attn.weight", shape=(4, 4),
-                           dtype="float32", storage_id=f"se{i}", kind="tensor")
-            for i in range(2))
-        ctx = self._ctx(tms, declared=tuple(t.fqn for t in tms),
-                        experts=8, layers=2, expected_bytes=1024)
+            lsg.TensorMeta(
+                fqn=f"model.layers.{i}.attn.weight",
+                shape=(4, 4),
+                dtype="float32",
+                storage_id=f"se{i}",
+                kind="tensor",
+            )
+            for i in range(2)
+        )
+        ctx = self._ctx(
+            tms, declared=tuple(t.fqn for t in tms), experts=8, layers=2, expected_bytes=1024
+        )
         result = lsg.FirstSaveGate().run(ctx)
-        assert result.verdict is Verdict.FAIL               # fence
+        assert result.verdict is Verdict.FAIL  # fence
         distinct = lsg.ExpertDistinctnessGate().run(ctx)
-        assert distinct.verdict is Verdict.VACUOUS          # fence
-        assert distinct.abstention is None                  # FAILS-BEFORE (AttributeError)
+        assert distinct.verdict is Verdict.VACUOUS  # fence
+        assert distinct.abstention is None  # FAILS-BEFORE (AttributeError)
         bytegate = lsg.ExpertByteVolumeGate().run(ctx)
-        assert bytegate.verdict is Verdict.VACUOUS          # fence
-        assert bytegate.abstention is None                  # FAILS-BEFORE (AttributeError)
+        assert bytegate.verdict is Verdict.VACUOUS  # fence
+        assert bytegate.abstention is None  # FAILS-BEFORE (AttributeError)
 
     def test_all_inapplicable_is_vacuous_not_a_pass(self, monkeypatch):
         """[FAILS-BEFORE] The zero-applicable corner: if every property were
@@ -2475,17 +2861,24 @@ class TestFirstSaveCompositeDenominator:
         from foundationscale.gates.core import AbstentionKind, Lifecycle
 
         def _na_check(self, ctx):
-            return self.skip("synthetic: property affirmed absent",
-                             kind=AbstentionKind.NOT_APPLICABLE)
+            return self.skip(
+                "synthetic: property affirmed absent", kind=AbstentionKind.NOT_APPLICABLE
+            )
 
         fakes = tuple(
-            type(f"_NA{i}", (lsg.Gate,), {
-                "id": f"test.synthetic_na_{i}",
-                "description": "synthetic NOT_APPLICABLE abstainer",
-                "events": (Lifecycle.FIRST_SAVE,),
-                "check": _na_check,
-                "controls": lambda self: (),
-            }) for i in range(3))
+            type(
+                f"_NA{i}",
+                (lsg.Gate,),
+                {
+                    "id": f"test.synthetic_na_{i}",
+                    "description": "synthetic NOT_APPLICABLE abstainer",
+                    "events": (Lifecycle.FIRST_SAVE,),
+                    "check": _na_check,
+                    "controls": lambda self: (),
+                },
+            )
+            for i in range(3)
+        )
         monkeypatch.setattr(lsg.FirstSaveGate, "_subgates", fakes)
         result = lsg.FirstSaveGate().run(self._dense_ctx())  # ctx ignored by fakes
         assert result.verdict is Verdict.VACUOUS
@@ -2503,22 +2896,23 @@ class TestStackedFirstSaveTool:
         lazy 'any SKIP leaves the denominator' rewrite turns this test green
         for the wrong reason -- it exists to kill that rewrite."""
         _probe_declared_or_calibrate(MOE_CFG, 8, 2)
-        base = _make_base(tmp_path, _stacked_moe_full_tensors(), MOE_CFG,
-                          name="st-base")
-        ckpt = _materialize_artifact(tmp_path, _stacked_moe_full_tensors(),
-                                     name="st-ckpt")
+        base = _make_base(tmp_path, _stacked_moe_full_tensors(), MOE_CFG, name="st-base")
+        ckpt = _materialize_artifact(tmp_path, _stacked_moe_full_tensors(), name="st-ckpt")
         d = lsg.adjudicate_checkpoint(
-            ckpt, event="first_save", run_kind="full", base_model_dir=base,
-            train_config_path=_write_cfg(tmp_path, {}))
-        assert d.exit_code == 1                                    # fence (both trees)
-        assert len(d.blocking_reasons) == 1, (                     # fence
-            f"the composite's not-established leg must be the ONLY reason: "
-            f"{d.blocking_reasons}")
-        composite = next(g for g in d.gate_results
-                         if g["gate"] == "checkpoint.first_save")
-        assert composite["verdict"] == "UNDERCOVERED"              # fence
-        assert composite["checked"] == 2 and composite["expected"] == 3   # fence
-        assert "not established" in str(composite["detail"])       # fence
+            ckpt,
+            event="first_save",
+            run_kind="full",
+            base_model_dir=base,
+            train_config_path=_write_cfg(tmp_path, {}),
+        )
+        assert d.exit_code == 1  # fence (both trees)
+        assert len(d.blocking_reasons) == 1, (  # fence
+            f"the composite's not-established leg must be the ONLY reason: {d.blocking_reasons}"
+        )
+        composite = next(g for g in d.gate_results if g["gate"] == "checkpoint.first_save")
+        assert composite["verdict"] == "UNDERCOVERED"  # fence
+        assert composite["checked"] == 2 and composite["expected"] == 3  # fence
+        assert "not established" in str(composite["detail"])  # fence
         # The fail-before lines:
         # pre-patch: "2/3 first-save properties"
         assert "2/3 applicable" in str(composite["detail"])
@@ -2602,8 +2996,7 @@ class TestAdapterNamingAgreement:
         this census cannot launder a naming defect into a green: a
         generator or recognizer regression still dies on the exact
         want-maps and status assertions these tests always had."""
-        return [f"layers.{i}.self_attn.{w}"
-                for i in range(6) for w in ("q_proj", "v_proj")]
+        return [f"layers.{i}.self_attn.{w}" for i in range(6) for w in ("q_proj", "v_proj")]
 
     def test_mismatched_templates_refused_and_pair_named(self):
         """[FAILS-BEFORE -- _verify_adapter_naming_agreement does not exist
@@ -2628,9 +3021,7 @@ class TestAdapterNamingAgreement:
         either half of the naming would flip this leg red again, which is
         the anti-reversion coverage the test always carried. Both
         assertions below are unchanged."""
-        with pytest.raises(
-            lsg.GateUnmeasured, match="adapter naming disagreement"
-        ) as exc_info:
+        with pytest.raises(lsg.GateUnmeasured, match="adapter naming disagreement") as exc_info:
             lsg._verify_adapter_naming_agreement(
                 lsg._HF_PEFT_ADAPTER_SUFFIX_RE,
                 "",
@@ -2661,9 +3052,7 @@ class TestAdapterNamingAgreement:
                 (".lora_A.weight", ".lora_A.weight"),
             )
 
-    def test_cli_refusal_is_exactly_three_and_names_the_disagreement(
-        self, tmp_path, capsys
-    ):
+    def test_cli_refusal_is_exactly_three_and_names_the_disagreement(self, tmp_path, capsys):
         """[FAILS-BEFORE -- the CLI flags do not exist pre-patch: argparse
         exits 2 via SystemExit, uncaught here, so red by error] End-to-end
         MUST_FIRE at the interface the launcher sees. Exit THREE, not one:
@@ -2681,12 +3070,23 @@ class TestAdapterNamingAgreement:
         by fixture drift -- a refused measurement that never reached the
         artifact is exactly the property under test."""
         base, ckpt, cfg = _healthy_lora(tmp_path)
-        code = lsg_cli.main([str(ckpt), "--run-kind", "lora",
-                         "--base-model-dir", str(base),
-                         "--train-config", str(cfg),
-                         "--adapter-prefix", "",
-                         "--adapter-suffix-a", ".lora_A.weight",
-                         "--adapter-suffix-b", ".lora_B.weight"])
+        code = lsg_cli.main(
+            [
+                str(ckpt),
+                "--run-kind",
+                "lora",
+                "--base-model-dir",
+                str(base),
+                "--train-config",
+                str(cfg),
+                "--adapter-prefix",
+                "",
+                "--adapter-suffix-a",
+                ".lora_A.weight",
+                "--adapter-suffix-b",
+                ".lora_B.weight",
+            ]
+        )
         assert code == 3
         err = capsys.readouterr().err
         assert "adapter naming disagreement" in err
@@ -2718,21 +3118,22 @@ class TestAdapterNamingAgreement:
         test pins run_kind="lora" and never reaches the auto seam) and is
         pinned by test_auto_kind_denominator_excludes_save_state."""
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
-        ckpt = _materialize_artifact(
-            tmp_path, _megatron_named_lora_tensors(), name="mt-lora")
+        ckpt = _materialize_artifact(tmp_path, _megatron_named_lora_tensors(), name="mt-lora")
         # fix45/#78: the lora derive now demands an --adapter-modules census
         # (artifact namespace, written outside the judged tree). Names-only
         # is the honest minimum: the shape check then abstains BY NAME, an
         # abstention no assertion here inspects. Assertions unchanged.
         census = _census_file(tmp_path, self._census_stems())
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base,
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
             train_config_path=_write_cfg(tmp_path, LORA_TRAIN),
             adapter_prefix="",
             adapter_suffix_re=r"\.adapter\.linear_(?:in|out)\.weight$",
-            adapter_suffixes=(".adapter.linear_in.weight",
-                              ".adapter.linear_out.weight"),
-            adapter_modules=census)
+            adapter_suffixes=(".adapter.linear_in.weight", ".adapter.linear_out.weight"),
+            adapter_modules=census,
+        )
         assert d.exit_code == 0, f"calibrated non-default must CLEAR: {d.blocking_reasons}"
         # 31 is the honest #80 denominator, NOT a weakened assertion: 24
         # adapter + 6 optimizer + 1 rng_state, the measured non-adapter shape
@@ -2800,17 +3201,19 @@ class TestAdapterNamingAgreement:
         ckpt = _materialize_artifact(tmp_path, tensors, name="mt-lora-decoy")
         census = _census_file(tmp_path, self._census_stems())
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base,
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
             train_config_path=_write_cfg(tmp_path, LORA_TRAIN),
             adapter_prefix="",
             adapter_suffix_re=r"\.adapter\.linear_(?:in|out)\.weight$",
-            adapter_suffixes=(".adapter.linear_in.weight",
-                              ".adapter.linear_out.weight"),
-            adapter_modules=census)
+            adapter_suffixes=(".adapter.linear_in.weight", ".adapter.linear_out.weight"),
+            adapter_modules=census,
+        )
         assert d.exit_code == 1, (
-            f"optimizer-shaped decoys must still hard-block: {d.blocking_reasons}")
-        flagged = [r for r in d.blocking_reasons
-                   if "MODE/lora" in r and "adapter marker" in r]
+            f"optimizer-shaped decoys must still hard-block: {d.blocking_reasons}"
+        )
+        flagged = [r for r in d.blocking_reasons if "MODE/lora" in r and "adapter marker" in r]
         assert flagged, f"no unmarked-adapter reason fired: {d.blocking_reasons}"
         # "3 of 27" is the anti-disarm pin, one arm per failure shape.
         # Pre-#80 (no exclusion): "10 of 34" -- the 3 decoys + the 7
@@ -2824,10 +3227,12 @@ class TestAdapterNamingAgreement:
         # count to "2 of 26" without emptying it -- both die here on the
         # exact count. Six failure shapes, each landing on a named
         # assertion.
-        assert any("3 of 27" in r and "optimizer_gate.weight" in r
-                   for r in flagged), f"decoys not isolated in reason: {flagged}"
+        assert any("3 of 27" in r and "optimizer_gate.weight" in r for r in flagged), (
+            f"decoys not isolated in reason: {flagged}"
+        )
         assert any("7 non-adapter" in r for r in flagged), (
-            f"excluded-namespace count missing from reason: {flagged}")
+            f"excluded-namespace count missing from reason: {flagged}"
+        )
 
     def test_auto_kind_denominator_excludes_save_state(self):
         """[FAILS-BEFORE -- lsg._infer_auto_kind does not exist pre-patch ->
@@ -2849,16 +3254,14 @@ class TestAdapterNamingAgreement:
         `lsg.re` is used so this file needs no new import for a one-off
         pattern."""
         markers = lsg.re.compile(r"\.adapter\.linear_(?:in|out)\.weight$")
-        fqns = {f"layers.{i}.self_attn.q_proj.adapter.linear_in.weight"
-                for i in range(4)}
+        fqns = {f"layers.{i}.self_attn.q_proj.adapter.linear_in.weight" for i in range(4)}
         fqns |= {f"optimizer.state.exp_avg.block{i}.weight" for i in range(11)}
         fqns.add("rng_state")
         kind, basis = lsg._infer_auto_kind(fqns, markers)
         # Post-exclusion the judged pool is 4/4 = 1.00; raw counting would
         # give 4/16 = 0.25 -> "full". The basis string carries BOTH counts so
         # the shrink is reported, not silent (doctrine 2).
-        assert kind == "lora", (
-            f"save-state namespaces dragged auto-kind to full: {basis}")
+        assert kind == "lora", f"save-state namespaces dragged auto-kind to full: {basis}"
         assert "4/4" in basis and "12 non-adapter" in basis, basis
         # Embedded-segment decoy at the seam: "optimizer" inside a module
         # name is NOT a namespace root, so it must enter the judged
@@ -2874,8 +3277,7 @@ class TestAdapterNamingAgreement:
         except lsg.GateUnmeasured:
             pass
         else:
-            raise AssertionError(
-                "all-excluded pool must raise GateUnmeasured, not guess a kind")
+            raise AssertionError("all-excluded pool must raise GateUnmeasured, not guess a kind")
 
     def test_calibrated_templates_generate_exact_names_and_shapes(self, tmp_path):
         """[FAILS-BEFORE -- kwarg absent pre-patch] Unit-level MUST_PASS on
@@ -2884,13 +3286,15 @@ class TestAdapterNamingAgreement:
         TestMoeOverride already uses."""
         assert lsg._probe_derive_declared is not None, (
             "probe import failed -- the sys.path insertion in _load_gate "
-            "regressed; fix the loader, never this guard")
+            "regressed; fix the loader, never this guard"
+        )
         spec = lsg.resolve_train_spec(dict(LORA_TRAIN), "test://cfg", "auto", None)
         base = lsg.BaseModel(
-            model_dir=tmp_path, config=DENSE_CFG,
-            tensors={k: (v[0], "float32")
-                     for k, v in _dense_full_tensors().items()},
-            tensors_source="test://synthetic")
+            model_dir=tmp_path,
+            config=DENSE_CFG,
+            tensors={k: (v[0], "float32") for k, v in _dense_full_tensors().items()},
+            tensors_source="test://synthetic",
+        )
         # fix45/#78: the lora derive now demands an --adapter-modules census.
         # The want-map below pins generator SHAPES, which post-#78 are
         # declared only from census-carried parent dims x config rank (a
@@ -2901,10 +3305,13 @@ class TestAdapterNamingAgreement:
         # not a nicety.
         stems = self._census_stems()
         decl = lsg.derive_declared_block(
-            base, spec, set(), "",
-            adapter_suffixes=(".adapter.linear_in.weight",
-                              ".adapter.linear_out.weight"),
-            adapter_modules=_census(stems, dims={s: (8, 8) for s in stems}))
+            base,
+            spec,
+            set(),
+            "",
+            adapter_suffixes=(".adapter.linear_in.weight", ".adapter.linear_out.weight"),
+            adapter_modules=_census(stems, dims={s: (8, 8) for s in stems}),
+        )
         want = {}
         for i in range(6):
             for w in ("q_proj", "v_proj"):
@@ -2926,21 +3333,28 @@ class TestAdapterNamingAgreement:
         is its own red-maker."""
         assert lsg._probe_derive_declared is not None, (
             "probe import failed -- the sys.path insertion in _load_gate "
-            "regressed; fix the loader, never this guard")
+            "regressed; fix the loader, never this guard"
+        )
         spec = lsg.resolve_train_spec(dict(LORA_TRAIN), "test://cfg", "auto", None)
         base = lsg.BaseModel(
-            model_dir=tmp_path, config=DENSE_CFG,
-            tensors={k: (v[0], "float32")
-                     for k, v in _dense_full_tensors().items()},
-            tensors_source="test://synthetic")
+            model_dir=tmp_path,
+            config=DENSE_CFG,
+            tensors={k: (v[0], "float32") for k, v in _dense_full_tensors().items()},
+            tensors_source="test://synthetic",
+        )
         stems = self._census_stems()
         decl = lsg.derive_declared_block(
-            base, spec, set(), "", (".lora_A.weight", ".lora_B.weight"),
+            base,
+            spec,
+            set(),
+            "",
+            (".lora_A.weight", ".lora_B.weight"),
             # fix45/#78: same census contract as the calibrated twin above --
             # dims carried so the (rank, in)/(out, rank) shapes this fence
             # pins are actually declared (post-#78 shapes require census
             # dims x config rank).
-            adapter_modules=_census(stems, dims={s: (8, 8) for s in stems}))
+            adapter_modules=_census(stems, dims={s: (8, 8) for s in stems}),
+        )
         want = {}
         for i in range(6):
             for w in ("q_proj", "v_proj"):
@@ -2960,7 +3374,8 @@ class TestAdapterPrefixDemand:
         base, ckpt, cfg = _healthy_lora(tmp_path)
         with pytest.raises(lsg.GateUnmeasured, match="--adapter-prefix"):
             lsg.adjudicate_checkpoint(
-                ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg)
+                ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg
+            )
 
     def test_unpinned_prefix_auto_kind_also_refuses(self, tmp_path):
         """[FAILS-BEFORE -- same mechanism] The demand sits AFTER auto kind
@@ -2970,21 +3385,32 @@ class TestAdapterPrefixDemand:
         lora kind here is marker-inferred, not config-declared."""
         base = _make_base(tmp_path, _dense_full_tensors(), DENSE_CFG)
         ckpt = _materialize_artifact(tmp_path, _lora_tensors())
-        cfg = _write_cfg(tmp_path, {"lora_rank": 4,
-                                    "lora_targets": ["q_proj", "v_proj"]},
-                         name="auto-no-kind-no-prefix.json")
+        cfg = _write_cfg(
+            tmp_path,
+            {"lora_rank": 4, "lora_targets": ["q_proj", "v_proj"]},
+            name="auto-no-kind-no-prefix.json",
+        )
         with pytest.raises(lsg.GateUnmeasured, match="--adapter-prefix"):
             lsg.adjudicate_checkpoint(
-                ckpt, run_kind="auto", base_model_dir=base, train_config_path=cfg)
+                ckpt, run_kind="auto", base_model_dir=base, train_config_path=cfg
+            )
 
     def test_cli_lora_without_prefix_is_exactly_three(self, tmp_path):
         """[FAILS-BEFORE -- pre-patch the identical argv returns 0] The
         launcher-facing shape of the demand: refused measurement, not a
         checkpoint verdict."""
         base, ckpt, cfg = _healthy_lora(tmp_path)
-        code = lsg_cli.main([str(ckpt), "--run-kind", "lora",
-                         "--base-model-dir", str(base),
-                         "--train-config", str(cfg)])
+        code = lsg_cli.main(
+            [
+                str(ckpt),
+                "--run-kind",
+                "lora",
+                "--base-model-dir",
+                str(base),
+                "--train-config",
+                str(cfg),
+            ]
+        )
         assert code == 3
 
     def test_explicit_empty_prefix_is_an_assertion_and_clears(self, tmp_path):
@@ -3021,12 +3447,16 @@ class TestAdapterPrefixDemand:
         base, ckpt, cfg = _healthy_lora(tmp_path)
         census = _census_file(
             tmp_path,
-            [f"layers.{i}.self_attn.{w}"
-             for i in range(6) for w in ("q_proj", "v_proj")],
+            [f"layers.{i}.self_attn.{w}" for i in range(6) for w in ("q_proj", "v_proj")],
         )
         d = lsg.adjudicate_checkpoint(
-            ckpt, run_kind="lora", base_model_dir=base, train_config_path=cfg,
-            adapter_prefix="", adapter_modules=census)
+            ckpt,
+            run_kind="lora",
+            base_model_dir=base,
+            train_config_path=cfg,
+            adapter_prefix="",
+            adapter_modules=census,
+        )
         assert d.exit_code == 0, f"{d.blocking_reasons}"
         # #80: 31 is the honest EXAMINED denominator, NOT a weakened
         # assertion: 24 judged adapter tensors + 7 set-aside save-state

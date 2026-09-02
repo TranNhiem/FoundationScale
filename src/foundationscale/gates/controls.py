@@ -81,6 +81,21 @@ _KNOWN_GATELESS_PACKAGES: frozenset[str] = frozenset(
     {
         "foundationscale.checkpoint",  # torch-backed readers; gates import it lazily
         "foundationscale.provenance",  # run-manifest types; declares no gates
+        # The training entry CONSUMES the registry (FoundationScaleSaveGate wires
+        # REGISTRY into Trainer's on_save); it defines no Gate subclass and calls
+        # no register. Verified by AST over the package, not by reading: zero
+        # ClassDef inherits Gate, zero call site is register/add_gate. Were that to
+        # change, the provenance reconciliation names it -- the new gate's defining
+        # module would not be among the walk's attempted set.
+        "foundationscale.train",
+        # The model-adapter registry is a CLASSIFIER, not a gate: it answers
+        # "dense or MoE, on what evidence" and refuses on malformed config
+        # facts, but it registers nothing and blocks nothing -- the emitter and
+        # the gates decide what to do with its answer. Its own registry
+        # (register_adapter) is a distinct namespace from the gate REGISTRY and
+        # is deliberately not plumbed into it. AST-verified over the package:
+        # zero ClassDef inherits Gate, zero call site is register/add_gate.
+        "foundationscale.models",
     }
 )
 """First-party packages affirmatively classified — by a human, in review — as NOT
@@ -467,10 +482,7 @@ def main(walk: _GateWalk | None = None) -> int:
         # 9 over a tree holding 10; the reconciliation above is the tripwire,
         # and this line is the receipt a human can eyeball without re-running
         # anything.
-        print(
-            f"controls executed for {len(verifiable_ids)} of {gate_count} "
-            f"registered gates"
-        )
+        print(f"controls executed for {len(verifiable_ids)} of {gate_count} registered gates")
 
     if failures:
         print(f"\n{len(failures)} control failure(s):")

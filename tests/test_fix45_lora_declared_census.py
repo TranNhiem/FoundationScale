@@ -72,9 +72,7 @@ WEIGHT_SUFFIXES = (".adapter.linear_in.weight", ".adapter.linear_out.weight")
 FIXTURE_DIMS = {stem: (16, 8) for stem in CENSUS_STEMS}  # (out, in) small ints
 
 
-def _write_safetensors(
-    path: Path, tensors: dict[str, tuple[str, tuple[int, ...]]]
-) -> None:
+def _write_safetensors(path: Path, tensors: dict[str, tuple[str, tuple[int, ...]]]) -> None:
     """Write a header-correct safetensors shard: 8-byte len + JSON header +
     zero payload. The gate's base loader parses ONLY the header; the payload
     bytes exist so data_offsets are truthful."""
@@ -171,9 +169,7 @@ def _adapter_metadata(
         storage_id=f"fixture://{extra}",
         is_extra_state=True,
     )
-    return SimpleNamespace(
-        tensors=tensors, origin="fix45 census fixture", format="torch_dist"
-    )
+    return SimpleNamespace(tensors=tensors, origin="fix45 census fixture", format="torch_dist")
 
 
 def _write_census(
@@ -186,14 +182,14 @@ def _write_census(
     if dims is None:
         doc: object = {
             "adapter_modules": list(stems),
-            "source": ("fix45 test fixture standing in for the launch-time "
-                       "step-(5) live-module census"),
+            "source": (
+                "fix45 test fixture standing in for the launch-time step-(5) live-module census"
+            ),
         }
     else:
         doc = {
             "adapter_modules": [
-                {"fqn": s, "out_features": dims[s][0], "in_features": dims[s][1]}
-                for s in stems
+                {"fqn": s, "out_features": dims[s][0], "in_features": dims[s][1]} for s in stems
             ],
             "source": "fix45 test fixture carrying parent dims",
         }
@@ -326,19 +322,21 @@ def test_refusal_class_vocabulary_and_ordering():
     # The launcher calibrates exactly the prefix member today; the census
     # member exists for tools/operators. ORDER pin: a prefix message that
     # mentions --adapter-modules in its guidance must still classify prefix.
-    assert LSG._refusal_class(
-        "--adapter-prefix was not pinned for a lora adjudication ... "
-        "the fix path here is --adapter-modules ..."
-    ) == LSG._REFUSAL_ADAPTER_PREFIX_UNPINNED
-    assert LSG._refusal_class(
-        "--adapter-modules was not supplied for a lora adjudication ..."
-    ) == LSG._REFUSAL_ADAPTER_CENSUS_UNAVAILABLE
-    assert LSG._refusal_class(
-        "checkpoint unreadable: /x: why"
-    ) == LSG._REFUSAL_CHECKPOINT_UNREADABLE
-    assert LSG._refusal_class(
-        "something else entirely"
-    ) == "other_unmeasured"
+    assert (
+        LSG._refusal_class(
+            "--adapter-prefix was not pinned for a lora adjudication ... "
+            "the fix path here is --adapter-modules ..."
+        )
+        == LSG._REFUSAL_ADAPTER_PREFIX_UNPINNED
+    )
+    assert (
+        LSG._refusal_class("--adapter-modules was not supplied for a lora adjudication ...")
+        == LSG._REFUSAL_ADAPTER_CENSUS_UNAVAILABLE
+    )
+    assert (
+        LSG._refusal_class("checkpoint unreadable: /x: why") == LSG._REFUSAL_CHECKPOINT_UNREADABLE
+    )
+    assert LSG._refusal_class("something else entirely") == "other_unmeasured"
 
 
 def test_prefix_abstention_arm_intact(monkeypatch, tmp_path):
@@ -415,9 +413,7 @@ def test_shapes_bind_clear_when_census_carries_dims(monkeypatch, tmp_path):
     census_path = _write_census(tmp_path, dims=FIXTURE_DIMS)
     d = _adjudicate(monkeypatch, tmp_path, census_path=census_path, rank=32)
     assert d.exit_code == 0, d.blocking_reasons
-    assert not any(
-        "DECLARED WITHOUT SHAPE CHECK" in n for n in d.declared_basis["notes"]
-    )
+    assert not any("DECLARED WITHOUT SHAPE CHECK" in n for n in d.declared_basis["notes"])
 
 
 def test_shape_mismatch_fires(monkeypatch, tmp_path):
