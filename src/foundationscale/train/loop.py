@@ -1021,8 +1021,24 @@ def train(cfg: TrainConfig) -> int:
     # block claims to have removed, surviving one level down because the fix was
     # applied to the declaration and the symptom lives at the use.
     callbacks: list[Any] = [gate_callback]
+    # And the third time, on the same axis. `# type: ignore[arg-type]` here was
+    # NEEDED with transformers installed (**kwargs is dict[str, Any] against a
+    # long typed signature) and UNUSED without it (TrainingArguments resolves to
+    # Any under the module's ignore_missing_imports override), so with
+    # warn_unused_ignores the identical source was clean locally and one error on
+    # all three CI Pythons. A silencer whose own necessity depends on the
+    # environment is not a narrower verdict than the error it suppresses -- it is
+    # the same defect as #111/#229 written in one comment.
+    #
+    # Binding the constructor through an explicitly Any-typed local makes the
+    # CALL environment-independent, which is what the two notes above were
+    # reaching for: neither environment produces an error, so neither needs a
+    # silencer. Runtime is untouched -- this is the same object under a second
+    # name. Verified in both directions, not one: mypy is clean here with
+    # transformers importable, and clean again with transformers forced to Any.
+    _TrainingArguments: Any = TrainingArguments
     try:
-        args = TrainingArguments(**kwargs)  # type: ignore[arg-type]
+        args = _TrainingArguments(**kwargs)
         trainer = Trainer(
             model=model,
             args=args,

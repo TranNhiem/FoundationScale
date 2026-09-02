@@ -723,7 +723,7 @@ fi
 # artifact check (an UNMEASURED verdict must not be re-scored by it).
 census_rc=0
 run_in_container --slurm-ntasks 1 --workdir "$REPO" \
-  bash -lc "cd $REPO && ${census_cuda_prefix}torchrun --nnodes=1 --nproc_per_node=1 --master_addr=127.0.0.1 --master_port=$MASTER_PORT $CENSUS_PROBE --hf_model_path $HF_MODEL_PATH --ep $EP --targets '$LORA_TARGETS' --out '$ADAPTER_MODULES'" \
+  bash -lc "cd '$REPO' && ${census_cuda_prefix}torchrun --nnodes=1 --nproc_per_node=1 --master_addr=127.0.0.1 --master_port='$MASTER_PORT' '$CENSUS_PROBE' --hf_model_path '$HF_MODEL_PATH' --ep '$EP' --targets '$LORA_TARGETS' --out '$ADAPTER_MODULES'" \
     >"$CENSUS_OUT" 2>&1 || census_rc=$?
 # fix40 — VERDICT-LINE TRIAGE (deciding), rc (corroborating only).
 # MEASURED 2026-08-24 on <compute-node> (the CUDA_VISIBLE_DEVICES="" run): the
@@ -1261,7 +1261,7 @@ echo "Preflight: peft override replay via $REPLAY_PROBE (oracle = the real proce
 REPLAY_OUT=$PREFLIGHT_DIR/override_replay.txt
 replay_rc=0
 run_in_container --slurm-ntasks 1 --workdir "$REPO" \
-  bash -lc "cd $REPO && torchrun --nnodes=1 --nproc_per_node=1 --master_addr=127.0.0.1 --master_port=$MASTER_PORT $REPLAY_PROBE --recipe $RECIPE --peft_scheme $PEFT_SCHEME --hf_path $HF_MODEL_PATH --seq_length $SEQ_LENGTH --expect-dim $LORA_RANK --expect-alpha $LORA_ALPHA --expect-dropout $LORA_DROPOUT --expect-targets-csv '$LORA_TARGETS' --overrides $CLI_OVERRIDES" \
+  bash -lc "cd '$REPO' && torchrun --nnodes=1 --nproc_per_node=1 --master_addr=127.0.0.1 --master_port='$MASTER_PORT' '$REPLAY_PROBE' --recipe '$RECIPE' --peft_scheme '$PEFT_SCHEME' --hf_path '$HF_MODEL_PATH' --seq_length '$SEQ_LENGTH' --expect-dim '$LORA_RANK' --expect-alpha '$LORA_ALPHA' --expect-dropout '$LORA_DROPOUT' --expect-targets-csv '$LORA_TARGETS' --overrides $CLI_OVERRIDES" \
     >"$REPLAY_OUT" 2>&1 || replay_rc=$?
 [[ -r "$REPLAY_OUT" ]] || \
   { echo "FATAL: override-replay output $REPLAY_OUT is missing or unreadable — no verdict line or evidence row can be read off an unreadable artifact, and an unreadable artifact BLOCKS; it never reads as an empty one (doctrines 1/4)." >&2; exit 1; }

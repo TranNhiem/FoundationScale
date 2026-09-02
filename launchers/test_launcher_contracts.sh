@@ -1991,12 +1991,23 @@ f39_s=$?
 f39_r5_copy=""
 [ "$f39_s" -eq 0 ] && f39_r5_copy=$(sed -n '/^# (5) /,/^# (6) /p' "$f39_t" | strip_shell_comments)
 f39_region_fired=1
-if [ "$f39_s" -eq 0 ] && printf '%s\n' "$f39_r5_copy" | grep -qF -- '--hf_path $HF_MODEL_PATH' && ! f39_r5_ok "$f39_t"; then
+# The construction needle carries the QUOTES, and that is the whole point of
+# this line: the BASH-LC repair nested every value expansion in the step-(5)
+# invocation inside inner single quotes, so the bytes are now
+# `--hf_model_path '$HF_MODEL_PATH'` and the sed above renders
+# `--hf_path '$HF_MODEL_PATH'`. Against the old unquoted needle the grep found
+# nothing, the construction proof failed, and this leg reported "the invocation
+# regression could not be constructed" — a MUST_FIRE going red for a reason
+# other than the one it names. That is the pin having to MOVE with the bytes it
+# pins, exactly like the #81 probe-spelling pin two blocks down, not a repair to
+# revert: an alternation over quoted/unquoted would green through a revert to
+# the bare splice checks/bash_lc_sweep.py exists to forbid.
+if [ "$f39_s" -eq 0 ] && printf '%s\n' "$f39_r5_copy" | grep -qF -- "--hf_path '\$HF_MODEL_PATH'" && ! f39_r5_ok "$f39_t"; then
   f39_region_fired=0
 fi
 [ -n "${f39_t:-}" ] && rm -f "$f39_t" || true
 if [ "$f39_region_fired" -eq 0 ]; then
-  ok "MUST_FIRE fix39-region: a copy whose probe invocation regresses to the argparse-incompatible --hf_path goes red in-region (construction proven: '--hf_path \$HF_MODEL_PATH' present in the copy's step-(5) region)"
+  ok "MUST_FIRE fix39-region: a copy whose probe invocation regresses to the argparse-incompatible --hf_path goes red in-region (construction proven: \"--hf_path '\$HF_MODEL_PATH'\" present in the copy's step-(5) region)"
 else
   no "MUST_FIRE UNREACHABLE (fix39-region): the invocation regression could not be constructed or does not fire (sed rc=$f39_s) — the region leg above is an unproven detector"
 fi

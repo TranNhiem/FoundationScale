@@ -344,12 +344,12 @@ jobs:
         # a missing entry point read as zero controls run.
         #
         # The exit code is checked AND disbelieved. `bash script` exiting 0 says
-        # the process ended, not that 134 controls ran — a suite killed before
+        # the process ended, not that the floor's worth of controls ran — a suite killed before
         # its summary, or one whose summary print rotted away, must not be
         # creditable (a check over zero units proves nothing; ambiguous is
         # refused). So the captured output goes through verify_summary, which
-        # requires the summary line, a zero failure count, and the 134-control
-        # denominator measured when this gate was written. Exit-code-only
+        # requires the summary line, a zero failure count, and the control
+        # denominator FLOOR declares below. Exit-code-only
         # wiring would look identical in the Actions log on the day the suite
         # starts exiting 0 early; that undetectable green is the fake this step
         # exists to refuse. Output is captured via $(...) rather than piped
@@ -365,9 +365,42 @@ jobs:
             exit 1
           fi
 
+          # THE CONTROL FLOOR, AND THE ONLY PLACE IT IS WRITTEN.
+          #
+          # It was written in seven places: the comparison, its error message,
+          # and five doctored fixtures that each embedded a count. Raising it
+          # 150 -> 154 for #238 moved one of the seven, and the other six became
+          # stale in the same edit. Two distinct failures followed, and only the
+          # first is the kind a floor is supposed to produce:
+          #
+          #   * mustpass_4 carried `controls: 150 passed, 0 failed` as "the
+          #     suite's real wording". Under a 154 floor verify_summary refuses
+          #     it — correctly — and the leg printed "the reader cannot see its
+          #     own producer ... that is #237 exactly". That message was FALSE.
+          #     The reader saw its producer perfectly; the fixture was four
+          #     controls short of a floor raised two edits earlier. A control
+          #     that fires for a reason other than the one it names sends the
+          #     next reader after the wrong defect, which is #90's shape: an
+          #     unattributable red.
+          #   * mustfire_2 and mustfire_5 exist to isolate the FAILURE-COUNT
+          #     check ('1 failed' with the pass count intact). With their counts
+          #     below the floor they fire for two reasons at once, so they no
+          #     longer isolate anything — a confounded control still shows green
+          #     and is worth nothing. Both are now built from FLOOR, so the
+          #     failure count stays the only thing wrong with them.
+          #
+          # Fixtures 3 and 6 keep their literal 12: being below the floor IS
+          # what they test, and deriving them would make them track the number
+          # they are supposed to violate.
+          #
+          # The rule this encodes: a commit that adds or removes suite legs
+          # re-measures the suite and edits ONE line here. If a number is worth
+          # comparing against, it is worth having exactly one copy of.
+          FLOOR=154
+
           verify_summary() {
             # Returns 0 only when the suite's summary line exists, reports
-            # exactly 0 failures, and covers >= 154 controls. Every refusal
+            # exactly 0 failures, and covers at least FLOOR controls. Every refusal
             # names what failed and echoes the offending line so the operator
             # can act. Accepts '<passed>/<total> ... <n> failed' or a bare
             # '<n> passed ... <n> failed'; if the suite rewords it beyond both,
@@ -378,8 +411,7 @@ jobs:
             # THE LOCATOR IS THE BUG THIS COMMENT ONCE DESCRIBED (#237). It read
             #     grep -i 'summary'
             # while the suite's final line has the shape `controls: <n> passed,
-            # 0 failed` (154 at the time of writing; the floor below is the one
-            # place that number lives),
+            # 0 failed` — a shape carrying no such word,
             # which contains no such word. So `line` came back empty, the
             # function refused at the first branch, and this job was RED on
             # every run for 5+ commits over a suite that was 150/150 green.
@@ -438,16 +470,15 @@ jobs:
               echo "::error::summary reports $failed failed control(s): $line" >&2
               return 1
             fi
-            # Floor raised 134 -> 150 (#237) -> 154 (#238). 134 was the count
-            # when this gate was written; the suite measured 150 the day the
-            # locator was fixed, and 154 once #238 wired countables_drift.py and
-            # packaging_reachability.py in as four real legs. A floor below the
-            # live count lets that many controls vanish in silence, which is the
-            # same quiet-shrink move the floor exists to refuse. The rule is
-            # mechanical: any commit that adds or removes legs re-measures the
-            # suite and moves this number in the SAME commit.
-            if [ "$((10#$total))" -lt 154 ]; then
-              echo "::error::summary covers $total controls; 154 were measured when this" >&2
+            # Floor history: 134 (when this gate was written) -> 150 (#237, the
+            # day the locator was fixed) -> 154 (#238, once countables_drift.py
+            # and packaging_reachability.py were wired in as four real legs). A
+            # floor below the live count lets that many controls vanish in
+            # silence, which is the same quiet-shrink move the floor exists to
+            # refuse. The value itself is FLOOR, set once at the top of this
+            # step; see the comment there for why it is not written twice.
+            if [ "$((10#$total))" -lt "$FLOOR" ]; then
+              echo "::error::summary covers $total controls; $FLOOR were measured when this" >&2
               echo "::error::gate was written. A quietly shrunk suite is the empty-registry" >&2
               echo "::error::move, one directory down. Remove controls on purpose and lower" >&2
               echo "::error::this floor in the same commit — or not at all." >&2
@@ -461,12 +492,13 @@ jobs:
           # control, so three deliberately doctored logs must each be rejected
           # before the real output is trusted. Mutations: (1) the summary line
           # deleted — the dies-early green; (2) the summary rewritten to
-          # '1 failed' with 134/134 intact, isolating the failure-count check;
-          # (3) the summary shrunk to '12/12, 0 failed' — the silently-emptied
-          # suite that only the 134 floor catches. Refusals go to /dev/null so
-          # the expected reds do not pollute the annotation stream.
+          # '1 failed' with the pass count at FLOOR so the failure count is the
+          # only thing wrong with it; (3) the summary shrunk to '12/12, 0 failed'
+          # — the silently-emptied suite that only the floor catches. Refusals go
+          # to /dev/null so the expected reds do not pollute the annotation
+          # stream.
           mustfire_1=$'launchers: 8/8 watchdog checks green\ncontracts: 126/126 green'
-          mustfire_2='SUMMARY: 134/134 controls passed, 1 failed'
+          mustfire_2="SUMMARY: $FLOOR/$FLOOR controls passed, 1 failed"
           mustfire_3='SUMMARY: 12/12 controls passed, 0 failed'
           if verify_summary "$mustfire_1" 2>/dev/null; then
             echo "::error::summary verifier ACCEPTED doctored log 1 (mutation: summary"
@@ -482,7 +514,7 @@ jobs:
           fi
           if verify_summary "$mustfire_3" 2>/dev/null; then
             echo "::error::summary verifier ACCEPTED doctored log 3 (mutation: suite shrunk"
-            echo "::error::to 12/12). The 134-control floor is decorative without this leg."
+            echo "::error::to 12/12). The $FLOOR-control floor is decorative without this leg."
             exit 1
           fi
           echo "verify_summary fired on all three doctored logs (MUST_FIRE legs 1-3) — proven able to refuse."
@@ -496,8 +528,10 @@ jobs:
           # detector refuses garbage says nothing about whether it can read the
           # one input it exists to read.
           #
-          # So these carry the suite's ACTUAL final line verbatim —
-          # `controls: 150 passed, 0 failed` — and drive it through the SAME
+          # So these carry the suite's ACTUAL final line shape verbatim —
+          # `controls: <n> passed, 0 failed`, with <n> taken from FLOOR so the
+          # fixture can never fall below the bar it is being measured against —
+          # and drive it through the SAME
           # verify_summary the real log goes through. If the suite rewords its
           # tally, leg 4 goes red HERE, naming the reader/producer split, rather
           # than the job failing downstream with "no summary line" and being
@@ -508,8 +542,8 @@ jobs:
           # proven reachable THROUGH the new locator and not only through the
           # legacy 'summary' word.
           # ------------------------------------------------------------------
-          mustpass_4='controls: 150 passed, 0 failed'
-          mustfire_5='controls: 150 passed, 1 failed'
+          mustpass_4="controls: $FLOOR passed, 0 failed"
+          mustfire_5="controls: $FLOOR passed, 1 failed"
           mustfire_6='controls: 12 passed, 0 failed'
           if ! verify_summary "$mustpass_4"; then
             echo "::error::summary verifier REFUSED the suite's real summary line"
@@ -559,7 +593,22 @@ jobs:
             echo "::error::control scripts unreadable under $repo_root/checks -- missing is not zero (doctrine 4); refusing to run blind."
             exit 1
           fi
-          mapfile -t wf_files < <(find "$WORKFLOW_DIR" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) | sort)
+          # NOT mapfile. It is a bash 4+ builtin and macOS ships bash 3.2, where
+          # the line dies `mapfile: command not found` and -- under this step's
+          # `set -e`-less prologue -- leaves wf_files EMPTY. The guard below
+          # would then report "0 workflow files, UNMEASURED", which is true of
+          # the array and false of the directory: an accurate-sounding verdict
+          # about the wrong subject. The runner has bash 5, so CI never saw it;
+          # the only machine that did was the developer laptop this step must be
+          # reproducible on, which is where the whole step was being replayed to
+          # debug #237. The read loop below is identical on bash 3.2 and 5.
+          # The same rule is already written down at
+          # h100_validation/build_h100_plane.sh:580 -- it was applied there and
+          # not here, which is how a convention becomes one file's habit.
+          wf_files=()
+          while IFS= read -r wf_f; do
+            wf_files+=("$wf_f")
+          done < <(find "$WORKFLOW_DIR" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) | sort)
           if [ ${#wf_files[@]} -eq 0 ]; then
             echo "::error::WF-YAML found 0 *.yml/*.yaml under $WORKFLOW_DIR -- zero units is UNMEASURED, not a pass (doctrine 1)."
             exit 1
@@ -598,6 +647,22 @@ jobs:
           # green/passed/SUMMARY tokens and suite domain prefixes so
           # verify_summary cannot mis-ingest it.
           # ------------------------------------------------------------------
+          # Self-test FIRST, exactly like the `packaging` job's two steps: a
+          # detector whose own controls misbehave has no licence to report a
+          # verdict, so the live sweep must not be reachable without it. This
+          # ordering is load-bearing here and not merely tidy -- #239 widened
+          # the sweep three times (eval-shaped source, %q-rendered
+          # substitution, declared splice), and every widening is a shape it
+          # will now decline to report. The 9 MUST_FIREs are what keep those
+          # exemptions narrow: eval-shaped is exempt and eval-shaped-plus-one-
+          # word is not, %q-rendered is exempt and plain printf is not, comment
+          # text is not a site and a `#` inside the quoted source still is. A
+          # declaration that stops matching the tree is RED, which is the only
+          # thing separating DECLARED_SPLICES from an allowlist.
+          if ! python3 "$repo_root/checks/bash_lc_sweep.py" --self-test; then
+            echo "::error::BASH-LC self-test RED -- the sweep's own controls misbehaved, so its verdict on the live tree states nothing (doctrine 3)."
+            exit 1
+          fi
           for lp_file in "$LORA_LP" "$FULL_LP"; do
             if [ ! -r "$lp_file" ]; then
               echo "::error::BASH-LC cannot read $lp_file -- unreadable is not empty; the sweep refuses to green a launcher it cannot see (doctrine 4)."
@@ -635,14 +700,14 @@ jobs:
             exit 1
           fi
           if ! verify_summary "$output"; then
-            echo "::error::The suite exited 0, but exit 0 is not evidence that 134"
+            echo "::error::The suite exited 0, but exit 0 is not evidence that $FLOOR"
             echo "::error::controls ran. The required proof is the summary line above —"
             echo "::error::missing, unreadable, or red, this run is UNMEASURED and refused."
             exit 1
           fi
           # MUST_PASS leg, observed live: the real suite's summary accepted.
           # The summary line is reprinted as the claim, denominator included —
-          # "the guard works" is not a claim, "134 of 134 carry it" is.
+          # "the guard works" is not a claim, "$FLOOR of $FLOOR carry it" is.
           printf 'launcher contracts green, verified summary: '
           printf '%s\n' "$output" | { grep -i 'summary' || true; } | tail -n 1
 
