@@ -176,6 +176,14 @@ is gone — the API imports. Two pieces of work remain, in order:
 
 **Failure mode in practice.** The one module that most directly serves an end user is the one that greets a user on the framework's headline hardware with a blank slot where their cluster should be.
 
+**What this is *not*.** The absence is of *data*, not of mechanism. `ClusterProfile.from_dict`
+already carries an `mnnvl_available` field, rejects unknown keys, and accepts a profile from a JSON
+document or path; `profile_by_name`'s own error text says so — *"New clusters are added as data: one
+dict in `_PROFILE_DATA`, no code changes."* So this is the cheapest item in the review that a user
+actually feels: shipping H100-SXM, GB200-NVL72 and H200 profiles is adding dicts to a table and the
+measurements to fill them, not a redesign. It is ranked as Missing rather than Redesign for exactly
+that reason, and it is why M9 sits low in effort and high in perceived value.
+
 ---
 
 ## Theme 7 — Save-side-only verification: no resume/load-side contract
