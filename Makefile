@@ -46,7 +46,7 @@
 #     and skips the one target that certifies the detectors. It said "~2 min"
 #     until #234 and "~35 min" until #242, both of them guesses.
 
-.PHONY: install test lint fmt typecheck typecheck-checks controls packaging countables mutation mutation-module skip-guard-probe check clean
+.PHONY: install test lint fmt typecheck typecheck-checks controls packaging training-plane countables mutation mutation-module skip-guard-probe check clean
 
 install:
 	pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
@@ -84,7 +84,7 @@ fmt:
 # moves out from under the CLI that forwards to it.
 #
 # checks/ is NOT in this list, and that is a stated exclusion rather than an
-# implied one (#231): all 4 files under checks/ are unchecked by mypy. That
+# implied one (#231): all 5 files under checks/ are unchecked by mypy. That
 # count is anchored -- checks_files in the countables census, bound by
 # checks/countables_drift.py -- because the clause it replaces read "3 of 3"
 # in the same commit that ADDED the fourth file (#241). It had copied mypy's
@@ -132,6 +132,19 @@ controls:
 packaging:
 	python3 checks/packaging_reachability.py --self-test
 	python3 checks/packaging_reachability.py
+
+# Finding #245. Four review documents asserted the package "contains no
+# training code" -- true of training PRIMITIVES, false of the package, which
+# delegates to transformers.Trainer through function-scope imports. This probe
+# reports the two axes separately so neither can be quoted alone, and scans
+# every git-tracked *.md (not just docs/: README.md carries the claim too) for
+# the retired phrasings.
+#
+# Self-test first, same order as packaging: an instrument whose controls have
+# not run has not earned the right to have its verdict read.
+training-plane:
+	python3 checks/training_plane_probe.py --self-test
+	python3 checks/training_plane_probe.py
 
 # Mirrors the three steps in CI's countables leg (#220). The census is measured,
 # never committed -- see the ci.yml comment for why a frozen oracle is worse than

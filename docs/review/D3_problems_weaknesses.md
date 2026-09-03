@@ -7,7 +7,7 @@ Ranked by blast radius: how much of the intended audience (dense + MoE, 4B–100
 | # | Theme | Verdict classes | Evidence base |
 |---|-------|----------------|---------------|
 | 1 | The shipped package is not the advertised product | P0 Missing, P1 Redesign | Census §3 probe; A_front_door#0/#1; F1_docs#0/#1 |
-| 2 | The verification engine never fires in production — its only caller is its own test suite | P1 Missing (CONFIRMED) | Census §6 import/call-site graph; B_gate_engine#4 |
+| 2 | The verification engine fires on one seam only, via a path that bypasses its own public helper | P1 Missing (re-scoped post-`train/`) | Census §6 import/call-site graph; B_gate_engine#4; re-measured #245 |
 | 3 | The library/script boundary — **closed during this review**; a 98-name compatibility shim is the residual | ~~P0/P1 Redesign~~ → **P2 Simplify** (fix landed) | T2_lib_script_boundary#0–#15, plus post-move re-measurement |
 | 4 | Documentation describes a system that does not exist | P0/P1 Redesign (CONFIRMED) | F1_docs#2; F2_docs#1; F2_docs#5 |
 | 5 | Model- and campaign-specific semantics are hardcoded into "model-agnostic" infrastructure | P0/P1/P2 (mixed) | T3_skeptic#0/#3/#5; C_gates_domain#1/#2; T2#6/#10 |
@@ -20,9 +20,9 @@ Ranked by blast radius: how much of the intended audience (dense + MoE, 4B–100
 
 ## Theme 1 — The shipped package is not the advertised product
 
-**What it is.** FoundationScale presents as a foundation-model training framework. The measured content of `src/foundationscale` (18,706 LOC) is exclusively a verification plane: gates, checkpoint readers, a parity comparator, topology validation, provenance manifests. The census training-code probe is unambiguous:
+**What it is.** FoundationScale presents as a foundation-model training framework. Most of the measured content of `src/foundationscale` (18,706 LOC) is a verification plane: gates, checkpoint readers, a parity comparator, topology validation, provenance manifests. The training-primitive probe reads zero on every marker:
 
-| Probe (across all of `src/`) | Match count |
+| Probe (across all 24 git-tracked `src/*.py`) | Match count |
 |---|---|
 | `nn.Module` | **0** |
 | optimizer step | **0** |
@@ -30,33 +30,37 @@ Ranked by blast radius: how much of the intended audience (dense + MoE, 4B–100
 | dataloader | **0** |
 | forward pass | **0** |
 | dist collective | **0** |
-| `torch` import | 2 files, both read-side (model-agnostic `checkpoint/dcp.py`, `verify/parity.py`) |
+| module-scope `torch` import | **0** |
+| any-scope `torch` import | 3 files: read-side `checkpoint/dcp.py` and `verify/parity.py` — plus `train/loop.py` |
+| **delegated trainer construction** | **1 file: `train/loop.py`** |
 
-There is no `train.py` or `train*.py` of any kind under `src/`, zero trainer code, and no documentation path that touches a model, dataset, or GPU. The README itself admits the trainer "is early", and its three-step Quickstart exercises only `pytest`, `foundationscale.gates.controls`, and `tools/mutate.py` — the quickstart of a training framework that never trains (F1_docs#0, corrected: a Quickstart *does* exist; what is absent is one that trains). The top-level package ships a 3-line `__init__.py` that exports nothing (A_front_door#2), and the front-door messaging claims the un-shipped product (A_front_door#1).
+**The zero is real; the conclusion the first draft drew from it was not.** There *is* a `train/` package under `src/` — `loop.py` (1,168 lines), `cli.py` (108), `__init__.py` (29) — and it builds a `transformers.Trainer`, calls `trainer.train()` and `trainer.save_model()`, and gates every checkpoint it writes. It imports torch at function scope, so a marker set built from primitives cannot see it (#223, #245). The honest Theme-1 statement is therefore **narrower and still a problem**: the package trains by *delegation to one `transformers.Trainer` path*, while the estate the launchers actually drive is Megatron/NeMo in a container — so the shipped trainer is not the trainer that runs the H100 and GB200 workloads, and it is the least-tested module in the package (`train/loop.py` 62% vs ≥81% everywhere else, #228).
 
-**Who it hurts and when.** Every new adopter, in the first ten minutes. An engineer who installs `foundationscale` following the stated goal (make distributed training *easier*) discovers a package with no public import surface and nothing that builds a model.
+The README itself admits the trainer "is early", and its three-step Quickstart exercises only `pytest`, `foundationscale.gates.controls`, and `tools/mutate.py` — a quickstart that never reaches the trainer the package now ships (F1_docs#0, corrected: a Quickstart *does* exist; what is absent is one that trains). The top-level package ships a 3-line `__init__.py` that exports nothing (A_front_door#2), so even the `train` entry point is invisible from `import foundationscale`, and the front-door messaging claims a distributed-training product the packaged path does not deliver (A_front_door#1).
+
+**Who it hurts and when.** Every new adopter, in the first ten minutes. An engineer who installs `foundationscale` following the stated goal (make distributed training *easier*) finds a top-level package that exports nothing, a Quickstart that runs pytest, and — only if they already know the name — a `foundationscale-train` console script that fine-tunes a causal LM through `transformers`. Nothing in the front door leads them there, and nothing in the front door tells them that the distributed path the docs describe is the launcher estate, not the package.
 
 **Failure mode in practice.** The first contact is not a training failure mid-run; it is silent disbelief at the install prompt. The repo burns its credibility budget before a single GPU is touched, because the README's framing promises a framework and the disk contains a (genuinely good) gate engine.
 
 ---
 
-## Theme 2 — The verification engine never fires in production
+## Theme 2 — The verification engine fires on one seam, through a path that bypasses its own public helper
 
-**What it is.** The gate engine is the crown jewel of the current slice — multi-way-blocking `Verdict`, frozen `Coverage` carried per result, ERROR-on-exception, MUST_FIRE controls. The problem is that nobody calls it. The measured call-site graph for `run_event`:
+**What it is.** The gate engine is the crown jewel of the current slice — multi-way-blocking `Verdict`, frozen `Coverage` carried per result, ERROR-on-exception, MUST_FIRE controls. The measured call-site graph for `run_event`, the public helper written to be *the* way to invoke it:
 
 | Layer | `run_event(...)` call sites |
 |---|---|
-| `src/` | 2 |
+| `src/` | 2 — the `def` in `gates/core.py` and one call in `integrate.py`, the wrapper around it |
 | `tests/` | 18 |
-| `tools/` | 0 |
+| `tools/` | 0 (one comment mention in `preflight.py`) |
 | `h100_validation/` | 0 |
 | **Production** | **0** |
 
-The lifecycle enum binds `FIRST_SAVE`, `SAVE`, `LAUNCH`, `STEP_ZERO`, `EXPORT`, `PROMOTE` — but there is no RESUME/LOAD member at all (Theme 7), and nothing in the package integrates the engine into any trainer. B_gate_engine#4 (CONFIRMED): the engine has no integration seam into an actual trainer; the correction is that the seam is *missing*, not that it is broken. The very good MUST_FIRE control machinery is exercised only by the `foundationscale-controls` CI job against itself.
+**Re-measured after `train/` landed, and the finding narrows rather than dissolves.** One production seam now exists: `FoundationScaleSaveGate.on_save` in `train/loop.py` runs the registry on every checkpoint (`FIRST_SAVE` first, `SAVE` after) and fails closed. But it calls `registry.run(event, ctx)` directly, so the public helper is still dead code sitting beside a hand-rolled equivalent — two ways to do one thing, one of them untested in production and one of them undiscoverable. And the seam covers exactly one of six lifecycle points: `LAUNCH`, `STEP_ZERO`, `EXPORT` and `PROMOTE` have no in-process caller, and there is no RESUME/LOAD member at all (Theme 7). B_gate_engine#4's correction stands in re-scoped form: the *general* integration seam is missing; what exists is one bespoke callback for one trainer.
 
-**Who it hurts and when.** The framework's own maintainers, continuously: they are maintaining a defect-injection control framework whose only adversary is its own test suite. And every future operator of the not-yet-written trainer, who will get zero runtime protection from 13k LOC of gates until someone manually wires a seam that does not exist.
+**Who it hurts and when.** The framework's own maintainers, continuously: they are maintaining a defect-injection control framework whose only adversary is its own test suite. And every operator of a trainer other than the packaged one. The save seam is now wired for exactly one path — `FoundationScaleSaveGate.on_save` in `train/loop.py` — so an operator on the Megatron/NeMo estate the launchers actually drive still gets zero runtime protection from the gate plane until someone hand-wires the equivalent callback.
 
-**Failure mode in practice.** The gate plane can pass CI green indefinitely while the training pipeline it nominally protects is never built, so there is no failing run to point at — only a widening gap between "we have 107 adjudicated findings about our gates" and "our gates have never seen a checkpoint from a job."
+**Failure mode in practice.** The gate plane can pass CI green indefinitely while the pipelines it nominally protects run outside it. The one wired seam narrows the gap without closing it: the gates have now seen checkpoints from the packaged `transformers` trainer, and still none from the H100 or GB200 jobs this framework was built for. "Our gates have never seen a checkpoint from a cluster job" remains true, and that is the sentence that matters.
 
 ---
 
@@ -136,14 +140,14 @@ is gone — the API imports. Two pieces of work remain, in order:
 
 **What it is.** This is not stale docs; it is anticipatory docs presented as fact.
 
-- **`B2_scaling.md` presents unimplemented interfaces and a nonexistent entrypoint as the system.** Measured: `src/foundationscale/train.py` does not exist, no `train*.py` exists under `src/` at all, and `class ExecutionBackend` is defined in zero source files while appearing 3 times in docs (F1_docs#2, CONFIRMED). The YAML "working config" is fiction.
+- **`B2_scaling.md` presents unimplemented interfaces and the wrong entrypoint as the system.** Measured: `class ExecutionBackend` is defined in zero source files while appearing 3 times in docs, and the YAML "working config" it shows is loaded by nothing (F1_docs#2, CONFIRMED on the `ExecutionBackend` leg). The entrypoint leg has since been **overtaken by events** and must be restated (#245). `B2_scaling.md:196` declares `entrypoint: "foundationscale.train"`. That module path now resolves — `import foundationscale.train` succeeds — but `python -m foundationscale.train` still fails with *no module named `foundationscale.train.__main__`*, because the package ships `__init__.py`, `cli.py` and `loop.py` and no module entrypoint; the only runnable form is the `foundationscale-train` console script (#224). So the document is now **half right in the most misleading way**: a reader who copies the line gets an error that says the package cannot be executed, rather than one that says it does not exist. It is also wrong about the *shape* — a single-backend `transformers` CLI, not the backend protocol the surrounding YAML implies. Cheapest honest fix: add a four-line `train/__main__.py` that calls `cli.main`, so the documented form and the shipped form are the same form.
 - **`B1_architecture.md` §12 worked examples** are polished YAML with no not-implemented disclaimer, naming an entrypoint that does not exist (F2_docs#1, CONFIRMED).
 - **`F2_docs#5`** (CONFIRMED): zero API-reference/module-reference headings across all 19 markdown files, and exactly one markdown file names `from foundationscale`.
 - **`F2_docs#6`** (PARTLY_TRUE, corrected): the finding claimed no troubleshooting page; in fact one *does* exist, at `h100_validation/h100/LAUNCH.md`, scoped to the H100 launch plane. What is absent is one scoped to the *package*.
 
 **Who it hurts and when.** Anyone evaluating the repo for adoption, and any contributor trying to locate the true API. The docs' own doctrine (F2_docs#2) states that "a doc that is wrong and present is a defect," and this doctrine is kept — but the shipped docs currently violate it.
 
-**Failure mode in practice.** A reader internalises an architecture (`ExecutionBackend`, `train.py`) and writes plans, wrappers, and mental models against it. When they grep the tree, they find nothing, and now *every* document they have read is retroactively suspect.
+**Failure mode in practice.** A reader internalises an architecture (`ExecutionBackend`, `train.py`) and writes plans, wrappers, and mental models against it. When they grep the tree they find no `ExecutionBackend` at all and a `train/` package with a different shape than the one documented — and now *every* document they have read is retroactively suspect. This review is not exempt: its own load-bearing "no training code" claim went stale the moment `train/` landed, and no instrument caught it (#245).
 
 ---
 

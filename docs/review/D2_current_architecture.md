@@ -2,21 +2,25 @@
 
 ## 1. Runtime path as it exists today
 
-The installed package currently contains **zero training code**. Armed with the measured source probe, its role is verification infrastructure only:
+The installed package implements **zero training primitives of its own** — which is not the same as containing no trainer. Measured across all 24 git-tracked `src/*.py` files:
 
 | Training construct searched in `src/` | Measured result |
 |---|---:|
-| `nn.Module` | 0 files |
+| `nn.Module` subclass | 0 files |
 | optimizer step | 0 files |
 | backward | 0 files |
 | dataloader | 0 files |
 | forward pass | 0 files |
 | distributed collective | 0 files |
-| `torch` import | 2 files: `checkpoint/dcp.py`, `verify/parity.py` |
+| module-scope `torch` import | 0 files |
+| any-scope `torch` import | 3 files: `checkpoint/dcp.py`, `verify/parity.py`, `train/loop.py` |
+| **delegated trainer construction** | **1 file: `train/loop.py` — `Trainer(...)`, `trainer.train()`, `trainer.save_model()`, `AutoModelForCausalLM.from_pretrained`, `DataCollatorForLanguageModeling`** |
 
-The verification plane itself is real work and should be preserved: `gates/core.py`, checkpoint readers, `storage_id` identity, parity comparison, provenance capture, mutation controls, and fail-closed exit semantics all have Keep-classified findings. What is absent is a trainer around them.
+The last two rows are the ones the original six-marker probe could not see, and the earlier draft of this document read its zero as an absence. `src/foundationscale/train/` (1,305 lines: `loop.py` 1,168, `cli.py` 108, `__init__.py` 29) is a real training entry point that delegates the step loop to `transformers.Trainer` and imports torch at *function* scope, so all six primitive markers read 0 over a module that trains (findings #223, #245). The correct reading is **delegation, not absence**: the package owns the run lifecycle, the manifest and the gate sweep, and rents the step loop.
 
-The supplied findings do **not** identify the generated trainer's implementation files or verify the launcher-to-generated-trainer call graph. Rather than invent boxes, the trainer itself is drawn as an explicit evidence gap. The only launcher specifically named by the findings is the Gemma-4-E4B LoRA launcher used by the one-launch preflight and census control.
+The verification plane is real work and should be preserved: `gates/core.py`, checkpoint readers, `storage_id` identity, parity comparison, provenance capture, mutation controls, and fail-closed exit semantics all have Keep-classified findings. What is thin is not the trainer's existence but its coverage — `train/loop.py` is exercised at 62% against ≥81% for every other module (#228) — and its reach: it drives one `transformers.Trainer` path, not the Megatron/NeMo estate the launchers actually run.
+
+The supplied findings do **not** identify the *generated* (launcher-side, in-container) trainer's implementation files or verify the launcher-to-generated-trainer call graph; that trainer is distinct from the packaged `train/` entry point and remains an explicit evidence gap in the diagram below. The only launcher specifically named by the findings is the Gemma-4-E4B LoRA launcher used by the one-launch preflight and census control.
 
 ```mermaid
 flowchart TB
@@ -40,7 +44,7 @@ flowchart TB
   OK["Operator or bash continues"]
   NO["Operator blocks or remediates"]
 
-  PKG["[installed foundationscale package]<br/>18,706 LOC / 24 files<br/>verification plane only<br/>0 training constructs"]
+  PKG["[installed foundationscale package]<br/>18,706 LOC / 24 files<br/>verification plane + delegating train/ (1,305 LOC)<br/>0 training primitives, step loop rented from transformers.Trainer"]
 
   O --> PF
   O --> L
@@ -80,7 +84,7 @@ flowchart TB
 
 ### What the diagram establishes — and what it deliberately does not
 
-- The operational plane is shell and tool-heavy: `launchers/` contains 9,500 shell LOC plus 1,615 Python LOC, while `tools/` contains 8,916 Python LOC. `h100_validation/` adds another 31,313 Python LOC and 4,986 shell LOC.
+- The operational plane is shell and tool-heavy: `launchers/` contains 9,678 shell LOC plus 1,615 Python LOC, while `tools/` contains 8,916 Python LOC. `h100_validation/` adds another 31,313 Python LOC and 4,986 shell LOC.
 - The installed package is consumed by tools, but the measured `run_event` call-site count is **0 in both `tools/` and `h100_validation/`**. No evidence shows an actual trainer firing the lifecycle engine.
 - The package's three-line `__init__.py` exports nothing, so there is still no top-level public surface. The production save-gate decision function `adjudicate_checkpoint` **is now importable** from `foundationscale.gates.adjudication` (moved during this review, T2#0), but it is reachable only by its fully-qualified submodule path, and 60 private names still cross the boundary through the `tools/live_save_gate.py` compatibility shim.
 - There is **no load-side path after saving**: the `Lifecycle` enum has no `RESUME`, `LOAD`, `BEFORE_LOAD`, or `RESTORE` member.
@@ -144,7 +148,7 @@ This table uses the declared scope in the question as the reference architecture
 
 | Layer expected for the declared product | What exists today | Status |
 |---|---|---|
-| End-user training entry point | No `src/foundationscale/train.py`; no `train*.py` under `src/`; `ExecutionBackend` appears in docs but is defined in zero source files | **MISSING** |
+| End-user training entry point | `src/foundationscale/train/cli.py` exists and is registered as the `foundationscale-train` console script (`[project.scripts]`, added by #224). It drives one backend. `ExecutionBackend` — the pluggable-backend protocol B1/B2 document — appears in docs but is defined in zero source files | **PRESENT (single-backend); the documented multi-backend protocol is MISSING** |
 | First training run | A README Quickstart exists, but it exercises tests, the controls runner, and mutation checks only — no model, dataset, or GPU | **MISSING training quickstart** |
 | Model construction | Zero `nn.Module` occurrences in the package | **MISSING from package** |
 | Model-family adapter seam | MoE classification around Gemma-style config semantics and a closed three-name routed-count-key set sits in `tools/emit_run_manifest.py`; expert-layout spelling tables are built into package checkpoint gates | **PARTIAL facts, MISSING model-neutral interface** |
@@ -154,10 +158,10 @@ This table uses the declared scope in the question as the reference architecture
 | Distributed runtime | Zero distributed-collective occurrences in the package | **MISSING from package** |
 | Parallel topology model | `foundationscale.topology` includes construction-time product validation | **PRESENT as library; production trainer use UNMEASURED** |
 | Target-hardware profiles | `_PROFILE_DATA` contains only `slurm-generic` and `local-single-node`; neither is MNNVL-capable | **MISSING H100/H200/GB200/GB300 profiles** |
-| Launch orchestration | 9,500 shell LOC in `launchers/`; preflight is scoped to one Gemma-4-E4B / GB200-tray launch; census denominator control is hardwired to one launcher | **ESTATE-ONLY, not a package launcher API** |
-| In-process lifecycle hooks | Lifecycle members are referenced for `FIRST_SAVE`, `SAVE`, `STEP_ZERO`, `LAUNCH`, `EXPORT`, and `PROMOTE`, but `run_event` has zero production call sites in tools or validation estate | **MISSING trainer seam** |
+| Launch orchestration | 9,678 shell LOC in `launchers/`; preflight is scoped to one Gemma-4-E4B / GB200-tray launch; census denominator control is hardwired to one launcher | **ESTATE-ONLY, not a package launcher API** |
+| In-process lifecycle hooks | `train/loop.py`'s `FoundationScaleSaveGate.on_save` calls `registry.run(event, ctx)` with `FIRST_SAVE` on the first save and `SAVE` thereafter, and fails closed by setting `control.should_training_stop`. The convenience wrapper `run_event` still has zero production call sites (`gates/core.py`, `integrate.py`, `tools/preflight.py` only), and `STEP_ZERO`, `LAUNCH`, `EXPORT`, `PROMOTE` have no in-process caller | **PRESENT for the save seam; MISSING for the other four lifecycle points** |
 | Checkpoint readers and metadata | `checkpoint/dcp.py`, `checkpoint/dcp_meta.py`, `open_weights`, `read_metadata`, chunk reads, and fail-closed format sniffing exist | **PRESENT; end-to-end trainer consumption UNMEASURED** |
-| Trainer-owned checkpoint saving | No measured trainer body, no lifecycle caller, and no training constructs in the package | **MISSING/UNMEASURED** |
+| Trainer-owned checkpoint saving | `train/loop.py` calls `trainer.save_model()` at :1097 and reads `model.state_dict()` at :536 to build the pre-save declaration, and its save callback gates every checkpoint. What is UNMEASURED is the *estate* trainer: the in-container Megatron/NeMo path the launchers drive has no such seam | **PRESENT in the packaged trainer; UNMEASURED in the estate trainer** |
 | Save-side checkpoint verification | `gates/checkpoint_gates.py` is 1,974 LOC; census records seven `SAVE` references and seven `FIRST_SAVE` references in `src/` | **PRESENT as package/tool verification** |
 | Export parity | `verify/parity.py` is 1,053 LOC and supports trainer/converter artifact comparison through weight sources | **PRESENT as library/tool verification** |
 | Resume/load validation | No `RESUME`, `LOAD`, `BEFORE_TRAIN`, `BEFORE_LOAD`, or `RESTORE` lifecycle member exists | **MISSING** |
@@ -168,7 +172,7 @@ This table uses the declared scope in the question as the reference architecture
 | Public Python API | Three-line package `__init__.py` exports nothing; the `tools/live_save_gate.py` shim re-exports 98 names from `gates.adjudication`, 63 of them private (measured post-T2) | **MISSING stable public surface** |
 | Tool discoverability | Only `foundationscale-controls` is a measured console entry point; emit-manifest, mutate, preflight, and census tools lack the same registration story | **PARTIAL** |
 | Package troubleshooting/API docs | Zero API-reference or module-reference headings across all 19 markdown files; exactly one markdown file names `from foundationscale` | **MISSING product documentation** |
-| SFT, RL, multimodal recipes | Docs contain worked recipes but the named entrypoint does not exist; the shipped package has no trainer or data path to execute them | **MISSING executable recipes** |
+| SFT, RL, multimodal recipes | Docs contain worked recipes written against an entrypoint and a YAML schema that do not exist. The shipped `train/` entry point is causal-LM SFT over a `datasets` source only — no RL loop, no multimodal collator, no recipe registry that could load those YAMLs | **MISSING executable recipes** |
 | Hardware validation plane | `h100_validation/` contributes 31,313 Python LOC and 4,986 shell LOC | **CODE PRESENT, estate-scoped; it is not an installed trainer** |
 | 100+-node scale evidence | The scaling design's own dissent/open-risk material identifies 100+-node claims as unvalidated | **EXPRESSIBLE, UNMEASURED** |
 

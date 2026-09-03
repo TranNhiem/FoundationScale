@@ -26,24 +26,52 @@ T2 boundary move had already changed, and were corrected rather than published.
 
 ## The headline finding
 
-`src/foundationscale/` measures 18,706 lines and contains no training code. Measured across the
-whole package: zero files define an `nn.Module`, call `backward()`, construct a `DataLoader`,
-or define a `forward`; zero import torch at module scope. What is shipped is a *verification
-plane* — gates, checkpoint readers, a parity comparator, topology validation, provenance
-manifests — and it is a good one. What is documented is a training framework.
+`src/foundationscale/` measures 18,706 lines and implements **no training primitives of its
+own**. Across all 24 git-tracked `src/*.py` files, an AST probe finds zero that define an
+`nn.Module`, call `backward()`, construct a `DataLoader`, define a `forward`, call
+`optimizer.step()`, or import torch at module scope.
 
-That gap is the organising fact of D2, D3 and D4, and it is the reason the roadmap leads with
-naming the product honestly rather than with refactoring.
+**That zero is literally true and, read alone, materially misleading** — and it was read alone
+when D2, D3 and D4 were first drafted. The package *does* ship a training entry point:
+`src/foundationscale/train/` (`loop.py` 1,168 lines, `cli.py` 108, `__init__.py` 29) builds a
+`transformers.Trainer` and calls `trainer.train()`, `trainer.save_model()`,
+`AutoModelForCausalLM.from_pretrained` and `DataCollatorForLanguageModeling`. It imports torch
+and transformers at *function* scope, so every module-scope marker the probe looks for stays at
+zero. The package **delegates** training rather than implementing it, and six primitive markers
+cannot tell delegation apart from not training at all (finding #223).
 
-Two things about that number are worth stating plainly, because both were caught during the
-review rather than after it:
+The accurate statement has two axes, not one:
+
+| Axis | Measured |
+|---|---|
+| Training **primitives** implemented in `src/` | 0 of 24 files, on all six markers |
+| Training **entry point** delegating to a third-party trainer | present — `train/`, 1,305 lines across 3 files |
+| Gate seam into that trainer | present — `FoundationScaleSaveGate.on_save` runs the registry for `FIRST_SAVE`/`SAVE` and fails closed |
+| Tests exercising the entry point | `train/loop.py` 62%, `train/__init__.py` 50%; every other module ≥81% (#228) |
+
+The rest of the package is a *verification plane* — gates, checkpoint readers, a parity
+comparator, topology validation, provenance manifests — and it is a good one, better tested
+than the training path the framework is named for. That asymmetry, not an absence, is the
+organising fact of D2, D3 and D4, and it is why the roadmap leads with naming the product
+honestly rather than with refactoring.
+
+**How the error survived.** `train/` arrived with #224/#225/#226, *after* those documents were
+drafted, and no committed probe existed to go red when the repo moved — the "measured `src/`
+probe" they cite was an ad-hoc campaign command, not an instrument. The countables gate could
+not catch it either: it anchors numbers, not claims. Both defects are tracked as #245; the
+passages are corrected in place below, and the probe is being committed as a real 0/5/95/96
+instrument with controls on both axes.
+
+Two further things about the 18,706 are worth stating plainly, because both were caught during
+the review rather than after it:
 
 - It moved *during* the review. These documents were written against a census of 13,667 lines.
   The T2 boundary move then relocated the 2,546-line checkpoint decision API out of
   `tools/live_save_gate.py` and into `src/foundationscale/gates/adjudication.py`, and the fixes
   landed since have added the rest: `src/foundationscale/` now measures 18,706 lines. The
-  structural finding survived re-measurement unchanged: the package now holds real decision
-  logic where it previously held none, and still holds no training code.
+  structural finding survived re-measurement in re-scoped form: the package now holds real
+  decision logic where it previously held none, and a delegating trainer where it previously
+  held nothing at all.
 - The move did not finish the job it started. The library's decision path imports an
   unpackaged `tools/` module, so on a clean install it loads and then declines to decide
   (finding #219, measured with a positive control in D3 Theme 3).

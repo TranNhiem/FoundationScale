@@ -164,7 +164,7 @@ jobs:
         # file resolves under two module names and mypy refuses the directory. The
         # remaining tools/ modules are unchecked -- stated, not implied.
         # checks/ is likewise unchecked here, and its denominator is on the
-        # wire: all 4 files under checks/ are unchecked. That count is anchored
+        # wire: all 5 files under checks/ are unchecked. That count is anchored
         # (checks_files) after #241, where this clause and its Makefile twin
         # both read "3 of 3" -- mypy's error-BEARING file count, not the number
         # it checked -- written in the very commit that added the fourth file.
@@ -250,6 +250,32 @@ jobs:
         run: python3 checks/packaging_reachability.py --self-test
       - name: Packaging reachability (declared names must resolve)
         run: python3 checks/packaging_reachability.py
+
+      # Training-plane probe (#245). Four review documents asserted that the
+      # package "contains no training code". That was true of training
+      # PRIMITIVES and false of the package: src/foundationscale/train/ builds
+      # a transformers.Trainer and calls train()/save_model(), importing torch
+      # and transformers at FUNCTION scope, so every module-scope marker the
+      # original ad-hoc command looked for stayed at zero over a tree that
+      # demonstrably trains (#223).
+      #
+      # The reason it survived is the reason this step exists: the "measured
+      # src/ probe" those documents cite was a campaign one-liner, not a
+      # committed instrument, so nothing went red when train/ landed. The
+      # countables gate could not catch it either -- it anchors NUMBERS, and
+      # this was a CLAIM.
+      #
+      # Two axes are reported separately (primitives, delegation) so neither
+      # can be quoted alone, and a third scans every git-tracked *.md -- not
+      # just docs/, because README.md carries this claim too -- for the retired
+      # phrasings. rc=5 here means that sentence is back in the tree.
+      #
+      # --self-test FIRST and as a separate step, for the packaging reason
+      # above: the controls are the licence to believe the verdict.
+      - name: Training-plane probe controls (MUST_FIRE/MUST_PASS)
+        run: python3 checks/training_plane_probe.py --self-test
+      - name: Training-plane probe (two axes, and no retired doc assertion)
+        run: python3 checks/training_plane_probe.py
 
       # Countables drift (#220). The shipped documents state numbers ABOUT this
       # tree -- LOC, file counts -- and until now nothing kept them true; #220
@@ -422,7 +448,12 @@ jobs:
           # The rule this encodes: a commit that adds or removes suite legs
           # re-measures the suite and edits ONE line here. If a number is worth
           # comparing against, it is worth having exactly one copy of.
-          FLOOR=154
+          #
+          # 154 -> 157 (#245): three real legs wiring checks/training_plane_probe.py
+          # into the suite -- self-test denominator, non-repo REFUSE, live verdict.
+          # RE-MEASURED, not incremented: `bash launchers/test_launcher_contracts.sh`
+          # reported `controls: 157 passed, 0 failed` on the commit that adds them.
+          FLOOR=157
 
           verify_summary() {
             # Returns 0 only when the suite's summary line exists, reports
@@ -498,7 +529,8 @@ jobs:
             fi
             # Floor history: 134 (when this gate was written) -> 150 (#237, the
             # day the locator was fixed) -> 154 (#238, once countables_drift.py
-            # and packaging_reachability.py were wired in as four real legs). A
+            # and packaging_reachability.py were wired in as four real legs) ->
+            # 157 (#245, training_plane_probe.py wired in as three real legs). A
             # floor below the live count lets that many controls vanish in
             # silence, which is the same quiet-shrink move the floor exists to
             # refuse. The value itself is FLOOR, set once at the top of this

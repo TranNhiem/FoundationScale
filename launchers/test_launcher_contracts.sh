@@ -3905,6 +3905,184 @@ fi
 printf '  ABSTAIN  fix238-gatewiring: packaging_reachability CLEAR direction (rc=0 with foundationscale installed and importable) — 0 of 1 directions measurable under python3 -S on this wire; `make packaging` covers the installed direction in an installed environment; adds 0 to pass and 0 to fail\n'
 abstain=$((abstain+1))
 
+echo "== fix245-trainingplane: training_plane_probe real legs =="
+
+# --- finding #245: checks/training_plane_probe.py enters the repo in the same
+# commit as these legs, for the #238 reason -- the anti-orphan gate below scans
+# every checks/*.py and refuses any basename with no word-boundary call site in
+# this suite. A comment-mention would satisfy that grep and measure NOTHING.
+#
+# WHAT THE PROBE IS FOR. Four review documents asserted that the package
+# "contains no training code". That sentence came from an ad-hoc campaign
+# command that looked for six training PRIMITIVES at module scope; the package
+# DELEGATES to transformers.Trainer with function-scope imports, so all six
+# read zero over a tree that demonstrably trains. The zero was literally true
+# and materially misleading, and no committed instrument existed to go red when
+# `train/` landed. The probe reports two INDEPENDENT axes -- primitives (A) and
+# delegation (B) -- plus a doc axis (C) that hunts the retired phrasings.
+#
+# Every invocation below carries `python3 -S`, same as fix238 and for the same
+# reason: the probe is stdlib-only, and `-S` makes the verdict a property of
+# the gate rather than of whatever happens to be installed on the runner
+# (#83/#229 class).
+
+# --- MUST_PASS: training_plane_probe self-test -------------------------------
+# MEASURED: `python3 -S checks/training_plane_probe.py --self-test` exits rc=0
+# and its last line is exactly
+#   self-test denominator: 9 of 9 controls (5 MUST_FIRE, 4 MUST_PASS)
+# -- deliberately the same wording checks/countables_drift.py prints, parsed by
+# the same sed expression. rc=0 alone is NOT the measurement: a self-test whose
+# control set silently shrinks to 1 still exits 0, so the trailing "N of N" is
+# parsed and held to a FLOOR of 9.
+#
+# Floor history: 9 at birth (#245). Two of those nine exist because the probe
+# reproduced, one level up, the very defect it was written to catch: control 8
+# pins that ZERO DOCS SCANNED is UNMEASURED rather than inheriting the source
+# axes' clean reading, and control 9 pins that the doc denominator reaches the
+# repo ROOT -- README.md is 1 of the 8 tracked *.md that a docs/-only scan
+# cannot see, and it is the file deliverable 9 rewrites with exactly this
+# claim. A floor left behind while the real count grows is not conservative,
+# it is that many controls the leg would let disappear in silence.
+if [ ! -r "checks/training_plane_probe.py" ]; then
+  f245_msg="MUST_PASS FAILED (training_plane_probe self-test) UNMEASURED:"
+  f245_msg="$f245_msg checks/training_plane_probe.py is not readable -- unreadable is not"
+  f245_msg="$f245_msg empty (doctrine 4); the gate cannot run, so 0 of 9 controls were measured"
+  no "$f245_msg"
+else
+  f245_rc=0
+  f245_out=$(python3 -S checks/training_plane_probe.py --self-test 2>&1) || f245_rc=$?
+  f245_last=$(printf '%s\n' "$f245_out" | tail -n 1)
+  f245_have=$(printf '%s\n' "$f245_last" |
+    sed -n 's/^self-test denominator: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls.*/\1/p')
+  f245_want=$(printf '%s\n' "$f245_last" |
+    sed -n 's/^self-test denominator: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls.*/\2/p')
+  if [ "$f245_rc" -ne 0 ]; then
+    f245_msg="MUST_PASS FAILED (training_plane_probe self-test): rc=$f245_rc over the gate's"
+    f245_msg="$f245_msg own 9-control fixture set -- output:"
+    f245_msg="$f245_msg $(printf '%s\n' "$f245_out" | tr '\n' ' ')"
+    no "$f245_msg"
+  elif [ -z "$f245_have" ] || [ -z "$f245_want" ]; then
+    f245_msg="MUST_PASS FAILED (training_plane_probe self-test) UNMEASURED: rc=0 but the last"
+    f245_msg="$f245_msg line is not the declared 'self-test denominator: N of N controls'"
+    f245_msg="$f245_msg wording -- the measuring unit printed no denominator (doctrine 2);"
+    f245_msg="$f245_msg update this leg in the same commit as the wording change."
+    f245_msg="$f245_msg Last line: $f245_last"
+    no "$f245_msg"
+  elif [ "$f245_have" -ne "$f245_want" ]; then
+    f245_msg="MUST_PASS FAILED (training_plane_probe self-test): denominator $f245_have of"
+    f245_msg="$f245_msg $f245_want controls is not self-consistent -- the self-test examined"
+    f245_msg="$f245_msg fewer controls than it claims to have (doctrine 2)"
+    no "$f245_msg"
+  elif [ "$f245_have" -lt 9 ]; then
+    f245_msg="MUST_PASS FAILED (training_plane_probe self-test): control set shrank to"
+    f245_msg="$f245_msg $f245_have of $f245_want, below the measured floor of 9 -- a self-test"
+    f245_msg="$f245_msg that quietly drops controls still exits 0, so the floor is the control"
+    no "$f245_msg"
+  else
+    f245_msg="MUST_PASS training_plane_probe self-test: rc=0 under python3 -S, denominator"
+    f245_msg="$f245_msg $f245_have of $f245_want controls (>= the measured floor of 9): $f245_last"
+    ok "$f245_msg"
+  fi
+fi
+
+# --- MUST_FIRE: training_plane_probe refuses outside a git repository --------
+# MEASURED: run with cwd outside any git worktree, the probe exits rc=96
+# exactly -- the declared REFUSE code. The assertion is 96, not merely nonzero:
+# collapsing it to nonzero would accept a crash (rc=1/2) as a control firing,
+# and a crashed detector is not a discriminating one.
+#
+# This is the #244 lesson pinned as a control. The probe's denominator is the
+# git index and nothing else; the alternative -- an rglob minus a blocklist --
+# is what let a stale build/ tree DOUBLE this package's measured line count.
+# So when git cannot answer, the only honest verdict is REFUSE. A filesystem
+# fallback here would silently redefine "the repository" and every axis count
+# downstream would be a number about the wrong set of files.
+if [ ! -r "checks/training_plane_probe.py" ]; then
+  f245_msg="MUST_FIRE UNREACHABLE (training_plane_probe non-repo refusal) UNMEASURED:"
+  f245_msg="$f245_msg checks/training_plane_probe.py is not readable -- unreadable is not"
+  f245_msg="$f245_msg empty (doctrine 4); the refusal cannot be exercised, 0 of 1 refusal"
+  f245_msg="$f245_msg paths measured"
+  no "$f245_msg"
+else
+  f245_abs=$(pwd)/checks/training_plane_probe.py
+  f245_tmp=$(mktemp -d)
+  f245_rc=0
+  # A temp dir is not a git worktree on any runner this suite targets, but it
+  # is NOT assumed: if the sandbox happens to sit inside one, the probe would
+  # answer about THAT repo and the leg would be measuring nothing, so the
+  # non-repo precondition is established first and the leg abstains by name if
+  # it cannot be.
+  if (cd "$f245_tmp" && git rev-parse --show-toplevel >/dev/null 2>&1); then
+    f245_msg="MUST_FIRE UNREACHABLE (training_plane_probe non-repo refusal) UNMEASURED:"
+    f245_msg="$f245_msg $f245_tmp is itself inside a git worktree, so the non-repo condition"
+    f245_msg="$f245_msg could not be established -- 0 of 1 refusal paths measured; the probe"
+    f245_msg="$f245_msg would have answered about the enclosing repo, not refused"
+    no "$f245_msg"
+  else
+    f245_out=$( (cd "$f245_tmp" && python3 -S "$f245_abs" 2>&1) ) || f245_rc=$?
+    if [ "$f245_rc" -eq 96 ]; then
+      f245_msg="MUST_FIRE training_plane_probe: invoked outside any git worktree it refused"
+      f245_msg="$f245_msg with rc=96 (REFUSE) rather than falling back to a filesystem walk --"
+      f245_msg="$f245_msg a blocklist walk cannot define 'the repository' (#244)"
+      ok "$f245_msg"
+    else
+      f245_msg="MUST_FIRE UNREACHABLE (training_plane_probe non-repo refusal): rc=$f245_rc"
+      f245_msg="$f245_msg outside a git worktree, expected exactly 96 -- rc=0 would mean the"
+      f245_msg="$f245_msg probe invented a denominator from the filesystem (#244), and any"
+      f245_msg="$f245_msg other nonzero collapses a crash into a control firing; output:"
+      f245_msg="$f245_msg $(printf '%s\n' "$f245_out" | tr '\n' ' ')"
+      no "$f245_msg"
+    fi
+  fi
+  rm -rf "$f245_tmp"
+fi
+
+# --- MUST_PASS: the live tree's own two-axis verdict --------------------------
+# The self-test proves the instrument discriminates on fixtures; this leg runs
+# it against THIS repository, which is the reading the review documents cite.
+# MEASURED on the commit that introduces the probe: rc=0, axis A total 0 over
+# 24 git-tracked src/*.py, axis B nonzero, 23 git-tracked *.md clean on axis C.
+#
+# The assertion is rc=0 AND a nonzero source denominator. rc=0 alone would be
+# satisfied by a probe that scanned nothing: 0 of 0 files exits 95 today, but
+# the point of restating the denominator here is that the number reaching the
+# wire is the number the documents quote.
+if [ ! -r "checks/training_plane_probe.py" ]; then
+  f245_msg="MUST_PASS FAILED (training_plane_probe live verdict) UNMEASURED:"
+  f245_msg="$f245_msg checks/training_plane_probe.py is not readable -- unreadable is not"
+  f245_msg="$f245_msg empty (doctrine 4); 0 of 1 live verdicts measured"
+  no "$f245_msg"
+else
+  f245_rc=0
+  f245_out=$(python3 -S checks/training_plane_probe.py 2>&1) || f245_rc=$?
+  f245_den=$(printf '%s\n' "$f245_out" |
+    sed -n 's/^AXIS A module_scope_torch_import: [0-9][0-9]* of \([0-9][0-9]*\).*/\1/p')
+  if [ "$f245_rc" -ne 0 ]; then
+    f245_msg="MUST_PASS FAILED (training_plane_probe live verdict): rc=$f245_rc on this tree."
+    f245_msg="$f245_msg rc=5 means a tracked *.md still asserts a retired bare-absence form"
+    f245_msg="$f245_msg (the #245 sentence is back); rc=95 means a denominator went empty;"
+    f245_msg="$f245_msg rc=96 means git could not answer. Output:"
+    f245_msg="$f245_msg $(printf '%s\n' "$f245_out" | tr '\n' ' ')"
+    no "$f245_msg"
+  elif [ -z "$f245_den" ]; then
+    f245_msg="MUST_PASS FAILED (training_plane_probe live verdict) UNMEASURED: rc=0 but no"
+    f245_msg="$f245_msg 'AXIS A module_scope_torch_import: N of M' line was found -- the probe"
+    f245_msg="$f245_msg reported no denominator, and unparseable is not passing (doctrine 2)."
+    f245_msg="$f245_msg Output: $(printf '%s\n' "$f245_out" | tr '\n' ' ')"
+    no "$f245_msg"
+  elif [ "$f245_den" -lt 1 ]; then
+    f245_msg="MUST_PASS FAILED (training_plane_probe live verdict): source denominator is"
+    f245_msg="$f245_msg $f245_den git-tracked src/*.py -- zero units is UNMEASURED, never a"
+    f245_msg="$f245_msg clean reading (doctrine 1)"
+    no "$f245_msg"
+  else
+    f245_msg="MUST_PASS training_plane_probe live verdict: rc=0 over $f245_den git-tracked"
+    f245_msg="$f245_msg src/*.py, both axes on the wire and no tracked *.md asserting a retired"
+    f245_msg="$f245_msg bare-absence form"
+    ok "$f245_msg"
+  fi
+fi
+
 echo "== fix78-orphan: every launchers/*.py and checks/*.py harness helper carries at least one call site in this suite (anti-orphan, #86 class) =="
 # This control was earned the hard way: the F78 census-writer driver
 # shipped a full round with ZERO call sites while its two legs burned red
