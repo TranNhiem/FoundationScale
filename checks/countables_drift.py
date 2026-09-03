@@ -343,11 +343,26 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
     # census key -- the second group would overwrite the first and only half
     # the phrase would rewrite, which is rule 4's failure mode rather than its
     # satisfaction. One quantity, one token.
+    #
+    # #249: the trailing literal is `` `? checks/ `` and not `checks/`, because
+    # the first spelling was markup-blind. The pattern was written against the
+    # two evidence sites it was born from -- the Makefile and ci.yml, both plain
+    # text -- and docs/review/D6_developer_experience.md:197 states the same
+    # clause in markdown, as "all 4 files under `checks/`". Backticks, so no
+    # match, so no token, so no drift: D6 sat inside the scanned corpus (docs/
+    # is in COUNTABLES_CORPUS) and outside every denominator, and it carried 4
+    # while the Makefile and ci.yml both carried 5. `make countables` reported
+    # CLEAR over it for the whole interval. That is #240's shape -- a countable
+    # in a slot no pattern anchors -- reached by #233's mechanism, an instrument
+    # that cannot see through inline-code markup. The corpus is prose ABOUT a
+    # repository, so a path written as a path and a path written as code are the
+    # same claim, and an anchor that distinguishes them is measuring typography.
     PatternSpec(
         label="all N files under checks/ are unchecked (checks_files)",
-        # evidence: Makefile and .github/workflows/ci.yml, one clause each
+        # evidence: Makefile, .github/workflows/ci.yml and D6, one clause each
         #   "all 4 files under checks/ are unchecked"
-        regex=re.compile(r"all\s+(?P<num>" + NUMBER + r")\s+files under checks/"),
+        #   "all 4 files under `checks/`" (markdown; #249)
+        regex=re.compile(r"all\s+(?P<num>" + NUMBER + r")\s+files under `?checks/"),
         bindings=(("checks_files", "num"),),
     ),
     # The mutation corpus, stated in the Makefile and re-derived by #242's CI
@@ -1096,6 +1111,42 @@ def self_test() -> int:
         )
         return ok, f"drifted={rep.drifted} rewrites={n} history_intact={'13,667' in after}"
 
+    def c_markup_blind_anchor(root: Path) -> tuple[bool, str]:
+        # MUST_FIRE, #249. Both spellings of ONE clause, both stale, in one
+        # document: the plain form the anchor was born against and the markdown
+        # form that defeated it. The plant is the exact string measured in the
+        # wild -- docs/review/D6_developer_experience.md:197 read "all 4 files
+        # under `checks/`" while the Makefile and ci.yml both read 5, and the
+        # gate called the tree CLEAR because the backticks put that site in no
+        # denominator.
+        #
+        # Three assertions, because the fix has three ways to be wrong. drifted
+        # ==2 proves the backticked form is now SEEN (a fix that widened the
+        # pattern but skipped the site would read 1). Both `after` clauses
+        # prove each was CORRECTED, not merely counted. And the backtick has to
+        # survive the rewrite byte-for-byte: a repair that resolves drift by
+        # eating the markup would silently reformat prose it does not own, and
+        # the second clause below would then read "under checks/`" -- caught
+        # here rather than in a reviewer's diff.
+        doc = mk(
+            root / "markup",
+            "d.md",
+            "mypy sees all 3 files under checks/ and reports on none of them.\n"
+            "The exclusion covers all 3 files under `checks/`, which is the whole set.\n",
+        )
+        rep = scan_doc(doc)
+        texts = {doc: doc.read_text(encoding="utf-8")}
+        n = apply_rewrites(plan_rewrites(rep), texts)
+        after = doc.read_text(encoding="utf-8")
+        want = SELF_CENSUS["checks_files"]
+        ok = (
+            rep.drifted == 2
+            and n == 2
+            and f"all {want} files under checks/ and" in after
+            and f"all {want} files under `checks/`, which" in after
+        )
+        return ok, f"drifted={rep.drifted} rewrites={n} backtick_intact={'`checks/`' in after}"
+
     controls: list[tuple[str, str, ControlFn]] = [
         ("association", "MUST_PASS", c_association),
         ("one countable, two phrasings, both corrected", "MUST_FIRE", c_phrasing_twin),
@@ -1105,6 +1156,7 @@ def self_test() -> int:
         ("mermaid node pair is a site, and rewrites whole", "MUST_FIRE", c_mermaid_node),
         ("three identical edges, each number to its own key", "MUST_FIRE", c_import_edges),
         ("anchored clause, wrong number, blamed on right key", "MUST_FIRE", c_wrong_anchor),
+        ("plain and backticked clause both seen (#249)", "MUST_FIRE", c_markup_blind_anchor),
         ("anchored clause, right number, counts as agreement", "MUST_PASS", c_right_anchor),
         ("pair, LOC-only drift, one site, both tokens rewritten", "MUST_FIRE", c_pair_partial),
         ("historical clause masked, live same-line number caught", "MUST_PASS", c_historical),

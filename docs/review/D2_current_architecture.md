@@ -84,7 +84,7 @@ flowchart TB
 
 ### What the diagram establishes — and what it deliberately does not
 
-- The operational plane is shell and tool-heavy: `launchers/` contains 9,678 shell LOC plus 1,615 Python LOC, while `tools/` contains 8,916 Python LOC. `h100_validation/` adds another 31,313 Python LOC and 4,986 shell LOC.
+- The operational plane is shell and tool-heavy: `launchers/` contains 9,857 shell LOC plus 1,615 Python LOC, while `tools/` contains 8,916 Python LOC. `h100_validation/` adds another 31,313 Python LOC and 4,986 shell LOC.
 - The installed package is consumed by tools, but the measured `run_event` call-site count is **0 in both `tools/` and `h100_validation/`**. No evidence shows an actual trainer firing the lifecycle engine.
 - The package's three-line `__init__.py` exports nothing, so there is still no top-level public surface. The production save-gate decision function `adjudicate_checkpoint` **is now importable** from `foundationscale.gates.adjudication` (moved during this review, T2#0), but it is reachable only by its fully-qualified submodule path, and 60 private names still cross the boundary through the `tools/live_save_gate.py` compatibility shim.
 - There is **no load-side path after saving**: the `Lifecycle` enum has no `RESUME`, `LOAD`, `BEFORE_LOAD`, or `RESTORE` member.
@@ -158,7 +158,7 @@ This table uses the declared scope in the question as the reference architecture
 | Distributed runtime | Zero distributed-collective occurrences in the package | **MISSING from package** |
 | Parallel topology model | `foundationscale.topology` includes construction-time product validation | **PRESENT as library; production trainer use UNMEASURED** |
 | Target-hardware profiles | `_PROFILE_DATA` contains only `slurm-generic` and `local-single-node`; neither is MNNVL-capable | **MISSING H100/H200/GB200/GB300 profiles** |
-| Launch orchestration | 9,678 shell LOC in `launchers/`; preflight is scoped to one Gemma-4-E4B / GB200-tray launch; census denominator control is hardwired to one launcher | **ESTATE-ONLY, not a package launcher API** |
+| Launch orchestration | 9,857 shell LOC in `launchers/`; preflight is scoped to one Gemma-4-E4B / GB200-tray launch; census denominator control is hardwired to one launcher | **ESTATE-ONLY, not a package launcher API** |
 | In-process lifecycle hooks | `train/loop.py`'s `FoundationScaleSaveGate.on_save` calls `registry.run(event, ctx)` with `FIRST_SAVE` on the first save and `SAVE` thereafter, and fails closed by setting `control.should_training_stop`. The convenience wrapper `run_event` still has zero production call sites (`gates/core.py`, `integrate.py`, `tools/preflight.py` only), and `STEP_ZERO`, `LAUNCH`, `EXPORT`, `PROMOTE` have no in-process caller | **PRESENT for the save seam; MISSING for the other four lifecycle points** |
 | Checkpoint readers and metadata | `checkpoint/dcp.py`, `checkpoint/dcp_meta.py`, `open_weights`, `read_metadata`, chunk reads, and fail-closed format sniffing exist | **PRESENT; end-to-end trainer consumption UNMEASURED** |
 | Trainer-owned checkpoint saving | `train/loop.py` calls `trainer.save_model()` at :1097 and reads `model.state_dict()` at :536 to build the pre-save declaration, and its save callback gates every checkpoint. What is UNMEASURED is the *estate* trainer: the in-container Megatron/NeMo path the launchers drive has no such seam | **PRESENT in the packaged trainer; UNMEASURED in the estate trainer** |

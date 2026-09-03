@@ -164,7 +164,7 @@ jobs:
         # file resolves under two module names and mypy refuses the directory. The
         # remaining tools/ modules are unchecked -- stated, not implied.
         # checks/ is likewise unchecked here, and its denominator is on the
-        # wire: all 5 files under checks/ are unchecked. That count is anchored
+        # wire: all 6 files under checks/ are unchecked. That count is anchored
         # (checks_files) after #241, where this clause and its Makefile twin
         # both read "3 of 3" -- mypy's error-BEARING file count, not the number
         # it checked -- written in the very commit that added the fourth file.
@@ -276,6 +276,26 @@ jobs:
         run: python3 checks/training_plane_probe.py --self-test
       - name: Training-plane probe (two axes, and no retired doc assertion)
         run: python3 checks/training_plane_probe.py
+
+      # Makefile tooling (#247). Every recipe line in the Makefile must invoke
+      # its tool as `$(PY) -m <tool>`, never as a bare name resolved off PATH.
+      #
+      # This job is the one place the defect is INVISIBLE -- actions/setup-python
+      # puts pip, pytest, ruff and mypy on PATH, so a bare name works here and
+      # fails only on the developer laptop the Makefile exists to serve. That
+      # asymmetry is exactly why the gate has to run HERE: the machine that
+      # cannot reproduce the failure is the machine that must refuse to merge
+      # it. #232 fixed four bare `python` invocations by hand and CI stayed
+      # green through all five surviving instances of the same class.
+      #
+      # --self-test FIRST and as a separate step, same reason as the two gates
+      # above: a detector whose controls have not run has no licence to be
+      # believed, and here the controls are what prove the scanner can still
+      # see a bare name at all.
+      - name: Makefile tooling controls (MUST_FIRE/MUST_PASS)
+        run: python3 checks/makefile_tooling.py --self-test
+      - name: Makefile tooling (no bare tool names in any recipe)
+        run: python3 checks/makefile_tooling.py
 
       # Countables drift (#220). The shipped documents state numbers ABOUT this
       # tree -- LOC, file counts -- and until now nothing kept them true; #220
@@ -451,9 +471,12 @@ jobs:
           #
           # 154 -> 157 (#245): three real legs wiring checks/training_plane_probe.py
           # into the suite -- self-test denominator, non-repo REFUSE, live verdict.
+          # 157 -> 161 (#247): four real legs wiring checks/makefile_tooling.py --
+          # self-test denominator, live CLEAR verdict, planted bare name -> RED,
+          # empty denominator -> UNMEASURED.
           # RE-MEASURED, not incremented: `bash launchers/test_launcher_contracts.sh`
-          # reported `controls: 157 passed, 0 failed` on the commit that adds them.
-          FLOOR=157
+          # reported `controls: 161 passed, 0 failed` on the commit that adds them.
+          FLOOR=161
 
           verify_summary() {
             # Returns 0 only when the suite's summary line exists, reports
@@ -530,7 +553,8 @@ jobs:
             # Floor history: 134 (when this gate was written) -> 150 (#237, the
             # day the locator was fixed) -> 154 (#238, once countables_drift.py
             # and packaging_reachability.py were wired in as four real legs) ->
-            # 157 (#245, training_plane_probe.py wired in as three real legs). A
+            # 157 (#245, training_plane_probe.py wired in as three real legs) ->
+            # 161 (#247, makefile_tooling.py wired in as four real legs). A
             # floor below the live count lets that many controls vanish in
             # silence, which is the same quiet-shrink move the floor exists to
             # refuse. The value itself is FLOOR, set once at the top of this

@@ -46,13 +46,70 @@
 #     and skips the one target that certifies the detectors. It said "~2 min"
 #     until #234 and "~35 min" until #242, both of them guesses.
 
-.PHONY: install test lint fmt typecheck typecheck-checks controls packaging training-plane countables mutation mutation-module skip-guard-probe check clean
+# ---------------------------------------------------------------------------
+# Interpreter selection, and why it is two decisions rather than one (#247).
+# ---------------------------------------------------------------------------
+# Every tool in this file is invoked as `$(PY) -m <tool>`, never as a bare name
+# on PATH. #247 reopened #232 as a class: #232 fixed bare `python` in four
+# targets, and the same defect survived in the TOOL invocations -- 9 recipe
+# lines across 7 targets calling `pip`, `pytest`, `ruff` and `mypy` by name. A
+# bare name resolves only if the tool happens to be on PATH, and on the machine
+# this file exists to serve -- a laptop with no venv activated -- it is not.
+# That is not hypothetical: during the review campaign `make lint` died with
+# `ruff: command not found` and `make packaging` reported UNMEASURED, both
+# purely because the project venv was inactive. CI never sees it, because
+# actions/setup-python puts everything on PATH, so the only machine this file
+# exists for is the only machine it failed on.
+#
+# `-m` also binds each tool to the SAME interpreter as the rest of the file
+# rather than to whatever PATH offers, which is the #83/#111 shape closed one
+# more time: `mypy` from one environment checking a tree installed in another
+# is a different program, and the typecheck comment below says exactly that
+# about torch.
+#
+# THE SECOND DECISION, and the reason the obvious one-liner is not the fix.
+# `PY ?= python3` was written first and MEASURED, on the machine in question:
+#
+#     python3          -> 3.14.6 (Homebrew)  pip yes, pytest/ruff/mypy/coverage NO
+#     /usr/bin/python3 -> 3.9.6  (system)    pip yes, pytest/ruff/mypy/coverage NO
+#     .venv/bin/python3-> 3.14.6             all five present
+#
+# So `$(PY) -m ruff` under a bare `python3` does not fix `make lint`; it turns
+# `ruff: command not found` into `No module named ruff`. That is a strictly
+# better error -- it names the interpreter and makes the environment question
+# the visible one instead of a PATH riddle -- but shipping it as the fix would
+# have been the campaign's own recurring defect: declaring a class closed on
+# the strength of the edit rather than of a re-measurement. The tools are not
+# on PATH and they are not in the default interpreter either; they are in the
+# project venv, which is where `make install` puts them.
+#
+# Hence: prefer the in-tree venv when one exists, fall back to `python3` when
+# it does not, and let an explicit PY beat both. `?=` is not used, because a
+# recursively-expanded `$(shell ...)` would re-run the probe at every one of
+# this file's ~20 references; `origin` is the equivalent that expands once and
+# still yields to an environment or command-line PY.
+#
+#     make check                      # venv if present, else python3
+#     make check PY=python3.11        # explicit wins
+#     PY=/usr/bin/python3 make lint   # environment wins
+#
+# `checks/makefile_tooling.py` makes the bare-name class un-reintroducible. It
+# does NOT gate which interpreter you chose or what that interpreter has
+# installed: that is the #83/#111 axis, a property of the machine reading the
+# file rather than of the file, and a gate that reddens on it would be
+# reporting the developer's environment as a repository defect.
+FS_VENV_PY := $(CURDIR)/.venv/bin/python3
+ifeq ($(origin PY),undefined)
+PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
+endif
+
+.PHONY: install test lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables mutation mutation-module skip-guard-probe check clean
 
 install:
-	pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
+	$(PY) -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
 
 test:
-	pytest --cov=foundationscale --cov-report=term-missing --cov-fail-under=90
+	$(PY) -m pytest --cov=foundationscale --cov-report=term-missing --cov-fail-under=90
 
 # checks/ joined this list with #231. It was the one directory of executable
 # gates that no linter, no formatter and no typechecker saw, and the exclusion
@@ -64,12 +121,12 @@ test:
 # login node actually has (#138). A gate that cannot start states no verdict,
 # and exit 1 is outside the 0/5/95/96 namespace it claims to publish.
 lint:
-	ruff check src tests tools checks
-	ruff format --check src tests tools checks
+	$(PY) -m ruff check src tests tools checks
+	$(PY) -m ruff format --check src tests tools checks
 
 fmt:
-	ruff check --fix src tests tools checks
-	ruff format src tests tools checks
+	$(PY) -m ruff check --fix src tests tools checks
+	$(PY) -m ruff format src tests tools checks
 
 # Run this in the SAME environment as `install` creates — one with [checkpoint].
 # mypy without torch checks a different program: MetadataIndex becomes Any, and an
@@ -84,7 +141,7 @@ fmt:
 # moves out from under the CLI that forwards to it.
 #
 # checks/ is NOT in this list, and that is a stated exclusion rather than an
-# implied one (#231): all 5 files under checks/ are unchecked by mypy. That
+# implied one (#231): all 6 files under checks/ are unchecked by mypy. That
 # count is anchored -- checks_files in the countables census, bound by
 # checks/countables_drift.py -- because the clause it replaces read "3 of 3"
 # in the same commit that ADDED the fourth file (#241). It had copied mypy's
@@ -102,20 +159,21 @@ fmt:
 # and so wants NoReturn.
 # Ruff and ruff format DO cover checks/ as of #231; mypy is the tracked half.
 typecheck:
-	mypy src tools/emit_run_manifest.py tools/live_save_gate.py tools/real_checkpoint_probe.py
+	$(PY) -m mypy src tools/emit_run_manifest.py tools/live_save_gate.py tools/real_checkpoint_probe.py
 
 # Not part of `check`, and that is the point: this REPORTS, it does not gate.
 # It exists so the count above can stay unstated and still be knowable.
 typecheck-checks:
-	-mypy checks
+	-$(PY) -m mypy checks
 
-# python3, not python: bare `python` does not exist on modern macOS or most
+# $(PY), not bare `python`: bare `python` does not exist on modern macOS or most
 # Linux distributions, so `make check` died with command-not-found for any
 # developer who had not activated a virtualenv. CI never saw it — setup-python
 # provides `python` — so the only machine this file exists to serve was the
-# only machine it did not run on (#232).
+# only machine it did not run on (#232). #247 closed the same defect one layer
+# out, for the TOOLS: see the $(PY) block at the top of this file.
 controls:
-	python3 -m foundationscale.gates.controls
+	$(PY) -m foundationscale.gates.controls
 
 # Mirrors the two steps in CI's `controls` job. Self-test first: a detector whose
 # controls misbehave has no licence to report a verdict, so the real run must not
@@ -130,8 +188,8 @@ controls:
 # interpreter's own script directory and the install record, and PATH is
 # reported as operator convenience that can never be red.
 packaging:
-	python3 checks/packaging_reachability.py --self-test
-	python3 checks/packaging_reachability.py
+	$(PY) checks/packaging_reachability.py --self-test
+	$(PY) checks/packaging_reachability.py
 
 # Finding #245. Four review documents asserted the package "contains no
 # training code" -- true of training PRIMITIVES, false of the package, which
@@ -143,8 +201,22 @@ packaging:
 # Self-test first, same order as packaging: an instrument whose controls have
 # not run has not earned the right to have its verdict read.
 training-plane:
-	python3 checks/training_plane_probe.py --self-test
-	python3 checks/training_plane_probe.py
+	$(PY) checks/training_plane_probe.py --self-test
+	$(PY) checks/training_plane_probe.py
+
+# Finding #247. The gate that makes the bare-tool class un-reintroducible: it
+# reads THIS file and refuses any recipe line that invokes pip, pytest, ruff,
+# mypy, coverage or a bare interpreter by name instead of through $(PY).
+#
+# It exists because #232 was fixed by editing four lines, and editing lines does
+# not close a class -- five more instances of the same defect were sitting in
+# the same file the whole time, and the next one would have arrived the next
+# time someone added a target. A fix with no detector is a fix with a half-life.
+#
+# Self-test first, same order and same reason as packaging and training-plane.
+makefile-tooling:
+	$(PY) checks/makefile_tooling.py --self-test
+	$(PY) checks/makefile_tooling.py
 
 # Mirrors the three steps in CI's countables leg (#220). The census is measured,
 # never committed -- see the ci.yml comment for why a frozen oracle is worse than
@@ -166,13 +238,13 @@ CENSUS := $(CURDIR)/.countables_census.json
 COUNTABLES_CORPUS := docs README.md Makefile .github/workflows/ci.yml
 
 countables:
-	python3 checks/countables_drift.py --self-test
-	python3 tools/countables_census.py --self-test
-	python3 tools/countables_census.py --no-coverage --out $(CENSUS)
-	python3 checks/countables_drift.py --census $(CENSUS) $(COUNTABLES_CORPUS)
+	$(PY) checks/countables_drift.py --self-test
+	$(PY) tools/countables_census.py --self-test
+	$(PY) tools/countables_census.py --no-coverage --out $(CENSUS)
+	$(PY) checks/countables_drift.py --census $(CENSUS) $(COUNTABLES_CORPUS)
 
 mutation:
-	FS_FORBID_SKIPS=1 python3 tools/mutate.py
+	FS_FORBID_SKIPS=1 $(PY) tools/mutate.py
 
 # One shard, the way CI runs it after #242. `make mutation-module MODULE=dcp`.
 # Every module carries its own "must_survive" row precisely so a shard is a
@@ -180,8 +252,8 @@ mutation:
 # exits 2 (never measured) rather than printing a caught= figure it cannot
 # support, and before #242 that is what 5 of the 9 shards would have done.
 mutation-module:
-	@test -n "$(MODULE)" || { echo 'usage: make mutation-module MODULE=<name>   ("python3 tools/mutate.py --list" names them)'; exit 2; }
-	FS_FORBID_SKIPS=1 python3 tools/mutate.py --module $(MODULE)
+	@test -n "$(MODULE)" || { echo 'usage: make mutation-module MODULE=<name>   ("$(PY) tools/mutate.py --list" names them)'; exit 2; }
+	FS_FORBID_SKIPS=1 $(PY) tools/mutate.py --module $(MODULE)
 
 skip-guard-probe:
 	@printf '%s\n' \
@@ -198,7 +270,7 @@ skip-guard-probe:
 		'    pytest.skip("deliberate skip; an armed skip guard must fail this run")' \
 		> tests/test__skip_guard_probe.py
 	@set +e; \
-	output=$$(FS_FORBID_SKIPS=1 pytest tests/test__skip_guard_probe.py 2>&1); \
+	output=$$(FS_FORBID_SKIPS=1 $(PY) -m pytest tests/test__skip_guard_probe.py 2>&1); \
 	rc=$$?; \
 	set -e; \
 	printf '%s\n' "$$output"; \
@@ -213,7 +285,13 @@ skip-guard-probe:
 	}; \
 	echo "skip-guard-probe: guard fired and named its probe, as CI requires"
 
-check: lint typecheck skip-guard-probe test controls packaging countables mutation
+# Finding #247, second half. `training-plane` had a target, a .PHONY entry and
+# two CI steps (ci.yml:276, ci.yml:278) and was absent from this line, so the
+# one command a developer runs before pushing was WEAKER than the CI it claims
+# to mirror -- #230's shape, in the file that states the mirror as its purpose.
+# A gate reachable only by typing its name is reachable by nobody: #238's
+# orphan class, one layer up from the gate files it was written about.
+check: lint typecheck skip-guard-probe test controls packaging training-plane makefile-tooling countables mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \

@@ -4083,6 +4083,185 @@ else
   fi
 fi
 
+echo "== fix247-makefiletooling: checks/makefile_tooling.py real legs =="
+# --- finding #247 (REOPENS #232 as a class): five further Makefile recipes
+# invoked a tool by BARE NAME -- pytest, ruff, mypy, pip, python3 -- so
+# `make lint` resolved against the developer's PATH rather than against the
+# repository, and died `No module named ruff` on the machine the target
+# exists to serve. The repair routed all 22 invocations through $(PY).
+#
+# This block is the detector's CALL SITE. A gate file entering checks/ with
+# no leg here is the #86 orphan class, which the fix78-orphan block below
+# already refuses -- #238 says the gate, its legs, the Makefile target and
+# the CI step land in ONE commit, and this is the leg half of that.
+#
+# Four legs, because the gate declares four states and a state that no leg
+# ever reaches is a state that is written down rather than measured
+# (#198/#200): CLEAR on this tree, RED on a planted bare name, UNMEASURED on
+# an empty denominator, and the self-test that proves the discrimination.
+
+# --- MUST_PASS: makefile_tooling self-test -----------------------------------
+# MEASURED on the commit that introduces the gate: `python3 -S
+# checks/makefile_tooling.py --self-test` exits 0 and prints
+# `self-test: 21 of 21 controls ok (11 MUST_FIRE, 10 MUST_PASS)`.
+# The floor is a floor: controls may be ADDED, never silently dropped, and a
+# shrinking control set is how a detector quietly stops discriminating.
+f247_floor=21
+if [ ! -r "checks/makefile_tooling.py" ]; then
+  f247_msg="MUST_PASS FAILED (makefile_tooling self-test) UNMEASURED:"
+  f247_msg="$f247_msg checks/makefile_tooling.py is not readable -- unreadable is not empty"
+  f247_msg="$f247_msg and it is not clean (doctrine 4); 0 of 1 self-tests measured"
+  no "$f247_msg"
+else
+  f247_rc=0
+  f247_out=$(python3 -S checks/makefile_tooling.py --self-test 2>&1) || f247_rc=$?
+  f247_have=$(printf '%s\n' "$f247_out" |
+    sed -n 's/^self-test: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls ok.*/\1/p')
+  f247_tot=$(printf '%s\n' "$f247_out" |
+    sed -n 's/^self-test: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls ok.*/\2/p')
+  if [ "$f247_rc" -ne 0 ]; then
+    f247_msg="MUST_PASS FAILED (makefile_tooling self-test): rc=$f247_rc under python3 -S."
+    f247_msg="$f247_msg A red self-test means the instrument no longer discriminates, so its"
+    f247_msg="$f247_msg verdict on the live Makefile is worth nothing. Output:"
+    f247_msg="$f247_msg $(printf '%s\n' "$f247_out" | tr '\n' ' ')"
+    no "$f247_msg"
+  elif [ -z "$f247_have" ] || [ -z "$f247_tot" ]; then
+    f247_msg="MUST_PASS FAILED (makefile_tooling self-test) UNMEASURED: rc=0 but no"
+    f247_msg="$f247_msg 'self-test: N of M controls ok' line was found -- a control suite that"
+    f247_msg="$f247_msg reports no denominator has not reported (doctrine 2). Output:"
+    f247_msg="$f247_msg $(printf '%s\n' "$f247_out" | tr '\n' ' ')"
+    no "$f247_msg"
+  elif [ "$f247_have" != "$f247_tot" ]; then
+    f247_msg="MUST_PASS FAILED (makefile_tooling self-test): $f247_have of $f247_tot controls"
+    f247_msg="$f247_msg ok but rc=0 -- the exit code and the summary disagree, and one side of"
+    f247_msg="$f247_msg the contract is lying (doctrine 6)"
+    no "$f247_msg"
+  elif [ "$f247_tot" -lt "$f247_floor" ]; then
+    f247_msg="MUST_PASS FAILED (makefile_tooling self-test): control set shrank to $f247_tot,"
+    f247_msg="$f247_msg below the $f247_floor measured when the gate landed -- controls may be"
+    f247_msg="$f247_msg added, never dropped, and a green run over a shrunken set is doctrine 1"
+    no "$f247_msg"
+  else
+    f247_msg="MUST_PASS makefile_tooling self-test: rc=0 under python3 -S, $f247_have of"
+    f247_msg="$f247_msg $f247_tot controls ok, at or above the $f247_floor-control floor"
+    ok "$f247_msg"
+  fi
+fi
+
+# --- MUST_PASS: the live tree's own verdict ----------------------------------
+# The self-test proves the instrument discriminates on fixtures; this leg runs
+# it against THIS repository's Makefile, which is the reading the #247 repair
+# claims. MEASURED on the landing commit: rc=0 over 54 recipe lines.
+#
+# The assertion is rc=0 AND a nonzero recipe-line denominator. rc=0 alone is
+# satisfied by a gate that read nothing: 0 recipe lines exits 95 today, but
+# restating the denominator here is what keeps the number on the wire equal
+# to the number the Makefile's own comment quotes.
+if [ ! -r "checks/makefile_tooling.py" ]; then
+  f247_msg="MUST_PASS FAILED (makefile_tooling live verdict) UNMEASURED:"
+  f247_msg="$f247_msg checks/makefile_tooling.py is not readable -- unreadable is not empty"
+  f247_msg="$f247_msg (doctrine 4); 0 of 1 live verdicts measured"
+  no "$f247_msg"
+else
+  f247_rc=0
+  f247_out=$(python3 -S checks/makefile_tooling.py 2>&1) || f247_rc=$?
+  f247_den=$(printf '%s\n' "$f247_out" |
+    sed -n 's/^CLEAR makefile_tooling: 0 bare tool invocations over \([0-9][0-9]*\) recipe.*/\1/p')
+  if [ "$f247_rc" -ne 0 ]; then
+    f247_msg="MUST_PASS FAILED (makefile_tooling live verdict): rc=$f247_rc on this tree."
+    f247_msg="$f247_msg rc=5 means a recipe line invokes a tool by bare name again (#232/#247);"
+    f247_msg="$f247_msg rc=95 means the Makefile went unreadable or lost every recipe line;"
+    f247_msg="$f247_msg rc=96 means the gate crashed, which is not a verdict. Output:"
+    f247_msg="$f247_msg $(printf '%s\n' "$f247_out" | tr '\n' ' ')"
+    no "$f247_msg"
+  elif [ -z "$f247_den" ]; then
+    f247_msg="MUST_PASS FAILED (makefile_tooling live verdict) UNMEASURED: rc=0 but no"
+    f247_msg="$f247_msg 'CLEAR makefile_tooling: 0 bare tool invocations over N recipe lines'"
+    f247_msg="$f247_msg line was found -- unparseable is not passing (doctrine 2). Output:"
+    f247_msg="$f247_msg $(printf '%s\n' "$f247_out" | tr '\n' ' ')"
+    no "$f247_msg"
+  elif [ "$f247_den" -lt 1 ]; then
+    f247_msg="MUST_PASS FAILED (makefile_tooling live verdict): recipe-line denominator is"
+    f247_msg="$f247_msg $f247_den -- zero units is UNMEASURED, never a pass (doctrine 1)"
+    no "$f247_msg"
+  else
+    f247_msg="MUST_PASS makefile_tooling live verdict: rc=0, 0 bare tool invocations over"
+    f247_msg="$f247_msg $f247_den recipe lines of this repository's Makefile"
+    ok "$f247_msg"
+  fi
+fi
+
+# --- MUST_FIRE: a planted bare tool name is RED ------------------------------
+# The gate is copied into a throwaway tree whose Makefile invokes `ruff` bare.
+# Copying rather than editing the real Makefile is deliberate: a control that
+# mutates the tree it guards can leave the repository dirty on any early exit,
+# and #239 was exactly a leg committed red against its own target.
+#
+# This leg also proves the gate resolves its Makefile from its OWN location
+# (parents[1]) rather than from the working directory -- if it read $PWD it
+# would score the real Makefile here and stay green, which is the failure this
+# leg would then be blind to.
+f247_tmp=$(mktemp -d 2>/dev/null || mktemp -d -t fs247)
+if [ ! -r "checks/makefile_tooling.py" ] || [ -z "$f247_tmp" ] || [ ! -d "$f247_tmp" ]; then
+  f247_msg="MUST_FIRE UNREACHABLE (makefile_tooling planted bare name) UNMEASURED: could not"
+  f247_msg="$f247_msg stage a throwaway tree (gate readable? mktemp ok?) -- an unreachable"
+  f247_msg="$f247_msg control is a declared state, not a silent pass (doctrine 5)"
+  no "$f247_msg"
+else
+  mkdir -p "$f247_tmp/checks"
+  cp checks/makefile_tooling.py "$f247_tmp/checks/makefile_tooling.py"
+  printf 'PY := python3\n\nlint:\n\truff check src\n\ntest:\n\t$(PY) -m pytest\n' \
+    > "$f247_tmp/Makefile"
+  f247_rc=0
+  f247_out=$(python3 -S "$f247_tmp/checks/makefile_tooling.py" 2>&1) || f247_rc=$?
+  if [ "$f247_rc" -eq 5 ] && printf '%s\n' "$f247_out" | grep -q 'bare `ruff` in command position'; then
+    f247_msg="MUST_FIRE makefile_tooling: a recipe line reading 'ruff check src' was scored"
+    f247_msg="$f247_msg rc=5 (RED) and named as a bare command word, while the sibling"
+    f247_msg="$f247_msg '\$(PY) -m pytest' line in the same fixture was not flagged -- the gate"
+    f247_msg="$f247_msg discriminates the defect from its own fix"
+    ok "$f247_msg"
+  else
+    f247_msg="MUST_FIRE UNREACHABLE (makefile_tooling planted bare name): rc=$f247_rc on a"
+    f247_msg="$f247_msg Makefile whose recipe invokes 'ruff' bare, expected exactly 5 with the"
+    f247_msg="$f247_msg tool named. rc=0 means the detector is blind to the #232/#247 shape;"
+    f247_msg="$f247_msg rc=95 means it never found the planted Makefile, which would mean it"
+    f247_msg="$f247_msg reads \$PWD rather than its own location. Output:"
+    f247_msg="$f247_msg $(printf '%s\n' "$f247_out" | tr '\n' ' ')"
+    no "$f247_msg"
+  fi
+  rm -rf "$f247_tmp"
+fi
+
+# --- MUST_FIRE: an empty denominator is UNMEASURED, not CLEAR ----------------
+# A Makefile with no TAB-indented recipe has zero units to scan. `all([])` is
+# True, so the natural implementation returns 0 and reads as "clean". This leg
+# pins the refusal: the gate must exit 95, and 95 must not be 0.
+f247_tmp=$(mktemp -d 2>/dev/null || mktemp -d -t fs247)
+if [ ! -r "checks/makefile_tooling.py" ] || [ -z "$f247_tmp" ] || [ ! -d "$f247_tmp" ]; then
+  f247_msg="MUST_FIRE UNREACHABLE (makefile_tooling empty denominator) UNMEASURED: could not"
+  f247_msg="$f247_msg stage a throwaway tree -- unreachable is a declared state (doctrine 5)"
+  no "$f247_msg"
+else
+  mkdir -p "$f247_tmp/checks"
+  cp checks/makefile_tooling.py "$f247_tmp/checks/makefile_tooling.py"
+  printf 'PY := python3\n\n.PHONY: all\nall:\n' > "$f247_tmp/Makefile"
+  f247_rc=0
+  f247_out=$(python3 -S "$f247_tmp/checks/makefile_tooling.py" 2>&1) || f247_rc=$?
+  if [ "$f247_rc" -eq 95 ] && printf '%s\n' "$f247_out" | grep -q '^UNMEASURED makefile_tooling:'; then
+    f247_msg="MUST_FIRE makefile_tooling: over a Makefile with 0 recipe lines the gate exited"
+    f247_msg="$f247_msg 95 (UNMEASURED) and said so, rather than exiting 0 over an empty"
+    f247_msg="$f247_msg denominator -- zero units is not a pass (doctrine 1)"
+    ok "$f247_msg"
+  else
+    f247_msg="MUST_FIRE UNREACHABLE (makefile_tooling empty denominator): rc=$f247_rc over a"
+    f247_msg="$f247_msg Makefile with no TAB-indented recipe, expected exactly 95. rc=0 is the"
+    f247_msg="$f247_msg vacuous truth itself -- a gate reporting CLEAR over nothing scanned."
+    f247_msg="$f247_msg Output: $(printf '%s\n' "$f247_out" | tr '\n' ' ')"
+    no "$f247_msg"
+  fi
+  rm -rf "$f247_tmp"
+fi
+
 echo "== fix78-orphan: every launchers/*.py and checks/*.py harness helper carries at least one call site in this suite (anti-orphan, #86 class) =="
 # This control was earned the hard way: the F78 census-writer driver
 # shipped a full round with ZERO call sites while its two legs burned red
