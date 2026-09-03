@@ -27,6 +27,11 @@ env/
 .coverage
 .coverage.*
 coverage.xml
+# coverage.json is the report checks/coverage_floor.py adjudicates (#228). It is a
+# build artifact like the rest of this block, and it is IN the repository tree, so
+# leaving it untracked-and-unignored would put a generated file in front of every
+# `git status` and every pre-push diff scan.
+coverage.json
 htmlcov/
 
 # Editors

@@ -114,6 +114,36 @@ markers = [
     "integration: exercises a full lifecycle path end to end",
 ]
 
+# #228. CI asked for the two adjudicating tools/ modules by PATH
+# (`--cov=tools/live_save_gate.py`). coverage.py reads a `source` entry as a
+# package or directory NAME, so it never resolved either one: both emitted
+# `CoverageWarning: Module tools/live_save_gate.py was never imported
+# (module-not-imported)` and contributed zero rows, while the comment above the
+# CI step said they were measured. A widening that never widened.
+#
+# `--cov=tools` is the form that resolves, and coverage keys by FILE, which
+# matters here: the suite reaches these two under six different module names
+# (`tools.live_save_gate`, `live_save_gate`, `live_save_gate_under_control`, and
+# the emitter's three), and only path-keying collapses those into one number.
+#
+# omit carries the six helpers that are NOT adjudicators, stated with their
+# denominator rather than left silent. Measured 2026-09-03 under the resolving
+# form: countables_census 0%, count_census_modules 0%,
+# census_denominator_control 0% (the #66 gap), preflight 80.93%, mutate 87.30%,
+# real_checkpoint_probe 90.80%. Including them takes the total 93.53% -> 86.24%,
+# and the remedy for that is putting them under test, never lowering the floor.
+# A NEW tools/*.py is deliberately not omitted: it enrols at 0% and drags the
+# total red, which is the fail-closed direction.
+[tool.coverage.run]
+omit = [
+    "tools/census_denominator_control.py",
+    "tools/count_census_modules.py",
+    "tools/countables_census.py",
+    "tools/mutate.py",
+    "tools/preflight.py",
+    "tools/real_checkpoint_probe.py",
+]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 100

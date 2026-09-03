@@ -103,13 +103,31 @@ ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
 endif
 
-.PHONY: install test lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables mutation mutation-module skip-guard-probe check clean
+.PHONY: install test coverage-floor lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables mutation mutation-module skip-guard-probe check clean
 
 install:
 	$(PY) -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
 
+# --cov=tools joined this line with #251, so the Makefile measures what CI measures.
+# It had drifted the other way from #230's case: there CI was the weaker of the two,
+# here the Makefile was, and a developer running `make check` got a green over a
+# denominator two adjudicating modules smaller than the one the build enforces.
+#
+# --cov-report=json is what makes the per-module claim possible at all: it writes the
+# coverage.json that the `coverage-floor` target below adjudicates. Note that
+# --cov-fail-under=90 on this line is still a TOTAL, and a total can be subsidised --
+# that is #228, and the reason the next target exists.
 test:
-	$(PY) -m pytest --cov=foundationscale --cov-report=term-missing --cov-fail-under=90
+	$(PY) -m pytest --cov=foundationscale --cov=tools --cov-report=term-missing --cov-report=json --cov-fail-under=90
+
+# Ordered AFTER `test` in the `check` aggregate, and it must stay there: it consumes
+# the coverage.json that `test` writes. Self-test first, then the real run -- the same
+# pairing every other checks/ gate uses, because a detector whose controls misbehave
+# has no licence to report a verdict. If coverage.json is missing the gate exits 95
+# (UNMEASURED), never 0: "the report was not there" is not "every module passed".
+coverage-floor:
+	$(PY) checks/coverage_floor.py --self-test
+	$(PY) checks/coverage_floor.py
 
 # checks/ joined this list with #231. It was the one directory of executable
 # gates that no linter, no formatter and no typechecker saw, and the exclusion
@@ -141,7 +159,7 @@ fmt:
 # moves out from under the CLI that forwards to it.
 #
 # checks/ is NOT in this list, and that is a stated exclusion rather than an
-# implied one (#231): all 6 files under checks/ are unchecked by mypy. That
+# implied one (#231): all 7 files under checks/ are unchecked by mypy. That
 # count is anchored -- checks_files in the countables census, bound by
 # checks/countables_drift.py -- because the clause it replaces read "3 of 3"
 # in the same commit that ADDED the fourth file (#241). It had copied mypy's
@@ -291,10 +309,10 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck skip-guard-probe test controls packaging training-plane makefile-tooling countables mutation
+check: lint typecheck skip-guard-probe test coverage-floor controls packaging training-plane makefile-tooling countables mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \
 		.pytest_cache .mypy_cache .ruff_cache .cache \
-		.coverage .coverage.* coverage.xml htmlcov .countables_census.json
+		.coverage .coverage.* coverage.xml coverage.json htmlcov .countables_census.json
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +

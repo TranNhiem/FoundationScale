@@ -122,8 +122,14 @@ stable API.
 
 * No gate has run against a real multi-rank distributed checkpoint in this repository's
   CI — the suite writes checkpoints single-process and reads them back.
-* Per-module coverage floors are not in place; the enforced floor is a total, so a
-  well-covered module can subsidise a thin one.
+* Several modules sit below the aggregate coverage floor CI enforces and pass it anyway,
+  carried across the line by the rest. `checks/coverage_floor.py` states each one with its
+  own floor instead of averaging it away; its generated table separates ratchets from
+  debt, and a debt line is an admission with a delete-condition, not a standard. The
+  aggregate is still enforced — the two go red on different things. The per-module numbers
+  are deliberately not repeated here: no drift gate can re-check them, because CI measures
+  the census with `--no-coverage`. They live in that table, next to the run that produced
+  them.
 * The mutation table is hand-maintained; a rule nobody listed is a rule nobody tests.
 * The roadmap with per-phase falsification conditions is
   [`docs/deliverables/D_roadmap.md`](docs/deliverables/D_roadmap.md).
@@ -408,7 +414,7 @@ package. repo-wide, 115500 git-tracked .py/.sh/.md lines.
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (28690 .py LOC); conftest carries the skip guard
+tests/                 the test suite (29092 .py LOC); conftest carries the skip guard
 tools/                 contains 8916 Python LOC of CLIs over the package (emit_run_manifest,
                        live_save_gate, real_checkpoint_probe, preflight, mutate, census)
 checks/                standalone repository gates: countables drift, packaging

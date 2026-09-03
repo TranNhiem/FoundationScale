@@ -98,9 +98,16 @@ jobs:
         # keeps the torch download small; PyPI stays the primary index for
         # everything else. pytest-cov is installed here because pyproject.toml's
         # [dev] extra does not carry it and the pytest step needs --cov.
+        #
+        # #228 adds .[train]. tests/test_train_execution.py imports transformers
+        # and datasets at module scope on purpose — it exists to run the code
+        # AFTER train/loop.py's guarded dependency import, and a module that
+        # importorskip'd its way past that would pin nothing. Without the extra
+        # this job errors at collection rather than reporting green over an
+        # unrun path, which is the direction the whole finding is about.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[checkpoint,train,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
       - name: Skip-guard probe (MUST_FIRE — prove the armed guard can fail)
         # The cheapest honest proof that FS_FORBID_SKIPS is wired: hand the
         # runner a test that cannot pass-skipped-unnoticed and require (a) a
@@ -164,7 +171,7 @@ jobs:
         # file resolves under two module names and mypy refuses the directory. The
         # remaining tools/ modules are unchecked -- stated, not implied.
         # checks/ is likewise unchecked here, and its denominator is on the
-        # wire: all 6 files under checks/ are unchecked. That count is anchored
+        # wire: all 7 files under checks/ are unchecked. That count is anchored
         # (checks_files) after #241, where this clause and its Makefile twin
         # both read "3 of 3" -- mypy's error-BEARING file count, not the number
         # it checked -- written in the very commit that added the fourth file.
@@ -174,32 +181,75 @@ jobs:
         # Ruff now covers checks/ (#231); mypy is the tracked remainder.
         run: mypy src tools/emit_run_manifest.py tools/live_save_gate.py tools/real_checkpoint_probe.py
       - name: Pytest (coverage floor 90; skips are failures — FS_FORBID_SKIPS)
-        # --cov-fail-under=90 against a measured 93.6% total. The floor was 70 when
-        # written, sized around gates/fixtures.py at 63% and gates/controls.py at
-        # 0%; both now sit at 98% and 97%, so 70 had become a floor nothing could
-        # touch — a gate that cannot fail, in the file that argues against them.
-        # 90 leaves ~3.6 points of headroom and still goes red on the collapse
-        # cases this defends: a new unexercised module, a quietly emptied test
-        # file, tests no longer collected.
+        # --cov-fail-under=90 against a measured 92.79% total. The floor was 70
+        # when written, sized around gates/fixtures.py at 63% and gates/controls.py
+        # at 0%; both now sit at 98% and 97%, so 70 had become a floor nothing
+        # could touch — a gate that cannot fail, in the file that argues against
+        # them. 90 leaves ~2.8 points of headroom and still goes red on the
+        # collapse cases this defends: a new unexercised module, a quietly emptied
+        # test file, tests no longer collected.
         #
-        # It is a TOTAL, and a total can be subsidised: the weakest module is
-        # checkpoint/dcp_meta.py at 72%, which this floor would not catch on its
-        # own. Named in the README under Status rather than left implicit.
+        # It is a TOTAL, and a total can be subsidised. The per-module floors
+        # that catch that live in checks/coverage_floor.py and run as their own
+        # step below; this line still enforces the aggregate, because the two
+        # fail on different things — a total goes red when the suite collapses
+        # across the board, a per-module floor goes red when exactly one module
+        # rots while the rest carry it.
         #
-        # #85: the floor now also measures the two tools/ modules that
-        # ADJUDICATE — tools/live_save_gate.py (adjudicates the first real
-        # save) and tools/emit_run_manifest.py (refuses dishonest
-        # emissions) — which sat outside the measured denominator while
-        # the total read as though it covered them. Scoped per-file
-        # because tools/ is not an importable package: a blanket
-        # --cov=tools would drag every non-adjudicating helper in at ~0%
-        # and read below the floor, and the remedy for that is putting
-        # code under test, never lowering 90. The rest of tools/ stays
-        # OUT of the claim. The first combined total for the widened
-        # denominator is produced by this job's next run; whatever it
-        # prints is the measurement, and a red there is a correct red,
-        # not a re-floor prompt.
-        run: pytest --cov=foundationscale --cov=tools/live_save_gate.py --cov=tools/emit_run_manifest.py --cov-report=term-missing --cov-fail-under=90
+        # #85: the floor also measures the two tools/ modules that ADJUDICATE —
+        # tools/live_save_gate.py (adjudicates the first real save) and
+        # tools/emit_run_manifest.py (refuses dishonest emissions).
+        #
+        # #228 corrects HOW. #85 asked for them per-file
+        # (`--cov=tools/live_save_gate.py`), and coverage.py reads a source entry
+        # as a package or directory NAME, never a path: both were dropped with
+        # `CoverageWarning: ... was never imported (module-not-imported)` and
+        # contributed zero rows for the whole life of that line. The widening
+        # never widened, and the comment asserting it had no denominator behind
+        # it. #85's stated reason was wrong too: tools/ IS an importable package
+        # (tools/__init__.py, measured 100%).
+        #
+        # `--cov=tools` is the form that resolves. The six non-adjudicating
+        # helpers are omitted in pyproject.toml [tool.coverage.run], stated there
+        # with their measured percentages; a NEW tools/*.py is deliberately not
+        # omitted, so it enrols at 0% and drags this total red.
+        #
+        # Measured 2026-09-03 under the resolving form: 92.79% over 31 files.
+        # emit_run_manifest.py comes in at 80.92% — below this very floor, which
+        # is what "the widening never widened" was hiding, and the first real
+        # case the per-module gate has to hold.
+        run: pytest --cov=foundationscale --cov=tools --cov-report=term-missing --cov-report=json --cov-fail-under=90
+
+      # #228, and the step the comment above promises. --cov-report=json on the
+      # line above is what makes it possible at all: it writes coverage.json, and
+      # this gate adjudicates that report MODULE BY MODULE against a floor table
+      # generated from measurement (checks/coverage_floor.py --update), never
+      # hand-written.
+      #
+      # It runs HERE rather than in `controls`, and the order is load-bearing: the
+      # report is this job's artifact and exists nowhere else. If coverage.json is
+      # absent the gate exits 95 (UNMEASURED), never 0 -- "the report was not
+      # there" is not "every module passed", which is the all([]) shape this
+      # repository exists to refuse.
+      #
+      # The floor table has two labelled halves. RATCHET entries sit at or above
+      # the default 90 and hold a module where it already is. DEBT entries sit
+      # below it and are admissions with a denominator, not standards: measured
+      # 2026-09-03, train/__main__.py 0.00%, train/__init__.py 50.00%,
+      # train/loop.py 78.43%, tools/emit_run_manifest.py 80.92% and
+      # checkpoint/dcp_meta.py 81.36% all pass the 92.79% aggregate above,
+      # carried across the line by the other 23 modules. That is the subsidy, and
+      # this step is what states it out loud.
+      #
+      # --self-test FIRST and as a separate step, for the packaging reason given
+      # further down: the controls are the licence to believe the verdict. Twelve
+      # of them here -- eight MUST_FIRE, four MUST_PASS -- including both arms of
+      # the in-tree/out-of-tree report-key split, because an out-of-tree row must
+      # be excludable without ever becoming a way to launder an in-tree one.
+      - name: Coverage floor controls (MUST_FIRE/MUST_PASS)
+        run: python3 checks/coverage_floor.py --self-test
+      - name: Per-module coverage floors (a total can be subsidised)
+        run: python3 checks/coverage_floor.py
 
   controls:
     name: gate controls (MUST_FIRE fixtures)
