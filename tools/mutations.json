@@ -50,9 +50,17 @@
     },
     {
       "name": "overcovered-not-blocking",
-      "what": "A gate that examined MORE units than its manifest declared \u2014 the denominator and the numerator disagree and at least one of them is wrong \u2014 stops blocking and reports the sweep as clean, which is how a fabricated denominator gets published beside an honest count.",
+      "what": "A gate that examined MORE units than its manifest declared — the denominator and the numerator disagree and at least one of them is wrong — stops blocking and reports the sweep as clean, which is how a fabricated denominator gets published beside an honest count.",
       "anchor": "        return self in (\n            Verdict.FAIL,\n            Verdict.VACUOUS,\n            Verdict.UNDERCOVERED,\n            Verdict.OVERCOVERED,\n            Verdict.ERROR,\n        )\n",
       "replacement": "        return self in (\n            Verdict.FAIL,\n            Verdict.VACUOUS,\n            Verdict.UNDERCOVERED,\n            Verdict.ERROR,\n        )\n"
+    },
+    {
+      "name": "core.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is core's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "    return failures\n",
+      "replacement": "    return failures  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/gates/core.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
     }
   ],
   "dcp": [
@@ -91,6 +99,14 @@
       "what": "A tensor metadata chunk with no storage record would stop being reported as 'metadata declares a chunk that has no storage record'; operators would get a generic short-coverage error and lose the exact corruption that distinguishes orphaned metadata from a simple hole.",
       "anchor": "            if sinfo is None:",
       "replacement": "            if sinfo is None:\n                continue"
+    },
+    {
+      "name": "dcp.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is dcp's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "        verdict = VERDICT_DIFFER\n",
+      "replacement": "        verdict = VERDICT_DIFFER  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/checkpoint/dcp.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
     }
   ],
   "manifest": [
@@ -102,13 +118,13 @@
     },
     {
       "name": "corrupt-slot-silently-skipped",
-      "what": "store.attempts() on a run whose only record is corrupt returns zero attempts, reading exactly like ''nothing ever ran'' \u2014 the corrupt slot vanishes from the record the way the 27 overwritten manifests did, and nothing ever raises.",
+      "what": "store.attempts() on a run whose only record is corrupt returns zero attempts, reading exactly like ''nothing ever ran'' — the corrupt slot vanishes from the record the way the 27 overwritten manifests did, and nothing ever raises.",
       "anchor": "        records: list[tuple[int, RunManifest]] = []\n        for entry in run_dir.iterdir():\n            match = _ATTEMPT_RE.match(entry.name)\n            if match:\n                records.append((int(match.group(1)), load(entry)))",
       "replacement": "        records: list[tuple[int, RunManifest]] = []\n        for entry in run_dir.iterdir():\n            match = _ATTEMPT_RE.match(entry.name)\n            if match:\n                try:\n                    records.append((int(match.group(1)), load(entry)))\n                except ManifestError:\n                    continue"
     },
     {
       "name": "save-uses-clobbering-replace",
-      "what": "Saving a conflicting manifest over an existing attempt quietly rewrites history in place: the previous launch's record is destroyed and the slot shows only the newest claim \u2014 the exact overwrite that made 27 of 62 launches disappear, now succeeding without a sound.",
+      "what": "Saving a conflicting manifest over an existing attempt quietly rewrites history in place: the previous launch's record is destroyed and the slot shows only the newest claim — the exact overwrite that made 27 of 62 launches disappear, now succeeding without a sound.",
       "anchor": "        try:\n            os.link(tmp, final)\n        except FileExistsError as exc:",
       "replacement": "        try:\n            os.replace(tmp, final)\n        except FileExistsError as exc:"
     },
@@ -126,15 +142,15 @@
     },
     {
       "name": "absent-key-compares-equal",
-      "what": "differs_from short-circuits to 'equal' before reading a key that exists in only one manifest: a manifest missing OBJECTIVE_SWITCH compares identical to one that has it, so the 12/12 split disappears from the field-level diff \u2014 exactly the vacuous all([])-is-True the audit's own verifier shipped.",
+      "what": "differs_from short-circuits to 'equal' before reading a key that exists in only one manifest: a manifest missing OBJECTIVE_SWITCH compares identical to one that has it, so the 12/12 split disappears from the field-level diff — exactly the vacuous all([])-is-True the audit's own verifier shipped.",
       "anchor": "            if key not in a:",
       "replacement": "            if False and key not in a:"
     },
     {
       "name": "unborn-head-reports-clean",
-      "what": "A freshly git-init'ed repository with zero commits reports CaptureStatus.CLEAN \u2014 'working tree matches the recorded commit' asserted against a commit that does not exist. Every capture on an empty repo reads as a verified clean checkout.",
-      "anchor": "    if commit is None:\n        # Unborn HEAD: the least reproducible state a repository can be in \u2014 there\n        # is no commit to anchor the record against, and `git diff HEAD` is empty\n        # by construction. It must never read as CLEAN.\n        overall = CaptureStatus.NOT_CAPTURED",
-      "replacement": "    if commit is None:\n        # Unborn HEAD: the least reproducible state a repository can be in \u2014 there\n        # is no commit to anchor the record against, and `git diff HEAD` is empty\n        # by construction. It must never read as CLEAN.\n        overall = CaptureStatus.CLEAN"
+      "what": "A freshly git-init'ed repository with zero commits reports CaptureStatus.CLEAN — 'working tree matches the recorded commit' asserted against a commit that does not exist. Every capture on an empty repo reads as a verified clean checkout.",
+      "anchor": "    if commit is None:\n        # Unborn HEAD: the least reproducible state a repository can be in — there\n        # is no commit to anchor the record against, and `git diff HEAD` is empty\n        # by construction. It must never read as CLEAN.\n        overall = CaptureStatus.NOT_CAPTURED",
+      "replacement": "    if commit is None:\n        # Unborn HEAD: the least reproducible state a repository can be in — there\n        # is no commit to anchor the record against, and `git diff HEAD` is empty\n        # by construction. It must never read as CLEAN.\n        overall = CaptureStatus.CLEAN"
     },
     {
       "name": "latest-returns-first-attempt",
@@ -153,12 +169,20 @@
       "what": "#221. An UNMEASURED leg -- a parallelism degree the launcher never recorded -- is reported as CONSISTENT. The arithmetic is still run, so the impossible-layout legs stay green and only the abstention collapses: exactly the vacuous-truth shape, where a check that could not see its input reports the answer it would have liked. The three-state contract on TopologyConsistency becomes a two-state one with no site left to produce the third.",
       "anchor": "        if abstentions:\n            return TopologyConsistency(\"UNMEASURED\", \"; \".join(abstentions))",
       "replacement": "        if abstentions:\n            return TopologyConsistency(\"CONSISTENT\", \"; \".join(abstentions))"
+    },
+    {
+      "name": "manifest.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is manifest's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "    return store.latest(run_id)\n",
+      "replacement": "    return store.latest(run_id)  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/provenance/manifest.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
     }
   ],
   "topology": [
     {
       "name": "comparison-never-compares",
-      "what": "An entrypoint that silently forces cp=1 over the launcher's CP=4 is reported as 'the runtime honours the declared config' \u2014 declared_vs_effective always takes the match path, so a knob that appears configurable and is not gets a green check mark again.",
+      "what": "An entrypoint that silently forces cp=1 over the launcher's CP=4 is reported as 'the runtime honours the declared config' — declared_vs_effective always takes the match path, so a knob that appears configurable and is not gets a green check mark again.",
       "anchor": "        if want != got:",
       "replacement": "        if False and want != got:"
     },
@@ -170,7 +194,7 @@
     },
     {
       "name": "mismatch-path-drops-coverage-summary",
-      "what": "When declared and effective disagree, the BLOCK findings name the differing fields but no finding ever states how many fields were compared \u2014 a partial comparison that happened to catch a difference looks identical to a full one.",
+      "what": "When declared and effective disagree, the BLOCK findings name the differing fields but no finding ever states how many fields were compared — a partial comparison that happened to catch a difference looks identical to a full one.",
       "anchor": "    if findings:\n        findings.append(\n            Finding(\n                code=\"topology.effective_comparison_summary\",",
       "replacement": "    if False:\n        findings.append(\n            Finding(\n                code=\"topology.effective_comparison_summary\","
     },
@@ -182,7 +206,7 @@
     },
     {
       "name": "partition-normalization-keeps-spellings-distinct",
-      "what": "gpu-a100 and gpu_a100 are treated as two unrelated partitions, so the measured 188-files-one-way/4-the-other split on a single partition is reported as 'N distinct partitions, 0 spelling variants' \u2014 the exact estate failure reads as clean.",
+      "what": "gpu-a100 and gpu_a100 are treated as two unrelated partitions, so the measured 188-files-one-way/4-the-other split on a single partition is reported as 'N distinct partitions, 0 spelling variants' — the exact estate failure reads as clean.",
       "anchor": "    return re.sub(r\"[^a-z0-9]\", \"\", spelling.lower())",
       "replacement": "    return spelling"
     },
@@ -194,21 +218,29 @@
     },
     {
       "name": "dash-p-flag-noise-becomes-partitions",
-      "what": "The sbatch/srun gating on the short '-p' form is dropped, so 'cp -p weights.bin' manufactures a partition named weights.bin and a corpus containing nothing but flag noise is reported partition-consistent \u2014 the not-found BLOCK that distinguishes real extraction from noise never fires.",
+      "what": "The sbatch/srun gating on the short '-p' form is dropped, so 'cp -p weights.bin' manufactures a partition named weights.bin and a corpus containing nothing but flag noise is reported partition-consistent — the not-found BLOCK that distinguishes real extraction from noise never fires.",
       "anchor": "            if _SBATCH_LINE_RE.search(line):\n                spellings += _PARTITION_SHORT_RE.findall(line)",
       "replacement": "            if True:\n                spellings += _PARTITION_SHORT_RE.findall(line)"
+    },
+    {
+      "name": "topology.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is topology's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "                spellings += _PARTITION_SHORT_RE.findall(line)\n",
+      "replacement": "                spellings += _PARTITION_SHORT_RE.findall(line)  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/topology.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
     }
   ],
   "parity": [
     {
       "name": "cosine-range-check-needs-both-impossible-directions",
-      "what": "A broken accumulator's cosine of 1.80 is reported as data again instead of raising \u2014 the exact 'tensor's cosine with itself printed as >1' incident this guard descends from. Since a finite cosine cannot simultaneously exceed 1.0+slack and fall below -1.0-slack, no value ever trips the impossible-value check.",
+      "what": "A broken accumulator's cosine of 1.80 is reported as data again instead of raising — the exact 'tensor's cosine with itself printed as >1' incident this guard descends from. Since a finite cosine cannot simultaneously exceed 1.0+slack and fall below -1.0-slack, no value ever trips the impossible-value check.",
       "anchor": "        cosine is not None\n        and math.isfinite(cosine)\n        and (cosine > 1.0 + _COSINE_SLACK or cosine < -1.0 - _COSINE_SLACK)\n",
       "replacement": "        cosine is not None\n        and math.isfinite(cosine)\n        and (cosine > 1.0 + _COSINE_SLACK and cosine < -1.0 - _COSINE_SLACK)\n"
     },
     {
       "name": "self-cosine-slack-widened-past-reality",
-      "what": "A reduction that scores a bitwise-identical tensor's cosine with itself at 0.4 \u2014 a mathematically impossible self-similarity and the signature of a statistics bug \u2014 sails through the sanity guard and is printed as fact, because a deviation must now exceed 1.5 to be called impossible.",
+      "what": "A reduction that scores a bitwise-identical tensor's cosine with itself at 0.4 — a mathematically impossible self-similarity and the signature of a statistics bug — sails through the sanity guard and is printed as fact, because a deviation must now exceed 1.5 to be called impossible.",
       "anchor": "    if cosine is not None and (math.isnan(cosine) or abs(cosine - 1.0) > _SELF_COSINE_SLACK):\n",
       "replacement": "    if cosine is not None and (math.isnan(cosine) or abs(cosine - 1.0) > 1.5):\n"
     },
@@ -220,37 +252,37 @@
     },
     {
       "name": "unread-keys-counted-as-compared",
-      "what": "The report's compared_keys count includes dtype- and shape-mismatched keys that were never numerically read \u2014 the coverage number overstates what was actually examined, and a report can claim N compared keys while fewer than N comparisons ever happened.",
+      "what": "The report's compared_keys count includes dtype- and shape-mismatched keys that were never numerically read — the coverage number overstates what was actually examined, and a report can claim N compared keys while fewer than N comparisons ever happened.",
       "anchor": "        return tuple(\n            entry\n            for entry in self.keys\n            if (entry.key, entry.note) not in self.skipped_set and entry.elements > 0\n        )",
       "replacement": "        return tuple(self.keys)"
     },
     {
       "name": "none-cosine-report-laundered-to-one",
-      "what": "A zero-element tensor, or a key where one side is all zeros, reports cosine 1.0 \u2014 a perfect-similarity score for a comparison where no similarity was measurable \u2014 instead of the null that tells the reader no cosine exists. Consumers of to_dict can no longer distinguish 'measured identical direction' from 'cosine undefined'.",
+      "what": "A zero-element tensor, or a key where one side is all zeros, reports cosine 1.0 — a perfect-similarity score for a comparison where no similarity was measurable — instead of the null that tells the reader no cosine exists. Consumers of to_dict can no longer distinguish 'measured identical direction' from 'cosine undefined'.",
       "anchor": "        mismatched_elements=cmp.mismatched_elements,\n        max_abs_diff=cmp.max_abs_diff,\n        cosine=cmp.cosine,\n        rel_frob=rel_frob,",
       "replacement": "        mismatched_elements=cmp.mismatched_elements,\n        max_abs_diff=cmp.max_abs_diff,\n        cosine=cmp.cosine if cmp.cosine is not None else 1.0,\n        rel_frob=rel_frob,"
     },
     {
       "name": "vacuity-no-longer-declared",
-      "what": "A parity report over zero common keys \u2014 the literal all([]) shape of Incident #6 \u2014 no longer declares itself vacuous: is_vacuous is False, the rendered verdict skips the VACUOUS banner, and to_dict reports vacuous: false for a comparison that examined nothing. The gate's own vacuous branch becomes dead code.",
+      "what": "A parity report over zero common keys — the literal all([]) shape of Incident #6 — no longer declares itself vacuous: is_vacuous is False, the rendered verdict skips the VACUOUS banner, and to_dict reports vacuous: false for a comparison that examined nothing. The gate's own vacuous branch becomes dead code.",
       "anchor": "        return not self.findings and self.compared_elements == 0",
       "replacement": "        return not self.findings and self.compared_elements < 0"
     },
     {
       "name": "zero-reference-rel-frob-underreported",
-      "what": "A genuinely nonzero tensor compared against an all-zero reference reports rel_frob 0.0 \u2014 'identical to the zero tensor' \u2014 instead of the inf that states the difference is unbounded relative to the reference. A scrubbed-to-zero or never-written reference tensor masquerades as a perfect match on the relative-difference axis.",
+      "what": "A genuinely nonzero tensor compared against an all-zero reference reports rel_frob 0.0 — 'identical to the zero tensor' — instead of the inf that states the difference is unbounded relative to the reference. A scrubbed-to-zero or never-written reference tensor masquerades as a perfect match on the relative-difference axis.",
       "anchor": "    if rb > 0.0:\n        return math.sqrt(var_diff) / rb\n    return 0.0 if var_diff == 0.0 else math.inf",
       "replacement": "    if rb > 0.0:\n        return math.sqrt(var_diff) / rb\n    return 0.0 if var_diff >= 0.0 else math.inf"
     },
     {
       "name": "dtype-mismatch-disguised-as-value-difference",
-      "what": "A dtype mismatch is recorded as an ordinary numeric DIFFER finding, so consumers can no longer tell 'never numerically compared \u2014 possible silent cast' apart from 'compared and outside tolerance'. Every numeric statistic for that key still shows inf/None for zero compared elements, but under a status that claims a value judgement was made.",
+      "what": "A dtype mismatch is recorded as an ordinary numeric DIFFER finding, so consumers can no longer tell 'never numerically compared — possible silent cast' apart from 'compared and outside tolerance'. Every numeric statistic for that key still shows inf/None for zero compared elements, but under a status that claims a value judgement was made.",
       "anchor": "                _metadata_entry(\n                    key,\n                    ParityStatus.DTYPE_MISMATCH,\n                    shape_left,\n                    shape_right,\n                    dtype_left,\n                    dtype_right,\n                    tolerances,\n                    reason,\n                )",
       "replacement": "                _metadata_entry(\n                    key,\n                    ParityStatus.DIFFER,\n                    shape_left,\n                    shape_right,\n                    dtype_left,\n                    dtype_right,\n                    tolerances,\n                    reason,\n                )"
     },
     {
       "name": "inert-control-must-pass",
-      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. If the battery reports this killed, its attribution machinery is proven unsound and the whole run is void \u2014 exit 2.",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. If the battery reports this killed, its attribution machinery is proven unsound and the whole run is void — exit 2.",
       "anchor": "        and math.isfinite(cosine)\n",
       "replacement": "        and math.isfinite(cosine)  # inert must-pass control\n",
       "must_survive": true
@@ -259,13 +291,13 @@
   "checkpoint_gates": [
     {
       "name": "aliasing-records-unique-fqns-instead",
-      "what": "The aliasing signature is gone: a checkpoint where 128 (or 32) expert FQNs all resolve to one stored byte range passes the distinctness gate, because 'distinct FQNs' is being counted instead of 'distinct storages' \u2014 exactly the incident's 'all names present, count matches, every dtype correct' disguise.",
+      "what": "The aliasing signature is gone: a checkpoint where 128 (or 32) expert FQNs all resolve to one stored byte range passes the distinctness gate, because 'distinct FQNs' is being counted instead of 'distinct storages' — exactly the incident's 'all names present, count matches, every dtype correct' disguise.",
       "anchor": "            storages = {t.storage_id if t.storage_id is not None else t.fqn for t in members}",
       "replacement": "            storages = {t.fqn for t in members}"
     },
     {
       "name": "shard-count-mismatch-reads-as-match",
-      "what": "A checkpoint holding 16 expert shards against 128 declared is reported as 'present at declared count', because the declared-vs-present comparison now only flags layouts whose shard count equals the declared count \u2014 the local-name save signature passes silently.",
+      "what": "A checkpoint holding 16 expert shards against 128 declared is reported as 'present at declared count', because the declared-vs-present comparison now only flags layouts whose shard count equals the declared count — the local-name save signature passes silently.",
       "anchor": "            if c.num_experts is not None and len(members) != c.num_experts:",
       "replacement": "            if c.num_experts is not None and len(members) == c.num_experts:"
     },
@@ -283,9 +315,17 @@
     },
     {
       "name": "first-save-composite-ignores-blocking-subgates",
-      "what": "A corrupt first checkpoint whose distinctness, byte-volume and completeness gates all FAIL still leaves the composite reporting 'all hold at first save' \u2014 the composite aggregates verdicts but the blocking set is empty by construction, so save #1 is never stopped.",
+      "what": "A corrupt first checkpoint whose distinctness, byte-volume and completeness gates all FAIL still leaves the composite reporting 'all hold at first save' — the composite aggregates verdicts but the blocking set is empty by construction, so save #1 is never stopped.",
       "anchor": "        blocking = [r for r in sub if r.blocking]",
       "replacement": "        blocking = []"
+    },
+    {
+      "name": "checkpoint_gates.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is checkpoint_gates's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "        applicable = len(self._subgates) - len(inapplicable)\n",
+      "replacement": "        applicable = len(self._subgates) - len(inapplicable)  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/gates/checkpoint_gates.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
     }
   ],
   "controls": [
@@ -298,17 +338,17 @@
     },
     {
       "name": "uncertified-provenance-certified-anyway",
-      "what": "A gate registered from a module the walk never attempted is silently certified along with its neighbours \u2014 the harness vouches for imports it did not perform, and the decision to widen the walk is never put in front of a human.",
+      "what": "A gate registered from a module the walk never attempted is silently certified along with its neighbours — the harness vouches for imports it did not perform, and the decision to widen the walk is never put in front of a human.",
       "anchor": "        if module not in attempted:",
       "replacement": "        if False and module not in attempted:",
-      "why": "Kept verbatim; anchor occurs once. Predicted KILLED by test_provenance_reconciliation_names_gate_from_unwalked_module (expects exactly one finding naming the gate and its module; the mutation mints zero \u2014 the false-negative direction, doctrine 5 symmetric)."
+      "why": "Kept verbatim; anchor occurs once. Predicted KILLED by test_provenance_reconciliation_names_gate_from_unwalked_module (expects exactly one finding naming the gate and its module; the mutation mints zero — the false-negative direction, doctrine 5 symmetric)."
     },
     {
       "name": "package-census-silenced",
-      "what": "The first-party package census can no longer name an unclassified sibling, so the next package full of gates added to neither list ships months of controls runs that never knew it existed \u2014 the F1 shape standing open with the tripwire removed.",
+      "what": "The first-party package census can no longer name an unclassified sibling, so the next package full of gates added to neither list ships months of controls runs that never knew it existed — the F1 shape standing open with the tripwire removed.",
       "anchor": "        if info.ispkg and info.name not in classified:",
       "replacement": "        if False and info.ispkg and info.name not in classified:",
-      "why": "Kept verbatim; anchor occurs once. Prediction: ALIVE \u2014 stated as a finding, not a failure. No handed test constructs an unclassified first-party package; test_package_census_classifies_known_first_party_packages asserts only ABSENCE of findings for the four knowns, which the mutation still satisfies, and the 854-test green ground state implies the shipped tree itself yields zero census findings (else test_run_result_agrees_with_verify_controls is already red)."
+      "why": "Kept verbatim; anchor occurs once. Prediction: ALIVE — stated as a finding, not a failure. No handed test constructs an unclassified first-party package; test_package_census_classifies_known_first_party_packages asserts only ABSENCE of findings for the four knowns, which the mutation still satisfies, and the 854-test green ground state implies the shipped tree itself yields zero census findings (else test_run_result_agrees_with_verify_controls is already red)."
     },
     {
       "name": "certification-receipt-fakes-its-denominator",
@@ -319,7 +359,7 @@
     },
     {
       "name": "empty-registry-refusal-never-fires",
-      "what": "A run over an empty registry \u2014 zero gates ran, zero controls executed \u2014 bypasses the named 'registry is empty' refusal and certifies through the generic path; the sweep-level all([]) the harness exists to refuse is unguarded again.",
+      "what": "A run over an empty registry — zero gates ran, zero controls executed — bypasses the named 'registry is empty' refusal and certifies through the generic path; the sweep-level all([]) the harness exists to refuse is unguarded again.",
       "anchor": "    if gate_count == 0:",
       "replacement": "    if gate_count < 0:",
       "why": "Kept verbatim; anchor occurs once (`if gate_count:` is a different string). Predicted KILLED by TestEmptyRegistryBlocks::test_zero_registered_gates_is_a_failure_not_an_all_clear (asserts 'registry is empty' and 'vacuous' in output; the mutation removes both even though rc stays 1 via verify_controls' empty-refusal)."
@@ -336,11 +376,11 @@
       "what": "The context_type coverage line always claims full declaration: a forgotten context_type on a registered gate no longer moves the printed ratio, and the column of markers no longer carries a denominator a human can price.",
       "anchor": "        print(\n            f\"  context_type declared: {gate_count - undeclared}/{gate_count} gates; \"\n            f\"{undeclared} on untyped legacy broadcast\"\n        )",
       "replacement": "        print(\n            f\"  context_type declared: {gate_count}/{gate_count} gates; \"\n            f\"0 on untyped legacy broadcast\"\n        )",
-      "why": "Kept verbatim; anchor occurs once. Prediction: ALIVE \u2014 and possibly output-invisible by construction: no handed test asserts the ratio line, and every gate visible in the handed test assertions declares a context_type (weight_parity does; the full registry's typed fraction is not verifiable from the handed packet \u2014 flagged in Uncertainties), in which case undeclared==0 makes the mutated string byte-identical to the honest one on the shipped tree."
+      "why": "Kept verbatim; anchor occurs once. Prediction: ALIVE — and possibly output-invisible by construction: no handed test asserts the ratio line, and every gate visible in the handed test assertions declares a context_type (weight_parity does; the full registry's typed fraction is not verifiable from the handed packet — flagged in Uncertainties), in which case undeclared==0 makes the mutated string byte-identical to the honest one on the shipped tree."
     },
     {
       "name": "inert-control-must-pass",
-      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. If the battery reports this killed, its attribution machinery is proven unsound and the whole run is void \u2014 exit 2.",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. If the battery reports this killed, its attribution machinery is proven unsound and the whole run is void — exit 2.",
       "anchor": "    total = 0\n",
       "replacement": "    total = 0  # inert must-pass control\n",
       "must_survive": true,
@@ -350,14 +390,14 @@
   "adjudication": [
     {
       "name": "any-fired-floor-deleted",
-      "what": "A controls sweep in which NOTHING fired passes unremarked \u2014 the tool's sweep-level all([]): an artifact whose detectors were all inapplicable, unconstructable or silent prints CLEAR because nobody re-stated that the run proved nothing about the detectors.",
+      "what": "A controls sweep in which NOTHING fired passes unremarked — the tool's sweep-level all([]): an artifact whose detectors were all inapplicable, unconstructable or silent prints CLEAR because nobody re-stated that the run proved nothing about the detectors.",
       "anchor": "    if not any_fired:\n        reasons.append(\n            \"no MUST_FIRE control fired on this artifact -- the run \"\n            \"proved nothing about the detectors\"\n        )",
       "replacement": "    if False and not any_fired:\n        reasons.append(\n            \"no MUST_FIRE control fired on this artifact -- the run \"\n            \"proved nothing about the detectors\"\n        )",
       "why": "Kept verbatim from fix29; anchor occurs once. Predicted KILLED by TestControlFloors::test_empty_control_sweep_blocks_via_any_fired_floor and ::test_skipped_only_lands_on_the_floor_not_on_silence (both assert the floor's reason text in blocking_reasons)."
     },
     {
       "name": "quiet-detector-filed-as-inapplicable",
-      "what": "A MUST_FIRE control that stayed QUIET on real content \u2014 the detector accepted the injected defect, a true negative \u2014 is filed under the recorded-only inapplicable leg instead of producing the named blocking reason; the consume loop no longer convicts a dead detector by name.",
+      "what": "A MUST_FIRE control that stayed QUIET on real content — the detector accepted the injected defect, a true negative — is filed under the recorded-only inapplicable leg instead of producing the named blocking reason; the consume loop no longer convicts a dead detector by name.",
       "anchor": "        elif st == \"not_fired\":\n            reasons.append(\n                f\"MUST_FIRE control {c['control']} stayed QUIET on real \"\n                f\"content -- the detector cannot be trusted on this artifact\"\n            )\n",
       "replacement": "        elif st == \"not_fired\":\n            pass\n",
       "why": "RE-ANCHORED after the 62-row battery reported this row ALIVE. The previous replacement appended \"not_fired\" to the ('inapplicable','skipped') tuple, but that elif sits BELOW `elif st == \"not_fired\":` in the same chain, so the added member is unreachable and the edit was semantically INERT -- an equivalent mutant masquerading as an uncovered rule. It measured nothing about the rule it names. The rule is now expressed where it actually lives: the not_fired branch's reasons.append is replaced by `pass`, which really does file a quiet detector under the recorded-only leg. MEASURED (not predicted): applied to the shipped tree the suite goes 880 -> 879 passed / 1 failed, the single failure being tests/test_live_save_gate.py::TestControlFloors::test_quiet_detector_blocks_even_though_gates_pass at the `any(\"stayed QUIET\" ...)` assertion -- clean single-test attribution. Anchor verified unique (count == 1)."
@@ -367,14 +407,14 @@
       "what": "The Defect-A fall-through returns: an exercised-but-unattributable control (confounded or absent baseline, or a detector that answered the injection with ERROR/a coverage verdict) earns no named INCONCLUSIVE blocking reason and lands in the unrecognized-status else under the wrong name.",
       "anchor": "        elif st == \"inconclusive\":",
       "replacement": "        elif False and st == \"inconclusive\":",
-      "why": "Kept verbatim; anchor occurs once. Predicted KILLED by test_inconclusive_only_blocks_with_named_reason, test_confounded_alias_is_inconclusive_and_blocks, and test_detector_crash_on_injection_is_inconclusive_not_a_fire \u2014 all three assert an uppercase 'INCONCLUSIVE' reason; the fall-through's 'unrecognized status 'inconclusive'' does not contain it."
+      "why": "Kept verbatim; anchor occurs once. Predicted KILLED by test_inconclusive_only_blocks_with_named_reason, test_confounded_alias_is_inconclusive_and_blocks, and test_detector_crash_on_injection_is_inconclusive_not_a_fire — all three assert an uppercase 'INCONCLUSIVE' reason; the fall-through's 'unrecognized status 'inconclusive'' does not contain it."
     },
     {
       "name": "pass-over-zero-tripwire-removed",
-      "what": "The framework self-check is gone: a gate returning PASS with coverage.checked == 0 \u2014 the framework's own founding invariant breach arriving over a live artifact \u2014 no longer generates a blocking reason, so a vacuous gate rides a live CLEAR again.",
+      "what": "The framework self-check is gone: a gate returning PASS with coverage.checked == 0 — the framework's own founding invariant breach arriving over a live artifact — no longer generates a blocking reason, so a vacuous gate rides a live CLEAR again.",
       "anchor": "        if r.verdict is Verdict.PASS and r.coverage.checked == 0:",
       "replacement": "        if r.verdict is Verdict.PASS and r.coverage.checked < 0:",
-      "why": "Kept verbatim; anchor occurs once. Predicted KILLED by test_framework_tripwire_pass_over_zero_checked_blocks (asserts 'framework invariant breach' in reasons and exit 1; with the tripwire gone the run goes CLEAR \u2014 the vacuous pass itself \u2014 and both assertions redden)."
+      "why": "Kept verbatim; anchor occurs once. Predicted KILLED by test_framework_tripwire_pass_over_zero_checked_blocks (asserts 'framework invariant breach' in reasons and exit 1; with the tripwire gone the run goes CLEAR — the vacuous pass itself — and both assertions redden)."
     },
     {
       "name": "auto-kind-majority-read-backwards",
@@ -385,10 +425,10 @@
     },
     {
       "name": "adapter-prefix-demand-neutralized",
-      "what": "The pinned-or-refused --adapter-prefix demand is inverted: a lora adjudication WITHOUT the pin sails past the refusal while a correctly pinned prefix raises \u2014 the tool silently guesses the unprefixed namespace again, the exact guess the demand exists to refuse.",
+      "what": "The pinned-or-refused --adapter-prefix demand is inverted: a lora adjudication WITHOUT the pin sails past the refusal while a correctly pinned prefix raises — the tool silently guesses the unprefixed namespace again, the exact guess the demand exists to refuse.",
       "anchor": "    if kind == \"lora\" and adapter_prefix is None:",
       "replacement": "    if kind == \"lora\" and adapter_prefix is not None:",
-      "why": "Kept verbatim; anchor occurs once. Predicted KILLED by TestAdapterPrefixDemand (the unpinned calls no longer raise GateUnmeasured) and by every healthy-lora test once the inversion raises on their explicit adapter_prefix=\"\" \u2014 attribution will name several."
+      "why": "Kept verbatim; anchor occurs once. Predicted KILLED by TestAdapterPrefixDemand (the unpinned calls no longer raise GateUnmeasured) and by every healthy-lora test once the inversion raises on their explicit adapter_prefix=\"\" — attribution will name several."
     },
     {
       "name": "naming-agreement-checks-only-the-defaults",
@@ -413,7 +453,7 @@
     },
     {
       "name": "inert-control-must-pass",
-      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. If the battery reports this killed, its attribution machinery is proven unsound and the whole run is void \u2014 exit 2.",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. If the battery reports this killed, its attribution machinery is proven unsound and the whole run is void — exit 2.",
       "anchor": "    markers = re.compile(adapter_marker)\n",
       "replacement": "    markers = re.compile(adapter_marker)  # inert must-pass control\n",
       "must_survive": true,

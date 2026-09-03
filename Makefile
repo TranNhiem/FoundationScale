@@ -22,15 +22,31 @@
 #     script, and the faithful mirror of a script is the same script. Dropping
 #     it from `make check` would make `check` weaker than CI, which is its own
 #     vacuous pass, so fidelity won over brevity here.
-#   * `mutation` mirrors the mutation job (a surviving mutant fails it). Budget
-#     ~35 minutes, not the "~2 min" this line claimed until #234: the corpus is
-#     73 rows over 9 modules and each scoreable row runs the whole suite, so the
-#     wall time is 69 x a full pytest run, not one. An understated cost is not a
-#     harmless comment — it is the reason a developer reaches for `make test`
-#     and skips the one target that certifies the detectors, and it is measured
-#     here rather than estimated because estimating it is how it got wrong.
+#   * `mutation` runs the WHOLE corpus (a surviving mutant fails it). CI no
+#     longer does: as of #242 it shards per module across a job matrix, and
+#     `mutation-module` below is the mirror of one shard.
+#
+#     The mutation corpus is 78 rows over 9 modules.
+#     Of those, 69 are MUST_FIRE mutants and 9 are MUST_PASS controls.
+#
+#     Each scoreable row runs the whole suite, so the wall time is one full
+#     pytest run per MUST_FIRE row rather than one in total. All four counts
+#     above are anchored (total_rows, mut_modules, must_fire, must_pass in the
+#     countables census) and each sits on its own line, because the gate reads
+#     a clause, not a paragraph: a number wrapped across a comment continuation
+#     is a number in no denominator. The line read "73 rows" until #242 gave a
+#     control row to each of the five modules that had none.
+#
+#     The WALL TIME is not anchored, because no gate can hold it: it is a
+#     property of the machine, which is the #83/#111 shape. What is measured is
+#     one module — `--module checkpoint_gates`, 5 rows, 3m19s on an M-series
+#     laptop, i.e. ~40s per row. Extrapolated (not measured) that puts the full
+#     corpus near 50 minutes. It is stated because an understated cost is not a
+#     harmless comment: it is the reason a developer reaches for `make test`
+#     and skips the one target that certifies the detectors. It said "~2 min"
+#     until #234 and "~35 min" until #242, both of them guesses.
 
-.PHONY: install test lint fmt typecheck controls packaging countables mutation skip-guard-probe check clean
+.PHONY: install test lint fmt typecheck typecheck-checks controls packaging countables mutation mutation-module skip-guard-probe check clean
 
 install:
 	pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
@@ -68,15 +84,30 @@ fmt:
 # moves out from under the CLI that forwards to it.
 #
 # checks/ is NOT in this list, and that is a stated exclusion rather than an
-# implied one (#231). Denominator: 3 of 3 files under checks/ are unchecked,
-# carrying 10 mypy errors -- 5 no-untyped-def, 1 missing types-PyYAML stub, and
-# 2 in packaging_reachability.py that are deliberate and would need silencing
-# rather than fixing (an EntryPoints.get fallback that only executes on the
-# pre-3.10 shape mypy cannot see, and an ArgumentParser.exit override that
-# always raises and so wants NoReturn). Ruff and ruff format DO cover checks/
-# as of #231; mypy is the remaining half and is tracked, not forgotten.
+# implied one (#231): all 4 files under checks/ are unchecked by mypy. That
+# count is anchored -- checks_files in the countables census, bound by
+# checks/countables_drift.py -- because the clause it replaces read "3 of 3"
+# in the same commit that ADDED the fourth file (#241). It had copied mypy's
+# own "Found 10 errors in 3 files (checked 4 source files)" and taken the
+# error-bearing count for the denominator: the numerator, printed as the whole.
+#
+# The error count is deliberately NOT stated here. It was written once as 10
+# and measured 19 the next time anyone ran it, and a number that needs mypy --
+# and one particular mypy version -- to verify is the #83/#111 shape: a claim
+# whose truth depends on the environment that reads it. `make typecheck-checks`
+# prints it on demand instead. Two of what it reports are deliberate
+# back-compat shapes in packaging_reachability.py that want silencing rather
+# than fixing: an EntryPoints.get fallback that only executes on the pre-3.10
+# shape mypy cannot see, and an ArgumentParser.exit override that always raises
+# and so wants NoReturn.
+# Ruff and ruff format DO cover checks/ as of #231; mypy is the tracked half.
 typecheck:
 	mypy src tools/emit_run_manifest.py tools/live_save_gate.py tools/real_checkpoint_probe.py
+
+# Not part of `check`, and that is the point: this REPORTS, it does not gate.
+# It exists so the count above can stay unstated and still be knowable.
+typecheck-checks:
+	-mypy checks
 
 # python3, not python: bare `python` does not exist on modern macOS or most
 # Linux distributions, so `make check` died with command-not-found for any
@@ -111,15 +142,32 @@ packaging:
 # denominator. That is correct, not a bug -- tools_loc means "LOC under tools/",
 # and the producer lives there. Editing the producer moves tools_loc, which is
 # exactly the kind of drift this gate exists to catch.
+#
+# The scan set is `docs README.md Makefile .github/workflows/ci.yml`. The last
+# two joined with #241: a directory argument is walked for *.md, but a file
+# named outright is scanned whatever its suffix, so the build configuration --
+# the two files that DECIDE what CI measures -- is now inside the denominator
+# it was previously outside of. It had "3 of 3 files under checks/" in both,
+# written in the commit that added the fourth.
 CENSUS := $(CURDIR)/.countables_census.json
+COUNTABLES_CORPUS := docs README.md Makefile .github/workflows/ci.yml
 
 countables:
 	python3 checks/countables_drift.py --self-test
 	python3 tools/countables_census.py --no-coverage --out $(CENSUS)
-	python3 checks/countables_drift.py --census $(CENSUS) docs README.md
+	python3 checks/countables_drift.py --census $(CENSUS) $(COUNTABLES_CORPUS)
 
 mutation:
 	FS_FORBID_SKIPS=1 python3 tools/mutate.py
+
+# One shard, the way CI runs it after #242. `make mutation-module MODULE=dcp`.
+# Every module carries its own "must_survive" row precisely so a shard is a
+# whole detector rather than half of one -- run without a control, mutate.py
+# exits 2 (never measured) rather than printing a caught= figure it cannot
+# support, and before #242 that is what 5 of the 9 shards would have done.
+mutation-module:
+	@test -n "$(MODULE)" || { echo 'usage: make mutation-module MODULE=<name>   ("python3 tools/mutate.py --list" names them)'; exit 2; }
+	FS_FORBID_SKIPS=1 python3 tools/mutate.py --module $(MODULE)
 
 skip-guard-probe:
 	@printf '%s\n' \

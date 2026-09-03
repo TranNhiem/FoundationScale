@@ -282,6 +282,13 @@ def main() -> int:
     gt["src_files"], gt["src_loc"] = _count_subtree(REPO / "src/foundationscale")
     gt["tests_files"], gt["tests_loc"] = _count_subtree(REPO / "tests")
     gt["tools_files"], gt["tools_loc"] = _count_subtree(REPO / "tools")
+    # #241: checks/ is stated as an exclusion denominator in the Makefile and in
+    # ci.yml ("N of N files under checks/ are unchecked"). Both said "3 of 3" in
+    # the same commit that added the fourth file, because the clause copied
+    # mypy's "Found 10 errors in 3 files (checked 4 source files)" and took the
+    # ERROR-BEARING count for the denominator. A directory that appears in a
+    # claim needs a census key, or the claim sits in nothing.
+    gt["checks_files"], gt["checks_loc"] = _count_subtree(REPO / "checks")
     gt["gates_files"] = len(_py_files(REPO / "src/foundationscale/gates"))
     gt["root_init_loc"] = _loc([REPO / "src/foundationscale/__init__.py"])
     gt["adjudication_loc"] = _loc([REPO / "src/foundationscale/gates/adjudication.py"])

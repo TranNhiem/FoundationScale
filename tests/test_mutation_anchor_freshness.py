@@ -16,8 +16,11 @@ costs. The corpus is its own inverse map, so the gate asks whether SOME
 pristine text exists that binds every anchor exactly once and reaches the
 live bytes in zero or one applications.
 
-Denominator: 64 JSON rows over 8 modules + 9 EMBEDDED_TABLE rows over 1
-module = 73 rows over 9 modules, pinned as constants below. Silent row
+Denominator: 69 JSON rows over 8 modules + 9 EMBEDDED_TABLE rows over 1
+module = 78 rows over 9 modules, pinned as constants below. #242 moved
+64 -> 69: it gave a "must_survive" control row to each of the five modules
+that had none, because CI now shards the battery per module and a shard
+without its negative half is half a detector. Silent row
 deletion reds here rather than shrinking the denominator; a legitimate corpus
 change updates the pins.
 
@@ -67,15 +70,15 @@ ROOT = Path(__file__).resolve().parent.parent
 MUTATE_PY = ROOT / "tools" / "mutate.py"
 MUTATIONS_JSON = ROOT / "tools" / "mutations.json"
 
-JSON_ROWS, JSON_MODS = 64, 8
+JSON_ROWS, JSON_MODS = 69, 8
 EMBEDDED_ROWS, EMBEDDED_MODS = 9, 1
-TOTAL_ROWS, TOTAL_MODS = 73, 9
+TOTAL_ROWS, TOTAL_MODS = 78, 9
 # Rows are the corpus denominator; distinct (module, anchor) pairs are the
 # DISTINGUISHABILITY denominator. They differ because `core` publishes 9 rows
 # over 6 anchors, so a green verdict there resolves the anchor set and cannot
 # say which of the aliased rows a state carries. Pinned so neither figure can
 # be quoted as the other.
-DISTINCT_ANCHORS = 70
+DISTINCT_ANCHORS = 75
 # Row-shape counts are pins, not prose trivia. They are the reason the
 # insertion composition control and deletion exactly-once control exercise
 # real shipped shapes. Do not set either pin to 0 merely to pass after a

@@ -1332,6 +1332,16 @@ def main(
     )
     ap.add_argument("--module", help="run one module's mutations only")
     ap.add_argument("--list", action="store_true", help="print the table and exit")
+    # #242: CI shards the battery per module. The shard list must be DERIVED
+    # from the table, never restated in the workflow -- a hand-written matrix
+    # that misses a tenth module runs 9 shards, reports 9 greens, and leaves
+    # the tenth unmeasured behind a wall of success. One module per line,
+    # nothing else on stdout, so a workflow step can read it directly.
+    ap.add_argument(
+        "--list-modules",
+        action="store_true",
+        help="print one module name per line and exit (the CI shard list)",
+    )
     args = ap.parse_args(argv)
 
     resolved_paths: dict[str, Path]
@@ -1353,6 +1363,14 @@ def main(
         table = load_table(args.module)
     else:
         _validate_table(table, resolved_paths)
+
+    if args.list_modules:
+        # Deliberately BEFORE the --list branch and deliberately silent about
+        # everything else: the consumer is a shell, and a banner on stdout
+        # would become a matrix entry named "9 mutations across ...".
+        for mod in sorted(table):
+            print(mod)
+        return 0
 
     if args.list:
         for mod, muts in sorted(table.items()):

@@ -80,7 +80,7 @@ flowchart TB
 
 ### What the diagram establishes — and what it deliberately does not
 
-- The operational plane is shell and tool-heavy: `launchers/` contains 9,495 shell LOC plus 1,615 Python LOC, while `tools/` contains 8,695 Python LOC. `h100_validation/` adds another 31,313 Python LOC and 4,986 shell LOC.
+- The operational plane is shell and tool-heavy: `launchers/` contains 9,495 shell LOC plus 1,615 Python LOC, while `tools/` contains 8,720 Python LOC. `h100_validation/` adds another 31,313 Python LOC and 4,986 shell LOC.
 - The installed package is consumed by tools, but the measured `run_event` call-site count is **0 in both `tools/` and `h100_validation/`**. No evidence shows an actual trainer firing the lifecycle engine.
 - The package's three-line `__init__.py` exports nothing, so there is still no top-level public surface. The production save-gate decision function `adjudicate_checkpoint` **is now importable** from `foundationscale.gates.adjudication` (moved during this review, T2#0), but it is reachable only by its fully-qualified submodule path, and 60 private names still cross the boundary through the `tools/live_save_gate.py` compatibility shim.
 - There is **no load-side path after saving**: the `Lifecycle` enum has no `RESUME`, `LOAD`, `BEFORE_LOAD`, or `RESTORE` member.
@@ -92,8 +92,8 @@ The census reports counts per importing area, not unique dependencies or a file-
 
 ```mermaid
 flowchart TB
-  TESTS["tests/<br/>54 Python files / 28,288 LOC"]
-  TOOLS["tools/<br/>9 Python files / 8,695 LOC"]
+  TESTS["tests/<br/>54 Python files / 28,294 LOC"]
+  TOOLS["tools/<br/>9 Python files / 8,720 LOC"]
   SRC["src/ as importer<br/>24 Python files / 18,706 LOC"]
 
   FS["src/foundationscale<br/>24 Python files / 18,706 LOC<br/>root __init__.py exports nothing"]

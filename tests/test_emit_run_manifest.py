@@ -971,13 +971,16 @@ def test_dual_source_for_embedded_rows_is_refused(tmp_path, monkeypatch, capsys)
 def test_shipped_pair_passes_completeness_muster(capsys):
     # MUST_PASS on the real shipped pair. Units examined: 9 registered
     # modules (8 published in tools/mutations.json + emit_run_manifest
-    # merged from EMBEDDED_TABLE); 73 rows in total (64 JSON rows per the
+    # merged from EMBEDDED_TABLE); 78 rows in total (69 JSON rows per the
     # shipped census + 8 EMIT_RUN_MANIFEST_ROWS + 1 inert must-pass
     # control); plus the filtered --module emit_run_manifest path.
     # The totals are PINNED, not derived: a derived count would agree with
     # any table, including one that silently lost rows. #221 moved 62 -> 64
-    # (two manifest topology rows) and 7 -> 8 (the emitter wiring row); the
-    # pin is what made that visible instead of quiet.
+    # (two manifest topology rows) and 7 -> 8 (the emitter wiring row);
+    # #242 moved 64 -> 69, one inert must-pass control per module for the
+    # five that had none, so that a per-module CI shard is a whole detector
+    # rather than its MUST_FIRE half. The pin is what makes each visible
+    # instead of quiet.
     import json
 
     mutate = _load_mutate_module()
@@ -987,7 +990,7 @@ def test_shipped_pair_passes_completeness_muster(capsys):
     assert set(data) == set(mutate.MODULE_PATHS)
     assert len(data) == 9
     assert all(data.values())
-    assert sum(len(rows) for rows in data.values()) == 73  # 64 JSON + 9 embedded
+    assert sum(len(rows) for rows in data.values()) == 78  # 69 JSON + 9 embedded
     emit = data["emit_run_manifest"]
     n_const = len(mutate.EMIT_RUN_MANIFEST_ROWS)
     assert n_const == 8  # census leg: row growth reddens this by design

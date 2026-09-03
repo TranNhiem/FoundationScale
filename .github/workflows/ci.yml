@@ -163,10 +163,15 @@ jobs:
         # package while live_save_gate imports its sibling script-style, so the same
         # file resolves under two module names and mypy refuses the directory. The
         # remaining tools/ modules are unchecked -- stated, not implied.
-        # checks/ is likewise unchecked here, with its denominator on the wire:
-        # 3 of 3 files, 10 errors (5 no-untyped-def, 1 missing types-PyYAML stub,
-        # 2 deliberate back-compat shapes in packaging_reachability.py). Ruff now
-        # covers checks/ (#231); mypy is the tracked remainder.
+        # checks/ is likewise unchecked here, and its denominator is on the
+        # wire: all 4 files under checks/ are unchecked. That count is anchored
+        # (checks_files) after #241, where this clause and its Makefile twin
+        # both read "3 of 3" -- mypy's error-BEARING file count, not the number
+        # it checked -- written in the very commit that added the fourth file.
+        # The error count is not stated here for the reason the Makefile gives:
+        # it needs a particular mypy to verify, so it is reported on demand by
+        # `make typecheck-checks` rather than asserted in a comment.
+        # Ruff now covers checks/ (#231); mypy is the tracked remainder.
         run: mypy src tools/emit_run_manifest.py tools/live_save_gate.py tools/real_checkpoint_probe.py
       - name: Pytest (coverage floor 90; skips are failures — FS_FORBID_SKIPS)
         # --cov-fail-under=90 against a measured 93.6% total. The floor was 70 when
@@ -272,8 +277,17 @@ jobs:
         run: python3 checks/countables_drift.py --self-test
       - name: Measure the countables census (the oracle, never committed)
         run: python3 tools/countables_census.py --no-coverage --out "$RUNNER_TEMP/census.json"
+      #  4. Makefile and this workflow are in the scan set as of #241. A
+      #     directory argument is walked for *.md; a file named outright is
+      #     scanned whatever its suffix. Before that, every countable stated in
+      #     the build configuration sat in no denominator -- including the
+      #     "3 of 3 files under checks/" that this very file carried, in the
+      #     commit that added the fourth. The gate that decides what CI
+      #     measures should not be the one corpus CI never measures.
       - name: Countables drift (shipped numbers vs the measured tree)
-        run: python3 checks/countables_drift.py --census "$RUNNER_TEMP/census.json" docs README.md
+        run: |
+          python3 checks/countables_drift.py --census "$RUNNER_TEMP/census.json" \
+            docs README.md Makefile .github/workflows/ci.yml
 
   launchers:
     name: launcher contracts (a silent suite fails this job)
@@ -711,10 +725,76 @@ jobs:
           printf 'launcher contracts green, verified summary: '
           printf '%s\n' "$output" | { grep -i 'summary' || true; } | tail -n 1
 
-  mutation:
-    name: mutation testing (a surviving mutant fails this job)
+  # ---------------------------------------------------------------------------
+  # #242. The mutation battery ran as ONE job with timeout-minutes: 15 and
+  # produced NO VERDICT for 21 consecutive runs: every one of them was killed at
+  # 15.2-15.3 minutes and recorded as `cancelled`. The last real verdict was
+  # 36291cf0, which finished in 7.4 minutes; the corpus has grown since, and
+  # each scoreable row runs the entire pytest suite twice for attribution, so
+  # the job simply stopped fitting. Two separate defects, both fixed here:
+  #
+  #  1. IT COULD NOT FINISH. Measured locally, `--module checkpoint_gates` (5
+  #     rows) takes 3m19s, i.e. ~40s a row; the corpus is 78 rows. The battery
+  #     is embarrassingly parallel across modules and `--module` already
+  #     existed, so this is now a matrix: one shard per module, each shard well
+  #     inside its own budget.
+  #
+  #  2. ITS FAILURE STATE READ AS NEUTRAL. GitHub marks a job that exceeds
+  #     timeout-minutes as `cancelled`, which is the same word it uses when a
+  #     human presses the button. So 21 runs of "this gate measured nothing"
+  #     looked like 21 runs of "somebody stopped it" -- UNMEASURED wearing the
+  #     costume of a deliberate act, which is precisely the state this
+  #     repository refuses to allow (doctrine 5). The battery is now run under
+  #     an INNER deadline, shorter than the job's, so the deadline is ours: it
+  #     exits 2, the tool's own "never measured" code, and says so.
+  #
+  # The shard list is DERIVED from the table rather than written here. A
+  # hand-maintained matrix that misses a tenth module would run nine shards,
+  # report nine greens, and leave the tenth unmeasured behind a wall of
+  # success -- the same shape as the defect being fixed.
+  mutation-shards:
+    name: enumerate mutation shards (the matrix comes from the table)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
+    outputs:
+      modules: ${{ steps.enumerate.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: enumerate
+        name: Read the module list out of tools/mutations.json
+        run: |
+          set -euo pipefail
+          modules="$(python tools/mutate.py --list-modules)"
+          # An empty list would fan out to zero shards, and zero shards is a
+          # green matrix over nothing: all([]) in workflow form. Refuse it.
+          if [ -z "$modules" ]; then
+            echo "::error::the mutation table names zero modules — a matrix over"
+            echo "::error::nothing is a green wall in front of an unmeasured gate."
+            exit 2
+          fi
+          json="$(printf '%s\n' "$modules" | python -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
+          echo "modules=$json" >> "$GITHUB_OUTPUT"
+          echo "sharding the battery across: $json"
+
+  mutation:
+    name: mutation ${{ matrix.module }} (a surviving mutant fails this job)
+    needs: mutation-shards
+    runs-on: ubuntu-latest
+    # Generous relative to the inner deadline below ON PURPOSE. If this one
+    # ever fires, the run is `cancelled` again and we are back to a neutral
+    # word for an unmeasured gate; the inner deadline exists so that never
+    # happens, and this is only the backstop behind it.
+    timeout-minutes: 25
+    strategy:
+      # Every shard reports. fail-fast would cancel the siblings of the first
+      # red one, and a cancelled sibling is an unmeasured module wearing the
+      # word "cancelled" — the exact confusion #242 is about.
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.mutation-shards.outputs.modules) }}
     env:
       # Mutant trials inherit this: a mutant that flips a test into "skipped"
       # must be killed, not scored as survived. tools/mutate.py runs the suite
@@ -730,8 +810,30 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
-      - name: Run mutation tests
-        # tools/mutate.py (task 2 of this batch) exits nonzero if any mutant
-        # survives. No continue-on-error, no filtering: the survivor count is
-        # the signal and it fails this job directly.
-        run: python tools/mutate.py
+      - name: Run mutation tests for ${{ matrix.module }}
+        # tools/mutate.py exits 0 (all killed) / 1 (a survivor) / 2 (never
+        # measured). No continue-on-error, no filtering: the survivor count is
+        # the signal and it fails this job directly. Every module carries its
+        # own "must_survive" control row, so a shard is a whole detector — run
+        # without one, mutate.py exits 2 rather than printing a caught= figure
+        # it cannot support, and before #242 that is what 5 of 9 shards would
+        # have done.
+        #
+        # `timeout` is GNU coreutils and is present on ubuntu-latest. It is
+        # deliberately NOT in the Makefile mirror of this step: macOS has no
+        # `timeout`, and a missing binary there fails as command-not-found,
+        # which is exactly the "looks like something else" failure being fixed.
+        run: |
+          set +e
+          timeout --signal=INT --kill-after=60s 18m \
+            python tools/mutate.py --module "${{ matrix.module }}"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            echo "::error::mutation shard ${{ matrix.module }} exceeded its 18-minute deadline."
+            echo "::error::NOTHING WAS MEASURED for this module. This is exit 2 (never"
+            echo "::error::measured), not a cancellation and not a pass: no mutant in"
+            echo "::error::${{ matrix.module }} was scored, so no claim about it holds."
+            exit 2
+          fi
+          exit "$rc"

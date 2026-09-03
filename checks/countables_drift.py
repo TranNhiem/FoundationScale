@@ -263,6 +263,56 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
             ("imports_src", "src"),
         ),
     ),
+    # --- #241: the countable that lives in the build configuration ----------
+    #
+    # #240 was a false countable inside the scanned corpus. This is the same
+    # defect one layer out, where the gate could not look at all: the scan set
+    # is `docs README.md`, so every number stated in the Makefile and in
+    # ci.yml -- the two files that DECIDE what CI measures -- sat in no
+    # denominator. Both said "3 of 3 files under checks/ are unchecked" in the
+    # commit that ADDED the fourth file, having copied the "3 files" out of
+    # mypy's own "Found 10 errors in 3 files (checked 4 source files)": the
+    # error-bearing count, printed as the denominator.
+    #
+    # The clause states the count ONCE, deliberately. An "N of N" phrasing
+    # would bind one census key through two groups, and Site.tokens is keyed by
+    # census key -- the second group would overwrite the first and only half
+    # the phrase would rewrite, which is rule 4's failure mode rather than its
+    # satisfaction. One quantity, one token.
+    PatternSpec(
+        label="all N files under checks/ are unchecked (checks_files)",
+        # evidence: Makefile and .github/workflows/ci.yml, one clause each
+        #   "all 4 files under checks/ are unchecked"
+        regex=re.compile(r"all\s+(?P<num>" + NUMBER + r")\s+files under checks/"),
+        bindings=(("checks_files", "num"),),
+    ),
+    # The mutation corpus, stated in the Makefile and re-derived by #242's CI
+    # matrix. Two specs rather than one four-group spec: they are two clauses
+    # on two lines, and the gate reads a clause. Each group binds a DIFFERENT
+    # census key, which is what makes a multi-key spec legal at all -- binding
+    # one key through two groups is rule 4's failure mode (Site.tokens is keyed
+    # by census key, so the second group would overwrite the first and only
+    # half the phrase would rewrite).
+    PatternSpec(
+        label="mutation corpus size pair (total_rows+mut_modules)",
+        # evidence: Makefile
+        #   "The mutation corpus is 78 rows over 9 modules."
+        regex=re.compile(
+            r"mutation corpus is\s+(?P<rows>" + NUMBER + r")\s+rows over\s+"
+            r"(?P<mods>" + NUMBER + r")\s+modules"
+        ),
+        bindings=(("total_rows", "rows"), ("mut_modules", "mods")),
+    ),
+    PatternSpec(
+        label="mutation corpus halves pair (must_fire+must_pass)",
+        # evidence: Makefile
+        #   "Of those, 69 are MUST_FIRE mutants and 9 are MUST_PASS controls."
+        regex=re.compile(
+            r"(?P<fire>" + NUMBER + r")\s+are MUST_FIRE mutants and\s+"
+            r"(?P<passes>" + NUMBER + r")\s+are MUST_PASS controls"
+        ),
+        bindings=(("must_fire", "fire"), ("must_pass", "passes")),
+    ),
 )
 
 # Historical masks, CLAUSE-level (rule 3). Each swallows the dead claim and
@@ -353,9 +403,18 @@ def collect_files(paths: Sequence[Path]) -> tuple[list[Path], int]:
     files: set[Path] = set()
     excluded = 0
     for p in paths:
-        candidates = [p] if p.is_file() else sorted(p.rglob("*.md"))
+        # #241: a DIRECTORY is walked for prose (*.md); a FILE named on the
+        # command line is scanned whatever its suffix. Before this, the suffix
+        # test below rejected explicitly-named non-markdown, so Makefile and
+        # .github/workflows/ci.yml could not enter the scan set even when
+        # passed by name -- and every countable stated in the build
+        # configuration, the files that decide what CI measures, sat in no
+        # denominator. That is where #241's "3 of 3 files under checks/" lived
+        # while #240's gate reported CLEAR over the docs beside it.
+        named_file = p.is_file()
+        candidates = [p] if named_file else sorted(p.rglob("*.md"))
         for c in candidates:
-            if c.suffix != ".md":
+            if not named_file and c.suffix != ".md":
                 continue
             if any(part in EXCLUDED_PARTS for part in c.parts):
                 excluded += 1
@@ -519,6 +578,11 @@ SELF_CENSUS: Final[dict[str, int]] = {
     "imports_tests": 94,
     "imports_tools": 12,
     "imports_src": 26,
+    "checks_files": 4,
+    "total_rows": 78,
+    "mut_modules": 9,
+    "must_fire": 69,
+    "must_pass": 9,
 }
 
 
@@ -675,8 +739,37 @@ def self_test() -> int:
         ok = wrong == ["imports_tests"]
         return ok, f"blamed={wrong}"
 
+    def c_config_files_scanned(root: Path) -> tuple[bool, str]:
+        # #241: the anchor above is worthless unless the files carrying it can
+        # ENTER the scan set. Before #241 they could not -- collect_files
+        # rejected any candidate whose suffix was not .md, including one named
+        # explicitly on the command line -- so a new PatternSpec pointed at the
+        # Makefile would have matched nothing and reported itself as a
+        # zero-match instrument warning, not as coverage. This control runs the
+        # real collect_files over a suffixless `Makefile` and a `.yml`, which
+        # is the pair the gate is now invoked with, and only then checks that
+        # each is a drifted site. Asserting the drift without asserting the
+        # membership would be the same vacuity one layer down.
+        cfg = root / "cfg"
+        cfg.mkdir(parents=True, exist_ok=True)
+        mk(cfg, "Makefile", "# all 3 files under checks/ are unchecked by mypy.\n")
+        mk(cfg, "ci.yml", "        # all 3 files under checks/ are unchecked.\n")
+        named = [cfg / "Makefile", cfg / "ci.yml"]
+        collected, _ = collect_files(named)
+        if sorted(collected) != sorted(named):
+            return False, f"scan set missing config files: collected={[p.name for p in collected]}"
+        texts, unreadable = read_all(collected)
+        rep = scan(texts, SELF_CENSUS, len(collected), 0)
+        rewritten = apply_rewrites(plan_rewrites(rep), texts)
+        fixed = sum(
+            1 for p in named if "all 4 files under checks/" in p.read_text(encoding="utf-8")
+        )
+        ok = not unreadable and rep.drifted == 2 and rewritten == 2 and fixed == 2
+        return ok, f"collected={len(collected)} drifted={rep.drifted} fixed={fixed}/2"
+
     controls: list[tuple[str, str, ControlFn]] = [
         ("association", "MUST_PASS", c_association),
+        ("config files enter the scan set, and drift there", "MUST_FIRE", c_config_files_scanned),
         ("mermaid node pair is a site, and rewrites whole", "MUST_FIRE", c_mermaid_node),
         ("three identical edges, each number to its own key", "MUST_FIRE", c_import_edges),
         ("anchored clause, wrong number, blamed on right key", "MUST_FIRE", c_wrong_anchor),
