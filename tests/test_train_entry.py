@@ -463,11 +463,20 @@ def test_partition_scan_blocks_on_spelling_variants(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """MUST_FIRE: two spellings of one partition is an observed red, before any GPU."""
+    # The two spellings are deliberately NEUTRAL -- gpu-a100 / gpu_a100, the pair
+    # topology.partition_consistency names as its own positive control. They were
+    # the real estate's partition and one of its variants until #248, which put a
+    # cluster-internal identifier into a PUBLIC repository as fixture data. It went
+    # unnoticed because neither pre-push scanner carries that vocabulary: one holds
+    # product literals and credential patterns, the other holds estate PATH shapes,
+    # and a bare partition token is in neither denominator. The detector normalises
+    # separators, so any two spellings exercise the same branch -- realism buys this
+    # test nothing and costs a redaction leak. Do not "restore" the real names.
     poison = _ExplodingModule()
     corpus = tmp_path / "launchers"
     corpus.mkdir()
-    (corpus / "a.sh").write_text("#SBATCH --partition=hhai\n", encoding="utf-8")
-    (corpus / "b.sh").write_text("#SBATCH --partition=hh_ai\n", encoding="utf-8")
+    (corpus / "a.sh").write_text("#SBATCH --partition=gpu-a100\n", encoding="utf-8")
+    (corpus / "b.sh").write_text("#SBATCH --partition=gpu_a100\n", encoding="utf-8")
     cfg = _cfg(tmp_path, profile_path, launch_corpus=corpus, dry_run=False)
     import sys as _sys
 
