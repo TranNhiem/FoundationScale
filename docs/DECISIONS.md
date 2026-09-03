@@ -264,7 +264,7 @@ same declaration.
 | Added component | Justified by |
 |---|---|
 | **Objective/Algorithm** (loss · reward · teacher as plugins) | the crown jewels are also the most-cloned artefacts (F1) |
-| **Reward & Verifier** contract, versioned | 4 gold policies across 24 files, selected by CWD (F1) |
+| **Reward & Verifier** contract, versioned | 4 gold policies across 25 files, selected by CWD (F1) |
 | **Weight Bridge** (HF ↔ Megatron mapping) | dropped 7/8 of experts; produced structurally-perfect garbage (F3) |
 | **Inference / Service plane** | RL needs rollout+judge fleets with weight-age tracking (F6) |
 | **Stage / Pipeline orchestration** | A0–A4 and B1–B4 must compose declaratively (F4) |

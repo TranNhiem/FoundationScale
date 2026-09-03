@@ -30,14 +30,14 @@ its own gate and controls rather than as a single refactor commit.
 
 ## The headline finding
 
-`src/foundationscale/` measures 18,706 lines and implements **no training primitives of its
-own**. Across all 24 git-tracked `src/*.py` files, an AST probe finds zero that define an
+`src/foundationscale/` measures 18,761 lines and implements **no training primitives of its
+own**. Across all 25 git-tracked `src/*.py` files, an AST probe finds zero that define an
 `nn.Module`, call `backward()`, construct a `DataLoader`, define a `forward`, call
 `optimizer.step()`, or import torch at module scope.
 
 **That zero is literally true and, read alone, materially misleading** — and it was read alone
 when D2, D3 and D4 were first drafted. The package *does* ship a training entry point:
-`src/foundationscale/train/` (`loop.py` 1,168 lines, `cli.py` 108, `__init__.py` 29) builds a
+`src/foundationscale/train/` (`loop.py` 1,168 lines, `cli.py` 108, `__main__.py` 55, `__init__.py` 29) builds a
 `transformers.Trainer` and calls `trainer.train()`, `trainer.save_model()`,
 `AutoModelForCausalLM.from_pretrained` and `DataCollatorForLanguageModeling`. It imports torch
 and transformers at *function* scope, so every module-scope marker the probe looks for stays at
@@ -48,8 +48,8 @@ The accurate statement has two axes, not one:
 
 | Axis | Measured |
 |---|---|
-| Training **primitives** implemented in `src/` | 0 of 24 files, on all six markers |
-| Training **entry point** delegating to a third-party trainer | present — `train/`, 1,305 lines across 3 files |
+| Training **primitives** implemented in `src/` | 0 of 25 files, on all six markers |
+| Training **entry point** delegating to a third-party trainer | present — `train/`, 1,360 lines across 4 files |
 | Gate seam into that trainer | present — `FoundationScaleSaveGate.on_save` runs the registry for `FIRST_SAVE`/`SAVE` and fails closed |
 | Tests exercising the entry point | `train/loop.py` 62%, `train/__init__.py` 50%; every other module ≥81% (#228) |
 
@@ -69,13 +69,13 @@ instrument with nine controls across both axes, wired into the launcher suite, t
 and CI in the same commit. It scans every git-tracked `*.md`, this file included, so the
 retired phrasing cannot come back anywhere in the repository without turning a gate red.
 
-Two further things about the 18,706 are worth stating plainly, because both were caught during
+Two further things about the 18,761 are worth stating plainly, because both were caught during
 the review rather than after it:
 
 - It moved *during* the review. These documents were written against a census of 13,667 lines.
   The T2 boundary move then relocated the 2,546-line checkpoint decision API out of
   `tools/live_save_gate.py` and into `src/foundationscale/gates/adjudication.py`, and the fixes
-  landed since have added the rest: `src/foundationscale/` now measures 18,706 lines. The
+  landed since have added the rest: `src/foundationscale/` now measures 18,761 lines. The
   structural finding survived re-measurement in re-scoped form: the package now holds real
   decision logic where it previously held none, and a delegating trainer where it previously
   held nothing at all.
