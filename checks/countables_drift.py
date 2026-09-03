@@ -118,12 +118,18 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         bindings=(("h100_loc", "loc"), ("h100_files", "files")),
     ),
     PatternSpec(
-        label="h100_validation/ contributes N Python LOC (h100_loc)",
-        # evidence: docs/review/D2_current_architecture.md
-        #   "| Hardware validation plane | `h100_validation/` contributes
-        #    31,313 Python LOC and 4,986 shell LOC |"
-        regex=re.compile(r"`?h100_validation/`? contributes (?P<num>" + NUMBER + r") Python LOC"),
-        bindings=(("h100_loc", "num"),),
+        label="h100_validation/ contributes/adds N Python LOC and M shell LOC pair "
+        "(h100_loc+h100_sh_loc)",
+        # evidence: docs/review/D2_current_architecture.md, two phrasings of one
+        # clause -- ":172 `h100_validation/` contributes 31,313 Python LOC and
+        # 4,986 shell LOC" and ":83 `h100_validation/` adds another 31,313
+        # Python LOC and 4,986 shell LOC". #243: the shell half had no census
+        # key at all, so half of a two-number clause sat in nothing.
+        regex=re.compile(
+            r"`?h100_validation/`? (?:contributes|adds another) (?P<py>" + NUMBER + r") Python LOC"
+            r" and (?P<sh>" + NUMBER + r") shell LOC"
+        ),
+        bindings=(("h100_loc", "py"), ("h100_sh_loc", "sh")),
     ),
     PatternSpec(
         label="launchers/ contains N shell LOC plus M Python LOC pair "
@@ -137,11 +143,27 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         bindings=(("launch_sh_loc", "sh"), ("launch_py_loc", "py")),
     ),
     PatternSpec(
-        label="launchers/*.sh (N LOC, ...) (launch_sh_loc)",
+        label="launchers/*.sh (N LOC, M files) pair (launch_sh_loc+launch_sh_files)",
         # evidence: docs/review/D4_feature_evaluation.md
-        #   "| Bash launchers | `launchers/*.sh` (9,274 LOC, 5 files); ... |"
-        regex=re.compile(r"`?launchers/\*\.sh`?\s*\((?P<num>" + NUMBER + r") LOC"),
-        bindings=(("launch_sh_loc", "num"),),
+        #   "| Bash launchers | `launchers/*.sh` (9,495 LOC, 5 files); ... |"
+        regex=re.compile(
+            r"`?launchers/\*\.sh`?\s*\((?P<loc>" + NUMBER + r") LOC,"
+            r"\s*(?P<files>" + NUMBER + r") files\)"
+        ),
+        bindings=(("launch_sh_loc", "loc"), ("launch_sh_files", "files")),
+    ),
+    PatternSpec(
+        label="h100_validation/*.sh (N LOC, M files) pair (h100_sh_loc+h100_sh_files)",
+        # evidence: docs/review/D4_feature_evaluation.md, the SAME table cell as
+        # the spec above -- "`launchers/*.sh` (9,495 LOC, 5 files);
+        # `h100_validation/*.sh` (4,986 LOC, 4 files)". Two specs, because they
+        # are two clauses naming two subtrees; one spec spanning both would tie
+        # a correct half to a stale half.
+        regex=re.compile(
+            r"`?h100_validation/\*\.sh`?\s*\((?P<loc>" + NUMBER + r") LOC,"
+            r"\s*(?P<files>" + NUMBER + r") files\)"
+        ),
+        bindings=(("h100_sh_loc", "loc"), ("h100_sh_files", "files")),
     ),
     PatternSpec(
         label="N shell LOC in launchers/ (launch_sh_loc)",
@@ -313,6 +335,159 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         ),
         bindings=(("must_fire", "fire"), ("must_pass", "passes")),
     ),
+    # --- #243: the anchored and unanchored twin ----------------------------
+    #
+    # In ONE file, docs/review/D4_feature_evaluation.md, line 46 states the
+    # bash launchers at 9,495 LOC and line 3 states them at 9,274. Line 46 is
+    # correct because the `launchers/*.sh (N LOC` spec above anchors that
+    # phrasing; line 3 is stale because "the bash launchers (N + M .sh LOC)" is
+    # a phrasing no spec had. `make countables` read CLEAR over both.
+    #
+    # So drift is not a property of a NUMBER, it is a property of a PHRASING.
+    # One countable restated a second way is a second site, and an unanchored
+    # site does not merely go unchecked -- it sits three lines from a checked
+    # one and inherits its credibility. `src/foundationscale` was stated SIX
+    # ways across four files and every one of them said 16,213 while the
+    # package measured 18,706.
+    #
+    # These specs are therefore transcriptions of the shipped phrasings, not
+    # generalisations of them: a loose `(?P<num>N) lines` would match the prose
+    # around it and reintroduce the 865-false-drift association defect (#233).
+    PatternSpec(
+        label="src/foundationscale/ (now) measures N lines (src_loc)",
+        # evidence: docs/review/README.md twice, and the identical
+        # census-correction footnote in D2_current_architecture.md,
+        # D3_problems_weaknesses.md and D4_feature_evaluation.md:
+        #   "`src/foundationscale/` measures 18,706 lines and contains no
+        #    training code."
+        #   "`src/foundationscale/` now measures **18,706 lines**."
+        #
+        # This is ONE spec where #243's first draft had three, and the
+        # consolidation is the actual remedy rather than a tidy-up. The corpus
+        # said the same thing as "is N lines", "taking the package from H to N
+        # lines" and "taking `src/` to **N lines**"; three phrasings need three
+        # anchors, and the moment a fourth is written the gate is blind again.
+        # Converging the prose on one form makes the anchor cheap to keep.
+        #
+        # The two "taking ... to N" forms were also CAUSAL -- they said a
+        # 2,546-line move produced the figure. Correcting the token to 18,706
+        # left the grammar asserting that the move added 5,039 lines, which is
+        # false: a gate can keep a NUMBER current but it cannot keep a SENTENCE
+        # true. So the prose now states the measurement flatly and attributes
+        # the growth separately, which is a shape --fix cannot break.
+        regex=re.compile(
+            r"`src/foundationscale/` (?:now )?measures \*{0,2}(?P<num>" + NUMBER + r") lines"
+        ),
+        bindings=(("src_loc", "num"),),
+    ),
+    PatternSpec(
+        label="measured content of src/foundationscale (N LOC) (src_loc)",
+        # evidence: docs/review/D3_problems_weaknesses.md
+        #   "The measured content of `src/foundationscale` (16,213 LOC) is
+        #    exclusively a verification plane"
+        regex=re.compile(
+            r"measured content of `src/foundationscale/?` \((?P<num>" + NUMBER + r") LOC\)"
+        ),
+        bindings=(("src_loc", "num"),),
+    ),
+    PatternSpec(
+        label="across N lines of shipped package (src_loc)",
+        # evidence: docs/review/D4_feature_evaluation.md
+        #   "across 16,213 lines of shipped package, the training-code probe
+        #    found **zero** of `nn.Module` ..."
+        regex=re.compile(r"across (?P<num>" + NUMBER + r") lines of shipped package"),
+        bindings=(("src_loc", "num"),),
+    ),
+    PatternSpec(
+        label="src/ = N LOC across M files pair (src_loc+src_files)",
+        # evidence: docs/review/D4_feature_evaluation.md
+        #   "`src/` = 16,213 LOC across 17 files"
+        regex=re.compile(
+            r"`src/` = (?P<loc>" + NUMBER + r") LOC across (?P<files>" + NUMBER + r") files"
+        ),
+        bindings=(("src_loc", "loc"), ("src_files", "files")),
+    ),
+    PatternSpec(
+        label="mermaid installed-package node pair (src_loc+src_files)",
+        # evidence: docs/review/D2_current_architecture.md
+        #   'PKG["[installed foundationscale package]<br/>16,213 LOC / 17 files<br/>..."]'
+        # LOC-then-files, the reverse of the other mermaid nodes, which is
+        # exactly why it needed its own spec instead of a shared one.
+        regex=re.compile(
+            r"foundationscale package\]<br/>(?P<loc>"
+            + NUMBER
+            + r") LOC / (?P<files>"
+            + NUMBER
+            + r") files"
+        ),
+        bindings=(("src_loc", "loc"), ("src_files", "files")),
+    ),
+    PatternSpec(
+        label="the test suite (N .py LOC) (tests_loc)",
+        # evidence: docs/review/D4_feature_evaluation.md
+        #   "and the test suite (25,689 .py LOC) -- have **no direct findings**"
+        regex=re.compile(r"the test suite \((?P<num>" + NUMBER + r") \.py LOC\)"),
+        bindings=(("tests_loc", "num"),),
+    ),
+    PatternSpec(
+        label="tests/ (N .py LOC, M files; K import statements) triple "
+        "(tests_loc+tests_files+imports_tests)",
+        # evidence: docs/review/D4_feature_evaluation.md
+        #   "| Test suite | `tests/` (25,689 .py LOC, 47 files; 78 import
+        #    statements -- the package's largest consumer) |"
+        regex=re.compile(
+            r"`tests/` \((?P<loc>" + NUMBER + r") \.py LOC, (?P<files>" + NUMBER + r") files;"
+            r" (?P<imports>" + NUMBER + r") import statements"
+        ),
+        bindings=(
+            ("tests_loc", "loc"),
+            ("tests_files", "files"),
+            ("imports_tests", "imports"),
+        ),
+    ),
+    PatternSpec(
+        label="tests = N of M total import statements pair (imports_tests+imports_total)",
+        # evidence: docs/review/D4_feature_evaluation.md
+        #   "Census S4: tests = 78 of 99 total import statements."
+        # A share needs BOTH halves anchored: a numerator that tracks while its
+        # denominator rots states a different fraction under the same words.
+        regex=re.compile(
+            r"tests = (?P<part>" + NUMBER + r") of (?P<total>" + NUMBER + r") total import"
+        ),
+        bindings=(("imports_tests", "part"), ("imports_total", "total")),
+    ),
+    PatternSpec(
+        label="the bash launchers (N + M .sh LOC) pair (launch_sh_loc+h100_sh_loc)",
+        # evidence: docs/review/D4_feature_evaluation.md -- THE #243 exemplar,
+        # three lines from the anchored `launchers/*.sh (9,495 LOC, 5 files)`
+        # and disagreeing with it:
+        #   "the bash launchers (9,274 + 4,986 .sh LOC)"
+        regex=re.compile(
+            r"the bash launchers \((?P<launch>"
+            + NUMBER
+            + r") \+ (?P<h100>"
+            + NUMBER
+            + r") \.sh LOC"
+        ),
+        bindings=(("launch_sh_loc", "launch"), ("h100_sh_loc", "h100")),
+    ),
+    PatternSpec(
+        label="the h100_validation/ harness (N .py LOC) (h100_loc)",
+        # evidence: docs/review/D4_feature_evaluation.md
+        #   "the `h100_validation/` harness (31,313 .py LOC)"
+        regex=re.compile(r"`h100_validation/` harness \((?P<num>" + NUMBER + r") \.py LOC\)"),
+        bindings=(("h100_loc", "num"),),
+    ),
+    PatternSpec(
+        label="N measured .py/.sh/.md lines repo-wide (ondisk_py_sh_md_loc)",
+        # evidence: docs/review/D4_feature_evaluation.md
+        #   "the measured census (107,217 measured .py/.sh/.md lines repo-wide;"
+        # The clause names its own method, so it binds the key that uses that
+        # method and no other -- ondisk_py_sh_loc is a DIFFERENT number and
+        # substituting it would be the drift this gate exists to catch.
+        regex=re.compile(r"(?P<num>" + NUMBER + r") measured \.py/\.sh/\.md lines repo-wide"),
+        bindings=(("ondisk_py_sh_md_loc", "num"),),
+    ),
 )
 
 # Historical masks, CLAUSE-level (rule 3). Each swallows the dead claim and
@@ -323,7 +498,13 @@ HISTORICAL_MASKS: Final[tuple[Pattern[str], ...]] = (
     # "...drafted against a census of 13,667 lines ..." is history; the lazy
     # clause runs to sentence end (a '.' followed by whitespace/EOL) so a
     # following "The package NOW measures ..." on the SAME line is untouched.
-    re.compile(r"drafted against a census of " + NUMBER + r" lines.*?(?=\.(?:\s|$))"),
+    #
+    # #243: this said `drafted` only, while all three shipped footnotes say
+    # "This document was WRITTEN against a census of 13,667 lines". A mask is
+    # a phrasing too, and a mask that misses is worse than no mask: the dead
+    # number stays live in the denominator and a --fix would have rewritten
+    # the history. Same lesson as the specs above, mirrored.
+    re.compile(r"(?:drafted|written) against a census of " + NUMBER + r" lines.*?(?=\.(?:\s|$))"),
     # evidence: h100_validation/h100/EVIDENCE.md
     #   "The launcher exports **14** variables (an earlier count of 12 was
     #    wrong; ...)": the 12 is history, the 14 is the live claim.
@@ -565,8 +746,13 @@ SELF_CENSUS: Final[dict[str, int]] = {
     "decisions_loc": 982,
     "h100_loc": 31313,
     "h100_files": 63,
+    "h100_sh_loc": 4986,
+    "h100_sh_files": 4,
     "launch_sh_loc": 9274,
+    "launch_sh_files": 5,
     "launch_py_loc": 1615,
+    "ondisk_py_sh_md_loc": 133680,
+    "imports_total": 132,
     "tools_files": 9,
     "tools_loc": 8695,
     "tests_files": 54,
@@ -767,8 +953,82 @@ def self_test() -> int:
         ok = not unreadable and rep.drifted == 2 and rewritten == 2 and fixed == 2
         return ok, f"collected={len(collected)} drifted={rep.drifted} fixed={fixed}/2"
 
+    def c_phrasing_twin(root: Path) -> tuple[bool, str]:
+        # #243 verbatim, reduced to two lines. The SAME countable, stated the
+        # anchored way and the prose way, disagreeing. Before #243 the gate read
+        # CLEAR here: it saw the table cell agree and never saw the prose at
+        # all. The assertion is not just "the stale one drifts" -- it is that
+        # BOTH end up equal, because the failure being gated is two numbers for
+        # one fact, not a wrong number.
+        doc = mk(
+            root / "twin",
+            "d.md",
+            "| Bash launchers | `launchers/*.sh` (9,274 LOC, 5 files) | Keep |\n"
+            "Three components -- the bash launchers (9,000 + 4,986 .sh LOC) -- have no findings.\n",
+        )
+        rep = scan_doc(doc)
+        stats = per_key(rep)
+        ok = rep.drifted == 1 and stats["launch_sh_loc"][2] == 1 and stats["launch_sh_loc"][1] == 1
+        texts = {doc: doc.read_text(encoding="utf-8")}
+        apply_rewrites(plan_rewrites(rep), texts)
+        after = doc.read_text(encoding="utf-8")
+        ok = ok and after.count("9,274") == 2 and "9,000" not in after
+        twins = after.count("9,274")
+        return ok, f"drifted={rep.drifted} agreeing={rep.agreeing} twins_equal={twins}"
+
+    # The census-correction footnote, shipped verbatim in three review
+    # documents, is the #196/#243 shape at its sharpest: a dead number and a
+    # live one, two sentences apart, on ONE line. It gets BOTH controls,
+    # because the two ways it can fail are opposite.
+    _FOOTNOTE = (
+        "> **Census correction (applied post-draft).** This document was written against a "
+        "census of {dead} lines in `src/foundationscale/`. The T2 move has since relocated "
+        "the decision API, and later fixes have added the rest; `src/foundationscale/` now "
+        "measures **{live} lines**. The structural finding is UNCHANGED.\n"
+    )
+
+    def c_written_against_masked(root: Path) -> tuple[bool, str]:
+        # MUST_PASS. The mask's own phrasing is a phrasing: all three footnotes
+        # say "written against", the mask said "drafted against", so before
+        # #243 the 13,667 was read as a LIVE src_loc claim -- and --fix would
+        # have rewritten recorded history into a number it never was.
+        # Asserting agreeing==1 as well as drifted==0 is the point: a mask that
+        # swallowed the live half too would also report zero drifts.
+        text = _FOOTNOTE.format(dead="13,667", live="18,706")
+        doc = mk(root / "written", "d.md", text)
+        rep = scan_doc(doc)
+        texts = {doc: doc.read_text(encoding="utf-8")}
+        n = apply_rewrites(plan_rewrites(rep), texts)
+        ok = (
+            rep.drifted == 0
+            and rep.agreeing == 1  # the live half WAS seen -- not a silent zero
+            and n == 0
+            and doc.read_text(encoding="utf-8") == text
+        )
+        return ok, f"drifted={rep.drifted} agreeing={rep.agreeing} rewrites={n}"
+
+    def c_masked_history_live_stale(root: Path) -> tuple[bool, str]:
+        # MUST_FIRE, the same line with the live half STALE. Exactly one token
+        # moves: the dead 13,667 stays byte-identical while 16,213 is corrected.
+        # A mask is allowed to hide history and nothing else.
+        doc = mk(root / "stale", "d.md", _FOOTNOTE.format(dead="13,667", live="16,213"))
+        rep = scan_doc(doc)
+        texts = {doc: doc.read_text(encoding="utf-8")}
+        n = apply_rewrites(plan_rewrites(rep), texts)
+        after = doc.read_text(encoding="utf-8")
+        ok = (
+            rep.drifted == 1
+            and n == 1
+            and "census of 13,667 lines" in after
+            and "measures **18,706 lines**" in after
+        )
+        return ok, f"drifted={rep.drifted} rewrites={n} history_intact={'13,667' in after}"
+
     controls: list[tuple[str, str, ControlFn]] = [
         ("association", "MUST_PASS", c_association),
+        ("one countable, two phrasings, both corrected", "MUST_FIRE", c_phrasing_twin),
+        ("'written against' masked, live half seen", "MUST_PASS", c_written_against_masked),
+        ("masked history, stale live half: 1 move", "MUST_FIRE", c_masked_history_live_stale),
         ("config files enter the scan set, and drift there", "MUST_FIRE", c_config_files_scanned),
         ("mermaid node pair is a site, and rewrites whole", "MUST_FIRE", c_mermaid_node),
         ("three identical edges, each number to its own key", "MUST_FIRE", c_import_edges),

@@ -299,8 +299,19 @@ def main() -> int:
     lsh = sorted(
         p for p in (REPO / "launchers").rglob("*.sh") if not any(x in NOISE for x in p.parts)
     )
+    gt["launch_sh_files"] = len(lsh)
     gt["launch_sh_loc"] = _loc(lsh)
     gt["launch_py_loc"] = _loc(_py_files(REPO / "launchers"))
+    # #243: h100_files/h100_loc are .py ONLY, but the review corpus states the
+    # harness as "N Python LOC and M shell LOC" in the same clause. The shell
+    # half had no key, so half of a two-number claim sat in nothing -- and the
+    # half that IS anchored stayed correct while the unanchored half went
+    # stale three lines away, with the gate reporting CLEAR.
+    hsh = sorted(
+        p for p in (REPO / "h100_validation").rglob("*.sh") if not any(x in NOISE for x in p.parts)
+    )
+    gt["h100_sh_files"] = len(hsh)
+    gt["h100_sh_loc"] = _loc(hsh)
     gt["decisions_loc"] = _loc([REPO / "docs/DECISIONS.md"])
 
     # Repo-wide LOC is reported as SEVERAL keys, each naming its own method,
@@ -323,6 +334,17 @@ def main() -> int:
     gt["ondisk_sh_files"], gt["ondisk_sh_loc"] = _ext_loc(".sh")
     gt["ondisk_md_files"], gt["ondisk_md_loc"] = _ext_loc(".md")
     gt["ondisk_py_sh_loc"] = gt["ondisk_py_loc"] + gt["ondisk_sh_loc"]
+    # The review corpus says "N measured .py/.sh/.md lines repo-wide" -- a
+    # THIRD method again, distinct from the two above. It gets its own key
+    # rather than being approximated by ondisk_py_sh_loc, because the whole
+    # point of the ondisk_* family is that each name states its own denominator.
+    #
+    # This key counts .md, so the document that STATES it is inside it. That is
+    # a fixed point only because the unit is the LINE and a token rewrite
+    # preserves line count, so `--fix` converges in one pass. Re-express it in
+    # characters or bytes and it never converges: correcting the number changes
+    # the number.
+    gt["ondisk_py_sh_md_loc"] = gt["ondisk_py_sh_loc"] + gt["ondisk_md_loc"]
     gt["repo_wide_loc_UNRECOVERABLE"] = (
         "prior drafts state 125,697 with no recorded method; no counting rule tried "
         "here reproduces it. Use the ondisk_* keys, which name their own denominator."
@@ -331,6 +353,12 @@ def main() -> int:
     gt["imports_tests"] = _package_imports(REPO / "tests")
     gt["imports_tools"] = _package_imports(REPO / "tools")
     gt["imports_src"] = _package_imports(REPO / "src")
+    # "tests = N of M total import statements" states a share, and a share needs
+    # BOTH halves in a denominator or the fraction can rot from underneath. The
+    # total is the sum of the three trees scanned above and nothing else --
+    # named as such, not as "the repo's imports", which would be a fourth
+    # method wearing the same word.
+    gt["imports_total"] = gt["imports_tests"] + gt["imports_tools"] + gt["imports_src"]
 
     gt.update(_mutation_corpus())
     if not args.no_coverage:

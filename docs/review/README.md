@@ -26,7 +26,7 @@ T2 boundary move had already changed, and were corrected rather than published.
 
 ## The headline finding
 
-`src/foundationscale/` is 16,213 lines and contains no training code. Measured across the
+`src/foundationscale/` measures 18,706 lines and contains no training code. Measured across the
 whole package: zero files define an `nn.Module`, call `backward()`, construct a `DataLoader`,
 or define a `forward`; zero import torch at module scope. What is shipped is a *verification
 plane* — gates, checkpoint readers, a parity comparator, topology validation, provenance
@@ -38,11 +38,12 @@ naming the product honestly rather than with refactoring.
 Two things about that number are worth stating plainly, because both were caught during the
 review rather than after it:
 
-- It moved *during* the review. The T2 boundary move relocated the 2,546-line checkpoint
-  decision API out of `tools/live_save_gate.py` and into
-  `src/foundationscale/gates/adjudication.py`, taking the package from 13,667 to 16,213 lines.
-  The structural finding survived re-measurement unchanged: the package now holds real
-  decision logic where it previously held none, and still holds no training code.
+- It moved *during* the review. These documents were written against a census of 13,667 lines.
+  The T2 boundary move then relocated the 2,546-line checkpoint decision API out of
+  `tools/live_save_gate.py` and into `src/foundationscale/gates/adjudication.py`, and the fixes
+  landed since have added the rest: `src/foundationscale/` now measures 18,706 lines. The
+  structural finding survived re-measurement unchanged: the package now holds real decision
+  logic where it previously held none, and still holds no training code.
 - The move did not finish the job it started. The library's decision path imports an
   unpackaged `tools/` module, so on a clean install it loads and then declines to decide
   (finding #219, measured with a positive control in D3 Theme 3).
