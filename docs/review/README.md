@@ -13,16 +13,20 @@ T2 boundary move had already changed, and were corrected rather than published.
 
 | # | Deliverable | File | Status |
 |---|---|---|---|
-| 1 | Complete codebase review | `D1_codebase_review.md` | **Pending** — regenerating |
+| 1 | Complete codebase review | [`D1_codebase_review.md`](D1_codebase_review.md) | **Landed** |
 | 2 | Current architecture diagram | [`D2_current_architecture.md`](D2_current_architecture.md) | **Landed** |
 | 3 | Problems and weaknesses | [`D3_problems_weaknesses.md`](D3_problems_weaknesses.md) | **Landed** |
 | 4 | Feature evaluation (Keep / Simplify / Redesign / Remove / Missing) | [`D4_feature_evaluation.md`](D4_feature_evaluation.md) | **Landed** |
-| 5 | Proposed architecture | `D5_proposed_architecture.md` | **Pending** — regenerating |
-| 6 | Developer-experience review | `D6_developer_experience.md` | **Pending** — regenerating |
-| 7 | Prioritized roadmap (P0–P3) | `D7_roadmap.md` | **Pending** — regenerating |
+| 5 | Proposed architecture | [`D5_proposed_architecture.md`](D5_proposed_architecture.md) | **Landed** |
+| 6 | Developer-experience review | [`D6_developer_experience.md`](D6_developer_experience.md) | **Landed** |
+| 7 | Prioritized roadmap (P0–P3) | [`D7_roadmap.md`](D7_roadmap.md) | **Landed** |
 | 8 | Implementation of highest-priority improvements | tracked in the issue log | **In progress** |
-| 9 | Rewritten README | `/README.md` | **Pending** |
-| 10 | Validation that H100 and GB200 still work | `D10_validation_protocol.md` | **Pending** — regenerating |
+| 9 | Rewritten README | [`/README.md`](../../README.md) | **Landed** |
+| 10 | Validation that H100 and GB200 still work | [`D10_validation_protocol.md`](D10_validation_protocol.md) | **Landed** |
+
+Deliverable 8 is the only one that is not a document, and it is deliberately open: the
+highest-priority improvements are being implemented as numbered findings, each landing with
+its own gate and controls rather than as a single refactor commit.
 
 ## The headline finding
 
@@ -59,8 +63,11 @@ honestly rather than with refactoring.
 drafted, and no committed probe existed to go red when the repo moved — the "measured `src/`
 probe" they cite was an ad-hoc campaign command, not an instrument. The countables gate could
 not catch it either: it anchors numbers, not claims. Both defects are tracked as #245; the
-passages are corrected in place below, and the probe is being committed as a real 0/5/95/96
-instrument with controls on both axes.
+passages are corrected in place below, and the probe now ships as
+[`checks/training_plane_probe.py`](../../checks/training_plane_probe.py) — a real 0/5/95/96
+instrument with nine controls across both axes, wired into the launcher suite, the `Makefile`
+and CI in the same commit. It scans every git-tracked `*.md`, this file included, so the
+retired phrasing cannot come back anywhere in the repository without turning a gate red.
 
 Two further things about the 18,706 are worth stating plainly, because both were caught during
 the review rather than after it:

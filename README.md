@@ -1,134 +1,235 @@
 <p align="center">
-  <img src="assets/hero.png" alt="FoundationScale — a scalable distributed training framework for foundation models, from single-GPU experiments to large-scale multi-node training" width="100%">
+  <img src="assets/hero.png" alt="FoundationScale" width="100%">
 </p>
 
 <h1 align="center">FoundationScale</h1>
 
 <p align="center">
-  <b>A forensic audit of a real training estate, and the checkpoint-verification framework it demanded.</b>
+  <b>A verification plane for large-scale training, with a thin training entry point on top of it.</b>
 </p>
 
-<p align="center">
-  Gates whose verdicts carry their own coverage &mdash;<br>
-  because a check that cannot fail is worse than no check. It also buys confidence.
-</p>
+FoundationScale is a Python package of **gates**: correctness checks that run at defined
+points in a training job's lifecycle (launch, build, data, first save, every save, export)
+and can block. What separates a gate from an assertion is that its verdict carries its own
+coverage — a gate that examined zero units reports `VACUOUS` and blocks, not `PASS`. On top
+of the gate plane sits a deliberately thin training entry point that validates the declared
+topology, hands the actual training step to `transformers.Trainer`, and runs the save gates
+on the result. It is not a from-scratch trainer, and this README will not pretend otherwise.
+
+## Contents
+
+1. [What FoundationScale is](#1-what-foundationscale-is)
+2. [Why it exists](#2-why-it-exists)
+3. [Core design principles](#3-core-design-principles)
+4. [Status — what exists, what is experimental, what is missing](#4-status--what-exists-what-is-experimental-what-is-missing)
+5. [Architecture overview](#5-architecture-overview)
+6. [Supported hardware and platforms](#6-supported-hardware-and-platforms)
+7. [Supported training workflows](#7-supported-training-workflows)
+8. [Installation](#8-installation)
+9. [Quick-start](#9-quick-start)
+10. [Basic training example](#10-basic-training-example)
+11. [Configuration](#11-configuration)
+12. [Model integration](#12-model-integration)
+13. [Dataset integration](#13-dataset-integration)
+14. [Distributed training](#14-distributed-training)
+15. [Multi-node training](#15-multi-node-training)
+16. [Custom workload development](#16-custom-workload-development)
+17. [Advanced customization](#17-advanced-customization)
+18. [Extension and plugin points](#18-extension-and-plugin-points)
+19. [Performance and throughput considerations](#19-performance-and-throughput-considerations)
+20. [Checkpointing and recovery](#20-checkpointing-and-recovery)
+21. [Monitoring and debugging](#21-monitoring-and-debugging)
+22. [Examples](#22-examples)
+23. [Project structure](#23-project-structure)
+24. [Development guide](#24-development-guide)
+25. [Testing](#25-testing)
+26. [Troubleshooting](#26-troubleshooting)
+27. [Contributing](#27-contributing)
 
 ---
 
-This repository contains two things, in the order that produced them: an audit of a
-distributed-training estate, written as an evidence chain and published in full; and a
-verification framework built to make the audit's central failure impossible to repeat,
-including inside the framework itself.
+## 1. What FoundationScale is
 
-## 1. The audit
+Three things, in increasing order of size:
 
-FoundationScale is built from a forensic audit of a real estate rather than from a
-blank page: two production training codebases (published here under the pseudonyms
-`omni-accel` and `omni-bridge`), 1,774 Slurm jobs, 205 export artefacts, ten target
-training stages, MoE and dense model families across H100 and GB200. The full
-evidence chain is in [`docs/deliverables/`](docs/deliverables/README.md), published
-with cluster-internal identifiers replaced by stable pseudonyms and nothing else
-altered — the failure record, the numbers and the retractions are as written.
+* **The gate contract** (`src/foundationscale/gates/core.py`). Frozen. Pure stdlib — the
+  core installs with zero dependencies so a verifier runs on a bare login node.
+* **The gate plane around it**: reference gates and fixtures
+  (`src/foundationscale/gates/example.py`, `src/foundationscale/gates/fixtures.py`,
+  `src/foundationscale/gates/checkpoint_gates.py`,
+  `src/foundationscale/gates/objective_gates.py`), an adjudication layer
+  (`src/foundationscale/gates/adjudication.py`), checkpoint I/O
+  (`src/foundationscale/checkpoint/dcp.py`), parity checking
+  (`src/foundationscale/verify/parity.py`), run-manifest provenance
+  (`src/foundationscale/provenance/manifest.py`) and topology validation
+  (`src/foundationscale/topology.py`).
+* **A thin training entry point** (`src/foundationscale/train/cli.py`,
+  `src/foundationscale/train/loop.py`) that validates the declared topology and profile,
+  delegates the step to `transformers.Trainer`, and runs the save gates over the result.
 
-The finding that shapes the design:
+Beside the package: a launch plane of estate-specific shell launchers, and an experimental
+H100 validation harness. Both are described in §6 and §15.
+
+## 2. Why it exists
+
+FoundationScale grew out of a forensic audit of a real distributed-training estate
+(published here under pseudonyms), whose central finding was:
 
 > **The dominant failure mode in large-scale training is not a crash. It is a run that
 > reports success.**
 
-Two items from the record carry the argument:
+The record includes a checkpoint holding a fraction of its required bytes that passed
+every check in front of it, and the verification tool written to detect that corruption
+itself reporting success over an empty comparison set — `all([])` is `True`. The full
+evidence chain, with each claim graded by how it was established, lives in
+[`docs/deliverables/`](docs/deliverables/README.md); the reasoning spine is
+[`docs/DECISIONS.md`](docs/DECISIONS.md). The framework is the audit's review rules made
+executable.
 
-* A checkpoint holding **5.71 GB where 45.70 GB was correct** passed every check in
-  front of it — exit code, resume, tensor counts, dtypes, healthy loss — because
-  every property anyone measured was genuinely correct. The only thing wrong was the
-  content.
-* The tool written to *detect* that corruption reported
-  **`expert_perm_all_identity: true`** on a known-corrupt artefact, because the expert
-  tensors it meant to compare were absent, the comparison set was empty, and
-  **`all([])` is `True`** in Python. The engineer who wrote the detector for that bug
-  wrote the bug into the detector. The same class of error had gone undetected for
-  months, four separate times, in the audited systems; a negative control caught the
-  tool's own copy of it in minutes.
+## 3. Core design principles
 
-Nor was this confined to checkpointing. One run logged `grad_norm` exactly 0.000 for
-472 steps while reporting `reward/mean=0.794, success=1.00`. Five of the ten target
-stages have never executed at all. Every check that existed asked *"did anything go
-wrong?"* — a question a broken system answers "no" just as fluently as a working one.
+* **A verdict is a claim about coverage.** `PASS` means "examined N units, all correct".
+  Zero examined units is `VACUOUS` and blocks; fewer than expected without a declared
+  sample is `UNDERCOVERED` and blocks.
+* **Controls are executable.** Every gate declares `MUST_FIRE` fixtures (broken input it
+  must block) and typically `MUST_PASS` fixtures (known-good). A gate with no `MUST_FIRE`
+  control fails the build.
+* **Gates fail closed.** An exception inside a gate is `ERROR`, and `ERROR` blocks.
+* **Absence blocks, one level up.** Callers declare required gates; any that never ran
+  render as `MISSING` and block the report.
+* **An unqualified count is not a fact.** This README follows it too: numbers appear only
+  in wordings the repository's own drift gate can re-check.
 
-The analysis is written as seven deliverables plus a decision log, graded claim by
-claim — **[M]** measured, **[V]** verified by source inspection, **[A]** artefact
-census, **[K]** asserted by a model and not independently confirmed, **[U]**
-explicitly unverified. Start with the reasoning spine,
-[`docs/DECISIONS.md`](docs/DECISIONS.md), or jump to the
-[deliverables index](docs/deliverables/README.md):
+The `VACUOUS`/`UNDERCOVERED` verdicts are the design, not edge cases, and the rule is
+enforced in the base class — `Gate.ok()` cannot return `PASS` on zero coverage no matter
+what the author writes. [-> docs/DESIGN_PRINCIPLES.md]
 
-| | Document | What it answers |
+## 4. Status — what exists, what is experimental, what is missing
+
+**Exists and runs in CI today:** the gate contract; the reference and domain gates; the
+controls entry point; the mutation battery; checkpoint manifest/parity machinery; the
+launcher contract suites; the H100 validation harness's gate scripts.
+
+**Thin, on purpose:** the training entry point is a delegating shim over
+`transformers.Trainer`. It owns no `nn.Module`, no parallelism engine, no scheduler.
+Anything Trainer can run, it can run gated.
+
+**Experimental:** `h100_validation/` is a working harness for one specific H100 estate,
+full of `patch_*.py` scripts and hardening work in flight. It is on the record, not a
+stable API.
+
+**Unimplemented or incomplete, stated rather than implied:**
+
+* No gate has run against a real multi-rank distributed checkpoint in this repository's
+  CI — the suite writes checkpoints single-process and reads them back.
+* Per-module coverage floors are not in place; the enforced floor is a total, so a
+  well-covered module can subsidise a thin one.
+* The mutation table is hand-maintained; a rule nobody listed is a rule nobody tests.
+* The roadmap with per-phase falsification conditions is
+  [`docs/deliverables/D_roadmap.md`](docs/deliverables/D_roadmap.md).
+
+## 5. Architecture overview
+
+Bottom to top:
+
+```
+gate contract (stdlib-only core: Verdict, Gate, REGISTRY)
+   ├── gate domains        checkpoint / objective / probe / example + fixtures
+   ├── adjudication        composes gate verdicts into a run-level judgment
+   ├── checkpoint + verify DCP metadata, parity checks
+   ├── provenance          the run manifest — what was claimed, measured, emitted
+   ├── topology            validates the declared parallel geometry
+   └── train/              cli + loop: validate → delegate to Trainer → save gates
+```
+
+The load-bearing idea: layers above may only emit a verdict they earned — a composite gate
+propagates its children's coverage rather than minting a pass they never produced.
+[-> docs/ARCHITECTURE.md; the full L0–L6 design is
+docs/deliverables/B1_architecture.md]
+
+## 6. Supported hardware and platforms
+
+* **The gate plane** targets Python 3.10, 3.11 and 3.12 (the CI matrix) and is
+  OS-independent; the core needs nothing beyond the stdlib. Checkpoint I/O needs the
+  `[checkpoint]` extra (torch, safetensors, numpy).
+* **The launch plane** (`launchers/`) has been exercised on exactly one estate: Slurm and
+  enroot container backends (`FS_BACKEND=auto|slurm|enroot` in
+  `launchers/fs_container_backend.sh`), one H100 tray. It is a concrete, hardened example,
+  not a portable launcher.
+* Local machines, DGX Cloud / Lepton and Kubernetes appear on the poster as design
+  targets from the audit's scaling work (docs/deliverables/B2_scaling.md). In this
+  repository they are **unmeasured**: nothing here has run on them, and what would measure
+  them is the roadmap's structured-harness phases, not a claim in a README.
+
+## 7. Supported training workflows
+
+* **Via the package**: any workflow `transformers.Trainer` supports, run under the gate
+  plane — the loop validates topology and profile first, and save gates fire on the
+  result. Model-agnostic by construction.
+* **Via the launchers as reference material**: one full fine-tune and one LoRA workflow
+  (`launchers/launch_g4e4b_fullft_1tray.sh`, `launchers/launch_g4e4b_lora_1tray.sh`),
+  estate-parameterized through environment variables rather than hard-coded paths.
+* **Not yet**: RL/post-training alignment pipelines, pre-training recipes and the unified
+  data contract remain roadmap items with falsification conditions in
+  docs/deliverables/. Nothing in the tree implements them.
+
+[-> docs/WORKFLOWS.md]
+
+## 8. Installation
+
+From a clean clone, exactly what `make install` and CI run:
+
+```bash
+git clone https://github.com/TranNhiem/FoundationScale && cd FoundationScale
+python -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" \
+    --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+The extras, as declared in `pyproject.toml`:
+
+| extra | contents | when |
 |---|---|---|
-| **A1** | [Existing system — structure](docs/deliverables/A1_existing_system.md) | Two repos, workflows end-to-end (SFT / RL / export), infrastructure, dependency map |
-| **A2** | [Existing system — algorithms](docs/deliverables/A2_algorithms.md) | Every objective, the reward cascade, pipeline coverage matrix |
-| **A3** | [Existing system — debt & risk](docs/deliverables/A3_debt.md) | Duplication census, the **silent-failure catalogue**, blast-radius accounting, risk register |
-| **B1** | [Architecture — core](docs/deliverables/B1_architecture.md) | The L0–L6 layered design, gate catalogue, run manifest, falsifiable claims |
-| **B2** | [Architecture — unified LLM/VLM + scaling](docs/deliverables/B2_scaling.md) | One data contract, one Stage abstraction, 1 GPU → 100+ nodes as a ladder with measured rungs |
-| **C** | [Codebase mapping](docs/deliverables/C_mapping.md) | Per-component Reusable / Refactor / Wrap / Replace / Build-New |
-| **D** | [Development roadmap](docs/deliverables/D_roadmap.md) | Phases 1–10, each with exit criteria and a **falsification condition** |
+| *(none)* | stdlib only | running the gate contract itself |
+| `checkpoint` | torch, safetensors, numpy | checkpoint gates and the real-checkpoint tests |
+| `dev` | pytest, ruff, mypy | development |
+| `train` | torch, transformers, datasets, accelerate | the training entry point |
+| `all` | everything | exists so `all` means all; CI deliberately does **not** install it |
 
-The documents apply two rules to themselves. First: **an unqualified count is not a
-fact**. Second: **every claim that something does not exist must name the positive
-control proving its detector could have fired.** The second rule exists because the
-audit broke it four times and was wrong each time — and the second rule is what the
-framework below is, once you make it code.
+Omitting `[checkpoint]` does not fail loudly — it shrinks the suite through skips, which
+is precisely why CI forbids skips entirely (§25). Requires Python ≥ 3.10.
 
-## 2. The framework: a verdict is a claim about coverage
+## 9. Quick-start
 
-The central abstraction is not a trainer or a parallelism strategy. It is a **gate** —
-a correctness check that runs at a defined point in a job's lifecycle (launch, build,
-data, first optimizer step, first save, every save, export, promotion) and can block.
-What separates a gate from an assertion is that its verdict includes its coverage:
+Every command below is what CI itself executes (the Makefile targets mirror the CI steps
+exactly; the source of truth is `pyproject.toml` plus `.github/workflows/ci.yml`):
 
-```python
-class Verdict(str, Enum):
-    PASS          # examined N units, all correct
-    FAIL          # examined N units, found a defect
-    VACUOUS       # examined ZERO units, and therefore proved nothing — blocks
-    UNDERCOVERED  # examined fewer than expected, without declaring a sample — blocks
-    SKIP          # explicitly not applicable; reason required; reported; non-blocking
-    ERROR         # the gate itself raised — gates fail closed; blocks
+```bash
+# after installing per §8:
+
+# 1. Unit and gate suite, coverage floor included
+python -m pytest --cov=foundationscale --cov-report=term-missing --cov-fail-under=90
+
+# 2. Gate controls: every registered gate's MUST_FIRE / MUST_PASS fixtures.
+#    Exits nonzero if a gate fails to block its defective input, declares no
+#    MUST_FIRE control at all, or the registry is empty.
+python -m foundationscale.gates.controls
+
+# 3. Mutation battery, one module shard the way CI runs it:
+python tools/mutate.py --list        # names the modules
+FS_FORBID_SKIPS=1 python tools/mutate.py --module checkpoint_gates
+
+# 4. Everything at once (lint, typecheck, skip-guard probe, tests, controls,
+#    packaging and countables gates, full mutation corpus):
+make check
 ```
 
-**VACUOUS and UNDERCOVERED are the design, not edge cases.** There are two ways to
-not block and four ways to block, and the asymmetry is deliberate: it is far easier
-to produce a meaningless success than a meaningless failure. A gate reporting "3
-layers checked" out of 205 is UNDERCOVERED unless it declares itself a sample, with
-the reason; a gate reporting "all experts match" over an empty comparison set is
-VACUOUS. Both block.
+To run the suite byte-for-byte as CI sees it: `FS_FORBID_SKIPS=1 make test`. [->
+docs/GETTING_STARTED.md]
 
-The rule is enforced in the base class
-([`src/foundationscale/gates/core.py`](src/foundationscale/gates/core.py)), not in
-the gate author's discipline: `Gate.ok()` cannot return `PASS` on zero coverage, no
-matter what the author writes — it downgrades. An author who means "nothing to check
-here" must say so via `skip()` with a reason, which is recorded and surfaced.
+## 10. Basic training example
 
-The reference gate — `checkpoint.expert_alias`, in
-[`src/foundationscale/gates/example.py`](src/foundationscale/gates/example.py) —
-encodes the estate's defining incident, in which 128 experts were saved under local
-names as 16 experts replicated eight times, and two full training runs executed on a
-model that was 87.5% wrong. Its `check()` contains no special case for an empty
-expert set. Deliberately:
-
-```python
-        # 3. The empty case is NOT special-cased. self.ok with zero coverage is
-        #    downgraded to VACUOUS by the contract — that downgrade is the fix for
-        #    the `all([]) is True` verification tool, and the `empty-expert-set`
-        #    control below exists to prove nobody "helpfully" bypasses it here.
-        if not by_expert:
-            return self.ok(
-                f"checkpoint exposes {len(names)} expert tensors total but none with "
-                f"a resolvable global expert index",
-                coverage,
-            )
-```
-
-And here is that code path running, over a checkpoint whose expert set is entirely
-absent — the exact shape of artefact the original tool passed:
+The honest hello-world for this repository is a **gate**, because that is the artifact
+that exists end-to-end. This runs verbatim against the installed package:
 
 ```python
 from foundationscale.gates.core import REGISTRY, Verdict
@@ -138,216 +239,251 @@ from foundationscale.gates.fixtures import make_empty_experts
 gate = REGISTRY.get("checkpoint.expert_alias")
 ctx = ExpertCheckContext.from_expert_set(make_empty_experts(declared_expert_count=128))
 result = gate.run(ctx)
-
 print(result.render())
-# [VACUOUS] checkpoint.expert_alias: 0/128 experts — gate examined 0 experts and
-# therefore proves nothing (claimed: …)
-assert result.verdict is Verdict.VACUOUS
-assert result.blocking
+assert result.verdict is Verdict.VACUOUS and result.blocking
 ```
 
-Three more properties of the contract, because each is drawn from the record:
+For the training path: `pip install 'foundationscale[train]'`, then use the
+`foundationscale-train` console script (also runnable as
+`python -m foundationscale.train.cli`). Without the extra, the loop refuses and prints the
+install remedy rather than half-starting. The loop reads `FS_RUN_ID` and `FS_ATTEMPT`
+from the environment. A worked end-to-end recipe, including a toy dataset, is specified
+but not yet written. [-> docs/TRAINING.md]
 
-* **Controls are executable.** Every gate declares fixtures — at least one
-  `MUST_FIRE` (a deliberately broken input it must block) and typically a
-  `MUST_PASS` (known-good, which catches gates that block everything and get
-  disabled). `verify_controls()` runs them and is wired into CI as its own job; a
-  gate with no `MUST_FIRE` control fails the build, because a gate that has never
-  been shown to fire is not evidence of anything. This is the audit's second review
-  rule, made executable.
-* **Gates fail closed.** An exception inside a gate is `ERROR`, and `ERROR` blocks.
-  In the audited estate, a reward-module import failure silently disabled a
-  degeneracy veto, and a verifier exception counted as a pass.
-* **Absence blocks, one level up.** Callers can declare which gates are required at
-  a lifecycle point; any that never ran render as `MISSING` and block the report. In
-  the audited estate the export byte check lived as a copy-pasted heredoc in one
-  script and was simply absent from the other, which is how a truncated export
-  reached `rc=0`. A registry that silently ran zero gates is the same failure as a
-  gate that silently checked zero units, one level up.
+## 11. Configuration
 
-## 3. Proof the checks can fail
+Three layers, three mechanisms:
 
-A verification framework whose own checks cannot fail would be the thing it exists
-to prevent. So the framework's test infrastructure is part of the claim, and it is
-measured, not asserted:
+* **The package** takes configuration as Python objects (context objects per gate,
+  topology/profile declarations for the train loop) — there is no global config file.
+* **The train loop** reads `FS_RUN_ID` and `FS_ATTEMPT` from the environment.
+* **The launch plane** is configured entirely through environment variables, so that no
+  account name, hostname or path is committed: `CLUSTER_HOME` (estate root),
+  `FS_ALLOWED_NODE` (required, no default — an unset guard is a disabled guard),
+  `FS_FORBIDDEN_NODES`, `FS_BACKEND`, `FS_USE_TORCHRUN`, and many more. No single
+  reference enumerates them yet; today they are documented in the header comments of the
+  launchers themselves, which is where they are enforced. [-> docs/CONFIGURATION.md]
 
-* **582 tests, 0 skipped**, 94.2% line coverage — and CI is configured to fail on *any*
-  skip at all. How it acquired that policy is the last item in the next section.
-* **A mutation battery** ([`tools/mutate.py`](tools/mutate.py)): 42 rules of the
-  contract deliberately broken — one mutant per rule — with the suite required to
-  catch each one. It currently catches 42 of 42. It did not start there: the first
-  full run caught 38, and the 4 survivors were four rules the modules stated and
-  nothing tested, including the byte-deficit tolerance that is the incident itself.
-  They were recorded as gaps, then closed by writing the tests that kill them. That
-  history is the point — a battery is worth having because it finds survivors, not
-  because it reports none.
-* **That 42-of-42 is printed beside a negative control, and it did not used to be.**
-  The table carries a `must_survive` row — a comment-only edit that changes no
-  behaviour, so a sound suite cannot detect it. If the battery reports killing it,
-  the run is voided at exit 2: a harness that can manufacture kills has nothing to
-  say about the ones it printed. This is not decoration. An earlier revision of this
-  repository published `42 killed, 100% caught` from a harness that scored exactly
-  that inert edit as `[killed]` — the meta-tests were driving the battery against the
-  live mutation table, so any mutant that disturbed an anchor was killed on contact
-  regardless of behaviour. A run whose table configures *no* control row now says so
-  in words and exits 2 rather than printing a tally with its negative half missing.
-  The full retraction, with the before-and-after measurement, is in
-  [`docs/SELF_AUDIT.md`](docs/SELF_AUDIT.md) §3.10.
-* **A survivor and an unapplied mutation exit differently from a clean run.** If an
-  anchor no longer matches its module, that mutation did not run, and the battery
-  exits nonzero rather than counting it as caught. This is not hypothetical either: a
-  run reported `40 killed, 0 alive, 2 n/a` and exited 0 — the tool for detecting
-  reported success over unexamined work, doing exactly that.
-* **Controls run as their own CI job**, over the live registry, so a gate cannot rot
-  into a no-op that reports success on everything while the unit tests stay green.
+## 12. Model integration
 
-## 4. The bug, inside this repository
+Model-agnostic framing is a rule here: no example in the documentation should imply one
+model family. The seams that exist:
 
-None of the above prevented this repository from shipping the same failure modes it
-audits for. While the framework was being built, its own verification produced each
-of the classic vacuities — and each was found by measuring rather than assuming, via
-the discipline this repository advocates: coverage-carrying verdicts, positive
-controls, and mutation testing.
+* The train path delegates to `transformers.Trainer`, so any architecture Trainer can
+  construct is usable; the package validates the declared topology around it rather than
+  wrapping the model class.
+* `src/foundationscale/models/adapters.py` and `src/foundationscale/integrate.py` are the
+  package's own model-touching modules — both thin by measurement.
+* The launchers demonstrate a vision-language model end to end, but every estate value
+  (paths, model root, node identity) enters via environment, not source.
 
-* A composite gate reported **"distinctness, byte volume and completeness all hold"
-  while two of its three sub-gates had abstained.** Aggregation read abstention as
-  assent; the parent now propagates coverage instead of minting a pass its children
-  never earned.
-* A gate treated **"no manifest found" as "nothing wrong"** — an empty discovery
-  result read as a clean bill of health.
-* A parity report **passed when the only key it compared contained zero elements**,
-  because coverage counted keys — and a key is a container, not evidence.
-* A loss gate **compared weights against `0.0` with `==`**, so a NaN weight — a term
-  already poisoning the objective — took the false branch of every comparison and
-  was reported as fine.
-* The gate-audit entry point — the thing that checks the checkers — **crashed
-  part-way through the registry instead of reporting.** A gate whose `controls()`
-  raised, and a gate *subpackage* that raised on import, both escaped as tracebacks,
-  so every finding collected before them was lost with the unprinted report. A
-  checker that dies rather than reports is a checker whose findings vanish.
-* **41 of this repository's own tests were skipping in CI while the run reported
-  green.** The skip-list version of VACUOUS, shipped by the repository that exists
-  to catch it. Any skip is now a CI failure — enforced by a guard that CI proves can
-  fail, by feeding it a deliberately skipped test on every run. That is how the suite
-  reached 412 with 0 skipped, and it is why these sections are written in the past
-  tense with numbers attached.
+What is *not* present: a curated recipe library or a parallelism-aware model wrapper. The
+catalogue on the poster is the audit's design output, not code in this tree.
+[-> docs/MODEL_INTEGRATION.md]
 
-This is stated plainly because it is the argument. The adversary is not careless
-engineers; it is the systematic ease with which a broken check says "no defects
-found." The discipline caught it here, repeatedly, at the framework's own expense —
-including twice inside the tooling built to enforce the discipline. That is not a
-confession to bury and it is not a victory lap: what is still weak is named under
-Status below rather than left for a reader to discover.
+## 13. Dataset integration
 
-## Quickstart
+The same honest shape as models: datasets reach training through the `[train]` extra's
+`datasets` library via `transformers.Trainer`; FoundationScale adds no dataset
+abstraction of its own today. The audit's "one data contract" design
+(docs/deliverables/B2_scaling.md) is where a first-class dataset layer is specified, and
+it is unimplemented. [-> docs/DATASETS.md]
 
-From a clean clone:
+## 14. Distributed training
 
-```bash
-git clone <this-repository> && cd foundationscale
+What ships locally: `src/foundationscale/topology.py` validates the declared parallel
+geometry before any process group exists, so a nonsense layout fails on the login node
+rather than at NCCL init. Actual multi-process orchestration lives in the launch plane:
+`launchers/fs_container_backend.sh` routes every in-container step — preflight probes and
+the training run alike — through one backend function, with `FS_USE_TORCHRUN` selecting
+torchrun on the enroot arm. A library-level distributed runtime (the DP/TP/PP/EP
+strategies on the poster) is design-stage; do not read this section as an API.
+[-> docs/DISTRIBUTED.md]
 
-# [checkpoint] carries torch. Install only [dev] and 41 tests skip instead of run —
-# which is precisely how this repository's CI was green over them. Any skip fails
-# CI now, but on a laptop the suite would simply be quieter and smaller.
-python -m pip install -e ".[checkpoint,dev]"
+## 15. Multi-node training
 
-# 1. The unit and gate suite — 582 tests, 0 skipped. Every skip is named in the
-#    summary with its reason; in CI (FS_FORBID_SKIPS=1) each one fails the build.
-python -m pytest
+Not implemented in the package. The shipped launchers are single-tray (one node) by
+construction, and their node guards — `FS_ALLOWED_NODE`, `FS_FORBIDDEN_NODES` — exist
+precisely so a script cannot wander onto another team's hardware by accident. The
+multi-node story today is `h100_validation/`: an experimental harness carrying the
+hardening patches, launch gates and evidence documents for scaling one H100 estate, with
+its own README at [`h100_validation/README.md`](h100_validation/README.md) and published
+deliverables under `h100_validation/h100/`. Treat it as a lab notebook that CI gates, not
+as supported surface.
 
-# 2. The controls — every gate's MUST_FIRE / MUST_PASS fixtures, run over the live
-#    registry. This is verbatim what CI's `controls` job runs. It exits nonzero if a
-#    gate fails to block its defective input, if a gate declares no MUST_FIRE control
-#    at all, or if the registry is empty — a controls run that verified nothing is
-#    the vacuous pass one level up.
-python -m foundationscale.gates.controls
+## 16. Custom workload development
 
-# 3. The mutation battery — 42 deliberate breakages of the gate contract, each
-#    required to turn the suite red. ~2 minutes. Exit 0 only if every mutation was
-#    applied AND killed; 1 if a mutant survived; 2 if it could not measure (red
-#    suite, any skipped test, or an anchor that no longer matches its module).
-python tools/mutate.py
+The well-supported extension is writing your own gate, over your own workload:
+
+1. Subclass the base in `foundationscale.gates.core`; implement `check()`, returning
+   `self.ok(..., coverage)` with the examined-units count attached — the base class
+   downgrades a zero-coverage `ok()` to `VACUOUS` for you.
+2. Declare fixtures: at least one `MUST_FIRE` input your gate must block, and a
+   `MUST_PASS` known-good input so a gate that blocks everything is also caught.
+3. Importing registers the gate in `REGISTRY`; `foundationscale-controls` then runs your
+   fixtures against it like any built-in gate.
+
+The reference implementation to copy is `src/foundationscale/gates/example.py`, whose
+empty-expert-set case is deliberately *not* special-cased — the contract's downgrade is
+the fix, and the fixture exists to prove nobody bypasses it. [-> docs/CUSTOM_GATES.md]
+
+## 17. Advanced customization
+
+* **Required gates at a lifecycle point.** Callers declare which gates must run; any that
+  never did render as `MISSING` and block the report — the empty-registry vacuity, one
+  level up.
+* **Adjudication** (`src/foundationscale/gates/adjudication.py`) composes per-gate
+  verdicts into a run-level judgment, propagating coverage instead of assent.
+* **The controls runner is itself an entry point**
+  (`foundationscale-controls` = `foundationscale.gates.controls:main`), so a gate added to
+  the registry is automatically audited by CI's `controls` job.
+
+## 18. Extension and plugin points
+
+Concrete today: the gate base class, the fixture/controls protocol, `REGISTRY` (populated
+by import), and the adjudication layer. There is no setuptools entry-point discovery
+mechanism for third-party plugins — registration is by import, and whether that should
+grow into an entry-point group is an open design question. Anything else advertised as a
+"plugin API" would be invention; the boundary is the gate contract and nothing wider.
+[-> docs/EXTENSION_POINTS.md]
+
+## 19. Performance and throughput considerations
+
+Training-throughput numbers: **none exist in this repository, and none are claimed.** No
+benchmark has been run that this README could attach; publishing one requires the
+roadmap's harness phases. What is measured is the cost of the verification machinery
+itself, from the Makefile's own accounting:
+
+* The mutation battery runs the whole pytest suite per scoreable row. Measured: one five-row
+  module shard took 3m19s on an M-series laptop (~40s per row); **extrapolated, not
+  measured**, the full corpus sits near 50 minutes, which is why CI shards it one module
+  per job under an inner deadline.
+* CI's pytest leg carries a coverage floor of 90; the mutation and controls jobs exist
+  because a suite that only answers "does the code pass" cannot answer "does the suite
+  detect wrong code".
+
+## 20. Checkpointing and recovery
+
+* `src/foundationscale/checkpoint/dcp.py` and `dcp_meta.py` handle checkpoint I/O and
+  metadata indexing; `src/foundationscale/gates/checkpoint_gates.py` and
+  `src/foundationscale/verify/parity.py` are where checkpoints are *judged* — the expert-alias
+  reference case encodes the estate's defining incident.
+* Recovery knobs exist in the harness (`FS_RESUME_CKPT`, `FS_RESUME_STEP` appear in the
+  launch-plane environment surface), wired to the launchers rather than the package.
+* **Stated limit from §4, repeated where it bites:** the suite writes real checkpoints to
+  disk and reads them back single-process. Multi-rank save/reload shapes are reproduced
+  from the audit record, not re-observed — so multi-rank recovery is *specified*, not
+  *verified here*. [-> docs/CHECKPOINTING.md]
+
+## 21. Monitoring and debugging
+
+* Every gate verdict renders with its coverage inline — "[VACUOUS] … examined 0 of 128"
+  is the debugging affordance, not an error format.
+* `tools/emit_run_manifest.py` refuses dishonest emissions: the run manifest
+  (`src/foundationscale/provenance/manifest.py`) is where what-was-claimed vs
+  what-was-measured is made explicit for a run.
+* `tools/real_checkpoint_probe.py` is a thin CLI over `foundationscale.gates.probe`, and
+  `tools/live_save_gate.py` adjudicates the first real save of a job — the same pattern:
+  logic in the package, thin CLI at the edge.
+* CI's own debugging doctrine — exit-code-only wiring is distrusted everywhere; a summary
+  line with a denominator is required before a green is credited. [-> docs/OBSERVABILITY.md]
+
+## 22. Examples
+
+* **The gate example** in §10 — runnable today, covers the defining incident.
+* **The launchers** — two complete, gated single-estate training jobs, readable as
+  worked examples of launch-time verification (§7, §15).
+* **The harness evidence** — `h100_validation/h100/EVIDENCE.md` and the published
+  deliverables show gates firing against real launches.
+* **`examples/`** exists at the repository root. Its contents are unmeasured by the
+  evidence slice this README was written from; interactively, `ls examples/` is what
+  measures them. [-> docs/EXAMPLES.md — the catalogue that should exist]
+
+## 23. Project structure
+
+`src/` = 18706 LOC across 24 files. `launchers/` contains 9500 shell LOC plus 1615 Python
+LOC, and `h100_validation/` adds another 31313 Python LOC and 4986 shell LOC on top of the
+package. repo-wide, 115500 git-tracked .py/.sh/.md lines.
+
+```
+src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
+                       topology.py, models/, train/, integrate.py
+tests/                 the test suite (28294 .py LOC); conftest carries the skip guard
+tools/                 contains 8916 Python LOC of CLIs over the package (emit_run_manifest,
+                       live_save_gate, real_checkpoint_probe, preflight, mutate, census)
+checks/                standalone repository gates: countables drift, packaging
+                       reachability, bash -lc sweep, workflow YAML audit
+launchers/             the estate launch plane + two contract suites (bash), plus
+                       Python helpers (lora target census, peft override replay)
+h100_validation/       experimental H100 harness: build script, gate_*.py, patch_*.py,
+                       its own tests, and the published h100/ deliverables
+docs/                  DECISIONS.md, deliverables/ (A1–D), SELF_AUDIT.md
+examples/              see §22
+.github/workflows/     CI: check / controls / launchers / mutation shards
 ```
 
-`make check` runs all of the above plus lint, types, and the skip-guard probe.
+## 24. Development guide
 
-## What the diagram shows
+The Makefile is convenience only; CI mirrors, it does not consume it.
 
-The poster above describes the training frame that is being built *on top of* the
-gate plane — the audit's conclusion was that this layer had to exist first. The
-trainer itself is early (see Status below).
-
-**Model stack** — curated recipes and framework libraries covering the full model
-development path, from pre-training and SFT/LoRA (VFM, LLM &amp; VLM) through the
-framework layer (Megatron-LM, Megatron-Bridge, AutoModel) to post-training
-alignment and RL.
-
-**Parallelism strategies** — the four ways work is distributed across GPUs:
-
-| | strategy | what is split |
-|---|---|---|
-| **DP** | Data Parallelism | Same model replicated on each GPU, different data per GPU |
-| **TP** | Tensor Parallelism | Each GPU holds a slice of every layer (tensor / hidden dimension split) |
-| **PP** | Pipeline Parallelism | Different layers (stages) on different GPUs, executed sequentially |
-| **EP** | Expert Parallelism | Different experts on different GPUs, a router selects which experts run |
-
-**Distributed infrastructure** — the same stack is designed to run on local
-machines, Slurm clusters, DGX Cloud / Lepton, and Kubernetes clusters.
-
-## Status, and what is still missing
-
-Early, and deliberately so. The gate contract
-(`src/foundationscale/gates/core.py`) is frozen; the reference gate, fixtures,
-controls job, mutation battery and skip policy above all exist and run in CI. The
-layers above the gate plane are being built against the roadmap in
-[`docs/deliverables/D_roadmap.md`](docs/deliverables/D_roadmap.md), each phase with
-a falsification condition. The audit and the gate plane are the useful artefacts
-today.
-
-What is still missing, stated rather than implied:
-
-* **Coverage is 94.2% overall, but it is not evenly earned.** The weakest module is
-  `checkpoint/dcp_meta.py` at 74%, followed by `gates/checkpoint_gates.py` at 94% —
-  and `checkpoint_gates.py` is the module that encodes the incident, so its 6% is the
-  6% that matters most. The enforced floor is a total, which means a well-covered
-  module can subsidise a thin one; per-module floors are not yet in place.
-* **The mutation battery measures the rules someone thought to write down.** 42 of 42
-  are killed, which says every listed rule has a test behind it. It says nothing
-  about a rule nobody listed, and the table is hand-maintained: if a module is
-  refactored, its anchors go stale, and the battery reports that rather than hiding
-  it, but re-deriving them is still manual work. The negative control is likewise
-  *one* row: it proves the harness can still say "no", not that the suite's
-  attribution is sound for every mutant it scored.
-* **No gate has run against a real distributed checkpoint in this repository's CI.**
-  The suite writes real checkpoints to disk and reads them back, single-process. The
-  audited estate's failures were multi-rank; the shapes are reproduced from the
-  record, not re-observed here.
-* From the audit's "still open" list: the estate's export bytes are verified —
-  200 of 205 export directories tensor-by-tensor against the training format at
-  0 DIFFER, 3,840/3,840 experts bitwise identical, with controls firing at 128 and
-  112 — but **no exported artefact has ever been asked to produce a token.**
-  Bitwise-identical weights survive a wrong rope base, a mismatched attention
-  kernel, a tokenizer drift and a bad generation config. That probe is one node,
-  one GPU, about twenty minutes, and it is specified to land as the export path's
-  first semantic gate rather than as a one-off script.
-
-## Assets
-
-| file | description |
+| command | what runs |
 |---|---|
-| [`assets/hero.png`](assets/hero.png) | 2000 &times; 2242 — the image used above |
-| [`assets/hero@2x.png`](assets/hero%402x.png) | 4000 &times; 4484 — retina / print master |
-| [`assets/hero.html`](assets/hero.html) | Self-contained source (system fonts, inline SVG, no external requests) |
+| `make install` | editable install with `[checkpoint,dev]` + pytest-cov |
+| `make test` | pytest with the coverage floor |
+| `make lint` / `make fmt` | ruff check/format over `src tests tools checks` |
+| `make typecheck` | mypy over `src` plus the three adjudicating `tools/` CLIs |
+| `make typecheck-checks` | reports on `checks/` — deliberately not a gate |
+| `make controls` | the gate controls entry point |
+| `make packaging` | the packaging-reachability gate, self-test first |
+| `make countables` | census + drift gate over the shipped documents |
+| `make mutation` | full mutation corpus; `make mutation-module MODULE=x` for one shard |
+| `make skip-guard-probe` | proves the armed skip guard can fail and names its probe |
+| `make check` | all of the above |
 
-The poster is rendered from `hero.html`, which has no network dependencies — open
-it in any browser, or re-render it headlessly at any resolution:
+Stated exclusions, so silence does not read as coverage: mypy does not check `checks/`
+or `tools/preflight.py` (the latter carries an explicit exemption); ruff covers
+everything listed. [-> docs/DEVELOPMENT.md]
 
-```bash
-chrome --headless=new --disable-gpu --hide-scrollbars \
-       --window-size=2000,2242 --force-device-scale-factor=2 \
-       --screenshot=hero@2x.png file://$PWD/assets/hero.html
-```
+## 25. Testing
 
-## License
+* `pytest` is configured in `pyproject.toml` (`testpaths = ["tests"]`, markers `slow` and
+  `integration`, `--strict-markers`).
+* **Skips are failures in CI.** `FS_FORBID_SKIPS=1` is set job-wide and
+  `tests/conftest.py` names every skip with its reason; a probe step feeds the guard a
+  deliberately skipped test and requires it to fire. On a laptop the variable stays
+  unset and skips are merely named.
+* **Mutation testing asks the other question.** The mutation corpus is 78 rows over 9
+  modules. Of those, 69 are MUST_FIRE mutants and 9 are MUST_PASS controls. Exit codes
+  separate "a mutant survived" (1) from "nothing was measured" (2) — a red suite, any
+  skipped test, or a stale anchor all read as never-measured, never as caught.
+* **CI has four jobs on purpose**: `check` (hygiene across Python 3.10/3.11/3.12),
+  `controls` (gate fixtures), `launchers` (the bash contract suites plus the workflow-YAML
+  and bash-`lc` standing legs), and `mutation` (sharded per module, enumerated from the
+  mutation table itself). [-> docs/TESTING.md]
 
-[MIT](LICENSE).
+## 26. Troubleshooting
+
+| symptom | cause worth checking |
+|---|---|
+| Many tests "skip" instead of failing | torch missing: you installed `[dev]` without `[checkpoint]` (§8). |
+| `foundationscale-train` refuses at startup | the `[train]` extra is absent; the loop prints the exact remedy — install it. |
+| `make ...` says `python: command not found` | the Makefile uses `python3` deliberately; bare `python` does not exist on modern macOS. |
+| Launcher contract suite fails with "0/8 launcher unreadable" | it is CWD-sensitive by measured behaviour; run it from the repository root. |
+| Mutation battery exits 2 | deliberate: nothing was measured (stale anchor, red suite, or a skip). Fix the cause; do not re-run hoping for 0. |
+| A number in a doc looks wrong | run `make countables` — the drift gate compares shipped wording against a freshly measured census. |
+
+[-> docs/TROUBLESHOOTING.md]
+
+## 27. Contributing
+
+* Run `make check` before opening a PR; CI runs the same steps across the matrix.
+* Follow the repository's two standing review rules: every count carries its denominator,
+  and every claim that something does not exist names the control proving its detector
+  could have fired. The drift gate (`checks/countables_drift.py`) enforces the first on
+  shipped numbers — state counts only in wordings it anchors.
+* Write the MUST_FIRE control with the gate. A check that has never been observed going
+  red is not evidence.
+* License: [MIT](LICENSE). The audit documents carry their own grading scheme
+  ([M]/[V]/[A]/[K]/[U]) — see docs/DECISIONS.md before editing them.
+
+[-> docs/CONTRIBUTING.md]
