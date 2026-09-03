@@ -98,6 +98,55 @@ outside every scan category. That control exists because the publish set and the
 scan denominator used to be different sets derived by different rules, and
 nothing compared them (#157).
 
+## Why the two scanners stay here and are not published (#248)
+
+`prepush_gate.py` and `gate133_estate.py` scan for estate leaks before a push.
+The obvious objection is that they therefore belong in the published repo's
+`checks/`, where CI would run them on every commit instead of only when a
+developer remembers. They stay here anyway, and the reason is the same doctrine
+the rest of this tree enforces.
+
+**Their vocabulary is the thing they must never publish.** The fatal patterns are
+built at import time from `FS_ESTATE_IDENT_PAT`, `FS_PARTITION_LITERAL`,
+`FS_REDACT_EXTRA` and `FS_ESTATE_ROOT`, sourced from the operator's own estate
+file (mode 600, outside any repo). A published copy would run in CI with none of
+those set. It
+would then do one of two things, and both are worse than not running:
+
+  * **Refuse (96) on every commit**, because the inputs are required with no
+    default — a gate that is red on the tree it guards, which is exactly the
+    defect #239 was about; or
+  * **Degrade to the literals it can compile in** and print `PASS`, having
+    scanned for an empty estate vocabulary. That is a vacuous pass: `all([])` is
+    True, the denominator is zero, and the banner says clean because nothing ever
+    told it what a leak looks like. Publishing the scanner without its vocabulary
+    manufactures precisely the false confidence this repo exists to eliminate.
+
+Hard-coding the vocabulary to escape that dilemma is self-defeating: the leak
+detector would become the leak.
+
+**Their denominator is also wrong for CI.** `prepush_gate.py` scans the *push
+set* — `git diff --stat origin/main..HEAD` plus the working tree — because the
+question it answers is "is it safe to publish *this*". CI runs post-push, over a
+tree from which any estate literal has, by then, already been published. The
+instrument is pre-publication by construction; moving it after the event does not
+make it a weaker check, it makes it a check of a different and useless claim.
+
+Consequences accepted, and the mitigations:
+
+  * The gate runs only when invoked. It is wired into the documented push
+    procedure, not into CI, and that is a human-discipline dependency with no
+    automated backstop. Accepted knowingly.
+  * `prepush_gate.py` keeps its own historical exit codes — **0 PASS, 1 LEAK,
+    2 GATE ERROR, 96 REFUSE** — rather than the 0/5/95/96 contract above. It has
+    no programmatic callers (`sync_to_repo.py` only names it in a print), so
+    nothing decodes those numbers but a human. Renumbering it to the tree
+    contract would be churn with a migration risk and no reader.
+  * What *can* be published safely is published: `h100_validation/` carries the
+    use-vs-mention controls and the token-tier patterns that carry no estate
+    identifier. The split is deliberate — public checks get the vocabulary that
+    is safe in public, and only that.
+
 ## Where the deliverables are
 
   * `h100/LAUNCH.md` — the operator-facing launch document (Deliverable D).
