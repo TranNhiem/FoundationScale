@@ -171,7 +171,7 @@ jobs:
         # file resolves under two module names and mypy refuses the directory. The
         # remaining tools/ modules are unchecked -- stated, not implied.
         # checks/ is likewise unchecked here, and its denominator is on the
-        # wire: all 7 files under checks/ are unchecked. That count is anchored
+        # wire: all 8 files under checks/ are unchecked. That count is anchored
         # (checks_files) after #241, where this clause and its Makefile twin
         # both read "3 of 3" -- mypy's error-BEARING file count, not the number
         # it checked -- written in the very commit that added the fourth file.
@@ -346,6 +346,30 @@ jobs:
         run: python3 checks/makefile_tooling.py --self-test
       - name: Makefile tooling (no bare tool names in any recipe)
         run: python3 checks/makefile_tooling.py
+
+      # CI suite extras (#253). Every job in THIS FILE that executes the pytest
+      # suite must install the same extras. The measured failure it closes: #228
+      # added tests/test_train_execution.py, the `check` job's install gained
+      # `train`, the `mutation` job's did not -- and mutation runs the WHOLE
+      # suite once per mutant, so all 9 shards died at COLLECTION with "No
+      # module named 'tokenizers'". The battery surfaced that as `assert 96 ==
+      # 5`: an UNMEASURED mutant wearing the costume of a wrong verdict, which
+      # is the failure this repository is least able to see.
+      #
+      # The gate reads this file, so this job is the natural home for it -- but
+      # note what that means: the gate is measuring the workflow that invokes
+      # it. That is not circular, because its denominator is the OTHER jobs
+      # (`check` and `mutation`, the two that run the suite); `controls` itself
+      # installs .[checkpoint,dev] and runs no pytest, so it sits outside the
+      # denominator by the gate's own rule rather than by an exception written
+      # for it. A MUST_PASS control pins exactly that: a job that installs
+      # pytest-cov and mentions pytest but never invokes it must not redden.
+      #
+      # --self-test first, same reason as every gate above.
+      - name: CI suite extras controls (MUST_FIRE/MUST_PASS)
+        run: python3 checks/ci_suite_extras.py --self-test
+      - name: CI suite extras (suite-executing jobs install identical extras)
+        run: python3 checks/ci_suite_extras.py
 
       # Countables drift (#220). The shipped documents state numbers ABOUT this
       # tree -- LOC, file counts -- and until now nothing kept them true; #220
@@ -925,9 +949,18 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install
+        # `train` is not optional here even though this job names no trainer.
+        # tools/mutate.py runs the WHOLE pytest suite per mutant, so this job's
+        # dependency set is the suite's, not the battery's: when #228 added
+        # tests/test_train_execution.py the `check` job got `train` and this one
+        # did not, and all 9 shards died at COLLECTION with "No module named
+        # 'tokenizers'" -- 3 errors that the battery reported as `assert 96 == 5`,
+        # an unmeasured mutant reading as a wrong verdict rather than as a
+        # missing dependency. The extras of every job that executes the suite
+        # must track the suite; see checks/ci_suite_extras.py, which gates it.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[checkpoint,train,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
       - name: Run mutation tests for ${{ matrix.module }}
         # tools/mutate.py exits 0 (all killed) / 1 (a survivor) / 2 (never
         # measured). No continue-on-error, no filtering: the survivor count is

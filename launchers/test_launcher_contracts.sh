@@ -5243,6 +5243,320 @@ else
   fi
 fi
 
+echo "== fix252-gatewiring: coverage_floor + ci_suite_extras real legs =="
+
+# --- finding #252: checks/coverage_floor.py is already committed and the
+# anti-orphan gate is correctly RED on it for having no executable call site;
+# checks/ci_suite_extras.py enters with this same commit. Naming either file
+# in a comment would satisfy the orphan scanner while measuring NOTHING, so
+# the four legs below execute both gates against their own controls and put
+# their denominators on the wire.
+#
+# ENVIRONMENT (measured, not assumed): both invocations use the runner's
+# bare system `python3`; both gates are stdlib-only; and every invocation is
+# pinned with `-S`. As with the #238 wiring, `-S` is load-bearing rather than
+# hygiene: it prevents ambient site-packages from changing a verdict from one
+# runner to another.
+
+# --- MUST_PASS: coverage_floor self-test (checks/coverage_floor.py) --------
+# MEASURED: `python3 -S checks/coverage_floor.py --self-test` exits rc=0 and
+# its last line is the declared
+#   SELF-TEST DENOMINATOR: 12 of 12 controls behaved; ...
+# rc=0 alone is NOT the measurement: a control set that shrank to one control
+# would still be capable of exiting 0. The trailing "N of N" tally is parsed,
+# required to be non-empty and self-consistent, and held at N >= 12 -- the 8
+# MUST_FIRE + 4 MUST_PASS controls present when this leg was written. A
+# wording change reds THIS leg and must update it in the same commit.
+if [ ! -r "checks/coverage_floor.py" ]; then
+  f252_msg="MUST_PASS FAILED (coverage_floor self-test) UNMEASURED:"
+  f252_msg="$f252_msg checks/coverage_floor.py is not readable -- unreadable is not"
+  f252_msg="$f252_msg empty; the gate cannot run, so 0 of its declared denominator of 12"
+  f252_msg="$f252_msg controls (8 MUST_FIRE + 4 MUST_PASS) were measured. An unreadable"
+  f252_msg="$f252_msg measuring unit is failed closed, never skipped."
+  no "$f252_msg"
+else
+  f252_rc=0
+  f252_out=$(python3 -S checks/coverage_floor.py --self-test 2>&1) || f252_rc=$?
+  f252_last=$(printf '%s\n' "$f252_out" | tail -n 1)
+  f252_have=$(printf '%s\n' "$f252_last" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved;.*/\1/p')
+  f252_want=$(printf '%s\n' "$f252_last" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved;.*/\2/p')
+  if [ "$f252_rc" -ne 0 ]; then
+    f252_msg="MUST_PASS FAILED (coverage_floor self-test): rc=$f252_rc over the gate's"
+    f252_msg="$f252_msg declared denominator of 12 controls (8 MUST_FIRE + 4 MUST_PASS);"
+    f252_msg="$f252_msg 0 of 12 controls were accepted as behaved, so the leg fails closed."
+    f252_msg="$f252_msg Output: $(printf '%s\n' "$f252_out" | tr '\n' ' ')"
+    no "$f252_msg"
+  elif [ -z "$f252_have" ] || [ -z "$f252_want" ]; then
+    f252_msg="MUST_PASS FAILED (coverage_floor self-test) UNMEASURED: rc=0 but the last"
+    f252_msg="$f252_msg line carries no parseable 'SELF-TEST DENOMINATOR: N of N controls"
+    f252_msg="$f252_msg behaved' tally -- the measuring unit printed no denominator, so 0 of"
+    f252_msg="$f252_msg 12 declared controls are auditable here. Unparseable is not passing;"
+    f252_msg="$f252_msg fail closed and update this leg in the same commit as the wording"
+    f252_msg="$f252_msg change. Last line: $f252_last"
+    no "$f252_msg"
+  elif [ "$f252_have" -ne "$f252_want" ]; then
+    f252_msg="MUST_PASS FAILED (coverage_floor self-test): denominator $f252_have of"
+    f252_msg="$f252_msg $f252_want controls is not self-consistent -- the self-test examined"
+    f252_msg="$f252_msg fewer controls than it claims to have, over the declared denominator"
+    f252_msg="$f252_msg of 12. The inconsistency is failed closed because rc=0 cannot certify"
+    f252_msg="$f252_msg a partial control set."
+    no "$f252_msg"
+  elif [ "$f252_have" -lt 12 ]; then
+    f252_msg="MUST_PASS FAILED (coverage_floor self-test): control set shrank to"
+    f252_msg="$f252_msg $f252_have of $f252_want, below the measured floor of 12 controls"
+    f252_msg="$f252_msg (8 MUST_FIRE + 4 MUST_PASS). A shortened self-test can still exit 0,"
+    f252_msg="$f252_msg so the floor is the control and this leg fails closed."
+    no "$f252_msg"
+  else
+    f252_msg="MUST_PASS coverage_floor self-test: rc=0 under python3 -S, denominator"
+    f252_msg="$f252_msg $f252_have of $f252_want controls (>= the measured floor of 12,"
+    f252_msg="$f252_msg 8 MUST_FIRE + 4 MUST_PASS): $f252_last"
+    ok "$f252_msg"
+  fi
+fi
+
+# --- MUST_FIRE: coverage_floor refuses an absent coverage report ------------
+# MEASURED: a path deliberately constructed inside a fresh temporary directory,
+# verified absent, is passed as `--report`; `python3 -S
+# checks/coverage_floor.py --report "$missing"` exits exactly rc=95
+# (UNMEASURED), never rc=0. A CLEAR verdict over a report that does not exist
+# would be the repository's defining vacuous pass. The assertion is 95, not
+# merely nonzero: a crash or refusal code is not evidence that the missing-
+# report detector is discriminating as declared.
+if [ ! -r "checks/coverage_floor.py" ]; then
+  f252_msg="MUST_FIRE UNREACHABLE (coverage_floor absent-report refusal) UNMEASURED:"
+  f252_msg="$f252_msg checks/coverage_floor.py is not readable -- unreadable is not empty;"
+  f252_msg="$f252_msg 0 of 1 declared absent-report refusal paths could be exercised, and"
+  f252_msg="$f252_msg this fail-closed leg never treats an unreadable gate as measured."
+  no "$f252_msg"
+else
+  f252_tmp=""
+  f252_tmp=$(mktemp -d "${TMPDIR:-/tmp}/fix252-coveragemissing.XXXXXX" 2>/dev/null) || f252_tmp=""
+  if [ -z "$f252_tmp" ] || [ ! -d "$f252_tmp" ]; then
+    f252_msg="MUST_FIRE UNREACHABLE (coverage_floor absent-report refusal) UNMEASURED:"
+    f252_msg="$f252_msg mktemp -d did not create the scratch directory that carries the"
+    f252_msg="$f252_msg absent report, so 0 of 1 declared absent-report refusal paths were"
+    f252_msg="$f252_msg measured. The fixture construction itself is failed closed rather"
+    f252_msg="$f252_msg than allowing an un-isolated path to stand in for an absent report."
+    no "$f252_msg"
+  else
+    f252_missing="$f252_tmp/coverage-report-that-does-not-exist.json"
+    if [ -e "$f252_missing" ] || [ -L "$f252_missing" ]; then
+      rm -rf "$f252_tmp"
+      f252_msg="MUST_FIRE UNREACHABLE (coverage_floor absent-report refusal) UNMEASURED:"
+      f252_msg="$f252_msg the constructed report path already existed before invocation,"
+      f252_msg="$f252_msg so 0 of 1 declared ABSENT-report refusal paths were actually"
+      f252_msg="$f252_msg constructed. Firing condition failed its own construction and is"
+      f252_msg="$f252_msg failed closed; $f252_missing"
+      no "$f252_msg"
+    else
+      f252_rc=0
+      f252_out=$(python3 -S checks/coverage_floor.py --report "$f252_missing" 2>&1) || f252_rc=$?
+      rm -rf "$f252_tmp"
+      if [ "$f252_rc" -eq 95 ]; then
+        f252_msg="MUST_FIRE coverage_floor absent-report refusal: over 1 of 1 constructed"
+        f252_msg="$f252_msg absent-report paths, the gate exited rc=95 (UNMEASURED), refusing"
+        f252_msg="$f252_msg to launder evidence it never read into a pass"
+        ok "$f252_msg"
+      else
+        f252_msg="MUST_FIRE UNREACHABLE (coverage_floor absent-report refusal): rc=$f252_rc"
+        f252_msg="$f252_msg over 1 of 1 constructed absent-report paths, expected exactly 95"
+        f252_msg="$f252_msg (UNMEASURED). rc=0 would report CLEAR over no evidence, while any"
+        f252_msg="$f252_msg other code misclassifies crash, RED, or REFUSE as this detector's"
+        f252_msg="$f252_msg declared abstention; the leg therefore fails closed. Output:"
+        f252_msg="$f252_msg $(printf '%s\n' "$f252_out" | tr '\n' ' ')"
+        no "$f252_msg"
+      fi
+    fi
+  fi
+fi
+
+# --- MUST_PASS: ci_suite_extras self-test -----------------------------------
+# MEASURED: `python3 -S checks/ci_suite_extras.py --self-test` exits rc=0 and
+# publishes an explicit "N of N" control tally. The tally variables must be
+# non-empty and equal, and N must be at least 2: one firing-side control and
+# one clean-side control are the irreducible minimum for a detector whose job
+# is discrimination. rc=0 with a vanished or internally inconsistent tally is
+# not evidence; the direct two-workflow discrimination leg below supplies the
+# separately constructed historical firing check.
+if [ ! -r "checks/ci_suite_extras.py" ]; then
+  f252_msg="MUST_PASS FAILED (ci_suite_extras self-test) UNMEASURED:"
+  f252_msg="$f252_msg checks/ci_suite_extras.py is not readable -- unreadable is not empty;"
+  f252_msg="$f252_msg 0 of the required minimum denominator of 2 controls were measured."
+  f252_msg="$f252_msg The gate is failed closed rather than skipped."
+  no "$f252_msg"
+else
+  f252_rc=0
+  f252_out=$(python3 -S checks/ci_suite_extras.py --self-test 2>&1) || f252_rc=$?
+  f252_last=$(printf '%s\n' "$f252_out" | tail -n 1)
+  # ONE house tally format, ONE parser -- the same expression the coverage_floor
+  # leg above uses. The first draft of this leg carried three alternative
+  # patterns because it was authored in parallel with the gate and had to guess
+  # which phrasing the gate would print; it guessed three and the gate printed a
+  # fourth, so the tally read as absent and this MUST_PASS would have reported
+  # UNMEASURED against a working gate. The fix went into the gate (conform to the
+  # house format) rather than here, because a parser that accepts formats no gate
+  # emits has dead branches that cannot be exercised by any control -- and an
+  # unexercised branch is exactly where a malformed future tally gets accepted.
+  f252_have=$(printf '%s\n' "$f252_last" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved;.*/\1/p')
+  f252_want=$(printf '%s\n' "$f252_last" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved;.*/\2/p')
+  if [ "$f252_rc" -ne 0 ]; then
+    f252_msg="MUST_PASS FAILED (ci_suite_extras self-test): rc=$f252_rc over the gate's"
+    f252_msg="$f252_msg own control denominator (minimum required: 2 controls; reported"
+    f252_msg="$f252_msg tally is checked only after a passing exit). The self-test did not"
+    f252_msg="$f252_msg earn a CLEAR verdict, so this leg fails closed. Output:"
+    f252_msg="$f252_msg $(printf '%s\n' "$f252_out" | tr '\n' ' ')"
+    no "$f252_msg"
+  elif [ -z "$f252_have" ] || [ -z "$f252_want" ]; then
+    f252_msg="MUST_PASS FAILED (ci_suite_extras self-test) UNMEASURED: rc=0 but the last"
+    f252_msg="$f252_msg line is not one of the suite's explicit 'N of N' self-test tally"
+    f252_msg="$f252_msg spellings -- the measuring unit printed no denominator, so 0 of the"
+    f252_msg="$f252_msg required minimum denominator of 2 controls is auditable. Unparseable"
+    f252_msg="$f252_msg is not passing; fail closed and update this leg in the same commit"
+    f252_msg="$f252_msg as the wording change. Last line: $f252_last"
+    no "$f252_msg"
+  elif [ "$f252_have" -ne "$f252_want" ]; then
+    f252_msg="MUST_PASS FAILED (ci_suite_extras self-test): denominator $f252_have of"
+    f252_msg="$f252_msg $f252_want controls is not self-consistent -- the self-test examined"
+    f252_msg="$f252_msg fewer controls than it claims to have. rc=0 cannot certify a partial"
+    f252_msg="$f252_msg control set, so the leg fails closed."
+    no "$f252_msg"
+  elif [ "$f252_have" -lt 2 ]; then
+    f252_msg="MUST_PASS FAILED (ci_suite_extras self-test): control tally $f252_have of"
+    f252_msg="$f252_msg $f252_want is below the non-vacuous minimum denominator of 2 controls."
+    f252_msg="$f252_msg A discriminating gate needs at least one firing-side and one"
+    f252_msg="$f252_msg clean-side control; the shrunken set is failed closed."
+    no "$f252_msg"
+  else
+    f252_msg="MUST_PASS ci_suite_extras self-test: rc=0 under python3 -S, control denominator"
+    f252_msg="$f252_msg $f252_have of $f252_want (>= the non-vacuous minimum of 2): $f252_last"
+    ok "$f252_msg"
+  fi
+fi
+
+# --- MUST_FIRE: ci_suite_extras reds differing extras and clears reality ----
+# MEASURED: a temporary workflow is WRITTEN with exactly two jobs that invoke
+# launchers/test_launcher_contracts.sh and two distinct pip extras, [test] and
+# [dev]. The fixture text itself is counted before either invocation: 2 suite
+# call sites, 1 [test] install, and 1 [dev] install. The doctored workflow must
+# exit rc=5 (RED). The real `.github/workflows/ci.yml` must then exit rc=0
+# (CLEAR). Requiring both outcomes proves discrimination: rc=5 alone could be
+# a stuck-red detector, while rc=0 alone could be a vacuous pass.
+if [ ! -r "checks/ci_suite_extras.py" ]; then
+  f252_msg="MUST_FIRE UNREACHABLE (ci_suite_extras doctored-workflow discrimination)"
+  f252_msg="$f252_msg UNMEASURED: checks/ci_suite_extras.py is not readable -- unreadable is"
+  f252_msg="$f252_msg not empty; 0 of 2 required gate invocations (1 doctored RED fixture,"
+  f252_msg="$f252_msg 1 real CLEAR workflow) were measured, so the leg fails closed."
+  no "$f252_msg"
+elif [ ! -r ".github/workflows/ci.yml" ]; then
+  f252_msg="MUST_FIRE UNREACHABLE (ci_suite_extras doctored-workflow discrimination)"
+  f252_msg="$f252_msg UNMEASURED: .github/workflows/ci.yml is not readable -- unreadable is"
+  f252_msg="$f252_msg not the same as clean. 0 of 2 required gate invocations were accepted;"
+  f252_msg="$f252_msg without the real CLEAR arm the RED arm cannot prove discrimination,"
+  f252_msg="$f252_msg so the leg fails closed."
+  no "$f252_msg"
+else
+  f252_tmp=""
+  f252_tmp=$(mktemp -d "${TMPDIR:-/tmp}/fix252-ciworkflow.XXXXXX" 2>/dev/null) || f252_tmp=""
+  if [ -z "$f252_tmp" ] || [ ! -d "$f252_tmp" ]; then
+    f252_msg="MUST_FIRE UNREACHABLE (ci_suite_extras doctored-workflow discrimination)"
+    f252_msg="$f252_msg UNMEASURED: mktemp -d did not create the scratch directory for the"
+    f252_msg="$f252_msg 2-job/2-extra fixture, so 0 of 2 required gate invocations were"
+    f252_msg="$f252_msg measured. The unconstructed firing condition fails closed."
+    no "$f252_msg"
+  else
+    f252_doctored="$f252_tmp/doctored-ci-suite-extras.yml"
+    # The two jobs must EXECUTE THE SUITE by the gate's own definition of that
+    # phrase -- a real pytest invocation or a tools/mutate.py run. The first
+    # draft of this fixture ran launchers/test_launcher_contracts.sh in both
+    # jobs, which is a gate but is not the pytest suite, so the gate correctly
+    # answered 95 (zero suite-executing jobs, an empty denominator) and this
+    # MUST_FIRE would have failed against a working detector. A firing fixture
+    # has to satisfy the detector's denominator rule, not merely look like the
+    # defect.
+    cat > "$f252_doctored" <<'EOF'
+name: fix252 doctored ci-suite extras
+on:
+  push:
+jobs:
+  suite-with-test-extra:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install with test extra
+        run: python -m pip install -e ".[test]"
+      - name: Run the pytest suite
+        run: python -m pytest tests/
+  suite-with-dev-extra:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install with dev extra
+        run: python -m pip install -e ".[dev]"
+      - name: Run the mutation battery
+        run: python tools/mutate.py
+EOF
+    f252_suite_refs=$(grep -F -c -e 'python -m pytest tests/' \
+      -e 'python tools/mutate.py' "$f252_doctored" 2>/dev/null || true)
+    f252_test_refs=$(grep -F -c 'python -m pip install -e ".[test]"' "$f252_doctored" 2>/dev/null || true)
+    f252_dev_refs=$(grep -F -c 'python -m pip install -e ".[dev]"' "$f252_doctored" 2>/dev/null || true)
+    if [ ! -s "$f252_doctored" ]; then
+      rm -rf "$f252_tmp"
+      f252_msg="MUST_FIRE UNREACHABLE (ci_suite_extras doctored-workflow discrimination)"
+      f252_msg="$f252_msg UNMEASURED: writing the 2-job/2-extra temporary workflow produced"
+      f252_msg="$f252_msg an empty or missing file, so 0 of 2 required gate invocations were"
+      f252_msg="$f252_msg measured. An unwritten fixture cannot establish the claimed firing"
+      f252_msg="$f252_msg condition and is failed closed."
+      no "$f252_msg"
+    elif [ "$f252_suite_refs" -ne 2 ] || [ "$f252_test_refs" -ne 1 ] || [ "$f252_dev_refs" -ne 1 ]; then
+      rm -rf "$f252_tmp"
+      f252_msg="MUST_FIRE UNREACHABLE (ci_suite_extras doctored-workflow discrimination)"
+      f252_msg="$f252_msg UNMEASURED: fixture construction was checked before the gate and"
+      f252_msg="$f252_msg found suite-executing steps=$f252_suite_refs (expected 2), [test] installs="
+      f252_msg="$f252_msg$f252_test_refs (expected 1), and [dev] installs=$f252_dev_refs"
+      f252_msg="$f252_msg (expected 1). 0 of 2 required gate invocations were accepted because"
+      f252_msg="$f252_msg the doctored denominator was not the claimed 2 suite jobs with 2"
+      f252_msg="$f252_msg distinct extras; fail closed rather than credit a malformed fixture."
+      no "$f252_msg"
+    else
+      f252_doctor_rc=0
+      f252_doctor_out=$(python3 -S checks/ci_suite_extras.py --workflow "$f252_doctored" 2>&1) || f252_doctor_rc=$?
+      f252_real_rc=0
+      f252_real_out=$(python3 -S checks/ci_suite_extras.py --workflow ".github/workflows/ci.yml" 2>&1) || f252_real_rc=$?
+      rm -rf "$f252_tmp"
+      if [ "$f252_doctor_rc" -ne 5 ]; then
+        f252_msg="MUST_FIRE FAILED (ci_suite_extras doctored-workflow discrimination):"
+        f252_msg="$f252_msg doctored fixture rc=$f252_doctor_rc, expected exactly 5 (RED),"
+        f252_msg="$f252_msg over an independently counted denominator of 2 suite-executing jobs"
+        f252_msg="$f252_msg and 2 distinct extras. The real workflow arm returned rc=$f252_real_rc"
+        f252_msg="$f252_msg over 1 readable workflow, but only 0 of 1 firing outcomes held;"
+        f252_msg="$f252_msg rc=0 would launder differing extras into CLEAR and any nonzero other"
+        f252_msg="$f252_msg than 5 is not this detector's declared RED. The leg fails closed."
+        f252_msg="$f252_msg Doctored output: $(printf '%s\n' "$f252_doctor_out" | tr '\n' ' ')"
+        no "$f252_msg"
+      elif [ "$f252_real_rc" -ne 0 ]; then
+        f252_msg="MUST_FIRE FAILED (ci_suite_extras doctored-workflow discrimination):"
+        f252_msg="$f252_msg the constructed 2-job/2-extra arm fired correctly at rc=5, but"
+        f252_msg="$f252_msg the real .github/workflows/ci.yml returned rc=$f252_real_rc instead"
+        f252_msg="$f252_msg of 0. Only 1 of 2 discrimination outcomes held; a gate that also"
+        f252_msg="$f252_msg rejects its production denominator is stuck RED, not discriminating,"
+        f252_msg="$f252_msg so the leg fails closed. Real output:"
+        f252_msg="$f252_msg $(printf '%s\n' "$f252_real_out" | tr '\n' ' ')"
+        no "$f252_msg"
+      else
+        f252_msg="MUST_FIRE ci_suite_extras doctored-workflow discrimination: over a counted"
+        f252_msg="$f252_msg denominator of 2 suite-executing jobs and 2 distinct extras the"
+        f252_msg="$f252_msg doctored fixture exited rc=5 (RED); over the 1 real production"
+        f252_msg="$f252_msg workflow it exited rc=0 (CLEAR). Both discrimination outcomes held:"
+        f252_msg="$f252_msg the gate is neither vacuous nor stuck red"
+        ok "$f252_msg"
+      fi
+    fi
+  fi
+fi
+
 echo "abstentions: $abstain named (each named at its site above with its denominator; 0 added to pass or fail)"
 echo "controls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

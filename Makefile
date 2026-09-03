@@ -103,7 +103,7 @@ ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
 endif
 
-.PHONY: install test coverage-floor lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables mutation mutation-module skip-guard-probe check clean
+.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables launcher-contracts mutation mutation-module skip-guard-probe check clean
 
 install:
 	$(PY) -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
@@ -128,6 +128,22 @@ test:
 coverage-floor:
 	$(PY) checks/coverage_floor.py --self-test
 	$(PY) checks/coverage_floor.py
+
+# Finding #253. Every CI job that EXECUTES the pytest suite must install the same
+# extras. The measured failure: #228 added tests/test_train_execution.py, the
+# `check` job got `[train]`, the `mutation` job -- which runs the WHOLE suite once
+# per mutant -- did not, and all 9 shards died at COLLECTION with "No module named
+# 'tokenizers'". The battery reported that as `assert 96 == 5`, so an unmeasured
+# mutant read as a WRONG VERDICT rather than as a missing dependency.
+#
+# The gate's denominator is jobs that run pytest or tools/mutate.py, NOT jobs that
+# merely mention them; a job installing pytest-cov without ever invoking pytest is
+# a MUST_PASS control, because widening the denominator to "mentions pytest" is how
+# this kind of scanner starts reddening jobs it has no claim over. Zero or one such
+# job exits 95, never 0: agreement across an empty set is `all([])`.
+ci-suite-extras:
+	$(PY) checks/ci_suite_extras.py --self-test
+	$(PY) checks/ci_suite_extras.py
 
 # checks/ joined this list with #231. It was the one directory of executable
 # gates that no linter, no formatter and no typechecker saw, and the exclusion
@@ -159,7 +175,7 @@ fmt:
 # moves out from under the CLI that forwards to it.
 #
 # checks/ is NOT in this list, and that is a stated exclusion rather than an
-# implied one (#231): all 7 files under checks/ are unchecked by mypy. That
+# implied one (#231): all 8 files under checks/ are unchecked by mypy. That
 # count is anchored -- checks_files in the countables census, bound by
 # checks/countables_drift.py -- because the clause it replaces read "3 of 3"
 # in the same commit that ADDED the fourth file (#241). It had copied mypy's
@@ -261,6 +277,28 @@ countables:
 	$(PY) tools/countables_census.py --no-coverage --out $(CENSUS)
 	$(PY) checks/countables_drift.py --census $(CENSUS) $(COUNTABLES_CORPUS)
 
+# Finding #254. CI runs launchers/test_launcher_contracts.sh; until this target
+# existed, no `make` goal did, so the largest gate in the repository was one a
+# developer could not run before pushing. That is the #230 asymmetry with the
+# arrow reversed -- there the Makefile was the stronger of the two mirrors and
+# CI the weaker; here CI enforced a contract the mirror could not even reach.
+#
+# It was not a theoretical gap. The suite's anti-orphan leg scans every
+# launchers/*.py + checks/*.py for call sites and refuses a file that has none.
+# #228 committed checks/coverage_floor.py with `make check` fully green, and CI
+# indicted it as an orphan on the next push -- the second time (#238 was the
+# first) that a new gate file was discoverable only after the commit existed.
+#
+# Cost, measured rather than assumed: 29.7s wall / 4.7s user on the developer
+# machine, 161 controls. The first draft of this comment said "minutes, because
+# it runs real watchdog legs with wall budgets" -- plausible, and wrong; the
+# watchdog legs run their budgets concurrently, which is why user time is a
+# sixth of wall. It is cheap enough that there is no argument for keeping it
+# out of `check`. (#93 is the reason the legs are not made cheaper still: one
+# was, and went load-sensitive -- red at 7/8 under parallel load, 8/8 alone.)
+launcher-contracts:
+	bash launchers/test_launcher_contracts.sh
+
 mutation:
 	FS_FORBID_SKIPS=1 $(PY) tools/mutate.py
 
@@ -309,7 +347,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck skip-guard-probe test coverage-floor controls packaging training-plane makefile-tooling countables mutation
+check: lint typecheck skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables launcher-contracts mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \

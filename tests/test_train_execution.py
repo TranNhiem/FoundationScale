@@ -18,8 +18,10 @@ extra is installed exactly so these tests execute.
 
 from __future__ import annotations
 
+import functools
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -56,6 +58,53 @@ PROFILE_DATA: dict = {
 # fixture defect. 3 special tokens + 253 word tokens == 256 exactly.
 _SPECIAL_TOKENS = ("<unk>", "<pad>", "<eos>")
 _WORD_TOKENS = tuple(f"w{i}" for i in range(253))
+
+
+# Whatever `_offline_and_cpu_env` displaced, recorded at patch time so the
+# control below can compare the double against the real thing. It cannot read
+# the original itself: the autouse fixture has already run by the time any test
+# body executes, so `torch.backends.mps.is_available` is the double there.
+_ORIGINAL_MPS_PROBES: dict[str, Any] = {}
+
+
+def _false_probe_like(original: Any) -> Any:
+    """A zero-arg ``False`` stub that is not NARROWER than the probe it replaces.
+
+    A test double is a claim that it can stand in for the original, and an
+    attribute the original has and the double lacks falsifies that claim
+    silently. `lambda: False` looked adequate because the only thing this
+    module calls the probe FOR is its return value -- but torch does not only
+    call these probes, it INTROSPECTS them. `torch/_dynamo/variables/torch.py`
+    reads ``torch.backends.mps.is_available.__wrapped__`` at import time while
+    building its constant-fold table, and the real `is_available` is an
+    `_lru_cache_wrapper` (which has `__wrapped__`) while a bare lambda is a
+    plain function (which does not) -- narrower by six attributes.
+
+    The consequence was a verdict that depended on the machine, the #83/#111
+    class this framework rejects. The first import of `torch._dynamo` is lazy
+    and happens from deep inside `transformers.modeling_utils`; if it lands
+    inside the patched window it hits the double, raises AttributeError, and
+    transformers' LazyModule converts that into
+    ``ModuleNotFoundError: Could not import module 'is_kubeflow_available'`` --
+    a message naming neither MPS, nor dynamo, nor this fixture. Locally, torch
+    2.13 did not read the attribute and the suite was green; CI resolved torch
+    2.14, which does, and three matrix jobs went red on a test that had passed
+    on the author's machine minutes earlier. The latency was the fixture's, not
+    torch's: the double was already narrower when it was written.
+
+    So the double is built the way the original was, rather than by naming
+    `__wrapped__` as a special case -- an allowlist of one attribute would go
+    stale the next time torch introspects a different one. `cache_info` is the
+    discriminator because that is what distinguishes the two shapes actually
+    present here (`is_available` is cached, `is_built` is not), and wrapping
+    the lambda means everything reachable through `__wrapped__` still answers
+    False. `test_cpu_pin_double_is_not_narrower_than_the_probe` measures the
+    non-narrowing rather than assuming it.
+    """
+    stub: Any = lambda: False  # noqa: E731 -- must be a plain function, not a def, to match shape
+    if hasattr(original, "cache_info"):
+        stub = functools.lru_cache(maxsize=None)(stub)
+    return stub
 
 
 @pytest.fixture(autouse=True)
@@ -96,8 +145,12 @@ def _offline_and_cpu_env(monkeypatch: pytest.MonkeyPatch) -> None:
     import torch
 
     if hasattr(torch.backends, "mps"):
-        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False, raising=False)
-        monkeypatch.setattr(torch.backends.mps, "is_built", lambda: False, raising=False)
+        for _probe in ("is_available", "is_built"):
+            _original = getattr(torch.backends.mps, _probe, None)
+            _ORIGINAL_MPS_PROBES[_probe] = _original
+            monkeypatch.setattr(
+                torch.backends.mps, _probe, _false_probe_like(_original), raising=False
+            )
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
     monkeypatch.setenv("HF_DATASETS_OFFLINE", "1")
@@ -141,6 +194,64 @@ def test_fixture_pins_execution_to_cpu(tmp_path: Path) -> None:
 
     resolved = TrainingArguments(output_dir=str(tmp_path / "probe")).device
     assert resolved.type == "cpu", f"expected CPU placement, resolved {resolved}"
+
+
+def test_cpu_pin_double_is_not_narrower_than_the_probe() -> None:
+    """Control for `_false_probe_like`: the double must not be narrower.
+
+    MUST_PASS arm: for every probe the fixture displaced, every attribute the
+    original exposes is present on the double. Stated as a set difference, not
+    as a check for the one attribute that broke -- torch reads `__wrapped__`
+    today and the point is that the double survives whatever it reads next.
+
+    MUST_FIRE arm: the naive `lambda: False` this replaced IS narrower than
+    `is_available`, so the assertion above is a real measurement and not a
+    tautology that any object would satisfy. Without it a `_false_probe_like`
+    that returned the original unchanged would also pass, and the control
+    would certify nothing.
+
+    Denominator: the probes actually patched, reported on failure. Zero
+    patched probes is UNMEASURED, not a pass -- on a torch build with no
+    `mps` module the fixture patches nothing and this control must say so
+    rather than exit green over an empty set.
+    """
+    import torch
+
+    if not hasattr(torch.backends, "mps"):
+        pytest.fail(
+            "UNMEASURED: torch.backends has no `mps`, so the fixture patched 0 probes and "
+            "this control has an empty denominator. An empty set satisfies every claim "
+            "(`all([])` is True); it is not evidence the double is adequate. Re-scope this "
+            "control to whatever the fixture displaces on this build, or delete both."
+        )
+
+    assert _ORIGINAL_MPS_PROBES, (
+        "UNMEASURED: no originals were recorded, so the fixture did not run or stopped "
+        "recording. The comparison below would be over an empty denominator."
+    )
+
+    for name, original in _ORIGINAL_MPS_PROBES.items():
+        double = getattr(torch.backends.mps, name)
+        missing = sorted(set(dir(original)) - set(dir(double)))
+        assert not missing, (
+            f"the {name} double is NARROWER than the probe it replaces: missing {missing}. "
+            f"torch introspects these at import time, so a missing attribute surfaces as an "
+            f"unrelated ModuleNotFoundError several frames away. Build the double to match "
+            f"the original's shape in _false_probe_like rather than excepting the attribute."
+        )
+        assert double() is False, f"the {name} double must report False, not {double()!r}"
+
+    cached = _ORIGINAL_MPS_PROBES.get("is_available")
+    assert cached is not None and hasattr(cached, "cache_info"), (
+        "MUST_FIRE precondition gone: is_available is no longer a cached wrapper, so the "
+        "narrowing this control detects can no longer be constructed. Re-derive the arm "
+        "against whatever shape the probe has now -- do not delete it."
+    )
+    naive_gap = sorted(set(dir(cached)) - set(dir(lambda: False)))
+    assert "__wrapped__" in naive_gap, (
+        "MUST_FIRE did not fire: a bare `lambda: False` is no longer narrower than "
+        f"is_available (gap {naive_gap}), so the MUST_PASS arm above proves nothing."
+    )
 
 
 @pytest.fixture(scope="module")
