@@ -154,6 +154,7 @@ COUNTABLES_CORPUS := docs README.md Makefile .github/workflows/ci.yml
 
 countables:
 	python3 checks/countables_drift.py --self-test
+	python3 tools/countables_census.py --self-test
 	python3 tools/countables_census.py --no-coverage --out $(CENSUS)
 	python3 checks/countables_drift.py --census $(CENSUS) $(COUNTABLES_CORPUS)
 

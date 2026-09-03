@@ -3715,21 +3715,22 @@ echo "== fix238-gatewiring: countables_drift + packaging_reachability real legs 
 # --- MUST_PASS: countables_drift self-test (checks/countables_drift.py) -----
 # MEASURED: `python3 -S checks/countables_drift.py --self-test` exits rc=0
 # and its last line is exactly
-#   self-test denominator: 14 of 14 controls (8 MUST_FIRE, 6 MUST_PASS)
+#   self-test denominator: 17 of 17 controls (10 MUST_FIRE, 7 MUST_PASS)
 # rc=0 alone is NOT the measurement: a self-test whose control set silently
 # shrinks to 1 still exits 0, so the trailing "N of N controls" is parsed and
-# held to a FLOOR of N >= 14 -- the claim counts what the self-test examined
+# held to a FLOOR of N >= 17 -- the claim counts what the self-test examined
 # (doctrine 2), and a shrunken control set goes red here. If the wording of
 # that line ever changes, THIS leg goes red and must be updated in the same
 # commit -- unreadable is not empty, and unparseable is not passing.
 #
-# #243 raised the floor from 8 to 14. A floor left at its historical value
-# while the real count grows is not conservative, it is six controls the leg
+# Floor history: 8 -> 14 (#243) -> 17 (#244, the three legs that check the
+# census/gate exclusion handshake). A floor left at its historical value while
+# the real count grows is not conservative, it is that many controls the leg
 # would let disappear in silence.
 if [ ! -r "checks/countables_drift.py" ]; then
   f238_msg="MUST_PASS FAILED (countables_drift self-test) UNMEASURED:"
   f238_msg="$f238_msg checks/countables_drift.py is not readable -- unreadable is not"
-  f238_msg="$f238_msg empty (doctrine 4); the gate cannot run, so 0 of 14 controls were measured"
+  f238_msg="$f238_msg empty (doctrine 4); the gate cannot run, so 0 of 17 controls were measured"
   no "$f238_msg"
 else
   f238_rc=0
@@ -3741,7 +3742,7 @@ else
     sed -n 's/^self-test denominator: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls.*/\2/p')
   if [ "$f238_rc" -ne 0 ]; then
     f238_msg="MUST_PASS FAILED (countables_drift self-test): rc=$f238_rc over the gate's"
-    f238_msg="$f238_msg own 14-control fixture set -- output:"
+    f238_msg="$f238_msg own 17-control fixture set -- output:"
     f238_msg="$f238_msg $(printf '%s\n' "$f238_out" | tr '\n' ' ')"
     no "$f238_msg"
   elif [ -z "$f238_have" ] || [ -z "$f238_want" ]; then
@@ -3756,14 +3757,14 @@ else
     f238_msg="$f238_msg $f238_want controls is not self-consistent -- the self-test examined"
     f238_msg="$f238_msg fewer controls than it claims to have (doctrine 2)"
     no "$f238_msg"
-  elif [ "$f238_have" -lt 14 ]; then
+  elif [ "$f238_have" -lt 17 ]; then
     f238_msg="MUST_PASS FAILED (countables_drift self-test): control set shrank to"
-    f238_msg="$f238_msg $f238_have of $f238_want, below the measured floor of 14 -- a self-test"
+    f238_msg="$f238_msg $f238_have of $f238_want, below the measured floor of 17 -- a self-test"
     f238_msg="$f238_msg that quietly drops controls still exits 0, so the floor is the control"
     no "$f238_msg"
   else
     f238_msg="MUST_PASS countables_drift self-test: rc=0 under python3 -S, denominator"
-    f238_msg="$f238_msg $f238_have of $f238_want controls (>= the measured floor of 14): $f238_last"
+    f238_msg="$f238_msg $f238_have of $f238_want controls (>= the measured floor of 17): $f238_last"
     ok "$f238_msg"
   fi
 fi

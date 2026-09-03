@@ -38,11 +38,77 @@ PY = sys.executable
 
 # Directories that are build residue, never source. Counting __pycache__ would
 # make every countable a function of whether someone had recently run pytest.
-NOISE = {"__pycache__", ".venv", ".git", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+#
+# #244: this set is not hygiene, it is a DEFINITION of "the repository", and it
+# was the wrong kind of definition. It listed what to exclude, so it could only
+# ever be as complete as the last machine someone ran it on: `build` was absent,
+# one `pip install .` had left a byte-for-byte second copy of the package in
+# build/lib/foundationscale/, and the repo-wide keys silently counted the
+# package twice. CI's fresh checkout had no build/ and disagreed by exactly
+# src_loc. A blocklist cannot be finished -- .codegraph/, artifacts/, htmlcov/,
+# a downloaded dataset and the next tool's cache are all one command away.
+#
+# The repository already publishes an exact, machine-independent statement of
+# what it contains: the git index. TRACKED membership is now the denominator and
+# NOISE is only a second guard, kept so the method still refuses residue if a
+# junk directory is ever committed by accident.
+NOISE = {
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".git",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".eggs",
+    ".codegraph",
+    "build",
+    "dist",
+    "htmlcov",
+    "site-packages",
+    "node_modules",
+}
+
+
+def _tracked() -> set[Path]:
+    """Every path in the git index, absolute. REFUSEs rather than guessing.
+
+    Falling back to a bare filesystem walk when git is unavailable would put the
+    census back on the blocklist without saying so -- the same number under the
+    same key derived by a different method, which is the drift this file exists
+    to prevent. A census that cannot name its denominator does not ship one.
+    """
+    r = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files", "-z"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if r.returncode != 0:
+        raise SystemExit(
+            f"REFUSE: `git ls-files` failed in {REPO} (rc={r.returncode}). The census "
+            "measures the git index, not the working directory; without it there is "
+            "no machine-independent denominator. See #244."
+        )
+    return {REPO / p for p in r.stdout.split("\0") if p}
+
+
+_TRACKED: set[Path] | None = None
+
+
+def _in_repo(p: Path) -> bool:
+    """Tracked by git AND not residue. Both halves, in that order."""
+    assert _TRACKED is not None, "call _tracked() into _TRACKED before measuring"
+    return p in _TRACKED and not any(part in NOISE for part in p.parts)
+
+
+def _files(root: Path, ext: str) -> list[Path]:
+    return sorted(p for p in root.rglob(f"*{ext}") if _in_repo(p))
 
 
 def _py_files(root: Path) -> list[Path]:
-    return sorted(p for p in root.rglob("*.py") if not any(part in NOISE for part in p.parts))
+    return _files(root, ".py")
 
 
 def _loc(paths: list[Path]) -> int:
@@ -269,14 +335,110 @@ def _env() -> dict[str, str]:
     return dict(os.environ)
 
 
+def self_test() -> int:
+    """Controls for the #244 denominator: a stray build tree must not count.
+
+    Two legs, and the second is the one that makes the first mean anything. A
+    walker that returns nothing at all also "does not count the stray copy" --
+    that PASS would be vacuous. So the MUST_MOVE leg plants a file that IS part
+    of the repository and asserts the number moves by exactly its length.
+    """
+    global _TRACKED
+    saved = _TRACKED
+    ok = True
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "pkg").mkdir()
+        (root / "pkg/a.py").write_text("x = 1\n" * 10, encoding="utf-8")
+        (root / "doc.md").write_text("# t\n" * 5, encoding="utf-8")
+        real = [root / "pkg/a.py", root / "doc.md"]
+        _TRACKED = set(real)
+
+        base_py = _loc(_files(root, ".py"))
+        base_md = _loc(_files(root, ".md"))
+
+        # Residue, in every shape that has actually appeared on a real machine:
+        # the pip build tree (#244's live defect), a wheel dir, a coverage
+        # report, a virtualenv's vendored packages, a code index.
+        for rel, n in (
+            ("build/lib/pkg/a.py", 10),
+            ("dist/pkg/a.py", 10),
+            ("htmlcov/x.md", 5),
+            (".venv/lib/site-packages/dep.py", 400),
+            (".codegraph/idx.py", 77),
+            ("__pycache__/a.py", 10),
+        ):
+            f = root / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("y = 2\n" * n, encoding="utf-8")
+
+        legs: list[tuple[str, str, bool]] = [
+            (
+                "stray build/dist/htmlcov/.venv/.codegraph do not move .py",
+                "MUST_PASS",
+                _loc(_files(root, ".py")) == base_py,
+            ),
+            (
+                "stray htmlcov/*.md does not move .md",
+                "MUST_PASS",
+                _loc(_files(root, ".md")) == base_md,
+            ),
+        ]
+
+        # The positive control: plant a file the index DOES carry and require
+        # the count to move by exactly its length. Without this leg the two
+        # MUST_PASSes above are satisfied by a walker that measures nothing.
+        (root / "pkg/b.py").write_text("z = 3\n" * 7, encoding="utf-8")
+        _TRACKED = set(real) | {root / "pkg/b.py"}
+        legs.append(
+            (
+                "a tracked file DOES move .py, by exactly its length",
+                "MUST_MOVE",
+                _loc(_files(root, ".py")) == base_py + 7,
+            )
+        )
+        # And residue that is somehow in the index is still residue: NOISE is
+        # the second guard, and a guard that never fires is not a guard.
+        _TRACKED = set(real) | {root / "build/lib/pkg/a.py"}
+        legs.append(
+            (
+                "an INDEXED build/ path is still refused by NOISE",
+                "MUST_PASS",
+                _loc(_files(root, ".py")) == base_py,
+            )
+        )
+
+        for name, kind, passed in legs:
+            print(f"  [{'OK ' if passed else 'FAIL'}] {kind:9s} {name}")
+            ok &= passed
+        n = len(legs)
+
+    _TRACKED = saved
+    print(f"census self-test: {n} controls, {'PASS' if ok else 'FAIL'}")
+    return 0 if ok else 5
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", type=Path, default=None, help="prior census to diff against")
     # Required with no default: a census writer with a default output path
     # silently overwrites someone's file.
-    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--out", type=Path, required=False)
     ap.add_argument("--no-coverage", action="store_true", help="skip the pytest+coverage run")
+    ap.add_argument(
+        "--self-test",
+        action="store_true",
+        help="run the #244 denominator controls and exit (no census is written)",
+    )
     args = ap.parse_args()
+
+    if args.self_test:
+        return self_test()
+    if args.out is None:
+        ap.error("--out is required unless --self-test is given")
+
+    global _TRACKED
+    _TRACKED = _tracked()
 
     gt: dict[str, object] = {}
     gt["src_files"], gt["src_loc"] = _count_subtree(REPO / "src/foundationscale")
@@ -296,9 +458,7 @@ def main() -> int:
     gt["shim_names"], gt["shim_private"], gt["shim_public"] = _shim_names()
     gt["h100_files"], gt["h100_loc"] = _count_subtree(REPO / "h100_validation")
 
-    lsh = sorted(
-        p for p in (REPO / "launchers").rglob("*.sh") if not any(x in NOISE for x in p.parts)
-    )
+    lsh = _files(REPO / "launchers", ".sh")
     gt["launch_sh_files"] = len(lsh)
     gt["launch_sh_loc"] = _loc(lsh)
     gt["launch_py_loc"] = _loc(_py_files(REPO / "launchers"))
@@ -307,9 +467,7 @@ def main() -> int:
     # half had no key, so half of a two-number claim sat in nothing -- and the
     # half that IS anchored stayed correct while the unanchored half went
     # stale three lines away, with the gate reporting CLEAR.
-    hsh = sorted(
-        p for p in (REPO / "h100_validation").rglob("*.sh") if not any(x in NOISE for x in p.parts)
-    )
+    hsh = _files(REPO / "h100_validation", ".sh")
     gt["h100_sh_files"] = len(hsh)
     gt["h100_sh_loc"] = _loc(hsh)
     gt["decisions_loc"] = _loc([REPO / "docs/DECISIONS.md"])
@@ -322,33 +480,43 @@ def main() -> int:
     # derived number under the same word would hide that, so the old key is
     # deliberately NOT emitted: a claim whose method cannot be restated is
     # unmeasured, and unmeasured is a state, not a rounding error.
+    # #244: these were named ondisk_* and walked the working directory minus a
+    # blocklist, so each one stated a property of the MACHINE. They are now
+    # git-tracked, and RENAMED to say so -- a method change under an unchanged
+    # key is exactly the failure this file exists to prevent, and renaming
+    # forces every document that states one of these numbers to restate it in
+    # words the gate must re-anchor.
     def _ext_loc(ext: str) -> tuple[int, int]:
-        ps = sorted(
-            p
-            for p in REPO.rglob(f"*{ext}")
-            if not any(x in NOISE for x in p.relative_to(REPO).parts)
-        )
+        ps = _files(REPO, ext)
         return len(ps), _loc(ps)
 
-    gt["ondisk_py_files"], gt["ondisk_py_loc"] = _ext_loc(".py")
-    gt["ondisk_sh_files"], gt["ondisk_sh_loc"] = _ext_loc(".sh")
-    gt["ondisk_md_files"], gt["ondisk_md_loc"] = _ext_loc(".md")
-    gt["ondisk_py_sh_loc"] = gt["ondisk_py_loc"] + gt["ondisk_sh_loc"]
-    # The review corpus says "N measured .py/.sh/.md lines repo-wide" -- a
-    # THIRD method again, distinct from the two above. It gets its own key
-    # rather than being approximated by ondisk_py_sh_loc, because the whole
-    # point of the ondisk_* family is that each name states its own denominator.
+    gt["tracked_py_files"], gt["tracked_py_loc"] = _ext_loc(".py")
+    gt["tracked_sh_files"], gt["tracked_sh_loc"] = _ext_loc(".sh")
+    gt["tracked_md_files"], gt["tracked_md_loc"] = _ext_loc(".md")
+    gt["tracked_py_sh_loc"] = gt["tracked_py_loc"] + gt["tracked_sh_loc"]
+    # The review corpus says "N ... lines repo-wide" -- a THIRD method again,
+    # distinct from the two above. It gets its own key rather than being
+    # approximated by tracked_py_sh_loc, because the whole point of this family
+    # is that each name states its own denominator.
     #
     # This key counts .md, so the document that STATES it is inside it. That is
     # a fixed point only because the unit is the LINE and a token rewrite
     # preserves line count, so `--fix` converges in one pass. Re-express it in
     # characters or bytes and it never converges: correcting the number changes
     # the number.
-    gt["ondisk_py_sh_md_loc"] = gt["ondisk_py_sh_loc"] + gt["ondisk_md_loc"]
+    gt["tracked_py_sh_md_loc"] = gt["tracked_py_sh_loc"] + gt["tracked_md_loc"]
     gt["repo_wide_loc_UNRECOVERABLE"] = (
         "prior drafts state 125,697 with no recorded method; no counting rule tried "
-        "here reproduces it. Use the ondisk_* keys, which name their own denominator."
+        "here reproduces it. Use the tracked_* keys, which name their own denominator."
     )
+    # The method and its exclusion set, emitted so the CONSUMER can check them.
+    # checks/countables_drift.py holds its own EXCLUDED_PARTS for deciding which
+    # documents to scan; before #244 the two lists differed and neither could
+    # see the other, which is how a whole duplicated package entered a published
+    # number in silence. The gate now refuses unless its list is a subset of
+    # this one, so a future divergence is a verdict instead of a disagreement.
+    gt["census_method"] = "git-tracked"
+    gt["excluded_parts"] = sorted(NOISE)
 
     gt["imports_tests"] = _package_imports(REPO / "tests")
     gt["imports_tools"] = _package_imports(REPO / "tools")

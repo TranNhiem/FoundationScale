@@ -80,6 +80,48 @@ EXCLUDED_PARTS: Final[tuple[str, ...]] = (
 )
 
 
+def exclusions_agree(raw: object) -> tuple[bool, str]:
+    """Does the census exclude at least everything this gate excludes? (#244)
+
+    The producer and the consumer each held a private answer to "what is the
+    repository", and the two answers differed by `build`. A pip build tree
+    added a second copy of the whole package to a published number; CI's fresh
+    checkout had no build/ and the two sides disagreed by exactly src_loc, with
+    no instrument able to say why. Neither list was wrong on its own -- the
+    defect was that neither could see the other.
+
+    So the census now states its method and its exclusion set, and this gate
+    refuses to read a census whose definition is narrower than its own. Subset,
+    not equality: the census may exclude MORE (it walks source trees, this gate
+    only walks documents), it may never exclude less.
+    """
+    if not isinstance(raw, dict):
+        return False, "census is not a JSON object"
+    method = raw.get("census_method")
+    if method != "git-tracked":
+        return False, (
+            f"census_method is {method!r}, expected 'git-tracked'. A census derived by "
+            "walking the filesystem states a property of the machine it ran on; see #244."
+        )
+    parts = raw.get("excluded_parts")
+    if not isinstance(parts, list) or not all(isinstance(p, str) for p in parts):
+        return False, (
+            "census carries no excluded_parts list, so its definition of 'the repository' "
+            "cannot be compared with this gate's. Regenerate with tools/countables_census.py."
+        )
+    missing = sorted(set(EXCLUDED_PARTS) - set(parts))
+    if missing:
+        return False, (
+            "census and gate disagree about what the repository IS: the census does not "
+            f"exclude {', '.join(missing)}, which this gate does. That is #244 exactly -- "
+            "one side counted a build tree the other refused to read."
+        )
+    return True, (
+        f"census_method={method}, exclusions agree "
+        f"({len(EXCLUDED_PARTS)} gate parts are a subset of the census's {len(parts)})"
+    )
+
+
 @dataclass(frozen=True)
 class PatternSpec:
     """ONE context-anchored pattern.
@@ -479,14 +521,19 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         bindings=(("h100_loc", "num"),),
     ),
     PatternSpec(
-        label="N measured .py/.sh/.md lines repo-wide (ondisk_py_sh_md_loc)",
+        label="N git-tracked .py/.sh/.md lines repo-wide (tracked_py_sh_md_loc)",
         # evidence: docs/review/D4_feature_evaluation.md
-        #   "the measured census (107,217 measured .py/.sh/.md lines repo-wide;"
+        #   "the measured census (115,229 git-tracked .py/.sh/.md lines repo-wide;"
         # The clause names its own method, so it binds the key that uses that
-        # method and no other -- ondisk_py_sh_loc is a DIFFERENT number and
+        # method and no other -- tracked_py_sh_loc is a DIFFERENT number and
         # substituting it would be the drift this gate exists to catch.
-        regex=re.compile(r"(?P<num>" + NUMBER + r") measured \.py/\.sh/\.md lines repo-wide"),
-        bindings=(("ondisk_py_sh_md_loc", "num"),),
+        #
+        # #244: the word was "measured", which named no method at all, and the
+        # key behind it walked the working directory. The phrasing now carries
+        # the method, so a reader can tell which of the three repo-wide numbers
+        # this is without opening the census.
+        regex=re.compile(r"(?P<num>" + NUMBER + r") git-tracked \.py/\.sh/\.md lines repo-wide"),
+        bindings=(("tracked_py_sh_md_loc", "num"),),
     ),
 )
 
@@ -751,7 +798,7 @@ SELF_CENSUS: Final[dict[str, int]] = {
     "launch_sh_loc": 9274,
     "launch_sh_files": 5,
     "launch_py_loc": 1615,
-    "ondisk_py_sh_md_loc": 133680,
+    "tracked_py_sh_md_loc": 115229,
     "imports_total": 132,
     "tools_files": 9,
     "tools_loc": 8695,
@@ -887,6 +934,31 @@ def self_test() -> int:
         rep = scan({}, SELF_CENSUS, 0, 0)
         ok = gate_exit_code(rep) == EXIT_UNMEASURED
         return ok, f"exit={gate_exit_code(rep)}"
+
+    # #244. These three take no corpus: they interrogate the handshake between
+    # the census and this gate, which is upstream of any document.
+    _WIDE = sorted(set(EXCLUDED_PARTS) | {"__pycache__", ".mypy_cache"})
+
+    def c_exclusions_agree(_root: Path) -> tuple[bool, str]:
+        ok, why = exclusions_agree({"census_method": "git-tracked", "excluded_parts": _WIDE})
+        return ok, why
+
+    def c_exclusions_narrower(_root: Path) -> tuple[bool, str]:
+        # The literal #244 census: the pre-fix NOISE set, which omits `build`.
+        # MUST_FIRE, and the message must NAME the part, because "the two
+        # disagree" without the term is a verdict nobody can act on.
+        narrow = ["__pycache__", ".venv", ".git", ".pytest_cache", ".mypy_cache", ".ruff_cache"]
+        ok, why = exclusions_agree({"census_method": "git-tracked", "excluded_parts": narrow})
+        return (not ok) and "build" in why, f"refused={not ok} names_build={'build' in why}"
+
+    def c_exclusions_absent(_root: Path) -> tuple[bool, str]:
+        # A census written before this contract existed. Fail CLOSED: an
+        # unstated method is not a compatible one.
+        ok_a, _ = exclusions_agree({"census_method": "git-tracked"})
+        ok_b, _ = exclusions_agree({"excluded_parts": _WIDE})
+        return (not ok_a) and (
+            not ok_b
+        ), f"no_parts_refused={not ok_a} no_method_refused={not ok_b}"
 
     def c_mermaid_node(root: Path) -> tuple[bool, str]:
         # #240: the clause that was false at birth lived in a mermaid node
@@ -1039,6 +1111,9 @@ def self_test() -> int:
         ("--fix idempotent, second run rewrites 0", "MUST_PASS", c_idempotent),
         ("pattern matching nothing lands in instrument warnings", "MUST_FIRE", c_zero_patterns),
         ("empty corpus -> exit 95, never 0", "MUST_PASS", c_empty_corpus),
+        ("census excludes >= gate: handshake agrees", "MUST_PASS", c_exclusions_agree),
+        ("census excludes less (no `build`): refuse, by name", "MUST_FIRE", c_exclusions_narrower),
+        ("census states no method / no parts: refuse", "MUST_FIRE", c_exclusions_absent),
     ]
 
     behaved = 0
@@ -1101,6 +1176,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not isinstance(raw, dict):
         print("REFUSE: census is not a JSON object", file=sys.stderr)
         return EXIT_REFUSE
+    agreed, why = exclusions_agree(raw)
+    if not agreed:
+        print(f"REFUSE: {why}", file=sys.stderr)
+        return EXIT_REFUSE
+    print(f"method: {why}")
     # int-valued keys only; strings like repo_wide_loc_UNRECOVERABLE carry no
     # oracle and bools are not counts.
     census: dict[str, int] = {

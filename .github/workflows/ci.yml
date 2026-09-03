@@ -275,6 +275,18 @@ jobs:
       #     narrower census is visible in the output rather than assumed.
       - name: Countables drift controls (MUST_FIRE/MUST_PASS)
         run: python3 checks/countables_drift.py --self-test
+      #  3b. #244: the CENSUS needs its own controls, not just the gate's. Its
+      #     repo-wide keys were a filesystem walk minus a blocklist, so they
+      #     stated a property of the machine: one developer's leftover build/
+      #     tree added a second copy of the whole package, and this job is where
+      #     it surfaced -- a fresh checkout disagreed by exactly src_loc. The
+      #     denominator is now the git index, and these four controls plant the
+      #     residue shapes that have actually appeared (build/, dist/, htmlcov/,
+      #     .venv/, .codegraph/) and require the number not to move -- plus one
+      #     positive control requiring that a TRACKED file does move it, since a
+      #     walker that measures nothing would satisfy the other three.
+      - name: Countables census controls (a stray build/ tree must not count)
+        run: python3 tools/countables_census.py --self-test
       - name: Measure the countables census (the oracle, never committed)
         run: python3 tools/countables_census.py --no-coverage --out "$RUNNER_TEMP/census.json"
       #  4. Makefile and this workflow are in the scan set as of #241. A
