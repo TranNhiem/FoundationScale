@@ -176,6 +176,18 @@ class ExpertAliasGate(Gate):
         "and expert keys carry global indices — the 128-saved-as-16 incident"
     )
     events = (Lifecycle.FIRST_SAVE, Lifecycle.SAVE)
+    # Declared, because this gate reads a context no other checkpoint gate produces:
+    # `check` needs declared_expert_count, which a CheckpointGateContext does not
+    # carry. Leaving context_type unset makes the gate LEGACY, and a legacy gate is
+    # broadcast whatever context the sweep is holding -- so a run that happened to
+    # import this module died at its first save on
+    # `AttributeError: 'CheckpointGateContext' object has no attribute
+    # 'declared_expert_count'`, scored as a blocking ERROR (#250). Registration is an
+    # import side effect, so which runs died was decided by an import graph. Declaring
+    # the type makes the mismatch a dispatch fact instead of a traceback: the gate is
+    # reported unwired, or SKIP where the caller declared the abstention, and it never
+    # reaches `check` with a context it cannot read.
+    context_type = ExpertCheckContext
 
     #: Trailing digits directly on a weight/bias stem: the local-name signature.
     #: Canonical names end in ``.weight`` / ``.bias``; the corrupted module appended

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from foundationscale.gates.core import Coverage, Gate, GateRegistry, Lifecycle
+from foundationscale.gates.core import Coverage, Gate, GateRegistry, Lifecycle, Verdict
 from foundationscale.topology import ClusterProfile
 from foundationscale.train.cli import main as cli_main
 from foundationscale.train.loop import (
@@ -493,3 +493,143 @@ def test_partition_scan_blocks_on_spelling_variants(
     assert rc == EXIT_RED, out
     assert "scanning 2 launcher file(s)" in out
     assert poison.touched is False  # blocked BEFORE torch
+
+
+# ---------------------------------------------------------------------------
+# #250: the save gate dispatches on declared context type, and an abstention is
+# declared rather than fatal.
+#
+# The loop used to call GateRegistry.run, which broadcasts one context to every
+# gate registered for the event. A gate declaring a different context family got
+# a CheckpointGateContext and died inside check() as a raw AttributeError one
+# frame down, which the sweep scores as a blocking ERROR and the callback turns
+# into should_training_stop. Two real gates were in that state
+# (checkpoint.weight_parity, objective.hparam_drift), so whether a run trained at
+# all depended on whether anything in the process had imported their modules --
+# registration is an import side effect. These controls pin the dispatch, not the
+# two gates: a third gate declaring a third context would otherwise reintroduce
+# the class silently.
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class _ForeignContext:
+    """A context no checkpoint builder produces."""
+
+    token: str
+
+
+class _ForeignContextGate(Gate):
+    """Declares a context the save path does not build, and does NOT override
+    coerce_context -- the base refuses by returning None. This is deliberately the
+    exact shape of checkpoint.weight_parity, so the control fails the same way the
+    real gate did rather than a way invented for the test."""
+
+    id = "test.save_gate.foreign_context"
+    description = "declares a context the save path does not build"
+    events = (Lifecycle.FIRST_SAVE, Lifecycle.SAVE)
+    context_type = _ForeignContext
+
+    def check(self, ctx):
+        # Reached only with a _ForeignContext. fail() rather than ok() so that the
+        # positive control below is unambiguous: if dispatch ever hands this gate
+        # the checkpoint context again, the run stops and the suite says so.
+        return self.fail(
+            f"foreign context observed: {ctx.token}",
+            Coverage(checked=1, unit="token", expected=1),
+        )
+
+    def controls(self):
+        return []
+
+
+def test_foreign_context_gate_abstains_and_training_continues(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A gate whose declared context the caller does not build must SKIP.
+
+    Pre-#250 this was a blocking ERROR and the run stopped here. The assertions
+    below are the four separable claims: the run continues, the abstention is
+    SKIP and not PASS, the gate stays inside the printed denominator, and the
+    reason names the missing type so the SKIP is attributable.
+    """
+    registry = GateRegistry()
+    registry.register(_ForeignContextGate())
+    cb = FoundationScaleSaveGate(registry=registry, context_builder=lambda p: object())
+    args, state, control = _fake_hf(tmp_path)
+    cb.on_save(args, state, control)
+    out = capsys.readouterr().out
+
+    assert control.should_training_stop is False  # the run CONTINUES
+    assert cb.blocked is False
+    assert len(cb.reports) == 1
+    results = cb.reports[0].results
+    # Still counted: an abstention that vanished from the denominator would make
+    # a 0/0 sweep read as complete, which is doctrine 1 with extra steps.
+    assert len(results) == 1
+    assert results[0].gate_id == "test.save_gate.foreign_context"
+    assert results[0].verdict is Verdict.SKIP
+    assert "_ForeignContext" in str(results[0].detail)
+    assert "1/1 gates" in out
+    # The pre-fix signature was a traceback from inside check(); its absence is
+    # what distinguishes "dispatched away" from "crashed quietly".
+    assert "Traceback" not in out
+
+
+def test_foreign_context_gate_fires_when_its_context_is_supplied(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Positive control for the test above: the gate is not merely inert.
+
+    A SKIP proves nothing on its own -- a gate that could never fire would also
+    produce one. Handing this gate the context it declares must reach check() and
+    stop the run, so the abstention above is attributable to dispatch rather than
+    to a dead gate.
+    """
+    registry = GateRegistry()
+    registry.register(_ForeignContextGate())
+    cb = FoundationScaleSaveGate(
+        registry=registry,
+        context_builder=lambda p: _ForeignContext(token="wired"),
+    )
+    args, state, control = _fake_hf(tmp_path)
+    cb.on_save(args, state, control)
+    out = capsys.readouterr().out
+
+    assert control.should_training_stop is True  # the run STOPS
+    assert cb.blocked is True
+    results = cb.reports[0].results
+    assert len(results) == 1
+    assert results[0].verdict is Verdict.FAIL
+    assert "foreign context observed: wired" in str(results[0].detail)
+    assert "should_training_stop=True" in out
+
+
+def test_legacy_and_typed_gates_coexist_in_one_sweep(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The mixed registry is the migration state, and it is where #250 bit.
+
+    A legacy gate (context_type is None) must still receive the bare context
+    unchanged, while a gate declaring a foreign type abstains -- in the SAME
+    sweep, with both inside the denominator. Asserting them separately would not
+    catch a dispatch that handles each shape correctly only when it is alone.
+    """
+    registry = GateRegistry()
+    registry.register(_MustFireGate())  # legacy: reads whatever it is handed
+    registry.register(_ForeignContextGate())  # typed: declares a foreign context
+    cb = FoundationScaleSaveGate(registry=registry, context_builder=lambda p: object())
+    args, state, control = _fake_hf(tmp_path)
+    cb.on_save(args, state, control)
+    out = capsys.readouterr().out
+
+    verdicts = {r.gate_id: r.verdict for r in cb.reports[0].results}
+    assert verdicts == {
+        "test.save_gate.must_fire": Verdict.FAIL,
+        "test.save_gate.foreign_context": Verdict.SKIP,
+    }
+    # The legacy gate's FAIL is what stops the run; the typed gate's abstention
+    # neither adds to nor subtracts from that verdict.
+    assert control.should_training_stop is True
+    assert "2/2 gates" in out
+    assert "Traceback" not in out

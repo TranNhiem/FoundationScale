@@ -45,6 +45,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from abc import ABC
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -436,8 +437,52 @@ def _no_hparams_at_all_ctx() -> ObjectiveGateContext:
     return _healthy_ctx(current_hparams={}, step0_fingerprint=None, step0_hparams=None)
 
 
+class _ObjectiveGate(Gate, ABC):
+    """Base for the objective gates: declares the context these gates actually read.
+
+    ``ABC`` is in the bases deliberately: :meth:`Gate.__init_subclass__` requires a
+    non-empty ``id``/``description``/``events`` on every concrete subclass and
+    exempts only classes that name ``ABC`` directly, which is the framework's way of
+    spelling "shared behaviour, not a gate". Without it this base would have to
+    invent an id and an event tuple, and a gate with a placeholder id is a gate that
+    can be registered by accident.
+
+    Every gate below opens with ``_coerce(ctx)``, which raises ``TypeError`` on any
+    object without an ``.objective``. Left undeclared, a gate is LEGACY, and the
+    legacy path hands it whatever context the sweep happens to be holding — so that
+    ``TypeError`` surfaces as a blocking ERROR in a sweep that was never about
+    objectives. ``objective.hparam_drift`` is registered for SAVE, which is the
+    event the training loop's end-of-run adjudicator uses: a run that merely
+    imported this module died there on a ``CheckpointGateContext`` (#250). Because
+    registration is an import side effect, *which* runs died was decided by an
+    import graph rather than by anything about the run.
+
+    Declaring ``context_type`` turns that from a traceback into a dispatch fact.
+    :func:`run_event` routes by the declared type, so a caller holding a foreign
+    context gets a named "unwired" ERROR, or a SKIP where it declared the
+    abstention — visible in the denominator, never a PASS, and never a stopped run.
+
+    The base is applied to all four gates, not only the one with a save event. The
+    others are STEP_ZERO/LAUNCH today, so they collide with nothing; that is a fact
+    about the current event map, not a property of the gates, and a gate whose
+    correctness depends on nobody registering it for another event is the same
+    defect waiting for a different import.
+
+    ``coerce_context`` preserves the duck-typing :func:`_coerce` documents — any
+    object carrying an ``.objective``, which is what the trainer-side adapters
+    supply — and refuses by returning ``None`` rather than raising, per the
+    base-class contract: raising here would reproduce the opaque failure the hook
+    exists to replace.
+    """
+
+    context_type = ObjectiveGateContext
+
+    def coerce_context(self, ctx: Any) -> ObjectiveGateContext | None:
+        return _coerce(ctx) if hasattr(ctx, "objective") else None
+
+
 @register
-class ObjectiveDeclaredGate(Gate):
+class ObjectiveDeclaredGate(_ObjectiveGate):
     """Prevents the 24-run unrecorded-objective incident.
 
     The objective in force must be an *effective* value (post-merge of CLI, config,
@@ -541,7 +586,7 @@ class ObjectiveDeclaredGate(Gate):
 
 
 @register
-class LossComponentCoverageGate(Gate):
+class LossComponentCoverageGate(_ObjectiveGate):
     """Prevents listed-but-inert objective components, and the empty-list pass.
 
     Two incident shapes share one gate because they share one root cause — trusting
@@ -776,7 +821,7 @@ class LossComponentCoverageGate(Gate):
 
 
 @register
-class RewardScaleSanityGate(Gate):
+class RewardScaleSanityGate(_ObjectiveGate):
     """Prevents healthy-looking averages on a dead policy gradient.
 
     The logged evidence from the incident: 1,876 steps, 472 with ``grad_norm``
@@ -1104,7 +1149,7 @@ class RewardScaleSanityGate(Gate):
 
 
 @register
-class HyperparameterDriftGate(Gate):
+class HyperparameterDriftGate(_ObjectiveGate):
     """Prevents the objective quietly becoming a different objective mid-run.
 
     In the audited estate the trust-region coefficient that should have bound the

@@ -31,6 +31,7 @@ from foundationscale.gates.core import (
     GateRegistry,
     GateReport,
     Lifecycle,
+    run_event,
 )
 from foundationscale.topology import (
     ClusterProfile,
@@ -311,7 +312,13 @@ def _run_save_gates(
         ctx = builder(ckpt_dir)
     except Exception as exc:  # noqa: BLE001 -- reported as UNMEASURED by callers
         return None, exc
-    return registry.run(event, ctx), None
+    # Typed dispatch for the same reason FoundationScaleSaveGate.on_save uses it: a
+    # broadcast hands gates from other context families a context they cannot read,
+    # and the resulting AttributeError is scored as a blocking ERROR (#250). This is
+    # the second of the two call sites, and it is the one the end-of-run adjudicator
+    # reaches -- fixing only on_save left the run stopping at exactly the same place,
+    # one instrument later, which is why both are stated here rather than shared.
+    return run_event(registry, event, ctx, missing_ctx="report-skip"), None
 
 
 class FoundationScaleSaveGate(_CallbackBase):
@@ -352,7 +359,31 @@ class FoundationScaleSaveGate(_CallbackBase):
                 f"UNMEASURED 0/0 gates: cannot build checkpoint context for {ckpt_dir}: {exc}",
             )
             return control
-        report = self.registry.run(event, ctx)
+        # Typed dispatch, not GateRegistry.run. `run` broadcasts one context to every
+        # gate registered for the event, so a gate from another context family
+        # (parity, objective) is handed a CheckpointGateContext and dies inside
+        # check() as a raw AttributeError one frame down -- which the sweep counts as
+        # a blocking ERROR and the loop turns into should_training_stop. Whether a run
+        # trained at all then depended on whether anything in the process had imported
+        # foundationscale.verify.parity, because registration is an import side effect
+        # (#250). run_event consults the declared Gate.context_type instead; its own
+        # docstring names this broadcast failure as the reason it exists.
+        #
+        # The context is passed BARE, not as {type(ctx): ctx}. A typed map is the
+        # stronger form, but run_event refuses to hand a mapping to a gate declaring
+        # no context_type -- choosing an entry for it would be a guess -- so a map
+        # here turns every legacy gate a caller registered through the `registry`
+        # argument into an ERROR. The bare object is the documented migration shape:
+        # it reaches a declaring gate by isinstance, and a legacy gate unchanged.
+        #
+        # missing_ctx="report-skip" declares the abstention rather than blocking on it.
+        # This backend writes one source per save, so there is no second checkpoint for
+        # a parity gate to compare against: the context is absent because the
+        # comparison does not exist here, not because the wiring was forgotten.
+        # Blocking would be fail-closed against the wrong proposition. The gates stay
+        # in the printed denominator and surface as SKIP with a detail naming them --
+        # an abstention that is visible, and never a PASS.
+        report = run_event(self.registry, event, ctx, missing_ctx="report-skip")
         self.reports.append(report)
         self.records.append(
             {
