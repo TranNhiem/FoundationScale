@@ -53,3 +53,10 @@ artifacts/mutation-battery-report.json
 
 # Measured by `make countables`; an oracle is never committed (#220).
 .countables_census.json
+
+# Graphify knowledge-graph output. The graph is built OUT of tree (GRAPHIFY_OUT is
+# absolute, at ~/fs-graph/graphify-out) precisely so it stays out of the pre-push
+# estate-scan denominator. This entry is the second, independent guard: graphify
+# resolves its cache as <scan-root>/<GRAPHIFY_OUT>/cache/, so a run that forgets
+# the env var writes ~8.5 MB / 210 files straight into this public repo.
+graphify-out/
