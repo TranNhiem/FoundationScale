@@ -6,9 +6,9 @@ the state is **UNMEASURED**. "Validated" is used only where a job id or a named 
 backs it.
 
 Scope note on size, so denominators in this document are anchored: the repository holds
-122683 git-tracked .py/.sh/.md lines repo-wide; the validation harness, `validation_campaigns/h100_validation/`
+122745 git-tracked .py/.sh/.md lines repo-wide; the validation harness, `validation_campaigns/h100_validation/`
 (31313 .py LOC, 63 files); the package, `src/foundationscale/` measures 18915 lines; the
-GB200-side launch path, `launchers/*.sh` (10171 LOC, 5 files). No other countables appear
+GB200-side launch path, `launchers/*.sh` (10231 LOC, 7 files). No other countables appear
 in this document.
 
 ---
@@ -99,8 +99,8 @@ plainly because the code layout invites the confusion:
   for the tray (sbatch/srun gone; enroot the only executable path). Those facts are
   recorded **in comments**, not in an evidence ledger equivalent to EVIDENCE.md.
 - Contract-test shells exist (`launchers/test_launcher_contracts.sh`,
-  `launchers/test_fs_live_gate_watchdog_contracts.sh`). No execution record of their
-  output is in the evidence I was given. UNMEASURED means exactly this: not observed.
+  `launchers/test_checks_gates.sh`, `launchers/test_fs_live_gate_watchdog_contracts.sh`).
+  No execution record of their output is in the evidence I was given. UNMEASURED means exactly this: not observed.
 - GB200-shaped constants caused measured H100-side defects when they leaked across
   (the `SLURM_NTASKS=4` mint in #125, identified as "a GB200 tray fact"; the stale
   GB200 walltime guard removed by `patch_node_shape.py`). These are defect records,
@@ -194,7 +194,9 @@ with plugin selection in an evidence ledger **that does not yet exist for this
 platform**.
 
 **Step G1–G4 sketch (all currently UNMEASURED):** G1: run the launcher contract shells
-(`launchers/test_launcher_contracts.sh`) on the tray and record output. G2: LoRA probe
+(`launchers/test_launcher_contracts.sh` and `launchers/test_checks_gates.sh` — both,
+since the anti-orphan leg's corpus is the two concatenated) on the tray and record
+output. G2: LoRA probe
 via `launchers/launch_g4e4b_lora_1tray.sh`, bounded budget, exit 0 with an adjudicated
 checkpoint. G3: full-FT probe via `launchers/launch_g4e4b_fullft_1tray.sh`, same exit
 condition. G4: resume from G3's checkpoint with a restore verdict in the trainer's

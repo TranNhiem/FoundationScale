@@ -11,9 +11,14 @@
 # The entry point also exits nonzero if the registry is empty: a controls run
 # that verified nothing is the same vacuous pass one level up.
 #
-# `launchers` closes finding #81: launchers/test_launcher_contracts.sh carries
+# `launchers` closes finding #81: launchers/test_launcher_contracts.sh carried
 # 134 controls and was invoked by no CI step — a suite that only runs when a
 # human remembers is a control that never RUNS, which is to say not a control.
+# Under #257 that file was split: the checks/*.py gate self-tests now live in
+# launchers/test_checks_gates.sh, and this job runs BOTH (146 + 19 = 165
+# controls). Running only one would be worse than running neither loudly —
+# the anti-orphan leg's corpus is the two suites concatenated, so a half-run
+# indicts every helper cited solely from the absent half.
 # The job runs it from the repository root (measured CWD-sensitivity: called
 # from inside launchers/, its watchdog sub-suite reports "0/8 launcher
 # unreadable" and fails closed) and credits a pass only on the suite's own
@@ -503,13 +508,21 @@ jobs:
         # lands in rc untouched.
         run: |
           cd "$GITHUB_WORKSPACE"
-          if [ ! -f launchers/test_launcher_contracts.sh ]; then
-            echo "::error::launchers/test_launcher_contracts.sh not found from $(pwd)."
-            echo "::error::This step must run from the repository root (see step comment:"
-            echo "::error::the suite is measured CWD-sensitive). A missing entry point is a"
-            echo "::error::refusal — never zero controls, never a pass."
-            exit 1
-          fi
+          # Both halves of the #257 split are checked, and the shared prelude
+          # with them: the two suites source it for ok/no and the counters, so
+          # its absence is not a missing convenience but a suite that cannot
+          # count. A missing member is a refusal, never zero controls.
+          for entry in launchers/test_launcher_contracts.sh \
+                       launchers/test_checks_gates.sh \
+                       launchers/_suite_prelude.sh; do
+            if [ ! -f "$entry" ]; then
+              echo "::error::$entry not found from $(pwd)."
+              echo "::error::This step must run from the repository root (see step comment:"
+              echo "::error::the suite is measured CWD-sensitive). A missing entry point is a"
+              echo "::error::refusal — never zero controls, never a pass."
+              exit 1
+            fi
+          done
 
           # THE CONTROL FLOOR, AND THE ONLY PLACE IT IS WRITTEN.
           #
@@ -550,7 +563,27 @@ jobs:
           # empty denominator -> UNMEASURED.
           # RE-MEASURED, not incremented: `bash launchers/test_launcher_contracts.sh`
           # reported `controls: 161 passed, 0 failed` on the commit that adds them.
-          FLOOR=161
+          # 161 -> 165 (#255 era, re-measured on the split commit below).
+          #
+          # #257 SPLIT THE SUITE, so one floor became two -- and the rule above
+          # ("if a number is worth comparing against, it is worth having exactly
+          # one copy of") is what dictates the shape. Each suite is verified
+          # against its OWN floor, because each prints its own summary; but the
+          # quantity the doctrine cares about is the TOTAL number of controls a
+          # push certifies, so FLOOR is COMPUTED from the parts rather than
+          # written a third time. A leg that moves between the two files changes
+          # both parts and leaves the total alone, which is exactly right: no
+          # control was gained or lost. A leg deleted from one file lowers the
+          # total, which is the shrink this floor exists to refuse.
+          #
+          # RE-MEASURED on the split commit, not apportioned by arithmetic:
+          #   launchers/test_launcher_contracts.sh -> controls: 146 passed, 0 failed
+          #   launchers/test_checks_gates.sh       -> controls:  19 passed, 0 failed
+          # 146 + 19 = 165, which is what the unsplit suite reported, so the cut
+          # moved legs and created none.
+          FLOOR_LAUNCHER=146
+          FLOOR_CHECKS=19
+          FLOOR=$((FLOOR_LAUNCHER + FLOOR_CHECKS))
 
           verify_summary() {
             # Returns 0 only when the suite's summary line exists, reports
@@ -588,7 +621,18 @@ jobs:
             # reworded 'SUMMARY:' line still lands) OR the semantic shape the
             # parser actually needs: a pass count and a failure count on one
             # line. It is still strictly fail-closed — no match is a refusal.
-            local log=$1 line frac failed passed_n passed total
+            # #257: the floor arrives as $2 rather than being read from the
+            # enclosing FLOOR, because there are now two suites with two floors
+            # and a function that closes over one global would silently measure
+            # the checks suite against the launcher's bar. Required, never
+            # defaulted: an unset floor is UNMEASURED, and a default would turn
+            # a call-site omission into a pass over an unknown denominator.
+            local log=$1 floor=$2 line frac failed passed_n passed total
+            if [ -z "$floor" ]; then
+              echo "::error::verify_summary called with no floor -- the denominator" >&2
+              echo "::error::is the claim; without one this function states nothing." >&2
+              return 1
+            fi
             line=$(printf '%s\n' "$log" \
               | { grep -iE 'summary|[0-9]+[[:space:]]*(passed|green)[^0-9]+[0-9]+[[:space:]]*failed' || true; } \
               | tail -n 1)
@@ -633,8 +677,8 @@ jobs:
             # silence, which is the same quiet-shrink move the floor exists to
             # refuse. The value itself is FLOOR, set once at the top of this
             # step; see the comment there for why it is not written twice.
-            if [ "$((10#$total))" -lt "$FLOOR" ]; then
-              echo "::error::summary covers $total controls; $FLOOR were measured when this" >&2
+            if [ "$((10#$total))" -lt "$floor" ]; then
+              echo "::error::summary covers $total controls; $floor were measured when this" >&2
               echo "::error::gate was written. A quietly shrunk suite is the empty-registry" >&2
               echo "::error::move, one directory down. Remove controls on purpose and lower" >&2
               echo "::error::this floor in the same commit — or not at all." >&2
@@ -656,19 +700,19 @@ jobs:
           mustfire_1=$'launchers: 8/8 watchdog checks green\ncontracts: 126/126 green'
           mustfire_2="SUMMARY: $FLOOR/$FLOOR controls passed, 1 failed"
           mustfire_3='SUMMARY: 12/12 controls passed, 0 failed'
-          if verify_summary "$mustfire_1" 2>/dev/null; then
+          if verify_summary "$mustfire_1" "$FLOOR" 2>/dev/null; then
             echo "::error::summary verifier ACCEPTED doctored log 1 (mutation: summary"
             echo "::error::line deleted). It must refuse a full run's worth of output that"
             echo "::error::has no summary; as written it is a no-op stamp. Trust no green."
             exit 1
           fi
-          if verify_summary "$mustfire_2" 2>/dev/null; then
+          if verify_summary "$mustfire_2" "$FLOOR" 2>/dev/null; then
             echo "::error::summary verifier ACCEPTED doctored log 2 (mutation: '1 failed')."
             echo "::error::A checker that only greps for the word 'summary' looks exactly"
             echo "::error::like this from the outside — that fake is why this leg exists."
             exit 1
           fi
-          if verify_summary "$mustfire_3" 2>/dev/null; then
+          if verify_summary "$mustfire_3" "$FLOOR" 2>/dev/null; then
             echo "::error::summary verifier ACCEPTED doctored log 3 (mutation: suite shrunk"
             echo "::error::to 12/12). The $FLOOR-control floor is decorative without this leg."
             exit 1
@@ -701,21 +745,22 @@ jobs:
           mustpass_4="controls: $FLOOR passed, 0 failed"
           mustfire_5="controls: $FLOOR passed, 1 failed"
           mustfire_6='controls: 12 passed, 0 failed'
-          if ! verify_summary "$mustpass_4"; then
+          if ! verify_summary "$mustpass_4" "$FLOOR"; then
             echo "::error::summary verifier REFUSED the suite's real summary line"
             echo "::error::('$mustpass_4'). The reader cannot see its own producer —"
             echo "::error::that is #237 exactly, and it makes every green below unearned."
-            echo "::error::Reconcile the locator with launchers/test_launcher_contracts.sh"
-            echo "::error::in this commit; do NOT relax the checks underneath it."
+            echo "::error::Reconcile the locator with BOTH suites it adjudicates"
+            echo "::error::(test_launcher_contracts.sh, test_checks_gates.sh) in this"
+            echo "::error::commit; do NOT relax the checks underneath it."
             exit 1
           fi
-          if verify_summary "$mustfire_5" 2>/dev/null; then
+          if verify_summary "$mustfire_5" "$FLOOR" 2>/dev/null; then
             echo "::error::summary verifier ACCEPTED doctored log 5 ('1 failed' in the"
             echo "::error::suite's REAL wording). The failure-count check is reachable via"
             echo "::error::the legacy 'summary' word but not via the line actually emitted."
             exit 1
           fi
-          if verify_summary "$mustfire_6" 2>/dev/null; then
+          if verify_summary "$mustfire_6" "$FLOOR" 2>/dev/null; then
             echo "::error::summary verifier ACCEPTED doctored log 6 (suite shrunk to 12,"
             echo "::error::in the REAL wording). The control floor is decorative on the"
             echo "::error::only line shape this job will ever actually parse."
@@ -843,29 +888,59 @@ jobs:
           rm -f "$mustfire_lp"
           echo "Both new standing legs (WF-YAML, BASH-LC) hold -- and both controls were OBSERVED refusing before this stamp."
 
-          set +e
-          output=$(bash launchers/test_launcher_contracts.sh 2>&1)
-          rc=$?
-          set -e
-          printf '%s\n' "$output"
-          if [ "$rc" -ne 0 ]; then
-            echo "::error::launchers/test_launcher_contracts.sh exited $rc from the"
-            echo "::error::repository root; suite output above. (From any other directory"
-            echo "::error::this same command fails closed with '0/8 launcher unreadable'"
-            echo "::error::— that refusal is the watchdog working, not a bug to retry.)"
+          # #257: both suites run, each verified against its own floor, and
+          # SEPARATELY. Concatenating the two logs would be the cheaper edit and
+          # the wrong one -- verify_summary reads the LAST matching line, so one
+          # green suite would cover for a silently-emptied sibling, which is the
+          # exact quiet-shrink this floor exists to refuse.
+          suite_total=0
+          for suite_pair in \
+              "launchers/test_launcher_contracts.sh:$FLOOR_LAUNCHER" \
+              "launchers/test_checks_gates.sh:$FLOOR_CHECKS"; do
+            suite=${suite_pair%:*}
+            suite_floor=${suite_pair##*:}
+            set +e
+            output=$(bash "$suite" 2>&1)
+            rc=$?
+            set -e
+            printf '%s\n' "$output"
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::$suite exited $rc from the"
+              echo "::error::repository root; suite output above. (From any other directory"
+              echo "::error::this same command fails closed with '0/8 launcher unreadable'"
+              echo "::error::— that refusal is the watchdog working, not a bug to retry.)"
+              exit 1
+            fi
+            if ! verify_summary "$output" "$suite_floor"; then
+              echo "::error::$suite exited 0, but exit 0 is not evidence that"
+              echo "::error::$suite_floor controls ran. The required proof is the summary line"
+              echo "::error::above — missing, unreadable, or red, this run is UNMEASURED."
+              exit 1
+            fi
+            # MUST_PASS leg, observed live: the real suite's summary accepted.
+            # The summary line is reprinted as the claim, denominator included —
+            # "the guard works" is not a claim, "N of N carry it" is. THE
+            # LOCATOR HERE WAS #237's RESIDUE: it grepped for 'summary', a word
+            # the suite emits zero times, so this line printed an empty claim on
+            # every green run for the whole life of the gate. It now uses the
+            # same locator verify_summary uses, so the line reprinted is the
+            # line adjudicated rather than a second, weaker guess at it.
+            printf '%s green, verified summary: ' "$suite"
+            printf '%s\n' "$output" \
+              | { grep -iE 'summary|[0-9]+[[:space:]]*(passed|green)[^0-9]+[0-9]+[[:space:]]*failed' || true; } \
+              | tail -n 1
+            suite_total=$((suite_total + suite_floor))
+          done
+          # The parts must still add up to the whole. Cheap, and it is the only
+          # thing standing between the split floors and two numbers that drift
+          # apart while each stays individually defensible.
+          if [ "$suite_total" -ne "$FLOOR" ]; then
+            echo "::error::verified $suite_total controls across the split suites but FLOOR"
+            echo "::error::declares $FLOOR — a suite was added or dropped from the loop"
+            echo "::error::without moving the floor. Reconcile in this commit."
             exit 1
           fi
-          if ! verify_summary "$output"; then
-            echo "::error::The suite exited 0, but exit 0 is not evidence that $FLOOR"
-            echo "::error::controls ran. The required proof is the summary line above —"
-            echo "::error::missing, unreadable, or red, this run is UNMEASURED and refused."
-            exit 1
-          fi
-          # MUST_PASS leg, observed live: the real suite's summary accepted.
-          # The summary line is reprinted as the claim, denominator included —
-          # "the guard works" is not a claim, "$FLOOR of $FLOOR carry it" is.
-          printf 'launcher contracts green, verified summary: '
-          printf '%s\n' "$output" | { grep -i 'summary' || true; } | tail -n 1
+          echo "both suites green: $suite_total controls verified against per-suite floors ($FLOOR_LAUNCHER + $FLOOR_CHECKS)."
 
   # ---------------------------------------------------------------------------
   # #242. The mutation battery ran as ONE job with timeout-minutes: 15 and

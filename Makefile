@@ -103,7 +103,7 @@ ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
 endif
 
-.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables launcher-contracts mutation mutation-module skip-guard-probe check clean
+.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables launcher-contracts checks-gates mutation mutation-module skip-guard-probe check clean
 
 install:
 	$(PY) -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
@@ -289,8 +289,8 @@ countables:
 # indicted it as an orphan on the next push -- the second time (#238 was the
 # first) that a new gate file was discoverable only after the commit existed.
 #
-# Cost, measured rather than assumed: 29.7s wall / 4.7s user on the developer
-# machine, 161 controls. The first draft of this comment said "minutes, because
+# Cost, measured rather than assumed: 27.8s wall / 4.1s user on the developer
+# machine, 146 controls. The first draft of this comment said "minutes, because
 # it runs real watchdog legs with wall budgets" -- plausible, and wrong; the
 # watchdog legs run their budgets concurrently, which is why user time is a
 # sixth of wall. It is cheap enough that there is no argument for keeping it
@@ -298,6 +298,19 @@ countables:
 # was, and went load-sensitive -- red at 7/8 under parallel load, 8/8 alone.)
 launcher-contracts:
 	bash launchers/test_launcher_contracts.sh
+
+# Finding #257. The checks/*.py gate self-tests were split out of the launcher
+# suite: they certify the repository's own gate scripts, not the launchers, and
+# appending each new one to a file named for the launchers is what grew that
+# file to 5,562 lines. Both halves must run -- the anti-orphan leg's corpus is
+# the two suites concatenated, so running only one indicts every helper called
+# solely from the other. That is why this target is in `check` beside its
+# sibling and not merely available to type.
+#
+# Cost: 1.5s wall / 0.9s user, 19 controls. It is fast because the wall-budget
+# watchdog legs all stayed on the launcher side.
+checks-gates:
+	bash launchers/test_checks_gates.sh
 
 mutation:
 	FS_FORBID_SKIPS=1 $(PY) tools/mutate.py
@@ -347,7 +360,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables launcher-contracts mutation
+check: lint typecheck skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables launcher-contracts checks-gates mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \
