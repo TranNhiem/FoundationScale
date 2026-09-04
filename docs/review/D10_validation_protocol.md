@@ -6,7 +6,7 @@ the state is **UNMEASURED**. "Validated" is used only where a job id or a named 
 backs it.
 
 Scope note on size, so denominators in this document are anchored: the repository holds
-121935 git-tracked .py/.sh/.md lines repo-wide; the validation harness, `h100_validation/`
+121955 git-tracked .py/.sh/.md lines repo-wide; the validation harness, `validation_campaigns/h100_validation/`
 (31313 .py LOC, 63 files); the package, `src/foundationscale/` measures 18915 lines; the
 GB200-side launch path, `launchers/*.sh` (10171 LOC, 5 files). No other countables appear
 in this document.
@@ -18,9 +18,9 @@ in this document.
 ### A.1 H100 (single node, 8× H100 SXM, Slurm, singularity)
 
 **What has actually been executed** (all job ids and artifacts below are recorded in
-`h100_validation/h100/EVIDENCE.md`, `h100_validation/h100/DELIVERABLE_B_validation_report.md`,
-`h100_validation/h100/DELIVERABLE_E_matrix.md`, and
-`h100_validation/h100/LAUNCH.md`):
+`validation_campaigns/h100_validation/h100/EVIDENCE.md`, `validation_campaigns/h100_validation/h100/DELIVERABLE_B_validation_report.md`,
+`validation_campaigns/h100_validation/h100/DELIVERABLE_E_matrix.md`, and
+`validation_campaigns/h100_validation/h100/LAUNCH.md`):
 
 1. **Phase 3 end-to-end run, 8/8 legs, no abstentions.** Job **37310**,
    Qwen3-4B-Instruct-2507, load → distributed init → FSDP sharding → training → DCP save
@@ -58,7 +58,7 @@ in this document.
    docstring and E.3). The `--nv` singularity flag is load-bearing (job 37284 died
    without it: NVML unreachable, recorded in `patch_nv_runtime.py`).
 
-7. **The build plane.** `h100_validation/build_h100_plane.sh` is green at 42 stages
+7. **The build plane.** `validation_campaigns/h100_validation/build_h100_plane.sh` is green at 42 stages
    (per LAUNCH.md's lead box and §4), rebuilding `h100/gen/` from scratch on every
    invocation. This is a **build-time** certification; see the UNMEASURED list for what
    it does not cover.
@@ -118,14 +118,14 @@ comments" is available from these sources.
 Ordered, reproducible procedures to **re-establish** each claim. Each step names its
 exit condition using the framework's contract: **0** PASS, **5** RED, **95** UNMEASURED,
 **96** REFUSE (launcher/backend namespace). The trainer
-(`h100_validation/h100/gen/fs_train.fixed.py`) uses a **different** namespace —
+(`validation_campaigns/h100_validation/h100/gen/fs_train.fixed.py`) uses a **different** namespace —
 0 MEASURED, 1 selftest mismatch, 2 argv refused, 3 ran-but-not-MEASURED — do not
 conflate them.
 
 ### B.1 H100
 
 **Step H0 — rebuild the plane (login node, no allocation).**
-Source the estate environment, then run `h100_validation/build_h100_plane.sh`.
+Source the estate environment, then run `validation_campaigns/h100_validation/build_h100_plane.sh`.
 *Exit condition:* script exits 0 with all stages green and the three standing checks
 (`gate_env_drift.py`, estate blocklist, `bash -n` on both artifacts) passing. Any red
 stage leaves the tree at the last good state; do not proceed on a partial build.
@@ -163,7 +163,7 @@ before queueing. Then all four hops COMPLETED with the resume hop reporting a re
 verdict (PROVED within `--resume-tolerance`, restore fidelity only since #192).
 
 **Step H5 — record.** Append job ids, verdicts, and any abstentions to
-`h100_validation/h100/EVIDENCE.md`. A claim without a
+`validation_campaigns/h100_validation/h100/EVIDENCE.md`. A claim without a
 ledger row is UNMEASURED by this repository's own rule.
 
 ### B.2 GB200
@@ -209,18 +209,18 @@ kind is validated**.
 
 | Change | Claim invalidated | Gate that catches it (path) |
 |---|---|---|
-| Stage added/renamed; docs still cite old count | "build green at 42 stages" | `h100_validation/gate_doc_stage_count.py` |
-| Stage or patch omitted from STAGES or PUBLISH_SET | the fix runs/ships at all | `h100_validation/gate_stage_orphans.py` |
-| Build input parked in the output tree | "rebuilt from scratch" | `h100_validation/gate_build_inputs.py` |
-| Artifacts drift on run-time filename references | "individually green" but plane cannot start (#142 shape) | `h100_validation/gate_artifact_linkage.py` |
-| Env export vs allowlist divergence | resume/env crossing (#115/#122 class) | `h100_validation/gate_env_drift.py` (build standing check) |
-| `SystemExit("msg")` replacing contract codes | 0/5/95/96 vocabulary | `h100_validation/gate_exit_contract.py` |
-| Checkpoint naming drift between writer and adjudicator | A7b abstains on 100% of real dirs (#150 shape) | `h100_validation/gate_ckpt_naming_agreement.py` |
-| LAUNCH.md text drifts from launcher/trainer | operator instructions | `h100_validation/gate_launch_doc.py` |
+| Stage added/renamed; docs still cite old count | "build green at 42 stages" | `validation_campaigns/h100_validation/gate_doc_stage_count.py` |
+| Stage or patch omitted from STAGES or PUBLISH_SET | the fix runs/ships at all | `validation_campaigns/h100_validation/gate_stage_orphans.py` |
+| Build input parked in the output tree | "rebuilt from scratch" | `validation_campaigns/h100_validation/gate_build_inputs.py` |
+| Artifacts drift on run-time filename references | "individually green" but plane cannot start (#142 shape) | `validation_campaigns/h100_validation/gate_artifact_linkage.py` |
+| Env export vs allowlist divergence | resume/env crossing (#115/#122 class) | `validation_campaigns/h100_validation/gate_env_drift.py` (build standing check) |
+| `SystemExit("msg")` replacing contract codes | 0/5/95/96 vocabulary | `validation_campaigns/h100_validation/gate_exit_contract.py` |
+| Checkpoint naming drift between writer and adjudicator | A7b abstains on 100% of real dirs (#150 shape) | `validation_campaigns/h100_validation/gate_ckpt_naming_agreement.py` |
+| LAUNCH.md text drifts from launcher/trainer | operator instructions | `validation_campaigns/h100_validation/gate_launch_doc.py` |
 | Any countable reworded in a doc | this corpus's drift surface | `checks/countables_drift.py` |
-| Splice damages the enroot arm | GB200 path (code-level only) | `h100_validation/apply_splice.py` gates G1–G7 |
-| Anchored fix misses/over-applies | each #113/#117-class fix | `h100_validation/apply_113.py` (A1–A5), `apply_117.py` (B1–B7) |
-| Estate identifier into public tree | publishability | blocklist stage inside `build_h100_plane.sh`, patterns from `h100_validation/fs_estate_pat.py` |
+| Splice damages the enroot arm | GB200 path (code-level only) | `validation_campaigns/h100_validation/apply_splice.py` gates G1–G7 |
+| Anchored fix misses/over-applies | each #113/#117-class fix | `validation_campaigns/h100_validation/apply_113.py` (A1–A5), `apply_117.py` (B1–B7) |
+| Estate identifier into public tree | publishability | blocklist stage inside `build_h100_plane.sh`, patterns from `validation_campaigns/h100_validation/fs_estate_pat.py` |
 | Repo-wide countable rotated | repo-wide total | `checks/countables_drift.py` (the logged wording change: "git-tracked ... repo-wide" replaced the retired "measured ..." wording on 2026-09-03) |
 
 Plus standing checks `checks/bash_lc_sweep.py`, `checks/packaging_reachability.py`,
@@ -262,5 +262,5 @@ Plus standing checks `checks/bash_lc_sweep.py`, `checks/packaging_reachability.p
    silent-reorder defect of that class is likewise invisible to C.1's entire table.
 
 The governing rule for all eight gaps: a denominator that has not been re-executed is a
-claim on credit. The ledger in `h100_validation/h100/EVIDENCE.md` is the only
+claim on credit. The ledger in `validation_campaigns/h100_validation/h100/EVIDENCE.md` is the only
 denominator this repository recognises, and for GB200 that ledger does not yet exist.

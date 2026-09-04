@@ -150,25 +150,28 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         bindings=(("decisions_loc", "num"),),
     ),
     PatternSpec(
-        label="h100_validation/ (N .py LOC, M files) pair (h100_loc+h100_files)",
+        label="validation_campaigns/h100_validation/ (N .py LOC, M files) pair "
+        "(h100_loc+h100_files)",
         # evidence: docs/review/D4_feature_evaluation.md
-        #   "| H100 validation harness | `h100_validation/` (31,313 .py LOC, 63 files) |"
+        #   "| H100 validation harness | `validation_campaigns/h100_validation/`
+        #   (31,313 .py LOC, 63 files) |"
         regex=re.compile(
-            r"`?h100_validation/`?\s*\((?P<loc>" + NUMBER + r") \.py LOC,"
+            r"`?validation_campaigns/h100_validation/`?\s*\((?P<loc>" + NUMBER + r") \.py LOC,"
             r"\s*(?P<files>" + NUMBER + r") files\)"
         ),
         bindings=(("h100_loc", "loc"), ("h100_files", "files")),
     ),
     PatternSpec(
-        label="h100_validation/ contributes/adds N Python LOC and M shell LOC pair "
-        "(h100_loc+h100_sh_loc)",
+        label="validation_campaigns/h100_validation/ contributes/adds N Python LOC "
+        "and M shell LOC pair (h100_loc+h100_sh_loc)",
         # evidence: docs/review/D2_current_architecture.md, two phrasings of one
-        # clause -- ":172 `h100_validation/` contributes 31,313 Python LOC and
-        # 4,986 shell LOC" and ":83 `h100_validation/` adds another 31,313
+        # clause -- ":172 `validation_campaigns/h100_validation/` contributes 31,313 Python LOC and
+        # 4,986 shell LOC" and ":83 `validation_campaigns/h100_validation/` adds another 31,313
         # Python LOC and 4,986 shell LOC". #243: the shell half had no census
         # key at all, so half of a two-number clause sat in nothing.
         regex=re.compile(
-            r"`?h100_validation/`? (?:contributes|adds another) (?P<py>" + NUMBER + r") Python LOC"
+            r"`?validation_campaigns/h100_validation/`? (?:contributes|adds another) "
+            r"(?P<py>" + NUMBER + r") Python LOC"
             r" and (?P<sh>" + NUMBER + r") shell LOC"
         ),
         bindings=(("h100_loc", "py"), ("h100_sh_loc", "sh")),
@@ -195,14 +198,15 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         bindings=(("launch_sh_loc", "loc"), ("launch_sh_files", "files")),
     ),
     PatternSpec(
-        label="h100_validation/*.sh (N LOC, M files) pair (h100_sh_loc+h100_sh_files)",
+        label="validation_campaigns/h100_validation/*.sh (N LOC, M files) pair "
+        "(h100_sh_loc+h100_sh_files)",
         # evidence: docs/review/D4_feature_evaluation.md, the SAME table cell as
         # the spec above -- "`launchers/*.sh` (9,495 LOC, 5 files);
-        # `h100_validation/*.sh` (4,986 LOC, 4 files)". Two specs, because they
+        # `validation_campaigns/h100_validation/*.sh` (4,986 LOC, 4 files)". Two specs, because they
         # are two clauses naming two subtrees; one spec spanning both would tie
         # a correct half to a stale half.
         regex=re.compile(
-            r"`?h100_validation/\*\.sh`?\s*\((?P<loc>" + NUMBER + r") LOC,"
+            r"`?validation_campaigns/h100_validation/\*\.sh`?\s*\((?P<loc>" + NUMBER + r") LOC,"
             r"\s*(?P<files>" + NUMBER + r") files\)"
         ),
         bindings=(("h100_sh_loc", "loc"), ("h100_sh_files", "files")),
@@ -529,10 +533,12 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         bindings=(("launch_sh_loc", "launch"), ("h100_sh_loc", "h100")),
     ),
     PatternSpec(
-        label="the h100_validation/ harness (N .py LOC) (h100_loc)",
+        label="the validation_campaigns/h100_validation/ harness (N .py LOC) (h100_loc)",
         # evidence: docs/review/D4_feature_evaluation.md
-        #   "the `h100_validation/` harness (31,313 .py LOC)"
-        regex=re.compile(r"`h100_validation/` harness \((?P<num>" + NUMBER + r") \.py LOC\)"),
+        #   "the `validation_campaigns/h100_validation/` harness (31,313 .py LOC)"
+        regex=re.compile(
+            r"`validation_campaigns/h100_validation/` harness \((?P<num>" + NUMBER + r") \.py LOC\)"
+        ),
         bindings=(("h100_loc", "num"),),
     ),
     PatternSpec(
@@ -567,7 +573,7 @@ HISTORICAL_MASKS: Final[tuple[Pattern[str], ...]] = (
     # number stays live in the denominator and a --fix would have rewritten
     # the history. Same lesson as the specs above, mirrored.
     re.compile(r"(?:drafted|written) against a census of " + NUMBER + r" lines.*?(?=\.(?:\s|$))"),
-    # evidence: h100_validation/h100/EVIDENCE.md
+    # evidence: validation_campaigns/h100_validation/h100/EVIDENCE.md
     #   "The launcher exports **14** variables (an earlier count of 12 was
     #    wrong; ...)": the 12 is history, the 14 is the live claim.
     re.compile(r"earlier count of " + NUMBER + r" was wrong"),
@@ -883,7 +889,9 @@ def self_test() -> int:
 
     def c_pair_partial(root: Path) -> tuple[bool, str]:
         doc = mk(
-            root / "pair", "d.md", "| `h100_validation/` (30,000 .py LOC, 63 files) | keep |\n"
+            root / "pair",
+            "d.md",
+            "| `validation_campaigns/h100_validation/` (30,000 .py LOC, 63 files) | keep |\n",
         )
         rep = scan_doc(doc)
         stats = per_key(rep)
@@ -902,10 +910,10 @@ def self_test() -> int:
         # cites numbers that WOULD drift on both keys if masking leaked.
         dead = (
             "drafted against a census of 25,000 lines for "
-            "`h100_validation/` (25,000 .py LOC, 60 files), "
+            "`validation_campaigns/h100_validation/` (25,000 .py LOC, 60 files), "
             "and was never re-measured then"
         )
-        live = "`h100_validation/` (30,000 .py LOC, 63 files)"
+        live = "`validation_campaigns/h100_validation/` (30,000 .py LOC, 63 files)"
         doc = mk(root / "hist", "d.md", f"The harness note was {dead}. Currently: {live}.\n")
         rep = scan_doc(doc)
         stats = per_key(rep)
@@ -923,7 +931,11 @@ def self_test() -> int:
         return ok, f"drifted={rep.drifted} mask_intact={dead in after}"
 
     def c_idempotent(root: Path) -> tuple[bool, str]:
-        doc = mk(root / "idem", "d.md", "| `h100_validation/` (30,000 .py LOC, 61 files) |\n")
+        doc = mk(
+            root / "idem",
+            "d.md",
+            "| `validation_campaigns/h100_validation/` (30,000 .py LOC, 61 files) |\n",
+        )
         texts = {doc: doc.read_text(encoding="utf-8")}
         first = apply_rewrites(plan_rewrites(scan_doc(doc)), texts)
         second = apply_rewrites(

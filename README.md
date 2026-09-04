@@ -114,7 +114,7 @@ launcher contract suites; the H100 validation harness's gate scripts.
 `transformers.Trainer`. It owns no `nn.Module`, no parallelism engine, no scheduler.
 Anything Trainer can run, it can run gated.
 
-**Experimental:** `h100_validation/` is a working harness for one specific H100 estate,
+**Experimental:** `validation_campaigns/h100_validation/` is a working harness for one specific H100 estate,
 full of `patch_*.py` scripts and hardening work in flight. It is on the record, not a
 stable API.
 
@@ -311,10 +311,10 @@ strategies on the poster) is design-stage; do not read this section as an API.
 Not implemented in the package. The shipped launchers are single-tray (one node) by
 construction, and their node guards — `FS_ALLOWED_NODE`, `FS_FORBIDDEN_NODES` — exist
 precisely so a script cannot wander onto another team's hardware by accident. The
-multi-node story today is `h100_validation/`: an experimental harness carrying the
+multi-node story today is `validation_campaigns/h100_validation/`: an experimental harness carrying the
 hardening patches, launch gates and evidence documents for scaling one H100 estate, with
-its own README at [`h100_validation/README.md`](h100_validation/README.md) and published
-deliverables under `h100_validation/h100/`. Treat it as a lab notebook that CI gates, not
+its own README at [`validation_campaigns/h100_validation/README.md`](validation_campaigns/h100_validation/README.md) and published
+deliverables under `validation_campaigns/h100_validation/h100/`. Treat it as a lab notebook that CI gates, not
 as supported surface.
 
 ## 16. Custom workload development
@@ -399,7 +399,7 @@ itself, from the Makefile's own accounting:
 * **The gate example** in §10 — runnable today, covers the defining incident.
 * **The launchers** — two complete, gated single-estate training jobs, readable as
   worked examples of launch-time verification (§7, §15).
-* **The harness evidence** — `h100_validation/h100/EVIDENCE.md` and the published
+* **The harness evidence** — `validation_campaigns/h100_validation/h100/EVIDENCE.md` and the published
   deliverables show gates firing against real launches.
 * **`examples/`** exists at the repository root. Its contents are unmeasured by the
   evidence slice this README was written from; interactively, `ls examples/` is what
@@ -408,20 +408,21 @@ itself, from the Makefile's own accounting:
 ## 23. Project structure
 
 `src/` = 18915 LOC across 25 files. `launchers/` contains 9500 shell LOC plus 1615 Python
-LOC, and `h100_validation/` adds another 31313 Python LOC and 4986 shell LOC on top of the
+LOC, and `validation_campaigns/h100_validation/` adds another 31313 Python LOC and 4986 shell LOC on top of the
 package. repo-wide, 115500 git-tracked .py/.sh/.md lines.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
 tests/                 the test suite (29435 .py LOC); conftest carries the skip guard
-tools/                 contains 8916 Python LOC of CLIs over the package (emit_run_manifest,
+tools/                 contains 8923 Python LOC of CLIs over the package (emit_run_manifest,
                        live_save_gate, real_checkpoint_probe, preflight, mutate, census)
 checks/                standalone repository gates: countables drift, packaging
                        reachability, bash -lc sweep, workflow YAML audit
 launchers/             the estate launch plane + two contract suites (bash), plus
                        Python helpers (lora target census, peft override replay)
-h100_validation/       experimental H100 harness: build script, gate_*.py, patch_*.py,
+validation_campaigns/  evidence campaigns, not framework code — read as lab notebooks
+  h100_validation/     experimental H100 harness: build script, gate_*.py, patch_*.py,
                        its own tests, and the published h100/ deliverables
 docs/                  DECISIONS.md, deliverables/ (A1–D), SELF_AUDIT.md
 examples/              see §22

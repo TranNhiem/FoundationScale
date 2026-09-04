@@ -3,11 +3,11 @@
 **Scope and method.** This review was written as an AI engineer arriving cold with
 one instruction: "train a model with this framework this week." Every workflow below
 was attempted against the shipped tree only — what is in `src/foundationscale/`,
-`launchers/`, `tools/`, `checks/`, `h100_validation/`, the README, the Makefile,
+`launchers/`, `tools/`, `checks/`, `validation_campaigns/h100_validation/`, the README, the Makefile,
 `pyproject.toml`, and the CI workflow. Where a workflow has no documented path in
 that evidence, it is rated **Absent** rather than assigned a plausible invented one.
 `src/foundationscale/` measures 18915 lines; `launchers/` contains 9500 shell LOC
-plus 1615 Python LOC; `h100_validation/` (31313 .py LOC, 63 files) is a validation
+plus 1615 Python LOC; `validation_campaigns/h100_validation/` (31313 .py LOC, 63 files) is a validation
 harness, not a training product. The framework's own README says it plainly: "The
 trainer itself is early." This review measures what "early" feels like from the
 operator's chair.
@@ -66,7 +66,7 @@ extra pulls `datasets>=2.18`, so the intended path is "HuggingFace datasets via
 `transformers.Trainer`," but no shipped code or doc says that. The launchers reach
 data through an estate-specific env var (`FOXBRAIN_SFT_JSONLS`, exported by name in
 the full-FT launcher because container-side python reads it from `os.environ`).
-`h100_validation/estate.env.example` is the closest thing to a data-configuration
+`validation_campaigns/h100_validation/estate.env.example` is the closest thing to a data-configuration
 document, and it is a validation-harness artifact.
 
 **Single best change:** one sentence in `train/cli.py`'s help plus one committed
@@ -210,7 +210,7 @@ wall-clock costs the Makefile already knows.
 Verdicts carry coverage denominators. The launch plane has a failure vocabulary:
 `gate_exit_contract.py`, exit codes outside a published namespace treated as
 defects, refusal messages that name the knob and the remedy (`FS_ALLOWED_NODE`'s
-unset refusal prints an example value). `h100_validation/` adds EVIDENCE.md,
+unset refusal prints an example value). `validation_campaigns/h100_validation/` adds EVIDENCE.md,
 LAUNCH.md, checkpoint scalar extractors (`fs_ckpt_scalars.py`), and an
 adjudicator. The culture — "a number wrapped across a comment continuation is a
 number in no denominator" — means failures tend to arrive with their denominator
@@ -266,7 +266,7 @@ is the hard part and it exists.
 knowledge is recorded where it was earned — the `NCCL_MNNVL_ENABLE=0` note in
 `fs_container_backend.sh` with its honest denominator ("measured on 4 trays, not
 1"). But the shipped validation harness is H100-only by name
-(`h100_validation/`, `h100_validation/h100/`, `launch_fs_h100.fixed.sh` under
+(`validation_campaigns/h100_validation/`, `validation_campaigns/h100_validation/h100/`, `launch_fs_h100.fixed.sh` under
 `gen/`), and no GB200 launcher, plane, or gate set appears in the tree. Scaling
 guidance for GB200 is unmeasured.
 
@@ -321,7 +321,7 @@ whose only registry is a grep.
 ## What would make me confused, slow, or afraid to modify the framework?
 
 - **Confused:** the repository is two things — an audit and a framework — and the
-  seams between `src/`, `launchers/`, and `h100_validation/` are organizational,
+  seams between `src/`, `launchers/`, and `validation_campaigns/h100_validation/` are organizational,
   not architectural. It took real reading to learn that the launchers do not call
   the package trainer at all; they run an estate engine (`Megatron-Bridge`)
   through a container backend.
@@ -361,8 +361,8 @@ whose only registry is a grep.
 
 - `FS_ALLOWED_NODE` has no default *by design* — correct for a standing safety
   rule, but there is no est ate-level example env in the package; the only
-  template is `h100_validation/estate.env.example`, one directory too deep to be
-  discovered.
+  template is `validation_campaigns/h100_validation/estate.env.example`, two directories
+  too deep to be discovered.
 - Dozens of `FS_*` knobs, no registry. Occurrence counts in the hundreds
   (`FS_ALLOCATION` 155, `FS_ALLOWED_NODE` 142) say the launch plane *is* the
   configuration system, and its documentation is the union of launcher header

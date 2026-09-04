@@ -84,8 +84,8 @@ flowchart TB
 
 ### What the diagram establishes — and what it deliberately does not
 
-- The operational plane is shell and tool-heavy: `launchers/` contains 10,171 shell LOC plus 1,615 Python LOC, while `tools/` contains 8,916 Python LOC. `h100_validation/` adds another 31,313 Python LOC and 4,986 shell LOC.
-- The installed package is consumed by tools, but the measured `run_event` call-site count is **0 in both `tools/` and `h100_validation/`**. No evidence shows an actual trainer firing the lifecycle engine.
+- The operational plane is shell and tool-heavy: `launchers/` contains 10,171 shell LOC plus 1,615 Python LOC, while `tools/` contains 8,923 Python LOC. `validation_campaigns/h100_validation/` adds another 31,313 Python LOC and 4,986 shell LOC.
+- The installed package is consumed by tools, but the measured `run_event` call-site count is **0 in both `tools/` and `validation_campaigns/h100_validation/`**. No evidence shows an actual trainer firing the lifecycle engine.
 - The package's three-line `__init__.py` exports nothing, so there is still no top-level public surface. The production save-gate decision function `adjudicate_checkpoint` **is now importable** from `foundationscale.gates.adjudication` (moved during this review, T2#0), but it is reachable only by its fully-qualified submodule path, and 60 private names still cross the boundary through the `tools/live_save_gate.py` compatibility shim.
 - There is **no load-side path after saving**: the `Lifecycle` enum has no `RESUME`, `LOAD`, `BEFORE_LOAD`, or `RESTORE` member.
 - The generated/estate trainer path is **UNMEASURED**. The dotted trainer edges are evidence gaps, not claims that no trainer exists anywhere in the repository.
@@ -97,7 +97,7 @@ The census reports counts per importing area, not unique dependencies or a file-
 ```mermaid
 flowchart TB
   TESTS["tests/<br/>58 Python files / 29,435 LOC"]
-  TOOLS["tools/<br/>9 Python files / 8,916 LOC"]
+  TOOLS["tools/<br/>9 Python files / 8,923 LOC"]
   SRC["src/ as importer<br/>25 Python files / 18,915 LOC"]
 
   FS["src/foundationscale<br/>25 Python files / 18,915 LOC<br/>root __init__.py exports nothing"]
@@ -131,7 +131,7 @@ flowchart TB
   class GATES,CKPT,PROV,VERIFY,TOPO,INTEG,ROOT module;
 ```
 
-No separate package-import count was supplied for `launchers/` or `h100_validation/`; that must not be read as zero. Separately, the measured count of `run_event(` call sites is 18 in `tests/`, 2 in `src/`, 0 in `tools/`, and 0 in `h100_validation/`.
+No separate package-import count was supplied for `launchers/` or `validation_campaigns/h100_validation/`; that must not be read as zero. Separately, the measured count of `run_event(` call sites is 18 in `tests/`, 2 in `src/`, 0 in `tools/`, and 0 in `validation_campaigns/h100_validation/`.
 
 | Package component | Measured LOC | Present responsibility | Runtime qualification |
 |---|---:|---|---|
@@ -173,7 +173,7 @@ This table uses the declared scope in the question as the reference architecture
 | Tool discoverability | Only `foundationscale-controls` is a measured console entry point; emit-manifest, mutate, preflight, and census tools lack the same registration story | **PARTIAL** |
 | Package troubleshooting/API docs | Zero API-reference or module-reference headings across all 19 markdown files; exactly one markdown file names `from foundationscale` | **MISSING product documentation** |
 | SFT, RL, multimodal recipes | Docs contain worked recipes written against an entrypoint and a YAML schema that do not exist. The shipped `train/` entry point is causal-LM SFT over a `datasets` source only — no RL loop, no multimodal collator, no recipe registry that could load those YAMLs | **MISSING executable recipes** |
-| Hardware validation plane | `h100_validation/` contributes 31,313 Python LOC and 4,986 shell LOC | **CODE PRESENT, estate-scoped; it is not an installed trainer** |
+| Hardware validation plane | `validation_campaigns/h100_validation/` contributes 31,313 Python LOC and 4,986 shell LOC | **CODE PRESENT, estate-scoped; it is not an installed trainer** |
 | 100+-node scale evidence | The scaling design's own dissent/open-risk material identifies 100+-node claims as unvalidated | **EXPRESSIBLE, UNMEASURED** |
 
 ## 4. One run's evidence-backed artifact walkthrough

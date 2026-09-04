@@ -31,6 +31,13 @@ from pathlib import Path
 # pointed at a different tree than the one it ships in is an oracle with no
 # anchor.
 REPO = Path(__file__).resolve().parents[1]
+# The H100 validation campaign. One home for the path: it is an evidence
+# campaign rather than framework code, so it lives under validation_campaigns/,
+# and the two call sites below must never disagree about where that is. Note
+# that rglob() on a missing directory returns empty rather than raising, so a
+# forgotten update here would silently zero four countables -- the drift gate
+# catches it (20 sites go RED), but only because the numbers are anchored.
+H100_CAMPAIGN = REPO / "validation_campaigns" / "h100_validation"
 # The interpreter actually running this census, so the tree is measured under
 # whatever Python CI (or a developer) invoked -- not a .venv path that may
 # not exist.
@@ -456,7 +463,7 @@ def main() -> int:
     gt["adjudication_loc"] = _loc([REPO / "src/foundationscale/gates/adjudication.py"])
     gt["lsg_loc"] = _loc([REPO / "tools/live_save_gate.py"])
     gt["shim_names"], gt["shim_private"], gt["shim_public"] = _shim_names()
-    gt["h100_files"], gt["h100_loc"] = _count_subtree(REPO / "h100_validation")
+    gt["h100_files"], gt["h100_loc"] = _count_subtree(H100_CAMPAIGN)
 
     lsh = _files(REPO / "launchers", ".sh")
     gt["launch_sh_files"] = len(lsh)
@@ -467,7 +474,7 @@ def main() -> int:
     # half had no key, so half of a two-number claim sat in nothing -- and the
     # half that IS anchored stayed correct while the unanchored half went
     # stale three lines away, with the gate reporting CLEAR.
-    hsh = _files(REPO / "h100_validation", ".sh")
+    hsh = _files(H100_CAMPAIGN, ".sh")
     gt["h100_sh_files"] = len(hsh)
     gt["h100_sh_loc"] = _loc(hsh)
     gt["decisions_loc"] = _loc([REPO / "docs/DECISIONS.md"])

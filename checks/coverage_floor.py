@@ -184,7 +184,7 @@ FLOORS: dict[str, int] = {
     # tests are written. Delete a line when its module reaches the default; do not
     # add a line by hand, and do not lower one to make a red run green.
     "src/foundationscale/checkpoint/dcp_meta.py": 81,  # set by --update; measured 81.4%
-    "src/foundationscale/train/__init__.py": 50,  # set by --update; measured 50.0%
+    "src/foundationscale/train/__init__.py": 87,  # set by --update; measured 87.5%
     "src/foundationscale/train/__main__.py": 0,  # set by --update; measured 0.0%
     "src/foundationscale/train/loop.py": 78,  # set by --update; measured 78.4%
     "tools/emit_run_manifest.py": 80,  # set by --update; measured 80.9%

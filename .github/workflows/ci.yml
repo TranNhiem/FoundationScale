@@ -759,7 +759,7 @@ jobs:
           # reproducible on, which is where the whole step was being replayed to
           # debug #237. The read loop below is identical on bash 3.2 and 5.
           # The same rule is already written down at
-          # h100_validation/build_h100_plane.sh:580 -- it was applied there and
+          # validation_campaigns/h100_validation/build_h100_plane.sh:580 -- it was applied there and
           # not here, which is how a convention becomes one file's habit.
           wf_files=()
           while IFS= read -r wf_f; do
