@@ -30,7 +30,7 @@ its own gate and controls rather than as a single refactor commit.
 
 ## The headline finding
 
-`src/foundationscale/` measures 18,849 lines and implements **no training primitives of its
+`src/foundationscale/` measures 18,915 lines and implements **no training primitives of its
 own**. Across all 25 git-tracked `src/*.py` files, an AST probe finds zero that define an
 `nn.Module`, call `backward()`, construct a `DataLoader`, define a `forward`, call
 `optimizer.step()`, or import torch at module scope.
@@ -75,7 +75,7 @@ the review rather than after it:
 - It moved *during* the review. These documents were written against a census of 13,667 lines.
   The T2 boundary move then relocated the 2,546-line checkpoint decision API out of
   `tools/live_save_gate.py` and into `src/foundationscale/gates/adjudication.py`, and the fixes
-  landed since have added the rest: `src/foundationscale/` now measures 18,849 lines. The
+  landed since have added the rest: `src/foundationscale/` now measures 18,915 lines. The
   structural finding survived re-measurement in re-scoped form: the package now holds real
   decision logic where it previously held none, and a delegating trainer where it previously
   held nothing at all.
