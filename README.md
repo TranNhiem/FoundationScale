@@ -414,7 +414,7 @@ package. repo-wide, 115500 git-tracked .py/.sh/.md lines.
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (29435 .py LOC); conftest carries the skip guard
+tests/                 the test suite (29498 .py LOC); conftest carries the skip guard
 tools/                 contains 8923 Python LOC of CLIs over the package (emit_run_manifest,
                        live_save_gate, real_checkpoint_probe, preflight, mutate, census)
 checks/                standalone repository gates: countables drift, packaging

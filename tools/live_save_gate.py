@@ -170,7 +170,7 @@ import traceback
 # globals. Monkeypatching `live_save_gate._probe_derive_declared` does NOT change
 # what the moved functions read, because they read their own module's globals.
 # Patch `foundationscale.gates.adjudication` instead. The suites that do this
-# were migrated with the move; see tests/test_live_save_gate.py.
+# were migrated with the move; see tests/test_live_save_gate_*.py.
 #
 # The surface is 94 names, and it used to be 98. Finding #219 inverted the
 # probe dependency -- the declaration machinery moved INTO the package as
