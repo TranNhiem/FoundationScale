@@ -21,7 +21,7 @@ import math
 from typing import Any
 
 import pytest
-from test_compare_keys_nonfinite import MemSource
+from _dcp_fakes import MemSource
 
 from foundationscale.checkpoint import dcp
 from foundationscale.checkpoint.dcp import (
