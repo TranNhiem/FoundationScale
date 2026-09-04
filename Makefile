@@ -130,7 +130,7 @@ coverage-floor:
 	$(PY) checks/coverage_floor.py
 
 # Finding #253. Every CI job that EXECUTES the pytest suite must install the same
-# extras. The measured failure: #228 added tests/test_train_execution.py, the
+# extras. The measured failure: #228 added tests/train/test_train_execution.py, the
 # `check` job got `[train]`, the `mutation` job -- which runs the WHOLE suite once
 # per mutant -- did not, and all 9 shards died at COLLECTION with "No module named
 # 'tokenizers'". The battery reported that as `assert 96 == 5`, so an unmeasured

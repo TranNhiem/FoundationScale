@@ -45,7 +45,7 @@ import pytest
 
 from foundationscale.provenance import Topology, TopologyConsistency
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 EMITTER_PATH = ROOT / "tools" / "emit_run_manifest.py"
 
 

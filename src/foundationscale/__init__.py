@@ -22,7 +22,7 @@ from typing import Any
 __version__ = "0.1.0"
 
 # Public name -> home module. This mapping IS the public surface: it is the
-# denominator that tests/test_front_door.py enumerates, so a name added here
+# denominator that tests/packaging/test_front_door.py enumerates, so a name added here
 # without a working home fails a test rather than an import at a user's site.
 _EXPORTS: dict[str, str] = {
     # The gate plane and its verdicts.

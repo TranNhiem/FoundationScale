@@ -370,7 +370,7 @@ def main(walk: _GateWalk | None = None) -> int:
             cannot fire. A parameter cannot rot that way: deleting it
             TypeErrors at every caller, and bypassing it inside this body
             reddens
-            tests/test_controls_listing.py::test_main_consults_the_injected_walk.
+            tests/gates/test_controls_listing.py::test_main_consults_the_injected_walk.
 
     Exit 1 means at least one of:
 

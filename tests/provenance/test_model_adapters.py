@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 for _path in (str(REPO_ROOT), str(REPO_ROOT / "src")):
     if _path not in sys.path:
         sys.path.insert(0, _path)

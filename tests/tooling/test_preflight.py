@@ -18,7 +18,7 @@ from pathlib import Path
 
 from tools import preflight
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 
 
 def patch_everywhere(monkeypatch, name: str, value) -> int:

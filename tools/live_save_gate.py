@@ -182,7 +182,7 @@ import traceback
 # not deprecated aliases kept for a release; they name machinery that no longer
 # exists, and re-exporting a name for a thing that is gone would advertise a
 # compatibility this file cannot provide. The shrink is deliberate, and it is
-# pinned in both directions rather than by a count: tests/test_reexport_surface.py
+# pinned in both directions rather than by a count: tests/packaging/test_reexport_surface.py
 # derives the library's unconditional surface from its AST and fails if any of
 # it is missing here, while re-listing a name the library no longer defines
 # fails harder still -- as an ImportError at the top of this file, which is how

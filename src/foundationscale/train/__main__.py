@@ -38,7 +38,7 @@ cannot silently diverge: if this module is ever deleted, emptied, or given
 its own parser, the control fires there rather than in a user's terminal.
 
 **This file reads 0% in the coverage report, and that number is an artifact,
-not a gap.** ``tests/test_train_module_entrypoint.py`` exercises every line
+not a gap.** ``tests/train/test_train_module_entrypoint.py`` exercises every line
 below -- four legs, including a MUST_FIRE leg that deletes this file and
 demands red -- but it does so in a CHILD interpreter, which the parent's
 coverage plugin does not instrument. Reading the 0% as "untested" would be

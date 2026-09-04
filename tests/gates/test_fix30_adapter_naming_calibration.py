@@ -33,7 +33,9 @@ from types import SimpleNamespace
 
 import pytest
 
-TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
+TOOLS_DIR = (
+    next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()) / "tools"
+)
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 

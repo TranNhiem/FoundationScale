@@ -13,7 +13,7 @@ rightly fails under FS_FORBID_SKIPS=1). Two decisions keep this honest:
        python3 -m pytest container_tests/peft_omegaconf_repair_cases.py -q
    Its off-stack abstention is therefore not a runtime verdict pytest could
    launder; it is structural, and it is pinned with a denominator off-stack
-   by tests/test_container_lane_peft_repair.py (existence, exact 8-case AST
+   by tests/launchers/test_container_lane_peft_repair.py (existence, exact 8-case AST
    census, retirement of the old path, plus that census's own MUST_FIRE).
 2. The import below is a PLAIN import. In the lane where the vendored stack
    is promised, an ImportError is a real defect: it surfaces as a pytest

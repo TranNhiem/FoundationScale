@@ -42,7 +42,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 SRC = REPO_ROOT / "src"
 
 # Executed by an isolated interpreter (-I: no PYTHONPATH, no user site, no cwd

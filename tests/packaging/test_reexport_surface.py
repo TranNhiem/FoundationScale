@@ -60,7 +60,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 for _p in (str(REPO_ROOT), str(REPO_ROOT / "src"), str(REPO_ROOT / "tools")):
     if _p not in sys.path:
         sys.path.insert(0, _p)

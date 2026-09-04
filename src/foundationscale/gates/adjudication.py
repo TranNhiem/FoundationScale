@@ -1613,7 +1613,7 @@ def _attributed_status(res: GateResult, base_res: GateResult | None) -> tuple[st
     """Resolve (status, confounded, inconclusive_reason) for one injected-defect run.
 
     Verbatim discipline from the probe's Finding-2 repair (pinned by
-    tests/test_hunt_finding_repairs.py), applied to the controls THIS file builds
+    tests/gates/test_hunt_finding_repairs.py), applied to the controls THIS file builds
     itself: detection must be ATTRIBUTABLE to the injection.
 
       * baseline absent or already blocking -> the experiment is confounded; a

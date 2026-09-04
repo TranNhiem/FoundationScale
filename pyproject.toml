@@ -144,7 +144,7 @@ markers = [
 # leaving it silent: unlike the literal entries above, these also swallow a
 # FUTURE tools/preflight/**.py, so the fail-closed default the paragraph above
 # describes does not hold inside this one subtree. What replaces it is that
-# every module here is reached by tests/test_preflight.py's 21 contracts and by
+# every module here is reached by tests/tooling/test_preflight.py's 21 contracts and by
 # `--self-test`'s 18 MUST_FIRE / 10 MUST_PASS lanes, which is a stronger
 # instrument than an enrolment number.
 [tool.coverage.run]

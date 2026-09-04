@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 
 # tools/ is not a package; load the battery exactly as it lives on disk so the
 # tests exercise the shipped file, never a copy. Registered in sys.modules so

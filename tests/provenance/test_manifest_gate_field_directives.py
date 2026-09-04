@@ -36,7 +36,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 # The gate's decision API is a library module since T2_lib_script_boundary#0.
 GATE_PATH = ROOT / "src" / "foundationscale" / "gates" / "adjudication.py"
 EMITTER_PATH = ROOT / "tools" / "emit_run_manifest.py"

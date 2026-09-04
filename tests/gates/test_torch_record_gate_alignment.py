@@ -49,7 +49,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 # The gate's decision API is a library module since T2_lib_script_boundary#0;
 # tools/live_save_gate.py is an argparse wrapper that re-exports it. Parsing
 # the wrapper would find no FunctionDef and raise LookupError -- which is the

@@ -72,7 +72,7 @@ Each subsection: what it was, where, the concrete bad outcome, and the acceptanc
 
 **Bad outcome.** The comparator behind the export-verification story returns its *cleanest-looking* verdict — pass-grade, zero max difference — on poisoned payloads. The non-finite laundering class has sibling instances in the parity gate (`W-par-2`, `W-par-3`, MAJOR).
 
-**Acceptance.** `tests/test_compare_keys_nonfinite.py::test_nan_never_close` over real in-memory `WeightSource` implementations: NaN-left-only, NaN-on-both-sides-same-positions, and NaN-plus-large-finite-divergence must each return a verdict outside `{"CLOSE", "EXACT"}` with `max_abs_diff != 0.0`.
+**Acceptance.** `tests/checkpoint/test_compare_keys_nonfinite.py::test_nan_never_close` over real in-memory `WeightSource` implementations: NaN-left-only, NaN-on-both-sides-same-positions, and NaN-plus-large-finite-divergence must each return a verdict outside `{"CLOSE", "EXACT"}` with `max_abs_diff != 0.0`.
 
 ### 3.5 Git capture inherits the caller's environment: the probed repository and the hashed diff are malleable — `W-prov-1`
 
@@ -104,7 +104,7 @@ Each subsection: what it was, where, the concrete bad outcome, and the acceptanc
 
 **Bad outcome.** The public claim that the battery catches its mutants is produced by a scorer that cannot distinguish "a test caught the defect" from "pytest could not start". The artifact that justifies the framework's existence cannot show its work — compounded by the fact that the battery emits no machine-readable report, so the headline tally is maintained by hand (`F-metatest-5`).
 
-**Acceptance.** `tests/test_mutate_classify.py` against `main(argv, suite_runner=fake)`: fake `rc=2` must list the trial under `unscored`, never `killed`, and must not count toward exit 0; `rc=1` with an ERROR-only summary likewise.
+**Acceptance.** `tests/tooling/test_mutate_classify.py` against `main(argv, suite_runner=fake)`: fake `rc=2` must list the trial under `unscored`, never `killed`, and must not count toward exit 0; `rc=1` with an ERROR-only summary likewise.
 
 ### 3.9 The mutation battery's other direction: skip-poisoned greens read as ALIVE — `W-metatest-2`
 
@@ -112,7 +112,7 @@ Each subsection: what it was, where, the concrete bad outcome, and the acceptanc
 
 **Bad outcome.** "42/42 killed" and "mutant survived" are both, today, un-attributed readings of an exit code. Neither direction of the battery's verdict is currently evidence.
 
-**Acceptance.** `tests/test_mutate_scoring.py` over new `SuiteOutcome` / `TrialVerdict` types: a collection-error outcome yields `TrialKind.UNSCORED` with `rc=2` in its reason, never a kill; a zero-attribution `rc=1` is never a kill; greens with skips cannot mint ALIVE.
+**Acceptance.** `tests/tooling/test_mutate_scoring.py` over new `SuiteOutcome` / `TrialVerdict` types: a collection-error outcome yields `TrialKind.UNSCORED` with `rc=2` in its reason, never a kill; a zero-attribution `rc=1` is never a kill; greens with skips cannot mint ALIVE.
 
 ### 3.10 What landed
 
@@ -120,17 +120,17 @@ All nine are closed, in two waves — six first, then the three whose fixes touc
 
 | § | Item | Where the acceptance test lives |
 |---|---|---|
-| 3.1 | `W-gatecore-1` | `tests/test_gates_core.py::test_empty_event_sweep_is_blocking_vacuous` |
-| 3.2 | `W-ckpt-1` | `tests/test_checkpoint_denominators.py::test_byte_gate_prices_distinct_storage` |
-| 3.3 | `F-ckpt-1` | `tests/test_checkpoint_denominators.py::test_declared_block_round_trip_and_wiring` |
-| 3.4 | `W-io-1` | `tests/test_compare_keys_nonfinite.py::test_nan_never_close` |
-| 3.5 | `W-prov-1` | `tests/test_manifest_provenance.py::test_git_env_cannot_redirect_probe` |
-| 3.6 | `W-prov-2` | `tests/test_manifest_provenance.py::test_schema_version_acceptance_matrix` |
-| 3.7 | `F-gatecore-1` | `tests/test_run_event.py` (22 tests) |
-| 3.8 | `W-metatest-1` | `tests/test_mutate_classify.py` (11 tests) |
-| 3.9 | `W-metatest-2` | `tests/test_mutate_scoring.py` (22 tests) |
+| 3.1 | `W-gatecore-1` | `tests/gates/test_gates_core.py::test_empty_event_sweep_is_blocking_vacuous` |
+| 3.2 | `W-ckpt-1` | `tests/checkpoint/test_checkpoint_denominators.py::test_byte_gate_prices_distinct_storage` |
+| 3.3 | `F-ckpt-1` | `tests/checkpoint/test_checkpoint_denominators.py::test_declared_block_round_trip_and_wiring` |
+| 3.4 | `W-io-1` | `tests/checkpoint/test_compare_keys_nonfinite.py::test_nan_never_close` |
+| 3.5 | `W-prov-1` | `tests/provenance/test_manifest_provenance.py::test_git_env_cannot_redirect_probe` |
+| 3.6 | `W-prov-2` | `tests/provenance/test_manifest_provenance.py::test_schema_version_acceptance_matrix` |
+| 3.7 | `F-gatecore-1` | `tests/gates/test_run_event.py` (22 tests) |
+| 3.8 | `W-metatest-1` | `tests/tooling/test_mutate_classify.py` (11 tests) |
+| 3.9 | `W-metatest-2` | `tests/tooling/test_mutate_scoring.py` (22 tests) |
 
-**Tree state as of today.** 791 tests pass, 0 fail — 412 before this work began, 500 after the BLOCKER wave, 543 at this document's first revision, 582 at the second, 709 at the third. The 82 added since the third revision are almost entirely the two verification tools acquiring suites of their own (`tests/test_live_save_gate_*.py`, `tests/test_preflight.py`), and the honest way to read that number is that it counts tests, not confidence: five of them were red for most of a working session, pinning a real divergence between two expert-layout classifiers that both shipped, and the tree only reached 0 fail once that divergence was repaired at its source rather than at the assertions.
+**Tree state as of today.** 791 tests pass, 0 fail — 412 before this work began, 500 after the BLOCKER wave, 543 at this document's first revision, 582 at the second, 709 at the third. The 82 added since the third revision are almost entirely the two verification tools acquiring suites of their own (`tests/test_live_save_gate_*.py`, `tests/tooling/test_preflight.py`), and the honest way to read that number is that it counts tests, not confidence: five of them were red for most of a working session, pinning a real divergence between two expert-layout classifiers that both shipped, and the tree only reached 0 fail once that divergence was repaired at its source rather than at the assertions.
 
 `mypy` is clean over `src`, 17 source files — and that is the whole of its denominator: the `typecheck` target is `mypy src`, so `tools` is unchecked by it, and an earlier revision of this paragraph claimed mypy clean over `src`, `tests` and `tools`, which was a claim two directories wider than the command that backs it. The overstatement is the document's own subject matter, so it is corrected here rather than quietly narrowed: `tools/live_save_gate.py` does not typecheck clean today, and nothing in the repository's gates claims it does.
 
@@ -159,7 +159,7 @@ So the mutation line means something it did not mean before, twice over. §3.8 a
 
 - **Five of the nine registered gates do not yet declare a `context_type`** — the four in `objective_gates.py` and `ExpertAliasGate` in `example.py`. Reached through the new `run_event`, they produce a blocking "declares no context_type" ERROR rather than running against a context they cannot consume. Their behaviour through the older broadcast path (`GateRegistry.run`) is byte-identical to before. The fix is one class attribute and one `coerce_context` delegation per gate.
 - **`WeightParityGate` still requires the caller to pass `expected_keys`.** Clause (d) of `F-ckpt-1` — deriving them from the manifest join — is not implemented; the seam it needs (`CheckpointGateContext.from_path` resolving `manifest.declared`) now exists.
-- **`tensors_per_expert_layer` is captured and stored but not consumed** by the coverage denominator, which still assumes two projections per expert. This is correct for the Megatron-style layouts in the fixtures and wrong for HF-style three-projection MoE. Since the selector rewrite this is no longer only a note: `tests/test_expert_layouts.py` runs Mixtral and Qwen contexts through the gates and asserts the resulting `checked=24, expected=16` explicitly. The mismatch is in the strictly-more-examined-than-declared direction, which does not block, so the test's job is to keep the wart visible until the denominator consumes the field.
+- **`tensors_per_expert_layer` is captured and stored but not consumed** by the coverage denominator, which still assumes two projections per expert. This is correct for the Megatron-style layouts in the fixtures and wrong for HF-style three-projection MoE. Since the selector rewrite this is no longer only a note: `tests/checkpoint/test_expert_layouts.py` runs Mixtral and Qwen contexts through the gates and asserts the resulting `checked=24, expected=16` explicitly. The mismatch is in the strictly-more-examined-than-declared direction, which does not block, so the test's job is to keep the wart visible until the denominator consumes the field.
 - **The controls listing now reports the typing it used to hide.** It prints each registered gate's declared dispatch context type, marks explicitly where none is declared, and states the ratio as a fact: 4/9 gates typed, 5 on the untyped legacy broadcast path. The visibility shipped; the typing work for the five is the first bullet of this list.
 - **Nothing here closed the real-artifact gap — but §4 no longer describes it the same way.** These fixes were verified against synthetic fixtures and a green suite. Since they landed, two real production checkpoints have been adjudicated (§4): the framework abstained and blocked on both rather than pass what it could not examine. That is the vacuity machinery surviving contact with production bytes, not detection — no gate has yet fired on a real defect, and the real-artifact corpus in Phase 5 of §7 remains the item that can falsify the rest.
 - **Two defects found *after* the nine were closed are also fixed, and neither came from the ledger.** The layout-blind expert selector (§4.1) came from pointing the tool at real bytes; the mutation battery's self-detection (retracted above) came from applying the doctrine to the tool that applies the doctrine. Both were invisible to a green suite of 543 tests, and both are the same shape: a check whose denominator was chosen by the thing being checked. We record them here rather than folding them into §3 because the nine were found by reading, and these two were found by measuring — which is the ratio the ledger should be judged on.
@@ -225,7 +225,7 @@ The structural consequence matters more than the regex, and it is a finding abou
 
 Re-run against the same 128-expert artifact's metadata, the selector now takes **60 of 1,013 tensors** and none of the 30 routers — `router.per_expert_scale` contains the substring `expert` but no expert path *segment*, and the selection is segment-exact so the trap is not taken. `checkpoint.expert_distinctness` returns SKIP over `checked=60`, evidence `layout=stacked`, `per_expert_identity=unobservable-from-metadata`; the false stated reason "the checkpoint contains no expert tensors" is gone and is pinned against by name. `checkpoint.expert_bytes`, which *can* price a stacked layout completely, reaches a real non-vacuous PASS on 45,675,970,560 bytes against a manifest-supplied denominator — and FAILs at ratio 0.500 against a deliberately doubled one, because a gate that only ever passes has proven nothing.
 
-So the blindness is closed and the overclaim was not opened: what changed is that a checkpoint the gates previously described falsely, they now describe correctly, including the part they cannot judge. `tests/test_expert_layouts.py` pins all four outcomes with a MUST_FIRE and a MUST_PASS case per family, asserts the router exclusion by name in every fixture, and pins the stacked verdict as SKIP *and* not-PASS *and* not-FAIL — so a later change can neither promote the abstention into a claim nor regress it into a false alarm. One wart is pinned rather than fixed: the coverage denominator still prices two projections per MoE layer, so three-projection families report `checked=24, expected=16` — strictly-more-examined-than-declared, the non-blocking direction, and the test says so out loud rather than rounding it away.
+So the blindness is closed and the overclaim was not opened: what changed is that a checkpoint the gates previously described falsely, they now describe correctly, including the part they cannot judge. `tests/checkpoint/test_expert_layouts.py` pins all four outcomes with a MUST_FIRE and a MUST_PASS case per family, asserts the router exclusion by name in every fixture, and pins the stacked verdict as SKIP *and* not-PASS *and* not-FAIL — so a later change can neither promote the abstention into a claim nor regress it into a false alarm. One wart is pinned rather than fixed: the coverage denominator still prices two projections per MoE layer, so three-projection families report `checked=24, expected=16` — strictly-more-examined-than-declared, the non-blocking direction, and the test says so out loud rather than rounding it away.
 
 **A nesting-blind config producer.** The second defect is in the manifest producer, not the probe. `declared_from_hf_config` in `src/foundationscale/provenance/manifest.py` reads `num_experts` only from the top level of the config dict. This model family nests it one level down, under the text sub-config — so the framework's shipped producer would classify a 128-expert model as dense, silently disarming every expert gate, on the real config of a public open-weights family. The probe escaped only because it carries its own scope-aware config reader, which searches the nested text scope before the top level; the framework's own shipped producer did not. This has now been fixed: the producer searches the nested scope and records the scope it read the value from as part of the declaration's basis — the provenance the number always needed.
 

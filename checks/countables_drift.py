@@ -487,8 +487,25 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         label="the test suite (N .py LOC) (tests_loc)",
         # evidence: docs/review/D4_feature_evaluation.md
         #   "and the test suite (25,689 .py LOC) -- have **no direct findings**"
-        regex=re.compile(r"the test suite \((?P<num>" + NUMBER + r") \.py LOC\)"),
+        # #266: the article is `[Tt]he` because this clause can open a sentence.
+        # It did, at D1:121, and a case-sensitive `the` put that site in no
+        # denominator for as long as the pattern has existed -- it read 28550
+        # against a measured 29578 and `make countables` said CLEAR. Same class
+        # as #249 (markup) and #263 (whitespace): the anchor was keyed to one
+        # surface form of the sentence rather than to the claim.
+        regex=re.compile(r"[Tt]he test suite \((?P<num>" + NUMBER + r") \.py LOC\)"),
         bindings=(("tests_loc", "num"),),
+    ),
+    PatternSpec(
+        label="(N tracked test files) (tests_files)",
+        # evidence: docs/review/D1_codebase_review.md:121 -- the OTHER half of
+        # the #266 sentence. The file count sits in its own parenthetical, one
+        # clause away from the LOC count, so anchoring the LOC half alone would
+        # have left `54 tracked test files` (measured: 65) unmeasured under a
+        # line the gate now reports as agreeing, which is worse than not
+        # anchoring it at all.
+        regex=re.compile(r"\((?P<num>" + NUMBER + r") tracked test files"),
+        bindings=(("tests_files", "num"),),
     ),
     PatternSpec(
         label="tests/ (N .py LOC, M files; K import statements) triple "
@@ -1159,8 +1176,56 @@ def self_test() -> int:
         )
         return ok, f"drifted={rep.drifted} rewrites={n} backtick_intact={'`checks/`' in after}"
 
+    def c_sentence_initial_anchor(root: Path) -> tuple[bool, str]:
+        # MUST_FIRE, #266. The plant is D1:121 verbatim, which is where the
+        # hole was measured: ONE sentence stating the test-suite countable
+        # twice -- LOC in the first parenthetical, file count in the second --
+        # and neither half in any denominator. Two independent reasons, which
+        # is why one fix would not have been enough:
+        #
+        #   1. the clause opens the sentence, so `the test suite` never matched
+        #      `The test suite`. One character, and the site read 28550 against
+        #      a measured 29578 while `make countables` printed CLEAR.
+        #   2. `(N tracked test files` is a shape no pattern had at all, so
+        #      anchoring only (1) would have left a stale file count sitting
+        #      inside a line the gate had just started calling agreeing --
+        #      strictly worse than leaving both unmeasured, because the first
+        #      number's correction reads as a warrant for the second.
+        #
+        # The second sentence plants the ordinary lowercase mid-sentence form
+        # against the SAME relaxed pattern: a repair that swapped `the` for
+        # `The` rather than admitting both would pass assertion 1 and fail
+        # here, which is the whole point of keeping both spellings in one
+        # fixture.
+        doc = mk(
+            root / "sentence",
+            "d.md",
+            "- The test suite (28550 .py LOC) over `tests/` (47 tracked test files in the "
+            "census's wording) — the individual test module names are not in this slice.\n"
+            "Elsewhere the test suite (28550 .py LOC) is named the ordinary way, mid-sentence.\n",
+        )
+        rep = scan_doc(doc)
+        texts = {doc: doc.read_text(encoding="utf-8")}
+        n = apply_rewrites(plan_rewrites(rep), texts)
+        after = doc.read_text(encoding="utf-8")
+        loc = SELF_CENSUS["tests_loc"]
+        files = SELF_CENSUS["tests_files"]
+        ok = (
+            rep.drifted == 3
+            and n == 3
+            and f"The test suite ({loc} .py LOC) over" in after
+            and f"({files} tracked test files in the" in after
+            and f"Elsewhere the test suite ({loc} .py LOC)" in after
+        )
+        return ok, f"drifted={rep.drifted} rewrites={n} (2 LOC spellings + 1 file count)"
+
     controls: list[tuple[str, str, ControlFn]] = [
         ("association", "MUST_PASS", c_association),
+        (
+            "sentence-initial and second-parenthetical seen (#266)",
+            "MUST_FIRE",
+            c_sentence_initial_anchor,
+        ),
         ("one countable, two phrasings, both corrected", "MUST_FIRE", c_phrasing_twin),
         ("'written against' masked, live half seen", "MUST_PASS", c_written_against_masked),
         ("masked history, stale live half: 1 move", "MUST_FIRE", c_masked_history_live_stale),

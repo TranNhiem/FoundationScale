@@ -104,7 +104,7 @@ jobs:
         # everything else. pytest-cov is installed here because pyproject.toml's
         # [dev] extra does not carry it and the pytest step needs --cov.
         #
-        # #228 adds .[train]. tests/test_train_execution.py imports transformers
+        # #228 adds .[train]. tests/train/test_train_execution.py imports transformers
         # and datasets at module scope on purpose — it exists to run the code
         # AFTER train/loop.py's guarded dependency import, and a module that
         # importorskip'd its way past that would pin nothing. Without the extra
@@ -354,7 +354,7 @@ jobs:
 
       # CI suite extras (#253). Every job in THIS FILE that executes the pytest
       # suite must install the same extras. The measured failure it closes: #228
-      # added tests/test_train_execution.py, the `check` job's install gained
+      # added tests/train/test_train_execution.py, the `check` job's install gained
       # `train`, the `mutation` job's did not -- and mutation runs the WHOLE
       # suite once per mutant, so all 9 shards died at COLLECTION with "No
       # module named 'tokenizers'". The battery surfaced that as `assert 96 ==
@@ -1027,7 +1027,7 @@ jobs:
         # `train` is not optional here even though this job names no trainer.
         # tools/mutate.py runs the WHOLE pytest suite per mutant, so this job's
         # dependency set is the suite's, not the battery's: when #228 added
-        # tests/test_train_execution.py the `check` job got `train` and this one
+        # tests/train/test_train_execution.py the `check` job got `train` and this one
         # did not, and all 9 shards died at COLLECTION with "No module named
         # 'tokenizers'" -- 3 errors that the battery reported as `assert 96 == 5`,
         # an unmeasured mutant reading as a wrong verdict rather than as a

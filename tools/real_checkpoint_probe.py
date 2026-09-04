@@ -99,7 +99,7 @@ from foundationscale.gates.core import Gate, GateResult, Verdict
 # (`_ENABLE_MOE_BLOCK_KEY`) -- which is what a partial surface looks like,
 # silent until some caller reaches for the twelfth.
 #
-# That near-miss is why tests/test_reexport_surface.py was generalised from one
+# That near-miss is why tests/packaging/test_reexport_surface.py was generalised from one
 # boundary pair to two (#205: a fix that leaves the class open is incomplete).
 # It derives this surface from foundationscale.gates.probe's own AST and fails
 # if any of it is missing here, so the next name added to the library is caught

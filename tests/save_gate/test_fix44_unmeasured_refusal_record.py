@@ -29,7 +29,7 @@ import pytest
 # The tools/ directory sits at the repository root beside src/; the suite's
 # other tests of this tool resolve it the same way. Path setup is defensive
 # and idempotent so the file also runs standalone.
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 for _p in (str(REPO_ROOT), str(REPO_ROOT / "src")):
     if _p not in sys.path:
         sys.path.insert(0, _p)

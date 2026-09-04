@@ -33,7 +33,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 LANE_FILE = REPO_ROOT / "container_tests" / "peft_omegaconf_repair_cases.py"
 RETIRED_PATH = REPO_ROOT / "tests" / "test_peft_omegaconf_repair.py"
 

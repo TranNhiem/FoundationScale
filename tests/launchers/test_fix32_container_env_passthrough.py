@@ -123,7 +123,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 BACKEND = REPO_ROOT / "launchers" / "fs_container_backend.sh"
 BASH = shutil.which("bash") or "/bin/bash"
 

@@ -41,7 +41,7 @@ def _import_gate_module():
     # Self-contained path setup: src/ (foundationscale package) and tools/
     # (real_checkpoint_probe sibling import) -- no conftest assumption, so
     # these tests run identically from the repo root or elsewhere.
-    root = Path(__file__).resolve().parents[1]
+    root = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
     for sub in ("src", "tools"):
         entry = str(root / sub)
         if entry not in sys.path:

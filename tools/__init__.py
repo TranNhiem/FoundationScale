@@ -16,7 +16,7 @@ MEASURED, 2026-08-30, on the H100 estate inside
 ``/usr/local/lib/python3.12/dist-packages/tools/__init__.py``. With the
 repository root inserted at ``sys.path[0]``, ``import tools`` resolved to the
 container's package, and collection of
-``tests/test_fix44_unmeasured_refusal_record.py`` died with
+``tests/save_gate/test_fix44_unmeasured_refusal_record.py`` died with
 ``ModuleNotFoundError: No module named 'tools.live_save_gate'`` — aborting the
 entire run at collection time, so the suite reported an error rather than a
 verdict. The same tree collects and passes on a laptop whose environment

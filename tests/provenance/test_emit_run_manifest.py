@@ -44,7 +44,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 EMITTER_PATH = ROOT / "tools" / "emit_run_manifest.py"
 MUTATE_PATH = ROOT / "tools" / "mutate.py"
 
@@ -109,7 +109,11 @@ def _load_emit_run_manifest_module():
     import importlib.util
     from pathlib import Path
 
-    emitter = Path(__file__).resolve().parents[1] / "tools" / "emit_run_manifest.py"
+    emitter = (
+        next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+        / "tools"
+        / "emit_run_manifest.py"
+    )
     spec = importlib.util.spec_from_file_location("emit_run_manifest_under_test", emitter)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {emitter}")  # FAIL CLOSED

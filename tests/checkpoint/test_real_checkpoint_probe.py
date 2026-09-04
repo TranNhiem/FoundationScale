@@ -32,7 +32,7 @@ import torch
 
 from foundationscale.gates.core import Verdict
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 _PROBE_PATH = REPO_ROOT / "tools" / "real_checkpoint_probe.py"
 
 _SPEC = importlib.util.spec_from_file_location("real_checkpoint_probe", _PROBE_PATH)

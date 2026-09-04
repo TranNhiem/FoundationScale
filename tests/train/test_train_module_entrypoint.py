@@ -65,7 +65,7 @@ from pathlib import Path
 from foundationscale.train.cli import build_parser
 from foundationscale.train.loop import fs_version
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 SRC = REPO_ROOT / "src"
 
 

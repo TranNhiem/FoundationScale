@@ -562,7 +562,7 @@ fs_env_forward_denylisted() {
 #   Either knob in production is the same offence stated once: a launch that
 #   PROCEEDS with a drill armed is proof the tripwire is dead.
 # Both drills are exercised at the decision level in
-# tests/test_fix32_container_env_passthrough.py. Exit codes 95-98 remain
+# tests/launchers/test_fix32_container_env_passthrough.py. Exit codes 95-98 remain
 # this wrapper's own, never fs_die(1)/gate(90) — fix37 ADDS NO CODES: the
 # layer-3 scrub it adds cannot detect, and a control that cannot detect must
 # not mint a refusal.
@@ -731,7 +731,7 @@ run_in_container() {
     # fs_backend_init SET it (s7); PYTHONPATH (EXTRAS-first, README trap 1),
     # CUDA_VISIBLE_DEVICES, HOME, USER, LANG/LC_CTYPE and every variable
     # fs_backend_init mints all keep flowing — the keep-set is pinned in
-    # tests/test_fix32_container_env_passthrough.py.
+    # tests/launchers/test_fix32_container_env_passthrough.py.
     local v
     while IFS= read -r v; do
       if fs_env_forward_denylisted "$v"; then
@@ -739,7 +739,7 @@ run_in_container() {
         # FS_REARM_HOST_PATH_FORWARD=1 re-forwards exactly PATH, re-creating
         # the measured case 1 on demand so the in-container interpreter
         # tripwire can be PROVEN able to fire (doctrine 3); the control lives
-        # in tests/test_fix32_container_env_passthrough.py and is how a live
+        # in tests/launchers/test_fix32_container_env_passthrough.py and is how a live
         # tripwire is distinguished from a dead one. Never set in production:
         # with it set, a launch that PROCEEDS is proof the tripwire is dead.
         if [[ "$v" == PATH && "${FS_REARM_HOST_PATH_FORWARD:-0}" == "1" ]]; then

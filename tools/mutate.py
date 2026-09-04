@@ -206,8 +206,8 @@ _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")
 # #221 appended topology-check-unwired and made it 8, and nothing was red for
 # the interval -- a count in prose sits in no denominator and no gate, so it
 # can only rot. `tools/mutate.py --list` prints the live per-module figure and
-# tests/test_emit_run_manifest.py pins shape over however many rows there are.
-# KNOWN, re-observed on every test run: tests/test_emit_run_manifest.py pins
+# tests/provenance/test_emit_run_manifest.py pins shape over however many rows there are.
+# KNOWN, re-observed on every test run: tests/provenance/test_emit_run_manifest.py pins
 # shape, keys, and per-row anchor uniqueness, over however many rows the
 # list carries. EXPECTED, not yet measured by the battery: the five rows
 # whose behaviors that suite exercises directly should be killed; and the
@@ -1349,7 +1349,7 @@ def main(
         resolved_paths = {mod: ROOT / rel for mod, rel in MODULE_PATHS.items()}
     else:
         # Injected tables resolve their own paths verbatim; this branch is
-        # pinned by tests/test_mutate_zero_work_refusals.py and must not move.
+        # pinned by tests/tooling/test_mutate_zero_work_refusals.py and must not move.
         resolved_paths = {mod: Path(p) for mod, p in module_paths.items()}
 
     # The table/module_paths seam is the second half of the inert-control

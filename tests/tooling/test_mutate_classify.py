@@ -25,7 +25,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-_REPO = Path(__file__).resolve().parent.parent
+_REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 _spec = importlib.util.spec_from_file_location("fs_mutate", _REPO / "tools" / "mutate.py")
 mutate = importlib.util.module_from_spec(_spec)
 # Register before executing: @dataclass resolves string annotations through
