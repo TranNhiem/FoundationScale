@@ -136,7 +136,7 @@ their future home, but no evidence connects them yet. The README's DP/TP/PP/EP
 table is marketing-poster prose, not configuration documentation.
 
 **Single best change:** a preflight leg (the pattern already exists —
-`tools/preflight.py` at 3593 LOC is the largest tool in `tools/`) that refuses
+the `tools/preflight/` package at 4184 LOC across 23 modules is the largest tool in `tools/`) that refuses
 impossible TP/PP/EP shapes against the measured model config, the way EP=world is
 already refused on a dense base.
 

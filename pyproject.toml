@@ -134,13 +134,27 @@ markers = [
 # and the remedy for that is putting them under test, never lowering the floor.
 # A NEW tools/*.py is deliberately not omitted: it enrols at 0% and drags the
 # total red, which is the fail-closed direction.
+#
+# preflight is the one PACKAGE in this list. Its entry was the literal path
+# `tools/preflight.py`, which stopped matching the moment the module became
+# tools/preflight/*.py — omit entries are paths, not names, so the split would
+# have silently ENROLLED 22 files at preflight's 80.93% and moved the floor
+# under cover of a refactor. The two patterns below restore exactly the old
+# scope (the same code, now in more files). Stating the cost rather than
+# leaving it silent: unlike the literal entries above, these also swallow a
+# FUTURE tools/preflight/**.py, so the fail-closed default the paragraph above
+# describes does not hold inside this one subtree. What replaces it is that
+# every module here is reached by tests/test_preflight.py's 21 contracts and by
+# `--self-test`'s 18 MUST_FIRE / 10 MUST_PASS lanes, which is a stronger
+# instrument than an enrolment number.
 [tool.coverage.run]
 omit = [
     "tools/census_denominator_control.py",
     "tools/count_census_modules.py",
     "tools/countables_census.py",
     "tools/mutate.py",
-    "tools/preflight.py",
+    "tools/preflight/*.py",
+    "tools/preflight/**/*.py",
     "tools/real_checkpoint_probe.py",
 ]
 
@@ -176,7 +190,10 @@ ignore = ["UP038"]
 # argument) and ARG005 (unused lambda argument) still fire in this file, and so
 # does F841 — an unused LOCAL is the shape that hid a dropped knob in
 # tools/live_save_gate.py, and nothing here should silence it.
-"tools/preflight.py" = ["ARG001"]
+# Keyed to the package, not the old single file: `tools/preflight.py` matches
+# nothing after the split, and the ten dispatched checks now live under
+# tools/preflight/items/, one directory deeper.
+"tools/preflight/**/*.py" = ["ARG001"]
 
 [tool.mypy]
 # tools/ is on the path, not merely checked. Several test modules and the
@@ -246,6 +263,14 @@ disallow_untyped_defs = false
 # 4-tuple return (#105) with the suite green. The exemption is stated WITH its
 # denominator rather than left silent — a quiet exclusion reads exactly like coverage.
 # Delete this block when the 23 land; do not grow it to cover a new file.
+#
+# Four patterns for ONE exemption, because the module split changed the name
+# mypy knows this code by. `tools/preflight.py` resolved as `preflight` (mypy_path
+# carries tools/); `tools/preflight/` resolves as a package, and mypy reports it
+# under `tools.preflight.*`. The single-name override matched nothing afterwards
+# and 49 errors appeared with no code change — the same shape as the coverage
+# `omit` entry above, and the reason both are listed here rather than assumed.
+# The bare names are kept so the exemption survives either resolution.
 [[tool.mypy.overrides]]
-module = "preflight"
+module = ["preflight", "preflight.*", "tools.preflight", "tools.preflight.*"]
 ignore_errors = true

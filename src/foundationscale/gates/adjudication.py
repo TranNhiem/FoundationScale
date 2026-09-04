@@ -1659,7 +1659,7 @@ def _attributed_status(res: GateResult, base_res: GateResult | None) -> tuple[st
 def control_drop(
     ctx: CheckpointGateContext,
     # Unused BY DESIGN, and suppressed inline rather than in pyproject.toml:
-    # that file is outside the visible scope of this patch (preflight.py holds
+    # that file is outside the visible scope of this patch (preflight/ holds
     # the analogous exemption there; whoever next has both files open may
     # unify them). Every _CONTROL_BUILDERS entry must accept the uniform
     # (ctx, baselines) arity -- the consume loop invokes builders through one

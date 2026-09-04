@@ -52,7 +52,7 @@ The README itself admits the trainer "is early", and its three-step Quickstart e
 |---|---|
 | `src/` | 2 — the `def` in `gates/core.py` and one call in `integrate.py`, the wrapper around it |
 | `tests/` | 18 |
-| `tools/` | 0 (one comment mention in `preflight.py`) |
+| `tools/` | 0 (one comment mention in `preflight/_cli.py`) |
 | `validation_campaigns/h100_validation/` | 0 |
 | **Production** | **0** |
 

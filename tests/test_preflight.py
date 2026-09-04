@@ -1,28 +1,102 @@
-"""Fail-closed contract tests for tools/preflight.py.
+"""Fail-closed contract tests for the tools/preflight package.
 
-The module is loaded by path (tools/ is not a package), which also proves the
-login-node bootstrap of `foundationscale` works from a bare checkout.
+Imported as a package rather than loaded by path. The by-path load this file
+used to do was a workaround for tools/preflight.py being a bare script in a
+non-package directory; tools/ has an __init__.py, so a plain import is both
+honest and closer to how the login node runs the tool (`python -m
+tools.preflight`).
 """
 
 from __future__ import annotations
 
 import hashlib
-import importlib.util
+import importlib
 import json
 import os
-import sys
+import pkgutil
 from pathlib import Path
 
+from tools import preflight
+
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("preflight", ROOT / "tools" / "preflight.py")
-preflight = importlib.util.module_from_spec(spec)
-# Register BEFORE exec_module. @dataclass resolves string annotations through
-# sys.modules[cls.__module__], so a module executed while absent from sys.modules
-# raises AttributeError on the first frozen dataclass — the tool imports fine as
-# __main__ from the CLI and only breaks under a by-path load, which is exactly
-# the shape that would have reached the login node untested.
-sys.modules[spec.name] = preflight
-spec.loader.exec_module(preflight)  # fail-before: file absent -> every test reds here
+
+
+def patch_everywhere(monkeypatch, name: str, value) -> int:
+    """Rebind `name` in EVERY package module that holds it; return the count.
+
+    A single-module script has one binding, so `monkeypatch.setattr(preflight,
+    name, ...)` was total. A package does not: a consumer that wrote
+    `from .._artifacts import _read_safetensors_header` owns its own reference,
+    and patching the front door reaches none of them. Measured at the split:
+    `_read_safetensors_header` is bound in four modules, of which the front door
+    is one and the two real consumers are not.
+
+    The dangerous half is that an inert patch usually PASSES -- the injected
+    fault simply never fires and the test reports the healthy path. So this
+    refuses when it rebinds nothing beyond the front door, which makes the
+    injection itself a measured event rather than an assumed one.
+    """
+    targets = [preflight]
+    for mod in pkgutil.walk_packages(preflight.__path__, "tools.preflight."):
+        targets.append(importlib.import_module(mod.name))
+    hit = [m for m in targets if hasattr(m, name)]
+    consumers = [m for m in hit if m is not preflight]
+    assert consumers, (
+        f"patching {name!r} rebound nothing outside the package front door; "
+        "the injection would be inert and the test would pass vacuously"
+    )
+    for m in hit:
+        monkeypatch.setattr(m, name, value)
+    return len(hit)
+
+
+def test_bootstrap_src_path_arithmetic() -> None:
+    """`_SRC` must point at <repo>/src from wherever _base.py lives.
+
+    This is a positive control for a landmine, not a tautology. The bootstrap
+    sits on the `except ImportError` branch, which carries `pragma: no cover`,
+    so no test could observe it -- and when the tool was split from
+    tools/preflight.py into tools/preflight/_base.py it moved one directory
+    deeper, silently turning `_HERE.parent / "src"` into the nonexistent
+    tools/src. A depth-sensitive path with no assertion is a path nothing
+    measures; on a bare checkout the tool would simply refuse to start.
+    """
+    assert preflight._HERE == ROOT / "tools" / "preflight"
+    assert preflight._SRC == ROOT / "src"
+    assert preflight._SRC.is_dir(), "the bootstrap target must actually exist"
+
+
+def test_bootstrap_failure_branch_still_binds_the_enums() -> None:
+    """The `except ImportError` arm must re-import after extending sys.path.
+
+    Structural, not textual: this walks the handler and asks which names it
+    BINDS, so reformatting or reordering the two lines cannot break it and
+    deleting either one cannot pass it.
+
+    It exists because `ruff check --fix` deleted exactly that re-import once.
+    `_base` re-exports Coverage/Verdict without using them, so F401 read the
+    line as dead; the autofix left `sys.path.insert(...)` standing with nothing
+    after it. That fails only on a bare checkout -- the branch carries `pragma:
+    no cover`, so coverage never saw it, and the whole suite stayed green while
+    the tool had lost the ability to start where it is actually run.
+    """
+    import ast
+
+    src = (ROOT / "tools" / "preflight" / "_base.py").read_text(encoding="utf-8")
+    handlers = [
+        h for node in ast.parse(src).body if isinstance(node, ast.Try) for h in node.handlers
+    ]
+    assert len(handlers) == 1, "one bootstrap try/except is expected in _base"
+    bound = {
+        alias.asname or alias.name
+        for stmt in ast.walk(handlers[0])
+        if isinstance(stmt, ast.ImportFrom)
+        for alias in stmt.names
+    }
+    assert {"Coverage", "Verdict"} <= bound, (
+        f"the bootstrap branch binds {sorted(bound)}; without both enums a bare "
+        "checkout extends sys.path and then dies on the first Verdict reference"
+    )
 
 
 def world(tmp_path):
@@ -450,7 +524,7 @@ def test_absent_or_corrupt_shard_is_named_fail__environmental_refusal_is_error(
         except PermissionError as exc:
             raise preflight.ArtifactError(f"{path}: unreadable: {exc}") from exc
 
-    monkeypatch.setattr(preflight, "_read_safetensors_header", refuse)
+    patch_everywhere(monkeypatch, "_read_safetensors_header", refuse)
     r2 = run_check(w2, "frozen_manifest")
     assert r2.verdict is preflight.Verdict.ERROR
     # Judge the VOCABULARY, not the paths. Every path in this detail lives under

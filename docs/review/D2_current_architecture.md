@@ -26,7 +26,7 @@ The supplied findings do **not** identify the *generated* (launcher-side, in-con
 flowchart TB
   O(["Operator"])
 
-  PF["[validation tool]<br/>tools/preflight.py<br/>one Gemma-4-E4B / GB200-tray launch gate"]
+  PF["[validation tool]<br/>tools/preflight/<br/>one Gemma-4-E4B / GB200-tray launch gate"]
   L["[bash]<br/>launchers/launch_g4e4b_lora_1tray.sh"]
 
   E["[validation tool]<br/>tools/emit_run_manifest.py<br/>login-node provenance emitter"]
@@ -84,7 +84,7 @@ flowchart TB
 
 ### What the diagram establishes — and what it deliberately does not
 
-- The operational plane is shell and tool-heavy: `launchers/` contains 10,171 shell LOC plus 1,615 Python LOC, while `tools/` contains 8,923 Python LOC. `validation_campaigns/h100_validation/` adds another 31,313 Python LOC and 4,986 shell LOC.
+- The operational plane is shell and tool-heavy: `launchers/` contains 10,171 shell LOC plus 1,615 Python LOC, while `tools/` contains 9,514 Python LOC. `validation_campaigns/h100_validation/` adds another 31,313 Python LOC and 4,986 shell LOC.
 - The installed package is consumed by tools, but the measured `run_event` call-site count is **0 in both `tools/` and `validation_campaigns/h100_validation/`**. No evidence shows an actual trainer firing the lifecycle engine.
 - The package's three-line `__init__.py` exports nothing, so there is still no top-level public surface. The production save-gate decision function `adjudicate_checkpoint` **is now importable** from `foundationscale.gates.adjudication` (moved during this review, T2#0), but it is reachable only by its fully-qualified submodule path, and 60 private names still cross the boundary through the `tools/live_save_gate.py` compatibility shim.
 - There is **no load-side path after saving**: the `Lifecycle` enum has no `RESUME`, `LOAD`, `BEFORE_LOAD`, or `RESTORE` member.
@@ -96,8 +96,8 @@ The census reports counts per importing area, not unique dependencies or a file-
 
 ```mermaid
 flowchart TB
-  TESTS["tests/<br/>65 Python files / 29,498 LOC"]
-  TOOLS["tools/<br/>9 Python files / 8,923 LOC"]
+  TESTS["tests/<br/>65 Python files / 29,572 LOC"]
+  TOOLS["tools/<br/>31 Python files / 9,514 LOC"]
   SRC["src/ as importer<br/>25 Python files / 18,915 LOC"]
 
   FS["src/foundationscale<br/>25 Python files / 18,915 LOC<br/>root __init__.py exports nothing"]
@@ -111,7 +111,7 @@ flowchart TB
   ROOT["root __init__.py<br/>1 file / 3 LOC"]
 
   TESTS -->|"99 Python import statements"| FS
-  TOOLS -->|"12 Python import statements"| FS
+  TOOLS -->|"14 Python import statements"| FS
   SRC -->|"27 Python import statements, source not disaggregated"| FS
 
   FS -->|"contains"| GATES
@@ -159,7 +159,7 @@ This table uses the declared scope in the question as the reference architecture
 | Parallel topology model | `foundationscale.topology` includes construction-time product validation | **PRESENT as library; production trainer use UNMEASURED** |
 | Target-hardware profiles | `_PROFILE_DATA` contains only `slurm-generic` and `local-single-node`; neither is MNNVL-capable | **MISSING H100/H200/GB200/GB300 profiles** |
 | Launch orchestration | 10,171 shell LOC in `launchers/`; preflight is scoped to one Gemma-4-E4B / GB200-tray launch; census denominator control is hardwired to one launcher | **ESTATE-ONLY, not a package launcher API** |
-| In-process lifecycle hooks | `train/loop.py`'s `FoundationScaleSaveGate.on_save` calls `registry.run(event, ctx)` with `FIRST_SAVE` on the first save and `SAVE` thereafter, and fails closed by setting `control.should_training_stop`. The convenience wrapper `run_event` still has zero production call sites (`gates/core.py`, `integrate.py`, `tools/preflight.py` only), and `STEP_ZERO`, `LAUNCH`, `EXPORT`, `PROMOTE` have no in-process caller | **PRESENT for the save seam; MISSING for the other four lifecycle points** |
+| In-process lifecycle hooks | `train/loop.py`'s `FoundationScaleSaveGate.on_save` calls `registry.run(event, ctx)` with `FIRST_SAVE` on the first save and `SAVE` thereafter, and fails closed by setting `control.should_training_stop`. The convenience wrapper `run_event` still has zero production call sites (`gates/core.py`, `integrate.py`, `tools/preflight/_cli.py` only), and `STEP_ZERO`, `LAUNCH`, `EXPORT`, `PROMOTE` have no in-process caller | **PRESENT for the save seam; MISSING for the other four lifecycle points** |
 | Checkpoint readers and metadata | `checkpoint/dcp.py`, `checkpoint/dcp_meta.py`, `open_weights`, `read_metadata`, chunk reads, and fail-closed format sniffing exist | **PRESENT; end-to-end trainer consumption UNMEASURED** |
 | Trainer-owned checkpoint saving | `train/loop.py` calls `trainer.save_model()` at :1097 and reads `model.state_dict()` at :536 to build the pre-save declaration, and its save callback gates every checkpoint. What is UNMEASURED is the *estate* trainer: the in-container Megatron/NeMo path the launchers drive has no such seam | **PRESENT in the packaged trainer; UNMEASURED in the estate trainer** |
 | Save-side checkpoint verification | `gates/checkpoint_gates.py` is 1,974 LOC; census records seven `SAVE` references and seven `FIRST_SAVE` references in `src/` | **PRESENT as package/tool verification** |
@@ -182,7 +182,7 @@ There is no verified end-to-end trace of a generated trainer run, so an unqualif
 
 | Order | Artifact | Producer / consumer | Current status |
 |---:|---|---|---|
-| 0 | Human preflight report and optional machine-record file | `tools/preflight.py` writes `--json PATH`; the human report goes to stdout | Conditional and operator visible; launcher call edge is not measured |
+| 0 | Human preflight report and optional machine-record file | `tools/preflight/` writes `--json PATH`; the human report goes to stdout | Conditional and operator visible; launcher call edge is not measured |
 | 1 | `launchers/launch_g4e4b_lora_1tray.sh` | Bash launch control plane | The launcher specifically named by the verified findings |
 | 2 | Run-manifest record | `tools/emit_run_manifest.py` composes package `RunManifest` / `ManifestStore` machinery | Launch-side provenance; no in-process trainer resolver supersedes it today |
 | 3 | Generated-trainer payload and its intermediate files | Generated/estate trainer | **UNMEASURED: source files and artifact list not identified by supplied evidence** |

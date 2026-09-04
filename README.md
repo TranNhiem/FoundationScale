@@ -409,14 +409,14 @@ itself, from the Makefile's own accounting:
 
 `src/` = 18915 LOC across 25 files. `launchers/` contains 9500 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 31313 Python LOC and 4986 shell LOC on top of the
-package. repo-wide, 115500 git-tracked .py/.sh/.md lines.
+package. `tools/` contains 9514 Python LOC. 122683 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (29498 .py LOC); conftest carries the skip guard
-tools/                 contains 8923 Python LOC of CLIs over the package (emit_run_manifest,
-                       live_save_gate, real_checkpoint_probe, preflight, mutate, census)
+tests/                 the test suite (29572 .py LOC); conftest carries the skip guard
+tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
+                       real_checkpoint_probe, preflight/, mutate, census)
 checks/                standalone repository gates: countables drift, packaging
                        reachability, bash -lc sweep, workflow YAML audit
 launchers/             the estate launch plane + two contract suites (bash), plus
@@ -448,7 +448,7 @@ The Makefile is convenience only; CI mirrors, it does not consume it.
 | `make check` | all of the above |
 
 Stated exclusions, so silence does not read as coverage: mypy does not check `checks/`
-or `tools/preflight.py` (the latter carries an explicit exemption); ruff covers
+or `tools/preflight/` (the latter carries an explicit exemption); ruff covers
 everything listed. [-> docs/DEVELOPMENT.md]
 
 ## 25. Testing

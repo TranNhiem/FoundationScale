@@ -29,7 +29,7 @@ regular package found earlier on ``sys.path`` beats one found later, so the
 repository's own adjudicators win wherever the suite runs.
 
 Kept empty of imports on purpose. ``tools/live_save_gate.py``,
-``tools/preflight.py`` and ``tools/emit_run_manifest.py`` are also entry points
+``tools/preflight/`` and ``tools/emit_run_manifest.py`` are also entry points
 run directly as scripts on control-plane nodes with no ML stack installed, and
 several of them are targets of the mutation battery. Re-exporting their symbols
 here would (a) force an import of every adjudicator whenever any one of them is

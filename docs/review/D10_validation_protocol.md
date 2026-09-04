@@ -6,7 +6,7 @@ the state is **UNMEASURED**. "Validated" is used only where a job id or a named 
 backs it.
 
 Scope note on size, so denominators in this document are anchored: the repository holds
-122018 git-tracked .py/.sh/.md lines repo-wide; the validation harness, `validation_campaigns/h100_validation/`
+122683 git-tracked .py/.sh/.md lines repo-wide; the validation harness, `validation_campaigns/h100_validation/`
 (31313 .py LOC, 63 files); the package, `src/foundationscale/` measures 18915 lines; the
 GB200-side launch path, `launchers/*.sh` (10171 LOC, 5 files). No other countables appear
 in this document.
@@ -225,7 +225,7 @@ kind is validated**.
 
 Plus standing checks `checks/bash_lc_sweep.py`, `checks/packaging_reachability.py`,
 `checks/wf_yaml_audit.py`, and the live-run instruments `tools/live_save_gate.py`,
-`tools/preflight.py`, `tools/real_checkpoint_probe.py`.
+`tools/preflight/`, `tools/real_checkpoint_probe.py`.
 
 ### C.2 The gaps — invalidating changes NO gate would notice
 
