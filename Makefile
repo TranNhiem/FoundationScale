@@ -174,31 +174,28 @@ fmt:
 # re-export list nobody reads: mypy is what notices when the library's signature
 # moves out from under the CLI that forwards to it.
 #
-# checks/ is NOT in this list, and that is a stated exclusion rather than an
-# implied one (#231): all 8 files under checks/ are unchecked by mypy. That
-# count is anchored -- checks_files in the countables census, bound by
-# checks/countables_drift.py -- because the clause it replaces read "3 of 3"
-# in the same commit that ADDED the fourth file (#241). It had copied mypy's
-# own "Found 10 errors in 3 files (checked 4 source files)" and taken the
-# error-bearing count for the denominator: the numerator, printed as the whole.
-#
-# The error count is deliberately NOT stated here. It was written once as 10
-# and measured 19 the next time anyone ran it, and a number that needs mypy --
-# and one particular mypy version -- to verify is the #83/#111 shape: a claim
-# whose truth depends on the environment that reads it. `make typecheck-checks`
-# prints it on demand instead. Two of what it reports are deliberate
+# checks/ is no longer excluded: `typecheck-checks` below now GATES it, and is
+# in `check`. It was excluded from #231 until the errors were cleared, and the
+# note that stood here recorded the exclusion honestly -- what it got wrong was
+# the disposition. It said two of the reported errors were "deliberate
 # back-compat shapes in packaging_reachability.py that want silencing rather
-# than fixing: an EntryPoints.get fallback that only executes on the pre-3.10
-# shape mypy cannot see, and an ArgumentParser.exit override that always raises
-# and so wants NoReturn.
-# Ruff and ruff format DO cover checks/ as of #231; mypy is the tracked half.
+# than fixing", naming an EntryPoints.get fallback "that only executes on the
+# pre-3.10 shape mypy cannot see". mypy was right and the note was wrong:
+# Distribution.entry_points is a LIST before 3.10 and an EntryPoints after, and
+# has never on any release been the mapping .get() addresses -- the mapping is
+# the module-level entry_points() FUNCTION. So the arm was dead on 3.10+ and an
+# AttributeError on exactly the interpreters it was written for. An excuse
+# written into the exclusion is how a real defect kept an unfailing gate.
 typecheck:
 	$(PY) -m mypy src tools/emit_run_manifest.py tools/live_save_gate.py tools/real_checkpoint_probe.py
 
-# Not part of `check`, and that is the point: this REPORTS, it does not gate.
-# It exists so the count above can stay unstated and still be knowable.
+# In `check`, and NOT prefixed with `-`. It was `-$(PY) -m mypy checks`, which
+# made this the one recipe in this file that could not fail: make prints
+# "Error 1 (ignored)" and returns 0, so the target read green while reporting
+# 22 errors. A gate that reports and cannot fail is #231's own subject matter
+# one level up -- the exclusion was visible, the suppression was not.
 typecheck-checks:
-	-$(PY) -m mypy checks
+	$(PY) -m mypy checks
 
 # $(PY), not bare `python`: bare `python` does not exist on modern macOS or most
 # Linux distributions, so `make check` died with command-not-found for any
@@ -360,7 +357,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables launcher-contracts checks-gates mutation
+check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables launcher-contracts checks-gates mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \

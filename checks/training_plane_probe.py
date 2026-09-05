@@ -93,6 +93,7 @@ import sys
 import tempfile
 import textwrap
 from pathlib import Path
+from typing import NoReturn
 
 EXIT_CLEAR = 0
 EXIT_RED = 5
@@ -152,9 +153,12 @@ _RETIRED_ASSERTIONS = tuple(
 
 
 class GateArgumentParser(argparse.ArgumentParser):
-    def exit(self, status: int = 0, message: str | None = None) -> None:
+    def exit(self, status: int = 0, message: str | None = None) -> NoReturn:
         # argparse exits 2 on bad arguments; without this remap an operator
         # typo would escape the four-code namespace this probe advertises.
+        # NoReturn, not None: the base method is Never, and an override that
+        # merely claims None would let a caller treat a remapped REFUSE as a
+        # fallthrough and carry on to publish a verdict this probe refused.
         if message:
             sys.stderr.write(message)
         raise SystemExit(EXIT_CLEAR if status == 0 else EXIT_REFUSE)

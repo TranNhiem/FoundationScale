@@ -47,6 +47,17 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.5",
     "mypy>=1.7",
+    # STUBS ONLY, and PyYAML itself stays undeclared anywhere in this file.
+    # checks/wf_yaml_audit.py imports yaml inside a try/except and degrades to a
+    # structural indentation scan that SAYS it is not a full parse (its doctrine
+    # 5); the CI job that runs it installs nothing and uses the runner's system
+    # python3, so declaring the runtime package here would not change what CI
+    # measures, only retire the fallback arm on the machine where a human would
+    # notice it break. The stubs are a typecheck-time artifact -- never imported
+    # -- and they are the difference between checking yaml.safe_load's real
+    # signature and the unchecked Any that ignore_missing_imports or a bare
+    # `# type: ignore` would buy for the same silence.
+    "types-PyYAML>=6.0",
 ]
 train = [
     # The training entry point (`foundationscale.train`) owns no nn.Module of its

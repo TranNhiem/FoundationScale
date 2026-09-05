@@ -175,16 +175,26 @@ jobs:
         # package while live_save_gate imports its sibling script-style, so the same
         # file resolves under two module names and mypy refuses the directory. The
         # remaining tools/ modules are unchecked -- stated, not implied.
-        # checks/ is likewise unchecked here, and its denominator is on the
-        # wire: all 8 files under checks/ are unchecked. That count is anchored
-        # (checks_files) after #241, where this clause and its Makefile twin
-        # both read "3 of 3" -- mypy's error-BEARING file count, not the number
-        # it checked -- written in the very commit that added the fourth file.
-        # The error count is not stated here for the reason the Makefile gives:
-        # it needs a particular mypy to verify, so it is reported on demand by
-        # `make typecheck-checks` rather than asserted in a comment.
-        # Ruff now covers checks/ (#231); mypy is the tracked remainder.
+        # checks/ is no longer the tracked remainder -- it has its own step
+        # below. Ruff covered it from #231; mypy now does too.
         run: mypy src tools/emit_run_manifest.py tools/live_save_gate.py tools/real_checkpoint_probe.py
+      - name: Mypy (checks/)
+        # A SEPARATE invocation, mirroring `make typecheck-checks`, not extra
+        # arguments on the step above: checks/ is a directory of standalone
+        # scripts and folding it into the same command changes how mypy
+        # resolves the other paths. Split so the two stay the same command.
+        #
+        # This step gates. Until it did, checks/ was excluded from mypy (#231)
+        # and the Makefile target that reported on it was prefixed with `-`,
+        # so it could not fail -- 22 errors reading green in both places at
+        # once. Among them was a real defect: packaging_reachability.py called
+        # .get() on Distribution.entry_points, which is a list before 3.10 and
+        # an EntryPoints after and has never been a mapping on any release.
+        # This directory holds three of this workflow's own gates, so an
+        # unchecked gate directory is the vacuous pass one level up -- #230's
+        # shape, where CI's mypy scope had silently drifted narrower than the
+        # Makefile's.
+        run: mypy checks
       - name: Pytest (coverage floor 90; skips are failures — FS_FORBID_SKIPS)
         # --cov-fail-under=90 against a measured 92.79% total. The floor was 70
         # when written, sized around gates/fixtures.py at 63% and gates/controls.py

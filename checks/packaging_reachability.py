@@ -43,9 +43,9 @@ EXIT CODES
     exits 5 with a stated reason.
 
 CONTROLS (--self-test)
-    Seven, built in a tempfile.TemporaryDirectory so nothing on disk is
-    touched and no control reads the caller's environment.  One per axis,
-    per outcome:
+    Nine.  The seven that need files are built in a tempfile.TemporaryDirectory
+    so nothing on disk is touched, and no control reads the caller's
+    environment.  One per axis, per outcome:
       MUST_FIRE: prog="totally-unregistered-cmd" not among declared console
                  scripts -> the prog= check must flag it (finding count > 0).
       MUST_FIRE: source advertising <dist>[nosuchextra] -> the extras check
@@ -61,14 +61,26 @@ CONTROLS (--self-test)
                  FOREIGN module -> UNMEASURED, and specifically NOT red.
       MUST_PASS: wrapper present, target loads -> zero findings AND
                  resolved == 1, so a detector examining nothing cannot pass.
+      MUST_PASS: a FLAT pre-3.10 entry-point list spanning two groups ->
+                 select_console_scripts returns 1 of 2, the console_scripts
+                 one.  Asserted as that exact list, because the arm this
+                 replaces raised AttributeError and a filter that dropped
+                 everything would also never raise.
+      MUST_PASS: entry points exposing .select() -> that arm is still taken
+                 AND is handed group="console_scripts", recorded on the stub.
+                 A fallback that swallowed every shape would satisfy the
+                 control above while widening the denominator to every group.
     Exits 0 only if all controls behave; the MUST_FIRE cases are asserted
     to produce a NONZERO FINDING COUNT, not merely a nonzero exit, so the
     controls cannot be vacuous.  Any control failure exits 5, because then
     every verdict this detector returns is worthless.
 
-    The last four exist because this gate's first version shipped the
+    Four of them exist because this gate's first version shipped the
     console-script axis with no control at all, and that was the axis that
     was wrong.  An uncontrolled axis is an unmeasured axis wearing a verdict.
+    The last two exist because the same was true one level up: nothing
+    controlled how the console-script DENOMINATOR was obtained, and its
+    pre-3.10 arm addressed a mapping no release ever returned.
 """
 
 from __future__ import annotations
@@ -81,9 +93,9 @@ import shutil
 import sys
 import sysconfig
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, NoReturn, Protocol
 
 EXIT_CLEAR = 0
 EXIT_RED = 5
@@ -92,9 +104,34 @@ EXIT_REFUSE = 96
 
 DEFAULT_DIST = "foundationscale"
 
+CONSOLE_SCRIPTS_GROUP = "console_scripts"
+
+
+class EntryPointLike(Protocol):
+    """The four members this gate consumes from an entry point.
+
+    A Protocol rather than importlib.metadata.EntryPoint so the --self-test
+    stubs inhabit the SAME declared type as the real thing.  The alternative on
+    offer was widening these signatures to a bare `list`, and that is how the
+    defect select_console_scripts describes survived: nothing typed the shape,
+    so nothing noticed that its fallback arm addressed a mapping no interpreter
+    ever returned.
+    """
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def value(self) -> str: ...
+
+    @property
+    def group(self) -> str: ...
+
+    def load(self) -> object: ...
+
 
 class GateArgumentParser(argparse.ArgumentParser):
-    def exit(self, status: int = 0, message: str | None = None) -> None:
+    def exit(self, status: int = 0, message: str | None = None) -> NoReturn:
         # argparse exits 2 on bad arguments; without this remap an operator
         # typo would escape the four-code namespace this gate advertises.
         if message:
@@ -102,22 +139,35 @@ class GateArgumentParser(argparse.ArgumentParser):
         raise SystemExit(EXIT_CLEAR if status == 0 else EXIT_REFUSE)
 
 
-def get_console_scripts(dist_name: str) -> list | None:
-    """Return declared console-script EntryPoints, or None if not installed.
+def select_console_scripts(entry_points: Iterable[EntryPointLike]) -> list[EntryPointLike]:
+    """Pick the console_scripts group out of whichever shape this Python returns.
 
-    importlib.metadata changed between 3.8 (entry_points returns a dict) and
-    3.10 (returns EntryPoints with .select); both shapes are handled because
-    the gate must run on whatever login-node Python exists, not on the one
-    Python the author tested.
+    `Distribution.entry_points` changed at 3.10: before, a FLAT LIST of
+    EntryPoint spanning every declared group; from 3.10, an EntryPoints with
+    .select(group=...).  Both are handled because the gate must run on whatever
+    login-node Python exists, not on the one Python the author tested.
+
+    The pre-3.10 arm used to read `eps.get("console_scripts", [])`, which is the
+    shape of the module-level `entry_points()` FUNCTION -- this property has
+    never returned a mapping on any release.  So the arm was dead on 3.10+ and
+    an AttributeError on exactly the old interpreters it was written for, where
+    main()'s fail-closed wrapper would have turned it into a RED naming no
+    packaging defect at all: an environment-dependent verdict, the #83/#111
+    shape, in the one function that decides this gate's largest denominator.
+    Filtering on ep.group is what a flat list actually supports.
     """
+    if hasattr(entry_points, "select"):
+        return list(entry_points.select(group=CONSOLE_SCRIPTS_GROUP))
+    return [ep for ep in entry_points if ep.group == CONSOLE_SCRIPTS_GROUP]
+
+
+def get_console_scripts(dist_name: str) -> list[EntryPointLike] | None:
+    """Return declared console-script entry points, or None if not installed."""
     try:
         dist = importlib.metadata.distribution(dist_name)
     except importlib.metadata.PackageNotFoundError:
         return None
-    eps = dist.entry_points
-    if hasattr(eps, "select"):
-        return list(eps.select(group="console_scripts"))
-    return list(eps.get("console_scripts", []))
+    return select_console_scripts(dist.entry_points)
 
 
 def get_declared_extras(dist_name: str) -> set[str] | None:
@@ -193,7 +243,7 @@ def package_root_of(value: str) -> str:
 
 def check_console_scripts(
     dist_name: str,
-    scripts: list,
+    scripts: Sequence[EntryPointLike],
     script_dirs: Sequence[str] | None = None,
     record_basenames: set[str] | None = None,
 ) -> tuple[list[str], list[str], ScriptTally]:
@@ -396,21 +446,55 @@ def report(kind: str, denominator: int, numerator: int, detail: str = "") -> Non
 class _StubEntryPoint:
     """Minimal EntryPoint stand-in for the console-script controls.
 
-    Only .name, .value and .load() are consumed by check_console_scripts, so a
-    stub is enough -- and it is what lets the controls exercise the failure
-    outcomes (absent wrapper, unresolvable target, thin environment) without
-    installing four broken distributions.
+    Only the four EntryPointLike members are consumed, so a stub is enough --
+    and it is what lets the controls exercise the failure outcomes (absent
+    wrapper, unresolvable target, thin environment) without installing four
+    broken distributions.  .group defaults to console_scripts but is settable,
+    because the group is what select_console_scripts filters on and a stub that
+    could only be one group cannot control that filter.
     """
 
-    def __init__(self, name: str, value: str, raises: BaseException | None = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        value: str,
+        raises: BaseException | None = None,
+        group: str = CONSOLE_SCRIPTS_GROUP,
+    ) -> None:
         self.name = name
         self.value = value
+        self.group = group
         self._raises = raises
 
     def load(self) -> object:
         if self._raises is not None:
             raise self._raises
         return self.load
+
+
+class _StubEntryPoints:
+    """Stand-in for the 3.10+ EntryPoints shape: iterable AND .select()-able.
+
+    Lets the group-selection controls drive BOTH arms of
+    select_console_scripts on any interpreter.  Building the modern arm's
+    fixture out of importlib.metadata.EntryPoints instead would make the
+    control fire only where that class exists -- a control whose reach depends
+    on the interpreter that ran it is the defect this gate's console-script
+    axis already shipped once.
+    """
+
+    def __init__(self, entries: Sequence[EntryPointLike]) -> None:
+        self._entries = tuple(entries)
+        # Recorded so the control can assert the group was PASSED, not merely
+        # that some list came back: select(group="") would also return cleanly.
+        self.select_groups: list[str] = []
+
+    def __iter__(self) -> Iterator[EntryPointLike]:
+        return iter(self._entries)
+
+    def select(self, group: str) -> tuple[EntryPointLike, ...]:
+        self.select_groups.append(group)
+        return tuple(ep for ep in self._entries if ep.group == group)
 
 
 def run_self_test(dist_name: str) -> int:
@@ -548,7 +632,47 @@ def run_self_test(dist_name: str) -> int:
                 f"loadable target gave red={red_s} unmeasured={unm_s} resolved={tally_s.resolved}"
             )
 
-    total_controls = 7
+        # ---- group-selection axis ------------------------------------------
+        # select_console_scripts decides the console-script DENOMINATOR, and
+        # its pre-3.10 arm shipped addressing a mapping no release of
+        # Distribution.entry_points ever returned: dead on 3.10+, AttributeError
+        # on the interpreters it existed for. Both arms are driven here with
+        # stubs, so neither control depends on which importlib.metadata this
+        # Python happens to ship. No tempdir: the axis touches no filesystem.
+        mixed: list[EntryPointLike] = [
+            _StubEntryPoint("fs-real-cmd", f"{dist_name}.x:main"),
+            _StubEntryPoint("fs-plugin", f"{dist_name}.x:plug", group="foundationscale.plugins"),
+        ]
+
+        # MUST_PASS: the flat pre-3.10 list keeps console_scripts and drops the
+        # foreign group. Asserted as 1 of 2, not as "no exception": the arm this
+        # replaces raised, so "it returned" is too weak a claim, and a filter
+        # that dropped everything would also never raise.
+        picked = select_console_scripts(mixed)
+        if [ep.name for ep in picked] != ["fs-real-cmd"]:
+            failures.append(
+                "MUST_PASS control failed: flat pre-3.10 entry-point list gave "
+                f"{[ep.name for ep in picked]}, expected exactly ['fs-real-cmd'] "
+                "of 2 entry points spanning 2 groups"
+            )
+
+        # MUST_PASS: the 3.10+ arm is still dispatched to .select() AND is
+        # handed the group. A fallback that quietly swallowed every shape would
+        # pass the control above while silently widening the denominator to
+        # every group the distribution declares.
+        selectable = _StubEntryPoints(mixed)
+        picked = select_console_scripts(selectable)
+        if [ep.name for ep in picked] != ["fs-real-cmd"] or selectable.select_groups != [
+            CONSOLE_SCRIPTS_GROUP
+        ]:
+            failures.append(
+                "MUST_PASS control failed: .select()-bearing entry points gave "
+                f"{[ep.name for ep in picked]} via select_groups="
+                f"{selectable.select_groups}, expected ['fs-real-cmd'] via "
+                f"['{CONSOLE_SCRIPTS_GROUP}']"
+            )
+
+    total_controls = 9
     if failures:
         print(
             f"SELF-TEST DENOMINATOR: {total_controls - len(failures)} of {total_controls} "
@@ -561,7 +685,7 @@ def run_self_test(dist_name: str) -> int:
         "SELF-TEST DENOMINATOR",
         total_controls,
         total_controls,
-        "5x MUST_FIRE produced nonzero finding counts; 2x MUST_PASS stayed "
+        "5x MUST_FIRE produced nonzero finding counts; 4x MUST_PASS stayed "
         "clean over a nonzero denominator",
     )
     return EXIT_CLEAR

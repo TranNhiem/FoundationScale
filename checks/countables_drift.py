@@ -1332,10 +1332,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = scan(texts, census, len(files), excluded)
     stats = per_key(report)
     for key in sorted(stats):
-        matched, agreed, drifted = stats[key]
+        # `agreeing`, not `agreed`: the exclusions handshake above binds
+        # `agreed` as a bool, and a per-key count reusing that name reads as
+        # the handshake verdict while carrying a site tally.
+        matched, agreeing, drifted = stats[key]
         print(
             f"  {key:<16} [{key_label(report, key)}] "
-            f"sites={matched} agreeing={agreed} drifted={drifted}"
+            f"sites={matched} agreeing={agreeing} drifted={drifted}"
         )
 
     zeros = report.zero_match_labels

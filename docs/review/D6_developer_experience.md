@@ -194,8 +194,10 @@ controls, packaging, countables, mutation. Frictions I hit:
   `make mutation-module MODULE=<name>`, discoverable only by reading the
   Makefile. CI shards it across a job matrix derived from the mutation table;
   locally you get one big bill.
-- mypy checks `src` plus three named `tools/` files; all 8 files under `checks/`
-  are unchecked by mypy (stated, with the stale-count retraction attached).
+- mypy checks `src` plus three named `tools/` files, and — since the `checks/`
+  errors were cleared — all 8 files under `checks/`, via a second invocation
+  (`make typecheck-checks`, in `check` and mirrored as its own CI step). The
+  remaining `tools/` modules are still unchecked.
 - `checks/countables_drift.py` will fail your docs edit if a countable wording
   drifts — correct, and a surprise the first time it happens.
 

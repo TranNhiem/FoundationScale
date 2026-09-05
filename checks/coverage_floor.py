@@ -74,9 +74,13 @@ FLOORS AND SLACK
     from a real measurement (measured value rounded down; entries that would
     sit inside the default band are omitted so the table stays small enough
     to audit by eye), prints every change, and touches nothing outside the
-    two sentinel lines. Floors are never invented by hand -- the table is
-    empty until --update fills it from evidence -- and --update writes it in
-    two labelled halves. Entries BELOW the default are DEBT, not policy:
+    two sentinel lines. What it writes is formatter-clean as written: `ruff
+    format` deletes empty lines inside a collection literal, so the rendered
+    table carries none, and "fixes this in one command" stays true rather
+    than leaving the tree red under the `ruff format --check` CI runs.
+    Floors are never invented by hand -- the table is empty until --update
+    fills it from evidence -- and --update writes it in two labelled halves.
+    Entries BELOW the default are DEBT, not policy:
     each one names a module this repository does not adequately test, and
     the floor's only job there is to stop the number sliding while the tests
     get written. Entries ABOVE the default band are the ratchet.
@@ -119,7 +123,7 @@ import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, NoReturn
 
 # Every tracked module was measured and sits inside [floor, floor + SLACK]: the per-module
 # claim actually holds, over the full denominator.
@@ -214,9 +218,12 @@ FLOORS: dict[str, int] = {
 
 
 class GateArgumentParser(argparse.ArgumentParser):
-    def exit(self, status: int = 0, message: str | None = None) -> None:
+    def exit(self, status: int = 0, message: str | None = None) -> NoReturn:
         # argparse exits 2 on bad arguments; without this remap an operator typo would escape
         # the four-code namespace this gate advertises to CI.
+        # NoReturn, not None: the base method is Never, and an override that merely claims None
+        # would let a caller treat a remapped REFUSE as a fallthrough and carry on to publish a
+        # verdict this gate refused to give.
         if message:
             sys.stderr.write(message)
         raise SystemExit(EXIT_CLEAR if status == 0 else EXIT_REFUSE)
@@ -612,8 +619,13 @@ def render_floors_block(floors: Mapping[str, int], measured: Mapping[str, float]
                 f"{measured[path]:.1f}%\n"
             )
     if ratchet:
-        if debt:
-            lines.append("\n")
+        # No blank separator line between the halves, however much one would help the eye:
+        # `ruff format` DELETES every empty line inside a collection literal, so emitting one
+        # made --update's own output fail the `ruff format --check` CI enforces -- the gate's
+        # advertised one-command remedy could not be committed without a second, undocumented
+        # reformat. MEASURED 2026-09-05: `ruff format --diff` on a freshly updated copy removed
+        # exactly this line and nothing else. The RATCHET label below is the separator instead;
+        # a generator whose output its own build rejects is a remedy nobody can take.
         lines.append(
             f"    # RATCHET -- {len(ratchet)} module(s) ABOVE the default band. These record "
             "what\n    # the tree already achieves, so a regression to a merely-passing "

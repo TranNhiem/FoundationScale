@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 BLOCKER1_FIXED = (
@@ -38,7 +39,7 @@ BLOCKER1_BROKEN = (
 )
 
 
-def structural_check(text):
+def structural_check(text: str) -> str | None:
     # NOT a YAML parse. Fallback scan for BLOCKER 1's shape only: content of a
     # '|' or '>' block scalar that dedents BELOW the opener's base indent and
     # is then followed by a line back at the block-content indentation -- e.g.
@@ -82,7 +83,7 @@ def structural_check(text):
     return None
 
 
-def audit(paths):
+def audit(paths: Sequence[str]) -> int:
     if not paths:
         print("WF-YAML RED: argv carried 0 files -- the caller measured nothing (doctrine 1)")
         return 1
@@ -91,7 +92,11 @@ def audit(paths):
 
         have_yaml = True
     except ImportError:
-        yaml = None
+        # Deliberately NOT rebinding `yaml = None` on this arm. Nothing below
+        # touches the name unless have_yaml is True, and a None-bound module
+        # name would turn a future unguarded call into an AttributeError that
+        # `except Exception` would then report as RED-unparseable -- a missing
+        # parser laundered into a verdict about the FILE (doctrine 5).
         have_yaml = False
     if have_yaml:
         mode = "full YAML parse via PyYAML"
@@ -131,7 +136,7 @@ def audit(paths):
     return 0
 
 
-def doctor(path):
+def doctor(path: str) -> int:
     try:
         with Path(path).open(encoding="utf-8") as f:
             t = f.read()
@@ -159,8 +164,16 @@ def doctor(path):
     return 0
 
 
-def main(argv):
-    if argv[:1] == ["--doctor-blocker1"]:
+def main(argv: Sequence[str]) -> int:
+    # Keyed on argv[0], not on `argv[:1] == [...]`. NOT a live defect: the sole
+    # caller passes sys.argv[1:], a list, so the slice form compared equal and
+    # CI's --doctor-blocker1 rig has always worked. It is the `Sequence[str]`
+    # annotation above that makes the old form wrong -- a tuple slice never
+    # equals a list literal, so any non-list caller this signature now invites
+    # would silently demote the flag to "audit a file by that name" and report
+    # a verdict about a nonexistent file instead of rebuilding BLOCKER 1.
+    # Widening the declared input without widening the parse is how that lands.
+    if argv and argv[0] == "--doctor-blocker1":
         if len(argv) != 2:
             print("WF-YAML DOCTOR RED: --doctor-blocker1 takes exactly one file")
             return 1

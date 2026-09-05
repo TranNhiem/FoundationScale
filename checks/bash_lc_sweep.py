@@ -90,18 +90,51 @@ import io
 import re
 import sys
 import tempfile
+from collections.abc import Sequence
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import TypedDict
 
 BLOCKER2_FIXED = 'bash -lc \'python3 "$1"\' _ "$COT_PROBE_PY"'
 BLOCKER2_BROKEN = 'bash -lc "python3 $COT_PROBE_PY"'
+
+
+class Declaration(TypedDict):
+    """One DECLARED_SPLICES entry -- the four keys classify() reads.
+
+    Spelled as a TypedDict rather than dict[str, str] because every key here is
+    load-bearing under doctrine 5: `anchor` and `token` are what pin the claim
+    to bytes, and a misspelled key would not soften the rule, it would raise
+    KeyError from inside the sweep and take the whole verdict with it. Naming
+    the four keys makes that a type error at the declaration site instead.
+    """
+
+    file: str
+    anchor: str
+    token: str
+    reason: str
+
+
+class DeclarationTally(TypedDict):
+    """A declaration paired with the number of sites it matched.
+
+    `hits` is the arithmetic doctrine 5 rests on: 0 is stale, >1 is ambiguous,
+    and both are RED. It shares a key space with a str->str declaration, so the
+    dict literal this replaces inferred `object` for both values -- which makes
+    `hits += 1` uncheckable and puts the stale/ambiguous counters in no
+    denominator a typechecker can see.
+    """
+
+    d: Declaration
+    hits: int
+
 
 # Deliberate splices, each pinned to the bytes that make it deliberate. `anchor`
 # is a substring of the site's own line and `token` is the exact expansion; both
 # must be observed or the entry is stale and the sweep goes RED. That is the
 # whole difference between this and an allowlist: an allowlist survives the code
 # it excuses being deleted, and this does not.
-DECLARED_SPLICES = (
+DECLARED_SPLICES: tuple[Declaration, ...] = (
     {
         "file": "launch_g4e4b_lora_1tray.sh",
         "anchor": "${census_cuda_prefix}torchrun --nnodes=1",
@@ -127,7 +160,7 @@ DECLARED_SPLICES = (
 )
 
 
-def _comment_start(line):
+def _comment_start(line: str) -> int:
     """Index of the `#` that begins a trailing comment, or -1.
 
     A `#` opens a comment only when it is unquoted AND at start-of-word, which
@@ -155,7 +188,7 @@ def _comment_start(line):
     return -1
 
 
-def _inner_source(line, at):
+def _inner_source(line: str, at: int) -> tuple[str, str]:
     """Return (kind, body) for the argument after `bash -lc` at index `at`.
 
     kind is 'nonliteral' (no quote follows), 'single' (single-quoted source) or
@@ -182,7 +215,7 @@ def _inner_source(line, at):
     return "double", "".join(body)
 
 
-def _cmdsub_span(body, i):
+def _cmdsub_span(body: str, i: int) -> tuple[str, int]:
     """Given body[i:i+2] == '$(', return (inner_text, index_of_closing_paren)."""
     depth = 0
     j = i + 1
@@ -202,14 +235,14 @@ _VAR = re.compile(r"\$\{?[A-Za-z_][A-Za-z_0-9]*\}?")
 _WHOLE_VAR = re.compile(r"^\$\{?[A-Za-z_][A-Za-z_0-9]*\}?$")
 
 
-def _scan(body):
+def _scan(body: str) -> list[tuple[str, str, str]]:
     """Every expansion in `body` that sits outside inner single quotes.
 
     Returns a list of (token, kind, narration) with kind in {'var', 'cmdsub',
     'cmdsub_q'}. 'cmdsub_q' is the %q-rendered form and is safe; the other two
     are splices unless the site as a whole is eval-shaped or declared.
     """
-    hits = []
+    hits: list[tuple[str, str, str]] = []
     inner_single = False
     idx = 0
     while idx < len(body):
@@ -256,19 +289,19 @@ def _scan(body):
     return hits
 
 
-def classify(files, declarations=DECLARED_SPLICES):
+def classify(files: Sequence[str], declarations: Sequence[Declaration] = DECLARED_SPLICES) -> int:
     if len(files) < 2:
         print(
             f"BASH-LC RED: the sweep requires both launchers on argv; got"
             f" {len(files)} -- a partial sweep is UNMEASURED (doctrine 1)"
         )
         return 1
-    decls = [{"d": d, "hits": 0} for d in declarations]
+    decls: list[DeclarationTally] = [{"d": d, "hits": 0} for d in declarations]
     total = 0
     mentions = 0
-    unsafe = []
-    audited = []
-    declared = []
+    unsafe: list[str] = []
+    audited: list[str] = []
+    declared: list[str] = []
     for fn in files:
         base = Path(fn).name
         try:
@@ -321,12 +354,12 @@ def classify(files, declarations=DECLARED_SPLICES):
                         " contents absolutely]"
                     )
                     continue
-                residual = []
-                site_declared = []
+                residual: list[str] = []
+                site_declared: list[str] = []
                 for token, hkind, narration in hits:
                     if hkind == "cmdsub_q":
                         continue
-                    match = None
+                    match: DeclarationTally | None = None
                     for entry in decls:
                         d = entry["d"]
                         if d["file"] == base and d["anchor"] in line and d["token"] == token:
@@ -371,7 +404,7 @@ def classify(files, declarations=DECLARED_SPLICES):
         )
         return 1
     rc = 0
-    stale = [e["d"] for e in decls if e["hits"] == 0]
+    stale = [entry["d"] for entry in decls if entry["hits"] == 0]
     if stale:
         print(
             f"BASH-LC RED: {len(stale)} DECLARED_SPLICES entr(y|ies) matched"
@@ -382,17 +415,22 @@ def classify(files, declarations=DECLARED_SPLICES):
         for d in stale:
             print(f"  RED: stale declaration {d['file']} :: {d['token']} @ '{d['anchor']}'")
         rc = 1
-    dupes = [e for e in decls if e["hits"] > 1]
+    dupes = [entry for entry in decls if entry["hits"] > 1]
     if dupes:
         print(
             f"BASH-LC RED: {len(dupes)} DECLARED_SPLICES entr(y|ies) matched more"
             " than one site -- a declaration must name one splice, or it is"
             " blessing sites nobody read:"
         )
-        for e in dupes:
+        # Named `entry`, not `e`, because `e` is the except-target bound at the
+        # unreadable-file arm above. Python deletes an except-target when its
+        # block exits, so reusing the name at function scope is one edit away
+        # from a NameError: the arm returns today, and the day it stops
+        # returning this loop reads a name the interpreter has unbound.
+        for entry in dupes:
             print(
-                f"  RED: ambiguous declaration {e['d']['file']} ::"
-                f" {e['d']['token']} matched {e['hits']} sites"
+                f"  RED: ambiguous declaration {entry['d']['file']} ::"
+                f" {entry['d']['token']} matched {entry['hits']} sites"
             )
         rc = 1
     if unsafe:
@@ -413,7 +451,7 @@ def classify(files, declarations=DECLARED_SPLICES):
     return 0
 
 
-def reinstate(src, dst):
+def reinstate(src: str, dst: str) -> int:
     try:
         with Path(src).open(encoding="utf-8") as f:
             t = f.read()
@@ -464,7 +502,13 @@ _CLEAN_PARTNER = 'run_in_container bash -lc \'python3 "$1"\' _ "$SCRIPT"\n'
 # is to scope the fixtures out of it rather than to soften it; the rule keeps
 # its own MUST_FIRE below, and the live run is where the real entries must
 # still be observed.
-def _run_fixture(tmp, name, text_a, text_b=_CLEAN_PARTNER, declarations=()):
+def _run_fixture(
+    tmp: str,
+    name: str,
+    text_a: str,
+    text_b: str = _CLEAN_PARTNER,
+    declarations: Sequence[Declaration] = (),
+) -> tuple[int, str]:
     a = Path(tmp) / f"{name}_a.sh"
     b = Path(tmp) / f"{name}_b.sh"
     a.write_text(text_a, encoding="utf-8")
@@ -475,12 +519,12 @@ def _run_fixture(tmp, name, text_a, text_b=_CLEAN_PARTNER, declarations=()):
     return rc, buf.getvalue()
 
 
-def self_test():
-    fired = []
-    held = []
-    failures = []
+def self_test() -> int:
+    fired: list[str] = []
+    held: list[str] = []
+    failures: list[str] = []
 
-    def must_fire(name, expect_rc, out_needle, rc, out):
+    def must_fire(name: str, expect_rc: int, out_needle: str, rc: int, out: str) -> None:
         if rc == expect_rc and out_needle in out:
             fired.append(name)
         else:
@@ -490,7 +534,7 @@ def self_test():
                 + "\n".join(f"      | {ln}" for ln in out.splitlines())
             )
 
-    def must_pass(name, rc, out, needle=None):
+    def must_pass(name: str, rc: int, out: str, needle: str | None = None) -> None:
         if rc == 0 and (needle is None or needle in out):
             held.append(name)
         else:
@@ -501,7 +545,7 @@ def self_test():
                 + "\n".join(f"      | {ln}" for ln in out.splitlines())
             )
 
-    bogus = (
+    bogus: tuple[Declaration, ...] = (
         {
             "file": "nosuchlauncher.sh",
             "anchor": "no such anchor",
@@ -529,6 +573,27 @@ def self_test():
 
         rc, out = _run_fixture(tmp, "stale", _CLEAN_PARTNER, declarations=bogus)
         must_fire("stale-declaration", 1, "stale declaration", rc, out)
+
+        # Doctrine 5 is two clauses -- stale is RED and ambiguous is RED -- and
+        # only the first had a control, so the loop that reports the second was
+        # reached by nothing. An unexercised RED path is indistinguishable from
+        # a RED path that does not work, which is what the rest of this file
+        # exists to say about gates.
+        ambiguous: tuple[Declaration, ...] = (
+            {
+                "file": "dupe_a.sh",
+                "anchor": "--overrides $SPLICED",
+                "token": "$SPLICED",
+                "reason": "one entry, deliberately naming two sites",
+            },
+        )
+        rc, out = _run_fixture(
+            tmp,
+            "dupe",
+            'bash -lc "p --overrides $SPLICED"\nbash -lc "q --overrides $SPLICED"\n',
+            declarations=ambiguous,
+        )
+        must_fire("ambiguous-declaration", 1, "$SPLICED matched 2 sites", rc, out)
 
         rc, out = _run_fixture(tmp, "zero", "echo no sites here\n", "echo none here either\n")
         must_fire("zero-sites-is-unmeasured", 1, "0 sites found", rc, out)
@@ -568,7 +633,7 @@ def self_test():
         must_pass("comment-mentions-are-not-sites", rc, out, "examined 2 'bash -lc' site(s)")
         must_pass("comment-mentions-are-counted-aloud", rc, out, "2 further occurrence(s)")
 
-        decl = (
+        decl: tuple[Declaration, ...] = (
             {
                 "file": "decl_a.sh",
                 "anchor": "--overrides $SPLICED",
@@ -604,7 +669,7 @@ def self_test():
     return 0
 
 
-def main(argv):
+def main(argv: list[str]) -> int:
     if argv[:1] == ["--self-test"]:
         if len(argv) != 1:
             print("BASH-LC SELF-TEST RED: --self-test takes no further arguments")
