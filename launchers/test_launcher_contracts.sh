@@ -134,12 +134,30 @@ if [ $rc -eq 9 ] && printf '%s' "$out" | grep -q "not KEY=VALUE"; then
 else no "MUST_FIRE malformed entry NOT refused (rc=$rc): $out"; fi
 
 # MUST_PASS: a legitimate, non-colliding override is recorded, not merely tolerated.
+# RECORDED=4 and the banner's "2" are DIFFERENT quantities and both are asserted:
+# the array carries two elements per override (--effective, KEY=VALUE) and that
+# is the argv contract with the emitter, while the operator passed two overrides
+# and that is what the banner must say. Until #270 the banner printed the array
+# length, so a two-override launch announced four -- the one number an operator
+# can check by eye, overstating the run by 2x. Asserting only RECORDED cannot
+# see that: it is the same expression the banner had wrong.
 out=$(run_block "model.moe_router_topk=2 optimizer.weight_decay=0.05"); rc=$?
 if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "RECORDED=4" \
+   && printf '%s' "$out" | grep -q "provenance gate: 2 extra override(s)" \
    && printf '%s' "$out" | grep -q "ARG:model.moe_router_topk=2" \
    && printf '%s' "$out" | grep -q "ARG:optimizer.weight_decay=0.05"; then
-  ok "MUST_PASS two clean overrides recorded as 2x(--effective k=v)"
+  ok "MUST_PASS two clean overrides recorded as 2x(--effective k=v), banner says 2"
 else no "MUST_PASS clean overrides not recorded (rc=$rc): $out"; fi
+
+# MUST_PASS: the banner counts overrides, not argv elements -- pinned at a count
+# where the two cannot be confused. Three overrides: banner 3, array 6. A /2
+# derivation would also satisfy this; an independent counter is what makes it
+# survive a change to the emitter's flag shape.
+out=$(run_block "model.moe_router_topk=2 optimizer.weight_decay=0.05 optimizer.adam_beta1=0.9"); rc=$?
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "provenance gate: 3 extra override(s)" \
+   && printf '%s' "$out" | grep -q "RECORDED=6"; then
+  ok "MUST_PASS banner counts overrides (3), array counts argv elements (6)"
+else no "MUST_PASS banner/array counts wrong (rc=$rc): $out"; fi
 
 # MUST_PASS: the empty case must not trip set -u on the array expansion.
 out=$(run_block ""); rc=$?

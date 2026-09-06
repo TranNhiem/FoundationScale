@@ -591,7 +591,16 @@ jobs:
           #   launchers/test_checks_gates.sh       -> controls:  19 passed, 0 failed
           # 146 + 19 = 165, which is what the unsplit suite reported, so the cut
           # moved legs and created none.
-          FLOOR_LAUNCHER=146
+          #
+          # RE-MEASURED again for #270, which ADDS one leg to the launcher suite
+          # (the provenance banner counts overrides, the array counts argv
+          # elements; the new leg pins them apart at 3-vs-6). Both suites re-run
+          # on this commit: launcher 147, checks 19. Raised rather than left at
+          # 146 because this is a floor: 147 clears it either way, so a stale 146
+          # would not fail CI -- it would silently license giving the new leg
+          # back. A floor one below the measured count is a floor that has
+          # already been spent.
+          FLOOR_LAUNCHER=147
           FLOOR_CHECKS=19
           FLOOR=$((FLOOR_LAUNCHER + FLOOR_CHECKS))
 

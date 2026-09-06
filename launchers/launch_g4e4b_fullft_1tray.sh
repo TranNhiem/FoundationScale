@@ -439,6 +439,16 @@ echo "CoT gate: patch present in $COLLATE_FILE ; FOXBRAIN_GEMMA4_KEEP_COT=$FOXBR
 # and stop, instead of letting the emitter fail with a message about provenance
 # internals that says nothing about which env var to set.
 declare -a EXTRA_EFFECTIVE=()
+# Counted here rather than derived from ${#EXTRA_EFFECTIVE[@]}: that array holds
+# TWO elements per override (the --effective flag and its KEY=VALUE), so its
+# length is 2x the number the operator passed and reporting it as an override
+# count overstates the run by exactly a factor of two. Deriving with /2 would
+# work today and re-encode the pairing as an invariant the banner has no way to
+# check; an independent counter stays correct if the emitter's flag shape ever
+# changes. The array length is still the right number for the argv contract,
+# and test_launcher_contracts.sh asserts BOTH: RECORDED (argv elements) and
+# this banner (overrides), which are deliberately different quantities.
+_EXTRA_N=0
 _FIRST_CLASS_KEYS="recipe train.train_iters train.global_batch_size model.seq_length checkpoint.save_interval model.recompute_granularity"
 if [[ -n "${EXTRA_OVERRIDES:-}" ]]; then
   for _ov in $EXTRA_OVERRIDES; do
@@ -451,8 +461,9 @@ if [[ -n "${EXTRA_OVERRIDES:-}" ]]; then
       fi
     done
     EXTRA_EFFECTIVE+=(--effective "$_ov")
+    _EXTRA_N=$((_EXTRA_N + 1))
   done
-  echo "provenance gate: ${#EXTRA_EFFECTIVE[@]} extra override(s) will be recorded: $EXTRA_OVERRIDES"
+  echo "provenance gate: ${_EXTRA_N} extra override(s) will be recorded: $EXTRA_OVERRIDES"
 fi
 
 # FS_ROOT: search the known deploy locations instead of asserting one. The old
