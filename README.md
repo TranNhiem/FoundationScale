@@ -191,6 +191,16 @@ python -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" \
     --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
+That is the **contributor** install: CPU torch, no trainer, because it is what CI needs to
+exercise the gate contract. It deliberately cannot train. To run the training example in
+§10 instead, add the `train` extra and drop the CPU index (you want a torch build for your
+own accelerator):
+
+```bash
+python -m pip install -e ".[train]"
+python examples/train_tiny.py          # measured: exits 0 PASS
+```
+
 The extras, as declared in `pyproject.toml`:
 
 | extra | contents | when |
@@ -249,12 +259,41 @@ print(result.render())
 assert result.verdict is Verdict.VACUOUS and result.blocking
 ```
 
-For the training path: `pip install 'foundationscale[train]'`, then use the
-`foundationscale-train` console script (also runnable as
-`python -m foundationscale.train.cli`). Without the extra, the loop refuses and prints the
-install remedy rather than half-starting. The loop reads `FS_RUN_ID` and `FS_ATTEMPT`
-from the environment. A worked end-to-end recipe, including a toy dataset, is specified
-but not yet written. [-> docs/TRAINING.md]
+### The training path
+
+Real training is one command, and it runs:
+
+```bash
+python -m pip install -e ".[train]"
+python examples/train_tiny.py
+```
+
+`examples/train_tiny.py` is one screen — a `ClusterProfile` describing the machine and a
+`TrainConfig` naming a model, a dataset and a topology. It trains `sshleifer/tiny-gpt2` on
+`fancyzhx/ag_news` for 20 steps and exits `0 PASS`, having adjudicated both intermediate
+checkpoints and the final save. To run it on four GPUs, edit the single `GPUS` constant and
+launch under `torchrun --nproc_per_node=4`; the profile, the declared topology and the DDP
+degree all read that one value, and the declared topology is then checked against the one
+torchrun actually built.
+
+For a corpus that needs no network, a 16-row toy dataset ships at
+`examples/data/toy_text.jsonl`, driven through the console script
+`foundationscale-train` (equivalently `python -m foundationscale.train.cli`):
+
+```bash
+HF_HUB_OFFLINE=1 python -m foundationscale.train.cli \
+  --model sshleifer/tiny-gpt2 --dataset examples/data/toy_text.jsonl \
+  --output-dir /tmp/fs_train_demo --profile-name local-single-node \
+  --nodes 1 --gpus-per-node 1 --dp 1 --max-steps 8 --save-interval 4
+```
+
+Without the `train` extra the loop refuses (96) and prints the install remedy rather than
+half-starting. `--dry-run` runs the whole validation prologue and stops before importing
+torch — put that in front of a scheduler submission, so an incoherent request is rejected
+without holding an allocation while it finds out. The loop reads `FS_RUN_ID` and
+`FS_ATTEMPT` from the environment. The full recipe — transcripts, the run manifest's
+fields, the save gates, and a symptom→cause table — is
+[-> docs/TRAINING.md].
 
 ## 11. Configuration
 
@@ -409,12 +448,12 @@ itself, from the Makefile's own accounting:
 
 `src/` = 18915 LOC across 25 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 31313 Python LOC and 4996 shell LOC on top of the
-package. `tools/` contains 9514 Python LOC. 123088 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 9514 Python LOC. 123547 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (29578 .py LOC); conftest carries the skip guard
+tests/                 the test suite (29716 .py LOC); conftest carries the skip guard
 tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
                        real_checkpoint_probe, preflight/, mutate, census)
 checks/                standalone repository gates: countables drift, packaging

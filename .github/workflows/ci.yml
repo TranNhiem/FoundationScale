@@ -162,9 +162,15 @@ jobs:
         # added by #231 -- the standing legs below (WF-YAML, BASH-LC) and the
         # packaging gate all live there, so it held three of this workflow's own
         # controls while being the one directory no linter read.
-        run: ruff check src tests tools checks
+        #
+        # examples/ added by #280, and it is the same finding twice. The only
+        # runnable example shipped dead on line 22 while ~1,100 tests were green,
+        # because no test imported it; it was ALSO unformatted since the day it
+        # was written, because no linter read it. Both are the one class -- the
+        # first file a new user opens sat in no denominator at all.
+        run: ruff check src tests tools checks examples
       - name: Ruff format
-        run: ruff format --check src tests tools checks
+        run: ruff format --check src tests tools checks examples
       - name: Mypy
         # The two LIVE tools are checked, for the same reason Ruff checks tools/ above:
         # `mypy src` left the emitter and the gate unchecked, and that is exactly how

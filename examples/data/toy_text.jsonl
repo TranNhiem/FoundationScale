@@ -1,0 +1,16 @@
+{"text": "FoundationScale validates a training topology before an allocation is burned."}
+{"text": "A gate that cannot fail is not a gate; every check here has a positive control."}
+{"text": "Tensor parallelism splits one model replica across several accelerators."}
+{"text": "Pipeline parallelism splits a model by layer depth across stages."}
+{"text": "Data parallelism replicates the model and shards the batch."}
+{"text": "Expert parallelism places mixture-of-experts experts on different devices."}
+{"text": "Context parallelism shards the sequence dimension across ranks."}
+{"text": "A checkpoint is adjudicated at save time, not discovered broken at load time."}
+{"text": "An unmeasured claim is reported as UNMEASURED, never as clean."}
+{"text": "The cluster is data, not code: describe the machine in a profile."}
+{"text": "Exit codes are 0 PASS, 5 RED, 95 UNMEASURED, 96 REFUSE."}
+{"text": "Machine facts have no defaults; the framework fails closed instead of guessing."}
+{"text": "A save gate runs on every checkpoint the trainer writes."}
+{"text": "Declared topology is compared against the topology the runtime actually built."}
+{"text": "Model-specific behaviour stays out of the core training loop."}
+{"text": "Reproducibility means the run manifest can rebuild the argv that produced it."}

@@ -43,6 +43,12 @@ htmlcov/
 # Local experiments — never commit
 scratch/
 
+# Training output. `python examples/train_tiny.py` writes out/train_tiny/ (two
+# gated checkpoints, a final save and a run manifest) into whatever directory it
+# is run from, which for the documented first run is this repo root. The
+# hello-world must not dirty a public working tree.
+out/
+
 # Never commit the redaction mapping: it dereferences the public pseudonyms and
 # would undo the point of publishing the audit with identifiers replaced.
 *.private.json
