@@ -633,7 +633,17 @@ run_adjudicators() {
   done
   [[ "$seen" -gt 0 && "$ok" -eq "$seen" ]] || { printf 'ADJUDICATOR-REFUSE rc=96 seen=%s ok=%s\n' "$seen" "$ok" >&2; return 96; }
   checkpoint_observed=$((checkpoint_observed+1))
-  printf 'ADJUDICATORS observed=%s seen=%s ok=%s ckpt=%s phase=%s\n' "$checkpoint_observed" "$seen" "$ok" "$ckpt" "$phase"
+  # fs216: the first field is a RUN-CUMULATIVE count of CHECKPOINT SAVES, the
+  # other two are PER-CALL counts of ADJUDICATORS. It was printed as bare
+  # `observed=` under a banner reading ADJUDICATORS, beside `seen=` and `ok=`,
+  # so three numbers in two units sat in one line with nothing distinguishing
+  # them -- and on a one-adjudicator plane (the shipped shape) the second
+  # checkpoint prints `observed=2 seen=1 ok=1`, which reads as 2 of 1
+  # adjudicators. The name is the one the END line already uses at the same
+  # variable's last print, so an operator can grep one token from first save to
+  # final tally. Do not shorten it back: the neighbouring fields take their
+  # unit from the banner word, and this one cannot.
+  printf 'ADJUDICATORS checkpoint_saves_adjudicated=%s seen=%s ok=%s ckpt=%s phase=%s\n' "$checkpoint_observed" "$seen" "$ok" "$ckpt" "$phase"
 }
 
 adjudicate_tree() {
