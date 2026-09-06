@@ -59,9 +59,44 @@ h100/gen/test_fs_ckpt_adjudicator.py	test	pytest module for the generated adjudi
 # most worth re-reading: "kept around, harmless" is precisely the state #136, #188 and
 # #189 were in, and the only thing separating those from these is that these are
 # declared and measured to be unreachable from the build.
+#
+# There are currently NO rows in this section. That is a measured state, not an
+# oversight: every candidate file in this repository is in STAGES, in PUBLISH_SET.txt,
+# or in both, and the gate reports the NEITHER bucket as 0.
+#
+# fs277: four rows USED to sit here, and all four named files that have never existed
+# in this repository at any commit -- they live only in the private build tree, which
+# this gate cannot see and does not publish. The header above says "in the repository";
+# for those four it was simply not true. A role of `superseded` or `developer-tool` is
+# defined one screen up as "in NEITHER list, and basename occurs 0x in the build
+# script", and both halves presuppose a file that EXISTS to be partitioned. Declaring a
+# file the gate has no way to see is not a weaker claim than declaring one it can, it
+# is a claim in a different denominator -- and it exited this gate 5 on a clean tree
+# for as long as the rows were here.
+#
+# The prose is kept, as comments, because the reason each stage is retired is the part
+# worth having. Only the DECLARATIONS are gone, because a declaration is a thing the
+# gate measures and these four cannot be:
+#
+#   patch_gate_launch_contract.py  (was: superseded)  Its sentinel is absent from
+#     gate_launch_contract.py, so this stage's edit is not present by this route. The
+#     hard-coded build-host ROOT it existed to remove IS gone, by another route, so the
+#     effect is present and the stage is not. Kept as the record of that; basename
+#     occurs 0x in the build script.
+#   apply_phase3.py  (was: superseded)  The Phase-3 one-off gate over the first
+#     generated trainer, checked against the R1-R9 it was commissioned to. Every
+#     requirement it covered is now enforced by a stage or a gate in the current plane;
+#     it names no file the current build produces and occurs 0x in the build script.
+#   apply_json_edits.py  (was: developer-tool)  Applies a reviewed JSON replacement
+#     list to staged modules, fail-closed on any anchor that does not occur exactly
+#     once. Orchestration tooling used to land reviewed edits; it is not part of the
+#     build plane and must not ship -- a published edit-applier invites edits that
+#     bypass the stages.
+#   apply_md_edits.py  (was: developer-tool)  The markdown counterpart of
+#     apply_json_edits.py, same reasoning. Both are deliberately absent from
+#     PUBLISH_SET.txt.
+#
+# If any of the four is ever brought into this repository, restore its row. At that
+# point it becomes a candidate, the NEITHER bucket will name it, and the declaration
+# is the thing that excuses it.
 # ---------------------------------------------------------------------------------
-
-patch_gate_launch_contract.py	superseded	Its sentinel is absent from gate_launch_contract.py, so this stage's edit is not present by this route. The hard-coded build-host ROOT it existed to remove IS gone, by another route, so the effect is present and the stage is not. Kept as the record of that; basename occurs 0x in the build script.
-apply_phase3.py	superseded	The Phase-3 one-off gate over the first generated trainer, checked against the R1-R9 it was commissioned to. Every requirement it covered is now enforced by a stage or a gate in the current plane; it names no file the current build produces and occurs 0x in the build script.
-apply_json_edits.py	developer-tool	Applies a reviewed JSON replacement list to staged modules, fail-closed on any anchor that does not occur exactly once. Orchestration tooling used to land reviewed edits; it is not part of the build plane and must not ship -- a published edit-applier invites edits that bypass the stages.
-apply_md_edits.py	developer-tool	The markdown counterpart of apply_json_edits.py, same reasoning. Both are deliberately absent from PUBLISH_SET.txt.
