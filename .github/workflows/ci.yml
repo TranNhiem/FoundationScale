@@ -463,6 +463,47 @@ jobs:
       - name: Doc pointers (every pointer in shipped markdown has a file behind it)
         run: python3 checks/doc_pointers.py
 
+      # Standing gates (#293). The H100 campaign's nine gate_*.py scripts were
+      # invoked ONLY by build_h100_plane.sh, which no make target and no CI step
+      # runs -- so the whole tail of that gate plane was reachable by nobody.
+      # That is #278 at nine times the scale, and it is the reason this step is
+      # in the SAME commit as the Makefile target it mirrors: no Makefile<->CI
+      # mirror gate exists yet (#286), so the pairing is held by hand here.
+      #
+      # The runner executes each gate directly, read-only, in seconds. It does
+      # NOT run the build: while #294 is open the build DELETES tracked
+      # artifacts when a stage refuses, and a CI step that mutates the tree it
+      # is certifying is the mistake this campaign keeps finding.
+      #
+      # --self-test first and as its own step, the same rule every gate above
+      # follows: seven controls are the licence to believe the verdict, and a
+      # runner whose controls are broken can certify nothing.
+      #
+      # The two environment decisions on the real run are both load-bearing:
+      #
+      #   FS_ESTATE_IDENT_PAT=NONE -- one gate needs a deployment-specific
+      #   identifier pattern that must never exist in a public checkout. NONE
+      #   is a real, matchable pattern that matches nothing here, which lets
+      #   that gate MEASURE rather than abstain; without it CI reaches 7 of 9
+      #   instead of 8 of 9.
+      #
+      #   --allow-refused NAMES the one gate that genuinely cannot measure
+      #   without a private input. A bare `|| true`, or simply accepting the
+      #   runner's honest exit 95, would swallow that refusal AND any refusal
+      #   that appears tomorrow because a gate broke. A named set still reds
+      #   when anything else goes quiet -- the #199/#233 lesson that a count of
+      #   one is satisfied by the wrong one. It is a ceiling, not an equality:
+      #   measuring MORE than promised is never a failure, so a developer whose
+      #   estate environment is present still gets 9 of 9 and exit 0.
+      - name: Standing-gate runner controls (eleven instrument controls)
+        run: bash validation_campaigns/h100_validation/run_standing_gates.sh --self-test
+      - name: Standing gates (the nine H100 gates, run directly and read-only)
+        env:
+          FS_ESTATE_IDENT_PAT: NONE
+        run: |
+          bash validation_campaigns/h100_validation/run_standing_gates.sh \
+            --allow-refused gate_launch_doc.py
+
   launchers:
     name: launcher contracts (a silent suite fails this job)
     runs-on: ubuntu-latest

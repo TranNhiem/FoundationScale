@@ -103,7 +103,7 @@ ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
 endif
 
-.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers launcher-contracts checks-gates mutation mutation-module skip-guard-probe check clean
+.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers launcher-contracts checks-gates standing-gates mutation mutation-module skip-guard-probe check clean
 
 install:
 	$(PY) -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
@@ -351,6 +351,32 @@ launcher-contracts:
 checks-gates:
 	bash launchers/test_checks_gates.sh
 
+# Finding #293. The nine standing gate_*.py scripts in the H100 campaign are
+# invoked ONLY by build_h100_plane.sh, which no make target and no CI step runs
+# -- so the whole tail of the gate plane was reachable by nobody, which is #278
+# at nine times the scale. This target is their automated runner. It executes
+# each gate directly, read-only, in seconds; it does NOT run the build, because
+# while #294 is open the build DELETES tracked artifacts when a stage refuses.
+#
+# --self-test first, and its rc is what gates the real run: a runner whose own
+# eleven controls are broken cannot certify anything, and running the plane with
+# a broken instrument would produce a verdict nobody should read. The `&&` is
+# deliberate -- controls first, plane second, and no plane verdict at all if the
+# controls did not pass.
+#
+# --allow-refused NAMES the one gate that cannot measure without the estate
+# environment, which is absent here by design and must never be in a public
+# checkout. Naming it is the point: a bare `|| true`, or accepting the runner's
+# exit 95, would also swallow a refusal that appeared tomorrow because a gate
+# broke. A named set still reds when anything ELSE goes quiet -- the #199/#233
+# lesson that a count of one is satisfied by the wrong one.
+#
+# Cost: 6.5s wall on the developer machine, nine gates.
+standing-gates:
+	bash validation_campaigns/h100_validation/run_standing_gates.sh --self-test && \
+		FS_ESTATE_IDENT_PAT=NONE bash validation_campaigns/h100_validation/run_standing_gates.sh \
+			--allow-refused gate_launch_doc.py
+
 mutation:
 	FS_FORBID_SKIPS=1 $(PY) tools/mutate.py
 
@@ -399,7 +425,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers launcher-contracts checks-gates mutation
+check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers launcher-contracts checks-gates standing-gates mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \
