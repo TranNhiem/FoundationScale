@@ -446,25 +446,78 @@ STAGES=(
 echo "=== rebuilding from scratch (removing generated artifacts first) ==="
 rm -f "$LAUNCHER" "$BACKEND" "$ENTRY" "$SPLICED" "$MODELROOT" "$MRTEST" "$ADJ" "$ADJTEST"
 
+# #290: a stage that REFUSES has not failed. 95 means UNMEASURED and 96 means CANNOT-MEASURE;
+# both are declared states of the plane's 0/5/95/96 contract, and both are distinct from RED.
+# Until this case existed, any nonzero rc was "STAGE RED" and sank the build to 5 at the line
+# below -- which is what apply_113.py does on EVERY clone, because the private upstream it
+# extracts from is absent. The consequence was not one wrong exit code: the `break` plus the
+# exit 5 meant the eight standing gates below never ran at all, on any clone, ever (#293).
+#
+# The `break` STAYS. A later stage's anchors assume the earlier one applied, so once a stage
+# has not produced its artifact the remaining stages really would be editing text that is not
+# there. What changes is only the VERDICT and what happens next: the gates below run, each one
+# says what it could and could not measure against an incomplete tree (several of them will
+# correctly refuse, which is the useful signal), and the build reports 96 at the end rather
+# than 5 at :458. The deferral uses the same mechanism #288 built for the unmeasured suite.
 fails=0
+stage_refused=0
+refused_stage=
 for s in "${STAGES[@]}"; do
   printf '\n--- %s ---\n' "$s"
   if python3 "$s"; then :; else
-    echo "STAGE RED: $s (rc=$?)" >&2
-    fails=$((fails + 1))
+    rc=$?
+    case $rc in
+      95|96)
+        echo "STAGE REFUSED: $s (rc=$rc) — declared UNMEASURED/CANNOT-MEASURE, not RED." >&2
+        echo "  Remaining stages are skipped (their anchors assume this one applied), but the" >&2
+        echo "  standing gates below still run and still report. Deferring the $rc (#290)." >&2
+        stage_refused=$rc
+        refused_stage=$s
+        ;;
+      *)
+        echo "STAGE RED: $s (rc=$rc)" >&2
+        fails=$((fails + 1))
+        ;;
+    esac
     break   # a later stage's anchors assume the earlier one applied
   fi
 done
 [[ $fails -eq 0 ]] || { echo -e "\nBUILD RED — ${#STAGES[@]} stages, $fails red" >&2; exit 5; }
 
 echo -e "\n=== standing gate: bidirectional env drift ==="
-python3 gate_env_drift.py || { echo "DRIFT GATE RED" >&2; exit 5; }
+python3 gate_env_drift.py || {
+  rc=$?
+  case $rc in
+    5)  echo "DRIFT GATE RED (rc=5) — FS_ENV_ALLOWLIST and the launcher's exports disagree" >&2 ;;
+    95) echo "DRIFT GATE UNMEASURED (rc=95) — the gate could not derive one of its two lists;" >&2
+        echo "  not comparing is not agreeing." >&2
+        exit 95 ;;
+    96) echo "DRIFT GATE REFUSED (rc=96) — an input is unreadable, or a control did not fire." >&2
+        exit 96 ;;
+    *)  echo "DRIFT GATE unexpected rc=$rc" >&2 ;;
+  esac
+  exit 5
+}
 
 echo -e "\n=== standing gate: input/output partition (#136, #137) ==="
 # Every file the build touches must be a DECLARED artifact or a DOCUMENTED upstream.
 # Both #136 and #137 were a third thing -- a file read from the output directory that no
 # stage produced -- and both were found by accident. This is the on-purpose version.
-python3 gate_build_inputs.py || { echo "INPUT PARTITION GATE RED" >&2; exit 5; }
+python3 gate_build_inputs.py || {
+  rc=$?
+  case $rc in
+    5)  echo "INPUT PARTITION GATE RED (rc=5) — a file in the output directory is neither a" >&2
+        echo "  declared artifact nor a documented upstream: the #136/#137 state." >&2 ;;
+    95) echo "INPUT PARTITION GATE UNMEASURED (rc=95) — the gate could not enumerate the output" >&2
+        echo "  directory or its declaration; an empty partition is not a clean one." >&2
+        exit 95 ;;
+    96) echo "INPUT PARTITION GATE REFUSED (rc=96) — an input is unreadable, or a control did" >&2
+        echo "  not fire. A detector that cannot be shown to fire proves nothing when silent." >&2
+        exit 96 ;;
+    *)  echo "INPUT PARTITION GATE unexpected rc=$rc" >&2 ;;
+  esac
+  exit 5
+}
 
 echo -e "\n=== standing gate: exit-code contract (#161) ==="
 # The plane publishes a four-state contract (0 / 5 / 95 / 96) and twelve of its own exit
@@ -480,6 +533,9 @@ python3 gate_exit_contract.py || {
     95) echo "EXIT-CONTRACT GATE UNMEASURED (rc=95 -> build 95) — the publish set did not resolve" >&2
         echo "  enough Python files to scan. Not scanning is not passing." >&2
         exit 95 ;;
+    96) echo "EXIT-CONTRACT GATE REFUSED (rc=96) — an input is unreadable, or a control did not" >&2
+        echo "  fire. #290: this arm did not exist, so a refusal was reported as RED." >&2
+        exit 96 ;;
     *)  echo "EXIT-CONTRACT GATE unexpected rc=$rc" >&2 ;;
   esac
   exit 5
@@ -1046,6 +1102,12 @@ python3 gate_ckpt_naming_agreement.py || {
     3) echo "NAMING GATE UNMEASURED (rc=3 -> build 95) — zero writer sites, or the adjudicator would not import" >&2; exit 95 ;;
     4) echo "NAMING GATE CONTROLS FAILED (rc=4) — the gate cannot be trusted, so neither can this build" >&2 ;;
     5) echo "NAMING GATE RED (rc=5) — writer and adjudicator disagree about checkpoint naming" >&2 ;;
+    95) echo "NAMING GATE UNMEASURED (rc=95) — the plane-wide code, distinct from this gate's own rc=3." >&2
+        echo "  #290: this arm did not exist, so a refusal arrived here and left as RED." >&2
+        exit 95 ;;
+    96) echo "NAMING GATE REFUSED (rc=96) — an input is unreadable; the writer or the generated" >&2
+        echo "  adjudicator is absent, which is the tree's state after a stage refuses." >&2
+        exit 96 ;;
     *) echo "NAMING GATE unexpected rc=$rc" >&2 ;;
   esac
   exit 5
@@ -1062,7 +1124,13 @@ python3 gate_artifact_linkage.py || {
   rc=$?
   case $rc in
     5)  echo "LINKAGE GATE RED (rc=5) — a shipped artifact reaches for a file the build never produces" >&2 ;;
-    95) echo "LINKAGE GATE UNMEASURED (rc=95) — zero inter-artifact edges resolved; a shrunken denominator is not a clean scan" >&2 ;;
+    95) echo "LINKAGE GATE UNMEASURED (rc=95) — zero inter-artifact edges resolved; a shrunken denominator is not a clean scan" >&2
+        echo "  #290: this arm printed UNMEASURED and then fell through to a shared exit 5, so the" >&2
+        echo "  message and the exit code disagreed. The exit code is what anything downstream reads." >&2
+        exit 95 ;;
+    96) echo "LINKAGE GATE REFUSED (rc=96) — a shipped artifact is unreadable, so there is no edge set" >&2
+        echo "  to audit. Absent inputs are the state after a stage refuses, not a linkage failure." >&2
+        exit 96 ;;
     *)  echo "LINKAGE GATE unexpected rc=$rc" >&2 ;;
   esac
   exit 5
@@ -1101,8 +1169,12 @@ python3 gate_launch_contract.py || {
   rc=$?
   case $rc in
     5)  echo "LAUNCH CONTRACT GATE RED (rc=5) — a required knob is missing from the command template, a template assignment is neither required nor waived, a required knob lands in no bucket, or the rendered template failed the redaction scan" >&2 ;;
-    95) echo "LAUNCH CONTRACT GATE UNMEASURED (rc=95) — a MUST_FIRE/MUST_PASS control did not fire; the detector is uncertified, so its verdict is unattributable" >&2 ;;
-    96) echo "LAUNCH CONTRACT GATE REFUSED (rc=96) — the generated artifacts are unreadable (run the bash generators first), or the estate redaction vocabulary is unset" >&2 ;;
+    95) echo "LAUNCH CONTRACT GATE UNMEASURED (rc=95) — a MUST_FIRE/MUST_PASS control did not fire; the detector is uncertified, so its verdict is unattributable" >&2
+        echo "  #290: this arm and the 96 below both fell through to a shared exit 5. The gate went to" >&2
+        echo "  the trouble of separating three states and the call site collapsed them back into one." >&2
+        exit 95 ;;
+    96) echo "LAUNCH CONTRACT GATE REFUSED (rc=96) — the generated artifacts are unreadable (run the bash generators first), or the estate redaction vocabulary is unset" >&2
+        exit 96 ;;
     *)  echo "LAUNCH CONTRACT GATE unexpected rc=$rc" >&2 ;;
   esac
   exit 5
@@ -1120,12 +1192,38 @@ python3 gate_launch_doc.py || {
   rc=$?
   case $rc in
     5)  echo "LAUNCH DOC GATE RED (rc=5) — the document names a knob the launcher does not enforce, cites a line that does not support it, or carries an estate literal" >&2 ;;
-    95) echo "LAUNCH DOC GATE UNMEASURED (rc=95) — a zero denominator or an unplantable drill; an uncertified detector is not a clean scan" >&2 ;;
-    96) echo "LAUNCH DOC GATE REFUSED (rc=96) — an input is unreadable or a required redaction pattern is unset" >&2 ;;
+    95) echo "LAUNCH DOC GATE UNMEASURED (rc=95) — a zero denominator or an unplantable drill; an uncertified detector is not a clean scan" >&2
+        echo "  #290: this arm and the 96 below both fell through to a shared exit 5, so a document" >&2
+        echo "  that could not be read was reported as a document that contradicts the launcher." >&2
+        exit 95 ;;
+    96) echo "LAUNCH DOC GATE REFUSED (rc=96) — an input is unreadable or a required redaction pattern is unset" >&2
+        exit 96 ;;
     *)  echo "LAUNCH DOC GATE unexpected rc=$rc" >&2 ;;
   esac
   exit 5
 }
+
+# #290: the deferred stage refusal, on the same mechanism #288 built for the suite. A stage
+# that exits 95/96 has declared it CANNOT MEASURE -- typically because a private upstream is
+# absent, which is the state of every clone -- and that is not the same claim as "this stage
+# is broken". Before this, the loop above called it STAGE RED and exited 5 immediately, which
+# ended the build before a single standing gate ran; the nine tail gates were unreachable on
+# every default build for that one reason. Now the gates run, each says what it could and
+# could not measure against an incomplete tree, and the refusal is reported here.
+#
+# It is reported BEFORE the suite's 95 because it is the earlier and more fundamental
+# refusal: the stage never applied, so the suite was measuring a tree that was never built.
+# Naming the stage matters -- "something refused" sends an operator through 42 stages.
+if [[ "$stage_refused" != 0 ]]; then
+  printf '\nBUILD %s — %s stages, the standing gates ran, suite: %s\n' \
+    "$( [[ "$stage_refused" == 96 ]] && echo 'REFUSED (96)' || echo 'UNMEASURED (95)' )" \
+    "${#STAGES[@]}" "$suite" >&2
+  echo "  Stage $refused_stage exited $stage_refused: it declared it could not measure, not that it" >&2
+  echo "  failed. Stages after it were skipped (their anchors assume it applied), so the artifacts" >&2
+  echo "  below are incomplete and every gate verdict above must be read in that light." >&2
+  echo "  This is NOT a green build and NOT a red one. #290." >&2
+  exit "$stage_refused"
+fi
 
 # #288: the deferred 95. Every standing gate above has now reported, so the build states
 # what it measured AND what it could not, then fails on the latter. Printing GREEN here and

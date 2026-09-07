@@ -200,6 +200,26 @@ def drills(lau: str, back: str) -> bool:
 
 
 def main() -> int:
+    # #290: both inputs are GENERATED. When a stage refuses -- which is the state of every
+    # clone, because the private upstream apply_splice.py reads from is absent -- they do not
+    # exist, and read_text raised FileNotFoundError. The traceback left rc=1, which is in no
+    # namespace this plane declares: the build's own call site prints "DRIFT GATE unexpected
+    # rc=1" and exits 5, so an absent input was reported as launcher/backend disagreement.
+    # The call site has declared a 96 arm since #161 and nothing could ever reach it.
+    #
+    # Absent is not disagreeing. Refuse, name both paths, and say which one is missing.
+    missing = [p for p in (LAUNCH, BACKEND) if not p.is_file()]
+    if missing:
+        print("ENV DRIFT GATE REFUSED (96) — an input this gate compares does not exist, so "
+              "there is no\n  pair to compare. This is CANNOT-MEASURE, not RED.",
+              file=sys.stderr)
+        for p in missing:
+            print(f"    absent: {p}", file=sys.stderr)
+        print("  Both are generated artifacts; run the build's stages first. A refusing stage "
+              "leaves\n  them unwritten (#290), and #294 additionally deletes them.",
+              file=sys.stderr)
+        return 96
+
     lau = LAUNCH.read_text("utf-8")
     back = BACKEND.read_text("utf-8")
 
