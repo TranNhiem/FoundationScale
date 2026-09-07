@@ -698,7 +698,15 @@ echo -e "\n=== public-repo blocklist (case-insensitive) ==="
 # stage whose only sin was carrying a redaction list, i.e. it pressured the code toward the
 # LESS safe state. Split, with the bare prefix kept visible as a non-fatal notice so the
 # narrowing cannot become a blind spot.
-PAT="$FS_ESTATE_IDENT_PAT|/work/|ghp_[A-Za-z0-9]{20,}"
+# #301: the identifier tier is NOT spliced in here. It is composed below, after the guards
+# that establish it was declared at all, because its empty case is a DECLARED value and an
+# empty alternation branch is not the same thing as an absent one. Measured with the grep this
+# build actually resolves (BSD grep 2.6.0): `PAT="|/work/|..."` is not a permissive pattern, it
+# is an ERROR -- `grep: empty (sub)expression`, rc 2 -- and every `|| true` in this section
+# turns that into an empty count that reads as clean. GNU grep, which is what CI runs, accepts
+# it and matches EVERY line instead. One mistake, two opposite symptoms, neither of them a
+# scan. So the tier is either present or omitted; it is never empty-but-spliced.
+PAT="/work/|ghp_[A-Za-z0-9]{20,}"
 NOTICE_PAT='ghp_|-----BEGIN[A-Z ]*PRIVATE KEY'
 
 # #151b: the extra-literal vocabulary is an INPUT, not a checked-in list.
@@ -710,12 +718,48 @@ NOTICE_PAT='ghp_|-----BEGIN[A-Z ]*PRIVATE KEY'
 # FS_REDACT_EXTRA=NONE means "this estate has no extra literals", unset means nobody decided.
 : "${FS_ESTATE_IDENT_PAT:?FS_ESTATE_IDENT_PAT is unset (required, no default). Set it to the |-separated regex alternation of the identifiers of this estate -- node names, account ids, org segments, private hostnames -- or to the literal string NONE to declare there are none. #155: a redaction list compiled into a public repository publishes the estate it was written to protect.}"
 : "${FS_REDACT_EXTRA:?FS_REDACT_EXTRA is unset (required, no default). Set it to a |-separated list of estate literals the pattern cannot express (bare account ids, private hostnames), or to the literal string NONE to declare that there are none. Unset is UNMEASURED, not clean.}"
+# #301: FS_ESTATE_IDENT_PAT=NONE was documented at the guard above and implemented NOWHERE.
+# That guard's own message tells the operator to write the literal string NONE to declare the
+# estate has no identifiers. Nothing then branched on it, so the string went straight into the
+# pattern and three defects stacked up, each hiding the next:
+#   1. the generator controls below assert that the pattern catches THIS estate's assembled
+#      identifiers. `NONE` catches nothing, so the first one failed and the build exited 5 --
+#      reporting a declared-empty estate as a RED tree. It is not a finding about the tree at
+#      all: the detector could not fire, which is UNMEASURED, and #160/#161 spent two tickets
+#      on exactly this collapse in other call sites.
+#   2. masked behind that exit, `NONE` was a LIVE alternation branch scanned case-insensitively,
+#      so every `x = None`, every `default=None`, every "none" in prose was a redaction hit.
+#      The declared-empty estate would have been redded for containing the word that means
+#      "nothing to redact". Measured: 1 hit on a two-line file.
+#   3. and the obvious repair -- drop the branch -- is the empty-subexpression bug at PAT above.
+# The sibling knob has had this right since #151b: FS_REDACT_EXTRA=NONE is branched on, and the
+# declaration is ECHOED so the empty case is visible in the log instead of inferred from a
+# silence. Same treatment here. The general shape is worth naming: an empty case DOCUMENTED in
+# one place and IMPLEMENTED in another, with nothing comparing the two -- and the two knobs sit
+# two lines apart.
+if [[ "$FS_ESTATE_IDENT_PAT" == "NONE" ]]; then
+  IDENT_TIER=""
+  echo "  FS_ESTATE_IDENT_PAT=NONE — declared: this estate contributes no identifiers"
+else
+  IDENT_TIER="$FS_ESTATE_IDENT_PAT"
+  PAT="$IDENT_TIER|$PAT"
+fi
 if [[ "$FS_REDACT_EXTRA" != "NONE" ]]; then
   PAT="$PAT|$FS_REDACT_EXTRA"
   echo "  extra literals folded in from FS_REDACT_EXTRA (value not echoed)"
 else
   echo "  FS_REDACT_EXTRA=NONE — declared: this estate contributes no extra literals"
 fi
+# #301: recorded here, decided at the end of this section. Exiting where a gap is DISCOVERED is
+# what #290 and #298 spent two tickets undoing one layer up: it silences every measurement
+# downstream, so the operator learns about one gap instead of all of them.
+scan_refused_reason=""
+# The generator scan can refuse for two reasons that OVERLAP -- its controls are inapplicable,
+# and separately it has no pattern to run at all -- so its reason is staged in one variable and
+# appended once. Appending at each site instead printed the same scan twice under two headings,
+# which is how #298's double-count read before it was caught: a verdict stated twice is a
+# verdict the reader has to reconcile.
+gen_refuse=""
 
 # #151: scan the GENERATORS, not only the generated. The old loop covered exactly the 7
 # output artifacts, so the build could report "0 blocklist hits" while 32 sat in the inputs
@@ -801,8 +845,17 @@ echo "  --- build inputs (#151: generators are published too) ---"
 #     disclosure wherever it appears, INCLUDING inside a redaction list.
 # So generators are scanned for identifiers only. Shipped artifacts keep the full pattern,
 # because a generated artifact has no legitimate reason to contain either class.
-IDENT_CORE="$FS_ESTATE_IDENT_PAT"
-[[ "$FS_REDACT_EXTRA" == "NONE" ]] || IDENT_CORE="$IDENT_CORE|$FS_REDACT_EXTRA"
+# #301: composed from PRESENT branches only. `$IDENT_CORE|$FS_REDACT_EXTRA` with an empty
+# IDENT_CORE is the empty-subexpression bug described at PAT above, and it would have landed
+# here on any estate that declared one tier and not the other.
+IDENT_CORE="$IDENT_TIER"
+if [[ "$FS_REDACT_EXTRA" != "NONE" ]]; then
+  if [[ -n "$IDENT_CORE" ]]; then
+    IDENT_CORE="$IDENT_CORE|$FS_REDACT_EXTRA"
+  else
+    IDENT_CORE="$FS_REDACT_EXTRA"
+  fi
+fi
 # #157: this scan used to apply a narrower PATH-ADJACENCY rule here -- an identifier counted
 # only when it touched a `/`, so that an identifier sitting in an alternation between pipes
 # read as vocabulary rather than as disclosure. That rule was forced by a real constraint: a
@@ -829,29 +882,69 @@ IDENT_PAT="$IDENT_CORE"
 # runtime value does; the concatenation is the point, not obfuscation.
 _ctl_id="hh""ri""-AI"
 _ctl_node="dg""pn""04"
-ictl=$(printf 'BLOCKLIST = ("/work/%s/x",)\n' "$_ctl_id" | grep -cInEi "$IDENT_PAT" || true)
-[[ "$ictl" -eq 1 ]] || { echo "  GENERATOR CONTROL FAILED: identifier pattern missed an estate segment inside a redaction list ($ictl/1)" >&2; exit 5; }
-ictl_neg=$(printf 'BLOCKLIST = ("/work/", "ghp_")\n' | grep -cInEi "$IDENT_PAT" || true)
-[[ "$ictl_neg" -eq 0 ]] || { echo "  GENERATOR CONTROL FAILED: identifier pattern fired on pure vocabulary ($ictl_neg, expected 0) — it would pressure generators toward carrying no redaction list at all" >&2; exit 5; }
-# The two #157 MUST_FIREs -- the cases the adjacency rule excused. Their expected value is
-# the INVERSE of what the old control asserted, and that inversion is the fix: a bare
-# alternation carrying an identifier is a disclosure now that no generator needs to carry one.
-ictl_alt=$(printf 'r"a|%s|b"\n' "$_ctl_id" | grep -cInEi "$IDENT_PAT" || true)
-[[ "$ictl_alt" -eq 1 ]] || { echo "  GENERATOR CONTROL FAILED: identifier in a bare alternation not caught ($ictl_alt, expected 1) — this is the #157 case: post-#155 no generator carries the vocabulary, so an identifier between pipes is a disclosure like any other" >&2; exit 5; }
-ictl_prose=$(printf '# measured on %s during bring-up\n' "$_ctl_node" | grep -cInEi "$IDENT_PAT" || true)
-[[ "$ictl_prose" -eq 1 ]] || { echo "  GENERATOR CONTROL FAILED: identifier in a comment not caught ($ictl_prose, expected 1) — prose in a published generator is published prose" >&2; exit 5; }
-echo "  control: identifier in path 1/1, in alternation 1/1, in prose 1/1 caught; pure vocabulary 0 false-positive"
+# #301: WHICH of the four apply depends on what the estate declared, and the split is not
+# tidiness -- running the wrong ones is what made a declared-empty estate exit 5.
+#   * the three MUST_FIREs plant THIS estate's identifiers. They are a proof of life for THIS
+#     estate's declared pattern and for nothing else, so on an estate that declared it has no
+#     identifier tier they are not failing, they are INAPPLICABLE. Another estate's pattern is
+#     under no obligation to match this one's org segment or node name.
+#   * the MUST_NOT_FIRE is different in kind. "Must not fire on pure vocabulary" is true of any
+#     pattern whatsoever, so it runs whenever there is a pattern to run it against, and a
+#     failure stays RED: a pattern that reds the word `/work/` is broken on every estate.
+if [[ -n "$IDENT_PAT" ]]; then
+  ictl_neg=$(printf 'BLOCKLIST = ("/work/", "ghp_")\n' | grep -cInEi "$IDENT_PAT" || true)
+  [[ "$ictl_neg" -eq 0 ]] || { echo "  GENERATOR CONTROL FAILED: identifier pattern fired on pure vocabulary ($ictl_neg, expected 0) — it would pressure generators toward carrying no redaction list at all" >&2; exit 5; }
+fi
+if [[ "$FS_ESTATE_IDENT_PAT" != "NONE" ]]; then
+  ictl=$(printf 'BLOCKLIST = ("/work/%s/x",)\n' "$_ctl_id" | grep -cInEi "$IDENT_PAT" || true)
+  [[ "$ictl" -eq 1 ]] || { echo "  GENERATOR CONTROL FAILED: identifier pattern missed an estate segment inside a redaction list ($ictl/1)" >&2; exit 5; }
+  # The two #157 MUST_FIREs -- the cases the adjacency rule excused. Their expected value is
+  # the INVERSE of what the old control asserted, and that inversion is the fix: a bare
+  # alternation carrying an identifier is a disclosure now that no generator needs to carry one.
+  ictl_alt=$(printf 'r"a|%s|b"\n' "$_ctl_id" | grep -cInEi "$IDENT_PAT" || true)
+  [[ "$ictl_alt" -eq 1 ]] || { echo "  GENERATOR CONTROL FAILED: identifier in a bare alternation not caught ($ictl_alt, expected 1) — this is the #157 case: post-#155 no generator carries the vocabulary, so an identifier between pipes is a disclosure like any other" >&2; exit 5; }
+  ictl_prose=$(printf '# measured on %s during bring-up\n' "$_ctl_node" | grep -cInEi "$IDENT_PAT" || true)
+  [[ "$ictl_prose" -eq 1 ]] || { echo "  GENERATOR CONTROL FAILED: identifier in a comment not caught ($ictl_prose, expected 1) — prose in a published generator is published prose" >&2; exit 5; }
+  echo "  control: identifier in path 1/1, in alternation 1/1, in prose 1/1 caught; pure vocabulary 0 false-positive"
+else
+  echo "  control: the three identifier MUST_FIREs are INAPPLICABLE — FS_ESTATE_IDENT_PAT=NONE," >&2
+  echo "    so the planted identifiers belong to no declared pattern and could not fire on any" >&2
+  echo "    correct build. Recorded UNMEASURED below rather than RED here (#301)." >&2
+  gen_refuse="its three positive controls are inapplicable, because the identifier tier is
+    declared empty (FS_ESTATE_IDENT_PAT=NONE) and they plant THIS estate's identifiers. A
+    0-hit result would be a clean bill of health from a detector with no proof of life."
+fi
 gen_hits=0; gen_files=0
-for f in "${GENERATORS[@]}"; do
-  [[ -f "$f" ]] || continue
-  gen_files=$((gen_files + 1))
-  n=$(grep -cInEi "$IDENT_PAT" "$f" 2>/dev/null || true)
-  if [[ "$n" -gt 0 ]]; then printf '  %-34s %s hit(s)\n' "$(basename "$f")" "$n"; fi
-  gen_hits=$((gen_hits + n))
-done
-printf '  %-34s %s file(s) scanned, %s hit(s)\n' "[generators]" "$gen_files" "$gen_hits"
-[[ "$gen_files" -ge 20 ]] || { echo "  GENERATOR SCAN UNMEASURED: only $gen_files input(s) resolved (expected >=20) — a shrunken denominator reads exactly like a clean scan" >&2; exit 95; }
-hits=$((hits + gen_hits))
+# #301: this scan reads the identifier tier and NOTHING else -- see the token-class split
+# above -- so when that tier is empty there is no scan to run. Skipping it is not the same as
+# running it and finding nothing, and the difference has to survive into the verdict: `0 hit(s)
+# over 31 generators` is exactly what a clean estate looks like, which is the vacuous-truth
+# shape the denominator floor below was written to catch, arriving through the pattern instead
+# of the file list. The token tiers (/work/, ghp_) are estate-independent and keep measuring in
+# the shipped-artifact and document scans; only this one goes dark.
+if [[ -n "$IDENT_PAT" ]]; then
+  for f in "${GENERATORS[@]}"; do
+    [[ -f "$f" ]] || continue
+    gen_files=$((gen_files + 1))
+    n=$(grep -cInEi "$IDENT_PAT" "$f" 2>/dev/null || true)
+    if [[ "$n" -gt 0 ]]; then printf '  %-34s %s hit(s)\n' "$(basename "$f")" "$n"; fi
+    gen_hits=$((gen_hits + n))
+  done
+  printf '  %-34s %s file(s) scanned, %s hit(s)\n' "[generators]" "$gen_files" "$gen_hits"
+  [[ "$gen_files" -ge 20 ]] || { echo "  GENERATOR SCAN UNMEASURED: only $gen_files input(s) resolved (expected >=20) — a shrunken denominator reads exactly like a clean scan" >&2; exit 95; }
+  hits=$((hits + gen_hits))
+else
+  printf '  %-34s SKIPPED — the identifier tier is empty, so the pattern would be empty\n' "[generators]" >&2
+  # OVERWRITES rather than appends: "it did not run" is the stronger statement and subsumes
+  # "its controls could not fire". Both conditions hold whenever this branch is taken.
+  gen_refuse="not run at all. FS_ESTATE_IDENT_PAT=NONE and FS_REDACT_EXTRA contributed
+    nothing, so the generator pattern has no branches. An empty pattern is not a permissive
+    scan: BSD grep errors on it and GNU grep matches every line."
+fi
+if [[ -n "$gen_refuse" ]]; then
+  scan_refused_reason="$scan_refused_reason
+  generator scan: $gen_refuse"
+fi
 # `|| true` before the pipe, not after it: `set -o pipefail` is on, and grep exits 1 when it
 # matches nothing -- which is the CLEAN case here. Without this the build dies on success.
 notices=$( { grep -lInEi "$NOTICE_PAT" "$LAUNCHER" "$BACKEND" "$ENTRY" "$MODELROOT" "$MRTEST" "$ADJ" "$ADJTEST" 2>/dev/null || true; } | wc -l | tr -d ' ')
@@ -887,7 +980,21 @@ echo "  --- published documents (#151c: the third category) ---"
 # that the distinction is load-bearing: EVIDENCE.md legitimately DESCRIBES the blocklist
 # ("`/work/` plus the estate segment are both on the blocklist"). A pattern that could not
 # tell that sentence from a real path would force the documentation to stop documenting.
-DOC_PAT="$IDENT_CORE|/work/[A-Za-z0-9]|ghp_[A-Za-z0-9]{8}"
+# #301: composed from present branches only, same reason as PAT. Unlike the generator scan,
+# this one does NOT go dark when the identifier tier is empty -- its other two branches are
+# token-class and estate-independent, and all four of its controls below plant strings that
+# those two branches catch (`/work/<alnum>` and a 8+-char `ghp_` body), so the scan keeps a
+# live proof of life. What it loses is reach: a BARE identifier in prose, which is the #151c
+# case this whole block exists for. That is a narrowed denominator, not a dead detector, and
+# it is recorded rather than passed over.
+DOC_PAT="/work/[A-Za-z0-9]|ghp_[A-Za-z0-9]{8}"
+if [[ -n "$IDENT_CORE" ]]; then
+  DOC_PAT="$IDENT_CORE|$DOC_PAT"
+else
+  scan_refused_reason="$scan_refused_reason
+  document scan: ran on its two token tiers only. With an empty identifier tier it cannot see
+    a bare estate identifier in prose -- the #151c case this scan was written for."
+fi
 # #159: the partition literal used to sit in that pattern, written out inside a word-boundary
 # escape -- `\b<PARTITION>\b` with the value where the placeholder is. Two defects in one
 # four-character string, and they hid each other:
@@ -1134,6 +1241,17 @@ else
 fi
 
 [[ "$hits" -eq 0 ]] || { echo "BLOCKLIST RED: $hits hit(s)" >&2; exit 5; }
+# #301: and only now, after every scan in this section has had its say, the refusals it
+# recorded along the way. Order matters and it is the same precedence #298 states one layer
+# up: RED first, because a hit is a finding about the tree and is true whether or not the
+# other scans could run, and a refusal reported above it would read as an amnesty.
+if [[ -n "$scan_refused_reason" ]]; then
+  echo "BLOCKLIST UNMEASURED (95) — one or more scans in this section could not measure:" >&2
+  echo "$scan_refused_reason" >&2
+  echo "  No scan that DID run reported a hit. That is not the same as a clean tree, and this" >&2
+  echo "  build declines to say it is." >&2
+  exit 95
+fi
 
 echo -e "\n=== parse ==="
 # Two shell artifacts and one Python one, each checked with its own language's parser.
