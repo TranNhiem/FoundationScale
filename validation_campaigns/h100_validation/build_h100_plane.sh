@@ -502,6 +502,80 @@ if [[ "$stage_refused" != 0 ]]; then
   echo "  the declared-but-absent direction rather than calling an unfinished build RED." >&2
 fi
 
+# #298: the standing gates ACCUMULATE their verdicts; the build decides ONCE, at the end.
+#
+# Under #290 every gate's refusal arm exited on the spot, so a refusing tree heard from exactly
+# one gate -- the first to refuse -- and the other eight never ran. That is the shape of the
+# defect #290 itself fixed, one layer in: an early exit turns "eight gates had something to say"
+# into "one gate said something", and the whole point of a tail plane is the whole tail. The
+# gates are read-only adjudicators, so there is nothing to protect by stopping early.
+#
+# The DENOMINATOR is derived from this script, not written as a literal. A hand-kept "9" is a
+# countable that goes stale the first time a gate is added or removed, and this plane has filed
+# that exact class four times (#194, #220, #233, #266). The pattern is anchored to column 0, so
+# the line below that CONTAINS the pattern inside a quoted string is not inside its own
+# denominator -- #199's lesson, and the reason this is anchored rather than a bare substring.
+GATE_COUNT=$(grep -c '^python3 gate_[a-z_0-9]*\.py || {' "$(basename "${BASH_SOURCE[0]}")" || true)
+if [[ "${GATE_COUNT:-0}" -lt 1 ]]; then
+  echo "BUILD UNMEASURED (95) — could not count the standing gates in this script, so the" >&2
+  echo "  verdict denominator below would be unknown. A summary over an unknown denominator" >&2
+  echo "  reads exactly like a summary over a complete one." >&2
+  exit 95
+fi
+
+gate_red=0
+gate_refused=0
+gate_worst_refusal=0
+gate_red_names=""
+gate_refused_names=""
+gate_seen=""
+
+# note_gate <rc> <gate> -- record a gate's non-green verdict instead of exiting on it.
+# The NAMES are recorded alongside the codes: "some gate refused" sends an operator through
+# nine gates, which is the same cost the early exit was already imposing.
+#
+# AT MOST ONE VERDICT PER GATE, and this is not defensive tidiness -- the first version of
+# #298 counted seven gates twice and printed "-5 green, 7 red, 7 refused (of 9)". Every call
+# site has the shape
+#     python3 gate_X.py || { rc=$?; case $rc in 95) …;; 96) …;; esac; <default RED> ; }
+# and under #290 the 95/96 arms EXITED, which is the only reason that trailing default was
+# unreachable for those codes. Turning an exit into a bookkeeping call makes the fall-through
+# live again. A gate runs once and produces one exit code, so the SPECIFIC arm -- which runs
+# first -- is the verdict and the default is what applies when no arm claimed it. Stating the
+# rule once here beats restating it in nine call sites that each have to remember it.
+note_gate() {
+  case " $gate_seen " in
+    *" $2 "*) return 0 ;;
+  esac
+  gate_seen="$gate_seen $2"
+  case "$1" in
+    5)
+      gate_red=$((gate_red + 1))
+      gate_red_names="$gate_red_names $2(5)"
+      ;;
+    95|96)
+      gate_refused=$((gate_refused + 1))
+      gate_refused_names="$gate_refused_names $2($1)"
+      # 96 (CANNOT-MEASURE) outranks 95 (UNMEASURED): 96 says an input was unreadable or a
+      # control did not fire, which is the stronger statement about what the build could see.
+      # Written as an if rather than `[[ ]] && x` because `set -e` is on and a false && list
+      # is a failing compound command, which would kill the build from inside a bookkeeping
+      # helper -- silently, and only on the branch where a gate refused.
+      if [[ "$1" == 96 ]]; then
+        gate_worst_refusal=96
+      elif [[ "$gate_worst_refusal" != 96 ]]; then
+        gate_worst_refusal=95
+      fi
+      ;;
+    *)
+      echo "  note_gate: unexpected rc '$1' from $2 — recording it as RED" >&2
+      gate_red=$((gate_red + 1))
+      gate_red_names="$gate_red_names $2($1)"
+      ;;
+  esac
+  return 0
+}
+
 echo -e "\n=== standing gate: bidirectional env drift ==="
 python3 gate_env_drift.py || {
   rc=$?
@@ -509,12 +583,12 @@ python3 gate_env_drift.py || {
     5)  echo "DRIFT GATE RED (rc=5) — FS_ENV_ALLOWLIST and the launcher's exports disagree" >&2 ;;
     95) echo "DRIFT GATE UNMEASURED (rc=95) — the gate could not derive one of its two lists;" >&2
         echo "  not comparing is not agreeing." >&2
-        exit 95 ;;
+        note_gate 95 gate_env_drift.py ;;
     96) echo "DRIFT GATE REFUSED (rc=96) — an input is unreadable, or a control did not fire." >&2
-        exit 96 ;;
+        note_gate 96 gate_env_drift.py ;;
     *)  echo "DRIFT GATE unexpected rc=$rc" >&2 ;;
   esac
-  exit 5
+  note_gate 5 gate_env_drift.py
 }
 
 echo -e "\n=== standing gate: input/output partition (#136, #137) ==="
@@ -528,13 +602,13 @@ python3 gate_build_inputs.py || {
         echo "  declared artifact nor a documented upstream: the #136/#137 state." >&2 ;;
     95) echo "INPUT PARTITION GATE UNMEASURED (rc=95) — the gate could not enumerate the output" >&2
         echo "  directory or its declaration; an empty partition is not a clean one." >&2
-        exit 95 ;;
+        note_gate 95 gate_build_inputs.py ;;
     96) echo "INPUT PARTITION GATE REFUSED (rc=96) — an input is unreadable, or a control did" >&2
         echo "  not fire. A detector that cannot be shown to fire proves nothing when silent." >&2
-        exit 96 ;;
+        note_gate 96 gate_build_inputs.py ;;
     *)  echo "INPUT PARTITION GATE unexpected rc=$rc" >&2 ;;
   esac
-  exit 5
+  note_gate 5 gate_build_inputs.py
 }
 
 echo -e "\n=== standing gate: exit-code contract (#161) ==="
@@ -550,13 +624,13 @@ python3 gate_exit_contract.py || {
     5)  echo "EXIT-CONTRACT GATE RED (rc=5) — a published stage exits 1 where it declares 5/95/96." >&2 ;;
     95) echo "EXIT-CONTRACT GATE UNMEASURED (rc=95 -> build 95) — the publish set did not resolve" >&2
         echo "  enough Python files to scan. Not scanning is not passing." >&2
-        exit 95 ;;
+        note_gate 95 gate_exit_contract.py ;;
     96) echo "EXIT-CONTRACT GATE REFUSED (rc=96) — an input is unreadable, or a control did not" >&2
         echo "  fire. #290: this arm did not exist, so a refusal was reported as RED." >&2
-        exit 96 ;;
+        note_gate 96 gate_exit_contract.py ;;
     *)  echo "EXIT-CONTRACT GATE unexpected rc=$rc" >&2 ;;
   esac
-  exit 5
+  note_gate 5 gate_exit_contract.py
 }
 
 echo -e "\n=== standing gate: stage/publish-set orphans (#191) ==="
@@ -579,13 +653,13 @@ python3 gate_stage_orphans.py || {
     95) echo "STAGE-ORPHAN GATE UNMEASURED (rc=95 -> build 95) — the gate could not derive its" >&2
         echo "  own inputs (STAGES array, publish set, or h100/STAGE_ROLES.tsv). Not deriving" >&2
         echo "  is not passing." >&2
-        exit 95 ;;
+        note_gate 95 gate_stage_orphans.py ;;
     96) echo "STAGE-ORPHAN GATE REFUSE (rc=96) — a control failed or a role is unknown. A" >&2
         echo "  detector that cannot be shown to fire has not been shown to work." >&2
-        exit 96 ;;
+        note_gate 96 gate_stage_orphans.py ;;
     *)  echo "STAGE-ORPHAN GATE unexpected rc=$rc" >&2 ;;
   esac
-  exit 5
+  note_gate 5 gate_stage_orphans.py
 }
 
 echo -e "\n=== doc stage-count agreement (#194) ==="
@@ -606,13 +680,13 @@ python3 gate_doc_stage_count.py || {
     95) echo "DOC STAGE-COUNT GATE UNMEASURED (rc=95 -> build 95) — zero claims matched, or the" >&2
         echo "  STAGES array could not be parsed. A scanner that matches nothing cannot tell a" >&2
         echo "  clean corpus from a broken pattern." >&2
-        exit 95 ;;
+        note_gate 95 gate_doc_stage_count.py ;;
     96) echo "DOC STAGE-COUNT GATE REFUSE (rc=96) — a control failed. A detector that cannot be" >&2
         echo "  shown to fire has not been shown to work." >&2
-        exit 96 ;;
+        note_gate 96 gate_doc_stage_count.py ;;
     *)  echo "DOC STAGE-COUNT GATE unexpected rc=$rc" >&2 ;;
   esac
-  exit 5
+  note_gate 5 gate_doc_stage_count.py
 }
 
 echo -e "\n=== public-repo blocklist (case-insensitive) ==="
@@ -996,9 +1070,49 @@ if [[ -r "$PUBSET" ]]; then
   [[ "$_pub_n" -ge 20 ]] || { echo "  COVERAGE UNMEASURED: publish set lists only $_pub_n file(s) (expected >=20) — an empty manifest covers vacuously" >&2; exit 95; }
   # A manifest naming a file that does not exist is its own defect: it inflates the
   # denominator with something no scan could ever have read.
+  #
+  # #298: except when the build has just said the tree is unfinished. This is #297's asymmetry
+  # at a third site, and it is the same two claims with the same different failure modes:
+  #
+  #   on a COMPLETE tree   the manifest is wrong -- it ships a name nothing produces, and the
+  #                        two sweeps above reported "0 hits" over a denominator that silently
+  #                        excluded it (both skip with `[[ -f ]] || continue`). RED.
+  #   on an UNFINISHED one the file is absent because the stage that writes it never ran. The
+  #                        manifest is right and the tree is short. Calling that RED misnames
+  #                        the fault AND -- the reason #298 has to touch this block at all --
+  #                        stops the build four gates early, so the whole point of accumulating
+  #                        gate verdicts is lost to an inline check two hundred lines above the
+  #                        remaining five.
+  #
+  # Deferring cannot manufacture a green: FS_BUILD_INCOMPLETE is exported only when a stage
+  # exited 95/96, and the tail below refuses on that stage unconditionally. What the deferral
+  # buys is the other gates' verdicts, not an amnesty. Unset keeps the strict reading for
+  # by-hand and CI runs, exactly as in gate_build_inputs.py.
+  _cov_incomplete="${FS_BUILD_INCOMPLETE:-}"
   _missing=0
-  while IFS= read -r _p; do [[ -e "$_p" ]] || { echo "  COVERAGE: publish set names a file that does not exist: $_p" >&2; _missing=$((_missing+1)); }; done < "$_cov_pub"
-  [[ "$_missing" -eq 0 ]] || { echo "  COVERAGE RED: $_missing published file(s) absent from the tree" >&2; exit 5; }
+  while IFS= read -r _p; do
+    if [[ ! -e "$_p" ]]; then
+      _missing=$((_missing + 1))
+      if [[ -n "$_cov_incomplete" ]]; then
+        echo "  COVERAGE: published file not produced (build unfinished): $_p" >&2
+      else
+        echo "  COVERAGE: publish set names a file that does not exist: $_p" >&2
+      fi
+    fi
+  done < "$_cov_pub"
+  # if/elif, not `[[ ]] && x`: `set -e` is on and a false && list is a failing compound command,
+  # which would kill the build from inside the branch that is supposed to let it continue.
+  if [[ "$_missing" -eq 0 ]]; then
+    :
+  elif [[ -n "$_cov_incomplete" ]]; then
+    echo "  COVERAGE DEFERRED (#298) — $_missing published file(s) absent because stage $_cov_incomplete refused." >&2
+    echo "    The sweeps above therefore read $_missing fewer file(s) than the shipment declares, so their" >&2
+    echo "    clean result is narrower than it looks. That is CANNOT-MEASURE for this leg, not RED." >&2
+  else
+    echo "  COVERAGE RED: $_missing published file(s) absent from the tree" >&2
+    rm -f "$_cov_tmp" "$_cov_pub" "$_cov_un"
+    exit 5
+  fi
   comm -23 "$_cov_pub" "$_cov_tmp" > "$_cov_un"
   _un_n=$(wc -l < "$_cov_un" | tr -d ' ')
   # MUST_FIRE: an unowned file must be observed producing the refusal, or this gate is a
@@ -1024,15 +1138,44 @@ fi
 echo -e "\n=== parse ==="
 # Two shell artifacts and one Python one, each checked with its own language's parser.
 # A single loop with `bash -n` would report the .py file as clean-because-unchecked.
+#
+# #298: ABSENT and UNPARSEABLE are counted separately, because they are the two claims #297
+# split and they still fail differently here. A parser reports "No such file" and "syntax
+# error" with the same nonzero rc, so the old single counter could not tell an artifact that
+# was never produced from one that was produced broken -- and on a refused tree it called the
+# first RED, which stopped the build five gates short of the tail #298 exists to reach.
+# A file that EXISTS and does not parse is still RED on any tree.
 ok=0
+absent=0
+_parse_absent=""
 for f in "$LAUNCHER" "$BACKEND"; do
-  bash -n "$f" && { printf '  clean  %-32s (bash -n)\n' "$(basename "$f")"; ok=$((ok + 1)); }
+  if [[ ! -e "$f" ]]; then
+    absent=$((absent + 1)); _parse_absent="$_parse_absent $(basename "$f")"
+    printf '  absent %-32s (not produced)\n' "$(basename "$f")"
+  elif bash -n "$f"; then
+    printf '  clean  %-32s (bash -n)\n' "$(basename "$f")"; ok=$((ok + 1))
+  fi
 done
 for f in "$ENTRY" "$MODELROOT" "$MRTEST" "$ADJ" "$ADJTEST"; do
-  python3 -m py_compile "$f" \
-    && { printf '  clean  %-32s (py_compile)\n' "$(basename "$f")"; ok=$((ok + 1)); }
+  if [[ ! -e "$f" ]]; then
+    absent=$((absent + 1)); _parse_absent="$_parse_absent $(basename "$f")"
+    printf '  absent %-32s (not produced)\n' "$(basename "$f")"
+  elif python3 -m py_compile "$f"; then
+    printf '  clean  %-32s (py_compile)\n' "$(basename "$f")"; ok=$((ok + 1))
+  fi
 done
-[[ $ok -eq 7 ]] || { echo "SYNTAX RED: $ok/7 clean" >&2; exit 5; }
+if [[ $ok -eq 7 ]]; then
+  :
+elif [[ $((ok + absent)) -eq 7 && -n "${FS_BUILD_INCOMPLETE:-}" ]]; then
+  # Every artifact that is not clean is merely ABSENT, and the build has said why. Note the
+  # conjunction: one artifact that exists and does not parse breaks `ok + absent == 7` and
+  # falls through to the RED below, on a refused tree too.
+  echo "  PARSE DEFERRED (#298) — $ok/7 parsed; $absent never produced (stage $FS_BUILD_INCOMPLETE refused):$_parse_absent" >&2
+  echo "    A parser cannot report on a file that does not exist. CANNOT-MEASURE, not RED." >&2
+else
+  echo "SYNTAX RED: $ok/7 clean" >&2
+  exit 5
+fi
 
 echo -e "\n=== generated unit suites (#133 model-root plane, #141 adjudicator) ==="
 # A generated test suite that the build does not run is an orphan -- #86 was exactly that,
@@ -1085,10 +1228,28 @@ fi
 # cross-artifact gates below remain meaningful and now run; the 95 is deferred to the end.
 # A RED suite still exits on the spot -- there the artifacts ARE known broken, so the
 # downstream gates would be reading rubble and their verdicts would be noise.
+#
+# #298: a third arm, for the tree that was never finished. Two of these four suites are
+# GENERATED, so on a refused build the paths do not exist and pytest exits 4 (usage) -- which
+# the arm below reports as SUITE RED, i.e. "the artifacts are known broken", i.e. exactly the
+# wrong word, taken at exactly the point that stops the five gates after it.
+#
+# The deferral is wholesale on purpose. Running the two suites that DO exist and reporting
+# that as a pass is the #157 defect verbatim: a narrower denominator reported with the wider
+# one's word. Better to say which legs are missing and decide nothing.
 suite_unmeasured=0
+_suite_absent=""
+for _t in "$MRTEST" "$ADJTEST" "$PFTEST" "$SCTEST"; do
+  [[ -e "$_t" ]] || _suite_absent="$_suite_absent $(basename "$_t")"
+done
 if [[ "${FS_SKIP_SUITE:-0}" == 1 ]]; then
   suite="WAIVED (FS_SKIP_SUITE=1)"
   echo "  $suite — the generated suite was NOT run"
+elif [[ -n "$_suite_absent" && -n "${FS_BUILD_INCOMPLETE:-}" ]]; then
+  suite="DEFERRED (#298) — suite file(s) never produced:$_suite_absent"
+  echo "  $suite" >&2
+  echo "  Stage $FS_BUILD_INCOMPLETE refused before these were written. Running only the legs that" >&2
+  echo "  do exist would report a NARROWER denominator under the wider one's word (#157)." >&2
 elif [[ -n "$PY" && -x "$PY" ]] && "$PY" -c 'import pytest' 2>/dev/null; then
   echo "  interpreter: $PY ($py_src)"
   "$PY" -m pytest "$MRTEST" "$ADJTEST" "$PFTEST" "$SCTEST" -q || { echo "SUITE RED" >&2; exit 5; }
@@ -1117,18 +1278,18 @@ echo -e "\n=== standing gate: writer/adjudicator naming agreement (#150) ==="
 python3 gate_ckpt_naming_agreement.py || {
   rc=$?
   case $rc in
-    3) echo "NAMING GATE UNMEASURED (rc=3 -> build 95) — zero writer sites, or the adjudicator would not import" >&2; exit 95 ;;
+    3) echo "NAMING GATE UNMEASURED (rc=3 -> build 95) — zero writer sites, or the adjudicator would not import" >&2; note_gate 95 gate_ckpt_naming_agreement.py ;;
     4) echo "NAMING GATE CONTROLS FAILED (rc=4) — the gate cannot be trusted, so neither can this build" >&2 ;;
     5) echo "NAMING GATE RED (rc=5) — writer and adjudicator disagree about checkpoint naming" >&2 ;;
     95) echo "NAMING GATE UNMEASURED (rc=95) — the plane-wide code, distinct from this gate's own rc=3." >&2
         echo "  #290: this arm did not exist, so a refusal arrived here and left as RED." >&2
-        exit 95 ;;
+        note_gate 95 gate_ckpt_naming_agreement.py ;;
     96) echo "NAMING GATE REFUSED (rc=96) — an input is unreadable; the writer or the generated" >&2
         echo "  adjudicator is absent, which is the tree's state after a stage refuses." >&2
-        exit 96 ;;
+        note_gate 96 gate_ckpt_naming_agreement.py ;;
     *) echo "NAMING GATE unexpected rc=$rc" >&2 ;;
   esac
-  exit 5
+  note_gate 5 gate_ckpt_naming_agreement.py
 }
 
 echo -e "\n=== standing gate: inter-artifact linkage (#142) ==="
@@ -1145,13 +1306,13 @@ python3 gate_artifact_linkage.py || {
     95) echo "LINKAGE GATE UNMEASURED (rc=95) — zero inter-artifact edges resolved; a shrunken denominator is not a clean scan" >&2
         echo "  #290: this arm printed UNMEASURED and then fell through to a shared exit 5, so the" >&2
         echo "  message and the exit code disagreed. The exit code is what anything downstream reads." >&2
-        exit 95 ;;
+        note_gate 95 gate_artifact_linkage.py ;;
     96) echo "LINKAGE GATE REFUSED (rc=96) — a shipped artifact is unreadable, so there is no edge set" >&2
         echo "  to audit. Absent inputs are the state after a stage refuses, not a linkage failure." >&2
-        exit 96 ;;
+        note_gate 96 gate_artifact_linkage.py ;;
     *)  echo "LINKAGE GATE unexpected rc=$rc" >&2 ;;
   esac
-  exit 5
+  note_gate 5 gate_artifact_linkage.py
 }
 
 # #278: this gate was declared role=`gate` in STAGE_ROLES.tsv, shipped in PUBLISH_SET.txt
@@ -1190,12 +1351,12 @@ python3 gate_launch_contract.py || {
     95) echo "LAUNCH CONTRACT GATE UNMEASURED (rc=95) — a MUST_FIRE/MUST_PASS control did not fire; the detector is uncertified, so its verdict is unattributable" >&2
         echo "  #290: this arm and the 96 below both fell through to a shared exit 5. The gate went to" >&2
         echo "  the trouble of separating three states and the call site collapsed them back into one." >&2
-        exit 95 ;;
+        note_gate 95 gate_launch_contract.py ;;
     96) echo "LAUNCH CONTRACT GATE REFUSED (rc=96) — the generated artifacts are unreadable (run the bash generators first), or the estate redaction vocabulary is unset" >&2
-        exit 96 ;;
+        note_gate 96 gate_launch_contract.py ;;
     *)  echo "LAUNCH CONTRACT GATE unexpected rc=$rc" >&2 ;;
   esac
-  exit 5
+  note_gate 5 gate_launch_contract.py
 }
 
 # #154: the operator document cites the launcher by line number, and the launcher grows.
@@ -1213,12 +1374,12 @@ python3 gate_launch_doc.py || {
     95) echo "LAUNCH DOC GATE UNMEASURED (rc=95) — a zero denominator or an unplantable drill; an uncertified detector is not a clean scan" >&2
         echo "  #290: this arm and the 96 below both fell through to a shared exit 5, so a document" >&2
         echo "  that could not be read was reported as a document that contradicts the launcher." >&2
-        exit 95 ;;
+        note_gate 95 gate_launch_doc.py ;;
     96) echo "LAUNCH DOC GATE REFUSED (rc=96) — an input is unreadable or a required redaction pattern is unset" >&2
-        exit 96 ;;
+        note_gate 96 gate_launch_doc.py ;;
     *)  echo "LAUNCH DOC GATE unexpected rc=$rc" >&2 ;;
   esac
-  exit 5
+  note_gate 5 gate_launch_doc.py
 }
 
 # #290: the deferred stage refusal, on the same mechanism #288 built for the suite. A stage
@@ -1232,6 +1393,34 @@ python3 gate_launch_doc.py || {
 # It is reported BEFORE the suite's 95 because it is the earlier and more fundamental
 # refusal: the stage never applied, so the suite was measuring a tree that was never built.
 # Naming the stage matters -- "something refused" sends an operator through 42 stages.
+# #298: every standing gate has now reported. Print the whole tail's verdict, then decide once.
+#
+# PRECEDENCE, most severe first, and it is deliberately NOT max(rc):
+#   1. a gate RED (5)     -- a finding about the tree. True whether or not anything else could
+#                            be measured, so it outranks every refusal. This is the same rule
+#                            #297 applies inside a gate, applied one layer up: RED dominates a
+#                            deferral, or a refusal becomes a blanket amnesty.
+#   2. the stage refusal  -- the earlier and more fundamental gap. The stage never applied, so
+#                            the gates were measuring a tree that was never built; their
+#                            refusals are its consequence, not independent facts. Reporting the
+#                            gate refusal first would name the symptom and hide the cause.
+#   3. a gate refusal     -- 96 (CANNOT-MEASURE) over 95 (UNMEASURED).
+#   4. the suite's 95     -- unchanged, below.
+if [[ $((gate_red + gate_refused)) -gt 0 ]]; then
+  printf '\n--- standing gates: %s green, %s red, %s refused (of %s) ---\n' \
+    "$((GATE_COUNT - gate_red - gate_refused))" "$gate_red" "$gate_refused" "$GATE_COUNT" >&2
+  [[ -z "$gate_red_names" ]]     || echo "  RED:     $gate_red_names" >&2
+  [[ -z "$gate_refused_names" ]] || echo "  REFUSED: $gate_refused_names" >&2
+fi
+
+if [[ "$gate_red" -gt 0 ]]; then
+  printf '\nBUILD RED — %s of %s standing gate(s) reported a finding.\n' \
+    "$gate_red" "$GATE_COUNT" >&2
+  echo "  Every gate ran. A RED here is a claim about the tree, not about coverage, so it" >&2
+  echo "  outranks any refusal reported alongside it (#298)." >&2
+  exit 5
+fi
+
 if [[ "$stage_refused" != 0 ]]; then
   printf '\nBUILD %s — %s stages, the standing gates ran, suite: %s\n' \
     "$( [[ "$stage_refused" == 96 ]] && echo 'REFUSED (96)' || echo 'UNMEASURED (95)' )" \
@@ -1243,19 +1432,39 @@ if [[ "$stage_refused" != 0 ]]; then
   exit "$stage_refused"
 fi
 
+# #298, precedence 3: no gate reported a finding and no stage refused, but some gate could not
+# decide. On a COMPLETE tree that is its own state and deserves its own word -- a gate whose
+# inputs were unreadable has not certified anything, and a build that printed GREEN over it
+# would be the #56/#149/#160 collapse.
+if [[ "$gate_refused" -gt 0 ]]; then
+  printf '\nBUILD %s — %s of %s standing gate(s) could not measure; none reported a finding.\n' \
+    "$( [[ "$gate_worst_refusal" == 96 ]] && echo 'REFUSED (96)' || echo 'UNMEASURED (95)' )" \
+    "$gate_refused" "$GATE_COUNT" >&2
+  echo "  Every gate that COULD decide is green, and the rest said so rather than guessing." >&2
+  echo "  This is NOT a green build and NOT a red one. Re-run once their inputs exist." >&2
+  exit "$gate_worst_refusal"
+fi
+
 # #288: the deferred 95. Every standing gate above has now reported, so the build states
 # what it measured AND what it could not, then fails on the latter. Printing GREEN here and
 # exiting 95 would be the collapse #56/#149/#160 exist to prevent, in the other direction:
 # an unmeasured suite is not a passing one, and the build must not offer the softer word.
+#
+# #298: the gate roll-call is DERIVED, not listed. These two lines named four gates ("drift
+# gate green, naming agreement green, linkage green, launch-doc green") out of nine, and the
+# sentence below them said "the four standing gates" -- a countable that was already wrong by
+# five and had drifted silently every time a gate was added. This plane has filed that exact
+# class four times (#194, #220, #233, #266). Reaching either line means gate_red and
+# gate_refused are both 0, so "$GATE_COUNT/$GATE_COUNT green" is a measurement, not a claim.
 if [[ "$suite_unmeasured" == 1 ]]; then
-  printf '\nBUILD UNMEASURED (95) — %s stages, drift gate green, %s blocklist hits, %s/7 parse clean, naming agreement green, linkage green, launch-contract green, launch-doc green, suite: %s\n' \
-    "${#STAGES[@]}" "$hits" "$ok" "$suite" >&2
-  echo "  The four standing gates ran and are green; the generated unit suite was NOT measured." >&2
+  printf '\nBUILD UNMEASURED (95) — %s stages, %s/%s standing gates green, %s blocklist hits, %s/7 parse clean, suite: %s\n' \
+    "${#STAGES[@]}" "$GATE_COUNT" "$GATE_COUNT" "$hits" "$ok" "$suite" >&2
+  echo "  Every standing gate ran and is green; the generated unit suite was NOT measured." >&2
   exit 95
 fi
 
-printf '\nBUILD GREEN — %s stages, drift gate green, %s blocklist hits, %s/7 parse clean, naming agreement green, linkage green, launch-contract green, launch-doc green, suite: %s\n' \
-  "${#STAGES[@]}" "$hits" "$ok" "$suite"
+printf '\nBUILD GREEN — %s stages, %s/%s standing gates green, %s blocklist hits, %s/7 parse clean, suite: %s\n' \
+  "${#STAGES[@]}" "$GATE_COUNT" "$GATE_COUNT" "$hits" "$ok" "$suite"
 for f in "$LAUNCHER" "$BACKEND" "$ENTRY" "$MODELROOT" "$MRTEST" "$ADJ" "$ADJTEST"; do
   printf '  %-34s %s lines\n' "$f" "$(wc -l < "$f" | tr -d ' ')"
 done
