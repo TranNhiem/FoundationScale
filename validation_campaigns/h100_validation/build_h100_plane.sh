@@ -1027,6 +1027,46 @@ python3 gate_artifact_linkage.py || {
   exit 5
 }
 
+# #278: this gate was declared role=`gate` in STAGE_ROLES.tsv, shipped in PUBLISH_SET.txt
+# and redaction-scanned -- and invoked by nothing. Until this line existed, the only
+# occurrence of its basename in this script was the comment at :584 noting its own
+# omission from a scan denominator. A gate that no build runs is not a gate; every RED it
+# is capable of producing protects nothing, which is why the L4 fix landed under #127 had
+# no consequence attached to it until now.
+#
+# It is NOT redundant with the launch-doc gate below. That gate audits the hand-written
+# operator document. This one does forward AND reverse accounting of the launch COMMAND
+# TEMPLATE: every required name appears in the template (L2), and every template
+# assignment is either extracted-required or a waiver carrying a stated reason (L3).
+# Nothing else performs the reverse leg, so before this an assignment nobody requires
+# could ride the template indefinitely.
+#
+# It is invoked with NO --emit, so it writes nothing. Wiring it in is what surfaced why:
+# the gate used to drop a rendered LAUNCH.md into h100/gen/ unconditionally, and that
+# directory is not scratch -- gate_build_inputs.py I1 asserts it holds exactly the declared
+# PRODUCED set, every member of which also ships in PUBLISH_SET.txt. Running the build
+# with the gate wired in turned I1 red on the spot ("10 present, 9 declared; UNDECLARED:
+# ['LAUNCH.md']"), and declaring it instead would have queued a SECOND published statement
+# of the 16-required-knobs countable that h100/LAUNCH.md already makes -- the drift class
+# behind #194, #220, #233 and #266. The document had zero consumers either way, so #278
+# made the write opt-in. The consequence that makes L1-L5 fatal is this EXIT CODE.
+#
+# Every code in the case below was proven REACHABLE by injection before being declared
+# (#198/#200 cut the other way too: a declared code no input can produce is a fiction).
+# 5 via a blank-reason waiver and via a redaction hit, 95 via a dead control, 96 via
+# absent inputs and via an unset estate vocabulary at import.
+echo -e "\n=== standing gate: launch command template vs launcher (#278) ==="
+python3 gate_launch_contract.py || {
+  rc=$?
+  case $rc in
+    5)  echo "LAUNCH CONTRACT GATE RED (rc=5) — a required knob is missing from the command template, a template assignment is neither required nor waived, a required knob lands in no bucket, or the rendered template failed the redaction scan" >&2 ;;
+    95) echo "LAUNCH CONTRACT GATE UNMEASURED (rc=95) — a MUST_FIRE/MUST_PASS control did not fire; the detector is uncertified, so its verdict is unattributable" >&2 ;;
+    96) echo "LAUNCH CONTRACT GATE REFUSED (rc=96) — the generated artifacts are unreadable (run the bash generators first), or the estate redaction vocabulary is unset" >&2 ;;
+    *)  echo "LAUNCH CONTRACT GATE unexpected rc=$rc" >&2 ;;
+  esac
+  exit 5
+}
+
 # #154: the operator document cites the launcher by line number, and the launcher grows.
 # Measured when this gate was written: 19 of 19 citations had rotted, all of them pushed
 # down by #142's resolver, and FS_PARTITION -- required, no default, refuses at L28 --
@@ -1046,7 +1086,7 @@ python3 gate_launch_doc.py || {
   exit 5
 }
 
-printf '\nBUILD GREEN — %s stages, drift gate green, %s blocklist hits, %s/7 parse clean, naming agreement green, linkage green, launch-doc green, suite: %s\n' \
+printf '\nBUILD GREEN — %s stages, drift gate green, %s blocklist hits, %s/7 parse clean, naming agreement green, linkage green, launch-contract green, launch-doc green, suite: %s\n' \
   "${#STAGES[@]}" "$hits" "$ok" "$suite"
 for f in "$LAUNCHER" "$BACKEND" "$ENTRY" "$MODELROOT" "$MRTEST" "$ADJ" "$ADJTEST"; do
   printf '  %-34s %s lines\n' "$f" "$(wc -l < "$f" | tr -d ' ')"

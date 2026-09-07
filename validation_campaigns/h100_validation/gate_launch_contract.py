@@ -16,17 +16,24 @@ READS
   h100/gen/fs_container_backend.bound.sh  (generated container backend)
 
 WRITES
-  h100/gen/LAUNCH.md -- only when every gate is green and the redaction scan is clean
-  (this repo is PUBLIC).
+  Nothing, by default. The rendered template is a BYPRODUCT; the verdict is the exit
+  code. `--emit PATH` writes the render, and the caller names the path, so no default
+  location can silently accrete an undeclared artifact -- which is what happened when
+  this gate wrote h100/gen/LAUNCH.md unconditionally: that directory is asserted by
+  gate_build_inputs.py to hold EXACTLY the declared PRODUCED set, and every member of
+  that set also ships in PUBLISH_SET.txt, so the write forced a choice between a red
+  input-partition gate and a second published statement of the required-knob countable
+  (#194/#220/#233/#266). The render and the redaction scan still run on EVERY invocation
+  regardless of --emit; only the write is conditional. This repo is PUBLIC.
 
 WHERE THE REQUIRED NAMES COME FROM (#276)
   The authoritative answer to "which variables does the launch plane refuse to start
   without?" is fs_required_knobs.extract(), shared with gate_launch_doc.py. The two
   gates answer the same question over the SAME two bash artifacts and then do opposite
   things with the answer -- this one GENERATES a command from it, that one AUDITS the
-  hand-written h100/LAUNCH.md against it. (Note the two files: this gate writes
-  h100/gen/LAUNCH.md, the generated template; the operator document it must not
-  contradict is h100/LAUNCH.md one directory up.) Two readers of one artifact holding
+  hand-written h100/LAUNCH.md against it. (The operator document this gate must not
+  contradict is h100/LAUNCH.md; the template rendered here reaches disk only under
+  --emit, and is a byproduct -- see WRITES.) Two readers of one artifact holding
   two different required sets is a drift neither can see from inside itself, because
   each is internally consistent.
 
@@ -49,6 +56,22 @@ SCOPE LIMITS
     printed; site coverage is reported as a floor, never silently claimed complete.
   * The two bash artifacts are never modified; the L6 drills run on in-memory copies.
   * stdlib only.
+
+EXIT CODES -- the plane's four-state contract (0 clean / 5 red / 95 unmeasured / 96
+refused). Until #278 this gate returned 0 or 1, so REFUSE, RED and a dead control were
+one indistinguishable code, and a consumer could not tell "the artifact is wrong" from
+"the detector never ran". Only states this gate can actually reach are listed; declaring
+an unreachable code is the #198/#200 defect in the other direction.
+  0   every gate green and every control fired.
+  5   a substantive gate is red: a required name is missing from the command template
+      (L2), a template assignment is neither required nor waived (L3), a required name
+      lands in no bucket (L4), or the rendered document failed the redaction scan (L5).
+  95  a MUST_FIRE or MUST_PASS control did not fire (L6). The detector is uncertified,
+      so any verdict it produced is unattributable -- UNMEASURED, not clean.
+  96  refused before any measurement: an unrecognised argument or a bare --emit with no
+      path; the generated artifacts are unreadable (run the bash generators first); or
+      -- raised at import by fs_estate_pat -- the estate's redaction vocabulary is unset,
+      which cannot certify a document against a secret it was never given.
 """
 
 import os
@@ -62,7 +85,9 @@ from fs_estate_pat import estate_ident_pat
 ROOT = Path(__file__).resolve().parent
 LAUNCH = ROOT / "h100/gen/launch_fs_h100.fixed.sh"
 BACKEND = ROOT / "h100/gen/fs_container_backend.bound.sh"
-OUT = ROOT / "h100/gen/LAUNCH.md"
+# There is deliberately no OUT constant. A module-level default output path is what made
+# the write unconditional, and h100/gen/ is a DECLARED artifact directory, not scratch
+# (#278). The render's destination now comes from --emit or does not exist.
 
 MARKER = "required, no default by design"
 
@@ -614,14 +639,36 @@ def run_drills(launch_text, backend_text, res):
     return ok
 
 
-def main():
+def main(argv=None):
     ok = True
+
+    # --emit is the ONLY way the rendered template reaches disk, and the caller names the
+    # path. Parsed by hand rather than through argparse to keep this gate importable and
+    # runnable under the 3.6.8 login-node interpreter the plane targets (#138), which is
+    # the same reason every other gate here avoids the newer argparse conveniences.
+    argv = list(sys.argv[1:] if argv is None else argv)
+    emit_path = None
+    while argv:
+        arg = argv.pop(0)
+        if arg == "--emit":
+            if not argv:
+                print("  REFUSE  --emit requires a path argument")
+                return 96
+            emit_path = Path(argv.pop(0))
+        elif arg.startswith("--emit="):
+            emit_path = Path(arg.split("=", 1)[1])
+        else:
+            print("  REFUSE  unrecognised argument: %s (accepts --emit PATH)" % arg)
+            return 96
 
     missing_files = [str(p) for p in (LAUNCH, BACKEND) if not p.is_file()]
     if missing_files:
-        print("  FAIL L1  cannot read generated artifacts: " + ", ".join(missing_files))
+        print("  REFUSE L1  cannot read generated artifacts: " + ", ".join(missing_files))
         print("           run the bash generators first; there is no command to gate.")
-        return 1
+        # 96, not 5. Nothing was measured, so there is no finding -- and a build that
+        # cannot tell "the inputs are absent" from "the command template is wrong" will
+        # go looking for a defect that does not exist. #278.
+        return 96
 
     launch_text = LAUNCH.read_text(encoding="utf-8")
     backend_text = BACKEND.read_text(encoding="utf-8")
@@ -699,9 +746,36 @@ def main():
     for line in l4_lines:
         print(line)
 
-    # --- L5 EMIT: refuse to write while any gate is red; redaction scan first ------
-    if not ok:
-        print("  FAIL L5  refusing to write %s while a gate is red" % OUT)
+    # --- L6 DRILLS: run BEFORE the emit, because a dead control is not a licence to ---
+    # ship. Until #278 the drills ran after L5, so the document could be written while
+    # the control layer certifying this gate's own detectors was red -- an artifact
+    # emitted under an uncertified detector carries a claim nothing checked. Ordering
+    # them ahead of the write makes them a precondition of it rather than a postscript.
+    # The report therefore prints L6 before L5; that is deliberate, not a numbering slip.
+    drills_ok = run_drills(launch_text, backend_text, res)
+
+    # --- L5 RENDER + REDACTION SCAN: always in memory; write only if asked ---------
+    # #278 moved the write behind --emit and made it default OFF. It used to land
+    # unconditionally in h100/gen/, which is not a scratch directory: gate_build_inputs.py
+    # I1 asserts that h100/gen/ holds EXACTLY the declared PRODUCED set, and every member
+    # of that set is also in PUBLISH_SET.txt. So an unconditional write forced a choice
+    # between two bad states -- leave it undeclared and turn the build's own input/output
+    # partition gate red (measured: "10 present, 9 declared; UNDECLARED: ['LAUNCH.md']"),
+    # or declare it and thereby queue a SECOND shipped statement of the 16-required-knobs
+    # countable that h100/LAUNCH.md already makes, which is the drift class behind #194,
+    # #220, #233 and #266.
+    #
+    # Neither was necessary, because the document had zero consumers: nothing reads it, no
+    # stage depends on it, and its only tracked sibling relationship was to files that do
+    # ship. What this gate is FOR is the verdict -- forward and reverse accounting of the
+    # launch command template -- and the verdict travels in the exit code. So the render
+    # still happens on every run and the redaction scan still runs over it (the scan is a
+    # real gate and must not become conditional on a flag nobody passes); only the write
+    # is opt-in. Passing --emit is how a human gets the rendered template on demand, and
+    # the caller names the path, so no default location can silently accrete an artifact.
+    if not ok or not drills_ok:
+        print("  FAIL L5  refusing to render the template while a gate is red or a "
+              "control is dead")
     else:
         md = render_markdown(res, buckets, sbatch, plain)
         md_lines = md.splitlines()
@@ -709,19 +783,30 @@ def main():
         if hits:
             ok = False
             print("  FAIL L5  redaction: %d of %d lines matched cluster-identifying "
-                  "patterns (lines %s); refusing to write %s"
-                  % (len(hits), len(md_lines), ", ".join(map(str, hits[:10])), OUT))
+                  "patterns (lines %s); not emitting"
+                  % (len(hits), len(md_lines), ", ".join(map(str, hits[:10]))))
         else:
-            OUT.write_text(md, encoding="utf-8")
-            print("  PASS L5  wrote %s (%d lines; redaction: 0 of %d lines matched)"
-                  % (OUT, len(md_lines), len(md_lines)))
+            where = "not written (byproduct; pass --emit PATH to write it)"
+            if emit_path is not None:
+                emit_path.write_text(md, encoding="utf-8")
+                where = "wrote %s" % emit_path
+            print("  PASS L5  rendered %d lines, redaction 0 of %d matched; %s"
+                  % (len(md_lines), len(md_lines), where))
 
-    # --- L6 DRILLS -----------------------------------------------------------------
-    if not run_drills(launch_text, backend_text, res):
-        ok = False
-
-    print("RESULT: " + ("ALL GATES GREEN" if ok else "GATES RED -- LAUNCH.md not trusted"))
-    return 0 if ok else 1
+    # The verdict order is deliberate: a dead control OUTRANKS a red gate. A RED produced
+    # by a detector whose own controls did not fire is unattributable -- it may be the
+    # artifact, it may be the detector -- and reporting RED would claim a measurement
+    # that was not made. UNMEASURED is the honest state and is equally blocking, so
+    # nothing ships either way; the difference is only in what the operator goes to fix.
+    if not drills_ok:
+        print("RESULT: CONTROLS DEAD -- UNMEASURED, not clean"
+              + ("" if ok else "; L1-L5 also reported red, unattributably"))
+        return 95
+    if not ok:
+        print("RESULT: GATES RED -- LAUNCH.md not trusted")
+        return 5
+    print("RESULT: ALL GATES GREEN")
+    return 0
 
 
 if __name__ == "__main__":

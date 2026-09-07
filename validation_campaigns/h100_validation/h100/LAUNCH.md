@@ -174,9 +174,15 @@ names**; the tables below reproduce every name the oracle assigns explicitly. Na
 present in code but not classified in the oracle's published tables are listed separately
 at the end and are **not** silently bucketed.
 
-This document is hand-written from the oracle tables: the Deliverable D generator
-(`gate_launch_contract.py`) is red on L2 ("6 of 18") and correctly refuses to write — the
-gate's count misses the names reached through locals and the array-length test.
+This document is hand-written from the oracle tables. The Deliverable D generator
+(`gate_launch_contract.py`) was red on L2 ("6 of 18") when this paragraph was first
+written, because its required-knob detector keyed on proximity rather than on guard
+polarity; #276 replaced that detector with a shared extractor and #127 made an unbucketed
+required knob fatal, so the generator is now green. #278 then wired it into the build, so
+its verdict is enforced rather than merely observed. What the build consumes from it is
+the exit code, not a document: the generator renders its template in memory and scans it
+for redaction on every run, but writes it only when a human passes `--emit PATH`. So the
+required-knob roster is stated in exactly one shipped place, which is the table below.
 
 ### REQUIRED — unset or empty is fatal, and no default exists
 

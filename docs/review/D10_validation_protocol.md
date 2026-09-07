@@ -6,8 +6,8 @@ the state is **UNMEASURED**. "Validated" is used only where a job id or a named 
 backs it.
 
 Scope note on size, so denominators in this document are anchored: the repository holds
-128977 git-tracked .py/.sh/.md lines repo-wide; the validation harness, `validation_campaigns/h100_validation/`
-(32156 .py LOC, 64 files); the package, `src/foundationscale/` measures 18915 lines; the
+129111 git-tracked .py/.sh/.md lines repo-wide; the validation harness, `validation_campaigns/h100_validation/`
+(32241 .py LOC, 64 files); the package, `src/foundationscale/` measures 18915 lines; the
 GB200-side launch path, `launchers/*.sh` (10387 LOC, 7 files). No other countables appear
 in this document.
 
@@ -243,10 +243,13 @@ Plus standing checks `checks/bash_lc_sweep.py`, `checks/packaging_reachability.p
 3. **`#205` is OPEN** — the bare-marker detector class remains stage-scoped, so a
    bare-`except`-style marker outside the current stage's scope invalidates the
    defect-class closure with no gate noticing.
-4. **`gate_launch_contract.py` is RED on L2 (6 of 18)** and correctly refuses to write;
-   LAUNCH.md is hand-written meanwhile. `gate_launch_doc.py` backstops doc↔code drift,
-   but the *generated* command (Deliverable D) being red means one intended producer of
-   truth is silent — a doc edit that only the generator's L2 would have caught can pass.
+4. **CLOSED — `gate_launch_contract.py` was RED on L2 (6 of 18) and is now green and
+   enforced.** Its detector keyed on proximity rather than guard polarity (#276 replaced
+   it with a shared extractor; #127 made an unbucketed required knob fatal). The residual
+   defect outlived the red: the gate was declared `role=gate`, published, redaction-
+   scanned — and invoked by nothing, so every RED it could produce protected nothing.
+   #278 wired it into `build_h100_plane.sh` and gave it the plane's four-state exit
+   contract, each code proven reachable by injection rather than merely declared.
 5. **GB200, all of it.** Every claim about the tray path has no execution evidence and
    the H100 gates reason about the H100 plane. A change breaking the enroot arm in a way
    `apply_splice.py`'s static gates do not cover (G1–G7 check structure, not runtime
