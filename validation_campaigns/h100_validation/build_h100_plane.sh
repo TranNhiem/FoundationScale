@@ -484,6 +484,24 @@ for s in "${STAGES[@]}"; do
 done
 [[ $fails -eq 0 ]] || { echo -e "\nBUILD RED — ${#STAGES[@]} stages, $fails red" >&2; exit 5; }
 
+# #297: tell the gates that the tree they are about to measure is UNFINISHED.
+#
+# Two of the gates below decide "a declared file does not exist on disk". On a completed build
+# that sentence is a real RED -- it is #136/#137, a declaration nobody can trace to a producer.
+# On a tree where a stage refused it is a statement about an unfinished build, and the diagnosis
+# those gates print is then FALSE. A gate cannot infer which tree it is on; only this script
+# knows, so this script says so. Exported, not passed as a flag, because the gates are also run
+# by hand and by CI, and an unset variable must mean "assume complete" -- the safe direction.
+#
+# The asymmetry is the whole point and is enforced inside the gates, not here: an UNDECLARED file
+# present on disk stays RED whether or not the build finished (it is evidence regardless), while
+# a DECLARED file that is absent is downgraded to a refusal (96) only while this is set.
+if [[ "$stage_refused" != 0 ]]; then
+  export FS_BUILD_INCOMPLETE="$refused_stage"
+  echo "  #297: exporting FS_BUILD_INCOMPLETE=$refused_stage — gates below will refuse (96) on" >&2
+  echo "  the declared-but-absent direction rather than calling an unfinished build RED." >&2
+fi
+
 echo -e "\n=== standing gate: bidirectional env drift ==="
 python3 gate_env_drift.py || {
   rc=$?

@@ -68,6 +68,7 @@ inputs), 96 REFUSE (a control failed, or the declaration file is misconfigured).
 """
 
 import argparse
+import os
 import re
 import sys
 from collections import Counter
@@ -77,6 +78,28 @@ EXIT_PASS = 0
 EXIT_RED = 5
 EXIT_UNMEASURED = 95
 EXIT_REFUSE = 96
+
+# #297. The ONE literal for the stale-declaration reason that means "the file is not on disk".
+# STALE_DECLARATION carries three different reasons and only this one is about absence; the
+# other two ("needs no declaration", "covers no partitioned file") are structural and true on
+# an unfinished tree. A single constant, used at the finding site AND by the classifier below,
+# is what stops the two from drifting apart -- a classifier matching a reason string that the
+# finding site has since reworded would silently stop deferring, and nothing would say so.
+STALE_ABSENT_REASON = "declaration names a file that does not exist"
+
+
+def _absent_on_disk_only(finding) -> bool:
+    """True when a finding says only 'this declared name is not on disk'.
+
+    That claim is decidable on a COMPLETE build and undecidable on a refused one, which is the
+    whole of #297. Every other bucket is structural -- a file in one membership list and not
+    the other, a shipped file whose dependency ships nowhere, a declared test the build never
+    runs -- and stays RED regardless, because an unfinished build does not create or excuse it.
+    """
+    _path, bucket, reason = finding
+    if bucket == "MISSING_FILE":
+        return True
+    return bucket == "STALE_DECLARATION" and reason == STALE_ABSENT_REASON
 
 # The declared prefix family for CANDIDATE. Module-level and printed on every run:
 # the NEITHER bucket is scoped to this family (plus files the build script names),
@@ -484,10 +507,7 @@ def partition(run, ship, on_disk, refs, declarations):
     partitioned = run_set | ship_set | candidate
     for path in sorted(declarations):
         if path not in on_disk:
-            findings.append((
-                path, "STALE_DECLARATION",
-                "declaration names a file that does not exist",
-            ))
+            findings.append((path, "STALE_DECLARATION", STALE_ABSENT_REASON))
         elif _basename(path) in run_and_shipped:
             findings.append((
                 path, "STALE_DECLARATION",
@@ -987,6 +1007,44 @@ def main():
         return EXIT_REFUSE
     if not real["findings"] and real["pytest_run"] is None:
         return EXIT_UNMEASURED
+
+    # #297. Split the findings by whether they are DECIDABLE on an unfinished tree.
+    #
+    # Every bucket here answers a structural question -- is this file in both lists, does a
+    # shipped file's dependency ship, is a declared test actually run -- and the answer does
+    # not depend on whether the build ran to completion. Two do not:
+    #
+    #   MISSING_FILE       a name in STAGES or PUBLISH_SET is not on disk
+    #   STALE_DECLARATION  ... but ONLY the "names a file that does not exist" reason; the
+    #                      other two reasons are structural and stay RED
+    #
+    # On a completed build those are real: a declaration nobody can trace to a file. On a tree
+    # where a stage refused they restate the refusal -- and worse, #294 means the build DELETED
+    # tracked files on its way out, so the absence is the build's own doing. Reporting that as
+    # "the declaration is stale" is a false diagnosis, and it is what stopped #290 from
+    # delivering a walkable tail.
+    #
+    # The signal comes from the build (FS_BUILD_INCOMPLETE), never from inference here. Unset
+    # means "assume complete", which keeps the strict reading for by-hand and CI runs.
+    incomplete = os.environ.get("FS_BUILD_INCOMPLETE", "").strip()
+    if incomplete and real["findings"]:
+        deferred = [f for f in real["findings"] if _absent_on_disk_only(f)]
+        standing = [f for f in real["findings"] if not _absent_on_disk_only(f)]
+        if deferred:
+            print(
+                "\n#297 DEFERRED (%d finding(s)) — the build did not finish (stage %s refused),\n"
+                "  so these files are absent because nothing produced them, not because the\n"
+                "  declaration is wrong:" % (len(deferred), incomplete), file=sys.stderr)
+            for path, bucket, _reason in deferred:
+                print("    %-20s %s" % (bucket, path), file=sys.stderr)
+        if standing:
+            # A refusal is not an amnesty. These findings are true on an unfinished tree too.
+            print(
+                "\nSTAGE-ORPHAN RED — %d finding(s) that an unfinished build does not excuse."
+                % len(standing), file=sys.stderr)
+            return EXIT_RED
+        return EXIT_REFUSE
+
     return EXIT_RED if real["findings"] else EXIT_PASS
 
 

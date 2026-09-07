@@ -19,10 +19,17 @@ reader of arbitrary Python path construction gets it wrong, and this project alr
 filed instance of that failure: an inline classifier that reported a default it had read out
 of the inside of an error-message string. Instead the check is exact and needs no inference:
 
-  I1  after a build, h100/gen/ contains EXACTLY the declared produced set -- reported in
-      both directions, because "no unexpected files" and "every declared file present" are
+  I1  after a build, h100/gen/ contains no UNDECLARED file
+  I1b every declared artifact is PRESENT
+
+      Two legs, not one, because "no unexpected files" and "every declared file present" are
       different claims and a build that silently stopped producing one of them would
-      otherwise read as clean
+      otherwise read as clean. They also fail differently, which is #297: an undeclared file
+      is evidence whether or not the build finished, but a declared file can be absent simply
+      because the stage that writes it never ran. So I1 is unconditionally RED-able and I1b
+      is DEFERRED to a refusal (96) when build_h100_plane.sh exports FS_BUILD_INCOMPLETE.
+      Unset means "assume the build completed", so a by-hand or CI run keeps the strict
+      reading, and a RED on I1 still dominates a deferral on I1b.
   I2  no upstream file shares a name with a produced one (an input shadowing an output is
       how a stale copy gets consumed while everyone reads the fresh one)
   I3  every file in h100/upstream/ appears in that directory's README table, so an input
@@ -33,6 +40,7 @@ of the inside of an error-message string. Instead the check is exact and needs n
 
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 
@@ -82,13 +90,47 @@ def main() -> int:
     found = _files(GEN)
     extra = sorted(found - PRODUCED)
     missing = sorted(PRODUCED - found)
+
+    # #297. The docstring above already says these are two different claims; until now the
+    # code collapsed them into one verdict, and that is what made this gate report RED on a
+    # tree nobody claimed was finished.
+    #
+    #   UNDECLARED (extra)  -- a file is here that no stage declares. Evidence regardless of
+    #                          whether the build finished: an undeclared file does not appear
+    #                          because a LATER stage refused. This stays RED, always.
+    #   MISSING (absent)    -- a declared artifact is not on disk. On a completed build that is
+    #                          RED. On a refused build it is a restatement of the refusal, and
+    #                          the diagnosis printed below ("it will survive every from-scratch
+    #                          rebuild") would be false. Downgraded to a refusal, and ONLY while
+    #                          the build says so.
+    #
+    # The signal is the build's, not this gate's inference: FS_BUILD_INCOMPLETE is exported by
+    # build_h100_plane.sh when a stage exits 95/96. Unset means "assume complete", which is the
+    # safe direction -- a gate run by hand or by CI keeps the strict reading.
+    incomplete = os.environ.get("FS_BUILD_INCOMPLETE", "").strip()
+
     gates.append((
-        "I1 h100/gen/ holds exactly the declared produced set",
-        not extra and not missing,
+        "I1 h100/gen/ holds no UNDECLARED file",
+        not extra,
         f"{len(found)} present, {len(PRODUCED)} declared"
-        + (f"; UNDECLARED: {extra}" if extra else "")
-        + (f"; MISSING: {missing}" if missing else ""),
+        + (f"; UNDECLARED: {extra}" if extra else ""),
     ))
+
+    deferred = bool(missing) and bool(incomplete)
+    if deferred:
+        print(
+            f"  I1b every declared artifact is present: DEFERRED — the build did not finish "
+            f"(stage {incomplete} refused), so {len(missing)} declared artifact(s) are absent "
+            f"because they were never produced, not because the declaration is wrong.\n"
+            f"       ABSENT: {missing}"
+        )
+    else:
+        gates.append((
+            "I1b every declared artifact is present",
+            not missing,
+            f"{len(found)} present, {len(PRODUCED)} declared"
+            + (f"; MISSING: {missing}" if missing else ""),
+        ))
 
     up = _files(UPSTREAM)
     shadow = sorted(up & PRODUCED)
@@ -133,7 +175,19 @@ def main() -> int:
             "'from scratch' rebuild and nobody will be able to say where it came from.",
             file=sys.stderr,
         )
-    return 0 if ok else 5
+        # RED dominates a deferral. A genuinely undeclared file is a finding on an unfinished
+        # tree too, and reporting 96 here would let the refusal launder it.
+        return 5
+    if deferred:
+        print(
+            f"\nINPUT PARTITION REFUSED (96) — every claim this gate CAN decide on an "
+            f"unfinished tree is green,\n  but the declared-artifact-present claim cannot be "
+            f"decided: stage {incomplete} refused, so the\n  build never produced them. That "
+            f"is CANNOT-MEASURE, not RED. Re-run on a completed build.",
+            file=sys.stderr,
+        )
+        return 96
+    return 0
 
 
 if __name__ == "__main__":
