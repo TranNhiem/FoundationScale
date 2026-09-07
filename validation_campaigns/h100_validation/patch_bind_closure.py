@@ -105,7 +105,7 @@ def main() -> int:
             original = fh.read()
     except OSError as exc:
         print(f"FATAL: cannot read {path}: {exc}", file=sys.stderr)
-        return 2
+        return 95
 
     patched, already, count, lineno = apply_patch(original)
     if already:
@@ -118,7 +118,7 @@ def main() -> int:
     if count != 1:
         print_gates(gates)
         print(f"FATAL: anchor line found {count} time(s), need exactly 1; refusing", file=sys.stderr)
-        return 2
+        return 96
 
     mk = patched.count(MARKER)
     cs = patched.count(CALLSITE)
@@ -147,7 +147,7 @@ def main() -> int:
         print_gates(gates)
         print("FATAL: bash unavailable -> syntax UNMEASURED; original bytes restored",
               file=sys.stderr)
-        return 3
+        return 96
     if proc.returncode != 0:
         write_atomic(path, original)
         gates.insert(3, ("C4 bash -n clean", "FAIL"))
@@ -155,7 +155,7 @@ def main() -> int:
         sys.stderr.write(proc.stderr)
         print("FATAL: bash -n rejected the patched file; original bytes restored",
               file=sys.stderr)
-        return 4
+        return 5
     gates.insert(3, ("C4 bash -n clean", "PASS"))
 
     print_gates(gates)

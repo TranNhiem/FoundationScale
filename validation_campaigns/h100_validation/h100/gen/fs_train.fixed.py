@@ -2806,7 +2806,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "real_data": None,
             },
         )
-        return 2
+        return 95  # this arm prints "verdict": "UNMEASURED"; 95 is the contract's UNMEASURED slot
     except OperationFailure as exc:
         _print_json(
             "PHASE_JSON",
@@ -2829,7 +2829,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "real_data": None,
             },
         )
-        return 3
+        return 95  # this arm prints "verdict": "UNMEASURED"; 95 is the contract's UNMEASURED slot
     finally:
         if _RANK0_ONLY.get("initialized"):
             try:

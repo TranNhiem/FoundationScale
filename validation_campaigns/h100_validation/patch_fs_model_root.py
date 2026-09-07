@@ -226,7 +226,7 @@ def main() -> int:
         _atomic_write(suite, suite0)
         _report(gates)
         print("restored the original bytes; an unverified patch is not left in place")
-        return 4
+        return 5
 
     _report(gates)
     print(f"patched {module} and {suite}; py_compile: clean")

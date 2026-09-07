@@ -225,7 +225,7 @@ def main() -> int:
         print("gate table:")
         print(f"  P1 target readable at h100/gen/launch_fs_h100.fixed.sh: UNMEASURED")
         print("0/1 gates green; 1 UNMEASURED (exit 3); nothing written")
-        return 3
+        return 95
 
     original = target.read_text(encoding="utf-8")
     gates.append(("P1 target exists and is readable", True, f"{len(original)} bytes"))
@@ -339,7 +339,7 @@ def main() -> int:
     _report(gates)
     if not all(ok for _, ok, _ in gates):
         print("refusing to write: at least one gate red; the pre-patch file is untouched")
-        return 2
+        return 5
 
     if mode == "applied":
         # mkstemp makes 0600; re-impose the launcher's mode so patching in

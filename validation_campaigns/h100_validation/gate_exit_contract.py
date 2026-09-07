@@ -20,9 +20,19 @@ A count with no denominator is not a measurement either, so the gate prints how
 many files it scanned and how many exit sites it judged, and it refuses to report
 "clean" against a shrunken or undeclared file list.
 
-EXIT CODES: 0 clean, 5 at least one contract violation found, 4 the gate failed
-its own must-fire/must-pass controls, 95 measurement impossible (publish set
-unreadable or fewer than 8 Python files resolve).
+Literal-only judging left the denominator hollow anyway: the universal idiom here
+is `raise SystemExit(main())` / `sys.exit(main())`, whose argument is a Call, so
+59 of 71 exit sites landed in UNJUDGED and every `return N` inside those entry
+functions sat in NO denominator. The gate now follows that one hop: when an exit
+site's sole argument is a zero-argument call to a locally defined name, the
+literal returns inside that function are judged against the contract. The hop
+surfaces 215 returns, of which 43 returned 1/2/3/4 -- outside {0, 5, 95, 96} --
+and one of them was this gate's own `return 4`: the enforcer could not see
+itself. An invisible self-defect is the strongest argument for the widening.
+
+EXIT CODES: 0 clean, 5 at least one contract violation found, 95 measurement
+impossible (publish set unreadable or fewer than 8 Python files resolve), 96 the
+gate failed its own must-fire/must-pass controls and cannot be trusted.
 """
 
 from __future__ import annotations
@@ -117,6 +127,141 @@ def _classify_arg(arg: ast.expr) -> str | None:
     return None
 
 
+def entry_functions(tree: ast.AST) -> set[str]:
+    """Names of locally-defined functions called zero-arg as an exit site's argument.
+
+    The universal entry idiom in this tree is `raise SystemExit(main())` /
+    `sys.exit(main())`. Literal-only judging buckets every one of them UNJUDGED:
+    on the measured tree that was 59 of 71 exit sites, leaving every `return N`
+    inside those entry functions out of every denominator. Only bare Name
+    callables with zero arguments count: `main(x)` is not the no-argument entry
+    idiom, and `obj.main()` attributes a contract we cannot see, so both stay
+    UNJUDGED. Restricting to locally-defined names keeps a harness's
+    `sys.exit(thirdparty())` from dragging foreign returns into our contract.
+    """
+    defined = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    names: set[str] = set()
+
+    def inspect_exit(args: list[ast.expr]) -> None:
+        if len(args) != 1:
+            return
+        arg = args[0]
+        if (
+            isinstance(arg, ast.Call)
+            and not arg.args
+            and not arg.keywords
+            and isinstance(arg.func, ast.Name)
+            and arg.func.id in defined
+        ):
+            names.add(arg.func.id)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Raise) and node.exc is not None:
+            exc = node.exc
+            if (
+                isinstance(exc, ast.Call)
+                and isinstance(exc.func, ast.Name)
+                and exc.func.id == "SystemExit"
+            ):
+                inspect_exit(exc.args)
+        elif isinstance(node, ast.Call):
+            func = node.func
+            is_sys_exit = (
+                isinstance(func, ast.Attribute)
+                and func.attr == "exit"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "sys"
+            )
+            is_bare_exit = isinstance(func, ast.Name) and func.id == "exit"
+            if is_sys_exit or is_bare_exit:
+                inspect_exit(node.args)
+    return names
+
+
+def judge_entry_returns(tree: ast.AST, source: str, path: str, names: set[str]) -> ScanResult:
+    """Judge the `return` statements of each named entry function, one hop only.
+
+    Following `raise SystemExit(main())` into `main` is what judges the 215
+    returns the literal-only rule never reached -- 43 of them returning 1/2/3/4,
+    outside {0, 5, 95, 96}, and one of them this gate's own former `return 4`.
+    The walk is explicit, not ast.walk, and refuses to descend into NESTED
+    FunctionDef/AsyncFunctionDef/Lambda bodies: an inner helper's `return 1` is
+    a value handed back into the entry function's own control flow, not an exit
+    code, and judging it would manufacture rejections the contract never made.
+    Returns the entry function does not settle statically (Name, Call, BoolOp,
+    ...) are recorded UNJUDGED so the count stays honest: no false widening.
+    """
+    result = ScanResult()
+
+    def judge_return(node: ast.Return, fn_name: str) -> None:
+        result.sites += 1
+        lineno = node.lineno
+        segment = ast.get_source_segment(source, node) or ""
+        value = node.value
+        if value is None:
+            return  # bare `return` leaves SystemExit's argument None, which is exit 0
+        if isinstance(value, ast.JoinedStr) or (
+            isinstance(value, ast.Constant) and isinstance(value.value, str)
+        ):
+            result.rejections.append(
+                Finding(
+                    path,
+                    lineno,
+                    f"entry function {fn_name}() returns a string, which SystemExit turns "
+                    "into exit 1, not a declared contract code (use 96 for REFUSE)",
+                    segment,
+                    True,
+                )
+            )
+            return
+        judged_int: int | None = None
+        if (
+            isinstance(value, ast.Constant)
+            and isinstance(value.value, int)
+            and not isinstance(value.value, bool)
+        ):
+            judged_int = value.value
+        elif (
+            isinstance(value, ast.UnaryOp)
+            and isinstance(value.op, ast.USub)
+            and isinstance(value.operand, ast.Constant)
+            and isinstance(value.operand.value, int)
+            and not isinstance(value.operand.value, bool)
+        ):
+            judged_int = -value.operand.value
+        if judged_int is not None:
+            if judged_int not in CONTRACT_CODES:
+                result.rejections.append(
+                    Finding(
+                        path,
+                        lineno,
+                        f"entry function {fn_name}() returns exit code {judged_int}, which "
+                        "is not in the declared contract {0, 5, 95, 96}",
+                        segment,
+                        False,
+                    )
+                )
+            return  # accepted literal contract code
+        result.unjudged.append((path, lineno, segment))
+
+    def walk(node: ast.AST, fn_name: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue  # nested function bodies return values, not exit codes
+            if isinstance(child, ast.Return):
+                judge_return(child, fn_name)
+            walk(child, fn_name)
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names:
+            walk(node, node.name)
+    return result
+
+
 def check_source(source: str, path: str) -> ScanResult:
     """Run the contract over one source text; shared by the scan and the controls."""
     result = ScanResult()
@@ -169,6 +314,16 @@ def check_source(source: str, path: str) -> ScanResult:
             is_bare_exit = isinstance(func, ast.Name) and func.id == "exit"
             if is_sys_exit or is_bare_exit:
                 judge(node, node.args)
+
+    # The Call-argument exit sites stay UNJUDGED as sites (a call may yield any
+    # int at runtime), but the one-hop entry rule judges the RETURNS behind them.
+    # Skip when nothing is named so plain scripts pay nothing.
+    entry_names = entry_functions(tree)
+    if entry_names:
+        entry_result = judge_entry_returns(tree, source, path, entry_names)
+        result.sites += entry_result.sites
+        result.rejections.extend(entry_result.rejections)
+        result.unjudged.extend(entry_result.unjudged)
     return result
 
 
@@ -229,6 +384,24 @@ def run_controls() -> str | None:
             "must-fire control 4 failed: implicitly concatenated str+f-string (one JoinedStr) "
             "followed by + was not rejected"
         )
+    # The entry-return widening: the shape that hid 43 out-of-contract returns
+    # behind `raise SystemExit(main())`, including this gate's own `return 4`.
+    entry_int = check_source(
+        "def main():\n    return 7\n\nraise SystemExit(main())\n", "<control:entry-7>"
+    )
+    if len(entry_int.rejections) != 1 or "7" not in entry_int.rejections[0].reason:
+        return (
+            "must-fire control 5 failed: `return 7` behind raise SystemExit(main()) did not "
+            "produce exactly one rejection mentioning 7"
+        )
+    entry_msg = check_source(
+        'def main():\n    return "boom"\n\nraise SystemExit(main())\n', "<control:entry-msg>"
+    )
+    if len(entry_msg.rejections) != 1 or not entry_msg.rejections[0].is_message_defect:
+        return (
+            "must-fire control 6 failed: a string returned from an entry function must give "
+            "exactly one rejection flagged as the string-message trap"
+        )
     legal = check_source(
         "import sys\nraise SystemExit(96)\nsys.exit(0)\nraise SystemExit(rc)\n",
         "<control:pass>",
@@ -237,6 +410,45 @@ def run_controls() -> str | None:
         return (
             "must-pass control failed: SystemExit(96)/sys.exit(0)/SystemExit(rc) must give "
             "zero rejections and exactly one unjudged entry"
+        )
+    entry_contract = check_source(
+        "def main():\n    return 96\n\nraise SystemExit(main())\n", "<control:entry-96>"
+    )
+    if entry_contract.rejections:
+        return "must-pass control 2 failed: an entry function returning 96 must not be rejected"
+    # A non-literal return is not statically decidable; widening must not
+    # manufacture a rejection it cannot know, only record the honest UNJUDGED.
+    entry_rc = check_source(
+        "def main():\n    rc = 3\n    return rc\n\nraise SystemExit(main())\n",
+        "<control:entry-rc>",
+    )
+    if entry_rc.rejections or not entry_rc.unjudged:
+        return (
+            "must-pass control 3 failed: non-literal `return rc` in an entry function must "
+            "give zero rejections and at least one UNJUDGED entry"
+        )
+    # A nested helper's `return 1` is a value inside main()'s control flow, not
+    # an exit code; descending into it would reject what the contract never made.
+    entry_nest = check_source(
+        "def main():\n    def helper():\n        return 1\n    return helper() and 0\n\n"
+        "raise SystemExit(main())\n",
+        "<control:entry-nest>",
+    )
+    if entry_nest.rejections:
+        return (
+            "must-pass control 4 failed: a nested helper's `return 1` was judged though only "
+            "main()'s own returns are exit codes"
+        )
+    # Only functions actually named at an exit site are entries; a def that is
+    # never called from an exit site returns values, not exit codes.
+    entry_scope = check_source(
+        "def helper():\n    return 7\n\ndef main():\n    return 0\n\nraise SystemExit(main())\n",
+        "<control:entry-scope>",
+    )
+    if entry_scope.rejections:
+        return (
+            "must-pass control 5 failed: helper()'s `return 7` was judged though helper is "
+            "never the argument of an exit site"
         )
     return None
 
@@ -255,8 +467,14 @@ def main() -> int:
 
     control_error = run_controls()
     if control_error is not None:
-        print(f"CONTROLS FAILED: {control_error}; the gate cannot be trusted, so neither can the build")
-        return 4
+        # 96 = CANNOT-MEASURE by a gate that cannot be trusted. This used to be
+        # `return 4` -- out of the very contract this gate enforces, and invisible
+        # to it until the entry-return hop judged the 43 returns that included it.
+        print(
+            f"CONTROLS FAILED: {control_error}; the gate cannot be trusted, so neither can "
+            "the build (exit 96 = CANNOT-MEASURE, the contract's slot for exactly this)"
+        )
+        return 96
 
     files = read_publish_set(root)
     if files is None:
@@ -303,8 +521,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # `main()` here is intentionally UNJUDGED under the rule above (a Call that
-    # may yield any int at runtime). That is the correct bucket: the gate's own
-    # exit code is decided by main(), not by a literal, and the contract is
-    # enforced by main()'s return values. Do not "fix" this into a literal.
+    # `main()` as the SystemExit argument is still UNJUDGED as an exit site (a
+    # Call may yield any int at runtime, and a literal here would lie about who
+    # decides). But it is no longer unmeasured: the one-hop entry rule now judges
+    # main()'s RETURN values against the contract, which is how this gate's own
+    # former `return 4` was finally seen. Do not "fix" this into a literal.
     raise SystemExit(main())

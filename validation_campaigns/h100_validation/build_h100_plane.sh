@@ -268,6 +268,16 @@ STAGES=(
                               # values across ranks" on the same line as three spreads of 0.0.
                               # Must follow patch_resume_tolerance_split.py, whose field it
                               # reads.
+  patch_trainer_exit_contract.py # #304: main() returned 2 on a refused contract and 3 on a
+                              # failed operation -- neither in the 0/5/95/96 contract the plane
+                              # publishes -- while both arms printed "verdict": "UNMEASURED" in
+                              # their own RUN_SUMMARY_JSON. The exit code contradicted the
+                              # message the same function emitted. 95 is the contract's
+                              # UNMEASURED slot, and fs_map_run_verdict already maps the log's
+                              # UNMEASURED declaration to 95 regardless of rc, so nothing
+                              # consumed 2/3 as a private namespace. Runs LAST of the trainer
+                              # patches: its G4 gate asserts main()'s whole int-return set, so
+                              # any earlier stage that adds a return is inside its denominator.
   emit_ckpt_adjudicator.py    # #141: the adjudicator the launcher's required knob has been
                               # asking for since #68 wired the call sites. Independent of
                               # the shell artifacts -- order here is free.

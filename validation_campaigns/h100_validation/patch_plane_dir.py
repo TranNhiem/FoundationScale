@@ -250,7 +250,7 @@ def main() -> int:
                       f"0/1 target(s) readable: {str(exc)[:120]}"))
         _report(gates)
         print("refused to write; 0/1 targets were readable")
-        return 2
+        return 95
 
     gates.append(("PRE1 target exists and is readable", "PASS",
                   f"1/1 target(s), {len(original.encode('utf-8'))} byte(s)"))
@@ -273,7 +273,7 @@ def main() -> int:
     if not state_ok:
         _report(gates)
         print("refused to write; a multiply anchored patch would pick one occurrence silently")
-        return 2
+        return 96
 
     try:
         patched = _rewrite(original)
@@ -283,7 +283,7 @@ def main() -> int:
                       f"0/1 resolver block(s): {exc}"))
         _report(gates)
         print("refused to write; the candidate resolver is not a single extractable block")
-        return 2
+        return 5
 
     resolver_ok = resolver_text is not None
     positions: list[int] = []
@@ -442,14 +442,14 @@ def main() -> int:
             gates.append(("POST installed artifact matches the verified candidate", "FAIL",
                           f"persisted delta={len(persisted) - len(patched)} character(s)"))
             _report(gates)
-            return 2
+            return 5
         gates.append(("POST installed artifact matches the verified candidate", "PASS",
                       f"1/1 atomic write(s); {len(patched.encode('utf-8'))} byte(s); mode preserved {mode:o}"))
     except (OSError, UnicodeError) as exc:
         gates.append(("POST installed artifact matches the verified candidate", "FAIL",
                       f"0/1 atomic write(s): {str(exc)[:120]}"))
         _report(gates)
-        return 2
+        return 96
 
     _report(gates)
     print(

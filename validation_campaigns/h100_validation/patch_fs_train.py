@@ -98,7 +98,7 @@ def main() -> int:
     )
     if not all(ok for _, ok, _ in gates):
         _report(gates)
-        return 2
+        return 96
 
     patched, changed = apply(original)
     gates.append(("C4 text changed", changed, ""))
@@ -122,7 +122,7 @@ def main() -> int:
 
     if not all(ok for _, ok, _ in gates):
         _report(gates)
-        return 3
+        return 96
 
     fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -138,7 +138,7 @@ def main() -> int:
         target.write_text(original, encoding="utf-8")
         _report(gates)
         print("restored original bytes; an unverified artifact is not left in place", file=sys.stderr)
-        return 4
+        return 5
 
     _report(gates)
     print(

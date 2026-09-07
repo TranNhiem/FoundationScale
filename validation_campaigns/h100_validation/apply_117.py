@@ -55,12 +55,12 @@ NOT_DEFECTS = {
 def main() -> int:
     if not FIX.exists():
         print(f"REFUSING: {FIX} absent", file=sys.stderr)
-        return 3
+        return 95
     rows = json.loads(FIX.read_text("utf-8"))
     if not rows or rows[0].get("error") or not rows[0].get("content"):
         print(f"REFUSING: task failed: {rows[0].get('error') if rows else 'empty'}",
               file=sys.stderr)
-        return 3
+        return 95
     spec = json.loads(rows[0]["content"])
     fixes = spec.get("fixes", [])
     before = SRC.read_text("utf-8")
@@ -70,7 +70,7 @@ def main() -> int:
         print(f"REFUSING: {len(dead)} of {len(NOT_DEFECTS)} B4 probes match nothing "
               f"in the unedited backend, so they could never detect a regression: "
               f"{dead}", file=sys.stderr)
-        return 3
+        return 96
 
     ok = True
     text = before

@@ -343,7 +343,7 @@ def main() -> int:
             "  at least one must-appear token is REQUIRED: C7 over an empty set is vacuous",
             file=sys.stderr,
         )
-        return 2
+        return 96
     SRC = pathlib.Path(argv[0])
     DST = pathlib.Path(argv[1])
     NAMES = tuple(argv[2:])
@@ -354,7 +354,7 @@ def main() -> int:
 
     if not SRC.is_file():
         print(f"REFUSING: {SRC} absent — nothing to extract", file=sys.stderr)
-        return 3
+        return 95
 
     if not _run_controls():
         print(
@@ -362,7 +362,7 @@ def main() -> int:
             "unverified, so nothing it says about the payload can be trusted.",
             file=sys.stderr,
         )
-        return 4
+        return 96
 
     rows = json.loads(SRC.read_text("utf-8"))
     gates: list[tuple[str, bool, str]] = []

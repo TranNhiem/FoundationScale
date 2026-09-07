@@ -85,7 +85,7 @@ def main() -> int:
 
     if not GEN.is_dir():
         print(f"REFUSING: {GEN} absent — run build_h100_plane.sh first", file=sys.stderr)
-        return 3
+        return 95
 
     found = _files(GEN)
     extra = sorted(found - PRODUCED)

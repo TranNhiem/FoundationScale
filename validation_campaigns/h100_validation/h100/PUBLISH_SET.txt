@@ -140,3 +140,11 @@ patch_argv_preflight.py
 # "restore" the convenient defaults puts one estate's hardware back into the shared plane.
 patch_node_shape.py
 patch_engine_entrypoint_naming.py
+# #304: the trainer's two UNMEASURED arms returned 2 and 3 -- outside the 0/5/95/96 contract
+# the plane publishes, and each one printed "verdict": "UNMEASURED" in the very JSON payload
+# whose exit code contradicted it. The committed gen/ artifact carries the fix, but a clone
+# that re-extracts fs_train.fixed.py from the frozen fs_train.json gets the pre-patch text
+# back, so the stage has to ship or the fix silently reverts on the next extraction. Its G4
+# gate is the durable part: it asserts main()'s whole int-return set, not just these two
+# lines, so no later edit can reintroduce a private exit-code namespace.
+patch_trainer_exit_contract.py

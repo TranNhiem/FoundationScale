@@ -140,12 +140,12 @@ CRED = re.compile(r"""(?ix)
 def main() -> int:
     if not SPLICE.exists():
         print(f"REFUSING: {SPLICE} absent — nothing to apply", file=sys.stderr)
-        return 3
+        return 95
     rows = json.loads(SPLICE.read_text("utf-8"))
     if not rows or not rows[0].get("ok"):
         print(f"REFUSING: splice task failed: {rows[0].get('error') if rows else 'empty'}",
               file=sys.stderr)
-        return 3
+        return 95
     spec = json.loads(rows[0]["content"])
 
     before = SRC.read_text("utf-8")
@@ -163,11 +163,11 @@ def main() -> int:
         fmap = functions(text)
         if name not in fmap:
             print(f"REFUSING: replacement target {name!r} not in file", file=sys.stderr)
-            return 4
+            return 95
         if not functions(body).get(name):
             print(f"REFUSING: replacement body for {name!r} does not define {name}",
                   file=sys.stderr)                                          # G4
-            return 4
+            return 96
         s, e = fmap[name]
         text = text[:s] + body.rstrip() + text[e:]
         applied.append(f"replace {name}")
@@ -177,11 +177,11 @@ def main() -> int:
         fmap = functions(text)
         if name in fmap:
             print(f"REFUSING: addition {name!r} already exists", file=sys.stderr)
-            return 4
+            return 96
         if after not in fmap:
             print(f"REFUSING: anchor {after!r} for addition {name!r} not found",
                   file=sys.stderr)
-            return 4
+            return 95
         e = fmap[after][1]
         text = text[:e] + "\n\n" + body.rstrip() + text[e:]
         applied.append(f"add {name} after {after}")

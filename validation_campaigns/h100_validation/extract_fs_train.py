@@ -99,7 +99,7 @@ def main() -> int:
         target.unlink(missing_ok=True)
         _report(gates)
         print("removed the artifact; an unverified entrypoint is not left in place")
-        return 4
+        return 5
 
     _report(gates)
     print(f"extracted {target}: {lines} lines, {len(text)} bytes; py_compile: clean")

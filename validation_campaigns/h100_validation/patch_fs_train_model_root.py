@@ -305,7 +305,7 @@ def main() -> int:
 
     if not all(ok for _, _, ok, _ in gates):
         print(f"VERDICT: FAIL -- refusing to write; {rel_entry} left at last good state")
-        return 1
+        return 5
 
     if changed:
         assert patched is not None

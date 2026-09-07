@@ -375,7 +375,7 @@ def main() -> int:
     if not LAUNCHER.exists() or not BACKEND.exists():
         gate(2, False, f"input files present {int(LAUNCHER.exists()) + int(BACKEND.exists())}/2 "
                        f"({LAUNCHER.name}, {BACKEND.name})")
-        return 1
+        return 95
 
     lt = LAUNCHER.read_text()
     bt = BACKEND.read_text()
@@ -389,7 +389,7 @@ def main() -> int:
         gate(1, False,
              f"half-applied: marker fs124: present in {int(m_l) + int(m_b)}/2 files "
              f"(launcher={m_l}, backend={m_b}); refusing to patch a half-applied state")
-        return 1
+        return 5
     gate(1, True, "marker fs124: present in 0/2 files; first application proceeds")
 
     # G2..G4 anchors unique (exactly once each).
@@ -401,7 +401,7 @@ def main() -> int:
     gate(4, c_c == 1, f"backend allowlist anchor C occurs {c_c}/1 time(s)")
     pre_allow = _allowlist_names(bt)
     if FAILURES:
-        return 1
+        return 96
 
     pl = lt.replace(ANCHOR_A, REPL_A)
     pb = bt.replace(ANCHOR_B, REPL_B).replace(ANCHOR_C, REPL_C)
@@ -447,7 +447,7 @@ def main() -> int:
     # Refuse to write while any gate is red.
     if FAILURES:
         print("  WRITE REFUSED: one or more gates red; files untouched")
-        return 1
+        return 5
 
     LAUNCHER.write_text(pl)
     BACKEND.write_text(pb)

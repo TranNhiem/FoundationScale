@@ -260,7 +260,7 @@ def main() -> int:
     missing = [t for t in TARGETS if t not in fmap]
     if missing:
         print(f"REFUSING: target function(s) not found in {src}: {missing}", file=sys.stderr)
-        return 3
+        return 95
     funcs = "\n\n".join(f"# ---- {t} ----\n{text[fmap[t][0]:fmap[t][1]]}" for t in TARGETS)
     prompt = PROMPT.replace("{FUNCS}", funcs).replace("{NAMES}", ", ".join(sorted(fmap)))
 
@@ -273,7 +273,7 @@ def main() -> int:
         return 0
     if not os.environ.get("KIMI_K3_API_KEY"):
         print("REFUSING: KIMI_K3_API_KEY unset", file=sys.stderr)
-        return 3
+        return 96
     cmd = [sys.executable, str(FANOUT), "--base-url", BASE_URL, "--effort", "high",
            "--max-tokens", "30000", "--workers", "1", "--timeout", "3600",
            "--json-schema-file", str(sp), "--out", str(dst)]

@@ -141,7 +141,7 @@ def main() -> int:
         test_target.unlink(missing_ok=True)
         _report(gates)
         print("removed both artifacts; unverified files are not left in place")
-        return 4
+        return 5
 
     _report(gates)
     print(
