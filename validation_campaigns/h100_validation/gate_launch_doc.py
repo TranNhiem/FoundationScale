@@ -93,6 +93,7 @@ from __future__ import annotations
 
 import ast
 import os
+import importlib.util
 import pathlib
 import re
 import sys
@@ -196,22 +197,59 @@ def load_patterns() -> list[tuple[str, "re.Pattern[str]"]]:
     ]
 
 
-def enforced_knobs(lau_text: str) -> tuple[list[str], int, int]:
-    """L1. Enumerate from the file, never from a hard-coded list.
+def _shared_extractor():
+    """Load fs_required_knobs.py, the single census both knob gates now share.
 
-    Returns (operator knob names in first-appearance order, guard lines seen,
-    SLURM_* names skipped).
+    Registered in sys.modules BEFORE exec: `dataclasses` resolves string annotations
+    via sys.modules[cls.__module__].__dict__, so a module exec'd without being
+    registered dies AttributeError on its first @dataclass under
+    `from __future__ import annotations`. That is the #100/D1 defect; it is written
+    out here because this loader is the third place it would otherwise recur.
     """
-    seen: set[str] = set()
-    names: list[str] = []
-    for m in GUARD_RE.finditer(lau_text):
-        n = m.group(1)
-        if n not in seen:
-            seen.add(n)
-            names.append(n)
-    skipped = sum(1 for n in names if n.startswith("SLURM_"))
-    operator = [n for n in names if not n.startswith("SLURM_")]
-    return operator, len(names), skipped
+    path = pathlib.Path(__file__).resolve().parent / "fs_required_knobs.py"
+    spec = importlib.util.spec_from_file_location("fs_required_knobs", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - packaging accident
+        raise Refusal(f"cannot load the shared knob extractor at {path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def enforced_knobs(lau_text: str, backend_text: str = "") -> tuple[list[str], int, int]:
+    """L1. Enumerate from the files, never from a hard-coded list.
+
+    Returns (operator knob names in sorted order, guard SITES seen, SLURM_* names
+    excluded).
+
+    #276/#279. This used to apply GUARD_RE — the raw `[[ -n "${NAME:-}" ]] ||` shape
+    — and nothing else. Measured, that saw 5 operator knobs. The launcher states 7 of
+    its requirements through the `req_env NAME` helper instead, and the backend adds
+    4 more, so 11 of 16 knobs the plane genuinely refuses to start without sat in NO
+    gate's denominator. A coverage rule whose denominator omits two thirds of the
+    subject reports a fraction that is true of the sample and false of the claim.
+
+    The replacement is the shared extractor, which is a strict SUPERSET here: it
+    returns every name GUARD_RE found plus the ones it could not see. That was
+    verified by diffing the two on the real artifacts before this call was rewired —
+    gained 7, lost 0 — because a "consolidation" that quietly drops a knob would
+    trade a visible gap for an invisible one.
+
+    BACKEND TEXT IS INCLUDED ON PURPOSE. The operator reads one document and must set
+    every knob the plane refuses to start without, and the plane does not care which
+    file does the refusing — #185 established exactly this for FS_FABRIC_TRIPWIRE.
+    Passing "" keeps the launcher-only reading available for callers that want it.
+    """
+    frk = _shared_extractor()
+    sources = {LAUNCHER.name: lau_text}
+    if backend_text:
+        sources[BACKEND.name] = backend_text
+    census = frk.extract(sources)
+    # The extractor's own R4 rule is what recognises a Slurm-provided name; this gate
+    # does not re-derive that with a prefix test of its own, because two definitions of
+    # "SLURM-provided" in one repository is how the two gates drifted apart to begin with.
+    slurm_excluded = sum(1 for rule, _ in census.excluded.values() if rule.startswith("R4"))
+    return sorted(census.required), census.sites_seen, slurm_excluded
 
 
 def check_l1(doc_text: str, knobs: list[str]) -> list[str]:
@@ -1500,6 +1538,14 @@ def main() -> int:
         print(f"REFUSE 96 cannot read trainer {TRAINER}: {e}", file=sys.stderr)
         return 96
     try:
+        # L1's denominator spans both shell sources since #276. Unreadable is REFUSE,
+        # not a smaller denominator: silently dropping the backend would shrink L1 from
+        # 16 knobs to 12 and still print a confident fraction.
+        backend_text = BACKEND.read_text("utf-8")
+    except OSError as e:
+        print(f"REFUSE 96 cannot read backend {BACKEND}: {e}", file=sys.stderr)
+        return 96
+    try:
         ast.parse(trainer_src)
     except SyntaxError as e:
         # An unparsable trainer is not a dirty doc: NONE of L6-L11 can be measured
@@ -1534,7 +1580,7 @@ def main() -> int:
     red = False
 
     # L1 --------------------------------------------------------------------
-    knobs, guards, slurm_skipped = enforced_knobs(lau_text)
+    knobs, guards, slurm_skipped = enforced_knobs(lau_text, backend_text)
     total1 = len(knobs)
     if total1 == 0:
         print(f"  FAIL L1 UNMEASURED 0/0 — the launcher exposes no required-no-default "
