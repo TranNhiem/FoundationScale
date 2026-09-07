@@ -39,9 +39,12 @@ from foundationscale.gates.core import (
     verify_controls,
 )
 from foundationscale.gates.objective_gates import (
+    DiagnosticMetricGate,
     HyperparameterDriftGate,
     LossComponent,
     LossComponentCoverageGate,
+    MetricExpectation,
+    MetricObservation,
     ObjectiveDeclaredGate,
     ObjectiveGateContext,
     RewardScaleSanityGate,
@@ -1173,3 +1176,66 @@ class TestRegistration:
         # launch-time fact, and re-auditing it per save against a live env is
         # exactly the re-read-the-config mistake the drift gate exists to refuse.
         assert "objective.declared" not in save_ids
+
+
+class TestNonFiniteDeclaredBounds:
+    """IEEE ordering makes every comparison against NaN or an infinity silently
+    vacuous: ``x < nan`` is False, ``x > -inf`` is True, and ``x == nan`` is
+    False. A declaration carrying a non-finite bound therefore makes the check
+    that reads it examine nothing while appearing to run — the same blindness
+    the component gate's xfail described, now in the expectations and reward
+    bounds channels."""
+
+    def test_expectation_with_non_finite_bounds_fails(
+        self,
+    ) -> None:
+        # low=-inf makes "value >= low" true for every reading, so the range
+        # check over this expectation can never fire. Refusing the declaration
+        # is the only honest answer; the healthy-looking 0.62 beside it must
+        # not buy a pass.
+        gate = DiagnosticMetricGate()
+        result = gate.run(
+            _healthy_ctx(
+                declared_metrics=(MetricExpectation(name="accuracy", low=-math.inf, high=1.0),),
+                metrics=(MetricObservation(name="accuracy", value=0.62),),
+            ),
+        )
+        assert result.verdict is Verdict.FAIL
+        assert result.blocking
+        assert "declares non-finite bounds" in result.detail
+        assert "accuracy" in result.detail
+
+    def test_expectation_with_non_finite_degenerate_entry_fails(
+        self,
+    ) -> None:
+        # degenerate=(nan,) is a degeneracy check that can never fire: NaN
+        # compares equal to nothing, so "value in degenerate" is False for
+        # every reading — including the DPO pinned-at-zero reading the tuple
+        # exists to catch.
+        gate = DiagnosticMetricGate()
+        result = gate.run(
+            _healthy_ctx(
+                declared_metrics=(
+                    MetricExpectation(name="accuracy", low=0.0, high=1.0, degenerate=(math.nan,)),
+                ),
+                metrics=(MetricObservation(name="accuracy", value=0.62),),
+            ),
+        )
+        assert result.verdict is Verdict.FAIL
+        assert result.blocking
+        assert "declares non-finite degenerate readings" in result.detail
+
+    def test_non_finite_declared_reward_bounds_fail_despite_finite_statistics(
+        self, reward_gate: RewardScaleSanityGate
+    ) -> None:
+        # The observed statistics are the healthy finite ones — the defect is
+        # in the declaration. A -inf lower bound makes "min >= lo" silently
+        # true for every batch, so the bounds check examined nothing while
+        # looking like it ran, and it must be distinguished from the passes
+        # above that genuinely exercised the same statistics.
+        result = reward_gate.run(
+            _healthy_ctx(reward_bounds=(-math.inf, 1.0)),
+        )
+        assert result.verdict is Verdict.FAIL
+        assert result.blocking
+        assert "declared reward bounds [-inf, 1.0] are non-finite" in result.detail
