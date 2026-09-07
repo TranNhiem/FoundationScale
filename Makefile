@@ -103,7 +103,7 @@ ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
 endif
 
-.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers launcher-contracts checks-gates standing-gates mutation mutation-module skip-guard-probe check clean
+.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers citation-lines launcher-contracts checks-gates standing-gates mutation mutation-module skip-guard-probe check clean
 
 install:
 	$(PY) -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
@@ -316,6 +316,33 @@ doc-pointers:
 	$(PY) checks/doc_pointers.py --self-test
 	$(PY) checks/doc_pointers.py
 
+# Finding #303. The repository cites its own source as `path.ext:N` and
+# `path.ext:N-M`, and nothing put those tokens in a denominator, so a citation
+# rotted silently whenever the file it named was edited. Measured before the
+# gate was written: 231 tokens over 279 readable tracked files, of which 95
+# resolve to a tracked file and 0 point past its end -- so this target lands
+# GREEN at birth (#239), rather than being committed red on the tree it guards.
+#
+# The claim is deliberately narrow and the gate says so: it proves the cited
+# LINE EXISTS, not that the line says what the surrounding prose claims. A
+# citation aimed at the wrong line of the right file passes here. The content
+# axis stays UNMEASURED, and the summary prints unresolved and bare counts next
+# to the verified count so 95 is never read as "95 of 231 citations are right".
+#
+# There is no allowlist, on purpose. Two constructs in the tree have exactly a
+# citation's shape and are not citations -- the `name:rc` arguments to
+# make_stub_campaign, and the `site` literals in fs_required_knobs.py. The gate
+# cannot tell them apart BY SHAPE and does not try: their paths name no tracked
+# file, so resolution puts them in UNMEASURED alongside genuine out-of-repo
+# citations. An allowlist would be the gate excepting its own residue (#303).
+#
+# Self-test first, same order and same reason as doc-pointers, and it carries a
+# control on itself: with the range comparison neutered, every MUST_FIRE control
+# must go silent, or the harness cannot fire and the gate refuses 96.
+citation-lines:
+	$(PY) checks/citation_lines.py --self-test
+	$(PY) checks/citation_lines.py
+
 # Finding #254. CI runs launchers/test_launcher_contracts.sh; until this target
 # existed, no `make` goal did, so the largest gate in the repository was one a
 # developer could not run before pushing. That is the #230 asymmetry with the
@@ -425,7 +452,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers launcher-contracts checks-gates standing-gates mutation
+check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers citation-lines launcher-contracts checks-gates standing-gates mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \

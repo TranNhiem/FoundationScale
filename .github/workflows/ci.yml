@@ -463,6 +463,27 @@ jobs:
       - name: Doc pointers (every pointer in shipped markdown has a file behind it)
         run: python3 checks/doc_pointers.py
 
+      # #303, and it rides here for the same reason doc_pointers does: it is the
+      # existence class again, one notch finer. There the claim is that a cited
+      # FILE exists; here that a cited LINE exists. `path.ext:N` and
+      # `path.ext:N-M` tokens sat in no denominator, so a citation rotted
+      # silently every time the file it named was edited.
+      #
+      # It is in the SAME commit as the `citation-lines` Makefile target it
+      # mirrors. #286 (no Makefile<->CI mirror gate) is still open, so that
+      # pairing is held by hand, exactly as the standing-gates step below says.
+      #
+      # What it does NOT claim, and the report says so on every run: the line
+      # EXISTS is the whole finding. A citation aimed at the wrong line of the
+      # right file passes. Unresolved (out-of-repo) and bare `:NNN` counts print
+      # beside the verified count so the verified number is never mistaken for
+      # the citation count -- inferring a bare citation's subject from proximity
+      # is what produced 865 false verdicts in #233.
+      - name: Citation-line controls (MUST_FIRE/MUST_PASS + a control on the harness)
+        run: python3 checks/citation_lines.py --self-test
+      - name: Citation lines (every in-repo path:N citation names a line that exists)
+        run: python3 checks/citation_lines.py
+
       # Standing gates (#293). The H100 campaign's nine gate_*.py scripts were
       # invoked ONLY by build_h100_plane.sh, which no make target and no CI step
       # runs -- so the whole tail of that gate plane was reachable by nobody.

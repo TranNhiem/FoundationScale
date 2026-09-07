@@ -1340,6 +1340,140 @@ else
   fi
 fi
 
+# --- MUST_PASS: citation-lines gate self-test (checks/citation_lines.py) -----
+# Finding #303: prose cited lines that were not there -- path.ext:N and
+# path.ext:N-M tokens whose N (or whose M) ran past the end of the target --
+# and nothing was red, because a citation is a DECLARATION and no gate resolved
+# the line half of one. This gate proves EXISTENCE only: that the cited line is
+# there, never that it says what the prose claims.
+#
+# Same floor convention as the f281 leg above and for the same reason: rc=0 is
+# not the measurement. A self-test whose control set silently shrinks to 1 still
+# exits 0, so the trailing "N of N controls" is parsed and held to a FLOOR.
+#
+# The floor covers ALL THREE control families -- 3 MUST_FIRE (out-of-range,
+# range-M-past-end, malformed N>M), 4 MUST_PASS (last-line boundary, ambiguous
+# basename left unresolved, out-of-repo path unresolved, bare :NNN declared
+# unmeasured), and 1 control ON THE HARNESS -- because the harness control is
+# the one that keeps the other seven honest. It re-runs the MUST_FIRE controls
+# with the range comparison neutered and asserts they all go silent, and that
+# is why an rc-only control would be insufficient here: without it, a
+# comparison that always reports "in range" passes every MUST_PASS and the gate
+# reads green while measuring nothing.
+#
+# Floor history: 8 at introduction (#303).
+if [ ! -r "checks/citation_lines.py" ]; then
+  f303_msg="MUST_PASS FAILED (citation_lines self-test) UNMEASURED:"
+  f303_msg="$f303_msg checks/citation_lines.py is not readable -- unreadable is not empty"
+  f303_msg="$f303_msg (doctrine 4); the gate cannot run, so 0 of 8 controls were measured"
+  no "$f303_msg"
+else
+  f303_rc=0
+  f303_out=$(python3 -S checks/citation_lines.py --self-test 2>&1) || f303_rc=$?
+  f303_last=$(printf '%s\n' "$f303_out" | tail -n 1)
+  f303_have=$(printf '%s\n' "$f303_last" |
+    sed -n 's/^self-test denominator: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls.*/\1/p')
+  f303_want=$(printf '%s\n' "$f303_last" |
+    sed -n 's/^self-test denominator: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls.*/\2/p')
+  if [ "$f303_rc" -ne 0 ]; then
+    f303_msg="MUST_PASS FAILED (citation_lines self-test): rc=$f303_rc over the gate's own"
+    f303_msg="$f303_msg 8-control fixture set -- output:"
+    f303_msg="$f303_msg $(printf '%s\n' "$f303_out" | tr '\n' ' ')"
+    no "$f303_msg"
+  elif [ -z "$f303_have" ] || [ -z "$f303_want" ]; then
+    f303_msg="MUST_PASS FAILED (citation_lines self-test) UNMEASURED: rc=0 but the last"
+    f303_msg="$f303_msg line is not the declared 'self-test denominator: N of N controls'"
+    f303_msg="$f303_msg wording -- the measuring unit printed no denominator (doctrine 2);"
+    f303_msg="$f303_msg update this leg in the same commit as the wording change."
+    f303_msg="$f303_msg Last line: $f303_last"
+    no "$f303_msg"
+  elif [ "$f303_have" -ne "$f303_want" ]; then
+    f303_msg="MUST_PASS FAILED (citation_lines self-test): denominator $f303_have of"
+    f303_msg="$f303_msg $f303_want controls is not self-consistent -- the self-test examined"
+    f303_msg="$f303_msg fewer controls than it claims to have (doctrine 2)"
+    no "$f303_msg"
+  elif [ "$f303_have" -lt 8 ]; then
+    f303_msg="MUST_PASS FAILED (citation_lines self-test): control set shrank to $f303_have"
+    f303_msg="$f303_msg of $f303_want, below the measured floor of 8 -- a self-test that"
+    f303_msg="$f303_msg quietly drops controls still exits 0, so the floor is the control"
+    no "$f303_msg"
+  else
+    f303_msg="MUST_PASS citation_lines self-test: rc=0 under python3 -S, denominator"
+    f303_msg="$f303_msg $f303_have of $f303_want controls (>= the measured floor of 8):"
+    f303_msg="$f303_msg $f303_last"
+    ok "$f303_msg"
+  fi
+fi
+
+# --- MUST_FIRE: citation_lines discriminates a past-end line from a real one -
+# The self-test above exercises the gate's INTERNAL fixture path. This leg
+# exercises the shipped CLI over a real git tree, and it is a discrimination
+# PAIR on purpose: the same corpus, differing only in whether the cited line
+# exists, must produce 5 (RED) and then 0 (CLEAR). A gate that is merely stuck
+# red satisfies the first arm and fails the second, so one arm alone would not
+# prove the gate discriminates.
+#
+# The assertion is rc=5 exactly, not merely nonzero: collapsing it to nonzero
+# would accept a crash (rc=1/2) or a REFUSE (96) as the control firing, and a
+# crashed detector is not a discriminating one.
+#
+# The CLEAR arm extends the TARGET from two lines to five rather than editing
+# the CITATION, and that is deliberate: it holds the cited token target.py:5
+# fixed across both arms, so the difference in verdict is attributable to the
+# target's length and to nothing else.
+if [ ! -r "checks/citation_lines.py" ]; then
+  f303b_msg="MUST_FIRE FAILED (citation_lines past-end discrimination) UNMEASURED:"
+  f303b_msg="$f303b_msg checks/citation_lines.py is not readable -- unreadable is not empty"
+  f303b_msg="$f303b_msg (doctrine 4); 0 of 2 discrimination arms were measured"
+  no "$f303b_msg"
+elif ! command -v git >/dev/null 2>&1; then
+  f303b_msg="MUST_FIRE FAILED (citation_lines past-end discrimination) UNMEASURED: git is"
+  f303b_msg="$f303b_msg not on PATH, and both the gate's corpus and its resolution universe"
+  f303b_msg="$f303b_msg are git's index -- the fixture cannot be built, so 0 of 2 arms ran"
+  no "$f303b_msg"
+else
+  f303b_tmp=$(mktemp -d)
+  mkdir -p "$f303b_tmp/docs"
+  printf 'alpha = 1\nbeta = 2\n' > "$f303b_tmp/target.py"
+  printf 'See target.py:5 for the detail.\n' > "$f303b_tmp/docs/a.md"
+  git -C "$f303b_tmp" init -q >/dev/null 2>&1
+  git -C "$f303b_tmp" add -A >/dev/null 2>&1
+  f303b_red_rc=0
+  f303b_red_out=$(python3 -S checks/citation_lines.py "$f303b_tmp" 2>&1) || f303b_red_rc=$?
+  # Identical corpus, the target extended from two lines to five and re-staged.
+  # The citing text is not touched. Nothing else changes.
+  printf 'alpha = 1\nbeta = 2\ngamma = 3\ndelta = 4\neps = 5\n' > "$f303b_tmp/target.py"
+  git -C "$f303b_tmp" add -A >/dev/null 2>&1
+  f303b_clear_rc=0
+  f303b_clear_out=$(python3 -S checks/citation_lines.py "$f303b_tmp" 2>&1) || f303b_clear_rc=$?
+  rm -rf "$f303b_tmp"
+  if [ "$f303b_red_rc" -ne 5 ]; then
+    f303b_msg="MUST_FIRE FAILED (citation_lines past-end discrimination): the planted"
+    f303b_msg="$f303b_msg target.py:5 over a 2-line target gave rc=$f303b_red_rc, expected"
+    f303b_msg="$f303b_msg exactly 5 (RED) over a denominator of 1 citation in 2 tracked"
+    f303b_msg="$f303b_msg files. rc=0 would launder a past-end citation into CLEAR and any"
+    f303b_msg="$f303b_msg other nonzero is not this gate's declared RED."
+    f303b_msg="$f303b_msg Output: $(printf '%s\n' "$f303b_red_out" | tr '\n' ' ')"
+    no "$f303b_msg"
+  elif [ "$f303b_clear_rc" -ne 0 ]; then
+    f303b_msg="MUST_FIRE FAILED (citation_lines past-end discrimination): the past-end arm"
+    f303b_msg="$f303b_msg fired correctly at rc=5, but extending target.py to five lines --"
+    f303b_msg="$f303b_msg the ONLY change -- still gave rc=$f303b_clear_rc instead of 0. Only"
+    f303b_msg="$f303b_msg 1 of 2 arms held; a gate that reddens a corpus whose every citation"
+    f303b_msg="$f303b_msg names an existing line is stuck RED, not discriminating, so the leg"
+    f303b_msg="$f303b_msg fails closed. Output:"
+    f303b_msg="$f303b_msg $(printf '%s\n' "$f303b_clear_out" | tr '\n' ' ')"
+    no "$f303b_msg"
+  else
+    f303b_msg="MUST_FIRE citation_lines past-end discrimination: over 1 citation in 2"
+    f303b_msg="$f303b_msg tracked files the shipped CLI exited rc=5 (RED) while target.py had"
+    f303b_msg="$f303b_msg 2 lines and rc=0 (CLEAR) once it held 5 -- the only difference"
+    f303b_msg="$f303b_msg between the arms, with the cited token target.py:5 untouched. Both"
+    f303b_msg="$f303b_msg discrimination outcomes held"
+    ok "$f303b_msg"
+  fi
+fi
+
 echo "abstentions: $abstain named (each named at its site above with its denominator; 0 added to pass or fail)"
 echo "controls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
