@@ -19,11 +19,34 @@ WRITES
   h100/gen/LAUNCH.md -- only when every gate is green and the redaction scan is clean
   (this repo is PUBLIC).
 
+WHERE THE REQUIRED NAMES COME FROM (#276)
+  The authoritative answer to "which variables does the launch plane refuse to start
+  without?" is fs_required_knobs.extract(), shared with gate_launch_doc.py. The two
+  gates answer the same question over the SAME two bash artifacts and then do opposite
+  things with the answer -- this one GENERATES a command from it, that one AUDITS the
+  hand-written h100/LAUNCH.md against it. (Note the two files: this gate writes
+  h100/gen/LAUNCH.md, the generated template; the operator document it must not
+  contradict is h100/LAUNCH.md one directory up.) Two readers of one artifact holding
+  two different required sets is a drift neither can see from inside itself, because
+  each is internally consistent.
+
+  The three local idioms below are NOT retired -- they still run, but as a SITE scan,
+  not as the name source. They answer a different question: how much of each artifact
+  did any reader understand, and how much matched nothing (the U floor). Keeping both
+  is what makes the disagreement printable: every name the site scan mints that the
+  census refuses is reported with the census rule that refused it.
+
+  This split is load-bearing rather than tidy. The I3 rule reads the first ALL-CAPS
+  token out of a refusal MESSAGE, so on launch_fs_h100.fixed.sh:39 it mints a variable
+  called REFUSE -- a word from the prose, not a knob any operator can set. Nothing in
+  STOPLIST covered it. Before this change that phantom was in the required set, one
+  wiring commit away from being published into the operator-facing table.
+
 SCOPE LIMITS
-  * Exactly three refusal idioms are understood (I1 req_env calls, I2 inline emptiness
-    refusals, I3 the marker phrase "required, no default by design"). Lines that look
-    like refusals but match no idiom are counted as UNPARSED and printed; coverage is
-    reported as a floor, never silently claimed complete.
+  * Exactly three refusal idioms are understood by the SITE scan (I1 req_env calls, I2
+    inline emptiness refusals, I3 the marker phrase "required, no default by design").
+    Lines that look like refusals but match no idiom are counted as UNPARSED and
+    printed; site coverage is reported as a floor, never silently claimed complete.
   * The two bash artifacts are never modified; the L6 drills run on in-memory copies.
   * stdlib only.
 """
@@ -32,6 +55,8 @@ import os
 import re
 import sys
 from pathlib import Path
+
+import fs_required_knobs
 from fs_estate_pat import estate_ident_pat
 
 ROOT = Path(__file__).resolve().parent
@@ -57,8 +82,19 @@ OPTIONAL = {
 # *PROCS* / *NTASKS* families. Anything extracted that matches none of these lands in
 # 'unclassified' and is PRINTED -- a new required variable must be visible, not
 # silently absorbed.
+#
+# The estate/topology line is "does it change how many ranks run?" FS_GPUS_PER_NODE
+# does, so it is topology. FS_PARTITION, FS_WALLTIME, FS_CPUS_PER_TASK and FS_MEM do
+# not -- they say which queue and what allocation shape, which is an estate fact the
+# operator inherits from their site. FS_FABRIC_TRIPWIRE names one estate's IMEX master
+# (#163), so it is estate too. Those five arrived in the required set when this gate
+# adopted the shared census (#276): a fifth bucket would have been the easy move and
+# the wrong one, because the buckets exist to tell an operator which knobs they must
+# get from their cluster admin, not to record which reader found them.
 ESTATE = {"FS_ALLOWED_NODE", "FS_ALLOWED_PATH_ROOTS", "FS_CONTAINER_RUNTIME",
-          "FS_ALLOCATION", "FS_CONTAINER_SQSH", "IMAGE"}
+          "FS_ALLOCATION", "FS_CONTAINER_SQSH", "IMAGE",
+          "FS_PARTITION", "FS_WALLTIME", "FS_CPUS_PER_TASK", "FS_MEM",
+          "FS_FABRIC_TRIPWIRE"}
 RUN = {"MODEL_DIR", "DATASET_DIR", "CONFIG_FILE", "OUT_DIR_STABLE", "PROBE", "FS_PHASE"}
 TOPOLOGY_EXACT = {"FS_GPUS_PER_NODE", "FS_ENGINE_LAUNCH_MODE"}
 TOPOLOGY_PARTS = ("PROCS", "NTASKS")
@@ -66,11 +102,22 @@ TOPOLOGY_PARTS = ("PROCS", "NTASKS")
 # The names this generator knows how to place into the command template, in display
 # order. An extracted name that is NOT here fails L2 loudly instead of being silently
 # dropped -- that failure is the drift alarm, and drill L6/MUST_FIRE relies on it.
+#
+# This is an ORDERING HINT, not a claim about requiredness: build_template() keeps only
+# the entries that are actually in the census (`if n in res.info`), so an entry that
+# stops being required costs nothing and is not a drift. FS_CONTAINER_SQSH and
+# FS_ENGINE_LAUNCH_MODE are exactly that -- the shared census files them R5 (produced
+# in-artifact) and R3 (conditional), so they no longer render. They stay because
+# deleting them would throw away where they belong if they ever come back, and because
+# a reader comparing this list to the table should see the same names in the same
+# order either way.
 KNOWN_EXPORT_ORDER = [
     "MODEL_DIR", "DATASET_DIR", "CONFIG_FILE", "OUT_DIR_STABLE",
     "IMAGE", "FS_GPUS_PER_NODE", "PROBE",
     "FS_ALLOWED_NODE", "FS_ALLOWED_PATH_ROOTS", "FS_CONTAINER_RUNTIME",
     "FS_ALLOCATION", "FS_CONTAINER_SQSH", "FS_ENGINE_LAUNCH_MODE",
+    "FS_PARTITION", "FS_WALLTIME", "FS_CPUS_PER_TASK", "FS_MEM",
+    "FS_FABRIC_TRIPWIRE",
 ]
 
 # Optional names we deliberately surface in the operator-facing command (they are safe
@@ -122,6 +169,15 @@ PLACEHOLDERS = {
     "PROBE": "<probe>",
     "FS_PHASE": "train",
     "FS_BIND_PATHS": "",
+    # Estate knobs the operator gets from their cluster admin. The generic fallback
+    # would render <fs-partition>, which reads like a value; these say what SHAPE of
+    # value the scheduler wants. No estate literal may appear here -- the rendered
+    # document is scanned by REDACT_RE, and a real partition name would fail L5.
+    "FS_PARTITION": "<partition>",
+    "FS_WALLTIME": "<d-hh:mm:ss>",
+    "FS_CPUS_PER_TASK": "<cpus-per-task>",
+    "FS_MEM": "<mem-per-node>",
+    "FS_FABRIC_TRIPWIRE": "<imex-master-host>",
 }
 
 
@@ -132,12 +188,21 @@ def placeholder(name):
 
 class Extraction:
     """Result of one pass over the two artifacts: names, per-idiom site counts, and the
-    unparsed denominator (U) that keeps the coverage claim honest."""
+    unparsed denominator (U) that keeps the coverage claim honest.
+
+    After _apply_census() runs, `info` holds the SHARED census's required set and the
+    three disagreement lists below hold the difference against the local site scan.
+    `i1/i2/i3/u/unparsed` are never rewritten -- they stay the site scan's own report,
+    because the U floor is a statement about what the artifacts look like, not about
+    which names are required."""
 
     def __init__(self):
         self.info = {}       # name -> {"idiom", "message", "where"}
         self.i1 = self.i2 = self.i3 = self.u = 0
         self.unparsed = []   # (file label, line number, truncated line text)
+        self.excluded = {}   # name -> (rule, why) for every name the census refused
+        self.site_only = []  # site scan minted it, census refused it (REFUSE lives here)
+        self.census_only = []  # census requires it, the three local idioms cannot see it
 
 
 def _add(res, idiom, name, message, where):
@@ -231,6 +296,33 @@ def _parse_file(res, text, label):
         if toks:
             res.u += 1
             res.unparsed.append((label, ln + 1, line.strip()[:110]))
+
+
+def _apply_census(res, sources):
+    """Replace the site scan's name set with the SHARED census, and record the diff.
+
+    `sources` is {label: text}, the same mapping the site scan was fed, so the drills
+    can run this over a mutated in-memory copy exactly as main() runs it over the real
+    artifacts. Anything else would leave the drills testing dead code.
+
+    The site scan's counters survive untouched -- see Extraction's docstring. What
+    changes is only WHICH NAMES are called required, and every difference in either
+    direction is recorded so the next reader can see it rather than infer it."""
+    census = fs_required_knobs.extract(sources)
+
+    site_names = set(res.info)
+    res.excluded = dict(census.excluded)
+    res.site_only = sorted(site_names - set(census.required))
+    res.census_only = sorted(set(census.required) - site_names)
+
+    res.info = {}
+    for name, knob in census.required.items():
+        res.info[name] = {
+            "idiom": knob.rule,
+            "message": knob.message or "refused when unset",
+            "where": knob.site,
+        }
+    return census
 
 
 def assigned_names(template_text):
@@ -347,10 +439,15 @@ def run_drills(launch_text, backend_text, res):
 
     # MUST_FIRE 1: plant a req_env call; the extractor must list the name AND L2 must
     # go red because the planted name is absent from the known-template inventory.
+    # The drill runs the SAME two passes main() runs -- site scan then _apply_census --
+    # because after #276 it is the census that decides the name set. A drill that only
+    # ran the site scan would be exercising a path no longer on the critical route.
+    mutated = (launch_text + "\n# L6 drill copy -- never written to disk\n"
+                             "req_env FS_PLANTED_REQ\n")
     planted = Extraction()
-    _parse_file(planted, launch_text + "\n# L6 drill copy -- never written to disk\n"
-                                       "req_env FS_PLANTED_REQ\n", LAUNCH.name)
+    _parse_file(planted, mutated, LAUNCH.name)
     _parse_file(planted, backend_text, BACKEND.name)
+    _apply_census(planted, {LAUNCH.name: mutated, BACKEND.name: backend_text})
     ps, pp = build_template(set(planted.info))
     missing = sorted(set(planted.info) - assigned_names(ps + "\n" + pp))
     if "FS_PLANTED_REQ" in planted.info and "FS_PLANTED_REQ" in missing:
@@ -376,6 +473,48 @@ def run_drills(launch_text, backend_text, res):
         ok = False
         print("  FAIL L6  MUST_FIRE planted-extra drill did not fire")
 
+    # MUST_FIRE 3: the anti-phantom drill, and the reason #276 is worth doing. I3
+    # attributes a refusal to the first ALL-CAPS token inside the refusal MESSAGE, so a
+    # message opening with a capitalised prose word mints that word as a variable. On
+    # the real launcher that word is REFUSE, and before the census it was in the
+    # required set -- one wiring commit from being published to operators.
+    #
+    # The fixture is standalone rather than appended to launch_text, and that is a
+    # measured decision, not tidiness: QUOTE_RE pairs quotes sequentially from offset 0
+    # over the WHOLE file, and the launcher currently holds an ODD number of them, so an
+    # appended line pairs off-by-one, falls back to hay=whole-line and mints the
+    # VARIABLE instead of the prose word. The appended version of this drill therefore
+    # reported "no phantom" while the real artifact had one -- a control whose result
+    # depended on the parity of quote characters in unrelated lines above it. (No count
+    # is quoted here on purpose: it would be a number in no drift denominator.)
+    #
+    # Both halves are asserted. Checking only that the census is clean would still read
+    # PASS if the site scan had quietly stopped minting anything at all.
+    fixture = ('[[ -n "${FS_PLANTED_PHANTOM:-}" ]] || { echo "DENY 96: '
+               'FS_PLANTED_PHANTOM is unset (' + MARKER + ')." >&2; exit 96; }\n')
+    fx_label = "l6_phantom_fixture.sh"
+    ph_site = Extraction()
+    _parse_file(ph_site, fixture, fx_label)
+    minted_by_site = "DENY" in ph_site.info
+    ph_census = Extraction()
+    _parse_file(ph_census, fixture, fx_label)
+    _apply_census(ph_census, {fx_label: fixture})
+    refused = "DENY" not in ph_census.info and "FS_PLANTED_PHANTOM" in ph_census.info
+    if minted_by_site and refused:
+        # The real pair is reported too, but as an observation: a phantom is a name the
+        # site scan minted that the census has no RULE for, because it was never a guard
+        # site at all. Zero here would be good news, not a failure.
+        live = [n for n in res.site_only if n not in res.excluded]
+        print("  PASS L6  MUST_FIRE anti-phantom: the site idiom mints DENY out of the "
+              "refusal message (control is live) and the census refuses it while "
+              "keeping FS_PLANTED_PHANTOM; on the real pair %d such phantom(s): %s"
+              % (len(live), ", ".join(live) or "none"))
+    else:
+        ok = False
+        print("  FAIL L6  MUST_FIRE anti-phantom drill did not fire "
+              "(site minted DENY=%s, census clean=%s) -- a dead control here means "
+              "UNMEASURED, not clean" % (minted_by_site, refused))
+
     # MUST_PASS: the unmodified pair yields a non-empty required set (>= 8 names).
     if len(res.info) >= 8:
         print("  PASS L6  MUST_PASS unmodified pair yields %d required names (>= 8)"
@@ -400,9 +539,14 @@ def main():
     backend_text = BACKEND.read_text(encoding="utf-8")
 
     # --- L1: extraction with a denominator AND an unparsed count -------------------
+    # Two passes over the same bytes, on purpose. The site scan measures how much of
+    # the artifacts any reader here understands (I1/I2/I3 and the U floor); the shared
+    # census decides which names are actually required. #276.
+    sources = {LAUNCH.name: launch_text, BACKEND.name: backend_text}
     res = Extraction()
     _parse_file(res, launch_text, LAUNCH.name)
     _parse_file(res, backend_text, BACKEND.name)
+    census = _apply_census(res, sources)
     n_names = len(res.info)
     m_sites = res.i1 + res.i2 + res.i3
     if res.u:
@@ -416,6 +560,20 @@ def main():
     else:
         print("  PASS L1  %d required names from %d refusal sites (I1 %d, I2 %d, I3 %d); "
               "0 sites matched no idiom" % (n_names, m_sites, res.i1, res.i2, res.i3))
+
+    # The two readers disagreeing is the interesting output, so print it rather than
+    # letting the census quietly win. Each site-only name carries the census rule that
+    # refused it; a name with no rule was never a guard site at all (that is the
+    # phantom shape -- a word read out of a refusal MESSAGE).
+    print("           census: %d required, %d excluded, %d sites seen by the shared "
+          "extractor" % (len(census.required), len(census.excluded), census.sites_seen))
+    for name in res.site_only:
+        rule = res.excluded.get(name)
+        why = "%s: %s" % rule if rule else "not a guard site -- read out of message text"
+        print("           SITE-ONLY %-22s %s" % (name, why))
+    for name in res.census_only:
+        print("           CENSUS-ONLY %-20s %s (idiom the three local rules cannot see)"
+              % (name, res.info[name]["where"]))
 
     sbatch, plain = build_template(set(res.info))
     template_text = sbatch + "\n" + plain
