@@ -35,6 +35,11 @@ test_fs_argv_preflight.py
 fs_ckpt_scalars.py
 test_fs_ckpt_scalars.py
 fs_estate_pat.py
+# The shared required-knob extractor from #276. It is published because two gates in this
+# very list depend on it: gate_launch_contract.py imports it, and gate_launch_doc.py loads
+# it by path. #292 is what happens when they do not agree -- a tree built from this file
+# alone died rc=1 in BOTH gates, an exit code the plane's 0/5/95/96 contract does not have.
+fs_required_knobs.py
 gate_artifact_linkage.py
 gate_build_inputs.py
 gate_ckpt_naming_agreement.py

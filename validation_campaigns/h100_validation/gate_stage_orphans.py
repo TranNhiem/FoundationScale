@@ -80,8 +80,11 @@ EXIT_REFUSE = 96
 
 # The declared prefix family for CANDIDATE. Module-level and printed on every run:
 # the NEITHER bucket is scoped to this family (plus files the build script names),
-# and a scope that is not printed is a claim broader than its evidence.
-PREFIX_FAMILY = ("patch_", "apply_", "extract_", "gate_", "emit_")
+# and a scope that is not printed is a claim broader than its evidence. The family
+# now also covers the fs_ helper-module and test_ suite families: a shipped gate's
+# helper module and a test suite are exactly the files the old five-prefix scope
+# let sit outside every measured set (fs_required_knobs.py).
+PREFIX_FAMILY = ("patch_", "apply_", "extract_", "gate_", "emit_", "fs_", "test_")
 
 ROLES = ("gate", "build-driver", "library", "test", "runtime-artifact",
          "superseded", "developer-tool")
@@ -104,6 +107,7 @@ _IMPORT_RE = re.compile(r"^\s*import\s+(.+)$")
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _DEF_TEST_RE = re.compile(r"^\s*def\s+test_", re.M)
 _PYTEST_VAR_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+_PY_LITERAL_RE = re.compile(r'''['"]([A-Za-z_][A-Za-z0-9_]*\.py)['"]''')
 
 
 def _names_in(text, names):
@@ -288,11 +292,12 @@ class Refs(object):
     """Every textual reference the partition needs, precomputed by the caller so
     the partition itself never touches the filesystem."""
 
-    def __init__(self, build_refs, importers, def_test, pytest_run):
+    def __init__(self, build_refs, importers, def_test, pytest_run, depends):
         self.build_refs = frozenset(build_refs)  # basenames occurring literally in the build script
         self.importers = dict((m, frozenset(s)) for m, s in importers.items())  # module -> ship entries importing it
         self.def_test = frozenset(def_test)  # relative paths containing a `def test_` definition
         self.pytest_run = None if pytest_run is None else frozenset(pytest_run)  # basenames the build's pytest invocation runs; None = no invocation found, class UNMEASURED
+        self.depends = dict((m, frozenset(s)) for m, s in depends.items())  # root basename 'X.py' -> ship entries depending on it, by the import or the quoted-literal idiom
 
 
 def derive_disk_and_refs(root, build_text, ship, declarations):
@@ -311,6 +316,17 @@ def derive_disk_and_refs(root, build_text, ship, declarations):
     build_refs = _names_in(build_text, names)
 
     importers = {}
+    depends = {}
+    # A shipped file's dependency edge comes in two idioms, and both are the SAME
+    # edge: a module the file IMPORTS (measured by modules_imported) and a quoted
+    # 'X.py' literal the file hands to a dynamic loader. Either way, a tree
+    # materialised from PUBLISH_SET.txt alone must contain the depended-on file
+    # or the shipped file dies with ModuleNotFoundError / FileNotFoundError --
+    # outside the declared 0/5/95/96 contract. A candidate enters 'depends' only
+    # if its basename is an actual root *.py file (this excludes stdlib and
+    # third-party by MEASUREMENT, never by allowlist), and a file is never
+    # recorded as depending on itself.
+    root_names = set(root_files)
     for entry in ship:
         if entry not in on_disk:
             continue
@@ -320,6 +336,13 @@ def derive_disk_and_refs(root, build_text, ship, declarations):
             continue
         for mod in modules_imported(text):
             importers.setdefault(mod, set()).add(entry)
+            dep = mod + ".py"
+            if dep in root_names and dep != _basename(entry):
+                depends.setdefault(dep, set()).add(entry)
+        for literal in _PY_LITERAL_RE.finditer(text):
+            dep = literal.group(1)
+            if dep in root_names and dep != _basename(entry):
+                depends.setdefault(dep, set()).add(entry)
 
     def_test = set()
     for rel in sorted(on_disk):
@@ -332,7 +355,7 @@ def derive_disk_and_refs(root, build_text, ship, declarations):
 
     pytest_run = pytest_invoked(build_text)
 
-    return on_disk, Refs(build_refs, importers, def_test, pytest_run)
+    return on_disk, Refs(build_refs, importers, def_test, pytest_run, depends)
 
 
 def partition(run, ship, on_disk, refs, declarations):
@@ -375,7 +398,26 @@ def partition(run, ship, on_disk, refs, declarations):
                 "PUBLISH_SET.txt names a file that does not exist on disk",
             ))
 
+    # #292: a shipped file's dependency must itself ship. This leg is deliberately
+    # INDEPENDENT of CANDIDATE and of PREFIX_FAMILY -- the edge is measured from the
+    # shipped file's own text, so a dependency outside every declared family is still
+    # caught. That independence IS the fix: fs_required_knobs.py sat outside
+    # PREFIX_FAMILY, so the CANDIDATE-scoped NEITHER bucket could never see it, while
+    # both gates that depend on it died rc=1 in a publish-set-only tree.
+    missing_dependencies = set()
+    for dep in sorted(refs.depends):
+        if dep in ship_base:
+            continue
+        missing_dependencies.add(dep)
+        findings.append((
+            dep, "MISSING_DEPENDENCY",
+            "shipped file(s) %s depend on it, but %s ships nothing by that name; a "
+            "tree built from the publish set alone cannot run them" % (
+                ", ".join(sorted(refs.depends[dep])), PUBLISH_SET_REL),
+        ))
+
     for e in sorted(shipped_not_run):
+
         decl = declarations.get(e)
         if decl is None:
             findings.append((
@@ -489,6 +531,7 @@ def partition(run, ship, on_disk, refs, declarations):
         "candidate": frozenset(candidate),
         "candidate_by_prefix": frozenset(by_prefix),
         "candidate_by_ref": frozenset(by_ref),
+        "missing_dependencies": frozenset(missing_dependencies),
         "findings": tuple(sorted(findings)),
         "runtime_attested": frozenset(runtime_attested),
         "pytest_run": refs.pytest_run,
@@ -604,7 +647,7 @@ def run_controls(run, ship, on_disk, refs, declarations, real):
         else:
             victim = executed_tests[0]
             refs2 = Refs(refs.build_refs, refs.importers, refs.def_test,
-                         set(refs.pytest_run) - {_basename(victim)})
+                         set(refs.pytest_run) - {_basename(victim)}, refs.depends)
             p = partition(run, ship, on_disk, refs2, declarations)
             if any(f[0] == victim and f[1] == "TEST_NEVER_RUN" for f in p["findings"]):
                 fired += 1
@@ -663,6 +706,49 @@ def run_controls(run, ship, on_disk, refs, declarations, real):
             "nothing red" % (victim, victim)
         )
 
+    total += 1
+    synth_dep = "zzq_ctl_dep_mustfire.py"
+    depends2 = dict((k, set(v)) for k, v in refs.depends.items())
+    depends2[synth_dep] = {ship[0]}
+    refs2 = Refs(refs.build_refs, refs.importers, refs.def_test, refs.pytest_run,
+                 depends2)
+    p = partition(run, ship, on_disk, refs2, declarations)
+    if any(f[0] == synth_dep and f[1] == "MISSING_DEPENDENCY" for f in p["findings"]):
+        fired += 1
+        lines.append(
+            "MUST_FIRE/MISSING_DEPENDENCY  mutated: made shipped %s depend on %s, "
+            "absent from the publish set; observed: RED, and the finding names "
+            "it" % (ship[0], synth_dep)
+        )
+    else:
+        failures.append(
+            "MUST_FIRE/MISSING_DEPENDENCY: made shipped %s depend on %s but no "
+            "MISSING_DEPENDENCY finding named it" % (ship[0], synth_dep)
+        )
+
+    total += 1
+    synth_ship_dep = "zzq_ctl_dep_mustnotfire.py"
+    ship3 = list(ship)
+    ship3.append(synth_ship_dep)
+    depends3 = dict((k, set(v)) for k, v in refs.depends.items())
+    depends3[synth_ship_dep] = {ship[0]}
+    refs3 = Refs(refs.build_refs, refs.importers, refs.def_test, refs.pytest_run,
+                 depends3)
+    p = partition(run, ship3, on_disk, refs3, declarations)
+    if any(f[0] == synth_ship_dep and f[1] == "MISSING_DEPENDENCY" for f in p["findings"]):
+        failures.append(
+            "MUST_NOT_FIRE/MISSING_DEPENDENCY: %s is depended on and now ships, "
+            "yet a MISSING_DEPENDENCY finding named it — the leg fires on an "
+            "edge whose target is shipped" % synth_ship_dep
+        )
+    else:
+        fired += 1
+        lines.append(
+            "MUST_NOT_FIRE/MISS_DEP_SHIPPED mutated: %s depended on by shipped %s "
+            "but itself added to the ship set; observed: no MISSING_DEPENDENCY "
+            "finding names it" % (synth_ship_dep, ship[0])
+        )
+
     again = partition(run, ship, on_disk, refs, declarations)
     if again == real:
         lines.append(
@@ -684,7 +770,7 @@ def print_report(root, run, ship, on_disk, declarations, real,
     buckets = real["buckets"]
     run_set = set(run)
     candidate = real["candidate"]
-    denominator = len(run_set | set(ship) | candidate)
+    denominator = len(run_set | set(ship) | candidate | real["missing_dependencies"])
     counts = Counter(run)
     dups = sorted("%s x%d" % (k, v) for k, v in counts.items() if v > 1)
 
@@ -704,7 +790,8 @@ def print_report(root, run, ship, on_disk, declarations, real,
     print("  SCOPE:     the NEITHER bucket is scoped to CANDIDATE — it is not a "
           "claim about every file in the directory")
     print("")
-    print("BUCKETS — %d file(s) partitioned (|RUN ∪ SHIP ∪ CANDIDATE|):" % denominator)
+    print("BUCKETS — %d file(s) partitioned (|RUN ∪ SHIP ∪ CANDIDATE|, widened by "
+          "any depended-on file outside the union):" % denominator)
 
     role_counts = Counter()
     for e in buckets["SHIPPED_NOT_RUN"]:
@@ -726,6 +813,8 @@ def print_report(root, run, ship, on_disk, declarations, real,
     print("  NEITHER          %d   (%s)" % (
         len(buckets["NEITHER"]),
         ", ".join("%s=%d" % (k, neither_counts[k]) for k in sorted(neither_counts)) or "none"))
+    print("  MISSING_DEPENDENCY %d   (RED if nonzero) — shipped file(s) depend on "
+          "these root module(s) and none of them ships" % len(real["missing_dependencies"]))
     print("  NOTE: role runtime-artifact is ATTESTED, NOT MEASURED (existence "
           "only) — %d row(s) carry it" % len(real["runtime_attested"]))
     declared_tests = sorted(p for p in declarations if declarations[p][0] == "test")

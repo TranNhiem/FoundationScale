@@ -41,6 +41,7 @@ gate_env_drift.py	gate	Build gate (#116): pins FS_ENV_ALLOWLIST against the laun
 gate_exit_contract.py	gate	Build gate (#161): censuses every exit site against the published 0/5/95/96 contract. Runs last in the build script.
 gate_launch_contract.py	gate	Build gate (#127): the required-knob detector over the launcher's guards.
 gate_launch_doc.py	gate	Build gate (#154/#184/#185): every citation and every required knob in LAUNCH.md must resolve against the shipped launcher.
+fs_required_knobs.py	library	The shared required-knob extractor from #276, which consolidated two gates' mirror-incomplete idiom vocabularies into one. Imported by gate_launch_contract.py, and loaded by path (spec_from_file_location) by gate_launch_doc.py -- two idioms, which is why #292's new MISSING_DEPENDENCY leg reads both. It was in NEITHER list for the whole of #276's life: it mirrored fs_estate_pat.py's design without mirroring its declaration, and a tree materialised from PUBLISH_SET.txt alone killed both dependent gates with rc=1.
 gate_stage_orphans.py	gate	This gate. Wired into build_h100_plane.sh directly rather than through STAGES because it reads the STAGES array itself and must run after every stage has executed. It is also in PUBLISH_SET.txt: a gate that closes the orphan class while being an orphan itself would be the fifth instance of that class, not the end of it.
 gate_doc_stage_count.py	gate	Build gate (#194): every stage-count claim in a shipped document is read against this script's own STAGES array. Wired directly rather than through STAGES for the same reason as the gate above -- it reads the array and must run after the array has executed.
 fs_argv_preflight.py	library	The login-node argv preflight (#183). Imported by test_fs_argv_preflight.py, which the build's pytest invocation runs, so its 12 self-test controls are executed by the build rather than attested. Also copied into the plane directory by patch_argv_preflight.py and executed there on the cluster; the copy is declared separately below, because a single row could not honestly carry both the measured role and the attested one.
@@ -63,6 +64,13 @@ h100/gen/test_fs_ckpt_adjudicator.py	test	pytest module for the generated adjudi
 # There are currently NO rows in this section. That is a measured state, not an
 # oversight: every candidate file in this repository is in STAGES, in PUBLISH_SET.txt,
 # or in both, and the gate reports the NEITHER bucket as 0.
+#
+# fs292 widened what "candidate" MEANS, so read that claim against its new denominator:
+# the prefix family gained fs_ and test_, and CANDIDATE is now every root *.py file in
+# this directory rather than a subset of it. The sentence above therefore covers
+# strictly more than it used to. The widening is the whole point -- the narrower family
+# is exactly what hid fs_required_knobs.py, which two shipped gates depend on, which sat
+# in neither list, and which consequently no bucket could name.
 #
 # fs277: four rows USED to sit here, and all four named files that have never existed
 # in this repository at any commit -- they live only in the private build tree, which
