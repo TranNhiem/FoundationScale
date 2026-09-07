@@ -49,7 +49,7 @@ def _result_by_id(report: Any, gate_id: str) -> Any:
     raise AssertionError(msg)
 
 
-def test_arm_a_declared_sft_with_observed_loss_passes_all_four_gates() -> None:
+def test_arm_a_declared_sft_with_observed_loss_clears_the_whole_sweep() -> None:
     cb = _callback(objective="sft")
     control = _control()
     cb.on_train_begin(SimpleNamespace(), _state(0), control)
@@ -62,12 +62,26 @@ def test_arm_a_declared_sft_with_observed_loss_passes_all_four_gates() -> None:
     assert control.should_training_stop is False
     (report,) = cb.reports
     assert report.ok is True
-    assert len(report.results) == 4
+    # The exact set, not the count: a bare `== 5` would let a sixth gate join the
+    # sweep with no verdict asserted for it, which is the shape of a denominator
+    # that grows while the claim about it stands still.
+    assert {r.gate_id for r in report.results} == {
+        "objective.declared",
+        "objective.loss_components",
+        "objective.metrics",
+        "objective.reward_scale",
+        "objective.hparam_drift",
+    }
+    assert len(report.results) == report.registered
     assert _result_by_id(report, "objective.declared").verdict.name == "PASS"
     assert _result_by_id(report, "objective.loss_components").verdict.name == "PASS"
     # SFT declares no reward term, so the reward gate abstains -- a SKIP stays
     # visible in the denominator and is never a PASS.
     assert _result_by_id(report, "objective.reward_scale").verdict.name == "SKIP"
+    # Same shape on the metrics axis (#316): SFT emits no diagnostic metric, and
+    # the empty case is a DECLARED abstention rather than a free PASS, so the
+    # absence of a metric channel stays countable instead of reading as coverage.
+    assert _result_by_id(report, "objective.metrics").verdict.name == "SKIP"
     assert _result_by_id(report, "objective.hparam_drift").verdict.name == "PASS"
 
 

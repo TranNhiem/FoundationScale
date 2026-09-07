@@ -64,10 +64,13 @@ __all__ = [
     "ValueProvenance",
     "LossComponent",
     "RewardStats",
+    "MetricExpectation",
+    "MetricObservation",
     "ObjectiveGateContext",
     "fingerprint_hparams",
     "ObjectiveDeclaredGate",
     "LossComponentCoverageGate",
+    "DiagnosticMetricGate",
     "RewardScaleSanityGate",
     "HyperparameterDriftGate",
 ]
@@ -148,6 +151,48 @@ class RewardStats:
 
 
 @dataclass(frozen=True)
+class MetricExpectation:
+    """What the objective DECLARES about one diagnostic metric.
+
+    A diagnostic metric is read but never optimised: it carries no weight and is
+    not a term of the loss, so :class:`LossComponent` cannot represent it —
+    ``weight`` is required there and a diagnostic has none. Without this channel
+    a catastrophic reading was invisible to the plane (finding #316): a Phase 2
+    DPO run logged ``accuracy = 0.0000`` for ten consecutive steps — the policy
+    ranked the rejected completion above the chosen one on every pair — and no
+    gate could see it.
+
+    ``low`` and ``high`` are required deliberately: an expectation with no bounds
+    is not an expectation, and a metric channel that accepted unbounded readings
+    would be a data dump that reads as coverage. ``degenerate`` names the exact
+    readings that mean this metric is broken even inside its range — the
+    algorithm knows them and the plane cannot guess: accuracy pinned at 0.0 is
+    pathological, while a truncation fraction pinned at 0.0 is ideal.
+    """
+
+    name: str
+    low: float
+    high: float
+    degenerate: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True)
+class MetricObservation:
+    """One diagnostic metric as read at the inspected step.
+
+    ``value=None`` is a per-metric abstention with exactly the semantics
+    documented on :class:`LossComponent.contribution`: no claim either way about
+    the metric. As there, abstention is per-unit, not a licence at aggregate
+    scope — a step in which EVERY declared metric abstains leaves the checks with
+    zero examined units, and :class:`DiagnosticMetricGate` answers that sweep
+    with a blocking VACUOUS naming 0 measured, never with ``all([])``.
+    """
+
+    name: str
+    value: float | None = None
+
+
+@dataclass(frozen=True)
 class ObjectiveGateContext:
     """Everything the objective gates need.
 
@@ -156,6 +201,13 @@ class ObjectiveGateContext:
     ``reward_stats`` and ``current_hparams`` come from observing the live step. The
     audit rule applies directly: comparing what is in force against what is in force
     is vacuous; comparing it against what the run declared is the check.
+
+    ``declared_metrics`` and ``metrics`` carry the diagnostic-metric channel
+    (finding #316). Both default to empty tuples so construction sites that
+    predate the channel remain valid, and the default is safe because the gate
+    that reads it answers the empty case with a DECLARED SKIP: the absence stays
+    visible in the sweep's denominator and cannot masquerade as coverage the way
+    a defaulted fingerprint or component list could.
     """
 
     objective: ValueProvenance | None
@@ -164,6 +216,8 @@ class ObjectiveGateContext:
     uses_rewards: bool = False
     reward_stats: RewardStats | None = None
     reward_bounds: tuple[float, float] | None = None
+    declared_metrics: tuple[MetricExpectation, ...] = ()
+    metrics: tuple[MetricObservation, ...] = ()
     expected_sample_count: int | None = None
     step0_fingerprint: str | None = None
     step0_hparams: Mapping[str, Any] | None = None
@@ -207,6 +261,8 @@ def _coerce(ctx: Any) -> ObjectiveGateContext:
             uses_rewards=bool(getattr(ctx, "uses_rewards", False)),
             reward_stats=getattr(ctx, "reward_stats", None),
             reward_bounds=getattr(ctx, "reward_bounds", None),
+            declared_metrics=tuple(getattr(ctx, "declared_metrics", ())),
+            metrics=tuple(getattr(ctx, "metrics", ())),
             expected_sample_count=getattr(ctx, "expected_sample_count", None),
             step0_fingerprint=getattr(ctx, "step0_fingerprint", None),
             step0_hparams=getattr(ctx, "step0_hparams", None),
@@ -347,6 +403,113 @@ def _partially_measured_components_ctx() -> ObjectiveGateContext:
     )
 
 
+def _healthy_metrics_ctx() -> ObjectiveGateContext:
+    # Built as an override of _healthy_ctx, never inside it: _healthy_ctx is the
+    # MUST_PASS fixture for the other four gates, and adding metrics there would
+    # silently change what every one of their controls asserts.
+    return _healthy_ctx(
+        declared_metrics=(
+            MetricExpectation(name="accuracy", low=0.0, high=1.0, degenerate=(0.0,)),
+            MetricExpectation(name="truncation_fraction", low=0.0, high=1.0),
+        ),
+        metrics=(
+            MetricObservation(name="accuracy", value=0.62),
+            MetricObservation(name="truncation_fraction", value=0.04),
+        ),
+    )
+
+
+def _no_metrics_declared_or_observed_ctx() -> ObjectiveGateContext:
+    # SFT-shaped: the objective declares no diagnostic metrics and the step
+    # emitted none. This gate answers that state with a declared SKIP, so the
+    # control declares the abstention up front (expect_skip) instead of letting
+    # verify_controls discover it at run time.
+    return _healthy_ctx()
+
+
+def _partially_abstained_metrics_ctx() -> ObjectiveGateContext:
+    return _healthy_ctx(
+        declared_metrics=(
+            MetricExpectation(name="accuracy", low=0.0, high=1.0, degenerate=(0.0,)),
+            MetricExpectation(name="truncation_fraction", low=0.0, high=1.0),
+        ),
+        metrics=(
+            MetricObservation(name="accuracy", value=0.62),
+            MetricObservation(name="truncation_fraction", value=None),
+        ),
+    )
+
+
+def _dpo_accuracy_pinned_zero_ctx() -> ObjectiveGateContext:
+    # The Phase 2 DPO reading verbatim: accuracy = 0.0000 — inside the declared
+    # range, and exactly the reading the objective declared pathological. The
+    # policy ranked the rejected completion above the chosen one on every pair
+    # for ten consecutive steps and no other gate could see it.
+    return _healthy_ctx(
+        declared_metrics=(
+            MetricExpectation(name="accuracy", low=0.0, high=1.0, degenerate=(0.0,)),
+        ),
+        metrics=(MetricObservation(name="accuracy", value=0.0),),
+    )
+
+
+def _metric_out_of_range_ctx() -> ObjectiveGateContext:
+    return _healthy_ctx(
+        declared_metrics=(
+            MetricExpectation(name="accuracy", low=0.0, high=1.0, degenerate=(0.0,)),
+        ),
+        metrics=(MetricObservation(name="accuracy", value=1.37),),
+    )
+
+
+def _undeclared_metric_observed_ctx() -> ObjectiveGateContext:
+    # Finding #316's hole from the other side: a metric the run emitted but the
+    # objective never declared is invisible to every expectation check, so
+    # undeclared-but-present is refused by construction.
+    return _healthy_ctx(
+        metrics=(MetricObservation(name="accuracy", value=0.62),),
+    )
+
+
+def _declared_metric_absent_ctx() -> ObjectiveGateContext:
+    return _healthy_ctx(
+        declared_metrics=(
+            MetricExpectation(name="accuracy", low=0.0, high=1.0, degenerate=(0.0,)),
+            MetricExpectation(name="truncation_fraction", low=0.0, high=1.0),
+        ),
+        metrics=(MetricObservation(name="truncation_fraction", value=0.04),),
+    )
+
+
+def _non_finite_metric_value_ctx() -> ObjectiveGateContext:
+    return _healthy_ctx(
+        declared_metrics=(
+            MetricExpectation(name="accuracy", low=0.0, high=1.0, degenerate=(0.0,)),
+        ),
+        metrics=(MetricObservation(name="accuracy", value=math.nan),),
+    )
+
+
+def _all_metrics_abstain_ctx() -> ObjectiveGateContext:
+    return _healthy_ctx(
+        declared_metrics=(
+            MetricExpectation(name="accuracy", low=0.0, high=1.0, degenerate=(0.0,)),
+            MetricExpectation(name="truncation_fraction", low=0.0, high=1.0),
+        ),
+        metrics=(
+            MetricObservation(name="accuracy", value=None),
+            MetricObservation(name="truncation_fraction", value=None),
+        ),
+    )
+
+
+def _inverted_expectation_ctx() -> ObjectiveGateContext:
+    return _healthy_ctx(
+        declared_metrics=(MetricExpectation(name="accuracy", low=1.0, high=0.0),),
+        metrics=(MetricObservation(name="accuracy", value=0.62),),
+    )
+
+
 def _stats_without_reward_term_ctx() -> ObjectiveGateContext:
     # Healthy reward statistics attached to an objective that declares no reward
     # term: the data exists, so it is examined — but the declaration and the
@@ -462,7 +625,7 @@ class _ObjectiveGate(Gate, ABC):
     context gets a named "unwired" ERROR, or a SKIP where it declared the
     abstention — visible in the denominator, never a PASS, and never a stopped run.
 
-    The base is applied to all four gates, not only the one with a save event. The
+    The base is applied to every gate below, not only the one with a save event. The
     others are STEP_ZERO/LAUNCH today, so they collide with nothing; that is a fact
     about the current event map, not a property of the gates, and a gate whose
     correctness depends on nobody registering it for another event is the same
@@ -816,6 +979,284 @@ class LossComponentCoverageGate(_ObjectiveGate):
                 note="kl_penalty unmeasured: abstains that leg as a declared sample "
                 "without blocking — pins the documented None contract so the "
                 "zero-measurement fix cannot grow into 'unmeasured is a defect'",
+            ),
+        ]
+
+
+_NO_METRICS_DECLARED_OR_OBSERVED_REASON = (
+    "objective declares no diagnostic metrics and none were observed — most "
+    "objectives (SFT among them) emit none, and an undeclared abstention would "
+    "read as coverage; this abstention is declared"
+)
+
+
+@register
+class DiagnosticMetricGate(_ObjectiveGate):
+    """Prevents a catastrophic diagnostic reading from passing invisibly.
+
+    Finding #316: the objective-gate plane had no channel for a diagnostic metric
+    at all. The only named-scalar channel on the context was ``components``, and
+    :class:`LossComponent` requires a ``weight`` — a metric that is read but
+    never optimised carries no weight and is not a term of the loss. So when a
+    Phase 2 DPO run logged ``accuracy = 0.0000`` for ten consecutive steps — the
+    policy ranked the rejected completion above the chosen one on every pair —
+    the reading was logged and no gate could see it.
+
+    The check is declaration-gated, like the component gate: a metric is only
+    examinable against what the objective stated about it, so a reading with no
+    declared expectation is refused rather than waved past, and a declared
+    expectation with no reading fails as a divergence between record and data.
+    Degenerate readings are declared per metric because the plane cannot guess
+    them: accuracy pinned at 0.0 is the DPO failure, while a truncation fraction
+    pinned at 0.0 is ideal.
+    """
+
+    id: ClassVar[str] = "objective.metrics"
+    description: ClassVar[str] = (
+        "Every observed diagnostic metric was declared with a bounded, coherent "
+        "expectation; every declared metric was emitted; every measured value is "
+        "finite, inside its declared range, and clear of the readings the "
+        "objective itself declared degenerate"
+    )
+    events: ClassVar[tuple[Lifecycle, ...]] = (Lifecycle.STEP_ZERO,)
+
+    def check(self, ctx: Any) -> GateResult:
+        c = _coerce(ctx)
+        declared = c.declared_metrics
+        observed = c.metrics
+        if not declared and not observed:
+            # SFT and most other objectives emit no diagnostic metric at all, and
+            # blocking them would be wrong; the skip is declared so the
+            # abstention stays in the denominator instead of reading as coverage.
+            return self.skip(_NO_METRICS_DECLARED_OR_OBSERVED_REASON)
+        if not declared:
+            # The measurement this gate exists for: an undeclared reading is
+            # invisible to every range and degeneracy check the objective could
+            # have stated, so undeclared-but-present is refused by construction.
+            extra = sorted({m.name for m in observed})
+            return self.fail(
+                f"observed metrics never declared: {extra} — the objective emitted "
+                f"a reading it made no claim about, and an undeclared reading is "
+                f"invisible to every check this gate runs",
+                Coverage.none("diagnostic metrics"),
+                evidence={"undeclared": extra, "origin": c.origin},
+            )
+        by_name = {m.name: m for m in observed}
+
+        problems: list[str] = []
+        abstaining: list[str] = []
+        clean: list[str] = []
+        for exp in declared:
+            if not (math.isfinite(exp.low) and math.isfinite(exp.high)):
+                problems.append(
+                    f"metric {exp.name!r} declares non-finite bounds "
+                    f"[{exp.low!r}, {exp.high!r}] — every comparison against them "
+                    f"is silently True, and a bounds check that examined nothing "
+                    f"reads as coverage"
+                )
+                continue
+            if exp.low > exp.high:
+                problems.append(
+                    f"metric {exp.name!r} declares an inverted range "
+                    f"[{exp.low!r}, {exp.high!r}] — no reading can satisfy it, so "
+                    f"the expectation is incoherent"
+                )
+                continue
+            bad_degenerate = [d for d in exp.degenerate if not math.isfinite(d)]
+            if bad_degenerate:
+                problems.append(
+                    f"metric {exp.name!r} declares non-finite degenerate readings "
+                    f"{bad_degenerate} — a NaN entry compares equal to nothing and "
+                    f"the degeneracy check would never fire"
+                )
+                continue
+            obs = by_name.get(exp.name)
+            if obs is None:
+                # Absent is not the same as present with value=None: the metric
+                # the objective's record claims never entered this step at all.
+                problems.append(
+                    f"declared metric {exp.name!r} was never emitted at this step "
+                    f"— the objective's record claims a metric the step does not "
+                    f"carry"
+                )
+                continue
+            if obs.value is None:
+                # Per-metric abstention, exactly the LossComponent.contribution
+                # contract: no claim either way. Counted below, never a defect.
+                abstaining.append(exp.name)
+                continue
+            value = obs.value
+            if not math.isfinite(value):
+                problems.append(
+                    f"metric {exp.name!r} read non-finite value {value!r} — a NaN "
+                    f"or infinite reading compares equal to nothing and would "
+                    f"slip past both the range and the degeneracy checks"
+                )
+                continue
+            if value < exp.low or value > exp.high:
+                problems.append(
+                    f"metric {exp.name!r} read {value!r}, outside its declared "
+                    f"range [{exp.low!r}, {exp.high!r}]"
+                )
+                continue
+            if value in exp.degenerate:
+                problems.append(
+                    f"metric {exp.name!r} is pinned at {value!r}, a reading the "
+                    f"objective itself declared pathological — an in-range value "
+                    f"can still mean the metric is broken, and DPO accuracy = "
+                    f"0.0 is exactly that: the rejected completion ranked above "
+                    f"the chosen one on every pair"
+                )
+                continue
+            clean.append(exp.name)
+
+        cov = Coverage(
+            checked=len(clean) + len(abstaining),
+            unit="diagnostic metrics",
+            expected=len(declared),
+        )
+        if problems:
+            return self.fail(
+                problems[0] + (f" (+{len(problems) - 1} more)" if len(problems) > 1 else ""),
+                cov,
+                evidence={
+                    "problems": problems,
+                    "declared": [exp.name for exp in declared],
+                    "abstaining": abstaining,
+                    "origin": c.origin,
+                },
+            )
+        if not clean:
+            # No problems, and no metric graded either: every declared metric
+            # abstained (any metric that neither passed nor abstained produced a
+            # problem above). The same shape LossComponentCoverageGate answers
+            # for its zero-contributions sweep: ok() over empty coverage
+            # downgrades to a blocking VACUOUS that names the 0 — never all([])
+            # wearing a covered numerator.
+            return self.ok(
+                f"all {len(declared)} declared diagnostic metrics abstained this "
+                f"step (value=None carries no claim either way, per the "
+                f"LossComponent.contribution contract) — the range and degeneracy "
+                f"checks examined 0 of {len(declared)} metrics",
+                Coverage.none("diagnostic metrics"),
+                evidence={
+                    "declared": [exp.name for exp in declared],
+                    "abstaining": abstaining,
+                    "origin": c.origin,
+                },
+            )
+        if abstaining:
+            # Partial abstention: the numerator counts only metrics verified on
+            # every leg, and the shortfall enters through Coverage(sampled=True)
+            # with the abstainers named — exactly the lane
+            # LossComponentCoverageGate uses for unmeasured contributions.
+            return self.ok(
+                f"{len(clean)} of {len(declared)} declared metrics inside their "
+                f"ranges and clear of degenerate readings; {len(abstaining)} "
+                f"abstained (no claim either way): {abstaining}",
+                Coverage(
+                    checked=len(clean),
+                    unit="diagnostic metrics",
+                    expected=len(declared),
+                    sampled=True,
+                    sample_reason=(
+                        f"value unmeasured (None) for {len(abstaining)} of "
+                        f"{len(declared)} declared metrics: {abstaining}; per "
+                        f"the LossComponent.contribution contract an unmeasured "
+                        f"value carries no claim either way"
+                    ),
+                ),
+                evidence={
+                    "declared": [exp.name for exp in declared],
+                    "clean": clean,
+                    "abstaining": abstaining,
+                    "origin": c.origin,
+                },
+            )
+        return self.ok(
+            f"all {len(declared)} declared diagnostic metrics emitted, finite, "
+            f"inside their declared ranges, and clear of their declared "
+            f"degenerate readings",
+            cov,
+            evidence={
+                "declared": [exp.name for exp in declared],
+                "origin": c.origin,
+            },
+        )
+
+    def controls(self) -> list[Control]:
+        return [
+            Control(
+                "healthy-metrics",
+                ControlKind.MUST_PASS,
+                _healthy_metrics_ctx,
+                note="accuracy 0.62 inside [0.0, 1.0] with degenerate=(0.0,), "
+                "plus a second metric — both declared, both emitted, both clean",
+            ),
+            Control(
+                "no-metrics-declared-or-observed",
+                ControlKind.MUST_PASS,
+                _no_metrics_declared_or_observed_ctx,
+                note="SFT-shaped: nothing declared, nothing observed — the gate "
+                "abstains, and the abstention is declared up front rather than "
+                "discovered at run time",
+                expect_skip=_NO_METRICS_DECLARED_OR_OBSERVED_REASON,
+            ),
+            Control(
+                "partial-metric-abstention",
+                ControlKind.MUST_PASS,
+                _partially_abstained_metrics_ctx,
+                note="truncation_fraction abstains (value=None) while accuracy is "
+                "clean — pins the documented None contract so the check cannot "
+                "grow into 'unmeasured is a defect'",
+            ),
+            Control(
+                "dpo-accuracy-pinned-zero",
+                ControlKind.MUST_FIRE,
+                _dpo_accuracy_pinned_zero_ctx,
+                note="the Phase 2 DPO reading: accuracy declared [0.0, 1.0] with "
+                "degenerate=(0.0,), observed exactly 0.0 — rejected ranked above "
+                "chosen on every pair for ten consecutive steps",
+            ),
+            Control(
+                "metric-outside-declared-range",
+                ControlKind.MUST_FIRE,
+                _metric_out_of_range_ctx,
+                note="accuracy 1.37 against a declared [0.0, 1.0]",
+            ),
+            Control(
+                "observed-metric-never-declared",
+                ControlKind.MUST_FIRE,
+                _undeclared_metric_observed_ctx,
+                note="an emitted reading with no declared expectation is invisible "
+                "to every check — refused by construction",
+            ),
+            Control(
+                "declared-metric-wholly-absent",
+                ControlKind.MUST_FIRE,
+                _declared_metric_absent_ctx,
+                note="accuracy declared but never emitted at this step — record and data diverge",
+            ),
+            Control(
+                "non-finite-metric-value",
+                ControlKind.MUST_FIRE,
+                _non_finite_metric_value_ctx,
+                note="NaN compares equal to nothing and would skip the range and "
+                "degeneracy checks alike",
+            ),
+            Control(
+                "every-declared-metric-abstains",
+                ControlKind.MUST_FIRE,
+                _all_metrics_abstain_ctx,
+                note="both declared metrics value=None — the vacuous sweep must "
+                "block (VACUOUS naming 0 measured), not issue a pass grade",
+            ),
+            Control(
+                "inverted-metric-expectation",
+                ControlKind.MUST_FIRE,
+                _inverted_expectation_ctx,
+                note="declared [1.0, 0.0]: no reading can satisfy it — an "
+                "incoherent declaration, not a verdict about the metric",
             ),
         ]
 

@@ -333,10 +333,12 @@ running-system evidence. The sketches below are design sketches, not run reports
   seven contracts as drawn: something must run the frozen reference over the batch,
   and that scoring pass is the same open edge the reward callable below runs into.
   Phase 2's open finding belongs here: DPO `accuracy` and `sft_loss` both read
-  exactly 0.0000 for the whole run, unexplained. Under this design,
-  `LossComponentCoverageGate` and `RewardScaleSanityGate` are the instruments that
-  would either catch or characterise such a reading; whether they would have caught
-  *this* one is UNMEASURED and belongs in section 7.
+  exactly 0.0000 for the whole run, still unexplained as to CAUSE. What the gates
+  DO with the reading is no longer unmeasured — section 7 item 4 measured it, and
+  `LossComponentCoverageGate` catches the `sft_loss` half while
+  `DiagnosticMetricGate` (added by #316) catches the `accuracy` half. Both are
+  conditional on the objective DECLARING the quantity, which is what stage 2 in
+  section 9 now carries as conditions (a) and (c).
 * **Reward-model training (Bradley-Terry).** `PolicyPair` carries a training view
   with a scalar head; `LossFn` is the pairwise ranking loss; no rollout, no
   advantage. The fit is clean, with one caveat: the trained artifact is consumed by
@@ -456,7 +458,6 @@ Ranked. Each item: the question, why the design turns on it, the measurement.
    | `sft_loss` 0.0000 | declared, weight `0.0` | **FAIL** — "components with weight 0.0" |
    | `sft_loss` 0.0000 | declared, weighted, contributing `0.0` | **FAIL** — "measured contributing exactly 0.0" |
    | `sft_loss` 0.0000 | **not declared**, log-only | PASS — four green gates |
-   | `accuracy` 0.0000 | any | no gate reads it |
 
    So the gate plane catches the `sft_loss` reading **if and only if the objective
    declares `sft_loss` as a component**, and NeMo-RL logs that key whether or not
@@ -465,17 +466,55 @@ Ranked. Each item: the question, why the design turns on it, the measurement.
    DPO must declare its auxiliary term even when the term is switched off, because
    an undeclared inactive term and an undeclared broken term read identically.
 
-   The `accuracy` half is worse and is a finding rather than a caveat: `accuracy`
-   at 0.0000 means the policy ranked the REJECTED completion above the chosen one
-   on every pair, and **no gate can see it, structurally**. Of the eleven
-   `ObjectiveGateContext` fields the only named-scalar channel is `components`,
-   and `LossComponent` requires a `weight`; a diagnostic metric has no weight and
-   is not a term of the loss. `LossOutput` (two fields) and
-   `build_objective_gate_context` (seven parameters) carry no metric either, so
-   the gap is in the stage-1 seam and not only in the context. The design's claim
-   that "the gate plane is the right instrument for this class of defect" holds
-   for loss components and is **false for diagnostic metrics**, which currently
-   sit in no denominator at all.
+   The `accuracy` half was worse, and it was a finding rather than a caveat:
+   `accuracy` at 0.0000 means the policy ranked the REJECTED completion above the
+   chosen one on every pair, and **no gate could see it, structurally**. Of the
+   eleven `ObjectiveGateContext` fields the only named-scalar channel was
+   `components`, and `LossComponent` requires a `weight`; a diagnostic metric has
+   no weight and is not a term of the loss. `LossOutput` (two fields) and
+   `build_objective_gate_context` (seven parameters) carried no metric either, so
+   the gap was in the stage-1 seam and not only in the context.
+
+   **That gap is finding #316, and it is now closed.** The plane gained a fifth
+   objective gate, `objective.metrics`, and the context gained two fields —
+   `declared_metrics: tuple[MetricExpectation, ...]` and
+   `metrics: tuple[MetricObservation, ...]` — with matching changes at the seam
+   (`LossOutput.metrics`, and a `declared_metrics` parameter on
+   `build_objective_gate_context`). The metric types are deliberately NOT
+   `LossComponent`: routing a metric through a type that requires a weight would
+   make the plane assert something false in order to look at it. `MetricExpectation`
+   requires its `low`/`high` bounds, because an expectation with no bounds is not
+   an expectation and a metric channel with no declared expectation is a data dump
+   that READS as coverage; `MetricObservation.value=None` abstains with exactly
+   `LossComponent.contribution`'s documented semantics. Re-measured over the same
+   production dispatch:
+
+   | Reading | Arm | `objective.metrics` |
+   |---|---|---|
+   | `accuracy` 0.5781 (control) | declared `[0, 1]`, observed | PASS |
+   | no metrics at all (SFT) | declared none, observed none | SKIP — declared abstention |
+   | `accuracy` 0.0000 | declared `[0, 1]` with `degenerate=(0.0,)` | **FAIL** — "pinned at 0.0" |
+   | `accuracy` 0.0000 | **not declared**, log-only | **FAIL** — "never declared" |
+   | `accuracy` 0.0000 | declared `[0, 1]`, no `degenerate` named | PASS |
+   | `accuracy` declared, never emitted | declared `[0, 1]`, absent | **FAIL** |
+   | every declared metric abstains | declared `[0, 1]`, `value=None` | **VACUOUS** |
+
+   Two things in that table are load-bearing and neither is free. First, the
+   metric axis does NOT inherit the loss axis's H3 hole: an observed metric the
+   objective never declared is itself a refusal, so `accuracy` cannot slip through
+   by going undeclared. Second, `0.0` is INSIDE an accuracy's natural `[0, 1]`
+   range, so bounds alone cannot refuse it — what refuses it is the objective
+   declaring `0.0` pathological for THIS metric, which the plane cannot infer
+   (accuracy pinned at 0.0 is broken; a truncation fraction at 0.0 is ideal). So
+   the conditional is narrowed, not removed, and it lands on stage 2 next to the
+   `sft_loss` one: **FoundationScale's DPO must declare `accuracy` with its
+   degenerate reading named.** The empty case is a declared SKIP rather than a
+   silent PASS for the same reason: absence has to stay visible in the denominator.
+
+   The design's claim that "the gate plane is the right instrument for this class
+   of defect" now holds on both axes, conditional on declaration on both.
+   Measured in `tests/rl/test_dpo_anomaly_gate_response.py` (8 legs) and in the
+   gate's own ten controls.
 5. **Serialized bytes crossing the trainer/generation boundary.** Sizes the
    `ExperienceBatch` schema and the sync mapping. UNMEASURED; Phase 2's ten steps
    on one GPU did not price the boundary.
@@ -531,6 +570,15 @@ measurements — the gate plane's fail-closed discipline is the motivation, and 
    measurement found missing must be resolved — either added to the contract or
    explicitly declared out of scope — before an algorithm whose primary health
    signal is a metric rather than a loss term is built on it.
+
+   Condition (b) is **DISCHARGED**: #316 added the channel (`objective.metrics`,
+   `ObjectiveGateContext.declared_metrics`/`.metrics`, `LossOutput.metrics`), so
+   this stage no longer blocks on it. What (b) leaves behind is a third condition
+   in the same family as (a): (c) DPO must declare `accuracy` **with its degenerate
+   reading named** (`MetricExpectation(name="accuracy", low=0.0, high=1.0,
+   degenerate=(0.0,))`), because `0.0` is inside an accuracy's natural range and
+   bounds alone cannot refuse it. Conditions (a) and (c) are the same finding on
+   two axes: declaration is what puts a quantity in the denominator.
 3. Land `RolloutSource`, `AdvantageFn`, and `WeightSync` together — they are not
    separable — behind one policy-gradient algorithm, gated on the transport
    measurement (section 7, item 3).

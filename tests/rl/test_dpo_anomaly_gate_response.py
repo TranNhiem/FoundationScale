@@ -20,11 +20,13 @@ The measured answer is split, and the split is the finding:
   `sft_loss` as a loss component (H1, H2). Undeclared, the same reading passes
   four green gates (H3). Declaration is what puts a component in the
   denominator, and NeMo-RL logs `sft_loss` whether or not it is an active term.
-* `accuracy` at 0.0000 is caught by NOTHING, and cannot be: no field of
-  `ObjectiveGateContext` can carry a diagnostic metric. See the last test.
+* `accuracy` at 0.0000 was caught by NOTHING, and could not be: no field of
+  `ObjectiveGateContext` could carry a diagnostic metric. That gap is #316, and
+  it is now closed -- the last three tests measure the channel that closed it,
+  including the one conditional that remains open.
 
-Arm CONTROL is the positive control (#239). Without a green arm the two firing
-arms are indistinguishable from a comparator that refuses everything.
+Arm CONTROL is the positive control (#239). Without a green arm the firing arms
+are indistinguishable from a comparator that refuses everything.
 """
 
 from __future__ import annotations
@@ -35,6 +37,8 @@ import inspect
 from foundationscale.gates.core import REGISTRY, Lifecycle, run_event
 from foundationscale.gates.objective_gates import (
     LossComponent,
+    MetricExpectation,
+    MetricObservation,
     ObjectiveGateContext,
     ValueProvenance,
     fingerprint_hparams,
@@ -55,13 +59,22 @@ _PREFERENCE_OK = LossComponent(
 
 
 def _context(
-    components: tuple[LossComponent, ...], declared: tuple[str, ...]
+    components: tuple[LossComponent, ...],
+    declared: tuple[str, ...],
+    *,
+    declared_metrics: tuple[MetricExpectation, ...] = (),
+    metrics: tuple[MetricObservation, ...] = (),
 ) -> ObjectiveGateContext:
+    # The metric arguments default to empty so the loss-axis arms below read
+    # exactly as they did before #316: those arms are about the loss channel, and
+    # a metric they never mention must not silently change what they assert.
     return ObjectiveGateContext(
         objective=_OBJECTIVE,
         declared_components=declared,
         components=components,
         uses_rewards=False,
+        declared_metrics=declared_metrics,
+        metrics=metrics,
         step0_fingerprint=_FINGERPRINT,
         step0_hparams=_HPARAMS,
         current_hparams=_HPARAMS,
@@ -196,32 +209,106 @@ def test_h3_the_same_reading_is_invisible_when_the_term_is_not_declared() -> Non
     assert _verdict(report, "objective.loss_components") == "PASS"
 
 
-def test_a_diagnostic_metric_has_no_channel_into_the_gate_plane() -> None:
-    """The `accuracy` half: structurally unmeasurable, not merely unmeasured.
+def test_the_diagnostic_metric_channel_exists_end_to_end() -> None:
+    """#316 CLOSED on the EXISTENCE axis: the channel is present in both layers.
 
-    DPO `accuracy` at exactly 0.0000 for ten steps says the policy ranked the
-    REJECTED response above the chosen one on every pair -- the more alarming of
-    Phase 2's two readings. No gate can see it, and the reason is the shape of
-    the context rather than the content of any gate: of eleven fields, the only
-    named-scalar channel is `components`, and `LossComponent` REQUIRES a
-    `weight`. A diagnostic metric has no weight and is not a term of the loss,
-    so routing `accuracy` through it would make the plane assert something false
-    in order to look at it.
+    This test previously asserted the OPPOSITE -- that no field of
+    `ObjectiveGateContext` could carry a diagnostic metric -- and it was written
+    to go red on exactly this change so the re-statement would be deliberate
+    rather than a silent relaxation. It is re-stated here as the positive claim.
 
-    Asserted over the live field sets rather than a copied list, so adding the
-    missing channel turns this test red and it has to be re-stated deliberately.
+    `LossComponent` still REQUIRES a `weight`, and that is the point: a
+    diagnostic metric has no weight and is not a term of the loss, so it gets its
+    own pair of types rather than being routed through the loss channel, which
+    would make the plane assert something false in order to look at it.
+
+    Asserted over the live field sets, so removing the channel again turns this
+    red instead of quietly restoring the blindness.
     """
     from foundationscale.rl.interfaces import LossOutput, build_objective_gate_context
 
     ctx_fields = {f.name for f in dataclasses.fields(ObjectiveGateContext)}
-    assert "metrics" not in ctx_fields
+    assert {"declared_metrics", "metrics"} <= ctx_fields
     assert {f.name for f in dataclasses.fields(LossComponent)} == {
         "name",
         "weight",
         "observed",
         "contribution",
     }
-    # The bridge stage 1 shipped: neither the loss it reads nor the parameters it
-    # accepts carry a metric, so the absence is in the seam, not just the context.
-    assert {f.name for f in dataclasses.fields(LossOutput)} == {"loss", "components"}
-    assert "metrics" not in set(inspect.signature(build_objective_gate_context).parameters)
+    assert {f.name for f in dataclasses.fields(MetricExpectation)} == {
+        "name",
+        "low",
+        "high",
+        "degenerate",
+    }
+    assert {f.name for f in dataclasses.fields(MetricObservation)} == {"name", "value"}
+    # The seam, not just the context: a channel the stage-1 bridge cannot fill is
+    # a field the production path never populates -- #316's own failure shape.
+    assert {f.name for f in dataclasses.fields(LossOutput)} == {"loss", "components", "metrics"}
+    assert "declared_metrics" in set(inspect.signature(build_objective_gate_context).parameters)
+
+
+def test_the_phase_two_accuracy_reading_now_fires() -> None:
+    """The `accuracy` half, measured rather than declared unmeasurable.
+
+    DPO `accuracy` at exactly 0.0000 for ten steps says the policy ranked the
+    REJECTED response above the chosen one on every pair -- the more alarming of
+    Phase 2's two readings, and the one no gate could see before #316.
+
+    The firing is conditional in the same way H1/H2 are, and the condition is
+    named rather than hidden: `0.0` is INSIDE the natural [0, 1] range of an
+    accuracy, so bounds alone cannot refuse it. What refuses it is the objective
+    declaring 0.0 pathological for THIS metric. The plane cannot infer that --
+    accuracy pinned at 0.0 is broken, a truncation fraction at 0.0 is ideal --
+    so `degenerate` is the algorithm's claim, not the gate's guess.
+    """
+    accuracy = MetricExpectation(name="accuracy", low=0.0, high=1.0, degenerate=(0.0,))
+    report = _sweep(
+        _context(
+            (_PREFERENCE_OK,),
+            ("preference_loss",),
+            declared_metrics=(accuracy,),
+            metrics=(MetricObservation(name="accuracy", value=0.0),),
+        )
+    )
+    assert report.ok is False  # type: ignore[attr-defined]
+    assert _verdict(report, "objective.metrics") == "FAIL"
+    assert "accuracy" in _detail(report, "objective.metrics")
+    # The loss-side gates stay green on this arm: the two halves of the Phase 2
+    # anomaly are caught by different gates, and collapsing them into one refusal
+    # would make the verdict unactionable.
+    assert _verdict(report, "objective.loss_components") == "PASS"
+
+
+def test_the_metric_axis_has_no_h3_hole_but_the_degenerate_claim_is_load_bearing() -> None:
+    """Two conditionals, measured, because only one of them is closed.
+
+    H3 on the loss axis: an UNDECLARED `sft_loss` at 0.0 passes every gate,
+    because declaration is what puts a term in the denominator. The metric axis
+    does NOT inherit that hole -- an observed metric the objective never declared
+    is itself a refusal, so `accuracy` cannot slip through by going undeclared.
+
+    What it DOES inherit is the weaker conditional above: declared with a range
+    but with no `degenerate` reading named, 0.0 is in-range and passes. That is
+    the residual, and it is a requirement on stage 2 rather than a defect here.
+    """
+    observed_only = _sweep(
+        _context(
+            (_PREFERENCE_OK,),
+            ("preference_loss",),
+            declared_metrics=(),
+            metrics=(MetricObservation(name="accuracy", value=0.0),),
+        )
+    )
+    assert _verdict(observed_only, "objective.metrics") == "FAIL"
+    assert "never declared" in _detail(observed_only, "objective.metrics")
+
+    no_degenerate = _sweep(
+        _context(
+            (_PREFERENCE_OK,),
+            ("preference_loss",),
+            declared_metrics=(MetricExpectation(name="accuracy", low=0.0, high=1.0),),
+            metrics=(MetricObservation(name="accuracy", value=0.0),),
+        )
+    )
+    assert _verdict(no_degenerate, "objective.metrics") == "PASS"

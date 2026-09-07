@@ -2,13 +2,16 @@
 
 Why this suite exists
 ---------------------
-These four gates encode the lessons of three concrete incidents: 24 runs that split
+These five gates encode the lessons of four concrete incidents: 24 runs that split
 12/12 between two objectives because an environment variable was read and never
 recorded; a trust region listed and instantiated in seven of ten arms while its
-importance ratio sat identically at 1.0; and 472 steps of ``grad_norm == 0.000``
-beneath a healthy-looking ``reward/mean=0.794``. Each incident survived precisely
-because some checker reported success without having checked the thing that was
-wrong — or without having checked anything at all.
+importance ratio sat identically at 1.0; 472 steps of ``grad_norm == 0.000``
+beneath a healthy-looking ``reward/mean=0.794``; and a NeMo-RL DPO run whose
+``accuracy`` read exactly ``0.0000`` for all ten steps while every loss-side gate
+passed, because a diagnostic metric is not a term of the loss and so sat in no
+denominator at all (#316). Each incident survived precisely because some checker
+reported success without having checked the thing that was wrong — or without
+having checked anything at all.
 
 The tests here attack the gates the way the estate actually failed: they try to get
 PASS out of an empty component list, out of an env-shadowed default, out of an
@@ -1150,11 +1153,12 @@ class TestRegistration:
     _IDS = {
         "objective.declared",
         "objective.loss_components",
+        "objective.metrics",
         "objective.reward_scale",
         "objective.hparam_drift",
     }
 
-    def test_all_four_gates_are_registered(self) -> None:
+    def test_all_five_gates_are_registered(self) -> None:
         registered = {gate.id for gate in REGISTRY}
         assert registered >= self._IDS
 

@@ -19,6 +19,8 @@ from typing import Any, Protocol
 
 from foundationscale.gates.objective_gates import (
     LossComponent,
+    MetricExpectation,
+    MetricObservation,
     ObjectiveGateContext,
     ValueProvenance,
 )
@@ -138,13 +140,22 @@ class LossOutput:
     ``LossComponentCoverageGate`` reads it without adaptation. An unmeasured
     contribution is ``None``, never ``0.0`` -- absent is not zero, and a
     measured ``0.0`` is a real and different observation.
+
+    ``metrics`` carries diagnostic readings the loss observed but does not
+    optimise -- quantities with no weight that are not terms of the loss, so
+    ``components`` cannot represent them (finding #316). It defaults to empty
+    because the gate that reads the channel answers the empty case with a
+    declared SKIP: the absence stays visible in the denominator instead of
+    grading as coverage.
     """
 
     loss: float
     components: tuple[LossComponent, ...]
+    metrics: tuple[MetricObservation, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "components", tuple(self.components))
+        object.__setattr__(self, "metrics", tuple(self.metrics))
 
 
 # The training loop's opaque forward callable. The loss invokes it with the
@@ -279,6 +290,7 @@ def build_objective_gate_context(
     current_hparams: Mapping[str, Any],
     step0_fingerprint: str | None,
     step0_hparams: Mapping[str, Any] | None,
+    declared_metrics: Sequence[MetricExpectation] = (),
     origin: str = "<rl-loss>",
 ) -> ObjectiveGateContext:
     """Assemble the gate context for one measured step (design section 7, item 1).
@@ -305,6 +317,14 @@ def build_objective_gate_context(
     is in force -- vacuous, and precisely the reading the gate exists to refuse.
     Producing the step-0 fingerprint belongs to the loop/manifest seam, where
     the value is written once and read back.
+
+    ``declared_metrics`` is allowed a default where ``step0_fingerprint`` was
+    not, because the two empty cases grade differently. With no metrics declared
+    and none emitted, ``objective.metrics`` answers a declared SKIP that stays
+    in the sweep's denominator -- the absence is visible and cannot read as
+    coverage. A defaulted step-0 fingerprint, by contrast, would have made
+    ``objective.hparam_drift``'s blocking verdict a property of this bridge
+    rather than a stated property of the call site.
     """
     # Reward fields stay at their defaults: reward-bearing algorithms are a
     # later stage (design section 9), and `uses_rewards=False` with no stats is
@@ -313,6 +333,8 @@ def build_objective_gate_context(
         objective=objective,
         declared_components=tuple(declared_components),
         components=loss.components,
+        declared_metrics=tuple(declared_metrics),
+        metrics=loss.metrics,
         uses_rewards=False,
         step0_fingerprint=step0_fingerprint,
         step0_hparams=step0_hparams,

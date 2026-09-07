@@ -183,10 +183,13 @@ not an absent thing.
   has not been read back — so no conclusion should be drawn from the DPO
   accuracy number. What HAS been measured is what FoundationScale's objective
   gates do when handed the reading (PHASE3_DESIGN section 7 item 4,
-  `tests/rl/test_dpo_anomaly_gate_response.py`): the `sft_loss` half is caught,
-  but only if the objective declares `sft_loss` as a loss component, and the
-  `accuracy` half is caught by nothing because the gate context has no channel
-  for a diagnostic metric.
+  `tests/rl/test_dpo_anomaly_gate_response.py`): both halves are caught, and both
+  only if the objective DECLARES the quantity. The `sft_loss` half needs
+  `sft_loss` declared as a loss component; the `accuracy` half needed a channel
+  that did not exist when this was first written, which is finding #316 and is
+  now closed — it needs `accuracy` declared as a diagnostic metric with `0.0`
+  named as a degenerate reading, since `0.0` is inside an accuracy's natural
+  range and bounds alone cannot refuse it.
 * No FoundationScale-side comparison exists yet. That is Phase 4, and nothing
   here licenses a claim about relative performance.
 
