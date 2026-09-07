@@ -48,9 +48,10 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from re import Pattern
@@ -573,6 +574,78 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         regex=re.compile(r"(?P<num>" + NUMBER + r") git-tracked \.py/\.sh/\.md lines repo-wide"),
         bindings=(("tracked_py_sh_md_loc", "num"),),
     ),
+    # -- docs/ARCHITECTURE.md (#315) ------------------------------------------
+    # The specs above were written by walking the DATED review corpus, so every
+    # phrasing they know is a phrasing D1-D10 happened to use. docs/ARCHITECTURE.md
+    # is the LIVING architecture document and it states nine countables in nine
+    # phrasings none of them use -- so it was scanned, matched nothing, and
+    # contributed zero sites while `make countables` reported CLEAR over 80.
+    # Seven of its nine numbers were stale, one by 11,322 lines. The corpus was in
+    # the denominator; this document's WORDING was not, which is the same defect
+    # one level down.
+    PatternSpec(
+        label="src/ is N LOC across M files pair (src_loc+src_files)",
+        # evidence: docs/ARCHITECTURE.md
+        #   "`src/` is 18915 LOC across 25 files"
+        regex=re.compile(
+            r"`?src/`? is (?P<loc>" + NUMBER + r") LOC across (?P<files>" + NUMBER + r") files"
+        ),
+        bindings=(("src_loc", "loc"), ("src_files", "files")),
+    ),
+    PatternSpec(
+        label="tests/ adds N .py LOC (tests_loc)",
+        # evidence: docs/ARCHITECTURE.md
+        #   "`tests/` adds 29716 `.py` LOC (its conftest carries the skip guard)"
+        regex=re.compile(r"`?tests/`? adds (?P<num>" + NUMBER + r") `?\.py`? LOC"),
+        bindings=(("tests_loc", "num"),),
+    ),
+    PatternSpec(
+        label="N Python LOC of CLIs over the package (tools_loc)",
+        # evidence: docs/ARCHITECTURE.md
+        #   "| `tools/` | 9514 Python LOC of CLIs over the package: ... |"
+        regex=re.compile(r"(?P<num>" + NUMBER + r") Python LOC of CLIs over the package"),
+        bindings=(("tools_loc", "num"),),
+    ),
+    PatternSpec(
+        label="estate launch plane (N shell LOC) ... M Python LOC pair "
+        "(launch_sh_loc+launch_py_loc)",
+        # evidence: docs/ARCHITECTURE.md
+        #   "| `launchers/` | The estate launch plane (10231 shell LOC) plus two bash
+        #   contract suites and Python helpers (lora target census, peft override
+        #   replay) -- 1615 Python LOC. |"
+        # One table row, so one site: the bounded wildcard steps over the prose
+        # (and the em dash) between the two numbers without leaving the row --
+        # `re` runs without DOTALL, so `.` cannot cross the newline that ends it.
+        regex=re.compile(
+            r"estate launch plane \((?P<sh>" + NUMBER + r") shell LOC\)"
+            r".{0,150}?(?P<py>" + NUMBER + r") Python LOC\."
+        ),
+        bindings=(("launch_sh_loc", "sh"), ("launch_py_loc", "py")),
+    ),
+    PatternSpec(
+        label="experimental H100 harness (N Python, M shell LOC) pair (h100_loc+h100_sh_loc)",
+        # evidence: docs/ARCHITECTURE.md
+        #   "The experimental H100 harness (31313 Python, 4996 shell LOC)"
+        regex=re.compile(
+            r"experimental H100 harness \((?P<py>" + NUMBER + r") Python, "
+            r"(?P<sh>" + NUMBER + r") shell LOC\)"
+        ),
+        bindings=(("h100_loc", "py"), ("h100_sh_loc", "sh")),
+    ),
+    PatternSpec(
+        label="Repo-wide: N git-tracked .py/.sh/.md lines (tracked_py_sh_md_loc)",
+        # evidence: docs/ARCHITECTURE.md
+        #   "Repo-wide: 123547 git-tracked `.py`/`.sh`/`.md` lines."
+        # A SECOND spec for this key, not a widening of the first: the review
+        # corpus writes "N git-tracked .py/.sh/.md lines repo-wide" and this
+        # document puts the number before the noun and backticks the extensions.
+        # Widening the earlier regex to admit both orderings would make it match
+        # on the extensions alone, which is how a value collision becomes a site.
+        regex=re.compile(
+            r"Repo-wide: (?P<num>" + NUMBER + r") git-tracked `?\.py`?/`?\.sh`?/`?\.md`? lines"
+        ),
+        bindings=(("tracked_py_sh_md_loc", "num"),),
+    ),
 )
 
 # Historical masks, CLAUSE-level (rule 3). Each swallows the dead claim and
@@ -793,6 +866,74 @@ def gate_exit_code(report: Report) -> int:
     if report.drifted:
         return EXIT_RED
     return EXIT_CLEAR
+
+
+# The census tool is the ONLY thing that walks the repository. The gate never
+# does its own file selection -- duplicating the walk here is exactly #244, the
+# gate and its oracle disagreeing about what the repository IS, which is worse
+# than either being wrong alone.
+CENSUS_TOOL: Final[Path] = Path(__file__).resolve().parent.parent / "tools" / "countables_census.py"
+
+
+def measure_census_now() -> tuple[dict[str, int] | None, str]:
+    """Run the census tool into a temp file and return its integer keys."""
+    if not CENSUS_TOOL.exists():
+        return None, f"census tool not found at {CENSUS_TOOL}"
+    with tempfile.TemporaryDirectory(prefix="countables-freshness-") as td:
+        out = Path(td) / "census.json"
+        # `--no-coverage --out` is the invocation both the Makefile and CI use
+        # to produce the census they then pass in; anything else would compare
+        # against a differently-scoped measurement.
+        cmd = [sys.executable, str(CENSUS_TOOL), "--no-coverage", "--out", str(out)]
+        # argv is closed: this interpreter, a path derived from __file__, and two
+        # literals. No shell, and nothing here comes from the corpus or the CLI.
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        except OSError as exc:
+            return None, f"could not run the census tool: {exc}"
+        if proc.returncode != 0:
+            tail = proc.stderr.strip().splitlines()[-1:] or ["(no stderr)"]
+            return None, f"census tool exited {proc.returncode}: {tail[0][:160]}"
+        try:
+            raw = json.loads(out.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return None, f"regenerated census unreadable: {exc}"
+    if not isinstance(raw, dict):
+        return None, "regenerated census is not a JSON object"
+    return {k: v for k, v in raw.items() if isinstance(v, int) and not isinstance(v, bool)}, "ok"
+
+
+def compare_census(given: Mapping[str, int], fresh: Mapping[str, int]) -> tuple[bool, str]:
+    """Name every key on which the supplied census and a fresh one disagree.
+
+    A key present in one and absent from the other is a disagreement too: a
+    census that has since GAINED a key is as stale as one whose value moved.
+    """
+    differing = sorted(k for k in set(fresh) | set(given) if fresh.get(k) != given.get(k))
+    if not differing:
+        return True, f"verified current against a fresh measurement ({len(fresh)} keys)"
+    shown = ", ".join(f"{k}: given={given.get(k)} measured={fresh.get(k)}" for k in differing[:6])
+    more = f" (+{len(differing) - 6} more)" if len(differing) > 6 else ""
+    return False, f"census is stale in {len(differing)} key(s): {shown}{more}"
+
+
+def census_is_current(given: Mapping[str, int]) -> tuple[bool, str]:
+    """Re-measure the repository so ``--fix`` cannot write stale numbers.
+
+    #314. The census file carries NO provenance -- no commit, no timestamp, no
+    input digest -- so there is nothing to date it against; the only way to know
+    it still describes this tree is to measure again. That costs ~1s.
+
+    Only ``--fix`` pays it, and the asymmetry is the point. A stale READ-ONLY
+    verdict is a wrong answer the operator can re-run. A stale ``--fix`` INSTALLS
+    wrong numbers into the documents and then reports CLEAR over them -- the
+    drift it just wrote becomes invisible to the one gate that would have caught
+    it. Refusing to write is recoverable; writing a laundered number is not.
+    """
+    fresh, why = measure_census_now()
+    if fresh is None:
+        return False, why
+    return compare_census(given, fresh)
 
 
 def print_provenance() -> None:
@@ -1219,8 +1360,39 @@ def self_test() -> int:
         )
         return ok, f"drifted={rep.drifted} rewrites={n} (2 LOC spellings + 1 file count)"
 
+    def c_freshness_agrees(_root: Path) -> tuple[bool, str]:
+        # #314, the pure half: identical measurements must read as current.
+        # Without this the MUST_FIRE below is indistinguishable from a
+        # comparator that calls everything stale.
+        given = {"a": 1, "b": 2}
+        ok, why = compare_census(given, dict(given))
+        return ok, why
+
+    def c_freshness_stale(_root: Path) -> tuple[bool, str]:
+        # Two ways to be stale in one census: a value that moved, and a key the
+        # repository has since GAINED. Both must be caught, and both NAMED --
+        # a refusal that says "stale" without saying where is unactionable.
+        given = {"a": 1, "b": 2, "gone": 9}
+        fresh = {"a": 1, "b": 3, "added": 7}
+        ok, why = compare_census(given, fresh)
+        named = all(k in why for k in ("b", "added", "gone"))
+        return (not ok) and named and "3 key(s)" in why, why
+
+    def c_freshness_live(_root: Path) -> tuple[bool, str]:
+        # #239: the subprocess path itself, on the real tree. The two controls
+        # above compare dicts and would stay green if the tool were never
+        # invoked at all -- which is the whole defect one level up.
+        fresh, why = measure_census_now()
+        if fresh is None:
+            return False, why
+        ok, detail = census_is_current(fresh)
+        return ok and len(fresh) > 0, f"{len(fresh)} keys; {detail}"
+
     controls: list[tuple[str, str, ControlFn]] = [
         ("association", "MUST_PASS", c_association),
+        ("#314 freshness: identical censuses read as current", "MUST_PASS", c_freshness_agrees),
+        ("#314 freshness: moved value AND gained key both named", "MUST_FIRE", c_freshness_stale),
+        ("#314 freshness: the live re-measurement path runs", "MUST_PASS", c_freshness_live),
         (
             "sentence-initial and second-parenthetical seen (#266)",
             "MUST_FIRE",
@@ -1315,6 +1487,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     census: dict[str, int] = {
         k: v for k, v in raw.items() if isinstance(v, int) and not isinstance(v, bool)
     }
+
+    # #314. --fix WRITES, and nothing in the census says when it was measured.
+    # Checked here, before the scan, so a stale oracle costs a refusal rather
+    # than a corpus walk that ends in a laundered rewrite.
+    if args.fix:
+        current, detail = census_is_current(census)
+        if not current:
+            print(f"REFUSE: {detail}", file=sys.stderr)
+            print(
+                f"  regenerate first: {sys.executable} "
+                f"tools/countables_census.py --no-coverage --out {census_path}",
+                file=sys.stderr,
+            )
+            return EXIT_REFUSE
+        print(f"fix-precondition: {detail}")
 
     files, excluded = collect_files(roots)
     print(
