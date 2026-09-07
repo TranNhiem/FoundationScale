@@ -49,7 +49,7 @@ flowchart TB
 
   subgraph ESTATE["Estate layer (kept, edges only)"]
     LAU["launchers/*.sh (10387 LOC, 7 files)"]
-    H100["validation_campaigns/h100_validation/ (32408 .py LOC, 64 files)"]
+    H100["validation_campaigns/h100_validation/ (32520 .py LOC, 64 files)"]
     WRAP["tools/ as argparse wrappers only"]
   end
 
@@ -272,8 +272,8 @@ Per the governing constraint, these components get no surgery. Each entry states
 - **Mutation battery core** (runner/scorer/restore) and the **CI controls job** that fails on non-firing MUST_FIRE and on an empty registry: T3_skeptic#13, CONFIRMED, plus the census's CI description. Kept; extended only to watch third-party gate loading (D5-8).
 - **preflight's 0/1/2 exit integrity**, **census counter stdout purity**, **denominator control's subprocess-the-artifact composition**, the **import-free `tools/__init__.py` map**: T1#9–#12, CONFIRMED as contracts; only CLI surface polish applies (D5-6/D5-10).
 - **`ensure_declaration_is_independent`** and its fail-closed stat layer: T3_skeptic#14, CONFIRMED Keep; unchanged.
-- **The bash launchers** — `launchers/*.sh` (10387 LOC, 7 files) — and **the H100 validation harness** — `validation_campaigns/h100_validation/` (32408 .py LOC, 64 files): preserved per the standing H100/GB200 constraint. Flagged honestly: D4's Keep here rests on census plus constraint, with zero direct findings; launcher internals and the harness are UNMEASURED by this review, not validated. Wiring the harness to `GateHooks` is future work after D5-1, explicitly out of this architecture's scope.
-- **`validation_campaigns/h100_validation/*.sh` (5186 LOC, 4 files)**: same disposition — estate plane, kept at the edges.
+- **The bash launchers** — `launchers/*.sh` (10387 LOC, 7 files) — and **the H100 validation harness** — `validation_campaigns/h100_validation/` (32520 .py LOC, 64 files): preserved per the standing H100/GB200 constraint. Flagged honestly: D4's Keep here rests on census plus constraint, with zero direct findings; launcher internals and the harness are UNMEASURED by this review, not validated. Wiring the harness to `GateHooks` is future work after D5-1, explicitly out of this architecture's scope.
+- **`validation_campaigns/h100_validation/*.sh` (5413 LOC, 4 files)**: same disposition — estate plane, kept at the edges.
 
 ## Explicitly not built here
 
@@ -281,4 +281,4 @@ No RL post-training loop, no multimodal data pipeline, no MoE router or expert-p
 
 ## Sequencing and evidence of done
 
-Order follows the tiers: D5-1 through D5-3 land together (a seam nobody calls, a thin caller that calls it, and docs that finally match), D5-4 through D5-6 make the install honest, D5-7 through D5-11 open the customization seams, D5-12 through D5-16 serve scale. Completion is checkable without opinion: the measured `run_event` production call-site count moves off 0 in the trunk trainer; the `src/`-only import test for the decision plane exists and passes; `Lifecycle` gains exactly the two named members; the gate's training-construct probe stays at 0 in the verification plane's modules while the new thin trainer carries the only training constructs in the package; and 129428 git-tracked .py/.sh/.md lines repo-wide remains the denominator of record under the current census method.
+Order follows the tiers: D5-1 through D5-3 land together (a seam nobody calls, a thin caller that calls it, and docs that finally match), D5-4 through D5-6 make the install honest, D5-7 through D5-11 open the customization seams, D5-12 through D5-16 serve scale. Completion is checkable without opinion: the measured `run_event` production call-site count moves off 0 in the trunk trainer; the `src/`-only import test for the decision plane exists and passes; `Lifecycle` gains exactly the two named members; the gate's training-construct probe stays at 0 in the verification plane's modules while the new thin trainer carries the only training constructs in the package; and 129767 git-tracked .py/.sh/.md lines repo-wide remains the denominator of record under the current census method.
