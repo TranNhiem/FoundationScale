@@ -44,6 +44,7 @@ import io
 import json
 import os
 import pickle
+import subprocess
 import sys
 import tempfile
 import types
@@ -57,6 +58,28 @@ from pathlib import Path
 # --------------------------------------------------------------------------
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _MODULE_PATH = os.path.join(_HERE, "fs_ckpt_scalars.py")
+
+# C10's probe body (#289). Runs in a subprocess that imports the reader and NOTHING else,
+# then reports its own torch footprint, because sys.modules is session-global and cannot
+# answer a per-module question. argv: module-path, directory, fixed-key, mode. In "plant"
+# mode it injects a module literally named "torch" before reporting -- that is the leg's
+# positive control, and it plants a synthetic module rather than importing the real one so
+# the control still fires on the torch-less estate host this reader exists to serve.
+_C10_PROBE = r'''
+import importlib.util, json, sys, types
+from pathlib import Path
+mod_path, directory, fixed_key, mode = sys.argv[1:5]
+spec = importlib.util.spec_from_file_location("fs_ckpt_scalars_c10", mod_path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+# Path, not str: survey() joins with `/`, and argv hands everything over as text.
+mod.survey(Path(directory), 8,
+           (fixed_key, "global_step", "world_size", "optimizer_state_count"))
+if mode == "plant":
+    sys.modules["torch"] = types.ModuleType("torch")
+json.dump(sorted(m for m in sys.modules if m == "torch" or m.startswith("torch.")),
+          sys.stdout)
+'''
 
 
 def _load_module_under_test():
@@ -594,15 +617,50 @@ class TestFsCkptScalars(unittest.TestCase):
                       "%r" % (entry["identical_across_ranks"],))
 
     # -- C10: the whole premise. ----------------------------------------------
+    #
+    # #289: this leg used to assert over the CURRENT process's sys.modules, which is
+    # session-global. It passed alone and failed inside any pytest session where a sibling
+    # module had already imported torch -- so the verdict was a fact about this leg's
+    # NEIGHBOURS, not about the reader. #288 turned that latent defect into a build
+    # blocker: once the suite stage could resolve an interpreter, the default build ran
+    # these four modules in one session under a venv carrying torch, and a correct claim
+    # about a torch-free reader took the whole build red.
+    #
+    # The survey therefore runs in a subprocess that imports the reader and nothing else.
+    # Run B ("plant") is the positive control and goes FIRST: if the reporting path cannot
+    # see a module literally named "torch" when one is planted, then run A's empty result
+    # measures nothing and this leg says so instead of passing (#93/#252 -- a control that
+    # cannot fire makes its clean verdict vacuous; plant the exact pattern, run the exact
+    # matcher).
     def test_c10_no_torch(self):
         directory = self._dir("c10")
         self._write_rank_set(directory, [0.25] * 8)
-        fsckpt.survey(directory, 8, (FIXED_KEY, "global_step", "world_size",
-                                     "optimizer_state_count"))
-        self.assertNotIn("torch", sys.modules,
-                         "C10: 'torch' entered sys.modules during a full survey; the "
-                         "reader's premise is that it never needs one")
-        # Fixture hygiene: the synthesis surface must have been torn back down too.
+
+        def _probe(mode):
+            proc = subprocess.Popen(
+                [sys.executable, "-c", _C10_PROBE, _MODULE_PATH, directory,
+                 FIXED_KEY, mode],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            out, err = proc.communicate()
+            self.assertEqual(proc.returncode, 0,
+                             "C10: the %s probe exited %d, so nothing was measured: %s"
+                             % (mode, proc.returncode,
+                                err.decode("utf-8", "replace").strip()))
+            return json.loads(out.decode("utf-8"))
+
+        self.assertIn("torch", _probe("plant"),
+                      "C10 CONTROL DEAD: the probe cannot see a module named 'torch' even "
+                      "when one is planted, so a clean measured run would prove nothing")
+
+        observed = _probe("measure")
+        self.assertEqual(observed, [],
+                         "C10: %r entered sys.modules during a full survey, in a "
+                         "subprocess that imported only the reader; the reader's premise "
+                         "is that it never needs one" % (observed,))
+
+        # Fixture hygiene stays in-process on purpose: the synthesis surface is built and
+        # torn down HERE, so this half of the leg is correctly a statement about this
+        # interpreter rather than about a subprocess that never saw the fixture.
         for leaked in _FAKE_MODULE_ATTRS:
             self.assertNotIn(leaked, sys.modules,
                              "C10: fixture module %r leaked out of its dump scope"

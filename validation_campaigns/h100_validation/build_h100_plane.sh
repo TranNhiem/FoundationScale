@@ -974,17 +974,58 @@ echo -e "\n=== generated unit suites (#133 model-root plane, #141 adjudicator) =
 # #56 and #149 separating. It also made the README false at the moment it shipped -- that doc
 # states this gate declares 95 -- which is doctrine point 6 with the roles reversed: not a
 # claim broader than its evidence, but a claim the code had quietly stopped honouring.
-PY=${FS_PYTEST:-./.venv/bin/python}
+# #288: the default here was `./.venv/bin/python`, and it has never resolved. cwd is pinned
+# to this script's own directory at :19, so that path means h100_validation/.venv/bin/python
+# -- which has existed in no tree and no layout, unchanged since this file's first commit
+# (8b369c6; the B1 relocation was measured and is NOT the cause). The interpreter that does
+# exist lives at the repository root. So EVERY default invocation took the else-branch, and
+# because that branch exits, the four standing gates below it have never run except by hand
+# with FS_PYTEST set. That is #193's shape -- a guard above a tail, so the tail can never
+# adjudicate -- and #278's at 4x scale. Nothing in CI or the Makefile invokes this build
+# (the one ci.yml mention is a comment), so no automated caller could have caught it.
+#
+# The search walks UP from this directory instead of naming ../../, so the next relocation
+# cannot silently rebreak it, and falls back to python3 on PATH. That fallback is not a new
+# dependency: the parse stage at :958 and all four standing gates below already invoke bare
+# python3. The resolved interpreter is PRINTED, because #83 requires a verdict to carry the
+# provenance of the interpreter that produced it.
+if [[ -n "${FS_PYTEST:-}" ]]; then
+  PY=$FS_PYTEST; py_src="FS_PYTEST"
+else
+  PY=""; py_src=""; _d=$PWD
+  while :; do
+    if [[ -x "$_d/.venv/bin/python" ]] && "$_d/.venv/bin/python" -c 'import pytest' 2>/dev/null; then
+      PY="$_d/.venv/bin/python"; py_src="venv discovered at $_d"; break
+    fi
+    [[ "$_d" == "/" ]] && break
+    _d=$(dirname "$_d")
+  done
+  if [[ -z "$PY" ]] && command -v python3 >/dev/null 2>&1 && python3 -c 'import pytest' 2>/dev/null; then
+    PY=$(command -v python3); py_src="python3 on PATH"
+  fi
+fi
+
+# #160 is preserved exactly: a genuinely absent pytest is still UNMEASURED, still distinct
+# from RED, and still fails the build. What #288 changes is only WHERE that failure is
+# taken. An UNMEASURED suite says nothing about the generated artifacts, so the four
+# cross-artifact gates below remain meaningful and now run; the 95 is deferred to the end.
+# A RED suite still exits on the spot -- there the artifacts ARE known broken, so the
+# downstream gates would be reading rubble and their verdicts would be noise.
+suite_unmeasured=0
 if [[ "${FS_SKIP_SUITE:-0}" == 1 ]]; then
   suite="WAIVED (FS_SKIP_SUITE=1)"
   echo "  $suite — the generated suite was NOT run"
-elif [[ -x "$PY" ]] && "$PY" -c 'import pytest' 2>/dev/null; then
+elif [[ -n "$PY" && -x "$PY" ]] && "$PY" -c 'import pytest' 2>/dev/null; then
+  echo "  interpreter: $PY ($py_src)"
   "$PY" -m pytest "$MRTEST" "$ADJTEST" "$PFTEST" "$SCTEST" -q || { echo "SUITE RED" >&2; exit 5; }
   suite="$("$PY" -m pytest "$MRTEST" "$ADJTEST" "$PFTEST" "$SCTEST" -q 2>/dev/null | tail -1)"
 else
-  echo "  UNMEASURED (95): no pytest at '$PY'. Set FS_PYTEST to an interpreter that has it," >&2
+  echo "  UNMEASURED (95): no interpreter with pytest — searched FS_PYTEST, then .venv/bin/python" >&2
+  echo "  from $PWD upward, then python3 on PATH. Set FS_PYTEST to an interpreter that has it," >&2
   echo "  or FS_SKIP_SUITE=1 to waive explicitly. Not running a suite is not passing it." >&2
-  exit 95
+  echo "  Deferring the 95 so the standing gates below still report (#288)." >&2
+  suite="UNMEASURED (95) — no interpreter with pytest"
+  suite_unmeasured=1
 fi
 
 echo -e "\n=== standing gate: writer/adjudicator naming agreement (#150) ==="
@@ -1085,6 +1126,17 @@ python3 gate_launch_doc.py || {
   esac
   exit 5
 }
+
+# #288: the deferred 95. Every standing gate above has now reported, so the build states
+# what it measured AND what it could not, then fails on the latter. Printing GREEN here and
+# exiting 95 would be the collapse #56/#149/#160 exist to prevent, in the other direction:
+# an unmeasured suite is not a passing one, and the build must not offer the softer word.
+if [[ "$suite_unmeasured" == 1 ]]; then
+  printf '\nBUILD UNMEASURED (95) — %s stages, drift gate green, %s blocklist hits, %s/7 parse clean, naming agreement green, linkage green, launch-contract green, launch-doc green, suite: %s\n' \
+    "${#STAGES[@]}" "$hits" "$ok" "$suite" >&2
+  echo "  The four standing gates ran and are green; the generated unit suite was NOT measured." >&2
+  exit 95
+fi
 
 printf '\nBUILD GREEN — %s stages, drift gate green, %s blocklist hits, %s/7 parse clean, naming agreement green, linkage green, launch-contract green, launch-doc green, suite: %s\n' \
   "${#STAGES[@]}" "$hits" "$ok" "$suite"
