@@ -20,7 +20,7 @@ import inspect
 import json
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -105,6 +105,7 @@ class Step:
     RUN = "fs:train:run"
     SAVED = "fs:train:saved"
     SAVE_GATE = "fs:train:save_gate"
+    OBJECTIVE_GATE = "fs:train:objective_gate"
     MANIFEST = "fs:train:manifest"
     ADJUDICATE = "fs:train:adjudicate"
     DONE = "fs:train:done"
@@ -130,6 +131,7 @@ MARKERS: tuple[str, ...] = (
     Step.RUN,
     Step.SAVED,
     Step.SAVE_GATE,
+    Step.OBJECTIVE_GATE,
     Step.MANIFEST,
     Step.ADJUDICATE,
     Step.DONE,
@@ -189,6 +191,14 @@ class TrainConfig:
     profile: ClusterProfile | None = None
     profile_name: str | None = None
     profile_path: Path | None = None
+    # What the run set out to optimise (e.g. "sft"). Default None means the run
+    # declared NOTHING, which is not a neutral state: the objective gate refuses
+    # an undeclared run at its first observed step. That refusal is the intended
+    # fail-closed behaviour -- a run whose objective is unstated cannot have its
+    # loss components, reward scale or hyperparameter drift checked against
+    # anything -- so the value is left absent here rather than defaulted to the
+    # plausible "sft", which would make the gate compare the loop against itself.
+    objective: str | None = None
     # Harmless knobs.
     max_steps: int = 20
     per_device_batch_size: int = 1
@@ -406,6 +416,243 @@ class FoundationScaleSaveGate(_CallbackBase):
             )
         else:
             _mark(Step.SAVE_GATE, f"PASS {denominator} over {ckpt_dir}")
+        return control
+
+
+# The gates whose blocking verdict on the BACKSTOP arm means "the loss was never
+# readable", not "the objective is wrong". Named as a set rather than tested
+# inline so the distinction is one declared thing: adding a gate that reads the
+# loss component means adding it here, and forgetting to is visible.
+_UNREAD_ON_BACKSTOP = frozenset({"objective.loss_components"})
+
+
+class FoundationScaleObjectiveGate(_CallbackBase):
+    """``TrainerCallback`` wiring the registered objective gates into the run.
+
+    Dispatches ``Lifecycle.STEP_ZERO`` exactly once, carrying the declared
+    objective, the live objective hyperparameters, the step-0 record snapshotted
+    at ``on_train_begin``, and the observed loss. A blocking verdict BOTH sets
+    ``control.should_training_stop = True`` AND is recorded on the instance
+    (``.blocked`` / ``.unmeasured`` / ``.reports``), exactly as the save gate
+    does: a gate that fires and lets the run continue cannot fail.
+
+    WHEN it fires is the load-bearing decision, and it was measured rather than
+    assumed. The dispatch happens at the first step for which a loss has been
+    OBSERVED -- the first training log carrying ``"loss"`` -- not at
+    ``global_step == 1``. The trainer's logging cadence, not the gate, decides
+    when a loss exists: this loop bound ``logging_steps: 10`` unconditionally,
+    so at step 1 there was no loss, and a step-1 dispatch over the four
+    registered gates measured ``report.ok=False,
+    blocking=['objective.loss_components']`` on a perfectly healthy run. That
+    verdict is a property of the cadence knob, not of the objective, and it
+    would have stopped every real run at step 1.
+
+    Firing on the first observable step cannot silently never happen: if no loss
+    is ever logged, ``on_train_end`` dispatches the same sweep with the component
+    unobserved. That arm is measured too -- it blocks on
+    ``objective.loss_components`` -- but it is recorded as ``.unmeasured``
+    rather than ``.blocked``, because a component the instrument never got to
+    read is UNMEASURED (95) and not RED (5). A gate that can quietly not run is
+    the vacuous pass this codebase refuses; a backstop that lies about which
+    state it is in is the same defect.
+
+    The backstop is now hard to reach, which is the point: the cadence is bound
+    to ``max(1, min(10, max_steps))``, so every run emits at least one training
+    log. Reaching it means the trainer logged nothing at all, which is worth
+    hearing about rather than papering over.
+
+    Importable without transformers/torch: with the extra absent the base
+    degrades to ``object`` and the class is driven directly in tests.
+    """
+
+    def __init__(
+        self,
+        objective: str | None,
+        learning_rate: float,
+        per_device_batch_size: int,
+        max_steps: int,
+        registry: GateRegistry | None = None,
+    ) -> None:
+        # The scalars the gate reads are passed individually, not as the whole
+        # TrainConfig. A callback holding the config can read a field it was
+        # never meant to see, and -- worse for a fingerprint -- any future
+        # config field would silently change what the step-0 snapshot covers
+        # without this signature changing. Naming them here makes the snapshot's
+        # contents a property of this class, not of whatever TrainConfig grows.
+        self.objective = objective
+        self.learning_rate = learning_rate
+        self.per_device_batch_size = per_device_batch_size
+        self.max_steps = max_steps
+        self.registry = registry if registry is not None else REGISTRY
+        self.reports: list[GateReport] = []
+        self.blocked = False
+        self.unmeasured = False
+        self._fired = False
+        self._last_loss: float | None = None
+        self._step0_hparams: Mapping[str, Any] | None = None
+        self._step0_fingerprint: str | None = None
+
+    def _hparams(self) -> dict[str, Any]:
+        return {
+            "learning_rate": self.learning_rate,
+            "per_device_batch_size": self.per_device_batch_size,
+            "max_steps": self.max_steps,
+        }
+
+    def on_train_begin(self, args: Any, state: Any, control: Any, **kwargs: Any) -> Any:  # noqa: ARG002
+        # Local import, the same idiom as _default_context_builder: this module
+        # must stay importable on a torch-free host, so nothing gate-adjacent is
+        # imported at module scope.
+        from types import MappingProxyType
+
+        from foundationscale.gates.objective_gates import fingerprint_hparams
+
+        # The STEP-0 RECORD: taken ONCE, here, and never recomputed. It is what
+        # hparam_drift compares the live mapping against at dispatch; deriving it
+        # lazily at dispatch would compare the run against itself and drift would
+        # be vacuously PASS. Wrapped immutable so nothing between here and the
+        # dispatch can edit the record it claims to be checking against.
+        snapshot = MappingProxyType(self._hparams())
+        self._step0_hparams = snapshot
+        self._step0_fingerprint = fingerprint_hparams(snapshot)
+        return control
+
+    def on_log(
+        self,
+        args: Any,  # noqa: ARG002
+        state: Any,
+        control: Any,
+        logs: dict[str, Any] | None = None,
+        **kwargs: Any,  # noqa: ARG002
+    ) -> Any:
+        # Training logs carry "loss"; eval-only logs do not. When the key is
+        # absent nothing is recorded rather than invented: a fabricated 0.0 would
+        # be scored by the coverage gate as a real, perfect measurement.
+        if logs is None or "loss" not in logs:
+            return control
+        self._last_loss = float(logs["loss"])
+        if self._fired or getattr(state, "global_step", 0) < 1:
+            return control
+        return self._dispatch(control, observed=True)
+
+    def on_train_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> Any:  # noqa: ARG002
+        if self._fired:
+            return control
+        return self._dispatch(control, observed=False)
+
+    def _dispatch(self, control: Any, *, observed: bool) -> Any:
+        from foundationscale.gates.objective_gates import (
+            LossComponent,
+            ObjectiveGateContext,
+            ValueProvenance,
+        )
+        from foundationscale.rl import LossOutput, build_objective_gate_context
+
+        # Fire EXACTLY ONCE. The boolean guard -- not a step comparison -- is
+        # what makes "once" hold: a trainer that resumes mid-run or emits an
+        # extra log cannot re-fire STEP_ZERO and append a second, contradictory
+        # record to self.reports.
+        self._fired = True
+
+        objective_prov: ValueProvenance | None = None
+        if self.objective is not None:
+            # source="config" because the value came from a TrainConfig field.
+            # The gate refuses any source outside {"cli", "config", "default",
+            # "env"}, so the source is stated, not invented.
+            objective_prov = ValueProvenance(
+                name="objective", value=self.objective, source="config", recorded=True
+            )
+
+        if observed and self._last_loss is not None:
+            scalar = self._last_loss
+            component = LossComponent(
+                name="sft_loss", weight=1.0, observed=True, contribution=scalar
+            )
+        else:
+            # Absent is not zero: the component goes in unmeasured with
+            # contribution=None so the gate sees the hole. LossOutput.loss is a
+            # required float and the bridge reads only `.components`, so the
+            # scalar is NaN rather than a plausible number -- if a future reader
+            # does consume it, NaN propagates instead of passing for a
+            # measurement. A measured 0.0 is a real observation; this is not one.
+            scalar = float("nan")
+            component = LossComponent(
+                name="sft_loss", weight=1.0, observed=False, contribution=None
+            )
+
+        ctx = build_objective_gate_context(
+            LossOutput(loss=scalar, components=(component,)),
+            objective=objective_prov,
+            declared_components=("sft_loss",),
+            # Live mapping, rebuilt here -- NOT the step-0 snapshot. hparam_drift
+            # exists to compare the two; passing the snapshot would make the
+            # comparison reflexive and the gate vacuously PASS.
+            current_hparams=self._hparams(),
+            # Keyword-required with no default: the context builder refuses to
+            # let the step-0 record be forgotten.
+            step0_fingerprint=self._step0_fingerprint,
+            step0_hparams=self._step0_hparams,
+            origin="<train-loop>",
+        )
+        # Typed dispatch for the same reason FoundationScaleSaveGate.on_save uses
+        # it: GateRegistry.run broadcasts one context to every gate on the event,
+        # and a gate from another context family dies on a context it cannot
+        # read, which the sweep counts as a blocking ERROR (#250).
+        # The MAPPING form, not the bare context the two save-gate call sites
+        # pass. run_event implements both (it branches on isinstance(contexts,
+        # Mapping)) but declares only `Mapping[type, Any]`, so the bare form
+        # typechecks there solely because those contexts are typed Any -- an
+        # annotation narrower than the implementation, holding only where the
+        # caller has no types. Naming ObjectiveGateContext here also states which
+        # family this context belongs to at the call site instead of leaving it
+        # to isinstance discovery. Measured identical to the bare form: same
+        # gates, same verdicts, same report.
+        report = run_event(
+            self.registry,
+            Lifecycle.STEP_ZERO,
+            {ObjectiveGateContext: ctx},
+            missing_ctx="report-skip",
+        )
+        self.reports.append(report)
+        denominator = f"{len(report.results)}/{report.registered} gates"
+        blockers = report.blocking
+        if not blockers:
+            _mark(Step.OBJECTIVE_GATE, f"PASS {denominator} at the first observed step")
+            return control
+        # On the backstop arm the unread component is reporting that it COULD NOT
+        # measure, which is 95 and not 5. A blocker from any other gate is a real
+        # refusal even here, so the two are separated by gate id rather than by
+        # which arm we happen to be on.
+        abstained = [] if observed else [g for g in blockers if g.gate_id in _UNREAD_ON_BACKSTOP]
+        refusals = [g for g in blockers if g not in abstained]
+        if not refusals:
+            self.unmeasured = True
+            _mark(
+                Step.OBJECTIVE_GATE,
+                f"UNMEASURED {denominator}, {len(abstained)} abstaining "
+                f"({', '.join(g.gate_id for g in abstained)}): no training log "
+                "carried a loss before the run ended, so the gate had nothing to "
+                "read -- the objective claim is unfalsifiable, not refuted",
+            )
+            return control
+        self.blocked = True
+        control.should_training_stop = True
+        # COUNT and NAMES come from the same list. They did not, once: the count
+        # was taken over every blocker and the names over the refusals alone, so
+        # a backstop dispatch printed "2 blocking (objective.declared)" -- a
+        # denominator and a numerator from different sets, in the one line an
+        # operator reads to find out what stopped the run.
+        note = (
+            ""
+            if not abstained
+            else f", plus {len(abstained)} abstaining ({', '.join(g.gate_id for g in abstained)})"
+        )
+        _mark(
+            Step.OBJECTIVE_GATE,
+            f"RED {denominator}, {len(refusals)} blocking "
+            f"({', '.join(g.gate_id for g in refusals)}){note}; "
+            "should_training_stop=True -- the run stops NOW",
+        )
         return control
 
 
@@ -1011,7 +1258,14 @@ def train(cfg: TrainConfig) -> int:
         "save_strategy": "steps",
         "save_steps": cfg.save_interval,
         "seed": cfg.seed,
-        "logging_steps": 10,
+        # Bounded by the run's own length, not a bare 10. A constant cadence
+        # means any run SHORTER than the cadence emits no training log at all --
+        # no loss is ever reported, for the whole run. That was invisible while
+        # nothing read the loss; the objective gate reads it, and a 3-step run
+        # was landing on the gate's backstop arm (UNMEASURED) purely because the
+        # cadence outran the run. The floor of 1 keeps max_steps=1 observable,
+        # and any run of 10 steps or more keeps the previous cadence exactly.
+        "logging_steps": max(1, min(10, cfg.max_steps)),
         "report_to": [],
         "ddp_find_unused_parameters": False,
     }
@@ -1051,7 +1305,13 @@ def train(cfg: TrainConfig) -> int:
     # in CI, one error locally, identical source. Exactly the divergence that
     # block claims to have removed, surviving one level down because the fix was
     # applied to the declaration and the symptom lives at the use.
-    callbacks: list[Any] = [gate_callback]
+    objective_callback = FoundationScaleObjectiveGate(
+        objective=cfg.objective,
+        learning_rate=cfg.learning_rate,
+        per_device_batch_size=cfg.per_device_batch_size,
+        max_steps=cfg.max_steps,
+    )
+    callbacks: list[Any] = [gate_callback, objective_callback]
     # And the third time, on the same axis. `# type: ignore[arg-type]` here was
     # NEEDED with transformers installed (**kwargs is dict[str, Any] against a
     # long typed signature) and UNUSED without it (TrainingArguments resolves to
@@ -1113,6 +1373,13 @@ def train(cfg: TrainConfig) -> int:
         trainer.train()
     except Exception as exc:  # noqa: BLE001
         _mark(Step.RED, f"Trainer.train() raised: {exc!r}")
+        return EXIT_RED
+    if objective_callback.blocked:
+        _mark(
+            Step.RED,
+            "an objective gate fired at the first observed step and the run was "
+            "stopped (should_training_stop=True) -- adjudicating as RED",
+        )
         return EXIT_RED
     if gate_callback.blocked:
         _mark(
@@ -1191,9 +1458,20 @@ def train(cfg: TrainConfig) -> int:
         )
         return EXIT_UNMEASURED
     rc = EXIT_RED if report.blocking else EXIT_PASS
+    done = "PASS" if rc == EXIT_PASS else "RED: blocking save-gate verdict on the final checkpoint"
+    # The objective gate's backstop arm is folded in HERE rather than returned
+    # at train end, because the two verdicts are about different artifacts and
+    # returning early would have thrown away a trained model to report on a
+    # missing log line. It only moves a PASS: a blocking save-gate verdict on
+    # the final checkpoint is a measurement, and a measurement outranks an
+    # abstention (doctrine 5 -- UNMEASURED is not PASS, and it is not RED
+    # either).
+    if rc == EXIT_PASS and objective_callback.unmeasured:
+        rc = EXIT_UNMEASURED
+        done = (
+            "UNMEASURED: the run trained and saved, but no training log ever "
+            "carried a loss, so the objective gates had nothing to read"
+        )
     _emit_manifest(cfg, stage="done", extra={"exit": rc}, declared=declared_ckpt, notes=decl_notes)
-    _mark(
-        Step.DONE,
-        "PASS" if rc == EXIT_PASS else "RED: blocking save-gate verdict on the final checkpoint",
-    )
+    _mark(Step.DONE, done)
     return rc

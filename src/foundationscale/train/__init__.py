@@ -14,6 +14,7 @@ __all__ = [
     "EXIT_RED",
     "EXIT_REFUSE",
     "EXIT_UNMEASURED",
+    "FoundationScaleObjectiveGate",
     "FoundationScaleSaveGate",
     "MARKERS",
     "TrainConfig",

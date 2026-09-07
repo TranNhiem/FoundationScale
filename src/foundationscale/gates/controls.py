@@ -96,6 +96,15 @@ _KNOWN_GATELESS_PACKAGES: frozenset[str] = frozenset(
         # is deliberately not plumbed into it. AST-verified over the package:
         # zero ClassDef inherits Gate, zero call site is register/add_gate.
         "foundationscale.models",
+        # The stage-1 RL contracts BUILD a gate context and register nothing:
+        # `build_objective_gate_context` assembles the real
+        # ObjectiveGateContext the objective gates already read, so the package
+        # is upstream of the registry rather than in it. AST-verified over the
+        # package, not read: 2 files, zero ClassDef inherits a Gate base, zero
+        # call site is register/add_gate. Later stages add algorithms, not
+        # gates; if one ever registers, the provenance reconciliation names it,
+        # because its defining module is not among the walk's attempted set.
+        "foundationscale.rl",
     }
 )
 """First-party packages affirmatively classified — by a human, in review — as NOT

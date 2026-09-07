@@ -361,6 +361,13 @@ def _cfg(
         "max_steps": 1,
         "per_device_batch_size": 2,
         "save_interval": 50,
+        # Declared, because these configs drive a REAL trainer and the objective
+        # gate refuses an undeclared run at its first observed step. Omitting it
+        # here would make every execution test red for a reason that has nothing
+        # to do with what the test is pinning. The refusal arm is worth covering
+        # -- it is covered deliberately, in the callback's own module, rather
+        # than incidentally by every test that happens to run the loop.
+        "objective": "sft",
         "dry_run": False,
     }
     kwargs.update(overrides)
@@ -411,6 +418,16 @@ def test_train_happy_path_executes_and_saves_safetensors(
         "[fs:train:adjudicate]",
     ):
         assert marker in out, f"missing {marker}; train output:\n{out}"
+    # The objective gate's ARM is deterministic here even though the save
+    # gate's verdict is not: max_steps=1 binds logging_steps=1, so a loss IS
+    # logged and the gate reads it. Asserting PASS rather than "the marker is
+    # present" is what makes this a control for the cadence: the knob was once
+    # a bare 10, under which this 1-step run emitted no training log at all and
+    # the gate landed on its no-loss backstop -- UNMEASURED, on a run that was
+    # perfectly healthy. A revert to a constant cadence turns this line red.
+    obj = [ln for ln in out.splitlines() if "[fs:train:objective_gate]" in ln]
+    assert len(obj) == 1, f"expected exactly one objective-gate line, got {obj}"
+    assert "PASS" in obj[0] and "first observed step" in obj[0], obj[0]
     assert "Traceback" not in out
 
 

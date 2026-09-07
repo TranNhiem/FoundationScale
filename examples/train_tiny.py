@@ -66,6 +66,9 @@ if __name__ == "__main__":
         dp=GPUS,  # pure DDP: one data-parallel rank per GPU
         max_steps=20,
         save_interval=10,  # the save gate adjudicates checkpoint-10 and -20
+        # What this run optimises. Stated, not defaulted: the objective gates
+        # refuse a run that declares nothing (exit 5 at the first observed step).
+        objective="sft",
         profile=PROFILE,
     )
     # train() validates topology against the profile and BLOCKS (exit 5)

@@ -48,6 +48,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--per-device-batch-size", type=int, default=1)
     p.add_argument("--learning-rate", type=float, default=5e-5)
     p.add_argument("--save-interval", type=int, default=50)
+    # Defaulted here and NOT on TrainConfig, and the asymmetry is deliberate.
+    # This entry implements exactly one objective -- supervised fine-tuning, via
+    # DataCollatorForLanguageModeling(mlm=False) -- so "sft" is a statement about
+    # what the code does, not a plausible guess. A programmatic caller building
+    # TrainConfig directly gets no such default: it may be driving a path this
+    # entry does not, so it has to say which, and an unstated objective is
+    # refused by the objective gate at the first observed step.
+    p.add_argument(
+        "--objective",
+        default="sft",
+        help=(
+            "what the run optimises; recorded with provenance and checked by the "
+            "objective gates at the first observed step (default: sft, the only "
+            "objective this entry implements)"
+        ),
+    )
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--dp", type=int, default=1)
     p.add_argument("--tp", type=int, default=1)
@@ -92,6 +108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         per_device_batch_size=args.per_device_batch_size,
         learning_rate=args.learning_rate,
         save_interval=args.save_interval,
+        objective=args.objective,
         seed=args.seed,
         dp=args.dp,
         tp=args.tp,
