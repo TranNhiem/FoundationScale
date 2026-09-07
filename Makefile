@@ -103,7 +103,7 @@ ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
 endif
 
-.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables launcher-contracts checks-gates mutation mutation-module skip-guard-probe check clean
+.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers launcher-contracts checks-gates mutation mutation-module skip-guard-probe check clean
 
 install:
 	$(PY) -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
@@ -274,6 +274,33 @@ countables:
 	$(PY) tools/countables_census.py --no-coverage --out $(CENSUS)
 	$(PY) checks/countables_drift.py --census $(CENSUS) $(COUNTABLES_CORPUS)
 
+# Finding #281. The README is a contents page, and 17 of the chapters it points
+# at did not exist. Nothing was red, because a pointer is a DECLARATION and the
+# only gate over declarations was gate_stage_orphans, which reads build stages.
+# This is the same class in prose, and the count could only grow while it had no
+# denominator.
+#
+# The gate found a defect in itself before it found one in the tree, which is the
+# reason it reports its extractors separately. Its first version anchored the
+# arrow notation on a closing bracket, so `[-> docs/ARCHITECTURE.md; the full
+# L0-L6 design is` -- one of the README's own pointers -- matched nothing. That
+# is #186 exactly (the citation gate read one of two notations and twelve
+# pointers sat in no denominator), recurring inside the gate written to close a
+# different instance of it. Two notations, two printed sub-counts, so an
+# extractor that goes inert shows a zero instead of a green.
+#
+# It also narrows on purpose: fenced blocks and inline-code spans are masked
+# before extraction, because a path in code formatting is being SHOWN, not
+# followed. That narrowing removed three false dangles a hand-rolled census had
+# reported -- `docs/CONTRACT.md` in SELF_AUDIT.md names a document that section
+# argues should be written. The masked-span count is printed so the narrowing
+# stays measured rather than silent.
+#
+# Self-test first, same order and same reason as packaging and makefile-tooling.
+doc-pointers:
+	$(PY) checks/doc_pointers.py --self-test
+	$(PY) checks/doc_pointers.py
+
 # Finding #254. CI runs launchers/test_launcher_contracts.sh; until this target
 # existed, no `make` goal did, so the largest gate in the repository was one a
 # developer could not run before pushing. That is the #230 asymmetry with the
@@ -357,7 +384,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables launcher-contracts checks-gates mutation
+check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers launcher-contracts checks-gates mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \

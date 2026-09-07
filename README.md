@@ -45,6 +45,7 @@ on the result. It is not a from-scratch trainer, and this README will not preten
 25. [Testing](#25-testing)
 26. [Troubleshooting](#26-troubleshooting)
 27. [Contributing](#27-contributing)
+28. [Documentation roadmap](#28-documentation-roadmap)
 
 ---
 
@@ -102,7 +103,7 @@ executable.
 
 The `VACUOUS`/`UNDERCOVERED` verdicts are the design, not edge cases, and the rule is
 enforced in the base class — `Gate.ok()` cannot return `PASS` on zero coverage no matter
-what the author writes. [-> docs/DESIGN_PRINCIPLES.md]
+what the author writes.
 
 ## 4. Status — what exists, what is experimental, what is missing
 
@@ -150,7 +151,7 @@ gate contract (stdlib-only core: Verdict, Gate, REGISTRY)
 
 The load-bearing idea: layers above may only emit a verdict they earned — a composite gate
 propagates its children's coverage rather than minting a pass they never produced.
-[-> docs/ARCHITECTURE.md; the full L0–L6 design is
+[the full L0–L6 design is
 docs/deliverables/B1_architecture.md]
 
 ## 6. Supported hardware and platforms
@@ -178,8 +179,6 @@ docs/deliverables/B1_architecture.md]
 * **Not yet**: RL/post-training alignment pipelines, pre-training recipes and the unified
   data contract remain roadmap items with falsification conditions in
   docs/deliverables/. Nothing in the tree implements them.
-
-[-> docs/WORKFLOWS.md]
 
 ## 8. Installation
 
@@ -239,8 +238,7 @@ FS_FORBID_SKIPS=1 python tools/mutate.py --module checkpoint_gates
 make check
 ```
 
-To run the suite byte-for-byte as CI sees it: `FS_FORBID_SKIPS=1 make test`. [->
-docs/GETTING_STARTED.md]
+To run the suite byte-for-byte as CI sees it: `FS_FORBID_SKIPS=1 make test`.
 
 ## 10. Basic training example
 
@@ -307,7 +305,7 @@ Three layers, three mechanisms:
   `FS_ALLOWED_NODE` (required, no default — an unset guard is a disabled guard),
   `FS_FORBIDDEN_NODES`, `FS_BACKEND`, `FS_USE_TORCHRUN`, and many more. No single
   reference enumerates them yet; today they are documented in the header comments of the
-  launchers themselves, which is where they are enforced. [-> docs/CONFIGURATION.md]
+  launchers themselves, which is where they are enforced.
 
 ## 12. Model integration
 
@@ -324,7 +322,6 @@ model family. The seams that exist:
 
 What is *not* present: a curated recipe library or a parallelism-aware model wrapper. The
 catalogue on the poster is the audit's design output, not code in this tree.
-[-> docs/MODEL_INTEGRATION.md]
 
 ## 13. Dataset integration
 
@@ -332,7 +329,7 @@ The same honest shape as models: datasets reach training through the `[train]` e
 `datasets` library via `transformers.Trainer`; FoundationScale adds no dataset
 abstraction of its own today. The audit's "one data contract" design
 (docs/deliverables/B2_scaling.md) is where a first-class dataset layer is specified, and
-it is unimplemented. [-> docs/DATASETS.md]
+it is unimplemented.
 
 ## 14. Distributed training
 
@@ -343,7 +340,6 @@ rather than at NCCL init. Actual multi-process orchestration lives in the launch
 the training run alike — through one backend function, with `FS_USE_TORCHRUN` selecting
 torchrun on the enroot arm. A library-level distributed runtime (the DP/TP/PP/EP
 strategies on the poster) is design-stage; do not read this section as an API.
-[-> docs/DISTRIBUTED.md]
 
 ## 15. Multi-node training
 
@@ -370,7 +366,7 @@ The well-supported extension is writing your own gate, over your own workload:
 
 The reference implementation to copy is `src/foundationscale/gates/example.py`, whose
 empty-expert-set case is deliberately *not* special-cased — the contract's downgrade is
-the fix, and the fixture exists to prove nobody bypasses it. [-> docs/CUSTOM_GATES.md]
+the fix, and the fixture exists to prove nobody bypasses it.
 
 ## 17. Advanced customization
 
@@ -390,7 +386,6 @@ by import), and the adjudication layer. There is no setuptools entry-point disco
 mechanism for third-party plugins — registration is by import, and whether that should
 grow into an entry-point group is an open design question. Anything else advertised as a
 "plugin API" would be invention; the boundary is the gate contract and nothing wider.
-[-> docs/EXTENSION_POINTS.md]
 
 ## 19. Performance and throughput considerations
 
@@ -418,7 +413,7 @@ itself, from the Makefile's own accounting:
 * **Stated limit from §4, repeated where it bites:** the suite writes real checkpoints to
   disk and reads them back single-process. Multi-rank save/reload shapes are reproduced
   from the audit record, not re-observed — so multi-rank recovery is *specified*, not
-  *verified here*. [-> docs/CHECKPOINTING.md]
+  *verified here*.
 
 ## 21. Monitoring and debugging
 
@@ -431,7 +426,7 @@ itself, from the Makefile's own accounting:
   `tools/live_save_gate.py` adjudicates the first real save of a job — the same pattern:
   logic in the package, thin CLI at the edge.
 * CI's own debugging doctrine — exit-code-only wiring is distrusted everywhere; a summary
-  line with a denominator is required before a green is credited. [-> docs/OBSERVABILITY.md]
+  line with a denominator is required before a green is credited.
 
 ## 22. Examples
 
@@ -442,13 +437,13 @@ itself, from the Makefile's own accounting:
   deliverables show gates firing against real launches.
 * **`examples/`** exists at the repository root. Its contents are unmeasured by the
   evidence slice this README was written from; interactively, `ls examples/` is what
-  measures them. [-> docs/EXAMPLES.md — the catalogue that should exist]
+  measures them.
 
 ## 23. Project structure
 
 `src/` = 18915 LOC across 25 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 31313 Python LOC and 4996 shell LOC on top of the
-package. `tools/` contains 9514 Python LOC. 123547 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 9514 Python LOC. 124200 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
@@ -488,7 +483,7 @@ The Makefile is convenience only; CI mirrors, it does not consume it.
 
 Stated exclusions, so silence does not read as coverage: mypy does not check `checks/`
 or `tools/preflight/` (the latter carries an explicit exemption); ruff covers
-everything listed. [-> docs/DEVELOPMENT.md]
+everything listed.
 
 ## 25. Testing
 
@@ -505,7 +500,7 @@ everything listed. [-> docs/DEVELOPMENT.md]
 * **CI has four jobs on purpose**: `check` (hygiene across Python 3.10/3.11/3.12),
   `controls` (gate fixtures), `launchers` (the bash contract suites plus the workflow-YAML
   and bash-`lc` standing legs), and `mutation` (sharded per module, enumerated from the
-  mutation table itself). [-> docs/TESTING.md]
+  mutation table itself).
 
 ## 26. Troubleshooting
 
@@ -517,8 +512,6 @@ everything listed. [-> docs/DEVELOPMENT.md]
 | Launcher contract suite fails with "0/8 launcher unreadable" | it is CWD-sensitive by measured behaviour; run it from the repository root. |
 | Mutation battery exits 2 | deliberate: nothing was measured (stale anchor, red suite, or a skip). Fix the cause; do not re-run hoping for 0. |
 | A number in a doc looks wrong | run `make countables` — the drift gate compares shipped wording against a freshly measured census. |
-
-[-> docs/TROUBLESHOOTING.md]
 
 ## 27. Contributing
 
@@ -532,4 +525,15 @@ everything listed. [-> docs/DEVELOPMENT.md]
 * License: [MIT](LICENSE). The audit documents carry their own grading scheme
   ([M]/[V]/[A]/[K]/[U]) — see docs/DECISIONS.md before editing them.
 
-[-> docs/CONTRIBUTING.md]
+## 28. Documentation roadmap
+
+The chapters below are planned and **not yet written**. They are listed as topics
+rather than as file paths on purpose: a path written before its file exists is a
+promise the reader cannot cash, and `checks/doc_pointers.py` now refuses one.
+Each chapter's pointer goes back into the prose above in the same commit that
+adds the chapter.
+
+Design principles · Architecture · Workflows · Getting started ·
+Configuration · Model integration · Datasets · Distributed execution ·
+Custom gates · Extension points · Checkpointing · Observability ·
+Examples · Development · Testing · Troubleshooting · Contributing

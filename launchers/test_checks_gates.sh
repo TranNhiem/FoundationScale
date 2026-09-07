@@ -1216,6 +1216,130 @@ EOF
   fi
 fi
 
+# --- MUST_PASS: doc-pointer gate self-test (checks/doc_pointers.py) ----------
+# Finding #281: the README is a contents page and 17 of the chapters it points
+# at did not exist. Nothing was red, because a pointer is a DECLARATION and the
+# only gate over declarations was gate_stage_orphans, which reads build stages.
+#
+# Same floor convention as the f238 leg above and for the same reason: rc=0 is
+# not the measurement. A self-test whose control set silently shrinks to 1 still
+# exits 0, so the trailing "N of N controls" is parsed and held to a FLOOR.
+#
+# The floor covers BOTH control families -- 17 end-to-end cases and 4 extractor
+# controls -- because it is the extractor controls that guard against #186
+# recurring here, and they are the ones a floor over end-to-end cases alone
+# would let disappear. That is not hypothetical: this gate's first version
+# anchored the arrow notation on a closing bracket, so two of the README's own
+# pointers (the ones carrying a prose tail) sat in no denominator while it
+# printed a green. The extractor controls assert the exact (notation, target,
+# line) tuples, which is the only assertion that would have caught it -- an
+# rc-only control cannot tell "found the right thing" from "found a different
+# thing that is also RED".
+#
+# Floor history: 21 at introduction (#281).
+if [ ! -r "checks/doc_pointers.py" ]; then
+  f281_msg="MUST_PASS FAILED (doc_pointers self-test) UNMEASURED:"
+  f281_msg="$f281_msg checks/doc_pointers.py is not readable -- unreadable is not empty"
+  f281_msg="$f281_msg (doctrine 4); the gate cannot run, so 0 of 21 controls were measured"
+  no "$f281_msg"
+else
+  f281_rc=0
+  f281_out=$(python3 -S checks/doc_pointers.py --self-test 2>&1) || f281_rc=$?
+  f281_last=$(printf '%s\n' "$f281_out" | tail -n 1)
+  f281_have=$(printf '%s\n' "$f281_last" |
+    sed -n 's/^self-test denominator: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls.*/\1/p')
+  f281_want=$(printf '%s\n' "$f281_last" |
+    sed -n 's/^self-test denominator: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls.*/\2/p')
+  if [ "$f281_rc" -ne 0 ]; then
+    f281_msg="MUST_PASS FAILED (doc_pointers self-test): rc=$f281_rc over the gate's own"
+    f281_msg="$f281_msg 21-control fixture set -- output:"
+    f281_msg="$f281_msg $(printf '%s\n' "$f281_out" | tr '\n' ' ')"
+    no "$f281_msg"
+  elif [ -z "$f281_have" ] || [ -z "$f281_want" ]; then
+    f281_msg="MUST_PASS FAILED (doc_pointers self-test) UNMEASURED: rc=0 but the last"
+    f281_msg="$f281_msg line is not the declared 'self-test denominator: N of N controls'"
+    f281_msg="$f281_msg wording -- the measuring unit printed no denominator (doctrine 2);"
+    f281_msg="$f281_msg update this leg in the same commit as the wording change."
+    f281_msg="$f281_msg Last line: $f281_last"
+    no "$f281_msg"
+  elif [ "$f281_have" -ne "$f281_want" ]; then
+    f281_msg="MUST_PASS FAILED (doc_pointers self-test): denominator $f281_have of"
+    f281_msg="$f281_msg $f281_want controls is not self-consistent -- the self-test examined"
+    f281_msg="$f281_msg fewer controls than it claims to have (doctrine 2)"
+    no "$f281_msg"
+  elif [ "$f281_have" -lt 21 ]; then
+    f281_msg="MUST_PASS FAILED (doc_pointers self-test): control set shrank to $f281_have"
+    f281_msg="$f281_msg of $f281_want, below the measured floor of 21 -- a self-test that"
+    f281_msg="$f281_msg quietly drops controls still exits 0, so the floor is the control"
+    no "$f281_msg"
+  else
+    f281_msg="MUST_PASS doc_pointers self-test: rc=0 under python3 -S, denominator"
+    f281_msg="$f281_msg $f281_have of $f281_want controls (>= the measured floor of 21):"
+    f281_msg="$f281_msg $f281_last"
+    ok "$f281_msg"
+  fi
+fi
+
+# --- MUST_FIRE: doc_pointers discriminates a dangle from a resolved pointer --
+# The self-test above exercises the gate's INTERNAL fixture path. This leg
+# exercises the shipped CLI over a real git tree, and it is a discrimination
+# PAIR on purpose: the same corpus, differing only in whether the pointed-at
+# file is in the index, must produce 5 (RED) and then 0 (CLEAR). A gate that is
+# merely stuck red satisfies the first arm and fails the second, so one arm
+# alone would not prove the gate discriminates.
+#
+# The assertion is rc=5 exactly, not merely nonzero: collapsing it to nonzero
+# would accept a crash (rc=1/2) or a REFUSE (96) as the control firing, and a
+# crashed detector is not a discriminating one.
+if [ ! -r "checks/doc_pointers.py" ]; then
+  f281b_msg="MUST_FIRE FAILED (doc_pointers dangle discrimination) UNMEASURED:"
+  f281b_msg="$f281b_msg checks/doc_pointers.py is not readable -- unreadable is not empty"
+  f281b_msg="$f281b_msg (doctrine 4); 0 of 2 discrimination arms were measured"
+  no "$f281b_msg"
+elif ! command -v git >/dev/null 2>&1; then
+  f281b_msg="MUST_FIRE FAILED (doc_pointers dangle discrimination) UNMEASURED: git is not"
+  f281b_msg="$f281b_msg on PATH, and both the gate's corpus and its resolution universe are"
+  f281b_msg="$f281b_msg git's index -- the fixture cannot be built, so 0 of 2 arms ran"
+  no "$f281b_msg"
+else
+  f281b_tmp=$(mktemp -d)
+  mkdir -p "$f281b_tmp/docs"
+  printf 'Contents page.\n\n[-> docs/PLANTED.md]\n' > "$f281b_tmp/README.md"
+  git -C "$f281b_tmp" init -q >/dev/null 2>&1
+  git -C "$f281b_tmp" add -A >/dev/null 2>&1
+  f281b_dangle_rc=0
+  f281b_dangle_out=$(python3 -S checks/doc_pointers.py "$f281b_tmp" 2>&1) || f281b_dangle_rc=$?
+  # Identical corpus, one file added to the index. Nothing else changes.
+  printf '# Planted\n' > "$f281b_tmp/docs/PLANTED.md"
+  git -C "$f281b_tmp" add -A >/dev/null 2>&1
+  f281b_clear_rc=0
+  f281b_clear_out=$(python3 -S checks/doc_pointers.py "$f281b_tmp" 2>&1) || f281b_clear_rc=$?
+  rm -rf "$f281b_tmp"
+  if [ "$f281b_dangle_rc" -ne 5 ]; then
+    f281b_msg="MUST_FIRE FAILED (doc_pointers dangle discrimination): the planted"
+    f281b_msg="$f281b_msg [-> docs/PLANTED.md] with no such path in the index gave"
+    f281b_msg="$f281b_msg rc=$f281b_dangle_rc, expected exactly 5 (RED) over a denominator of"
+    f281b_msg="$f281b_msg 1 pointer in 1 tracked *.md. rc=0 would launder a dangling pointer"
+    f281b_msg="$f281b_msg into CLEAR and any other nonzero is not this gate's declared RED."
+    f281b_msg="$f281b_msg Output: $(printf '%s\n' "$f281b_dangle_out" | tr '\n' ' ')"
+    no "$f281b_msg"
+  elif [ "$f281b_clear_rc" -ne 0 ]; then
+    f281b_msg="MUST_FIRE FAILED (doc_pointers dangle discrimination): the dangling arm fired"
+    f281b_msg="$f281b_msg correctly at rc=5, but staging docs/PLANTED.md -- the ONLY change --"
+    f281b_msg="$f281b_msg still gave rc=$f281b_clear_rc instead of 0. Only 1 of 2 arms held; a"
+    f281b_msg="$f281b_msg gate that reddens a corpus whose every pointer resolves is stuck RED,"
+    f281b_msg="$f281b_msg not discriminating, so the leg fails closed. Output:"
+    f281b_msg="$f281b_msg $(printf '%s\n' "$f281b_clear_out" | tr '\n' ' ')"
+    no "$f281b_msg"
+  else
+    f281b_msg="MUST_FIRE doc_pointers dangle discrimination: over 1 pointer in 1 tracked"
+    f281b_msg="$f281b_msg *.md the shipped CLI exited rc=5 (RED) while docs/PLANTED.md was"
+    f281b_msg="$f281b_msg absent from the index and rc=0 (CLEAR) once it was staged -- the only"
+    f281b_msg="$f281b_msg difference between the arms. Both discrimination outcomes held"
+    ok "$f281b_msg"
+  fi
+fi
+
 echo "abstentions: $abstain named (each named at its site above with its denominator; 0 added to pass or fail)"
 echo "controls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

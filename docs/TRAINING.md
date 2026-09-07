@@ -261,4 +261,4 @@ launchers — those carry the tensor/pipeline/expert-parallel work, resume, and 
 tripwires. `--tp/--pp/--ep/--cp` are accepted and validated here, but the thin loop
 executes DDP.
 
-[-> README §14 Distributed training, §15 Multi-node training]
+[-> ../README.md §14 Distributed training, §15 Multi-node training]

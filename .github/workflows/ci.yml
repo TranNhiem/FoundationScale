@@ -441,6 +441,27 @@ jobs:
         run: |
           python3 checks/countables_drift.py --census "$RUNNER_TEMP/census.json" \
             docs README.md Makefile .github/workflows/ci.yml
+      # #281, and it rides in this job because it is the same class the countables
+      # gate guards: a shipped document making a claim the tree does not support.
+      # There the claim is a number, here it is the existence of a file. The README
+      # is a contents page and 17 of its chapters were absent, with nothing red,
+      # because a pointer is a DECLARATION and gate_stage_orphans -- the only gate
+      # over declarations -- reads build stages, not prose.
+      #
+      # Self-test first, and this gate earned that ordering the hard way: its own
+      # first version anchored the arrow notation on a closing bracket, so two of
+      # the README's own pointers (the ones carrying a prose tail) sat in no
+      # denominator. That is #186 verbatim, inside the gate written to close #281.
+      # It now prints a sub-count per notation, so an extractor that goes inert
+      # reports a zero rather than a green.
+      #
+      # Note also what it deliberately does NOT read: fenced blocks and inline
+      # code. A path in code formatting is being SHOWN, not followed -- and the
+      # masked-span count is printed, so that narrowing is measured, not silent.
+      - name: Doc-pointer controls (MUST_FIRE/MUST_PASS/MUST_BE_UNMEASURED)
+        run: python3 checks/doc_pointers.py --self-test
+      - name: Doc pointers (every pointer in shipped markdown has a file behind it)
+        run: python3 checks/doc_pointers.py
 
   launchers:
     name: launcher contracts (a silent suite fails this job)
