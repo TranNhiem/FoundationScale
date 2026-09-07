@@ -442,11 +442,40 @@ Ranked. Each item: the question, why the design turns on it, the measurement.
    cadence semantics turn on this. Measurement: full copy vs collective vs reshard
    on the estate's GB200 hardware, per Phase 1 section 9's measure-before-committing
    list. Currently UNMEASURED.
-4. **Would the objective gates have caught Phase 2's DPO anomaly?** `accuracy` and
-   `sft_loss` at exactly 0.0000 for ten steps is unexplained. The design claims the
-   gate plane is the right instrument for this class of defect; the claim is
-   UNMEASURED. Measurement: reproduce the reading under an
-   `ObjectiveGateContext`-producing loop and record what the gates return.
+4. **Would the objective gates have caught Phase 2's DPO anomaly?** MEASURED, and
+   the answer is split down the middle of the two readings. The reading was driven
+   through the production dispatch (`run_event` over the shipped registry) in
+   `tests/rl/test_dpo_anomaly_gate_response.py`, with a healthy DPO step as the
+   positive control. Phase 2's config is on the cluster and WHY the numbers are
+   zero is still open, so all three hypotheses about what the run declared were
+   measured rather than one guessed:
+
+   | Reading | Arm | `objective.loss_components` |
+   |---|---|---|
+   | healthy step (control) | both terms live | PASS |
+   | `sft_loss` 0.0000 | declared, weight `0.0` | **FAIL** — "components with weight 0.0" |
+   | `sft_loss` 0.0000 | declared, weighted, contributing `0.0` | **FAIL** — "measured contributing exactly 0.0" |
+   | `sft_loss` 0.0000 | **not declared**, log-only | PASS — four green gates |
+   | `accuracy` 0.0000 | any | no gate reads it |
+
+   So the gate plane catches the `sft_loss` reading **if and only if the objective
+   declares `sft_loss` as a component**, and NeMo-RL logs that key whether or not
+   the term is active. Declaration is what puts a component in the denominator.
+   This is a requirement on stage 2, not a free property of it: FoundationScale's
+   DPO must declare its auxiliary term even when the term is switched off, because
+   an undeclared inactive term and an undeclared broken term read identically.
+
+   The `accuracy` half is worse and is a finding rather than a caveat: `accuracy`
+   at 0.0000 means the policy ranked the REJECTED completion above the chosen one
+   on every pair, and **no gate can see it, structurally**. Of the eleven
+   `ObjectiveGateContext` fields the only named-scalar channel is `components`,
+   and `LossComponent` requires a `weight`; a diagnostic metric has no weight and
+   is not a term of the loss. `LossOutput` (two fields) and
+   `build_objective_gate_context` (seven parameters) carry no metric either, so
+   the gap is in the stage-1 seam and not only in the context. The design's claim
+   that "the gate plane is the right instrument for this class of defect" holds
+   for loss components and is **false for diagnostic metrics**, which currently
+   sit in no denominator at all.
 5. **Serialized bytes crossing the trainer/generation boundary.** Sizes the
    `ExperienceBatch` schema and the sync mapping. UNMEASURED; Phase 2's ten steps
    on one GPU did not price the boundary.
@@ -494,7 +523,14 @@ measurements — the gate plane's fail-closed discipline is the motivation, and 
 1. Land `ExperienceBatch` and `LossFn` with SFT only, inside `train(cfg)`, with
    objective-gate contexts emitted. Smallest possible change to a working path.
 2. Land `PolicyPair`'s reference role and DPO; use stage 1's measurements plus the
-   DPO-anomaly investigation (section 7, item 4) as the gate.
+   DPO-anomaly investigation (section 7, item 4) as the gate. That investigation is
+   now done and it attaches two conditions to this stage rather than clearing it
+   unconditionally: (a) DPO must declare `sft_loss` as a component **even when the
+   auxiliary term is switched off**, because the measurement shows an undeclared
+   inert term passing the whole sweep; (b) the diagnostic-metric channel the same
+   measurement found missing must be resolved — either added to the contract or
+   explicitly declared out of scope — before an algorithm whose primary health
+   signal is a metric rather than a loss term is built on it.
 3. Land `RolloutSource`, `AdvantageFn`, and `WeightSync` together — they are not
    separable — behind one policy-gradient algorithm, gated on the transport
    measurement (section 7, item 3).

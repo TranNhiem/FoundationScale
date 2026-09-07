@@ -179,9 +179,14 @@ not an absent thing.
 * The `_v2` DTensor worker could not be built, so its behaviour is unmeasured
   on GB200, not "fine".
 * DPO `accuracy` and `sft_loss` are both exactly `0.0000` for the whole run.
-  This is unexplained. It may be correct (the config may not populate them) or
-  it may be a dead metric. It has not been investigated, and no conclusion
-  should be drawn from the DPO accuracy number.
+  This is still unexplained as to CAUSE — the run's config is on the cluster and
+  has not been read back — so no conclusion should be drawn from the DPO
+  accuracy number. What HAS been measured is what FoundationScale's objective
+  gates do when handed the reading (PHASE3_DESIGN section 7 item 4,
+  `tests/rl/test_dpo_anomaly_gate_response.py`): the `sft_loss` half is caught,
+  but only if the objective declares `sft_loss` as a loss component, and the
+  `accuracy` half is caught by nothing because the gate context has no channel
+  for a diagnostic metric.
 * No FoundationScale-side comparison exists yet. That is Phase 4, and nothing
   here licenses a claim about relative performance.
 
