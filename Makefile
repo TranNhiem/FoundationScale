@@ -154,13 +154,28 @@ ci-suite-extras:
 # with a TypeError and exit 1 on Python 3.9, which is the interpreter class the
 # login node actually has (#138). A gate that cannot start states no verdict,
 # and exit 1 is outside the 0/5/95/96 namespace it claims to publish.
+# `examples` joined this list because CI already had it and this file did not:
+# .github/workflows/ci.yml ran `ruff check src tests tools checks examples` while
+# `make lint` ran the same command four words shorter. That is #230 with the sign
+# flipped -- there CI was WEAKER than the Makefile it claims to mirror, here it was
+# stronger -- and the failure mode is the one that costs a round trip: `make lint`
+# green, push, CI red on a file the developer's own command could not see. Measured
+# at the time of this edit `examples` was clean on both rules, so nothing was being
+# hidden; the defect was that nothing would have said so either way.
+#
+# ONE VARIABLE, both recipes. Stating a denominator twice in one file is how the
+# four-word gap opened in the first place. The Makefile<->CI half of the mirror is
+# still unpinned by any gate -- filed, because a hand-synchronised pair is a
+# convention, and this repository has already watched two of them drift.
+LINT_PATHS := src tests tools checks examples
+
 lint:
-	$(PY) -m ruff check src tests tools checks
-	$(PY) -m ruff format --check src tests tools checks
+	$(PY) -m ruff check $(LINT_PATHS)
+	$(PY) -m ruff format --check $(LINT_PATHS)
 
 fmt:
-	$(PY) -m ruff check --fix src tests tools checks
-	$(PY) -m ruff format src tests tools checks
+	$(PY) -m ruff check --fix $(LINT_PATHS)
+	$(PY) -m ruff format $(LINT_PATHS)
 
 # Run this in the SAME environment as `install` creates — one with [checkpoint].
 # mypy without torch checks a different program: MetadataIndex becomes Any, and an

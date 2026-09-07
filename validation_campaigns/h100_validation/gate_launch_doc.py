@@ -109,11 +109,16 @@ TRAINER = H100 / "gen" / "fs_train.fixed.py"
 PUBLISH_SET = H100 / "PUBLISH_SET.txt"
 BACKEND = H100 / "gen" / "fs_container_backend.bound.sh"
 
-# L1: the launcher's own guard idiom for required-no-default knobs. Spacing-tolerant,
-# but the SHAPE is fixed on purpose: `||` present, `${NAME:-}` empty-default probe.
-GUARD_RE = re.compile(
-    r'\[\[\s+-n\s+"\$\{([A-Za-z_][A-Za-z0-9_]*):-\}"\s+\]\]\s+\|\|'
-)
+# L1 has NO pattern here on purpose. It used to own GUARD_RE, the raw
+# `[[ -n "${NAME:-}" ]] ||` shape, and that regex is now deleted rather than kept as
+# a spare: leaving a plausible-looking instrument next to the live one is how a later
+# reader re-adopts the narrow denominator #279 was filed about. enforced_knobs() reads
+# fs_required_knobs.extract() and nothing else. That module keeps the equivalent shape
+# as _GUARD_RE, and pairs it with a REFUSAL test the deleted version did not have --
+# this one accepted any `||`, so `[[ -n "${X:-}" ]] || return 1` counted as a
+# requirement and survived only because the one live instance happened to be SLURM_-
+# prefixed. Second-order rules (R2neg, R2compound, R3..R5) live there too.
+#
 # L2: a citation is <NOTATION>:<digits>; the row's subject is the FIRST backticked
 # FS_ token. A citation is a line number OR an inclusive range: L:358, L:358-365,
 # L:34–182. Both the ASCII hyphen and the en-dash a writer's editor substitutes for it,
@@ -222,15 +227,16 @@ def enforced_knobs(lau_text: str, backend_text: str = "") -> tuple[list[str], in
     Returns (operator knob names in sorted order, guard SITES seen, SLURM_* names
     excluded).
 
-    #276/#279. This used to apply GUARD_RE — the raw `[[ -n "${NAME:-}" ]] ||` shape
-    — and nothing else. Measured, that saw 5 operator knobs. The launcher states 7 of
-    its requirements through the `req_env NAME` helper instead, and the backend adds
-    4 more, so 11 of 16 knobs the plane genuinely refuses to start without sat in NO
-    gate's denominator. A coverage rule whose denominator omits two thirds of the
-    subject reports a fraction that is true of the sample and false of the claim.
+    #276/#279. This used to apply one local regex — the raw `[[ -n "${NAME:-}" ]] ||`
+    shape, since deleted — and nothing else. Measured, that saw 5 operator knobs. The
+    launcher states 7 of its requirements through the `req_env NAME` helper instead,
+    and the backend adds 4 more, so 11 of the 16 knobs the plane genuinely refuses to
+    start without sat in NO gate's denominator. A coverage rule whose denominator omits
+    two thirds of the subject reports a fraction that is true of the sample and false
+    of the claim.
 
     The replacement is the shared extractor, which is a strict SUPERSET here: it
-    returns every name GUARD_RE found plus the ones it could not see. That was
+    returns every name the old shape found plus the ones it could not see. That was
     verified by diffing the two on the real artifacts before this call was rewired —
     gained 7, lost 0 — because a "consolidation" that quietly drops a knob would
     trade a visible gap for an invisible one.

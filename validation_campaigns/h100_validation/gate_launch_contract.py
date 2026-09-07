@@ -80,8 +80,22 @@ OPTIONAL = {
 
 # L4 buckets. estate/run are exact-match sets; topology is exact names plus the
 # *PROCS* / *NTASKS* families. Anything extracted that matches none of these lands in
-# 'unclassified' and is PRINTED -- a new required variable must be visible, not
-# silently absorbed.
+# 'unclassified', which is FATAL (#127).
+#
+# It used to be merely PRINTED, under a PASS line reading "buckets disjoint and
+# complete". Both halves of that sentence cannot be true at once: a residue nobody
+# bucketed is exactly the case where the partition is NOT complete, and the gate went
+# on to write the operator document anyway. The unclassified name would have rendered
+# with the generic <fs-whatever> placeholder and no statement of where an operator is
+# supposed to get its value -- which is the one question the buckets exist to answer.
+# A visible line in a green report is not a gate; it is a note, and notes do not stop
+# a document from shipping.
+#
+# The RED is also the only thing that makes the bucket sets maintainable. A name
+# reaching unclassified means the launcher grew a requirement, and the correct response
+# is a one-line decision about which bucket it belongs to -- routine, provided someone
+# is made to make it. Absorbing it costs nothing at the moment it happens and produces
+# an operator document that quietly under-specifies the launch.
 #
 # The estate/topology line is "does it change how many ranks run?" FS_GPUS_PER_NODE
 # does, so it is topology. FS_PARTITION, FS_WALLTIME, FS_CPUS_PER_TASK and FS_MEM do
@@ -357,6 +371,49 @@ def classify(names):
     return buckets
 
 
+def l4_verdict(names):
+    """L4's ENTIRE decision, returned rather than printed, so that MUST_FIRE 4 can run
+    the code the gate runs instead of restating its condition. A drill that re-derives
+    `buckets["unclassified"] != []` for itself proves that classify() works and says
+    nothing about whether the gate acts on it -- which is precisely the thing #127 got
+    wrong for the whole life of this file.
+
+    Returns (ok, buckets, lines). main() prints the lines and ANDs the ok.
+    """
+    buckets = classify(set(names))
+    n_names = len(set(names))
+    total = sum(len(v) for v in buckets.values())
+    flat = [n for v in buckets.values() for n in v]
+    lines, ok = [], True
+    if total != n_names or len(set(flat)) != total:
+        ok = False
+        lines.append("  FAIL L4  bucket partition broken: %d names classified, %d "
+                     "required, %d distinct" % (total, n_names, len(set(flat))))
+    elif buckets["unclassified"]:
+        # #127. Fatal, not a note. The partition sums correctly here -- that is what
+        # the branch above checked -- so the only thing wrong is that some of the parts
+        # mean "unbucketed", and a sum that includes an I-don't-know term is not a
+        # classification. L5 reads `ok` and will now refuse to write the document.
+        ok = False
+        lines.append("  FAIL L4  %d required name(s) in no bucket -- estate %d + run %d "
+                     "+ topology %d = %d of %d, and a name with no bucket renders in "
+                     "the operator document with no statement of where its value comes "
+                     "from: %s"
+                     % (len(buckets["unclassified"]), len(buckets["estate"]),
+                        len(buckets["run"]), len(buckets["topology"]),
+                        n_names - len(buckets["unclassified"]), n_names,
+                        ", ".join(buckets["unclassified"])))
+    else:
+        lines.append("  PASS L4  buckets disjoint and complete: estate %d + run %d + "
+                     "topology %d + unclassified %d = %d required names"
+                     % (len(buckets["estate"]), len(buckets["run"]),
+                        len(buckets["topology"]), len(buckets["unclassified"]),
+                        n_names))
+    for b in ("estate", "run", "topology"):
+        lines.append("           %-12s %s" % (b, ", ".join(buckets[b]) or "(empty)"))
+    return ok, buckets, lines
+
+
 def redact_text(s):
     return REDACT_RE.sub("<redacted>", s)
 
@@ -515,6 +572,37 @@ def run_drills(launch_text, backend_text, res):
               "(site minted DENY=%s, census clean=%s) -- a dead control here means "
               "UNMEASURED, not clean" % (minted_by_site, refused))
 
+    # MUST_FIRE 4: plant a required name that belongs to no bucket; L4 must go RED and
+    # therefore L5 must refuse to write. This is #127's other half. Until it was added,
+    # the unclassified state was PRINTED under a PASS line reading "buckets disjoint and
+    # complete" -- a note, and notes do not stop a document from shipping.
+    #
+    # The drill calls l4_verdict() rather than re-deriving `unclassified != []` for
+    # itself, which is the whole reason that function exists. A drill that restates the
+    # condition proves classify() works and says nothing about whether the gate ACTS on
+    # it, and "the gate did not act on it" is the defect being closed here.
+    #
+    # Both directions are asserted. Planting alone is not a control: if L4 returned
+    # False unconditionally the planted half would still read PASS, so the real set is
+    # run through the same function and must come back ok with an EMPTY unclassified.
+    # And the planted name must land in unclassified SPECIFICALLY -- if it were absorbed
+    # by the topology substring rule (TOPOLOGY_PARTS is a substring match, so a name can
+    # be bucketed by accident) the equality below fails and this drill says so.
+    nb_ok, nb_buckets, _ = l4_verdict(set(res.info) | {"FS_PLANTED_NOBUCKET"})
+    real_ok, real_buckets, _ = l4_verdict(set(res.info))
+    fired = not nb_ok and nb_buckets["unclassified"] == ["FS_PLANTED_NOBUCKET"]
+    discriminates = real_ok and not real_buckets["unclassified"]
+    if fired and discriminates:
+        print("  PASS L6  MUST_FIRE unbucketed-required: FS_PLANTED_NOBUCKET lands in "
+              "'unclassified' and L4 returns RED (so L5 refuses to write), while the "
+              "real %d-name set returns GREEN with 0 unclassified" % len(res.info))
+    else:
+        ok = False
+        print("  FAIL L6  MUST_FIRE unbucketed-required drill did not fire "
+              "(planted RED=%s, planted unclassified=%s, real GREEN=%s) -- a dead "
+              "control here means UNMEASURED, not clean"
+              % (not nb_ok, nb_buckets["unclassified"] or "none", discriminates))
+
     # MUST_PASS: the unmodified pair yields a non-empty required set (>= 8 names).
     if len(res.info) >= 8:
         print("  PASS L6  MUST_PASS unmodified pair yields %d required names (>= 8)"
@@ -605,24 +693,11 @@ def main():
               % (len(tmpl_names), len(tmpl_names) - len(declared_opt), len(declared_opt)))
 
     # --- L4 CLASSIFY: disjoint buckets whose parts sum to the whole ----------------
-    buckets = classify(set(res.info))
-    total = sum(len(v) for v in buckets.values())
-    flat = [n for v in buckets.values() for n in v]
-    if total != n_names or len(set(flat)) != total:
+    l4_ok, buckets, l4_lines = l4_verdict(set(res.info))
+    if not l4_ok:
         ok = False
-        print("  FAIL L4  bucket partition broken: %d names classified, %d required, "
-              "%d distinct" % (total, n_names, len(set(flat))))
-    else:
-        print("  PASS L4  buckets disjoint and complete: estate %d + run %d + topology "
-              "%d + unclassified %d = %d required names"
-              % (len(buckets["estate"]), len(buckets["run"]),
-                 len(buckets["topology"]), len(buckets["unclassified"]), n_names))
-    for b in ("estate", "run", "topology"):
-        print("           %-12s %s" % (b, ", ".join(buckets[b]) or "(empty)"))
-    if buckets["unclassified"]:
-        # Visible, not absorbed: a newly required variable nobody bucketed yet.
-        print("           UNCLASSIFIED (new required variable -- give it a bucket): "
-              + ", ".join(buckets["unclassified"]))
+    for line in l4_lines:
+        print(line)
 
     # --- L5 EMIT: refuse to write while any gate is red; redaction scan first ------
     if not ok:
