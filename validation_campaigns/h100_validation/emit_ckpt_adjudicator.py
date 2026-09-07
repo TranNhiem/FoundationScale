@@ -764,7 +764,7 @@ def _report(gates: list[tuple[str, bool, str]]) -> None:
 
 def _fail(gates: list[tuple[str, bool, str]]) -> int:
     _report(gates)
-    return 2
+    return 5
 
 
 def _post_write_fail(
@@ -773,7 +773,7 @@ def _post_write_fail(
     _discard_outputs(outputs)
     _report(gates)
     print("removed both artifacts; unverified files are not left in place")
-    return 4
+    return 5
 
 
 def _compile_artifacts(paths: list[pathlib.Path]) -> tuple[int, str]:

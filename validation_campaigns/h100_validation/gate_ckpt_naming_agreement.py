@@ -69,8 +69,8 @@ UNMEASURED = "UNMEASURED"
 # Four outcomes must be distinguishable from the exit code alone: green, measured
 # disagreement, declared unmeasured, and an untrusted gate.
 EXIT_GREEN = 0
-EXIT_UNMEASURED = 3
-EXIT_CONTROLS = 4
+EXIT_UNMEASURED = 95
+EXIT_CONTROLS = 5
 EXIT_DISAGREEMENT = 5
 
 # 0 is deliberate: an early save at global_step 0 is a real case, and a padded zero

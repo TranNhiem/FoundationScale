@@ -332,7 +332,7 @@ def main() -> int:
         print("=== extract_stage.py self-certification ===")
         ok = _run_controls()
         print(f"\ncontrols: {ok}")
-        return 0 if ok else 6
+        return 0 if ok else 5
     if len(argv) < 3:
         # Refuse rather than default. An extraction with no required tokens would pass C7
         # vacuously -- all([]) is True -- which is the exact failure this project is named

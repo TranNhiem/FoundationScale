@@ -2613,7 +2613,7 @@ def _run(config: RunConfig) -> int:
             "metrics": summary_metrics,
         },
     )
-    return 0 if verdict == "MEASURED" else 3
+    return 0 if verdict == "MEASURED" else 95  # this arm printed UNMEASURED; 95 is its slot
 
 
 def _run_selftest() -> int:
@@ -2773,7 +2773,7 @@ def _run_selftest() -> int:
             "verdict": verdict,
         },
     )
-    return 0 if matched == len(table) else 1
+    return 0 if matched == len(table) else 5  # SELFTEST_FAIL is a measured failure: 5
 
 
 def _rank_hint() -> None:

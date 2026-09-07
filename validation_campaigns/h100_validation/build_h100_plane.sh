@@ -886,18 +886,25 @@ echo -e "\n=== standing gate: writer/adjudicator naming agreement (#150) ==="
 # cross-artifact gate; per-artifact suites structurally cannot see it.
 # #160, second site: this case arm translated the gate's own four-state result into a single
 # `exit 5`, so an UNMEASURED gate reported as a RED build. The gate goes to the trouble of
-# distinguishing "I could not measure" (3) from "we disagree" (5); flattening that at the call
-# site throws away the only thing the distinction was for. Controls-failed (4) stays RED on
-# purpose -- a gate that fails its own controls is not unmeasured, it is untrustworthy, and the
-# build must not offer the softer word for it.
+# distinguishing "I could not measure" from "we disagree"; flattening that at the call site
+# throws away the only thing the distinction was for. Controls-failed stays RED on purpose --
+# a gate that fails its own controls is not unmeasured, it is untrustworthy, and the build must
+# not offer the softer word for it.
+# #305: the gate used to say that in a PRIVATE namespace (`EXIT_UNMEASURED = 3`,
+# `EXIT_CONTROLS = 4`) which this block translated. Those two codes were outside the published
+# {0, 5, 95, 96} contract and the exit-contract gate could not see them, because its judge
+# stopped at a literal `return N` and these arrived as `return EXIT_UNMEASURED`. The gate now
+# speaks the contract directly (95 and 5), the translation arms below are gone, and the
+# SEMANTICS are unchanged: unmeasured still reports 95, controls-failed still reports RED. The
+# cost is that rc alone no longer separates controls-failed from disagreement; the gate's own
+# stderr still names which one it was, so the operator loses nothing.
 python3 gate_ckpt_naming_agreement.py || {
   rc=$?
   case $rc in
-    3) echo "NAMING GATE UNMEASURED (rc=3 -> build 95) — zero writer sites, or the adjudicator would not import" >&2; note_gate 95 gate_ckpt_naming_agreement.py ;;
-    4) echo "NAMING GATE CONTROLS FAILED (rc=4) — the gate cannot be trusted, so neither can this build" >&2 ;;
-    5) echo "NAMING GATE RED (rc=5) — writer and adjudicator disagree about checkpoint naming" >&2 ;;
-    95) echo "NAMING GATE UNMEASURED (rc=95) — the plane-wide code, distinct from this gate's own rc=3." >&2
-        echo "  #290: this arm did not exist, so a refusal arrived here and left as RED." >&2
+    5) echo "NAMING GATE RED (rc=5) — writer and adjudicator disagree about checkpoint naming," >&2
+       echo "  or the gate's own controls did not fire; its stderr above says which." >&2 ;;
+    95) echo "NAMING GATE UNMEASURED (rc=95) — zero writer sites, or the adjudicator would not" >&2
+        echo "  import. #290: this arm did not exist, so a refusal arrived here and left as RED." >&2
         note_gate 95 gate_ckpt_naming_agreement.py ;;
     96) echo "NAMING GATE REFUSED (rc=96) — an input is unreadable; the writer or the generated" >&2
         echo "  adjudicator is absent, which is the tree's state after a stage refuses." >&2

@@ -484,7 +484,7 @@ def main() -> int:
          f"fs_launch_python definitions remaining in backend: {old_defs}/0 -- "
          f"a composer with zero call sites is the defect being fixed (#124), "
          f"so a future regression reads as red here")
-    return 1 if FAILURES else 0
+    return 5 if FAILURES else 0
 
 
 if __name__ == "__main__":

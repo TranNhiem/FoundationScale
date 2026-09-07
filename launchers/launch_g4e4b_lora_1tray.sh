@@ -628,7 +628,7 @@ CENSUS_OUT=$PREFLIGHT_DIR/target_census.txt
 # now demands via --adapter-modules. Three lines below are load-bearing:
 #  - LOCATION $OUTPUT_DIR/fs_gate/: OUTSIDE the judged iter_* tree on
 #    purpose — written inside it, the loader's own tautology guard
-#    (tools/live_save_gate.py:742) refuses the census as self-certifying.
+#    (src/foundationscale/gates/adjudication.py:549) refuses the census as self-certifying.
 #  - mkdir BEFORE the probe runs: the probe's write is atomic (tmp file +
 #    rename inside the target dir) and cannot create the parent itself; a
 #    missing parent would surface only AFTER a CLEAR verdict, as the
@@ -651,7 +651,7 @@ mkdir -p "$OUTPUT_DIR/fs_gate" || \
   { echo "FATAL: cannot create $OUTPUT_DIR/fs_gate (for ADAPTER_MODULES=$ADAPTER_MODULES) — the census probe's atomic --out write needs the parent directory; refusing now rather than failing a CLEAR census on a missing artifact afterwards (doctrine 4)." >&2; exit 1; }
 rm -f "$ADAPTER_MODULES" || \
   { echo "FATAL: cannot remove stale $ADAPTER_MODULES before the census — a leftover artifact would let the CLEAR-arm presence check below certify a census THIS probe never wrote (the measured claim-vs-disk gap). Refusing (doctrine 4)." >&2; exit 1; }
-echo "Preflight: machine-readable adapter census -> $ADAPTER_MODULES (--out on the same probe run; deliberately outside the judged iter_* tree per live_save_gate.py:742's tautology guard)"
+echo "Preflight: machine-readable adapter census -> $ADAPTER_MODULES (--out on the same probe run; deliberately outside the judged iter_* tree per src/foundationscale/gates/adjudication.py:549's tautology guard)"
 # Invocation MEASURED (fix39): the probe's argparse is --hf_model_path
 # (required) plus --ep ONLY — the pre-fix attempt passed --hf_path/--recipe
 # and would have died in argparse before censusing anything — and the provider
@@ -1409,7 +1409,7 @@ gate_fail(){ echo "GATE FAIL: $1" >&2; GATE=1; }
 #   the one python call site in this launcher that did not go through the
 #   executor. Host python3 has no torch (fix32 measurement: the host anaconda
 #   interpreter shadows the image stack), so both PROBE runs' exit 3s were a
-#   torch-less host reading a HEALTHY DCP at live_save_gate.py:1149 — never the
+#   torch-less host reading a HEALTHY DCP at src/foundationscale/gates/adjudication.py:962 — never the
 #   adapter-prefix abstention the log claimed. The gate now runs through
 #   run_in_container like the four sites the contract suite already pins."
 # "Host python3 has no torch" is the sentence the measurement killed. The
@@ -1426,14 +1426,14 @@ gate_fail(){ echo "GATE FAIL: $1" >&2; GATE=1; }
 # PYTHONNOUSERSITE=1` in this file's Environment section, correct and
 # load-bearing for the training payload — hides the user site from every
 # host-side gate call that follows it. So both PROBE runs' exit 3s were the
-# hidden-torch import refusal at live_save_gate.py:1149 — never a
+# hidden-torch import refusal at src/foundationscale/gates/adjudication.py:962 — never a
 # torch-LESS host, and (as the quoted addendum itself insisted) never the
 # adapter-prefix abstention the log claimed either.
 # The corrected claim: the host python3 CAN parse the training save; under
 # the launcher's own environment it must NOT be asked to.
 # Three arms, one extracted function, one artifact — the extracted function
 # is fs_live_save_gate, immediately below; the artifact is the arm-A
-# refusal text the gate dies with at live_save_gate.py:1149:
+# refusal text the gate dies with at src/foundationscale/gates/adjudication.py:962:
 #   A  host + launcher env (NOUSERSITE=1)  rc=3  report=ABSENT
 #      "torch.distributed.checkpoint is unavailable; cannot read DCP"
 #   B  host - NOUSERSITE                   rc=0  report=CLEAR — the import
@@ -1485,7 +1485,7 @@ fs_live_save_gate() { # $1=iter dir  $2=event  $3=report path  $4=capture log; r
   # the calibrated rc-0 'expected lora state' in the mapper below. Both
   # flags are now pinned ON EVERY CALL, and the calibrated arm is retired in
   # the SAME edit — one edit, not two — because the gate raises its prefix
-  # demand BEFORE its census demand (live_save_gate.py:505-531, order
+  # demand BEFORE its census demand (src/foundationscale/gates/adjudication.py:309-335, order
   # load-bearing; the :511-523 note licenses exactly this COORDINATED
   # change), so wiring --adapter-modules while leaving the prefix arm in
   # place would have changed NOTHING: the prefix refusal would still
@@ -1499,7 +1499,7 @@ fs_live_save_gate() { # $1=iter dir  $2=event  $3=report path  $4=capture log; r
   # gate's demand distinguishes an empty pin from None) nor the two-
   # character string "''". --adapter-modules hands the gate the preflight
   # probe's --out artifact, written OUTSIDE the judged iter_* tree on
-  # purpose, because live_save_gate.py:742's tautology guard refuses any
+  # purpose, because src/foundationscale/gates/adjudication.py:549's tautology guard refuses any
   # census inside it.
   # Executor-routed (fix44 / #77-B1), invocation shape copied from the two
   # measured precedents: --slurm-ntasks 1 (a single-CPU adjudicator, like the
@@ -1560,7 +1560,7 @@ fs_lora_gate_verdict_to_rc() { # $1=gate rc  $2=which  $3=report path  $4=captur
   # same edit (fs_live_save_gate above): a chosen abstention cannot survive
   # the choice being made, and leaving the rc-0 arm armed after the wiring
   # landed would have silently kept the abstention alive (the byte-for-byte
-  # hazard live_save_gate.py:511-523 warns about). Every member of the class
+  # hazard src/foundationscale/gates/adjudication.py:315-327 warns about). Every member of the class
   # now rides the rc-92 infrastructure class: unreadable checkpoint, missing
   # base files, tool crash, unreadable capture, missing record, missing
   # census — AND the formerly-calibrated prefix refusal, which can now only
@@ -1605,7 +1605,7 @@ fs_lora_gate_verdict_to_rc() { # $1=gate rc  $2=which  $3=report path  $4=captur
          # calibration ended: the choice it calibrated no longer exists —
          # fs_live_save_gate now pins --adapter-prefix '' AND
          # --adapter-modules "$ADAPTER_MODULES" on every call, and the
-         # gate's own contract (live_save_gate.py:511-523) licensed only
+         # gate's own contract (src/foundationscale/gates/adjudication.py:315-327) licensed only
          # this COORDINATED edit, byte-for-byte. A gate that STILL raises
          # the prefix refusal is a gate whose payload silently lost the
          # flags — the same armed-no-op class as the drill that cannot fire
@@ -1618,7 +1618,7 @@ fs_lora_gate_verdict_to_rc() { # $1=gate rc  $2=which  $3=report path  $4=captur
          # every fire: 0 of the gate's gates and 0 of its controls ran.
          FS_ART_GATE_STATE="UNMEASURED-INFRA (gate exit 3, record CONFIRMED adapter_prefix_unpinned at $3 — a refused-the-refusal now that --adapter-prefix '' and --adapter-modules are wired, #78; class rc-92)"
          FS_ART_GATE_RC=92
-         echo "artifact gate ($2): exit 3 classified adapter_prefix_unpinned — CONFIRMED from the tool's own refusal record (verified present at $3), and now a FAILURE, not an abstention: --adapter-prefix '' and --adapter-modules $ADAPTER_MODULES are wired on every call since #78, so this refusal can only mean the flags silently dropped out of the fs_live_save_gate payload (or the gate drifted). Formerly the calibrated rc-0 'expected lora state' (fix44 / #77-B3); that calibration ended in the same edit that wired the census, per the byte-for-byte contract at live_save_gate.py:511-523. 0 of 3 gates and 0 of 3 controls ran; mapping to the infrastructure class, chain stops. Do NOT restore rc 0 here — resurrecting the abstention without retiring the wiring is the one-sided edit live_save_gate.py:511-523 forbids." >&2
+         echo "artifact gate ($2): exit 3 classified adapter_prefix_unpinned — CONFIRMED from the tool's own refusal record (verified present at $3), and now a FAILURE, not an abstention: --adapter-prefix '' and --adapter-modules $ADAPTER_MODULES are wired on every call since #78, so this refusal can only mean the flags silently dropped out of the fs_live_save_gate payload (or the gate drifted). Formerly the calibrated rc-0 'expected lora state' (fix44 / #77-B3); that calibration ended in the same edit that wired the census, per the byte-for-byte contract at src/foundationscale/gates/adjudication.py:315-327. 0 of 3 gates and 0 of 3 controls ran; mapping to the infrastructure class, chain stops. Do NOT restore rc 0 here — resurrecting the abstention without retiring the wiring is the one-sided edit src/foundationscale/gates/adjudication.py:315-327 forbids." >&2
        elif [[ "$fs_cause" == *"--adapter-prefix was not pinned"* ]]; then
          # The gate's words name the prefix abstention, but the refusal
          # record it must have written is absent or unmarked — precisely the

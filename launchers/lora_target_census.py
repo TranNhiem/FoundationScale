@@ -67,7 +67,7 @@ CENSUS_SAMPLE -- is persisted for live_save_gate.py --adapter-modules as a
 JSON object {'adapter_modules': [...], 'source': ...}. Entries are
 {'fqn', 'out_features', 'in_features'} when every unique parent exposes a
 positive-int dims pair, else plain stems: dims are all-or-nothing because the
-consumer's own dims-coverage check (live_save_gate.py:824-830) refuses a
+consumer's own dims-coverage check (src/foundationscale/gates/adjudication.py:630-636) refuses a
 partially dimmed file as an unstated mixture, so this producer never emits
 one -- bare stems leave the gate's shape check abstaining BY NAME. Stems are
 written in the ARTIFACT namespace: the single leading 'module.' segment every
@@ -76,7 +76,7 @@ live FQN on this estate is measured to carry is stripped exactly once
 refuses the whole write rather than guess a strip. Fail-closed AT THE
 PRODUCER LAYER, in code: an empty attachment set is UNMEASURED with NO file
 written -- a zero must never travel as a census (doctrine 1); until #78 that
-refusal lived ONLY downstream (live_save_gate.py:811), and that downstream
+refusal lived ONLY downstream (src/foundationscale/gates/adjudication.py:613), and that downstream
 check is now a BACKSTOP for broken producers, not this producer's license to
 emit []. The write is same-dir temp + flush/fsync + rename atomic, so a
 crash mid-write cannot leave a truncated census that parses. BLOCKED with a
@@ -175,14 +175,14 @@ def _parent_dims(module):
     """(out_features, in_features) of an attachment parent, or None.
 
     Acceptance mirrored from the consumer (_load_adapter_modules,
-    live_save_gate.py:786-801): positive, non-bool ints only -- JSON booleans
-    ARE Python ints, so an unchecked isinstance would let a True/True pair
+    src/foundationscale/gates/adjudication.py:589-603): positive, non-bool ints only --
+    JSON booleans ARE Python ints, so an unchecked isinstance would let a True/True pair
     read as a plausible (out, in) and mint wrong shapes with an authoritative
     face. A module that lacks the attrs, or whose attrs raise when read,
     yields None; the caller's all-or-nothing rule then degrades the WHOLE
     file to bare stems (the gate's shape check abstains by name) -- never a
     partially-dimmed census, which is refuse-on-read at
-    live_save_gate.py:824-830."""
+    src/foundationscale/gates/adjudication.py:630-636."""
     try:
         out_d = getattr(module, "out_features", None)
         in_d = getattr(module, "in_features", None)
@@ -249,8 +249,8 @@ def _persist_adapter_census(
         them, de-duplicated into a SORTED union: one module matched by TWO
         shipped patterns would otherwise appear twice and the gate loader
         refuses a census carrying duplicates outright
-        (live_save_gate.py:816-823), and sorted order makes the emitted bytes
-        a pure function of the attachment SET, so re-ordering or re-spelling
+        (src/foundationscale/gates/adjudication.py:618-629), and sorted order makes
+        the emitted bytes a pure function of the attachment SET, so re-ordering or re-spelling
         LORA_TARGETS can never silently diff the denominator file;
       * the EMPTY-SET guard sits directly in front of the only call that
         creates the file. Broken to see red: hand this writer rows whose
@@ -261,7 +261,7 @@ def _persist_adapter_census(
         means the verdict logic changed, which is exactly when a guard earns
         its keep;
       * dims are all-or-nothing, the consumer contract at
-        live_save_gate.py:824-830: emitting dims "per module where exposed"
+        src/foundationscale/gates/adjudication.py:630-636: emitting dims "per module where exposed"
         naively would mint exactly the partially-dimmed mixture the gate
         refuses on read -- a file that LOOKS producer-complete and
         adjudicates nothing. So a single parent without clean dims degrades
@@ -309,8 +309,8 @@ def _persist_adapter_census(
             f"{len(rows)} targets). CENSUS_VERDICT=UNMEASURED and NO file "
             "written: a zero can never travel as a census (doctrine 1). The "
             "downstream empty-declarations refusal (_load_adapter_modules, "
-            "live_save_gate.py:810-815) is a BACKSTOP for broken producers, "
-            "not this producer's license to emit []."
+            "src/foundationscale/gates/adjudication.py:612-617) is a BACKSTOP "
+            "for broken producers, not this producer's license to emit []."
         )
 
     dims = {}
@@ -333,14 +333,14 @@ def _persist_adapter_census(
             f"dims=none ({len(dims)} of {len(pairs)} parents expose clean "
             "positive-int dims) -- all entries written as bare stems so the "
             "gate's shape check abstains BY NAME; a partially-dimmed census "
-            "is refuse-on-read at live_save_gate.py:824-830 and would only "
+            "is refuse-on-read at src/foundationscale/gates/adjudication.py:630-636 and would only "
             "LOOK shipped"
         )
 
     payload = {
         "adapter_modules": entries,
         # 'source' is the provenance the gate loader folds into its basis
-        # text (live_save_gate.py:764-766); a census that cannot say who
+        # text (src/foundationscale/gates/adjudication.py:590); a census that cannot say who
         # wrote it earns the louder NO-provenance basis instead.
         "source": (
             "launchers/lora_target_census.py launch-time live-module census "

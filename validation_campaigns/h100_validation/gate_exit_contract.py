@@ -30,6 +30,20 @@ surfaces 215 returns, of which 43 returned 1/2/3/4 -- outside {0, 5, 95, 96} --
 and one of them was this gate's own `return 4`: the enforcer could not see
 itself. An invisible self-defect is the strongest argument for the widening.
 
+The hop still judged only literal returns, and 85 entry-function returns sat
+UNJUDGED behind it: 48 returning a Call, 27 a Name, 7 an IfExp, 2 a Subscript,
+1 an Attribute. Sixty-four of the 85 settle statically, and 30 of those return
+a code outside {0, 5, 95, 96} -- a finding about the SYSTEM that the INSTRUMENT
+was blind to. The gate now resolves each return to the SET of integers it can
+evaluate to: a module-level constant name, a conditional whose branches both
+resolve, one hop into a module-level helper's returns. A name bound twice, a
+call to a function not defined in the module, a second hop -- none of these
+settle, and the gate records UNJUDGED rather than guess. The exit SITES stay
+unjudged either way: `raise SystemExit(main())` may yield any int at runtime,
+and judging the site rather than the returns would claim the site decides the
+code when it does not. That is a limit of the INSTRUMENT, honestly counted,
+not a defect in the SYSTEM.
+
 EXIT CODES: 0 clean, 5 at least one contract violation found, 95 measurement
 impossible (publish set unreadable or fewer than 8 Python files resolve), 96 the
 gate failed its own must-fire/must-pass controls and cannot be trusted.
@@ -127,6 +141,119 @@ def _classify_arg(arg: ast.expr) -> str | None:
     return None
 
 
+def _resolve_int_set(
+    value: ast.expr,
+    consts: dict[str, int],
+    funcs: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    depth: int = 0,
+) -> set[int] | None:
+    """Resolve an expression to the SET of ints it can evaluate to, or None.
+
+    None means the expression does not settle statically and must be recorded
+    UNJUDGED, never guessed at. A Call to a module-level function is followed
+    ONE HOP into that function's returns, and depth >= 1 never follows a call:
+    no recursion, no second hop. The one-hop-only rule is deliberate -- a
+    deeper walk would start judging values that flow through helpers rather
+    than out of the process, and the gate would manufacture rejections the
+    contract never made.
+    """
+    if (
+        isinstance(value, ast.Constant)
+        and isinstance(value.value, int)
+        and not isinstance(value.value, bool)
+    ):
+        return {value.value}
+    if (
+        isinstance(value, ast.UnaryOp)
+        and isinstance(value.op, ast.USub)
+        and isinstance(value.operand, ast.Constant)
+        and isinstance(value.operand.value, int)
+        and not isinstance(value.operand.value, bool)
+    ):
+        return {-value.operand.value}
+    if isinstance(value, ast.Name) and value.id in consts:
+        return {consts[value.id]}
+    if isinstance(value, ast.IfExp):
+        body = _resolve_int_set(value.body, consts, funcs, depth)
+        orelse = _resolve_int_set(value.orelse, consts, funcs, depth)
+        if body is None or orelse is None:
+            return None  # a half-resolved conditional is not resolved
+        return body | orelse
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id in funcs
+        and depth == 0
+    ):
+        returned: list[ast.Return] = []
+
+        def collect(node: ast.AST) -> None:
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                    continue  # nested function bodies return values, not exit codes
+                if isinstance(child, ast.Return):
+                    returned.append(child)
+                collect(child)
+
+        collect(funcs[value.func.id])
+        if not returned:
+            return None  # a function with no returns does not settle to a code here
+        settled: set[int] = set()
+        for ret in returned:
+            if ret.value is None:
+                settled.add(0)  # SystemExit(None) is exit 0, as in judge_return
+                continue
+            one = _resolve_int_set(ret.value, consts, funcs, depth=1)
+            if one is None:
+                return None
+            settled |= one
+        return settled
+    return None
+
+
+def _module_tables(
+    tree: ast.AST,
+) -> tuple[dict[str, int], dict[str, ast.FunctionDef | ast.AsyncFunctionDef]]:
+    """Module-level constant and function tables for the return resolver.
+
+    Only the module BODY is read, not ast.walk: a name bound inside a function
+    is not visible to an entry function's return in any way this gate may
+    assume. A name assigned or defined more than once at module level is
+    DROPPED entirely -- two bindings mean the name does not settle statically,
+    and keeping the last one would be a guess.
+    """
+    consts: dict[str, int] = {}
+    funcs: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    if not isinstance(tree, ast.Module):
+        return consts, funcs
+    seen_consts: set[str] = set()
+    seen_funcs: set[str] = set()
+    for node in tree.body:
+        target: ast.expr | None = None
+        value: ast.expr | None = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        if isinstance(target, ast.Name):
+            name = target.id
+            if name in seen_consts:
+                consts.pop(name, None)  # bound twice: does not settle statically
+            else:
+                seen_consts.add(name)
+                if value is not None and isinstance(value, (ast.Constant, ast.UnaryOp)):
+                    resolved = _resolve_int_set(value, {}, {})
+                    if resolved is not None and len(resolved) == 1:
+                        consts[name] = next(iter(resolved))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name in seen_funcs:
+                funcs.pop(node.name, None)  # defined twice: does not settle statically
+            else:
+                seen_funcs.add(node.name)
+                funcs[node.name] = node
+    return consts, funcs
+
+
 def entry_functions(tree: ast.AST) -> set[str]:
     """Names of locally-defined functions called zero-arg as an exit site's argument.
 
@@ -192,10 +319,14 @@ def judge_entry_returns(tree: ast.AST, source: str, path: str, names: set[str]) 
     FunctionDef/AsyncFunctionDef/Lambda bodies: an inner helper's `return 1` is
     a value handed back into the entry function's own control flow, not an exit
     code, and judging it would manufacture rejections the contract never made.
-    Returns the entry function does not settle statically (Name, Call, BoolOp,
-    ...) are recorded UNJUDGED so the count stays honest: no false widening.
+    Each return is resolved to the set of ints it can settle to -- a literal, a
+    module-level constant name, a conditional whose branches both resolve, one
+    hop into a module-level helper's returns. What does not settle (Subscript,
+    Attribute, BoolOp, a second hop, an unstable binding, ...) is recorded
+    UNJUDGED so the count stays honest: no false widening.
     """
     result = ScanResult()
+    consts, funcs = _module_tables(tree)
 
     def judge_return(node: ast.Return, fn_name: str) -> None:
         result.sites += 1
@@ -218,34 +349,28 @@ def judge_entry_returns(tree: ast.AST, source: str, path: str, names: set[str]) 
                 )
             )
             return
-        judged_int: int | None = None
-        if (
-            isinstance(value, ast.Constant)
-            and isinstance(value.value, int)
-            and not isinstance(value.value, bool)
-        ):
-            judged_int = value.value
-        elif (
-            isinstance(value, ast.UnaryOp)
-            and isinstance(value.op, ast.USub)
-            and isinstance(value.operand, ast.Constant)
-            and isinstance(value.operand.value, int)
-            and not isinstance(value.operand.value, bool)
-        ):
-            judged_int = -value.operand.value
-        if judged_int is not None:
-            if judged_int not in CONTRACT_CODES:
-                result.rejections.append(
-                    Finding(
-                        path,
-                        lineno,
-                        f"entry function {fn_name}() returns exit code {judged_int}, which "
-                        "is not in the declared contract {0, 5, 95, 96}",
-                        segment,
-                        False,
-                    )
+        resolved = _resolve_int_set(value, consts, funcs)
+        if resolved is not None:
+            offending = sorted(v for v in resolved if v not in CONTRACT_CODES)
+            if not offending:
+                return  # every code this return can settle to is in contract
+            codes = ", ".join(str(v) for v in offending)
+            reason = (
+                f"entry function {fn_name}() returns exit code {codes}, which is not in "
+                "the declared contract {0, 5, 95, 96}"
+            )
+            if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+                reason += (
+                    f" (resolved one hop through {value.func.id}(); the code is not on "
+                    "the line you are reading)"
                 )
-            return  # accepted literal contract code
+            elif isinstance(value, ast.IfExp):
+                reason += (
+                    " (resolved through a conditional; the code is not on the line you "
+                    "are reading)"
+                )
+            result.rejections.append(Finding(path, lineno, reason, segment, False))
+            return
         result.unjudged.append((path, lineno, segment))
 
     def walk(node: ast.AST, fn_name: str) -> None:
@@ -449,6 +574,93 @@ def run_controls() -> str | None:
         return (
             "must-pass control 5 failed: helper()'s `return 7` was judged though helper is "
             "never the argument of an exit site"
+        )
+    # The resolver widening: 85 entry-function returns sat UNJUDGED because only
+    # a literal int was resolved, 64 of them settle statically, and 30 of those
+    # are outside the contract. One must-fire per newly resolvable shape.
+    entry_name = check_source(
+        "EXIT_BAD = 3\n\ndef main():\n    return EXIT_BAD\n\nraise SystemExit(main())\n",
+        "<control:entry-name>",
+    )
+    if len(entry_name.rejections) != 1 or "3" not in entry_name.rejections[0].reason:
+        return (
+            "must-fire control 7 failed: `return EXIT_BAD` with EXIT_BAD = 3 at module "
+            "level did not produce exactly one rejection mentioning 3"
+        )
+    entry_ifexp = check_source(
+        "def main():\n    ok = True\n    return 0 if ok else 6\n\nraise SystemExit(main())\n",
+        "<control:entry-ifexp>",
+    )
+    if len(entry_ifexp.rejections) != 1 or "6" not in entry_ifexp.rejections[0].reason:
+        return (
+            "must-fire control 8 failed: `return 0 if ok else 6` did not produce exactly "
+            "one rejection mentioning 6"
+        )
+    entry_call = check_source(
+        "def _fail():\n    return 2\n\ndef main():\n    return _fail()\n\n"
+        "raise SystemExit(main())\n",
+        "<control:entry-call>",
+    )
+    if len(entry_call.rejections) != 1 or "2" not in entry_call.rejections[0].reason:
+        return (
+            "must-fire control 9 failed: `return _fail()` with _fail() returning 2 did "
+            "not produce exactly one rejection mentioning 2"
+        )
+    # One must-pass per way the widening could go wrong: resolving what does
+    # not settle would manufacture rejections the contract never made.
+    entry_name_ok = check_source(
+        "EXIT_OK = 0\n\ndef main():\n    return EXIT_OK\n\nraise SystemExit(main())\n",
+        "<control:entry-name-ok>",
+    )
+    if entry_name_ok.rejections:
+        return "must-pass control 6 failed: `return EXIT_OK` with EXIT_OK = 0 must not be rejected"
+    entry_ifexp_ok = check_source(
+        "def main():\n    ok = True\n    return 0 if ok else 5\n\nraise SystemExit(main())\n",
+        "<control:entry-ifexp-ok>",
+    )
+    if entry_ifexp_ok.rejections:
+        return (
+            "must-pass control 7 failed: `return 0 if ok else 5` has both branches in "
+            "contract and must not be rejected"
+        )
+    # A call to a function not defined in this module does not settle; the
+    # unjudged count is the site plus the return, and both must stay UNJUDGED.
+    entry_foreign = check_source(
+        "def main():\n    return thirdparty()\n\nraise SystemExit(main())\n",
+        "<control:entry-foreign>",
+    )
+    if entry_foreign.rejections or len(entry_foreign.unjudged) != 2:
+        return (
+            "must-pass control 8 failed: `return thirdparty()` for an undefined name must "
+            "give zero rejections and exactly two UNJUDGED entries (site plus return), "
+            "proving the widening does not guess"
+        )
+    # A name bound twice at module level does not settle; keeping the last
+    # binding would be a guess, so the return must stay UNJUDGED.
+    entry_unstable = check_source(
+        "E = 0\nE = 7\n\ndef main():\n    return E\n\nraise SystemExit(main())\n",
+        "<control:entry-unstable>",
+    )
+    if entry_unstable.rejections or len(entry_unstable.unjudged) != 2:
+        return (
+            "must-pass control 9 failed: a name bound twice at module level must not "
+            "resolve; expected zero rejections and exactly two UNJUDGED entries (site "
+            "plus return), proving an unstable binding is not resolved"
+        )
+    # Anti-widening: the top-level SystemExit(main()) site itself must stay
+    # UNJUDGED even when main()'s returns all settle. A Call at an exit site
+    # may yield any int at runtime; judging the site would claim it decides
+    # the code when the returns do. The exact count fails any future change
+    # that starts judging the 60 entry-point call sites.
+    entry_site = check_source(
+        "def main():\n    return 0\n\nraise SystemExit(main())\n",
+        "<control:entry-site>",
+    )
+    if entry_site.rejections or len(entry_site.unjudged) != 1:
+        return (
+            "must-pass control 10 failed: the top-level SystemExit(main()) site itself "
+            "must stay UNJUDGED (exactly one unjudged entry, zero rejections); judging "
+            "the site rather than the returns claims the site decides the code"
         )
     return None
 

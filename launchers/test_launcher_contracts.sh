@@ -1857,13 +1857,13 @@ F44CAP
   # (fix44 / #77-B3). That possibility was RETIRED in the #78 wiring window —
   # the same edit that pins --adapter-prefix '' and --adapter-modules
   # "$ADAPTER_MODULES" on EVERY fs_live_save_gate call, the only change the
-  # byte-for-byte contract at live_save_gate.py:511-523 licenses, and only
+  # byte-for-byte contract at src/foundationscale/gates/adjudication.py:315-327 licenses, and only
   # coordinated (mapper, probe, legs), exactly like this one. A CONFIRMED
   # adapter_prefix_unpinned record can now only mean the wired flags silently
   # dropped out of the payload (or the gate drifted): an infrastructure
   # defect — rc 92, chain stops. Restoring rc 0 HERE is FORBIDDEN —
   # resurrecting the abstention without retiring the wiring is the one-sided
-  # edit live_save_gate.py:511-523 names, and it would re-green a state whose
+  # edit src/foundationscale/gates/adjudication.py:315-327 names, and it would re-green a state whose
   # preconditions no longer exist. The leg is re-pointed, NOT weakened and NOT
   # deleted: the mapper still owes a MUST_PASS proving a refusal CORROBORATED
   # off the tool's own record (never a bare 3) maps to its calibrated class
@@ -1873,8 +1873,8 @@ F44CAP
   if printf '%s' "$out" | grep -q 'ARTRC=92' && printf '%s' "$out" | grep -q 'UNMEASURED-INFRA' \
      && printf '%s' "$out" | grep -q 'CONFIRMED' \
      && printf '%s' "$out" | grep -q '0 of 3 gates and 0 of 3 controls ran'; then
-    ok "MUST_PASS LoRA m2: the CORROBORATED adapter-prefix refusal — CONFIRMED off the tool's own record, never a bare 3 — lands rc 92 as UNMEASURED-INFRA, stated, with its 0-of-3-gates and 0-of-3-controls denominator (the calibrated post-#78 state, re-pointed from the rc-0 abstention retired in the #78 wiring window per live_save_gate.py:511-523; rc 0 stays FORBIDDEN here)"
-  else no "MUST_PASS LoRA m2: the corroborated adapter-prefix refusal lost its rc-92 mapping, its UNMEASURED-INFRA statement, its CONFIRMED corroboration, or its 0-of-3 denominator (output: $out) — restoring rc 0 here is FORBIDDEN (the one-sided edit live_save_gate.py:511-523 names)"; fi
+    ok "MUST_PASS LoRA m2: the CORROBORATED adapter-prefix refusal — CONFIRMED off the tool's own record, never a bare 3 — lands rc 92 as UNMEASURED-INFRA, stated, with its 0-of-3-gates and 0-of-3-controls denominator (the calibrated post-#78 state, re-pointed from the rc-0 abstention retired in the #78 wiring window per src/foundationscale/gates/adjudication.py:315-327; rc 0 stays FORBIDDEN here)"
+  else no "MUST_PASS LoRA m2: the corroborated adapter-prefix refusal lost its rc-92 mapping, its UNMEASURED-INFRA statement, its CONFIRMED corroboration, or its 0-of-3 denominator (output: $out) — restoring rc 0 here is FORBIDDEN (the one-sided edit src/foundationscale/gates/adjudication.py:315-327 names)"; fi
 
   out=$(f44_map 3 "$f44_msim/rep-missing.json" "$f44_msim/cap-unreadable")
   if printf '%s' "$out" | grep -q 'ARTRC=92' && printf '%s' "$out" | grep -q 'torch.distributed.checkpoint is unavailable' \

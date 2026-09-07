@@ -242,7 +242,7 @@ def _atomic_write(target: pathlib.Path, data: bytes) -> None:
 
 def _fail(gates: list[tuple[str, bool, str]]) -> int:
     _report(gates)
-    return 2
+    return 5
 
 
 def _report(gates: list[tuple[str, bool, str]]) -> None:

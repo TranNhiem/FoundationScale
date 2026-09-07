@@ -678,7 +678,7 @@ def _run_suite():
     result = runner.run(suite)
     legs_passed = result.testsRun - len(result.failures) - len(result.errors)
     print("fs179: %d/%d legs" % (legs_passed, result.testsRun))
-    return 0 if result.wasSuccessful() else 1
+    return 0 if result.wasSuccessful() else 5
 
 
 if __name__ == "__main__":
