@@ -14,6 +14,7 @@ gate contract (stdlib-only core: Verdict, Gate, REGISTRY)
    ├── checkpoint + verify DCP metadata, parity checks
    ├── provenance          the run manifest — what was claimed, measured, emitted
    ├── topology            validates the declared parallel geometry
+   ├── rl/                 the post-training contracts: batch, loss, policy pair
    └── train/              cli + loop: validate → delegate to Trainer → save gates
 ```
 
@@ -235,6 +236,52 @@ Around that sit the support modules named in README §1:
 * `src/foundationscale/models/adapters.py` — `select_adapter` and
   `AdapterRefusal` (re-exported at the root).
 
+## The RL plane: `src/foundationscale/rl/`
+
+The post-training contracts. Three modules, split so that a contract and an
+implementation of it are never the same file:
+
+* `interfaces.py` — the contracts only. `ExperienceBatch` (the data contract),
+  `LossFn`/`ForwardFn` (the protocols), `LossOutput` (what one measured step
+  produced), `LossDeclaration` (what a loss *says* it will produce), the three
+  refusals `BatchRefusal`/`SupervisionRefusal`/`LossConfigRefusal`, and
+  `build_objective_gate_context`.
+* `losses.py` — `SFTLoss` and `DPOLoss`.
+* `policy.py` — `PolicyPair` and `PolicyRoleRefusal`: the policy/reference role
+  split DPO needs.
+
+`build_objective_gate_context` is the whole reason this plane sits under the
+gate contract rather than beside it. It turns one measured step into an
+`ObjectiveGateContext`, so the objective gates
+(`src/foundationscale/gates/objective_gates.py`) adjudicate an RL step the same
+way they adjudicate any other — `LossComponentCoverageGate` over the declared
+components, `DiagnosticMetricGate` over the declared metrics. That is what makes
+a loss's `declaration()` load-bearing instead of documentation: **a component
+that is computed and not declared, or declared and not computed, is a RED.**
+`SFTLoss` declares one component and no metric, and the empty metric tuple is a
+declared abstention — `DiagnosticMetricGate` answers "nothing declared, nothing
+observed" with a SKIP, which keeps the absence inside the sweep's denominator
+instead of reading as coverage.
+
+Two consequences of that rule are visible in the code. `DPOLoss` derives both
+its declaration and its computation of the auxiliary SFT term from the one field
+`sft_weight`, because any second source of truth could produce exactly the
+computed-but-undeclared state the gate blocks on. And `declaration()` is for the
+run manifest, not for the gate context: building the context *from* the
+declaration would compare what is in force against what is in force.
+
+The public import path is the subpackage — `from foundationscale.rl import
+DPOLoss` — not the package root, so these names are not in `_EXPORTS` and sit
+outside `tests/packaging/test_front_door.py`'s denominator. They are in the
+coverage-floor and mutation-scope denominators (`checks/coverage_floor.py`,
+`checks/mutation_scope.py`).
+
+The contracts named in the Phase 3 design that are *not* here — `Algorithm`,
+`RolloutSource`, `AdvantageFn`, `WeightSync` — are later stages and are
+deliberately absent. Nothing in this plane has been benchmarked against the
+reference implementation; `validation_campaigns/nemo_rl_baseline/PHASE3_DESIGN.md`
+section 10 states what is not established.
+
 ## The training plane: `src/foundationscale/train/`
 
 The entry point is deliberately thin. `cli.py` and `loop.py` validate the
@@ -279,7 +326,7 @@ conftest carries the skip guard). Beside the package:
 | `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 138363 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 138410 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 
