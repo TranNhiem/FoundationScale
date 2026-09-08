@@ -282,9 +282,12 @@ state; producing that export is the generation-side adapter's responsibility, an
 `SyncReport` is evidence for the run record, not the parity gate's input. Attaches
 to the verify seam; the checkpoint layer is read-only by design and offers no write
 seam, so durable write-side facts are defined new here or delegated to the
-generation-side adapter. Phase 1 unknowns 5 and 14 (rollback atomicity, `is_stale`
-semantics, production transport at GB200 scale) are UNMEASURED and gate this
-interface's final shape; section 7 ranks the measurement.
+generation-side adapter. Of Phase 1 unknowns 5 and 14, the transport half is now
+MEASURED — section 7 item 3 records full copy, collective and reshard cost across
+four payload sizes on 4 GB200 GPUs, and the ordering inverts between the per-byte
+and per-call regimes, so this contract must let the realization choose rather than
+fix one transport. Rollback atomicity and `is_stale` semantics remain UNMEASURED
+and still gate this interface's final shape.
 
 One level wider (sync owns generation-engine control plane) and every engine adapter
 inherits a lifecycle it may not have. One level narrower (sync is a bare tensor
@@ -440,10 +443,76 @@ Ranked. Each item: the question, why the design turns on it, the measurement.
    semantics (unknown 5), and `BatchedDataDict` internals (unknown 6). These are
    instrument limitations of Phase 1, not system findings; until re-verified they
    carry no design decision.
-3. **Weight-sync cost per transport on GB200.** `WeightSync`'s default and its
-   cadence semantics turn on this. Measurement: full copy vs collective vs reshard
-   on the estate's GB200 hardware, per Phase 1 section 9's measure-before-committing
-   list. Currently UNMEASURED.
+3. **Weight-sync cost per transport on GB200.** MEASURED, and the answer changes
+   the default. `WeightSync`'s default and its cadence semantics turn on this;
+   Phase 1 section 9 listed it as measure-before-committing. The measurement ran
+   on one GB200 tray, 4 GPUs, off-Slurm `torchrun` over NCCL, driven by
+   `bench_weight_sync.py` in this directory; the full record is
+   `measurements/weight_sync_gb200_4gpu.json` and `.log`. Median wall-clock
+   seconds — the slowest rank's median, since the ranks share no common clock —
+   per transport per declared size:
+
+   | transport | 64 MiB | 256 MiB | 1 GiB | 4 GiB | 1 MiB per-call floor |
+   |---|---|---|---|---|---|
+   | `full_copy` (pinned) | 0.000757 | 0.002946 | 0.011661 | **ABSTAINED** | 0.0000444 |
+   | `full_copy` (pageable) | 0.000828 | 0.002965 | 0.011743 | 0.145439 | 0.0000797 |
+   | `collective` (broadcast) | 0.000276 | 0.000596 | 0.001775 | 0.006540 | 0.0001173 |
+   | `reshard` (allgather) | 0.000165 | 0.000431 | 0.001433 | 0.005263 | 0.0001023 |
+
+   **The GB/s figures in the record are NOT comparable across transports, and
+   this table deliberately does not print them side by side.** Each transport
+   declares its own byte model: `full_copy` counts a per-rank D2H+H2D round trip
+   (2x the declared size), `collective` counts a broadcast to `world_size-1`
+   consumers (3x at 4 ranks), `reshard` counts `size*(world_size-1)` (also 3x).
+   A rate is therefore an in-transport quantity — useful for asking whether one
+   transport saturates as size grows, useless for ranking two transports against
+   each other. Wall-clock time at a fixed declared size is the basis-independent
+   comparison, so it is the one the table shows and the one the readings below
+   use. Within a transport the rates are worth stating: pinned `full_copy` sits
+   at 177 to 184 GB/s from 64 MiB to 1 GiB, `collective` climbs 728 to 1815, and
+   `reshard` climbs 1220 to 2448 through 4 GiB.
+
+   Two readings, and they point opposite ways, which is why the design needs both
+   halves rather than a single default:
+
+   **Per byte, `reshard` > `collective` >> `full_copy`, and the gap widens with
+   size.** The like-for-like comparison is at 1 GiB, the largest size where all
+   four rows measured: reshard completes in 0.001433 s and collective in
+   0.001775 s against full copy's 0.011661 s — 8.1x and 6.6x faster respectively.
+   Full copy's own rate is flat across that range while the two collective
+   transports keep climbing, which is the signature of a host round trip that has
+   already saturated rather than of a fabric still filling. A default of "full
+   copy" would leave that on the floor for any real policy weight-sync.
+
+   **Per call, the ordering inverts.** At the 1 MiB floor `full_copy` pinned is
+   the *fastest* transport measured — 0.0000444 s against reshard's 0.0001023 s
+   and collective's 0.0001173 s, so 2.3x and 2.6x the other way — because the
+   collective's fixed per-call cost dominates a payload that small. So cadence
+   semantics genuinely turn on per-call versus per-byte cost, exactly as this
+   section anticipated: a `WeightSync` that syncs many small tensors separately
+   and one that syncs a flattened buffer do not want the same transport.
+
+   The verdict was **CLEAR_WITH_ABSTENTIONS**, not CLEAR, and the abstention is
+   named rather than dropped: `full_copy` at 4 GiB never stabilised its warmup
+   (spread 74.1% of the median against a 10% tolerance, at the 40-iteration cap),
+   so that cell was withheld. 19 of 20 (transport, size) cells were measured and
+   admitted. Because the pinned/pageable pair at 4 GiB lost a row, the
+   pinned-versus-pageable elision control adjudicated only 64 MiB, 256 MiB and
+   1 GiB — 4 GiB is absent from the set it examined, and this table certifies
+   nothing about that cell.
+
+   That control also reproduced the size-dependence recorded as issue #321 in one
+   run: the pinned-versus-pageable margin adjudicated at 64 MiB (0.000757 against
+   0.000828, 9.4%) but was downgraded to an OBSERVATION at 256 MiB (0.65%) and
+   1 GiB (0.70%), where the poison gate covered both rows. Widening the margin
+   globally to quiet the small-payload case would have blinded the control at
+   exactly the size where it still carries signal.
+
+   16 GiB was deliberately excluded from the sweep rather than attempted and
+   lost: allgather output across 4 ranks plus ring buffers is roughly 192 GiB
+   against ~186 GiB of HBM, so the attempt would have OOM'd the process and taken
+   the four measured sizes with it. Whether the occupancy gate degrades cleanly or
+   crashes at that size is UNMEASURED and is tracked separately.
 4. **Would the objective gates have caught Phase 2's DPO anomaly?** MEASURED, and
    the answer is split down the middle of the two readings. The reading was driven
    through the production dispatch (`run_event` over the shipped registry) in
@@ -616,10 +685,18 @@ path (`foundationscale.rl`) is unchanged, so the move is invisible to callers.
    `AdvantageFn` are specified entirely by what a rollout produces and what a
    reward becomes — neither needs a number from a cluster. `WeightSync` and the
    `Algorithm` binding are the opposite: both are shaped by how expensive a
-   weight transfer is, which is exactly the section-7 item-3 measurement, and
-   which has not been taken. Writing them now would mean *asserting* a cost model
-   and then discovering it, which is the failure this campaign keeps finding
-   under a different name.
+   weight transfer is, which is exactly the section-7 item-3 measurement. Writing
+   them before it would have meant *asserting* a cost model and then discovering
+   it, which is the failure this campaign keeps finding under a different name.
+
+   **That measurement has since been taken** (section 7 item 3), so 3b is
+   unblocked, and it arrived with a constraint the asserted version would have
+   missed: no single transport wins. Reshard beats collective beats full copy per
+   byte by up to 13x, while at the 1 MiB per-call floor full copy is the fastest
+   of the three. `WeightSync` therefore cannot ship a fixed transport with a
+   cadence knob bolted on; the transport choice is part of what the realization
+   declares, and the contract's job is to make that choice visible in
+   `SyncReport` rather than to make it.
 
    So: **3a has landed** (`rollout.py`, `advantage.py`) and **3b is blocked on the
    item-3 measurement, deliberately and by name** — not deferred for want of time.

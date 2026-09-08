@@ -1,0 +1,58 @@
+W0908 14:12:01.904000 2542957 site-packages/torch/distributed/run.py:862] 
+W0908 14:12:01.904000 2542957 site-packages/torch/distributed/run.py:862] *****************************************
+W0908 14:12:01.904000 2542957 site-packages/torch/distributed/run.py:862] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0908 14:12:01.904000 2542957 site-packages/torch/distributed/run.py:862] *****************************************
+<HOME>/envs/bench/lib/python3.11/site-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+==============================================================================
+WEIGHT-SYNC TRANSPORT COST -- GB200, world_size=4
+Timing: CUDA events around the op, barrier-aligned, blocking collectives; per-rank samples, no common clock; aggregate = SLOWEST rank's median (named as such)
+Poison gate: destinations poisoned and re-primed before every timed iteration, verified only after the window closed, reduced across ranks (MIN).
+==============================================================================
+DENOMINATOR: 19 of 20 (transport,size) cells measured and admitted (4 transports x (4 sweep sizes + 1 per-call-floor size)).
+ABSTENTION RULE: zero measured cells is UNMEASURED, never PASS; a control that never fired is UNMEASURED, never PASS; and any withheld cell narrows the verdict to CLEAR_WITH_ABSTENTIONS over a named denominator, which certifies nothing about the cells it withheld.
+OUTSIDE THE DENOMINATOR:
+  - filesystem checkpoint write/read
+  - vLLM/inference process boundary (no IPC or shared-memory handoff)
+  - inter-node transport (single GB200 tray only)
+  - CPU-side cost of building the state_dict
+  - any common cross-rank timebase (there is none; aggregates use the slowest rank's median, named as such)
+  - 1 attempted cells withheld as UNMEASURED (see 'unmeasured' in the JSON)
+------------------------------------------------------------------------------
+transport                 payload          label      n     median_s    rankmin_s    rankmax_s        iqr_s    GB/s(med)  gbps_basis             moved_bytes
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+full_copy                67108864          sweep    500     0.000757     0.000750     0.000757     0.000018       177.21  per_rank_roundtrip     134217728
+full_copy_pageable       67108864          sweep    500     0.000828     0.000805     0.000828     0.000030       162.08  per_rank_roundtrip     134217728
+collective               67108864          sweep    500     0.000276     0.000179     0.000276     0.000007       728.35  aggregate_broadcast    201326592
+reshard                  67108864          sweep    500     0.000165     0.000161     0.000165     0.000005      1219.87  aggregate_allgather    201326592
+full_copy               268435456          sweep    164     0.002946     0.002940     0.002946     0.000069       182.22  per_rank_roundtrip     536870912
+full_copy_pageable      268435456          sweep    169     0.002965     0.002952     0.002965     0.000013       181.05  per_rank_roundtrip     536870912
+collective              268435456          sweep    500     0.000596     0.000471     0.000596     0.000011      1350.68  aggregate_broadcast    805306368
+reshard                 268435456          sweep    500     0.000431     0.000418     0.000431     0.000004      1867.59  aggregate_allgather    805306368
+full_copy              1073741824          sweep     43     0.011661     0.011531     0.011661     0.000159       184.15  per_rank_roundtrip     2147483648
+full_copy_pageable     1073741824          sweep     43     0.011743     0.011574     0.011743     0.000183       182.88  per_rank_roundtrip     2147483648
+collective             1073741824          sweep    280     0.001775     0.001608     0.001775     0.000022      1815.01  aggregate_broadcast    3221225472
+reshard                1073741824          sweep    344     0.001433     0.001417     0.001433     0.000009      2247.75  aggregate_allgather    3221225472
+full_copy_pageable     4294967296          sweep     10     0.145439     0.068126     0.145439     0.021911        59.06  per_rank_roundtrip     8589934592
+collective             4294967296          sweep     76     0.006540     0.006372     0.006540     0.000084      1970.24  aggregate_broadcast    12884901888
+reshard                4294967296          sweep     94     0.005263     0.005249     0.005263     0.000036      2447.99  aggregate_allgather    12884901888
+full_copy                 1048576 per_call_floor    500     0.000044     0.000043     0.000044     0.000003        47.25  per_rank_roundtrip     2097152
+full_copy_pageable        1048576 per_call_floor    500     0.000080     0.000072     0.000080     0.000004        26.31  per_rank_roundtrip     2097152
+collective                1048576 per_call_floor    500     0.000117     0.000113     0.000117     0.000005        26.82  aggregate_broadcast    3145728
+reshard                   1048576 per_call_floor    500     0.000102     0.000099     0.000102     0.000005        30.74  aggregate_allgather    3145728
+full_copy              4294967296          sweep  -- UNMEASURED: warmup never stabilised: last three durations ['0.081412', '0.046768', '0.046771'] s, spread 74.1% of median exceeds tolerance 10.0% after 40 iterations (cap 40)
+------------------------------------------------------------------------------
+ADJUDICATION (positive control): pageable_slower_than_pinned fired=True ok=True (predeclared margin 5.0% + non-overlapping bootstrap 95% intervals)
+  OBSERVATION @ 268435456 B: pinned_median=0.002946s pageable_median=0.002965s (observed ratio 1.0065, required >= 1.0500) -- NOT a violation: the poison gate covered BOTH rows of this pair and has already refuted elision directly, so this indirect margin is recorded rather than adjudicated (#321):
+      - margin not met: pageable median 0.002965s is only 0.65% above pinned median 0.002946s; the predeclared margin is >= 5.0%
+  OBSERVATION @ 1073741824 B: pinned_median=0.011661s pageable_median=0.011743s (observed ratio 1.0070, required >= 1.0500) -- NOT a violation: the poison gate covered BOTH rows of this pair and has already refuted elision directly, so this indirect margin is recorded rather than adjudicated (#321):
+      - margin not met: pageable median 0.011743s is only 0.70% above pinned median 0.011661s; the predeclared margin is >= 5.0%
+      - bootstrap 95% intervals overlap: pinned [0.011645, 0.011704], pageable [0.011633, 0.011759]
+  pageable exceeded pinned by the predeclared margin with non-overlapping intervals at every pair the margin adjudicated; the pairs listed above as OBSERVATION were adjudicated by the poison gate instead. The H2D/D2H path is really moving bytes.
+Per-call floor: see rows labelled 'per_call_floor' (1 MiB); cadence semantics turn on per-byte vs per-call cost.
+------------------------------------------------------------------------------
+DECLARED ABSTENTIONS -- this verdict certifies NOTHING about the following 1 cell(s):
+  - full_copy @ 4294967296 B (sweep): warmup never stabilised: last three durations ['0.081412', '0.046768', '0.046771'] s, spread 74.1% of median exceeds tolerance 10.0% after 40 iterations (cap 40)
+  The elision control adjudicated only these payload sizes: 67108864, 268435456, 1073741824 B. A size whose pinned/pageable pair lost a row is absent from that list and was never examined.
+VERDICT: CLEAR_WITH_ABSTENTIONS (exit 0)
+RUNNER_RC=0
