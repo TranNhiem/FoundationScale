@@ -18,6 +18,9 @@ voids the run with exit 2.
 from __future__ import annotations
 
 import importlib.util
+import os
+import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -160,6 +163,117 @@ def test_run_suite_arming_cannot_be_disabled_by_caller(monkeypatch, tmp_path):
     mutate.run_suite(junit_dir=tmp_path, label="pin", env={"FS_FORBID_SKIPS": "0", "EXTRA": "1"})
     assert captured["env"]["FS_FORBID_SKIPS"] == "1"  # arming merges last
     assert captured["env"]["EXTRA"] == "1"
+
+
+def test_run_suite_forbids_bytecode_writes_and_caller_cannot_re_enable(
+    monkeypatch, tmp_path
+) -> None:
+    captured = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kw):
+        captured.update(kw)
+        return _Proc()
+
+    monkeypatch.setattr(mutate.subprocess, "run", fake_run)
+    mutate.run_suite(
+        junit_dir=tmp_path,
+        label="pin",
+        env={"PYTHONDONTWRITEBYTECODE": "0", "EXTRA": "1"},
+    )
+    # #328: the caller's "0" is overridden, exactly as FS_FORBID_SKIPS's is, and
+    # both survive the same merge — a fix that armed one by displacing the other
+    # would trade one silent fault for another.
+    assert captured["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert captured["env"]["FS_FORBID_SKIPS"] == "1"
+    assert captured["env"]["EXTRA"] == "1"
+
+
+def test_size_preserving_mutant_restored_in_one_second_poisons_the_cache_unless_armed(
+    tmp_path: Path,
+) -> None:
+    """The #328 hazard, then the guard that closes it.
+
+    WHAT IS CLAIMED: PYTHONDONTWRITEBYTECODE=1 prevents the poisoned cache entry
+    that a size-preserving mutant restored inside one integer second otherwise
+    leaves behind, so the next import sees the ORIGINAL.
+    WHAT IS NOT CLAIMED: anything about mutants that CHANGE the byte length.
+    Those invalidate the cache on size alone and were never at risk.
+
+    Arm (A) runs first and asserts the poison REPRODUCES. Without it arm (B) is
+    vacuous: an import that returns the original proves nothing if nothing could
+    have made it return anything else.
+    """
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    target = scratch / "poison_target.py"
+    original = "def verdict() -> bool:\n    return 1 == 1\n"
+    mutant = "def verdict() -> bool:\n    return 1 != 1\n"
+    # A control for a size-preserving hazard that is not itself size-preserving
+    # measures nothing — CPython would reject the entry on size and the arm
+    # would pass for the wrong reason.
+    assert len(original) == len(mutant)
+    # The same-second collision is FORCED with one fixed stamp rather than raced
+    # for. A control that only fires when two writes happen to land in the same
+    # wall-clock second is not a control.
+    stamp = 1_700_000_000
+
+    def _verdict(*, allow_bytecode: bool) -> str:
+        env = dict(os.environ)
+        if allow_bytecode:
+            # The parent may itself be under the guard — inside the battery it
+            # now always is — and inheriting it would make arm (A) vacuous.
+            env.pop("PYTHONDONTWRITEBYTECODE", None)
+        else:
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+        # The env var, not the `-B` flag: the flag is a different mechanism and
+        # is not what run_suite can set through subprocess.run.
+        proc = subprocess.run(
+            [sys.executable, "-c", "import poison_target; print(poison_target.verdict())"],
+            cwd=scratch,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return proc.stdout.strip()
+
+    def _write(text: str) -> None:
+        target.write_text(text, encoding="utf-8")
+        os.utime(target, (stamp, stamp))
+
+    # --- arm (A): bytecode writing allowed, the poison must reproduce ---------
+    _write(mutant)
+    assert _verdict(allow_bytecode=True) == "False"
+    pyc = Path(importlib.util.cache_from_source(str(target)))
+    assert pyc.is_file()
+
+    _write(original)
+    st = target.stat()
+    header = pyc.read_bytes()
+    # The mechanism as an assertion rather than as a comment: the entry's
+    # recorded (source mtime, source size) matches the RESTORED file exactly,
+    # which is the whole reason CPython accepts a stale entry as fresh.
+    assert struct.unpack("<I", header[8:12])[0] == int(st.st_mtime)
+    assert struct.unpack("<I", header[12:16])[0] == st.st_size
+    # The source on disk now reads `1 == 1` and the process reports False. That
+    # lie IS the defect, and asserting it is what proves the detector can fire.
+    assert _verdict(allow_bytecode=True) == "False"
+
+    shutil.rmtree(scratch / "__pycache__")
+
+    # --- arm (B): guard armed, no entry is written and the restore holds ------
+    _write(mutant)
+    assert _verdict(allow_bytecode=False) == "False"
+    cache_dir = scratch / "__pycache__"
+    assert not cache_dir.exists() or not list(cache_dir.glob("poison_target.*"))
+
+    _write(original)
+    assert _verdict(allow_bytecode=False) == "True"
 
 
 def test_run_suite_timeout_marks_outcome(monkeypatch, tmp_path):

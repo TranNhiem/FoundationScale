@@ -411,11 +411,30 @@ def run_suite(
     the suite loopy must cost one unscored trial, not the tree, because CI's
     SIGKILL would bypass the finally-restore in main() and leave the mutant
     on disk.
+
+    PYTHONDONTWRITEBYTECODE is armed for the same reason and merged the same
+    way. CPython decides a cached `.pyc` is fresh from the source's
+    (mtime-truncated-to-whole-seconds, size) and nothing else, so a mutant
+    that preserves byte length — `==` -> `!=`, `<` -> `>`, a same-width name —
+    and is restored inside the same integer second leaves a cache entry whose
+    header matches the RESTORED file exactly. Every later process then imports
+    the mutant while the source reads correct and `git status` is clean, which
+    is a fault the restore-verification below cannot see: it compares source
+    bytes, and the source bytes are right. Forbidding the write is what closes
+    it; purging after the fact would not, because a SIGKILL mid-trial skips
+    the purge and leaves the entry behind. `importlib.invalidate_caches()`
+    does not help — it drops the finder's directory listing, not the
+    mtime/size validation.
     """
     junit = junit_dir / f"suite-{label}.xml"
-    # The arming line merges LAST: a caller may add to the environment but
-    # cannot disarm the skip guard.
-    run_env = {**os.environ, **(env or {}), "FS_FORBID_SKIPS": "1"}
+    # The arming lines merge LAST: a caller may add to the environment but
+    # cannot disarm the skip guard or re-enable bytecode caching.
+    run_env = {
+        **os.environ,
+        **(env or {}),
+        "FS_FORBID_SKIPS": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
     t0 = time.monotonic()
     try:
         proc = subprocess.run(
