@@ -76,6 +76,30 @@ class RewardStats:
     as if they were a measurement. Construction with ``count < 1`` is refused
     here and :meth:`over` refuses an empty sequence, so the state cannot
     exist through either door.
+
+    NOT :class:`foundationscale.gates.objective_gates.RewardStats`, which
+    shares this name and is a DIFFERENT contract. The two diverge on three
+    axes and the divergence is deliberate (finding #327, which is #222's
+    shape):
+
+    * DENOMINATOR SCOPE. This record summarises the samples ACTUALLY USED.
+      The gate one summarises whatever the caller inspected at the gate
+      point, a denominator this class cannot see.
+    * ZERO-COUNT ADMISSIBILITY. This record refuses ``count < 1``. The gate
+      one validates nothing on purpose, because the gate above it exists to
+      catch impossible aggregates and its MUST_FIRE fixtures must be able to
+      construct them. Unifying the two in EITHER direction breaks one of the
+      two contracts: adopting this validation disarms that gate's fixtures,
+      and dropping it lets a zeroed summary claim a denominator of nothing.
+    * DIVISOR PROVENANCE. :meth:`over` computes ``std`` and so names it the
+      POPULATION deviation. The gate one receives ``std`` from a caller and
+      makes no such claim.
+
+    The field vocabularies are disjoint (``count``/``minimum``/``maximum``
+    here, ``n``/``min``/``max`` there) so substituting one for the other
+    fails loudly at construction. That looseness is the protection, not an
+    inconsistency to tidy away; the controls that pin it live at the foot of
+    ``tests/rl/test_advantage.py``.
     """
 
     count: int

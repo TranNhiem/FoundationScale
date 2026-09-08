@@ -141,7 +141,33 @@ class LossComponent:
 
 @dataclass(frozen=True)
 class RewardStats:
-    """Reward statistics over the samples actually inspected at the gate point."""
+    """Reward statistics over the samples actually inspected at the gate point.
+
+    NOT :class:`foundationscale.rl.advantage.RewardStats`, which shares this name
+    and is a DIFFERENT contract. The two diverge on three axes and the divergence
+    is deliberate (finding #327, which is #222's shape):
+
+    * DENOMINATOR SCOPE. This record summarises whatever the caller inspected at
+      the gate point. The RL one summarises the samples an advantage function
+      ACTUALLY USED, a denominator that excludes offered-but-unused samples.
+    * ZERO-COUNT ADMISSIBILITY. This record validates NOTHING, on purpose:
+      :class:`RewardScaleSanityGate` adjudicates a caller-supplied aggregate it
+      never computed, so its job is to catch summaries no sample set could have
+      produced, and its own MUST_FIRE fixtures must therefore be able to
+      CONSTRUCT ``n=-3`` and ``n=1`` spanning a range. The RL one refuses
+      ``count < 1`` at construction. Delegating this record to that class would
+      make those fixtures unconstructible — the detector disarmed at fixture
+      construction, one layer below where anyone would look.
+    * DIVISOR PROVENANCE. The RL one names ``std`` as the POPULATION deviation
+      because it computes it. This one cannot make that claim: the number
+      arrives from the caller and the gate never sees the samples behind it.
+
+    The field vocabularies are disjoint (``n``/``min``/``max`` here,
+    ``count``/``minimum``/``maximum`` there) so substituting one for the other
+    fails loudly at construction. A rename "for consistency" would make that
+    substitution start succeeding silently; the control that refuses it is
+    ``tests/rl/test_advantage.py::test_neither_rewardstats_field_set_is_a_subset_of_the_other``.
+    """
 
     n: int
     mean: float

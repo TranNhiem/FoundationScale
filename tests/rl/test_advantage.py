@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from typing import Any
 
 import pytest
 
+# #327: this module is the ONE place that imports both planes' RewardStats, and it
+# does so in order to pin that they stay apart. It is not a counterexample to the
+# separation -- no SOURCE file imports both.
+from foundationscale.gates.objective_gates import RewardStats as GateRewardStats
 from foundationscale.rl.advantage import (
     AdvantageConfigRefusal,
     AdvantageFn,
@@ -551,3 +556,84 @@ def test_unhashable_prompt_id_refused() -> None:
             mask=((1,), (1,)),
         )
     assert "row 0" in str(exc_info.value)
+
+
+# --- #327: the two RewardStats classes, and why they must stay apart ----------
+
+
+def test_the_two_rewardstats_classes_are_distinct_types() -> None:
+    """One name, two classes -- and NOT one type reached by two import paths.
+
+    A tidy-up that unified them would leave this test failing rather than
+    silently merging two contracts.
+    """
+    assert GateRewardStats is not RewardStats
+    assert not issubclass(GateRewardStats, RewardStats)
+    assert not issubclass(RewardStats, GateRewardStats)
+
+
+def test_neither_rewardstats_field_set_is_a_subset_of_the_other() -> None:
+    """WHAT IS CLAIMED: substitution between the planes fails loudly at
+    construction because the vocabularies are disjoint on the fields that
+    matter -- the count-and-extremes keywords of one class are rejected by the
+    other, so dropping one in for the other raises TypeError at the call site
+    instead of smuggling a wrong-plane summary through. WHAT IS NOT CLAIMED:
+    anything about whether the two summarise the same samples -- they do not;
+    one summarises the samples inspected AT THE GATE POINT, the other the
+    samples an advantage function ACTUALLY USED.
+    """
+    gate_fields = {f.name for f in dataclasses.fields(GateRewardStats)}
+    rl_fields = {f.name for f in dataclasses.fields(RewardStats)}
+
+    assert gate_fields != rl_fields
+    # Both directions separately, so a failure names which direction broke
+    # instead of collapsing into one undifferentiated subset assertion.
+    assert not gate_fields <= rl_fields
+    assert not rl_fields <= gate_fields
+
+    # Named, not counted: a test that compared only sizes would pass through a
+    # rename that swapped one name for another, which is the exact edit that
+    # would make substitution start succeeding silently.
+    assert {"n", "min", "max"} <= gate_fields
+    assert {"n", "min", "max"}.isdisjoint(rl_fields)
+    assert {"count", "minimum", "maximum"} <= rl_fields
+    assert {"count", "minimum", "maximum"}.isdisjoint(gate_fields)
+
+    # The SHARED names are stated too, so the denominator is the whole field set
+    # rather than a hand-picked disjoint subset: the divergence lives in the
+    # count-and-extremes vocabulary, not in mean/std.
+    assert {"mean", "std"} <= gate_fields
+    assert {"mean", "std"} <= rl_fields
+
+
+def test_the_gate_plane_admits_the_impossible_records_the_rl_plane_refuses() -> None:
+    """WHAT IS CLAIMED: the gate-plane record is permissive BY DESIGN so that
+    ``RewardScaleSanityGate``'s own MUST_FIRE fixtures can be constructed. That
+    gate adjudicates a caller-supplied aggregate it never computed, so its job
+    is to catch summaries no sample set could produce; delegating the record
+    type to the validating RL class would make those fixtures unconstructible,
+    disarming the detector at fixture-construction time rather than at gate
+    time. This is #222's shape: the obvious unification is the wrong repair.
+    WHAT IS NOT CLAIMED: that the gate ACCEPTS such a record as healthy. It
+    does not -- it fails it, one layer up, under the objective-gate suite.
+    """
+    negative = GateRewardStats(n=-3, mean=0.5, std=0.3, min=-1.0, max=2.0)
+    assert negative.n == -3
+
+    # Fewer than two samples spanning a range is impossible as a summary, yet
+    # must CONSTRUCT: the gate is what fails it, not the value object.
+    single_with_spread = GateRewardStats(n=1, mean=0.0, std=0.0, min=-1.0, max=2.0)
+    assert single_with_spread.n == 1
+    assert single_with_spread.min < single_with_spread.max
+
+    # The count=0 arm restates test_reward_stats_zero_count_refused_at_construction
+    # on purpose: what is under test here is the CONTRAST, and a contrast that
+    # cites only one of its two sides is not one. Deleting either arm as a
+    # duplicate removes the comparison, not a redundancy.
+    with pytest.raises(AdvantageRefusal) as zero_exc_info:
+        RewardStats(count=0, mean=0.5, std=0.3, minimum=-1.0, maximum=2.0)
+    assert "count=0" in str(zero_exc_info.value)
+
+    with pytest.raises(AdvantageRefusal) as negative_exc_info:
+        RewardStats(count=-3, mean=0.5, std=0.3, minimum=-1.0, maximum=2.0)
+    assert "count=-3" in str(negative_exc_info.value)
