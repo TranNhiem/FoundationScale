@@ -22,7 +22,9 @@ from foundationscale.train.loop import (
     EXIT_PASS,
     EXIT_RED,
     EXIT_REFUSE,
+    MARKERS,
     FoundationScaleSaveGate,
+    Step,
     TrainConfig,
     train,
 )
@@ -633,3 +635,61 @@ def test_legacy_and_typed_gates_coexist_in_one_sweep(
     assert control.should_training_stop is True
     assert "2/2 gates" in out
     assert "Traceback" not in out
+
+
+# --- the marker denominator (#312) ------------------------------------------
+#
+# MARKERS is what any consumer reads to answer "which steps exist". It used to
+# be a hand-written tuple mirroring Step, and it drifted: Step.PARTITION was
+# declared and emitted twice while being named nowhere in the tuple, so the
+# partition step sat in no denominator and nothing noticed for as long as the
+# mirror was maintained by hand. Nothing in the suite asserted over MARKERS at
+# all, which is exactly why. These three tests are the anchor.
+
+
+def test_markers_covers_every_declared_step() -> None:
+    """MUST_PASS: the denominator contains every marker the class declares."""
+    declared = {
+        value
+        for name, value in vars(Step).items()
+        if not name.startswith("_") and isinstance(value, str)
+    }
+    assert set(MARKERS) == declared
+    assert len(MARKERS) == len(declared), "a duplicate value would shrink the tuple"
+    # Named explicitly, because a set-equality assertion would still pass if
+    # BOTH sides lost the member. This is the one that was missing.
+    assert Step.PARTITION in MARKERS
+
+
+def test_marker_predicate_selects_a_newly_added_member() -> None:
+    """The predicate, not the tuple: does `not name.startswith("_") and str`
+    actually admit a plain new member?
+
+    The test above is what catches drift -- if MARKERS reverted to a literal
+    and someone added a member to Step, its set-equality would fail. This one
+    covers the other half: that the selector itself would pick the new member
+    up rather than filtering it out. A subclass body is the cheapest carrier of
+    "one member that did not exist before".
+    """
+
+    class _StepPlusOne(Step):
+        NEWLY_ADDED = "fs:train:newly_added"
+
+    derived = tuple(
+        value
+        for name, value in vars(_StepPlusOne).items()
+        if not name.startswith("_") and isinstance(value, str)
+    )
+    # vars() on a subclass sees only its own body, so the growth is measured
+    # against the inherited base rather than against a re-listed constant.
+    assert derived == ("fs:train:newly_added",)
+    assert "fs:train:newly_added" not in MARKERS
+
+
+def test_every_marker_is_namespaced_and_unique() -> None:
+    """A marker that does not carry the prefix is invisible to every log reader."""
+    assert all(m.startswith("fs:train:") for m in MARKERS)
+    assert len(set(MARKERS)) == len(MARKERS)
+    # Declaration order is the source order, so a reader diffing two runs sees
+    # steps in the order the entry emits them.
+    assert MARKERS[0] == Step.START

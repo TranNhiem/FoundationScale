@@ -117,26 +117,19 @@ class Step:
     UNMEASURED = "fs:train:unmeasured"
 
 
-MARKERS: tuple[str, ...] = (
-    Step.START,
-    Step.TOPOLOGY,
-    Step.PROFILE,
-    Step.CONSISTENCY,
-    Step.VALIDATED,
-    Step.BLOCKED,
-    Step.REFUSE,
-    Step.DEPS,
-    Step.DATA,
-    Step.TRAINER,
-    Step.RUN,
-    Step.SAVED,
-    Step.SAVE_GATE,
-    Step.OBJECTIVE_GATE,
-    Step.MANIFEST,
-    Step.ADJUDICATE,
-    Step.DONE,
-    Step.RED,
-    Step.UNMEASURED,
+# MARKERS is the marker denominator: every consumer that asks "which steps exist"
+# reads this. It used to be a hand-written tuple listing Step's members, and it
+# drifted -- Step.PARTITION was declared at :98 and emitted twice from _partition
+# scanning, yet named nowhere in the tuple, so 19 of 20 markers were in the
+# denominator and the partition step was invisible to anything counting steps
+# (#312). Derive it from Step instead, so a member cannot be added without
+# entering the denominator. Class bodies preserve declaration order, so the
+# derived order is the source order; dunders are excluded by the underscore test,
+# which is also what keeps the class docstring out.
+MARKERS: tuple[str, ...] = tuple(
+    value
+    for name, value in vars(Step).items()
+    if not name.startswith("_") and isinstance(value, str)
 )
 
 
