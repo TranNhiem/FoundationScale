@@ -1,0 +1,129 @@
+# The RL plane: design record and binding seams
+
+FoundationScale has an RL plane at `src/foundationscale/rl/` — three advantage estimators, two losses, six protocols — and **zero** concrete RL algorithms bound to it. Before binding GRPO, PPO, DPO, GSPO and the rest, five independent design reviews were run against the current interfaces. All five concluded the interfaces do not fit: not in a way that any single signature change repairs, but in the shape of the seams themselves. NeMo-RL and comparable frameworks show which algorithm families exist; this record states what the seams must be so every one of those families plugs in without the core branching on algorithm identity.
+
+WHAT IS CLAIMED:
+- A design. Six decisions about interface shape, each anchored to a verified site in the current source, each argued from the failure it prevents.
+- That the seams as described are sufficient for the algorithm families in the table below, at the level of interface coverage.
+
+WHAT IS NOT CLAIMED:
+- A measurement. No algorithm is bound today; the reviews rated interfaces, not running code.
+- Any benchmark, convergence claim, or performance result. None exists for this plane.
+- Completeness. The open questions at the end are live, and at least one decision may need revision once a second algorithm family actually binds.
+
+## The five seams
+
+Five sites carry the coupling that must be broken:
+
+1. **Requirements surface** — `AlgorithmRequirements` (`algorithm.py:160`) declares role presence via `requires_rollout` / `requires_advantage` / `requires_weight_sync` / `requires_reference_policy` booleans, plus `declared_components` and `declared_metrics`.
+2. **Wiring enumeration** — `check_algorithm_wiring` (`algorithm.py:450-453`) iterates a hard-coded 3-tuple of roles: `rollout_source`, `advantage_fn`, `weight_sync`. The enumeration is source, not data.
+3. **Advantage input** — `AdvantageFn.compute` (`advantage.py:259`) takes `prompt_ids`, `rewards`, `mask`. Three estimators implement it today: `GroupNormalisedAdvantage`, `LeaveOneOutAdvantage`, `GeneralisedAdvantageEstimation` (`advantage.py:472/530/578`).
+4. **Step report** — `StepReport` carries `step`, a single `loss: LossOutput`, `rows`, `reward_stats: RewardStats | None`, `sync: SyncReport | None`. Critic-based families produce more than one loss per step.
+5. **Objective gate context** — `build_objective_gate_context` hard-codes `uses_rewards=False` with a comment acknowledging the shape (`interfaces.py:278`, `interfaces.py:286`).
+
+Two facts constrain the rework rather than invite it. First, the offline case is already anticipated: the comment at `algorithm.py:242-249` states that `requires_advantage` without `requires_rollout` is a legitimate offline shape, so DPO-style algorithms are not foreign bodies here. Second, an absence-as-data precedent exists: `algorithm.py:573` declines to refuse a missing `sync` under `requires_weight_sync` because a weight sync happens on a cadence — the framework already distinguishes "never required" from "required but not yet due".
+
+## The six decisions
+
+### D1. Add a semantics declaration beside the role-presence layer
+
+`AlgorithmRequirements` stays a role-presence layer. The `requires_*` booleans answer "is a rollout source wired in?"; they cannot answer "does this loss and this algorithm agree about what a group is?" Add a second, independent declaration of **consumed semantics** — group size K, ratio scheme, KL estimator, clip bounds, reference-freeness — stated by *both* the loss *and* the algorithm, and compared by `check_algorithm_wiring`:
+
+```python
+@dataclass(frozen=True, slots=True)
+class AlgorithmSemantics:
+    group_size: int | None
+    ratio_scope: Literal["token", "sequence"] | None
+    kl_estimator: str | None
+    clip_bounds: tuple[float, float] | None
+    reference_free: bool | None
+```
+
+Two declarations that must agree is an instrument; one shared constant is not. **Why not put semantics on the algorithm alone:** a single declaration has no second side to disagree with, so a mismatched loss reads it, believes it, and trains wrongly — the handshake exists precisely because both halves can state the wrong thing independently.
+
+### D2. The roles tuple becomes data, not source
+
+Replace the hard-coded 3-tuple at `algorithm.py:450-453` with two mappings:
+
+```python
+requires: Mapping[str, bool]
+supplied: Mapping[str, Any]
+```
+
+The checked denominator is the **union** of both key sets. This matters concretely: were the denominator `requires` alone, a newly supplied role — a critic, a reward model, a reference policy — would sit in no denominator and the wiring check would print CLEAR over it. That is this repository's signature defect class (an instrument reporting CLEAR over a set that does not contain the thing the claim is about) and it must not be reintroduced here. **Why not extend the tuple when a new role is needed:** every new role becomes a core edit, and the edit is exactly where the denominator silently stays stale. With data, adding a critic role requires no core edit.
+
+### D3. Do not widen `AdvantageFn.compute`
+
+Do not add parameters and do not add a `**kwargs` escape hatch. Widening breaks all three existing estimators; `**kwargs` makes every estimator's real input set unmeasurable. Pass one frozen record and require each estimator to declare what it reads:
+
+```python
+@dataclass(frozen=True, slots=True)
+class AdvantageInputs:
+    prompt_ids: Sequence[str]
+    rewards: Sequence[float] | None
+    mask: Sequence[Sequence[int]] | None
+    logprobs: Sequence[Sequence[float]] | None
+    values: Sequence[Sequence[float]] | None
+
+@runtime_checkable
+class AdvantageFn(Protocol):
+    reads: frozenset[str]
+    def compute(self, inputs: AdvantageInputs) -> AdvantageResult: ...
+```
+
+Reading an undeclared field is a refusal naming the field and both sides' sets — never a silent success. **Why not the widened signature:** `**kwargs` answers the question "what does this estimator consume?" with "unknowable without reading its body"; the `reads` declaration keeps that question checkable.
+
+### D4. `StepReport` must carry more than one loss
+
+PPO has a policy loss and a value loss; a single `LossOutput` cannot state both. Replace `loss` with a mapping of named outputs:
+
+```python
+@dataclass(frozen=True, slots=True)
+class StepReport:
+    step: int
+    losses: Mapping[str, LossOutput]
+    rows: int
+    reward_stats: RewardStats | None
+    sync: SyncReport | None
+```
+
+The existing `reward_stats.count == rows` cross-check must be restated against the correct denominator: with multiple losses and partial batches, `rows` is no longer the set the reward statistics were computed over. A check against the wrong denominator manufactures false refusals — a denominator that is a subset of the claim is worse than no denominator, because it fails loudly and wrongly. **Why not keep one loss and a tuple of auxiliaries:** the named mapping makes each loss addressable and its presence checkable; an unnamed tuple laundered through index arithmetic is a denominator bug waiting to be written.
+
+### D5. Derive `uses_rewards`; never hard-code it
+
+`uses_rewards=False` at `interfaces.py:286` is honest today — nothing consumes rewards — and becomes a lie the moment the first RL algorithm binds. The fix is **not** to flip it to `True`. Derive it from whether a reward source is declared, and make the no-source case abstain: `uses_rewards: bool | None`, where undeclared reports `None`. `False` is a claim ("rewards were declared and not used"); `None` is an abstention ("not measured"). The framework's rule is that an unmeasured quantity is `None`, never `0.0` and never `False` [-> docs/DESIGN_PRINCIPLES.md]. **Why not just set it from config:** a config flag is a promise, not a measurement; deriving from a declared reward source ties the report to what is wired, which is what wiring checks exist to attest.
+
+### D6. `ratio_scope` is loss geometry, refused at wiring time
+
+Sequence-level ratio is objective geometry and belongs to the loss declaration. It cannot live in the advantage function — the advantage never sees logprobs — and it cannot be implicit in the loss, because `SFTLoss` owns a fixed token-level denominator. So D1's `ratio_scope: token | sequence` sits on the loss, the batch must carry the matching denominator, and a disagreement is refused at wiring time naming the field and both sides' stated scopes. **Why not test for the mismatch instead:** a test detects one instance of the GSPO token/sequence-denominator bug; a typed declaration with a refused mismatch makes the bug unrepresentable. Refusals age; tests rot.
+
+## How to add an algorithm
+
+1. Write the algorithm's `AlgorithmRequirements`: role booleans, `declared_components`, `declared_metrics`. Do not reclassify presence booleans as semantics.
+2. Write the algorithm's `AlgorithmSemantics` independently of the loss you intend to pair — from the paper, not from the implementation.
+3. Declare every role you wire through the `supplied` mapping (D2), including roles with no `requires` counterpart; a role in no denominator is unmeasured by construction.
+4. If the estimator you need is new, set `reads` to exactly the `AdvantageInputs` fields it consumes (D3). Reading anything outside that set must fail in your own unit test before CI sees it.
+5. Name every loss by function (`policy`, `value`, `kl`) in the `StepReport.losses` mapping, and state which denominator each `RewardStats` was computed over (D4).
+6. Declare a reward source if the algorithm consumes rewards; otherwise expect `uses_rewards=None` and treat a `False` in your gate output as a bug to file, not a value to assert (D5).
+7. State `ratio_scope` on your loss; if your batch denominator disagrees, fix the batch, not the declaration (D6).
+8. Run `check_algorithm_wiring`. A CLEAR result over an empty `supplied` union is vacuous and must be refused — `all([]) is True` remains the founding defect [-> docs/DESIGN_PRINCIPLES.md].
+
+## Families and the seams they exercise
+
+| Family (example algorithms) | D1 semantics | D2 roles | D3 advantage | D4 losses | D5 rewards | D6 ratio |
+|---|---|---|---|---|---|---|
+| Critic-free on-policy (GRPO, RLOO, REINFORCE, Reinforce++, Dr.GRPO, DAPO) | ● | ○ | ● | ○ | ● | ● |
+| Critic-based (PPO, VinePPO) | ● | ● | ● | ● | ● | ● |
+| Offline preference (DPO, IPO, KTO, ORPO, SimPO, CPO) | ● | ● | ○ | ● | ○ | ○ |
+| Online/iterative (Online DPO, Iterative DPO, RAFT, RSO, Best-of-N) | ● | ● | ○ | ● | ● | ● |
+| Sequence-level (GSPO, POLAR, length control) | ● | ○ | ○ | ○ | ● | ● |
+
+● the family cannot bind without the seam; ○ the seam is exercised but the current shape survives. No row is all ○: every family needs at least D1.
+
+## Open questions
+
+- **Critic plumbing.** D2 makes the critic role free to declare but says nothing about value-target shapes flowing into `AdvantageInputs.values` (D3); the GAE migration path is unwritten.
+- **`sync` cadence as data.** The `algorithm.py:573` precedent (a cadence-bound absence is not a refusal) suggests `supplied` may need a per-role cadence field; no shape has been chosen.
+- **Is `ratio_scope` a closed union?** `token | sequence` covers the families in the table. Whether a third geometry (per-group, or a length-normalised sequence ratio) needs its own member, or is expressible as a sequence ratio plus a declared denominator, is untested — and guessing wrong turns D6's refusal into an obstacle rather than an instrument.
+- **Whether semantics comparison should be structural or advisory.** `check_algorithm_wiring` refusing on any `None`-vs-value semantics mismatch may over-block algorithms that genuinely do not fix a KL estimator; the refusal policy per field is open.
+- **No second family has bound.** Every decision here is rated against one set of interfaces; the first binding that forces a revision is a feature of this process, not a failure of it.

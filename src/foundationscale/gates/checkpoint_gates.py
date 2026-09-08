@@ -1763,9 +1763,15 @@ class SaveCompletenessGate(Gate):
         if missing:
             return self.fail(
                 f"{len(missing)} of {len(declared)} declared tensors absent — "
-                f"checkpoint is missing a shard",
+                "checkpoint is missing a shard (excluding "
+                f"{len(c.declared_fqns) - len(declared)} _extra_state metadata "
+                "blobs from the declared set)",
                 coverage,
-                evidence={"missing": missing[:16], "origin": c.origin},
+                evidence={
+                    "missing": missing[:16],
+                    "excluded_extra_state": len(c.declared_fqns) - len(declared),
+                    "origin": c.origin,
+                },
             )
         return self.ok(
             f"all {len(declared)} declared tensors present (excluding "

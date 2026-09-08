@@ -1218,7 +1218,15 @@ def _run_dispatched_gate(gate: Gate, contexts: Any, missing_ctx: str) -> GateRes
 def run_event(
     registry: GateRegistry,
     event: Lifecycle | str,
-    contexts: Mapping[type, Any],
+    # Deliberately `Any`, matching `_run_dispatched_gate` above, and NOT
+    # `Mapping[type, Any]`: the body branches on `isinstance(contexts, Mapping)`
+    # at three sites and the else-arm is the documented migration path for one
+    # bare context object (see the ``contexts:`` entry below). An annotation that
+    # admits only the mapping shape is narrower than both the implementation and
+    # the published contract, so mypy would reject a call this function is built
+    # to accept. The two admitted shapes are stated in the docstring, which is
+    # where a union that mypy collapses to `Any` can still be said precisely.
+    contexts: Any,
     *,
     required: Iterable[str] = (),
     gate_ids: Iterable[str] | None = None,

@@ -325,6 +325,12 @@ def print_report(report: Report) -> None:
         f"{len(report.unresolved)} unresolved / {report.bare_count} bare implied-file"
     )
     print(
+        f"content axis (DECLARED UNMEASURED): {report.verified} resolved token(s) "
+        "were checked for EXISTENCE only -- whether the cited line says what the "
+        "surrounding prose claims is a stronger question this gate does not ask, "
+        "so a citation aimed at the wrong line of the right file passes (#309)"
+    )
+    print(
         f"bare implied-file axis (DECLARED UNMEASURED): {report.bare_count} token(s) "
         f"in {len(report.bare_by_file)} file(s) -- which file each one means is "
         "declared, not inferred (doctrine 5)"

@@ -177,7 +177,10 @@ docs/deliverables/B1_architecture.md]
   estate-parameterized through environment variables rather than hard-coded paths.
 * **Not yet**: RL/post-training alignment pipelines, pre-training recipes and the unified
   data contract remain roadmap items with falsification conditions in
-  docs/deliverables/. Nothing in the tree implements them.
+  docs/deliverables/. Nothing in the tree implements them. The RL plane carries
+  advantage estimators, losses and protocols but **zero** bound algorithms; the seams
+  every algorithm family must plug into are a design record, not a measurement.
+  [-> docs/RL_ALGORITHMS.md]
 
 [-> docs/WORKFLOWS.md]
 ## 8. Installation
@@ -445,9 +448,9 @@ itself, from the Makefile's own accounting:
 
 ## 23. Project structure
 
-`src/` = 22776 LOC across 33 files. `launchers/` contains 10231 shell LOC plus 1615 Python
+`src/` = 22790 LOC across 33 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 33385 Python LOC and 6414 shell LOC on top of the
-package. `tools/` contains 9533 Python LOC. 144885 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 9533 Python LOC. 145037 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
