@@ -501,6 +501,16 @@ Ranked. Each item: the question, why the design turns on it, the measurement.
    1 GiB — 4 GiB is absent from the set it examined, and this table certifies
    nothing about that cell.
 
+   **That abstention is a property of the RUN, not of the cell**, and two later
+   runs on the same tray establish it. A same-shape re-take of 4 GiB
+   (`measurements/weight_sync_gb200_4gib_control.json`) MEASURED `full_copy` at
+   0.046692 s — the exact cell this run withheld — and lost a different one
+   instead, `full_copy_pageable` at the 1 MiB floor. The 16 GiB probe below lost
+   three others. So "withheld" here means "did not stabilise in this run", never
+   "cannot be measured", and nothing in this section should be read as the
+   latter. N is 3 and the three runs were not a designed repeatability study, so
+   how often a given cell drops out is UNMEASURED.
+
    That control also reproduced the size-dependence recorded as issue #321 in one
    run: the pinned-versus-pageable margin adjudicated at 64 MiB (0.000757 against
    0.000828, 9.4%) but was downgraded to an OBSERVATION at 256 MiB (0.65%) and
@@ -508,11 +518,27 @@ Ranked. Each item: the question, why the design turns on it, the measurement.
    globally to quiet the small-payload case would have blinded the control at
    exactly the size where it still carries signal.
 
-   16 GiB was deliberately excluded from the sweep rather than attempted and
-   lost: allgather output across 4 ranks plus ring buffers is roughly 192 GiB
-   against ~186 GiB of HBM, so the attempt would have OOM'd the process and taken
-   the four measured sizes with it. Whether the occupancy gate degrades cleanly or
-   crashes at that size is UNMEASURED and is tracked separately.
+   16 GiB was excluded from the sweep above rather than attempted, on the
+   reasoning that allgather output across 4 ranks plus ring buffers would need
+   roughly 192 GiB against ~186 GiB of HBM and would OOM the process, taking the
+   four measured sizes with it. **That reasoning was wrong, and the measurement
+   that refutes it is `measurements/weight_sync_gb200_16gib_probe.json`.** 16 GiB
+   was subsequently attempted on the same 4-GPU tray and did not OOM: `collective`
+   completed 17 timed samples at 0.033833 s (1523.4 GB/s over 51539607552
+   aggregate bytes) and `reshard` completed 21 at 0.023935 s (2153.3 GB/s), both
+   with cross-rank equality verified. The error was in the shape assumed, not in
+   the arithmetic: this harness's `collective` declares its own byte model as a
+   rank-0 broadcast to `world_size-1` consumers, not an allgather, so the resident
+   footprint the exclusion predicted was never the footprint that row allocates.
+
+   What the probe does establish is narrow. Its verdict is **UNMEASURED**, not
+   CLEAR — 5 of 8 cells admitted. `full_copy` and `full_copy_pageable` at 16 GiB
+   were both withheld for warmup spread (56.7% and 64.9%), so the host-staged
+   transports and the pinned-versus-pageable control are uncharacterised at that
+   size. The probe answers "does it crash at 16 GiB?" with no, under an occupancy
+   gate that recorded `contended: false`. It does not answer "how fast is a full
+   copy at 16 GiB?", and it does not extend the per-byte ordering above to that
+   size.
 4. **Would the objective gates have caught Phase 2's DPO anomaly?** MEASURED, and
    the answer is split down the middle of the two readings. The reading was driven
    through the production dispatch (`run_event` over the shipped registry) in

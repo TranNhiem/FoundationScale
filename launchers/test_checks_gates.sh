@@ -1669,6 +1669,137 @@ F317B_PY
   fi
 fi
 
+# --- MUST_PASS: campaign self-test runner controls (checks/campaign_self_tests.py) ---
+# Finding #352: pyproject.toml sets testpaths = ["tests"], so pytest collects NOTHING under
+# validation_campaigns/. Six campaign modules ship a --self-test flag that plants controls
+# and returns 0 only if every one passes, and five of the six were invoked by nobody. That
+# is #278/#293 on a third population: however good a gate's controls are, a gate that runs
+# nowhere states no coverage.
+#
+# Same floor convention as the f317 leg above, for the same reason: rc=0 is not the
+# measurement. The trailing tally is parsed and held to a FLOOR of 16 so a self-test that
+# quietly drops controls cannot still read green.
+#
+# The floor spans both families -- 6 MUST_FIRE (one per declaration rule R1-R6) and 10
+# MUST_PASS (planted stubs parse; a --self-test mention in a COMMENT stays out of the
+# measured population; a file with no literal stays out; two literal-bearing files are in;
+# the clean configuration stays silent; and the runner observes PASS, FAIL, TIMEOUT and
+# absent-from-disk as four distinct states). The last four are controls on the RUNNER
+# rather than on the declaration audit, and they are what stop this gate certifying five
+# modules it never actually executed.
+#
+# Floor history: 16 at introduction (#352).
+if [ ! -r "checks/campaign_self_tests.py" ]; then
+  f352_msg="MUST_PASS FAILED (campaign_self_tests self-test) UNMEASURED:"
+  f352_msg="$f352_msg checks/campaign_self_tests.py is not readable -- unreadable is not empty"
+  f352_msg="$f352_msg (doctrine 4); the gate cannot run, so 0 of 16 controls were measured"
+  no "$f352_msg"
+else
+  f352_rc=0
+  f352_out=$(python3 -S checks/campaign_self_tests.py --self-test 2>&1) || f352_rc=$?
+  f352_last=$(printf '%s\n' "$f352_out" | tail -n 1)
+  f352_have=$(printf '%s\n' "$f352_last" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved;.*/\1/p')
+  f352_want=$(printf '%s\n' "$f352_last" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved;.*/\2/p')
+  if [ "$f352_rc" -ne 0 ]; then
+    f352_msg="MUST_PASS FAILED (campaign_self_tests self-test): rc=$f352_rc over the gate's"
+    f352_msg="$f352_msg declared denominator of 16 controls (6 MUST_FIRE + 10 MUST_PASS);"
+    f352_msg="$f352_msg 0 of 16 are accepted as behaved, so the leg fails closed. Output:"
+    f352_msg="$f352_msg $(printf '%s\n' "$f352_out" | tr '\n' ' ')"
+    no "$f352_msg"
+  elif [ -z "$f352_have" ] || [ -z "$f352_want" ]; then
+    f352_msg="MUST_PASS FAILED (campaign_self_tests self-test) UNMEASURED: rc=0 but the last"
+    f352_msg="$f352_msg line carries no parseable 'SELF-TEST DENOMINATOR: N of N controls"
+    f352_msg="$f352_msg behaved' tally -- the measuring unit printed no denominator, so 0 of"
+    f352_msg="$f352_msg 16 declared controls are auditable here. Unparseable is not passing;"
+    f352_msg="$f352_msg fail closed and update this leg in the same commit as the wording"
+    f352_msg="$f352_msg change. Last line: $f352_last"
+    no "$f352_msg"
+  elif [ "$f352_have" -ne "$f352_want" ]; then
+    f352_msg="MUST_PASS FAILED (campaign_self_tests self-test): denominator $f352_have of"
+    f352_msg="$f352_msg $f352_want controls is not self-consistent -- the self-test examined"
+    f352_msg="$f352_msg fewer controls than it claims to have. rc=0 cannot certify a partial"
+    f352_msg="$f352_msg control set, so the inconsistency fails closed."
+    no "$f352_msg"
+  elif [ "$f352_have" -lt 16 ]; then
+    f352_msg="MUST_PASS FAILED (campaign_self_tests self-test): control set shrank to"
+    f352_msg="$f352_msg $f352_have of $f352_want, below the measured floor of 16 (6 MUST_FIRE"
+    f352_msg="$f352_msg + 10 MUST_PASS). A shortened self-test still exits 0, so the floor is"
+    f352_msg="$f352_msg the control and this leg fails closed."
+    no "$f352_msg"
+  else
+    f352_msg="MUST_PASS campaign_self_tests self-test: rc=0 under python3 -S, denominator"
+    f352_msg="$f352_msg $f352_have of $f352_want controls (>= the measured floor of 16,"
+    f352_msg="$f352_msg 6 MUST_FIRE + 10 MUST_PASS): $f352_last"
+    ok "$f352_msg"
+  fi
+fi
+
+# --- MUST_FIRE: campaign_self_tests actually EXECUTES what it certifies ----------------
+# The self-test above exercises the gate's internal fixture path over planted stubs. This
+# leg exercises the shipped CLI over the REAL git index and the REAL shipped declarations,
+# and it is a discrimination PAIR: the same tree, the same five RUNNABLE modules, differing
+# ONLY in --timeout, must give 5 (RED) and then 0 (CLEAR).
+#
+# The variable is chosen deliberately. The failure this gate exists to prevent is a gate
+# that reports coverage without running anything -- #278/#293 -- and a declaration audit
+# alone would still exit 0 with the five subprocesses never spawned. Making every spawn
+# unmeetable is the one input that separates "the partition is declared correctly" from
+# "the modules were executed and adjudicated". If the CLEAR arm's rc=0 survived an
+# unmeetable timeout, the run would be certifying files it never touched.
+#
+# The assertion is rc=5 exactly, not merely nonzero: nonzero would accept a crash (1/2), an
+# UNMEASURED (95) or a REFUSE (96) as the control firing, and none of those is this gate's
+# declared RED. The RED arm additionally asserts that all five modules are named TIMEOUT --
+# an rc-only check would be satisfied by a RED raised for some unrelated reason.
+if [ ! -r "checks/campaign_self_tests.py" ]; then
+  f352b_msg="MUST_FIRE FAILED (campaign_self_tests execution discrimination) UNMEASURED:"
+  f352b_msg="$f352b_msg checks/campaign_self_tests.py is not readable -- unreadable is not"
+  f352b_msg="$f352b_msg empty (doctrine 4); 0 of 2 discrimination arms were measured"
+  no "$f352b_msg"
+else
+  f352b_red_rc=0
+  f352b_red_out=$(python3 -S checks/campaign_self_tests.py --timeout 0.000001 2>&1) ||
+    f352b_red_rc=$?
+  f352b_clear_rc=0
+  f352b_clear_out=$(python3 -S checks/campaign_self_tests.py 2>&1) || f352b_clear_rc=$?
+  f352b_timeouts=$(printf '%s\n' "$f352b_red_out" | grep -c '^TIMEOUT validation_campaigns/')
+  if [ "$f352b_red_rc" -ne 5 ]; then
+    f352b_msg="MUST_FIRE FAILED (campaign_self_tests execution discrimination): an unmeetable"
+    f352b_msg="$f352b_msg --timeout gave rc=$f352b_red_rc, expected exactly 5 (RED). rc=0 would"
+    f352b_msg="$f352b_msg mean the gate reached CLEAR without any module having run -- the"
+    f352b_msg="$f352b_msg whole of #352 -- and any other nonzero is not its declared RED."
+    f352b_msg="$f352b_msg Output: $(printf '%s\n' "$f352b_red_out" | tr '\n' ' ')"
+    no "$f352b_msg"
+  elif [ "$f352b_timeouts" -ne 5 ]; then
+    f352b_msg="MUST_FIRE FAILED (campaign_self_tests execution discrimination): the gate"
+    f352b_msg="$f352b_msg exited 5, but $f352b_timeouts of the 5 RUNNABLE modules are named"
+    f352b_msg="$f352b_msg TIMEOUT. Under an unmeetable timeout every declared module must be"
+    f352b_msg="$f352b_msg observed timing out; a smaller count means some module was never"
+    f352b_msg="$f352b_msg spawned, and a RED raised for another reason is not this control"
+    f352b_msg="$f352b_msg firing. Output: $(printf '%s\n' "$f352b_red_out" | tr '\n' ' ')"
+    no "$f352b_msg"
+  elif [ "$f352b_clear_rc" -ne 0 ]; then
+    f352b_msg="MUST_FIRE FAILED (campaign_self_tests execution discrimination): the unmeetable"
+    f352b_msg="$f352b_msg arm fired correctly at rc=5 with all 5 modules TIMEOUT, but the same"
+    f352b_msg="$f352b_msg command at the default timeout -- the only difference -- gave"
+    f352b_msg="$f352b_msg rc=$f352b_clear_rc instead of 0. Only 1 of 2 arms held; a gate that"
+    f352b_msg="$f352b_msg reddens on a healthy tree is stuck RED, not discriminating, so the"
+    f352b_msg="$f352b_msg leg fails closed. Output:"
+    f352b_msg="$f352b_msg $(printf '%s\n' "$f352b_clear_out" | tr '\n' ' ')"
+    no "$f352b_msg"
+  else
+    f352b_msg="MUST_FIRE campaign_self_tests execution discrimination: over the live git index"
+    f352b_msg="$f352b_msg and the shipped declarations, an unmeetable --timeout exited rc=5"
+    f352b_msg="$f352b_msg with all 5 RUNNABLE modules named TIMEOUT, and the default timeout"
+    f352b_msg="$f352b_msg exited rc=0 -- the spawn budget the only variable. The CLEAR is"
+    f352b_msg="$f352b_msg therefore contingent on the modules having actually run, which a"
+    f352b_msg="$f352b_msg declaration audit alone would not be. Both outcomes held"
+    ok "$f352b_msg"
+  fi
+fi
+
 echo "abstentions: $abstain named (each named at its site above with its denominator; 0 added to pass or fail)"
 echo "controls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

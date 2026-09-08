@@ -103,7 +103,7 @@ ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
 endif
 
-.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope launcher-contracts checks-gates standing-gates mutation mutation-module skip-guard-probe check clean
+.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope launcher-contracts checks-gates standing-gates campaign-self-tests mutation mutation-module skip-guard-probe check clean
 
 install:
 	$(PY) -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
@@ -429,6 +429,27 @@ standing-gates:
 		FS_ESTATE_IDENT_PAT=NONE bash validation_campaigns/h100_validation/run_standing_gates.sh \
 			--allow-refused gate_launch_doc.py
 
+# Finding #352. pyproject.toml sets testpaths = ["tests"], so pytest collects
+# NOTHING under validation_campaigns/. Six campaign modules ship a --self-test
+# flag that plants controls and returns 0 only if every control passes, and five
+# of the six were invoked by nobody -- #278/#293 again, on a third population.
+# This target invokes them.
+#
+# --self-test first, and its rc gates the real run, for the same reason as the
+# sibling above: a runner whose own controls are broken cannot certify anything.
+#
+# The scope is MEASURED (an ast '--self-test' literal), not hand-listed, and the
+# usual objection to a measured denominator -- deleting the self-test shrinks it,
+# and the absence reads as a pass -- is closed by making the rules two-way: R1
+# reds a measured file that is undeclared, R6 reds a declared file that is no
+# longer measured. Neither side can move alone. That is also why the 62 campaign
+# files with no self-test need no reason strings: they are outside the claim by
+# measurement rather than excused from it by a table someone has to maintain.
+#
+# Cost: 12s wall, five self-tests spawned as subprocesses.
+campaign-self-tests:
+	$(PY) checks/campaign_self_tests.py --self-test && $(PY) checks/campaign_self_tests.py
+
 mutation:
 	FS_FORBID_SKIPS=1 $(PY) tools/mutate.py
 
@@ -477,7 +498,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope launcher-contracts checks-gates standing-gates mutation
+check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope launcher-contracts checks-gates standing-gates campaign-self-tests mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \

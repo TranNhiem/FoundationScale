@@ -170,8 +170,26 @@ import statistics
 import sys
 from typing import Any, Callable, NamedTuple
 
-import torch
-import torch.distributed as dist
+# Finding #354. torch is a REAL requirement of the measurement path and NOT a
+# requirement of --self-test, which the docstring above already declares runnable
+# with "no GPU, no torch.distributed" over synthetic rows. Importing it at module
+# scope collapsed that distinction: on any interpreter without torch the module
+# died with a ModuleNotFoundError traceback and exit 1 -- a code outside the
+# 0/5/95/96 contract this file publishes twelve lines above, and a verdict that
+# depended on which python3 happened to be first on PATH (#83/#111/#229 again).
+#
+# `from __future__ import annotations` is on line 1, so the 16 `torch.device` and
+# `torch.Tensor` annotations below are strings at runtime and cost nothing when the
+# binding is None. Only genuine runtime uses reach the guard in main().
+try:
+    import torch
+    import torch.distributed as dist
+
+    TORCH_IMPORT_ERROR: str | None = None
+except ImportError as _torch_exc:
+    torch = None  # type: ignore[assignment]
+    dist = None  # type: ignore[assignment]
+    TORCH_IMPORT_ERROR = str(_torch_exc)
 
 # --------------------------------------------------------------------------
 # Contract constants
@@ -1187,12 +1205,25 @@ def main(argv: list[str]) -> int:
     args = _parse_args(argv)
 
     # The self-test harness runs before any cluster precondition: no GPU,
-    # no torch.distributed, no torchrun. This is what makes the gate
-    # landable in CI on a machine with no cluster.
+    # no torch.distributed, no torchrun, and -- since #354 -- no torch at all.
+    # This is what makes the gate landable in CI on a machine with no cluster.
     if args.self_test:
         return _self_test()
 
     # --- preconditions ---
+    # #354: torch is imported conditionally so an absent install cannot crash the
+    # torch-free self-test above. Past this line every arm needs it, and an absent
+    # dependency is UNMEASURED -- the same degradation the CUDA check below makes,
+    # for the same reason: a measurement that could not be taken is not a failure
+    # of the thing being measured.
+    if TORCH_IMPORT_ERROR is not None:
+        sys.stderr.write(
+            f"UNMEASURED: torch is not importable on this interpreter "
+            f"({TORCH_IMPORT_ERROR}); the transport measurement needs it, so no "
+            f"cell was swept. This is not RED: nothing was measured to be wrong.\n"
+        )
+        sys.stderr.flush()
+        return EXIT_UNMEASURED
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
         return _refuse("RANK/WORLD_SIZE not in environment; launch under torchrun")
     if not torch.cuda.is_available():

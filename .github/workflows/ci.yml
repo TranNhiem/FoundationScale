@@ -574,6 +574,33 @@ jobs:
           bash validation_campaigns/h100_validation/run_standing_gates.sh \
             --allow-refused gate_launch_doc.py
 
+      # Finding #352, and the mirror of the `campaign-self-tests` Makefile target
+      # in the SAME commit (#286: this pairing is held by hand, so it is stated
+      # in both places on purpose).
+      #
+      # pyproject.toml sets testpaths = ["tests"], so pytest collects NOTHING
+      # under validation_campaigns/. Six campaign modules ship a --self-test flag
+      # whose controls return 0 only if every one passes, and five of the six
+      # were invoked by nobody. That is #278/#293 on a third population: a gate
+      # that runs nowhere states no coverage, however good its controls are.
+      #
+      # Controls first, and their rc gates the real run -- the `&&` is load-
+      # bearing, exactly as in the standing-gate pair above. An instrument whose
+      # own controls are broken produces a verdict nobody should read.
+      #
+      # The scope is MEASURED (an ast '--self-test' literal in a tracked file),
+      # not a hand-kept list. The usual objection to that -- delete the self-test
+      # and the file silently leaves the denominator -- is closed by making the
+      # rules two-way: R1 reds a measured file that is undeclared, R6 reds a
+      # declared file that is no longer measured, so neither side can move alone.
+      # One file is declared NOT_RUNNABLE_HERE and is therefore UNMEASURED, never
+      # passed: the generated preflight copy honestly exits 95 here because from
+      # its generated location it doubles its own fixture prefix.
+      - name: Campaign self-test runner controls (R1..R6 each must fire)
+        run: python3 checks/campaign_self_tests.py --self-test
+      - name: Campaign self-tests (five declared campaign --self-test modules)
+        run: python3 checks/campaign_self_tests.py
+
   launchers:
     name: launcher contracts (a silent suite fails this job)
     runs-on: ubuntu-latest
