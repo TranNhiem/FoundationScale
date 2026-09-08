@@ -38,11 +38,19 @@
 # runtime guards below were (FS_ALLOWED_NODE / FS_FORBIDDEN_NODES). Before any
 # real sbatch submission, replace <compute-node> above with the short hostname
 # of YOUR one allowed tray — the same value you export as FS_ALLOWED_NODE.
-# sbatch no longer exists on the login nodes (finding #51), so this header is
-# currently vestigial; it is retained deliberately (the sbatch path is a
-# standing rule and is never deleted), and the runtime node guards below
-# enforce the allow/deny policy independently of whether this line is ever
-# read by a scheduler.
+# fs341 CORRECTS fs51: an earlier revision of this header asserted that "sbatch
+# no longer exists on the login nodes", and treated this block as vestigial on
+# that basis. That assertion was an ARTIFACT OF THE MEASURING SHELL, not a fact
+# about the estate. `ssh <login> '<cmd>'` runs a NON-login shell, which builds
+# neither the Slurm PATH entry nor SLURM_CONF, so every Slurm binary reports
+# "command not found" and the client then dies in a DNS SRV lookup for the
+# controller — a failure that reads like a cluster outage. Re-measured
+# 2026-09-09 under `ssh <login> "bash -lc '...'"`: sbatch, srun, squeue,
+# scontrol and sacct are ALL present (Slurm 24.11.6) and SLURM_CONF is set.
+# So this header is NOT vestigial and the sbatch path is live. The runtime node
+# guards below still enforce the allow/deny policy independently, because a
+# #SBATCH line is a COMMENT — it cannot expand a variable, so it can never be
+# parameterized to the operator's tray and can never be the guard.
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=30
@@ -417,10 +425,15 @@ export NVTE_FUSED_ATTN=1
 export NVTE_UNFUSED_ATTN=1
 export MASTER_PORT=${MASTER_PORT:-$(( 29400 + ${SLURM_JOB_ID:-211} % 1000 ))}
 # The backend pre-sets MASTER_ADDR=127.0.0.1 on the enroot arm (single-tray
-# rendezvous, resolvable inside the container regardless of /etc/hosts) and
-# scontrol is measured ABSENT off-Slurm (s1). Under sbatch the scontrol
-# derivation is kept; `|| true` turns a missing scontrol into the hostname
-# fallback instead of a pipefail abort on this very assignment under set -e.
+# rendezvous, resolvable inside the container regardless of /etc/hosts).
+# fs341 CORRECTS the s1 note that used to sit here ("scontrol is measured
+# ABSENT off-Slurm"): the BINARY is present — re-measured 2026-09-09 under a
+# login shell, scontrol resolves alongside sbatch/srun/squeue/sacct. What is
+# absent off-Slurm is the ALLOCATION: SLURM_JOB_NODELIST is unset, so the
+# derivation below has no input and falls through to `hostname`. Under sbatch
+# the scontrol derivation is kept; `|| true` keeps a scontrol that is missing
+# OR that has nothing to report a hostname fallback, instead of a pipefail
+# abort on this very assignment under set -e.
 if [[ -z "${MASTER_ADDR:-}" ]]; then
   MASTER_ADDR=$(scontrol show hostnames "${SLURM_JOB_NODELIST:-$(hostname)}" 2>/dev/null | head -n1 || true)
   MASTER_ADDR=${MASTER_ADDR:-$(hostname)}   # hostname is correct for 1 node

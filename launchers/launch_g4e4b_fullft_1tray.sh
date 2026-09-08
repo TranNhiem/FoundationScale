@@ -983,9 +983,13 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTORCH_ALLOC_CONF=expan
 export MASTER_PORT
 # enroot arm comes in with MASTER_ADDR pre-set to 127.0.0.1 (single-tray
 # rendezvous that resolves inside the container no matter what /etc/hosts
-# holds); sbatch keeps the historical scontrol derivation. scontrol is
-# measured ABSENT off-Slurm (s1); the `|| true` keeps a missing scontrol a
-# fallback-to-hostname, not a pipefail failure, under set -u -o pipefail.
+# holds); sbatch keeps the historical scontrol derivation. fs341 CORRECTS the
+# s1 note that used to sit here ("scontrol is measured ABSENT off-Slurm"): the
+# BINARY is present — re-measured 2026-09-09 under a login shell. What is
+# absent off-Slurm is the ALLOCATION, so SLURM_JOB_NODELIST is unset and the
+# derivation has no input. The `|| true` keeps a scontrol that is missing OR
+# that has nothing to report a fallback-to-hostname, not a pipefail failure,
+# under set -u -o pipefail.
 if [[ -z "${MASTER_ADDR:-}" ]]; then
   MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" 2>/dev/null | head -n1 || true)
   export MASTER_ADDR=${MASTER_ADDR:-$(hostname)}

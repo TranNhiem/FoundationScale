@@ -128,7 +128,7 @@ fs_backend_init() {
 
   if [[ "$FS_BACKEND" == slurm ]]; then
     command -v srun >/dev/null 2>&1 || \
-      fs_die "FS_BACKEND=slurm but srun is not on PATH (s1: measured ABSENT on this estate 2026-08-23). Run on the node named by FS_ALLOWED_NODE (currently '${FS_ALLOWED_NODE:-<unset>}') so auto-selection picks enroot, or bring Slurm back."
+      fs_die "FS_BACKEND=slurm but srun is not on PATH in THIS shell. fs341: do not read this as 'the estate has no Slurm' — the s1 note this message used to carry said srun was measured ABSENT estate-wide on 2026-08-23, and that was an artifact of measuring from a NON-login shell (no Slurm PATH entry, no SLURM_CONF). Re-run under a login shell (ssh <host> \"bash -lc '...'\") before concluding anything. If srun is still absent, run on the node named by FS_ALLOWED_NODE (currently '${FS_ALLOWED_NODE:-<unset>}') so auto-selection picks enroot."
     # The two standing-rule checks the launchers historically ran at top
     # level, preserved verbatim in effect: an ALLOWLIST over a value Slurm —
     # not this script — writes.

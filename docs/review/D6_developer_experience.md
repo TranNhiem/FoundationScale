@@ -6,7 +6,7 @@ was attempted against the shipped tree only — what is in `src/foundationscale/
 `launchers/`, `tools/`, `checks/`, `validation_campaigns/h100_validation/`, the README, the Makefile,
 `pyproject.toml`, and the CI workflow. Where a workflow has no documented path in
 that evidence, it is rated **Absent** rather than assigned a plausible invented one.
-`src/foundationscale/` measures 22790 lines; `launchers/` contains 9500 shell LOC
+`src/foundationscale/` measures 27065 lines; `launchers/` contains 9500 shell LOC
 plus 1615 Python LOC; `validation_campaigns/h100_validation/` (33385 .py LOC, 65 files) is a validation
 harness, not a training product. The framework's own README says it plainly: "The
 trainer itself is early." This review measures what "early" feels like from the
@@ -33,12 +33,17 @@ import refuses with the remedy string `pip install 'foundationscale[train]'`, an
 `checks/packaging_reachability.py` keeps that string honest. That refusal message
 is the best piece of operator UX in the package.
 
-Path B, the launchers: `sbatch launchers/launch_g4e4b_lora_1tray.sh` — except
-sbatch no longer exists on the estate's login nodes (finding #51, cited in the
-launcher header comment), the `#SBATCH` block is vestigial, and the only
-executable backend is enroot via `launchers/fs_container_backend.sh`
-(`FS_BACKEND=auto|slurm|enroot`). Both shipped launchers are hardwired to one
-model (Gemma-4-E4B) on one tray of one estate.
+Path B, the launchers: `sbatch launchers/launch_g4e4b_lora_1tray.sh`. An earlier
+revision of this paragraph said sbatch no longer existed on the estate's login
+nodes (finding #51) and that the `#SBATCH` block was therefore vestigial;
+finding #341 refutes both. That measurement was taken from a non-login shell,
+which has neither the Slurm PATH entry nor `SLURM_CONF`, so every Slurm binary
+appears to be missing. Re-measured 2026-09-09 under a login shell, sbatch and
+srun are present. Two real DX problems survive the correction: the `#SBATCH`
+block still cannot be parameterized (a directive is a comment, so it can never
+read `FS_ALLOWED_NODE`), and both shipped launchers are hardwired to one model
+(Gemma-4-E4B) on one tray of one estate. `launchers/fs_container_backend.sh`
+selects the backend (`FS_BACKEND=auto|slurm|enroot`).
 
 **Single best change:** one documented, minimal `foundationscale-train` invocation
 in the README Quickstart — model, dataset, one GPU — so path A exists in prose,
@@ -195,7 +200,7 @@ controls, packaging, countables, mutation. Frictions I hit:
   Makefile. CI shards it across a job matrix derived from the mutation table;
   locally you get one big bill.
 - mypy checks `src` plus three named `tools/` files, and — since the `checks/`
-  errors were cleared — all 11 files under `checks/`, via a second invocation
+  errors were cleared — all 12 files under `checks/`, via a second invocation
   (`make typecheck-checks`, in `check` and mirrored as its own CI step). The
   remaining `tools/` modules are still unchecked.
 - `checks/countables_drift.py` will fail your docs edit if a countable wording
