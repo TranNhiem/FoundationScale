@@ -49,6 +49,15 @@ TORCH_FREE_MODULES = {
         "LeaveOneOutAdvantage",
         "RewardStats",
     ),
+    "foundationscale.rl.algorithm": (
+        "Algorithm",
+        "AlgorithmRequirements",
+        "AlgorithmWiringRefusal",
+        "StepReport",
+        "StepReportRefusal",
+        "check_algorithm_wiring",
+        "verify_step",
+    ),
     "foundationscale.rl.interfaces": (
         "BatchRefusal",
         "ExperienceBatch",

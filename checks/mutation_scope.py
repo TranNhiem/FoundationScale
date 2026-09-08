@@ -222,6 +222,19 @@ PENDING_ENROLMENT: dict[str, str] = {
         "sync -- a stale generate-view produces plausible completions, so nothing "
         "downstream notices the weights never arrived"
     ),
+    "src/foundationscale/rl/algorithm.py": (
+        "the two gates that read ONE declaration: check_algorithm_wiring compares "
+        "AlgorithmRequirements against what setup was handed AND against the wired loss's "
+        "own declaration(), and verify_step compares it against what each step observed. "
+        "Inverting a set comparison or dropping one direction of it reads as a run whose "
+        "objective is fully accounted for, and the reward_stats.count == rows check is what "
+        "stops one step carrying two denominators. NOT claimed: substituting the DECLARED "
+        "count for the OBSERVED count at verify_step's return is an EQUIVALENT mutant, not "
+        "an uncovered one -- every path that reaches the return has already refused a "
+        "repeat on both sides and refused set inequality, so the two lengths are equal by "
+        "construction. No test can kill it, and one written to try would be asserting a "
+        "distinction the guards above it have removed"
+    ),
 }
 
 OUT_OF_SCOPE: dict[str, str] = {

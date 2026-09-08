@@ -226,7 +226,7 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/train/__main__.py": 0,  # set by --update; measured 0.0%
     "src/foundationscale/train/loop.py": 81,  # set by --update; measured 81.1%
     "tools/emit_run_manifest.py": 80,  # set by --update; measured 80.9%
-    # RATCHET -- 25 module(s) ABOVE the default band. These record what
+    # RATCHET -- 26 module(s) ABOVE the default band. These record what
     # the tree already achieves, so a regression to a merely-passing 90% is RED
     # rather than invisible.
     "src/foundationscale/__init__.py": 100,  # set by --update; measured 100.0%
@@ -243,6 +243,7 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/provenance/__init__.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/__init__.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/advantage.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/rl/algorithm.py": 99,  # set by --update; measured 99.3%
     "src/foundationscale/rl/interfaces.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/losses.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/policy.py": 100,  # set by --update; measured 100.0%

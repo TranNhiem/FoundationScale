@@ -5,10 +5,13 @@ This module holds CONTRACTS. The ``LossFn`` implementations live beside it in
 when stage 2 added a second loss, because stage 3 adds more still.
 
 Design section 9 stages 1-2: ``ExperienceBatch``, ``LossFn`` and its
-``LossDeclaration``, and the objective-gate bridge. ``Algorithm``,
-``RolloutSource``, ``AdvantageFn``, ``WeightSync`` and ``StepReport`` are later
-stages and are deliberately absent -- shipping them here would be wrong, not
-ahead.
+``LossDeclaration``, and the objective-gate bridge. The later stages landed in
+sibling modules and remain deliberately absent HERE: ``RolloutSource`` in
+``rollout.py``, ``AdvantageFn`` in ``advantage.py``, ``WeightSync`` in
+``weightsync.py``, and ``Algorithm`` with ``StepReport`` in ``algorithm.py``.
+The dependency runs one way -- those modules import these contracts and this
+one imports none of them -- which is what keeps the gate bridge importable
+without dragging the whole RL surface in behind it.
 
 No torch at module scope: the gate plane is imported by torch-free host
 tooling, so every tensor interaction in this file is duck-typed and no

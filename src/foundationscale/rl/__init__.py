@@ -8,10 +8,12 @@ Design section 9 of ``validation_campaigns/nemo_rl_baseline/PHASE3_DESIGN.md``:
 * stage 2 -- ``PolicyPair``'s reference role and ``DPOLoss``, carrying the two
   declaration conditions the section-7 item-4 measurement attached to it;
 * stage 3a -- ``RolloutSource`` and ``AdvantageFn``, the two contracts that
-  need no distributed measurement to specify.
-
+  need no distributed measurement to specify;
 * stage 3b -- ``WeightSync``, the sibling edge that moves weights from the
-  training view to the generation view.
+  training view to the generation view;
+* stage 3c -- ``Algorithm``, the policy-gradient binding that consumes all of
+  the above, with ``AlgorithmRequirements`` as its declaration and
+  ``StepReport`` as what one step evidences.
 
 ``WeightSync`` could only be specified once the section-7 item-3
 weight-transfer measurement was taken. It has been, and it returned
@@ -23,10 +25,13 @@ construction and the report evidences which one ran. Deliberately not
 restated here: the per-transport ratios, which are a measurement artifact and
 belong in the campaign record, not in a docstring that no gate re-measures.
 
-Section 3's one remaining contract is ``Algorithm``, the policy-gradient
-binding that consumes all of the above. Nothing here has been benchmarked
-against the reference implementation; design section 10 states what is not
-established.
+``Algorithm`` declares ONCE, in ``AlgorithmRequirements``, and two gates read
+that declaration: ``check_algorithm_wiring`` compares it against what setup was
+HANDED -- including the wired loss's own ``declaration()``, because those are
+one countable stated in two objects -- and ``verify_step`` compares it against
+what each step OBSERVED. Section 3's contract set is now complete. Nothing here
+has been benchmarked against the reference implementation; design section 10
+states what is not established.
 
 The public import path is this package. ``SFTLoss`` moved from ``interfaces``
 to ``losses`` when stage 2 split contracts from implementations, and that move
@@ -44,6 +49,15 @@ from foundationscale.rl.advantage import (
     GroupNormalisedAdvantage,
     LeaveOneOutAdvantage,
     RewardStats,
+)
+from foundationscale.rl.algorithm import (
+    Algorithm,
+    AlgorithmRequirements,
+    AlgorithmWiringRefusal,
+    StepReport,
+    StepReportRefusal,
+    check_algorithm_wiring,
+    verify_step,
 )
 from foundationscale.rl.interfaces import (
     BatchRefusal,
@@ -80,6 +94,9 @@ __all__ = (
     "AdvantageFn",
     "AdvantageRefusal",
     "AdvantageResult",
+    "Algorithm",
+    "AlgorithmRequirements",
+    "AlgorithmWiringRefusal",
     "BatchRefusal",
     "CapabilityRefusal",
     "DPOLoss",
@@ -98,6 +115,8 @@ __all__ = (
     "RolloutSource",
     "SFTLoss",
     "SourceCapabilities",
+    "StepReport",
+    "StepReportRefusal",
     "SupervisionRefusal",
     "SyncCapabilities",
     "SyncCapabilityRefusal",
@@ -105,8 +124,10 @@ __all__ = (
     "SyncReportRefusal",
     "WeightSync",
     "build_objective_gate_context",
+    "check_algorithm_wiring",
     "check_capabilities",
     "check_sync_capabilities",
     "verify_generated",
+    "verify_step",
     "verify_sync",
 )
