@@ -91,6 +91,43 @@ def build_parser() -> argparse.ArgumentParser:
             "UNMEASURED -- it is never assumed clean"
         ),
     )
+    # Precision and adapter flags default to None, NOT to a plausible value.
+    # None means "not declared": the manifest records None, and the
+    # observed-vs-declared precision check abstains rather than passing
+    # (an unstated precision must never be laundered into "bf16" -- #342).
+    p.add_argument(
+        "--precision",
+        default=None,
+        help=(
+            "declared training precision, one of: bf16, fp16, fp32, nvfp4. "
+            "nvfp4 is declarable but train() refuses it (96) until the package "
+            "plane grows an nvfp4 backend -- it never falls back silently. "
+            "Omit to declare nothing"
+        ),
+    )
+    p.add_argument(
+        "--adapter",
+        default=None,
+        help=(
+            "adapter mode, one of: lora. Omit for a full fine-tune -- that is "
+            "the explicit default, not an unstated one. Requires --adapter-rank; "
+            "a missing peft install is a REFUSE (96), never a silent full "
+            "fine-tune"
+        ),
+    )
+    p.add_argument("--adapter-rank", type=int, default=None)
+    p.add_argument("--adapter-alpha", type=float, default=None)
+    p.add_argument(
+        "--adapter-target",
+        action="append",
+        default=None,
+        help=(
+            "LoRA target module pattern; repeatable, collected in order. "
+            "Omit to use peft's per-model defaults. If the adapter resolves "
+            "to zero modules the run is refused after wrapping"
+        ),
+    )
+    p.add_argument("--adapter-dropout", type=float, default=None)
     return p
 
 
@@ -117,6 +154,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         cp=args.cp,
         dry_run=args.dry_run,
         launch_corpus=args.launch_corpus,
+        precision=args.precision,
+        adapter=args.adapter,
+        adapter_rank=args.adapter_rank,
+        adapter_alpha=args.adapter_alpha,
+        adapter_targets=(tuple(args.adapter_target) if args.adapter_target is not None else None),
+        adapter_dropout=args.adapter_dropout,
     )
     return train(cfg)
 

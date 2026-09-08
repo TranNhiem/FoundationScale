@@ -19,6 +19,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import struct
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -87,6 +88,17 @@ TOKENIZE_MAX_LENGTH = 128
 # validated RunManifest -- see _build_run_manifest.
 MANIFEST_NAME = "run_manifest.json"
 
+# The precision names a run may DECLARE. Declarable is not executable: nvfp4
+# is in the accepted set so a manifest can say "nvfp4 was asked for", and
+# train() then refuses it -- see the Step.START refusal -- rather than mapping
+# it onto bf16, which is the silent-fallback defect of finding #342. Sorted,
+# because refusal messages interpolate it verbatim and a sorted set is the
+# house contract for naming accepted values.
+PRECISIONS: tuple[str, ...] = ("bf16", "fp16", "fp32", "nvfp4")
+# The adapter modes the package plane wires itself. "lora" is the only one;
+# TrainConfig.adapter=None means full fine-tune, and it means it explicitly.
+ADAPTERS: tuple[str, ...] = ("lora",)
+
 
 class Step:
     """Declared launch markers. Every line the entry emits starts with one."""
@@ -102,6 +114,12 @@ class Step:
     DEPS = "fs:train:deps"
     DATA = "fs:train:data"
     TRAINER = "fs:train:trainer"
+    # Marker, not absence (same doctrine as UNMEASURED below): adapter wiring
+    # and the vacuous-attach refusal both report here, so a log shows the step
+    # ran rather than implying an adapter run is indistinguishable from
+    # full fine-tune. MARKERS is derived from this class, so adding the member
+    # is also adding it to the denominator.
+    ADAPTER = "fs:train:adapter"
     RUN = "fs:train:run"
     SAVED = "fs:train:saved"
     SAVE_GATE = "fs:train:save_gate"
@@ -192,6 +210,22 @@ class TrainConfig:
     # anything -- so the value is left absent here rather than defaulted to the
     # plausible "sft", which would make the gate compare the loop against itself.
     objective: str | None = None
+    # Declared training precision. None means NOT DECLARED and is never coerced:
+    # a run that says nothing trains at whatever dtype the model loader picks,
+    # the manifest records None, and the observed-vs-declared check at the
+    # first checkpoint abstains rather than passing. Coercing None to "bf16"
+    # would launder an absent statement into a measured claim (#342). "nvfp4"
+    # is declarable here but refused by train() -- declarable is not executable.
+    precision: str | None = None
+    # Declared adapter mode. None means FULL FINE-TUNE, stated as data rather
+    # than implied by the absence of peft wiring. Every adapter_* knob is None
+    # by default, and a partial specification is refused in __post_init__ --
+    # adapter_rank set with adapter unset is a config the operator did not mean.
+    adapter: str | None = None
+    adapter_rank: int | None = None
+    adapter_alpha: float | None = None
+    adapter_targets: tuple[str, ...] | None = None
+    adapter_dropout: float | None = None
     # Harmless knobs.
     max_steps: int = 20
     per_device_batch_size: int = 1
@@ -240,6 +274,45 @@ class TrainConfig:
         ):
             if int(getattr(self, field_name)) < 1:
                 raise ValueError(f"{field_name} must be >= 1")
+        if self.precision is not None and self.precision not in PRECISIONS:
+            raise ValueError(f"precision={self.precision!r} is not one of {PRECISIONS}")
+        if self.adapter is not None and self.adapter not in ADAPTERS:
+            raise ValueError(f"adapter={self.adapter!r} is not one of {ADAPTERS}")
+        if self.adapter is None:
+            # A partial specification is a refusal, not a hint: every adapter_*
+            # field with adapter unset is a statement about nothing.
+            for field_name in (
+                "adapter_rank",
+                "adapter_alpha",
+                "adapter_targets",
+                "adapter_dropout",
+            ):
+                value = getattr(self, field_name)
+                if value is not None:
+                    raise ValueError(
+                        f"{field_name}={value!r} is set while adapter is None: "
+                        f"a partial adapter specification is refused. Set "
+                        f"adapter to one of {ADAPTERS}, or clear {field_name}"
+                    )
+        elif self.adapter_rank is None or int(self.adapter_rank) < 1:
+            raise ValueError(
+                f"adapter={self.adapter!r} requires adapter_rank to be a "
+                f"positive int; got adapter_rank={self.adapter_rank!r}. A "
+                "missing or non-positive rank silently defines the adapter's "
+                "capacity, which is exactly the unrecorded-config failure"
+            )
+        if self.adapter_targets is not None:
+            object.__setattr__(self, "adapter_targets", tuple(self.adapter_targets))
+            if not self.adapter_targets:
+                # all([]) is True and that is the founding defect of this
+                # codebase: an adapter that targets nothing trains nothing
+                # while looking like it trained.
+                raise ValueError(
+                    "adapter_targets=() is refused as vacuous: an adapter that "
+                    "targets no module trains nothing while looking like it "
+                    "trained. Name at least one target, or pass None to use "
+                    "peft's per-model defaults"
+                )
 
 
 def _loudest() -> Severity:
@@ -324,6 +397,169 @@ def _run_save_gates(
     return run_event(registry, event, ctx, missing_ctx="report-skip"), None
 
 
+# The safetensors dtypes accepted as agreeing with each declared precision.
+# bf16/fp16 tolerate F32: under transformers autocast the MASTER weights stay
+# fp32 and save_pretrained serializes those, so demanding purity would turn
+# every healthy autocast run RED. The detector limit this tolerance creates --
+# an honest fp32 run and a bf16 run with fp32 masters serialize identically --
+# is stated as WHAT IS NOT CLAIMED on check_precision_agreement.
+_PRECISION_ACCEPTED_DTYPES: dict[str, tuple[str, ...]] = {
+    "bf16": ("BF16", "F32"),
+    "fp16": ("F16", "F32"),
+    "fp32": ("F32",),
+}
+
+
+def _dtype_histogram(ckpt_dir: Path) -> dict[str, int] | None:
+    """Count saved tensors by safetensors dtype, stdlib only (no torch).
+
+    Reads the 8-byte header length and the JSON header of every
+    ``*.safetensors`` shard, where each tensor entry carries its ``dtype``
+    string. Returns None when there is nothing to look at -- zero shards, or
+    zero tensors across them -- so the caller REFUSES the comparison as
+    vacuous. It never returns ``{}``: an empty dict from here would be a
+    measured zero over an unmeasured set. A malformed shard RAISES; the caller
+    treats unreadable headers the same as absent tensors.
+    """
+    counts: dict[str, int] = {}
+    total = 0
+    for shard in sorted(ckpt_dir.glob("*.safetensors")):
+        with shard.open("rb") as handle:
+            raw = handle.read(8)
+            if len(raw) < 8:
+                raise ValueError(f"{shard} is too short to be a safetensors file")
+            (header_len,) = struct.unpack("<Q", raw)
+            header = json.loads(handle.read(header_len))
+        if not isinstance(header, dict):
+            raise ValueError(f"{shard} has a non-object safetensors header")
+        for name, meta in header.items():
+            if name == "__metadata__":
+                continue
+            dtype = meta.get("dtype") if isinstance(meta, dict) else None
+            if not isinstance(dtype, str):
+                raise ValueError(f"{shard}:{name} carries no usable dtype in its header")
+            counts[dtype] = counts.get(dtype, 0) + 1
+            total += 1
+    if total == 0:
+        return None
+    return counts
+
+
+@dataclass(frozen=True)
+class PrecisionAgreement:
+    """The outcome of one observed-vs-declared precision comparison.
+
+    ``status`` is a word, not an exit code: "pass" / "red" / "abstain" /
+    "refuse". ``observed`` is None whenever there was nothing to look at --
+    it is never ``{}`` for the unmeasured case (doctrine: abstention is a
+    value, and an empty histogram is not one).
+    """
+
+    status: str
+    declared: str | None
+    observed: dict[str, int] | None
+    message: str
+
+
+def check_precision_agreement(
+    declared: str | None,
+    observed: Mapping[str, int] | None,
+) -> PrecisionAgreement:
+    """Compare the declared precision against the observed saved dtypes.
+
+    WHAT IS CLAIMED: agreement means every dtype in the observed histogram is
+    accepted for the declared precision (``_PRECISION_ACCEPTED_DTYPES``);
+    disagreement reports status "red" and its message names the declaration,
+    the full observed histogram, the total tensor count, and the per-dtype
+    counts that were rejected. Nothing declared (None) abstains -- UNMEASURED,
+    never PASS. Nothing to look at (None or empty) refuses as vacuous -- a
+    comparison over zero tensors is the ``all([]) is True`` failure and must
+    never pass. A declared precision with no accepted-dtype mapping (nvfp4:
+    declarable, no backend) refuses rather than guessing.
+
+    WHAT IS NOT CLAIMED: this reads serialized dtypes, not compute. An honest
+    fp32 run and a bf16-autocast run with fp32 master weights serialize the
+    same dtypes, so dtype inspection cannot separate them; separating compute
+    precision from master-weight storage requires in-step telemetry that the
+    artifact does not carry. This check contracts to serialize-time truth only.
+    """
+    # ORDER IS LOAD-BEARING. The absence of a DECLARATION is adjudicated before
+    # the absence of TENSORS, and the two are different states. A refusal says
+    # "a claim was made and could not be checked"; with nothing declared there is
+    # no claim, so refusing would sink every run that simply did not pass
+    # --precision. The vacuity rule (all([]) is True) applies to the denominator
+    # of a claim, and an empty denominator under no claim is UNMEASURED.
+    if declared is None:
+        # Bind the narrowed histogram ONCE rather than testing an `empty` flag
+        # twice: a bool carries no narrowing, so `observed.items()` under
+        # `if not empty` is only provably safe to a reader, not to the type
+        # checker -- and the same two calls could drift apart under edit.
+        seen = None if observed is None or not observed else dict(sorted(observed.items()))
+        return PrecisionAgreement(
+            status="abstain",
+            declared=None,
+            observed=seen,
+            message=(
+                "declared precision=None: nothing was declared, so there is no "
+                "claim to check "
+                + (
+                    "against, and 0 saved tensors were available to inspect (both sides absent)"
+                    if seen is None
+                    else f"the observed histogram {seen} against"
+                )
+                + " -- UNMEASURED, abstaining, never PASS"
+            ),
+        )
+    if observed is None or not observed:
+        return PrecisionAgreement(
+            status="refuse",
+            declared=declared,
+            observed=None,
+            message=(
+                f"precision check refused as vacuous: precision={declared!r} was "
+                f"declared but 0 saved tensors were available to inspect; a "
+                "comparison over nothing must not pass"
+            ),
+        )
+    accepted = _PRECISION_ACCEPTED_DTYPES.get(declared)
+    if accepted is None:
+        return PrecisionAgreement(
+            status="refuse",
+            declared=declared,
+            observed=dict(sorted(observed.items())),
+            message=(
+                f"declared precision={declared!r} is declarable but has no "
+                f"accepted-dtype mapping in the package plane (no backend); "
+                "refusing to guess one rather than passing by the rule of "
+                "another precision"
+            ),
+        )
+    rejected = {d: n for d, n in observed.items() if d not in accepted}
+    if rejected:
+        return PrecisionAgreement(
+            status="red",
+            declared=declared,
+            observed=dict(sorted(observed.items())),
+            message=(
+                f"declared precision={declared!r} but the saved tensors "
+                f"disagree: accepted dtypes {accepted}, observed "
+                f"{dict(sorted(observed.items()))} over "
+                f"{sum(observed.values())} tensor(s); rejected dtypes "
+                f"{dict(sorted(rejected.items()))}"
+            ),
+        )
+    return PrecisionAgreement(
+        status="pass",
+        declared=declared,
+        observed=dict(sorted(observed.items())),
+        message=(
+            f"declared precision={declared!r} agrees with the saved tensors: "
+            f"{dict(sorted(observed.items()))} all within accepted dtypes "
+            f"{accepted}"
+        ),
+    )
+
+
 class FoundationScaleSaveGate(_CallbackBase):
     """``TrainerCallback`` wiring the registered checkpoint gates into ``on_save``.
 
@@ -333,6 +569,21 @@ class FoundationScaleSaveGate(_CallbackBase):
     (``.blocked`` / ``.reports`` / ``.records``). A gate that fires and lets
     the run continue is a check that cannot fail; this callback fails closed.
 
+    The FIRST save additionally runs the observed-vs-declared precision check
+    (DELIVERABLE 1c): the dtype histogram of the just-written shards is read
+    with stdlib only and compared against ``declared_precision`` by
+    :func:`check_precision_agreement`. It rides THIS callback -- the same
+    ``.blocked`` / ``.records`` / ``should_training_stop`` machinery as the
+    registered gates -- rather than a parallel reporter, and it does not
+    depend on the checkpoint context, so it still runs on a host where the
+    context family cannot be built. It is deliberately NOT a registry gate:
+    a ``Gate`` on ``Lifecycle.FIRST_SAVE`` receives only a context built from
+    the checkpoint directory, and the declared precision lives on
+    ``TrainConfig``, not beside the checkpoint; faking that handoff through
+    ``checkpoint.save_complete``'s manifest read would make the declaration's
+    provenance depend on the artifact family being gated. What promoting it
+    would require is named in RISKS.
+
     Importable without transformers/torch: with the extra absent the base
     degrades to ``object`` and the class is driven directly in tests.
     """
@@ -341,9 +592,16 @@ class FoundationScaleSaveGate(_CallbackBase):
         self,
         registry: GateRegistry | None = None,
         context_builder: ContextBuilder | None = None,
+        declared_precision: str | None = None,
     ) -> None:
         self.registry = registry if registry is not None else REGISTRY
         self.context_builder = context_builder or _default_context_builder
+        # None is carried to the comparator AS None: it means nothing was
+        # declared and the check abstains. Defaulting it here to, say, "bf16"
+        # would silently upgrade every direct construction of this callback
+        # into a declared-precision run -- the coercion #342 forbids.
+        self.declared_precision = declared_precision
+        self.precision_agreement: PrecisionAgreement | None = None
         self.reports: list[GateReport] = []
         self.records: list[dict[str, Any]] = []
         self.blocked = False
@@ -354,6 +612,42 @@ class FoundationScaleSaveGate(_CallbackBase):
         event = Lifecycle.FIRST_SAVE if self._saves == 0 else Lifecycle.SAVE
         self._saves += 1
         ckpt_dir = Path(getattr(args, "output_dir", ".")) / f"checkpoint-{step}"
+        # Observed-vs-declared precision at the FIRST save, through this
+        # callback's blocked/records/should_training_stop state -- the existing
+        # save-gate machinery, not a side channel. It runs BEFORE the context
+        # build and independently of it: the histogram needs only the shard
+        # headers, so an unbuildable checkpoint context degrades the registered
+        # gates to UNMEASURED without silencing this check. RED and a vacuous
+        # REFUSE both stop the run; an abstention (nothing declared) does not
+        # move the verdict -- it is recorded, and the manifest reports it.
+        if event is Lifecycle.FIRST_SAVE:
+            try:
+                histogram = _dtype_histogram(ckpt_dir)
+            except Exception as exc:  # noqa: BLE001 -- unreadable shard headers
+                histogram = None
+                _mark(
+                    Step.SAVE_GATE,
+                    f"precision: could not read safetensors headers under {ckpt_dir} "
+                    f"({exc!r}); the comparison will refuse as vacuous",
+                )
+            agreement = check_precision_agreement(self.declared_precision, histogram)
+            self.precision_agreement = agreement
+            self.records.append(
+                {
+                    "event": f"{event.value}.precision",
+                    "checkpoint": str(ckpt_dir),
+                    "verdicts": {"precision.observed_vs_declared": agreement.status},
+                    "declared": agreement.declared,
+                    "observed": agreement.observed,
+                }
+            )
+            _mark(
+                Step.SAVE_GATE,
+                f"precision {agreement.status.upper()}: {agreement.message}",
+            )
+            if agreement.status in ("red", "refuse"):
+                self.blocked = True
+                control.should_training_stop = True
         try:
             ctx = self.context_builder(ckpt_dir)
         except Exception as exc:  # noqa: BLE001 -- expected on undecodable saves
@@ -700,6 +994,18 @@ def _manifest_payload(
             "profile_name": cfg.profile_name,
             "profile_path": (str(cfg.profile_path) if cfg.profile_path is not None else None),
             "dry_run": cfg.dry_run,
+            # Declared, never coerced: None here means the run did not say,
+            # and the manifest carries that absence rather than a plausible
+            # dtype (finding #342). The OBSERVED dtype histogram is a separate
+            # key, written at done-time from the first-save measurement.
+            "precision": cfg.precision,
+            "adapter": cfg.adapter,
+            "adapter_rank": cfg.adapter_rank,
+            "adapter_alpha": cfg.adapter_alpha,
+            "adapter_targets": (
+                list(cfg.adapter_targets) if cfg.adapter_targets is not None else None
+            ),
+            "adapter_dropout": cfg.adapter_dropout,
         },
         "extra": extra or {},
     }
@@ -798,6 +1104,21 @@ def _declare_checkpoint(model: Any) -> tuple[Any, dict[str, str]]:
     for a run whose shape we could not establish. #54 is the finding that says
     absence-of-key must never mint a zero.
 
+    DELIVERABLE 2e -- correctness under peft. What I found, by inspection of
+    the peft save path (the live experiment is named in RISKS): the
+    declaration path BREAKS under a peft-wrapped model. ``Trainer.save_model``
+    on a PeftModel persists ADAPTER tensors only (``adapter_model.safetensors``),
+    while ``state_dict()`` still reports every frozen base weight, now under a
+    ``base_model.model.*`` prefix. Declaring the full state-dict would assert
+    FQNs the artifact never contains, and the completeness gate would report
+    the entire base model missing on every healthy LoRA run -- a false RED,
+    the same shape as the tied-alias defect corrected above. The declaration
+    is therefore scoped to the adapter tensors when a peft wrapper is
+    detected (``model.peft_config`` present), and ``declaration.adapter_scope``
+    records which arm ran. The vacuous-adapter refusal upstream guarantees
+    that scope is non-empty when adapter mode was declared; an undetected
+    wrapper is the residual risk and is named in RISKS.
+
     Returns the declaration and a dict of audit notes for the manifest's config
     block, so the basis of every number here survives into the artifact.
     """
@@ -807,11 +1128,23 @@ def _declare_checkpoint(model: Any) -> tuple[Any, dict[str, str]]:
     state = model.state_dict()
     names = set(state)
     tied = _tied_aliases(model, names)
-    declared = names - tied
+    if getattr(model, "peft_config", None) is not None:
+        # peft persists adapters only (see 2e in the docstring): the honest
+        # denominator is the adapter subset of the state dict, not the frozen
+        # base weights the artifact will never contain.
+        declared = {n for n in names if ".lora_" in n} - tied
+        adapter_scope = (
+            f"peft-wrapped model: declared {len(declared)} adapter tensor(s) "
+            "only; the saved artifact carries adapter weights, not base weights"
+        )
+    else:
+        declared = names - tied
+        adapter_scope = "full model (no peft wrapper detected on model.peft_config)"
     notes = {
         "declaration.source": "model.state_dict() in memory, before the first save",
         "declaration.state_dict_keys": str(len(names)),
         "declaration.tied_excluded": ",".join(sorted(tied)) or "(none)",
+        "declaration.adapter_scope": adapter_scope,
     }
 
     config = getattr(model, "config", None)
@@ -1058,12 +1391,39 @@ def train(cfg: TrainConfig) -> int:
 
     Returns 0/5/95/96 per the exit-code contract. Never raises for an
     expected condition; unexpected trainer exceptions adjudicate as RED.
+
+    ``precision='nvfp4'`` is REFUSED (96) before anything runs. That refusal
+    is the choice, made deliberately over a seam: transformers has no
+    TrainingArguments flag for nvfp4 and this loop wires no quantization
+    seam of its own, so the only executable interpretation today would be
+    "train at the loader's default dtype and claim nvfp4" -- the silent
+    fallback that is finding #342's defect class and the worst possible
+    outcome. An explicitly-named nvfp4 seam would name something that does
+    not exist yet; a refusal names exactly what is true. The {full, LoRA} x
+    {bf16, nvfp4} matrix keeps its nvfp4 cells empty until a real backend
+    lands.
     """
     _mark(
         Step.START,
         f"model={cfg.model} dataset={cfg.dataset} "
         f"output_dir={cfg.output_dir} dry_run={cfg.dry_run}",
     )
+
+    if cfg.precision == "nvfp4":
+        _mark(
+            Step.REFUSE,
+            "precision='nvfp4' is declared, but the package plane has no nvfp4 "
+            "backend yet: no TrainingArguments flag exists and no quantization "
+            "seam is wired in this loop. Refusing rather than silently "
+            "training at another dtype -- a silent bf16/fp32 fallback is "
+            "finding #342's defect class",
+        )
+        _emit_manifest(
+            cfg,
+            stage="refused",
+            extra={"exit": EXIT_REFUSE, "precision": "nvfp4"},
+        )
+        return EXIT_REFUSE
 
     # --- 1. Topology (validated on construction) --------------------------
     try:
@@ -1203,6 +1563,98 @@ def train(cfg: TrainConfig) -> int:
         f"{len(tokenized)} examples tokenized (split={split}, max_length={TOKENIZE_MAX_LENGTH})",
     )
 
+    # --- Adapters (LoRA), wrapped HERE -- upstream of the declaration -------
+    #
+    # Wrapping happens before _declare_checkpoint because under an adapter the
+    # saved artifact holds ADAPTER tensors, and the declaration is the
+    # denominator the save gates measure the artifact against (see 2e in the
+    # _declare_checkpoint docstring).
+    adapter_notes: dict[str, str] = {}
+    if cfg.adapter is not None:
+        # __post_init__ validates adapter against ADAPTERS, so "lora" is the
+        # only value reachable -- but the branch is explicit, so a future
+        # accepted mode cannot silently reuse the LoRA wiring.
+        if cfg.adapter == "lora":
+            try:
+                from peft import LoraConfig, get_peft_model
+            except ImportError:
+                # REFUSE, never fall through: a run the operator believes is
+                # LoRA but is secretly full-FT is a catastrophic silent failure.
+                _mark(
+                    Step.REFUSE,
+                    f"adapter='lora' is declared but the optional dependency "
+                    f"'peft' is not installed; install with {EXTRA_HINT}. "
+                    "Refusing rather than silently running a full fine-tune",
+                )
+                return EXIT_REFUSE
+            # Unset knobs are OMITTED from the LoraConfig, not defaulted here:
+            # peft's own defaults then apply, and this config invents no value
+            # the operator did not state.
+            lora_config: dict[str, Any] = {"r": cfg.adapter_rank}
+            if cfg.adapter_alpha is not None:
+                lora_config["lora_alpha"] = cfg.adapter_alpha
+            if cfg.adapter_targets is not None:
+                lora_config["target_modules"] = list(cfg.adapter_targets)
+            if cfg.adapter_dropout is not None:
+                lora_config["lora_dropout"] = cfg.adapter_dropout
+            try:
+                model = get_peft_model(model, LoraConfig(**lora_config))
+            except Exception as exc:  # noqa: BLE001 -- construction failure is RED
+                _mark(Step.RED, f"peft wrapping of adapter='lora' failed: {exc!r}")
+                return EXIT_RED
+            # MEASURE what the adapter attached to. LoRA parameters are named
+            # <module>.lora_A.<adapter>.weight / <module>.lora_B.<adapter>.weight,
+            # so the attached module set is the distinct prefixes. A target
+            # pattern matching zero modules leaves it EMPTY while every gate
+            # downstream stayed green -- this codebase has shipped exactly that
+            # LoRA defect once. Empty is REFUSE (96), and it is a real measured
+            # zero, not an abstention: the set was enumerated to get it.
+            lora_param_names = [name for name, _ in model.named_parameters() if ".lora_" in name]
+            attached_modules = sorted({name.split(".lora_")[0] for name in lora_param_names})
+            if not attached_modules:
+                _mark(
+                    Step.ADAPTER,
+                    f"adapter='lora' attached to 0 modules (targets="
+                    f"{list(cfg.adapter_targets) if cfg.adapter_targets is not None else None!r}); "
+                    "refusing as vacuous -- an adapter that targets nothing "
+                    "trains nothing while looking like it trained",
+                )
+                _emit_manifest(
+                    cfg,
+                    stage="refused",
+                    extra={
+                        "exit": EXIT_REFUSE,
+                        "adapter": "lora",
+                        "attached_modules": 0,
+                    },
+                )
+                return EXIT_REFUSE
+            trainable = sum(int(p.numel()) for _, p in model.named_parameters() if p.requires_grad)
+            total_params = sum(int(p.numel()) for _, p in model.named_parameters())
+            adapter_notes = {
+                "adapter.mode": "lora",
+                "adapter.rank": str(cfg.adapter_rank),
+                "adapter.alpha": str(cfg.adapter_alpha),
+                "adapter.targets_declared": (
+                    ",".join(cfg.adapter_targets)
+                    if cfg.adapter_targets is not None
+                    else "(peft defaults)"
+                ),
+                "adapter.attached_modules": str(len(attached_modules)),
+                "adapter.resolved_targets": ",".join(attached_modules),
+                "adapter.trainable_params": str(trainable),
+                "adapter.total_params": str(total_params),
+            }
+            _mark(
+                Step.ADAPTER,
+                f"lora attached to {len(attached_modules)} module(s); "
+                f"{trainable}/{total_params} parameters trainable; undeclared "
+                "knobs left to peft defaults",
+            )
+        else:  # pragma: no cover -- __post_init__ refuses every other value
+            _mark(Step.REFUSE, f"adapter={cfg.adapter!r} has no wiring in the thin path")
+            return EXIT_REFUSE
+
     # Derive the checkpoint denominator HERE -- from the model in memory, once,
     # before a single tensor has been written. Doing it after a save would read
     # the denominator off the artifact it is supposed to adjudicate, and the file
@@ -1226,6 +1678,11 @@ def train(cfg: TrainConfig) -> int:
         )
     else:
         _mark(Step.MANIFEST, f"declared checkpoint: {decl_notes['declaration.basis']}")
+    # Adapter measurements travel to the manifest through the SAME notes
+    # channel as the declaration basis: they are measured facts about the run
+    # (EffectiveValue source="measured"), alongside the declaration they
+    # rescoped under peft.
+    manifest_notes = {**decl_notes, **adapter_notes}
 
     # --- 6. Trainer + save-gate callback -----------------------------------
     #
@@ -1262,6 +1719,20 @@ def train(cfg: TrainConfig) -> int:
         "report_to": [],
         "ddp_find_unused_parameters": False,
     }
+    # The declared precision is wired into the flags EXPLICITLY (1b). fp32 sets
+    # both off rather than omitting them: an environment-leaning default behind
+    # TrainingArguments must not move the run off its declaration. None adds
+    # NOTHING -- no flag, no claim, no coercion -- and the manifest records the
+    # absence. nvfp4 never reaches here (refused at START). If a future
+    # transformers drops bf16/fp16, the `dropped` refusal below catches it
+    # rather than silently training off-declaration.
+    if cfg.precision == "bf16":
+        kwargs["bf16"] = True
+    elif cfg.precision == "fp16":
+        kwargs["fp16"] = True
+    elif cfg.precision == "fp32":
+        kwargs["bf16"] = False
+        kwargs["fp16"] = False
     accepted = set(inspect.signature(TrainingArguments.__init__).parameters)
     if "save_safetensors" in accepted:
         kwargs["save_safetensors"] = True
@@ -1287,7 +1758,9 @@ def train(cfg: TrainConfig) -> int:
     # same defect one plane up: a code outside the namespace is a verdict the
     # caller cannot interpret. A missing dependency is a REFUSE wherever it is
     # discovered, so the discovery site is wrapped rather than trusted.
-    gate_callback = FoundationScaleSaveGate()
+    # declared_precision goes in as-is: None stays None and the first-save
+    # precision check abstains instead of passing a run that said nothing.
+    gate_callback = FoundationScaleSaveGate(declared_precision=cfg.precision)
     # `list[Any]`, not `[gate_callback]` inline. The TYPE_CHECKING block at the
     # top of this module pins FoundationScaleSaveGate's base to `object` so the
     # typecheck does not depend on whether the optional extra is installed --
@@ -1360,7 +1833,7 @@ def train(cfg: TrainConfig) -> int:
     # anything a save gate reads has to exist before a save can happen. The
     # `done` emission below still runs and overwrites this one with the final
     # exit -- that is intended, since the run's outcome is only knowable then.
-    _emit_manifest(cfg, stage="train", declared=declared_ckpt, notes=decl_notes)
+    _emit_manifest(cfg, stage="train", declared=declared_ckpt, notes=manifest_notes)
     _mark(Step.RUN, "training starts")
     try:
         trainer.train()
@@ -1419,7 +1892,7 @@ def train(cfg: TrainConfig) -> int:
             stage="done",
             extra={"exit": EXIT_UNMEASURED},
             declared=declared_ckpt,
-            notes=decl_notes,
+            notes=manifest_notes,
         )
         return EXIT_UNMEASURED
     _mark(Step.SAVED, f"final checkpoint -> {final_dir} ({len(shards)} safetensors shard(s))")
@@ -1436,7 +1909,7 @@ def train(cfg: TrainConfig) -> int:
             stage="done",
             extra={"exit": EXIT_UNMEASURED},
             declared=declared_ckpt,
-            notes=decl_notes,
+            notes=manifest_notes,
         )
         return EXIT_UNMEASURED
     _mark(Step.ADJUDICATE, report.render())
@@ -1447,7 +1920,7 @@ def train(cfg: TrainConfig) -> int:
             stage="done",
             extra={"exit": EXIT_UNMEASURED},
             declared=declared_ckpt,
-            notes=decl_notes,
+            notes=manifest_notes,
         )
         return EXIT_UNMEASURED
     rc = EXIT_RED if report.blocking else EXIT_PASS
@@ -1465,6 +1938,28 @@ def train(cfg: TrainConfig) -> int:
             "UNMEASURED: the run trained and saved, but no training log ever "
             "carried a loss, so the objective gates had nothing to read"
         )
-    _emit_manifest(cfg, stage="done", extra={"exit": rc}, declared=declared_ckpt, notes=decl_notes)
+    # Declared precision and the OBSERVED dtype histogram are SEPARATE keys
+    # (1d): the whole point is that a reader can see when they disagreed,
+    # which requires neither to be collapsed into the other. The histogram is
+    # measured at the FIRST save by the save-gate callback and may be absent
+    # (no save ever happened) -- recorded as None then, never as {}.
+    agreement = gate_callback.precision_agreement
+    done_extra: dict[str, Any] = {
+        "exit": rc,
+        "precision_declared": cfg.precision,
+        "precision_observed_dtype_histogram": (
+            json.dumps(agreement.observed, sort_keys=True)
+            if agreement is not None and agreement.observed is not None
+            else None
+        ),
+        "precision_verdict": agreement.status if agreement is not None else None,
+    }
+    _emit_manifest(
+        cfg,
+        stage="done",
+        extra=done_extra,
+        declared=declared_ckpt,
+        notes=manifest_notes,
+    )
     _mark(Step.DONE, done)
     return rc
