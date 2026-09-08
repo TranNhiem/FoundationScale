@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import pkgutil
 import sys
 from collections.abc import Mapping
 from typing import Any, cast
@@ -26,10 +27,28 @@ from foundationscale.rl import (
 
 # Per MODULE, not per package: stage 2 split implementations out of
 # ``interfaces`` into ``losses`` and ``policy``, and a torch import can creep
-# into any of the three. Asserting over the package alone would leave two of
-# three modules in no denominator -- and the modules that hold the arithmetic
-# are exactly the two that would have dropped out.
+# into any of them. Asserting over the package alone would leave all but one
+# module in no denominator -- and the modules that hold the arithmetic are
+# exactly the ones that would have dropped out.
+#
+# This dict is a DENOMINATOR, not a snapshot of the modules that existed when
+# it was written. It stayed at three entries when stage 3a added ``rollout``
+# and ``advantage``: both are torch-free today, but nothing held them there,
+# which is the same "grew without its declaration growing" shape this suite
+# exists to catch. ``test_every_rl_module_is_in_the_torch_free_denominator``
+# below refuses if any ``foundationscale.rl`` module is missing an entry, so
+# the next module to land cannot repeat it.
 TORCH_FREE_MODULES = {
+    "foundationscale.rl.advantage": (
+        "AdvantageConfigRefusal",
+        "AdvantageFn",
+        "AdvantageRefusal",
+        "AdvantageResult",
+        "GeneralisedAdvantageEstimation",
+        "GroupNormalisedAdvantage",
+        "LeaveOneOutAdvantage",
+        "RewardStats",
+    ),
     "foundationscale.rl.interfaces": (
         "BatchRefusal",
         "ExperienceBatch",
@@ -43,6 +62,22 @@ TORCH_FREE_MODULES = {
     ),
     "foundationscale.rl.losses": ("DPOLoss", "SFTLoss"),
     "foundationscale.rl.policy": ("PolicyPair", "PolicyRoleRefusal"),
+    "foundationscale.rl.rollout": (
+        "CapabilityRefusal",
+        "RolloutSource",
+        "SourceCapabilities",
+        "check_capabilities",
+        "verify_generated",
+    ),
+    "foundationscale.rl.weightsync": (
+        "SyncCapabilities",
+        "SyncCapabilityRefusal",
+        "SyncReport",
+        "SyncReportRefusal",
+        "WeightSync",
+        "check_sync_capabilities",
+        "verify_sync",
+    ),
 }
 
 
@@ -434,3 +469,35 @@ def test_module_imports_with_torch_absent(module_name: str) -> None:
         sys.modules.pop(module_name, None)
         if saved is not None:
             sys.modules[module_name] = saved
+
+
+def test_every_rl_module_is_in_the_torch_free_denominator() -> None:
+    # The sweep above can only measure what TORCH_FREE_MODULES lists, so the
+    # dict is itself a claim: "these are all the modules in the package".
+    # Measure that claim against the package rather than trusting it. Stage 3a
+    # landed two modules and this dict did not grow; a module that is torch-free
+    # by luck and in no denominator is not a covered module.
+    package = importlib.import_module("foundationscale.rl")
+    present = {
+        f"foundationscale.rl.{info.name}"
+        for info in pkgutil.iter_modules(package.__path__)
+        if not info.name.startswith("_")
+    }
+    assert present, (
+        "found 0 submodules of foundationscale.rl: the enumeration is broken, "
+        "and an empty denominator makes this control vacuously pass -- which "
+        "is the exact failure it exists to catch"
+    )
+    unmeasured = sorted(present - set(TORCH_FREE_MODULES))
+    assert not unmeasured, (
+        f"{len(unmeasured)} of {len(present)} foundationscale.rl modules sit in "
+        f"no torch-free denominator: {', '.join(unmeasured)}. Add each to "
+        f"TORCH_FREE_MODULES with the public names it must expose under a "
+        f"blocked torch import; being torch-free today is not being held there"
+    )
+    stale = sorted(set(TORCH_FREE_MODULES) - present)
+    assert not stale, (
+        f"{len(stale)} of {len(TORCH_FREE_MODULES)} declared torch-free modules "
+        f"do not exist: {', '.join(stale)}. A declaration naming a module that "
+        f"is gone reports coverage it cannot deliver"
+    )

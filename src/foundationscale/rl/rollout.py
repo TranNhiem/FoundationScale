@@ -7,9 +7,11 @@ FoundationScale seam -- it is the one genuinely new edge in the design --
 so the core deliberately knows nothing about which engine sits behind it,
 and whichever engine does is an adapter concern per design section 5. No
 algorithm lives here either: the policy-gradient algorithm that is this
-contract's first consumer is stage 3's other half, and stage 3 is gated on
-the transport measurement (design section 7, item 3), which remains
-UNMEASURED.
+contract's first consumer is stage 3's other half. The transport
+measurement that gated it (design section 7, item 3) has since been taken
+and returned CLEAR_WITH_ABSTENTIONS: no single transport wins, so weight
+movement is specified as a sibling contract that declares the transport it
+actually ran, and not as a capability of this one.
 
 The handshake is split in two on purpose. ``SourceCapabilities`` and
 :func:`check_capabilities` are the CLAIM half, run once at setup: the
@@ -25,9 +27,11 @@ that claims a column it never delivers is the rollout-side mirror of that
 reading. A quantity that is not present sits in no denominator, and
 nothing downstream may read as though it were.
 
-WHAT THIS MODULE DOES NOT CLAIM: anything about throughput, staleness, or
-engine behaviour at scale (design section 3.3 lists all three UNMEASURED
-off Phase 2's ten-step, one-GPU run); anything about the scoring edge --
+WHAT THIS MODULE DOES NOT CLAIM: anything about generation throughput,
+staleness, or engine behaviour at scale (design section 3.3 lists all three
+UNMEASURED off Phase 2's ten-step, one-GPU run -- the section-7 item-3
+measurement named above is weight transfer, a different quantity, and it
+does not carry over here); anything about the scoring edge --
 who turns completions into rewards is the open edge recorded in design
 section 4, and this contract neither closes it nor papers over it; and any
 device or dtype semantics -- a batch is a plain columnar container and no

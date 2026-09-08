@@ -214,6 +214,14 @@ PENDING_ENROLMENT: dict[str, str] = {
         "survived a degenerate group -- a mutation to the rows bookkeeping misattributes "
         "gradients to the wrong sequences while every reported number stays plausible"
     ),
+    "src/foundationscale/rl/weightsync.py": (
+        "the accounting that makes a partial weight sync unrepresentable: transferred and "
+        "skipped must PARTITION offered exactly, a failed rank must not be summed away into "
+        "a pass, and verify_sync must refuse a report that moved nothing rather than return "
+        "0 as a denominator. Every one of those is an inversion that reads as a healthy "
+        "sync -- a stale generate-view produces plausible completions, so nothing "
+        "downstream notices the weights never arrived"
+    ),
 }
 
 OUT_OF_SCOPE: dict[str, str] = {

@@ -1,4 +1,4 @@
-"""Reinforcement-learning contracts (Phase 3, stages 1-2).
+"""Reinforcement-learning contracts for Phase 3.
 
 Design section 9 of ``validation_campaigns/nemo_rl_baseline/PHASE3_DESIGN.md``:
 
@@ -10,12 +10,23 @@ Design section 9 of ``validation_campaigns/nemo_rl_baseline/PHASE3_DESIGN.md``:
 * stage 3a -- ``RolloutSource`` and ``AdvantageFn``, the two contracts that
   need no distributed measurement to specify.
 
-Section 3's remaining contracts -- ``Algorithm`` and ``WeightSync`` -- are
-stage 3b and deliberately absent, because both are shaped by the section-7
-item-3 weight-transfer measurement, which has not been taken. Writing them
-first would be asserting a cost model rather than measuring one. Nothing here
-has been benchmarked against the reference implementation; design section 10
-states what is not established.
+* stage 3b -- ``WeightSync``, the sibling edge that moves weights from the
+  training view to the generation view.
+
+``WeightSync`` could only be specified once the section-7 item-3
+weight-transfer measurement was taken. It has been, and it returned
+CLEAR_WITH_ABSTENTIONS: no single transport wins -- resharding and a
+collective beat a full copy per byte at the large end, the full copy wins at
+the small per-call floor, and one cell was withheld for spread over
+tolerance. So the contract fixes no transport; the realization chooses one at
+construction and the report evidences which one ran. Deliberately not
+restated here: the per-transport ratios, which are a measurement artifact and
+belong in the campaign record, not in a docstring that no gate re-measures.
+
+Section 3's one remaining contract is ``Algorithm``, the policy-gradient
+binding that consumes all of the above. Nothing here has been benchmarked
+against the reference implementation; design section 10 states what is not
+established.
 
 The public import path is this package. ``SFTLoss`` moved from ``interfaces``
 to ``losses`` when stage 2 split contracts from implementations, and that move
@@ -54,6 +65,15 @@ from foundationscale.rl.rollout import (
     check_capabilities,
     verify_generated,
 )
+from foundationscale.rl.weightsync import (
+    SyncCapabilities,
+    SyncCapabilityRefusal,
+    SyncReport,
+    SyncReportRefusal,
+    WeightSync,
+    check_sync_capabilities,
+    verify_sync,
+)
 
 __all__ = (
     "AdvantageConfigRefusal",
@@ -79,7 +99,14 @@ __all__ = (
     "SFTLoss",
     "SourceCapabilities",
     "SupervisionRefusal",
+    "SyncCapabilities",
+    "SyncCapabilityRefusal",
+    "SyncReport",
+    "SyncReportRefusal",
+    "WeightSync",
     "build_objective_gate_context",
     "check_capabilities",
+    "check_sync_capabilities",
     "verify_generated",
+    "verify_sync",
 )
