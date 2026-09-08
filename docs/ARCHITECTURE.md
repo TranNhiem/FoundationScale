@@ -274,12 +274,12 @@ conftest carries the skip guard). Beside the package:
 |---|---|
 | `tools/` | 9514 Python LOC of CLIs over the package: `emit_run_manifest`, `live_save_gate`, `real_checkpoint_probe`, `preflight/`, `mutate`, `census`. |
 | `checks/` | Standalone repository gates: countables drift, packaging reachability, `bash -lc` sweep, workflow YAML audit. |
-| `launchers/` | The estate launch plane (10521 shell LOC) plus two bash contract suites and Python helpers (lora target census, peft override replay) — 1615 Python LOC. |
+| `launchers/` | The estate launch plane (10532 shell LOC) plus two bash contract suites and Python helpers (lora target census, peft override replay) — 1615 Python LOC. |
 | `validation_campaigns/h100_validation/` | The experimental H100 harness (33385 Python, 6414 shell LOC): build script, `gate_*.py`, `patch_*.py`, its own tests, and the published `h100/` deliverables. **Evidence campaigns, not framework code — read as lab notebooks.** |
 | `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 136009 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 136363 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 

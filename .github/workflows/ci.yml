@@ -263,10 +263,34 @@ jobs:
       # this step is what states it out loud.
       #
       # --self-test FIRST and as a separate step, for the packaging reason given
-      # further down: the controls are the licence to believe the verdict. Twelve
-      # of them here -- eight MUST_FIRE, four MUST_PASS -- including both arms of
-      # the in-tree/out-of-tree report-key split, because an out-of-tree row must
-      # be excludable without ever becoming a way to launder an in-tree one.
+      # further down: the controls are the licence to believe the verdict.
+      # Sixteen of them here -- eleven MUST_FIRE, five MUST_PASS -- including both
+      # arms of the in-tree/out-of-tree report-key split, because an out-of-tree
+      # row must be excludable without ever becoming a way to launder an in-tree
+      # one.
+      #
+      # Four of the sixteen guard FRESHNESS (#318). The gate used to adjudicate
+      # coverage.json without ever asking whether it describes the CURRENT source:
+      # a report generated before the tree grew read CLEAR, because the modules
+      # that grew were compared against their own older statement counts. That is
+      # why the order above is load-bearing in a second way -- the report must be
+      # regenerated in THIS job, not carried in. Freshness is decided per file by
+      # comparing the report's line sets against coverage's own parse of the file
+      # on disk, and a stale report is UNMEASURED (95), never RED: statement sets
+      # can legitimately differ across interpreter versions, so "we cannot tell"
+      # must not be published as "it is broken" (the #83/#111/#229 class).
+      #
+      # Those four drive the comparison through an INJECTED parser resolver, not
+      # the real coverage.parser, because launchers/test_checks_gates.sh runs this
+      # same --self-test under `python3 -S`: site-packages is unimportable there,
+      # deliberately, so the verdict cannot depend on what happens to be installed
+      # (the #83/#111/#229 class again). A control that needs an optional
+      # third-party import is not a control in that harness -- it reports
+      # UNMEASURED and shrinks the denominator. One of the four injects an ABSENT
+      # resolver over the same report a sibling certifies CLEAR, so "the parser is
+      # missing" is proven REFUSED rather than waived, with the resolver as the
+      # only variable. The real parser is still exercised end to end by the step
+      # below, over the report this job regenerated.
       - name: Coverage floor controls (MUST_FIRE/MUST_PASS)
         run: python3 checks/coverage_floor.py --self-test
       - name: Per-module coverage floors (a total can be subsidised)

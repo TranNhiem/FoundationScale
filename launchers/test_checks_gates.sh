@@ -920,17 +920,28 @@ fi
 # --- MUST_PASS: coverage_floor self-test (checks/coverage_floor.py) --------
 # MEASURED: `python3 -S checks/coverage_floor.py --self-test` exits rc=0 and
 # its last line is the declared
-#   SELF-TEST DENOMINATOR: 12 of 12 controls behaved; ...
+#   SELF-TEST DENOMINATOR: 16 of 16 controls behaved; ...
 # rc=0 alone is NOT the measurement: a control set that shrank to one control
 # would still be capable of exiting 0. The trailing "N of N" tally is parsed,
-# required to be non-empty and self-consistent, and held at N >= 12 -- the 8
-# MUST_FIRE + 4 MUST_PASS controls present when this leg was written. A
+# required to be non-empty and self-consistent, and held at N >= 16 -- the 11
+# MUST_FIRE + 5 MUST_PASS controls present when this leg was written. A
 # wording change reds THIS leg and must update it in the same commit.
+#
+# The floor moved 12 -> 16 when the freshness arm landed (#318). Four of the
+# sixteen drive freshness through an INJECTED parser resolver, not the real
+# coverage.parser: this leg runs the gate under `python3 -S`, deliberately, so
+# that its verdict cannot depend on what happens to be installed. A control
+# that needs an optional third-party import is not a control here -- it reports
+# UNMEASURED and shrinks the denominator, which is exactly what the tally is
+# built to catch. The resolver seam keeps the ghost/orphan comparison -- the
+# thing actually under test -- hermetic, and one of the four injects an absent
+# resolver so "coverage.parser is missing" is proven REFUSED rather than
+# waived, over a report that is CLEAR when the resolver is present.
 if [ ! -r "checks/coverage_floor.py" ]; then
   f252_msg="MUST_PASS FAILED (coverage_floor self-test) UNMEASURED:"
   f252_msg="$f252_msg checks/coverage_floor.py is not readable -- unreadable is not"
-  f252_msg="$f252_msg empty; the gate cannot run, so 0 of its declared denominator of 12"
-  f252_msg="$f252_msg controls (8 MUST_FIRE + 4 MUST_PASS) were measured. An unreadable"
+  f252_msg="$f252_msg empty; the gate cannot run, so 0 of its declared denominator of 16"
+  f252_msg="$f252_msg controls (11 MUST_FIRE + 5 MUST_PASS) were measured. An unreadable"
   f252_msg="$f252_msg measuring unit is failed closed, never skipped."
   no "$f252_msg"
 else
@@ -943,15 +954,15 @@ else
     sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved;.*/\2/p')
   if [ "$f252_rc" -ne 0 ]; then
     f252_msg="MUST_PASS FAILED (coverage_floor self-test): rc=$f252_rc over the gate's"
-    f252_msg="$f252_msg declared denominator of 12 controls (8 MUST_FIRE + 4 MUST_PASS);"
-    f252_msg="$f252_msg 0 of 12 controls were accepted as behaved, so the leg fails closed."
+    f252_msg="$f252_msg declared denominator of 16 controls (11 MUST_FIRE + 5 MUST_PASS);"
+    f252_msg="$f252_msg 0 of 16 controls were accepted as behaved, so the leg fails closed."
     f252_msg="$f252_msg Output: $(printf '%s\n' "$f252_out" | tr '\n' ' ')"
     no "$f252_msg"
   elif [ -z "$f252_have" ] || [ -z "$f252_want" ]; then
     f252_msg="MUST_PASS FAILED (coverage_floor self-test) UNMEASURED: rc=0 but the last"
     f252_msg="$f252_msg line carries no parseable 'SELF-TEST DENOMINATOR: N of N controls"
     f252_msg="$f252_msg behaved' tally -- the measuring unit printed no denominator, so 0 of"
-    f252_msg="$f252_msg 12 declared controls are auditable here. Unparseable is not passing;"
+    f252_msg="$f252_msg 16 declared controls are auditable here. Unparseable is not passing;"
     f252_msg="$f252_msg fail closed and update this leg in the same commit as the wording"
     f252_msg="$f252_msg change. Last line: $f252_last"
     no "$f252_msg"
@@ -959,19 +970,19 @@ else
     f252_msg="MUST_PASS FAILED (coverage_floor self-test): denominator $f252_have of"
     f252_msg="$f252_msg $f252_want controls is not self-consistent -- the self-test examined"
     f252_msg="$f252_msg fewer controls than it claims to have, over the declared denominator"
-    f252_msg="$f252_msg of 12. The inconsistency is failed closed because rc=0 cannot certify"
+    f252_msg="$f252_msg of 16. The inconsistency is failed closed because rc=0 cannot certify"
     f252_msg="$f252_msg a partial control set."
     no "$f252_msg"
-  elif [ "$f252_have" -lt 12 ]; then
+  elif [ "$f252_have" -lt 16 ]; then
     f252_msg="MUST_PASS FAILED (coverage_floor self-test): control set shrank to"
-    f252_msg="$f252_msg $f252_have of $f252_want, below the measured floor of 12 controls"
-    f252_msg="$f252_msg (8 MUST_FIRE + 4 MUST_PASS). A shortened self-test can still exit 0,"
+    f252_msg="$f252_msg $f252_have of $f252_want, below the measured floor of 16 controls"
+    f252_msg="$f252_msg (11 MUST_FIRE + 5 MUST_PASS). A shortened self-test can still exit 0,"
     f252_msg="$f252_msg so the floor is the control and this leg fails closed."
     no "$f252_msg"
   else
     f252_msg="MUST_PASS coverage_floor self-test: rc=0 under python3 -S, denominator"
-    f252_msg="$f252_msg $f252_have of $f252_want controls (>= the measured floor of 12,"
-    f252_msg="$f252_msg 8 MUST_FIRE + 4 MUST_PASS): $f252_last"
+    f252_msg="$f252_msg $f252_have of $f252_want controls (>= the measured floor of 16,"
+    f252_msg="$f252_msg 11 MUST_FIRE + 5 MUST_PASS): $f252_last"
     ok "$f252_msg"
   fi
 fi

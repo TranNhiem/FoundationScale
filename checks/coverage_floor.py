@@ -47,17 +47,28 @@ THE CLAIM
     exception, both arms carry controls, and an out-of-tree row cannot
     launder an in-tree one -- a report carrying both is still RED.
 
+    A report is also required to describe the SOURCE AS IT IS NOW. Coverage
+    line numbers are a line map: if the tree gained statements after the
+    report was written, the new statements sit in no denominator, and every
+    percentage in the file is a claim about a tree that no longer exists.
+    Such a report is STALE, and stale is UNMEASURED -- never CLEAR, because
+    "CLEAR" would certify modules the report cannot see, and never RED,
+    because "RED" would convict modules the report cannot see either.
+
 EXIT CODES
     0   CLEAR -- every tracked module was measured inside
         [floor, floor + SLACK]; the per-module claim holds with every unit
-        of its denominator accounted for.
+        of its denominator accounted for, and the report's line map still
+        matches the working tree.
     5   RED -- a module measured below its floor, a floor went stale (see
         SLACK), or the report measured an IN-TREE file git does not track.
     95  UNMEASURED -- no report, an unreadable or non-JSON report, an empty
         "files" mapping (zero modules is NOT "all modules pass"), a
-        denominator git could not supply, or tracked modules the report
-        never saw. UNMEASURED outranks RED: "we do not know" must not be
-        reported as "we know it is broken", nor laundered into clean.
+        denominator git could not supply, tracked modules the report never
+        saw, a statement map that cannot be recomputed from the current
+        source, or a report whose line map predates the working tree.
+        UNMEASURED outranks RED: "we do not know" must not be reported as
+        "we know it is broken", nor laundered into clean.
     96  REFUSE -- a --self-test control missed its declared outcome. A gate
         whose controls did not fire has not been certified and must not be
         trusted to report on anyone.
@@ -80,16 +91,27 @@ FLOORS AND SLACK
     than leaving the tree red under the `ruff format --check` CI runs.
     Floors are never invented by hand -- the table is empty until --update
     fills it from evidence -- and --update writes it in two labelled halves.
+    A stale report is not evidence: `--update` refuses to write floors from
+    it, because rewriting policy from a line map of another tree would
+    institutionalise the exact defect this gate exists to catch.
     Entries BELOW the default are DEBT, not policy:
     each one names a module this repository does not adequately test, and
     the floor's only job there is to stop the number sliding while the tests
     get written. Entries ABOVE the default band are the ratchet.
 
 CONTROLS (--self-test)
-    Twelve, run in a temp dir against synthetic in-memory reports with an
+    Sixteen, run in a temp dir against synthetic in-memory reports with an
     INJECTED tracked set and an INJECTED repo root, so the controls are
     hermetic and cannot pass or fail because of what happens to be
-    committed or where the checkout lives:
+    committed or where the checkout lives. The twelve floor controls keep
+    freshness OFF because their fabricated line numbers isolate the FLOOR
+    axis and would all go stale on purpose. The four freshness controls are
+    built the other way: the statement set they compare against is an
+    INJECTED constant delivered through an injected parser RESOLVER, so
+    they measure the ghost/orphan comparison -- the thing this gate owns --
+    and never coverage's parser, which is what lets them stay hermetic
+    under `python3 -S`, the harness invocation under which site-packages,
+    and coverage with it, is not importable:
       MUST_FIRE  a module one point below its floor            ->  5
       MUST_FIRE  a module far above floor + SLACK (stale)      ->  5
       MUST_FIRE  a tracked module absent from the report       -> 95
@@ -102,28 +124,39 @@ CONTROLS (--self-test)
       MUST_PASS  every module at floor + SLACK exactly         ->  0
       MUST_PASS  an out-of-tree row on an otherwise clean tree ->  0
       MUST_PASS  an absolute path UNDER the repo root, tracked ->  0
+      MUST_FIRE  freshness: ghost line the report names        -> 95
+      MUST_FIRE  freshness: current statement the report omits -> 95
+      MUST_PASS  freshness: fresh map, one line excluded-only  ->  0
+      MUST_FIRE  freshness: same fresh map, parser unavailable -> 95
     The first two MUST_PASS controls pin both band boundaries as INCLUSIVE.
-    The last two pin the exclusion axis: one proves the tmpdir shape is
+    The next two pin the exclusion axis: one proves the tmpdir shape is
     excluded rather than RED, the other proves an absolute in-tree path is
     normalised onto its tracked relative name instead of counting twice
     (once as drift, once as UNMEASURED). Control 8 is the drill that keeps
-    the exclusion from becoming a hole. If any control does not produce its
-    declared outcome, the gate prints which one and exits 96: an
-    uncertified verdict is a vacuous one.
+    the exclusion from becoming a hole. The freshness MUST_PASS proves the
+    arm is not a blanket refusal -- a report naming exactly the current
+    statements, with one pragma-excluded line omitted from both lists, is
+    still CLEAR -- and the control right after it proves the very same
+    report is REFUSED as UNMEASURED when no parser is available, so
+    absence of coverage is attributed to the resolver and never laundered
+    into either verdict. If any control does not produce its declared
+    outcome, the gate prints which one and exits 96: an uncertified
+    verdict is a vacuous one.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import math
 import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, NamedTuple, NoReturn
+from typing import Any, NamedTuple, NoReturn, Protocol, cast
 
 # Every tracked module was measured and sits inside [floor, floor + SLACK]: the per-module
 # claim actually holds, over the full denominator.
@@ -133,8 +166,9 @@ EXIT_CLEAR = 0
 # defects. Out-of-tree rows (a test's own tmpdir scratch) are excluded and named, not RED.
 EXIT_RED = 5
 # The gate could not measure: no report, an unreadable report, an empty "files", no git
-# denominator, or tracked modules the report never saw. Outranks RED -- "we do not know" must
-# not be reported as "we know it is broken", nor as clean.
+# denominator, tracked modules the report never saw, a statement map it could not recompute, or
+# a report whose line map predates the working tree. Outranks RED -- "we do not know" must not
+# be reported as "we know it is broken", nor as clean.
 EXIT_UNMEASURED = 95
 # A --self-test control did not produce its declared outcome. An uncertified gate has not
 # earned the right to report on anyone.
@@ -231,6 +265,22 @@ class GateArgumentParser(argparse.ArgumentParser):
         raise SystemExit(EXIT_CLEAR if status == 0 else EXIT_REFUSE)
 
 
+class PythonParserLike(Protocol):
+    # The only surface of coverage.parser this gate consumes. Typing the protocol here keeps the
+    # lazy import honest under --strict without pretending coverage ships its own stubs.
+    statements: set[int]
+
+    def parse_source(self) -> None: ...
+
+
+# The freshness parser seam. The RESOLVER -- a function returning a builder or None -- is the
+# injectable thing, not a nullable builder: a resolver returning None models "the parser is
+# unavailable" exactly, without a None-sentinel sitting where a builder argument would be
+# ambiguous between "the parser is absent" and "the caller did not inject anything".
+ParserBuilder = Callable[[str], PythonParserLike]
+ParserResolver = Callable[[], ParserBuilder | None]
+
+
 class ModuleOutcome(NamedTuple):
     # measured/missing are None when the report never saw the module: absent evidence is kept
     # as None so no code path can mistake "not measured" for 0% or for 100%.
@@ -245,7 +295,9 @@ class GateResult(NamedTuple):
     # drift and excluded are the two halves of "the report measured something the tracked set
     # does not carry", split on WHERE the file lives. drift is RED (the git index disagrees with
     # the denominator); excluded is a test's own out-of-tree scratch, kept as a named list so a
-    # dropped row is reported rather than vanishing.
+    # dropped row is reported rather than vanishing. stale is the freshness arm: rows whose line
+    # map no longer matches the current source, UNMEASURED because no verdict inside such a
+    # report is attributable to this tree.
     exit_code: int
     denominator: int
     src_count: int
@@ -253,8 +305,47 @@ class GateResult(NamedTuple):
     outcomes: list[ModuleOutcome]
     drift: list[str]
     excluded: list[str]
+    stale: list[str]
     load_error: str | None
     files_empty: bool
+
+
+def _import_python_parser() -> ParserBuilder | None:
+    """Import coverage.parser lazily; absence is UNAVAILABLE, never a silently skipped check.
+
+    The import is lazy because this gate must still adjudicate the floor axes when coverage is
+    not importable in some embedding environment -- by refusing freshness, not by waiving it.
+    This is the default parser resolver: callers that inject nothing get the real thing.
+    """
+    try:
+        module = importlib.import_module("coverage.parser")
+    except ImportError:
+        return None
+    candidate: Any = getattr(module, "PythonParser", None)
+    if not callable(candidate):
+        return None
+
+    def build(filename: str) -> PythonParserLike:
+        # Keep the exact validated call shape: PythonParser(filename=<path>).
+        return cast(PythonParserLike, candidate(filename=filename))
+
+    return build
+
+
+def _line_set(value: Any) -> set[int] | None:
+    """Coerce one coverage line-list to a set of positive ints; None means unreadable.
+
+    A malformed line list is not an empty line list: the report cannot be lined up against the
+    current tree, so freshness is unavailable rather than fresh.
+    """
+    if not isinstance(value, list):
+        return None
+    lines: set[int] = set()
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
+            return None
+        lines.add(item)
+    return lines
 
 
 def percent_of(entry: dict[str, Any]) -> float | None:
@@ -298,6 +389,73 @@ def locate_report_key(key: str, repo_root: Path) -> tuple[bool, str]:
     if candidate.is_relative_to(repo_root):
         return True, candidate.relative_to(repo_root).as_posix()
     return False, normalised
+
+
+def assess_report_freshness(
+    files: Mapping[str, Any],
+    tracked: Sequence[str],
+    repo_root: Path,
+    *,
+    resolve_parser: ParserResolver = _import_python_parser,
+) -> tuple[list[str], str | None]:
+    """Return (stale_rows, unavailable_reason) for tracked files the report carries.
+
+    This is the arm that stops an old report from certifying a new tree. For each tracked path
+    that APPEARS in the report, recompute the file's statement lines from the CURRENT source and
+    compare them against the line map the report claims:
+      ghost  = lines the report names that are no longer statements;
+      orphan = current statements the report never accounted for.
+    Either set non-empty means the report describes another tree. Pragma-excluded lines are
+    subtracted from the orphan side ONLY: they are statements coverage deliberately did not
+    count, but excluded_lines can also carry blanks, so unioning the whole list into `seen`
+    would invent statements that never existed.
+
+    resolve_parser is injectable so the self-test can exercise the ghost/orphan comparison
+    hermetically under `python3 -S`, where coverage is not importable; an injected resolver
+    returning None reproduces the unavailable arm exactly.
+    """
+    build_stmt_parser = resolve_parser()
+    if build_stmt_parser is None:
+        return [], "coverage.parser is not importable; the current statement map cannot be built"
+    tracked_set = set(tracked)
+    reported: dict[str, Any] = {}
+    for key, entry in files.items():
+        in_tree, normalised = locate_report_key(str(key), repo_root)
+        if in_tree and normalised in tracked_set:
+            reported[normalised] = entry
+    stale: list[str] = []
+    for path in tracked:
+        if path not in reported:
+            # Absence is the ordinary UNMEASURED arm. Freshness only adjudicates files the
+            # report claims to have measured.
+            continue
+        entry = reported[path]
+        if not isinstance(entry, dict):
+            return [], f"the report row for '{path}' is not an object; freshness is unknown"
+        executed = _line_set(entry.get("executed_lines"))
+        missing = _line_set(entry.get("missing_lines"))
+        excluded_raw = entry.get("excluded_lines", [])
+        excluded = _line_set(excluded_raw)
+        if executed is None or missing is None or excluded is None:
+            return [], f"the report row for '{path}' has no usable line map; freshness is unknown"
+        source = Path(path)
+        if not source.is_absolute():
+            source = repo_root / source
+        try:
+            parser = build_stmt_parser(str(source))
+            parser.parse_source()
+            current = set(parser.statements)
+        except Exception as exc:  # noqa: BLE001 -- any parse/read failure is UNAVAILABLE, not fresh
+            return [], f"cannot parse '{path}' from the current tree ({exc}); freshness is unknown"
+        seen = executed | missing
+        ghost = seen - current
+        orphan = current - seen - excluded
+        if ghost or orphan:
+            stale.append(
+                f"{path}: {len(orphan)} current statement(s) the report never accounted for "
+                f"and {len(ghost)} line(s) it names that are no longer statements"
+            )
+    return stale, None
 
 
 def evaluate(
@@ -356,12 +514,23 @@ def evaluate(
 
 
 def measure(
-    report_path: str, tracked: Sequence[str], floors: Mapping[str, int], repo_root: Path
+    report_path: str,
+    tracked: Sequence[str],
+    floors: Mapping[str, int],
+    repo_root: Path,
+    *,
+    check_freshness: bool = True,
+    resolve_parser: ParserResolver = _import_python_parser,
 ) -> GateResult:
     """Pure verdict: reads the report, classifies every tracked module, never prints.
 
     All printing lives in emit_human / emit_json so that --self-test can assert on verdicts
-    over synthetic reports without scraping banner text.
+    over synthetic reports without scraping banner text. check_freshness is keyword-only so a
+    caller has to SAY it is waiving the "does this report describe this tree" arm; the existing
+    floor controls do exactly that because their fabricated line numbers isolate the floor axis.
+    resolve_parser, also keyword-only, is forwarded to that arm so the self-test can drive
+    freshness with an injected parser; its default is the real lazy coverage import, so a
+    caller that says nothing changes nothing.
     """
     src_count = sum(1 for p in tracked if p.startswith("src/"))
     tools_count = len(tracked) - src_count
@@ -374,6 +543,7 @@ def measure(
         outcomes=[],
         drift=[],
         excluded=[],
+        stale=[],
         load_error=None,
         files_empty=False,
     )
@@ -405,6 +575,23 @@ def measure(
         # THE anti-vacuity guard: all([]) is True, and an empty files mapping would sail through
         # every per-module loop unopposed. Zero modules measured is not "all modules pass".
         return base._replace(files_empty=True)
+    if check_freshness:
+        stale, freshness_unavailable = assess_report_freshness(
+            files, tracked, repo_root, resolve_parser=resolve_parser
+        )
+        if freshness_unavailable is not None:
+            return base._replace(
+                load_error=(
+                    f"report freshness could not be verified ({freshness_unavailable}); "
+                    "could not measure"
+                )
+            )
+        if stale:
+            # Staleness outranks RED. If the report predates the tree, EVERY per-module verdict
+            # in it is unattributable -- new statements sit in no denominator -- so the gate must
+            # not report a floor finding derived from that map. "We cannot tell" is not "it is
+            # broken", and it is certainly not "clear".
+            return base._replace(stale=stale)
     outcomes, drift, excluded = evaluate(files, tracked, floors, repo_root)
     statuses = {o.status for o in outcomes}
     if "unmeasured" in statuses:
@@ -419,7 +606,16 @@ def measure(
     else:
         code = EXIT_CLEAR
     return GateResult(
-        code, denominator, src_count, tools_count, outcomes, drift, excluded, None, False
+        exit_code=code,
+        denominator=denominator,
+        src_count=src_count,
+        tools_count=tools_count,
+        outcomes=outcomes,
+        drift=drift,
+        excluded=excluded,
+        stale=[],
+        load_error=None,
+        files_empty=False,
     )
 
 
@@ -481,6 +677,17 @@ def emit_human(result: GateResult) -> None:
         print(
             'UNMEASURED: the report\'s "files" object is EMPTY -- zero modules were measured, '
             'and zero modules is not "all modules pass"; this is NOT a pass'
+        )
+        return
+    if result.stale:
+        # Named, one row per stale file, before any verdict: an unattributable report must not
+        # have its counts paraphrased away.
+        for row in result.stale:
+            print(f"STALE {row}")
+        print(
+            f"COVERAGE-FLOOR UNMEASURED: {len(result.stale)} tracked file(s) in the report do "
+            "not describe the current source; regenerate the report in this job. A stale report "
+            "is neither RED nor CLEAR -- this is NOT a pass"
         )
         return
     for outcome in result.outcomes:
@@ -567,6 +774,7 @@ def emit_json(result: GateResult) -> None:
         ],
         "drift": result.drift,
         "excluded_out_of_tree": result.excluded,
+        "stale": result.stale,
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
 
@@ -646,12 +854,12 @@ def apply_update(result: GateResult, self_path: Path) -> int:
     """Rewrite ONLY the FLOORS block of this file, between the two sentinel lines.
 
     Floors derive from measurement or they derive from nothing; an update that cannot see a
-    real report refuses rather than guess.
+    real, current report refuses rather than guess.
     """
-    if result.load_error is not None or result.files_empty:
+    if result.load_error is not None or result.files_empty or result.stale:
         print(
-            "UPDATE UNMEASURED: cannot write floors from a report that could not be measured; "
-            "the table is untouched"
+            "UPDATE UNMEASURED: cannot write floors from a report that could not be measured or "
+            "does not describe the current source; the table is untouched"
         )
         return EXIT_UNMEASURED
     floors, skipped = compute_updated_floors(result.outcomes)
@@ -696,12 +904,22 @@ def apply_update(result: GateResult, self_path: Path) -> int:
 
 
 def run_self_test() -> int:
-    """Drive twelve controls through measure() against synthetic reports in a temp dir.
+    """Drive sixteen controls through measure() against synthetic reports in a temp dir.
 
     The tracked set and the repo root are both INJECTED, never discovered from the real git
     tree, so the controls are hermetic: they cannot pass or fail because of what happens to be
     committed or where this checkout lives. Each control is labelled and asserted against its
     declared exit code; a misfire means every verdict this gate returns is worthless until fixed.
+
+    The twelve FLOOR controls pass check_freshness=False on purpose: they build SYNTHETIC
+    reports with fabricated line numbers over real-shaped paths, so each isolates the FLOOR axis
+    and would otherwise go stale by construction. The four FRESHNESS controls keep freshness ON
+    but stay hermetic the same way: the parser is an injected resolver returning a fixed
+    statement set, so what is measured is the ghost/orphan comparison this gate owns -- never
+    coverage's parser -- and the harness's `python3 -S` invocation, under which site-packages
+    and coverage with it are not importable, changes nothing. One of the four deliberately
+    injects a resolver returning None over an otherwise FRESH report, to prove the parser's
+    absence is REFUSED rather than waived.
     """
     tracked = ["src/foundationscale/alpha.py", "src/foundationscale/beta.py"]
     failures: list[str] = []
@@ -726,8 +944,32 @@ def run_self_test() -> int:
         def write_files(files: dict[str, Any]) -> None:
             report_path.write_text(json.dumps({"files": files}), encoding="utf-8")
 
-        def check(label: str, expected: int) -> None:
-            got = measure(str(report_path), tracked, {}, root).exit_code
+        def check(
+            label: str,
+            expected: int,
+            *,
+            floors: Mapping[str, int] | None = None,
+            check_freshness: bool = False,
+            tracked_override: Sequence[str] | None = None,
+            root_override: Path | None = None,
+            resolve_parser: ParserResolver = _import_python_parser,
+        ) -> None:
+            # check_freshness defaults to False for the pre-existing controls ONLY: their line
+            # numbers are fabricated over synthetic paths, so freshness would stale every one of
+            # them and drown the FLOOR axis each control was built to isolate. Any control that
+            # wants the freshness claim must opt in explicitly and inject its statement map
+            # through resolve_parser.
+            use_tracked = tracked if tracked_override is None else tracked_override
+            use_root = root if root_override is None else root_override
+            use_floors: Mapping[str, int] = {} if floors is None else floors
+            got = measure(
+                str(report_path),
+                use_tracked,
+                use_floors,
+                use_root,
+                check_freshness=check_freshness,
+                resolve_parser=resolve_parser,
+            ).exit_code
             behaved = got == expected
             print(
                 f"control {label}: wanted exit {expected}, got {got} -- "
@@ -792,7 +1034,106 @@ def run_self_test() -> int:
         write_files({(root / alpha).as_posix(): entry(92.0, 8), beta: entry(92.0, 8)})
         check("MUST_PASS an absolute path UNDER the repo root, tracked -> EXIT_CLEAR", EXIT_CLEAR)
 
-    total = 12
+        class _FixedParser:
+            # The statement map is a CONSTANT, not a parse: these controls measure the
+            # ghost/orphan comparison, not coverage's parser. That is what lets them run
+            # under `python3 -S`, which is how the harness invokes this self-test.
+            def __init__(self, statements: set[int]) -> None:
+                self.statements = set(statements)
+
+            def parse_source(self) -> None:
+                return None
+
+        def fixed_resolver(statements: set[int]) -> ParserResolver:
+            def resolve() -> ParserBuilder | None:
+                def build(_filename: str) -> PythonParserLike:
+                    # The filename is deliberately unused: the statement map is a constant, so
+                    # the control measures the ghost/orphan comparison and nothing about the
+                    # tree on disk. That is what lets it run under `python3 -S`.
+                    return cast(PythonParserLike, _FixedParser(statements))
+
+                return build
+
+            return resolve
+
+        def fresh_entry(
+            executed_lines: Sequence[int],
+            missing_lines: Sequence[int],
+            excluded_lines: Sequence[int],
+            pct: float,
+        ) -> dict[str, Any]:
+            return {
+                "executed_lines": list(executed_lines),
+                "missing_lines": list(missing_lines),
+                "excluded_lines": list(excluded_lines),
+                "summary": {
+                    "num_statements": len(executed_lines) + len(missing_lines),
+                    "missing_lines": len(missing_lines),
+                    "percent_covered": pct,
+                },
+            }
+
+        fresh_statements = {1, 2, 3, 5, 8, 13}
+        fresh_all = sorted(fresh_statements)
+        fresh_tracked = [alpha]
+        fresh_floors = {alpha: 100}
+        excluded_only = fresh_all[-1]
+        fresh_but_one = [n for n in fresh_all if n != excluded_only]
+
+        # (a) GHOST: the report names line 999, which is no statement of the injected map.
+        write_files({alpha: fresh_entry([*fresh_all, 999], [], [], 100.0)})
+        check(
+            "MUST_FIRE freshness: a report naming a line that is no statement (ghost) "
+            "-> EXIT_UNMEASURED",
+            EXIT_UNMEASURED,
+            floors=fresh_floors,
+            check_freshness=True,
+            tracked_override=fresh_tracked,
+            resolve_parser=fixed_resolver(fresh_statements),
+        )
+
+        # (b) ORPHAN: the report never accounts for one member of the injected map, in either
+        # of the two lists coverage could have carried it in.
+        write_files({alpha: fresh_entry(fresh_but_one, [], [], 100.0)})
+        check(
+            "MUST_FIRE freshness: a report omitting one current statement (orphan) "
+            "-> EXIT_UNMEASURED",
+            EXIT_UNMEASURED,
+            floors=fresh_floors,
+            check_freshness=True,
+            tracked_override=fresh_tracked,
+            resolve_parser=fixed_resolver(fresh_statements),
+        )
+
+        # (c) FRESH: executed|missing is the injected map minus ONE member, which sits in
+        # excluded_lines instead -- pragma-excluded on the orphan side ONLY. Had excluded_lines
+        # been unioned into `seen` wholesale, the blanks that list can carry would mint ghost
+        # findings on honest reports; this row pins the direction of the subtraction by staying
+        # CLEAR.
+        write_files({alpha: fresh_entry(fresh_but_one, [], [excluded_only], 100.0)})
+        check(
+            "MUST_PASS freshness: fresh map, one statement pragma-excluded only -> EXIT_CLEAR",
+            EXIT_CLEAR,
+            floors=fresh_floors,
+            check_freshness=True,
+            tracked_override=fresh_tracked,
+            resolve_parser=fixed_resolver(fresh_statements),
+        )
+
+        # (d) UNAVAILABLE: the SAME report as (c), which is CLEAR above, behind a resolver that
+        # returns None. The delta in verdict is attributable to the resolver alone, which is
+        # what proves absence of coverage.parser is REFUSED, not waived.
+        write_files({alpha: fresh_entry(fresh_but_one, [], [excluded_only], 100.0)})
+        check(
+            "MUST_FIRE freshness: the (c) report with the parser unavailable -> EXIT_UNMEASURED",
+            EXIT_UNMEASURED,
+            floors=fresh_floors,
+            check_freshness=True,
+            tracked_override=fresh_tracked,
+            resolve_parser=lambda: None,
+        )
+
+    total = 16
     if failures:
         print(
             f"SELF-TEST DENOMINATOR: {total - len(failures)} of {total} controls behaved; "
@@ -802,9 +1143,11 @@ def run_self_test() -> int:
             print("CONTROL DEFECT: " + failure)
         return EXIT_REFUSE
     print(
-        f"SELF-TEST DENOMINATOR: {total} of {total} controls behaved; 8x MUST_FIRE produced the "
-        "declared nonzero exits, 4x MUST_PASS pinned both band boundaries as inclusive and both "
-        "arms of the in-tree/out-of-tree split"
+        f"SELF-TEST DENOMINATOR: {total} of {total} controls behaved; 11x MUST_FIRE produced "
+        "the declared nonzero exits, 5x MUST_PASS pinned both band boundaries as inclusive, "
+        "both arms of the in-tree/out-of-tree split, and the fresh-report CLEAR path, with the "
+        "whole freshness arm exercised through an injected parser resolver so the self-test "
+        "runs and means the same under `python3 -S`"
     )
     return EXIT_CLEAR
 
