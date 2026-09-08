@@ -224,9 +224,9 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/checkpoint/dcp_meta.py": 81,  # set by --update; measured 81.4%
     "src/foundationscale/train/__init__.py": 87,  # set by --update; measured 87.5%
     "src/foundationscale/train/__main__.py": 0,  # set by --update; measured 0.0%
-    "src/foundationscale/train/loop.py": 81,  # set by --update; measured 81.1%
+    "src/foundationscale/train/loop.py": 86,  # set by --update; measured 86.2%
     "tools/emit_run_manifest.py": 80,  # set by --update; measured 80.9%
-    # RATCHET -- 26 module(s) ABOVE the default band. These record what
+    # RATCHET -- 27 module(s) ABOVE the default band. These record what
     # the tree already achieves, so a regression to a merely-passing 90% is RED
     # rather than invisible.
     "src/foundationscale/__init__.py": 100,  # set by --update; measured 100.0%
@@ -243,14 +243,15 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/provenance/__init__.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/__init__.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/advantage.py": 100,  # set by --update; measured 100.0%
-    "src/foundationscale/rl/algorithm.py": 99,  # set by --update; measured 99.3%
+    "src/foundationscale/rl/algorithm.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/interfaces.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/losses.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/policy.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/rl/policy_gradient.py": 99,  # set by --update; measured 99.5%
     "src/foundationscale/rl/rollout.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/weightsync.py": 96,  # set by --update; measured 96.9%
     "src/foundationscale/topology.py": 97,  # set by --update; measured 97.4%
-    "src/foundationscale/train/cli.py": 97,  # set by --update; measured 97.2%
+    "src/foundationscale/train/cli.py": 97,  # set by --update; measured 97.6%
     "src/foundationscale/verify/__init__.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/verify/parity.py": 99,  # set by --update; measured 99.1%
     "tools/__init__.py": 100,  # set by --update; measured 100.0%

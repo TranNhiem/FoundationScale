@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 from typing import Any, cast
 
@@ -12,6 +14,7 @@ from foundationscale.rl.advantage import RewardStats
 from foundationscale.rl.algorithm import (
     Algorithm,
     AlgorithmRequirements,
+    AlgorithmSemantics,
     AlgorithmWiringRefusal,
     StepReport,
     StepReportRefusal,
@@ -48,10 +51,12 @@ def _loss(
 def _requirements(**overrides: object) -> AlgorithmRequirements:
     fields: dict[str, object] = {
         "name": "grpo",
-        "requires_rollout": True,
-        "requires_advantage": True,
-        "requires_weight_sync": True,
-        "requires_reference_policy": False,
+        "requires": {
+            "rollout_source": True,
+            "advantage_fn": True,
+            "weight_sync": True,
+            "reference_policy": False,
+        },
         "declared_components": ("pg_loss",),
         "declared_metrics": (),
     }
@@ -79,6 +84,19 @@ def _pair(**overrides: object) -> PolicyPair:
     }
     fields.update(overrides)
     return PolicyPair(**cast(dict[str, Any], fields))
+
+
+def _supplied(**overrides: object) -> dict[str, Any]:
+    # The GRPO wiring's supplied side: the three components the declaration
+    # marks consumed. reference_policy is NEVER a key here -- the pair's
+    # references attest that side and the surface refuses a second statement.
+    fields: dict[str, object] = {
+        "rollout_source": cast(Any, object()),
+        "advantage_fn": cast(Any, object()),
+        "weight_sync": cast(Any, object()),
+    }
+    fields.update(overrides)
+    return cast(dict[str, Any], fields)
 
 
 def _expectation(name: str, *, low: float = 0.0, high: float = 1.0) -> MetricExpectation:
@@ -144,22 +162,66 @@ def test_requirements_refuses_a_name_declared_as_both_component_and_metric() -> 
     assert "kl" in str(excinfo.value)
 
 
+def test_requirements_refuses_an_empty_requires_mapping_as_vacuous() -> None:
+    # An algorithm that declares no roles puts its whole wiring outside the
+    # check's denominator and every agreement over it would be vacuous --
+    # all([]) is True is this repository's founding defect.
+    with pytest.raises(AlgorithmWiringRefusal, match="EMPTY requires mapping") as excinfo:
+        _requirements(requires={})
+    assert "all([]) is True" in str(excinfo.value)
+
+
+def test_requirements_refuses_a_non_bool_requires_value_naming_role_and_value() -> None:
+    # True declares the role consumed and False declares it
+    # refused-if-supplied; a stand-in value would let an unmeasured value
+    # pose as a declaration, so the refusal names the role AND the value.
+    with pytest.raises(
+        AlgorithmWiringRefusal, match=r"requires\['advantage_fn'\]='yes'"
+    ) as excinfo:
+        _requirements(requires={"advantage_fn": "yes"})
+    message = str(excinfo.value)
+    assert "'advantage_fn'" in message
+    assert "'yes'" in message
+
+
+def test_requirements_refuses_an_empty_string_role_name() -> None:
+    # Absence of a name is not a name: a wiring check cannot grade a role it
+    # cannot name.
+    with pytest.raises(AlgorithmWiringRefusal, match=r"role named ''") as excinfo:
+        _requirements(requires={"": True})
+    assert "non-empty str" in str(excinfo.value)
+
+
 def test_requirements_refuses_weight_sync_without_rollout() -> None:
     # A sync moves the training view into the generation view, and with no
     # rollout there is no generation view -- the report would describe a
     # transfer to nowhere.
-    with pytest.raises(AlgorithmWiringRefusal, match="requires_weight_sync without"):
-        _requirements(requires_rollout=False)
+    with pytest.raises(AlgorithmWiringRefusal, match="weight_sync role without the"):
+        _requirements(
+            requires={
+                "rollout_source": False,
+                "advantage_fn": True,
+                "weight_sync": True,
+                "reference_policy": False,
+            }
+        )
 
 
 def test_requirements_accepts_advantage_without_rollout_for_offline_rl() -> None:
     # Positive control for the asymmetry above: refusing this shape would
     # make offline RL -- advantages over rollouts a previous run generated --
     # unrepresentable.
-    requirements = _requirements(requires_rollout=False, requires_weight_sync=False)
-    assert requirements.requires_advantage is True
-    assert requirements.requires_rollout is False
-    assert requirements.requires_weight_sync is False
+    requirements = _requirements(
+        requires={
+            "rollout_source": False,
+            "advantage_fn": True,
+            "weight_sync": False,
+            "reference_policy": False,
+        }
+    )
+    assert requirements.requires["advantage_fn"] is True
+    assert requirements.requires["rollout_source"] is False
+    assert requirements.requires["weight_sync"] is False
 
 
 def test_requirements_accepts_empty_declared_metrics() -> None:
@@ -287,7 +349,7 @@ def test_algorithm_protocol_rejects_a_class_with_no_step_method() -> None:
             return _requirements()
 
         def setup(self) -> None:
-            return None
+            pass
 
     assert not isinstance(_NoStep(), Algorithm)
 
@@ -295,7 +357,7 @@ def test_algorithm_protocol_rejects_a_class_with_no_step_method() -> None:
 def test_algorithm_protocol_rejects_a_class_with_no_requirements_method() -> None:
     class _NoRequirements:
         def setup(self) -> None:
-            return None
+            pass
 
         def step(self) -> StepReport:
             return _report()
@@ -309,7 +371,7 @@ def test_algorithm_protocol_accepts_a_class_with_all_three_methods() -> None:
             return _requirements()
 
         def setup(self) -> None:
-            return None
+            pass
 
         def step(self) -> StepReport:
             return _report()
@@ -326,7 +388,7 @@ def test_algorithm_protocol_accepts_wrong_step_signature_because_presence_only()
             return _requirements()
 
         def setup(self) -> None:
-            return None
+            pass
 
         def step(self, bogus: int, another: str) -> int:
             return 0
@@ -340,9 +402,7 @@ def test_wiring_refuses_a_required_rollout_source_handed_none() -> None:
             _requirements(),
             policy_pair=_pair(),
             loss_fn=_loss_fn("pg_loss"),
-            rollout_source=None,
-            advantage_fn=cast(Any, object()),
-            weight_sync=cast(Any, object()),
+            supplied=_supplied(rollout_source=None),
         )
 
 
@@ -351,40 +411,55 @@ def test_wiring_refuses_a_supplied_rollout_source_the_algorithm_does_not_consume
     # a supplied-but-unconsumed component is a stub by another name and it
     # reads as wiring that works.
     requirements = _requirements(
-        requires_rollout=False, requires_advantage=False, requires_weight_sync=False
+        requires={
+            "rollout_source": False,
+            "advantage_fn": False,
+            "weight_sync": False,
+            "reference_policy": False,
+        }
     )
     with pytest.raises(AlgorithmWiringRefusal, match="rollout_source was supplied"):
         check_algorithm_wiring(
             requirements,
             policy_pair=_pair(generate_view=None),
             loss_fn=_loss_fn("pg_loss"),
-            rollout_source=cast(Any, object()),
+            supplied={"rollout_source": cast(Any, object())},
         )
 
 
 def test_wiring_refuses_a_supplied_advantage_fn_the_algorithm_does_not_consume() -> None:
     requirements = _requirements(
-        requires_rollout=False, requires_advantage=False, requires_weight_sync=False
+        requires={
+            "rollout_source": False,
+            "advantage_fn": False,
+            "weight_sync": False,
+            "reference_policy": False,
+        }
     )
     with pytest.raises(AlgorithmWiringRefusal, match="advantage_fn was supplied"):
         check_algorithm_wiring(
             requirements,
             policy_pair=_pair(generate_view=None),
             loss_fn=_loss_fn("pg_loss"),
-            advantage_fn=cast(Any, object()),
+            supplied={"advantage_fn": cast(Any, object())},
         )
 
 
 def test_wiring_refuses_a_supplied_weight_sync_the_algorithm_does_not_consume() -> None:
     requirements = _requirements(
-        requires_rollout=False, requires_advantage=False, requires_weight_sync=False
+        requires={
+            "rollout_source": False,
+            "advantage_fn": False,
+            "weight_sync": False,
+            "reference_policy": False,
+        }
     )
     with pytest.raises(AlgorithmWiringRefusal, match="weight_sync was supplied"):
         check_algorithm_wiring(
             requirements,
             policy_pair=_pair(generate_view=None),
             loss_fn=_loss_fn("pg_loss"),
-            weight_sync=cast(Any, object()),
+            supplied={"weight_sync": cast(Any, object())},
         )
 
 
@@ -396,25 +471,84 @@ def test_wiring_names_every_disagreeing_role_in_one_refusal() -> None:
             _requirements(),
             policy_pair=_pair(),
             loss_fn=_loss_fn("pg_loss"),
-            rollout_source=None,
-            advantage_fn=None,
-            weight_sync=cast(Any, object()),
+            supplied=_supplied(rollout_source=None, advantage_fn=None),
         )
     message = str(excinfo.value)
     assert "rollout_source" in message
     assert "advantage_fn" in message
 
 
+def test_wiring_grades_a_supplied_role_the_requirements_never_named() -> None:
+    # The denominator is the UNION of the two mappings' keys: a role named
+    # only on the supplied side still enters it, so an unknown role (a
+    # critic, a reward model) flows through the same both-direction check
+    # with no core edit and refuses as supplied-but-unconsumed.
+    requirements = _requirements(
+        requires={
+            "rollout_source": False,
+            "advantage_fn": False,
+            "weight_sync": False,
+            "reference_policy": False,
+        }
+    )
+    with pytest.raises(AlgorithmWiringRefusal, match="critic was supplied") as excinfo:
+        check_algorithm_wiring(
+            requirements,
+            policy_pair=_pair(generate_view=None),
+            loss_fn=_loss_fn("pg_loss"),
+            supplied={"critic": cast(Any, object())},
+        )
+    # Counted against the union MINUS reference_policy: three declared generic
+    # roles plus critic. reference_policy is a key of `requires` and so a member
+    # of the union, but the both-direction loop cannot reach it -- it is graded
+    # against the pair's references by its own refusal -- so a denominator of 5
+    # would state a rate over a role this claim does not range over.
+    assert "1 of 4 component roles" in str(excinfo.value)
+
+
+def test_wiring_refuses_reference_policy_named_on_the_supplied_side() -> None:
+    # A reference policy's supplied side is the policy pair's references;
+    # stating it in a second place is one countable declared in two objects.
+    with pytest.raises(AlgorithmWiringRefusal, match="names reference_policy"):
+        check_algorithm_wiring(
+            _requirements(),
+            policy_pair=_pair(),
+            loss_fn=_loss_fn("pg_loss"),
+            supplied=_supplied(reference_policy=cast(Any, object())),
+        )
+
+
+def test_wiring_refuses_an_empty_union_of_requires_and_supplied_as_vacuous() -> None:
+    # The constructor refuses an empty requires mapping outright, so this
+    # guard defends a requirements object that reached the check by another
+    # path: an empty union is CLEAR over nothing -- vacuous agreement,
+    # twice refused.
+    requirements = _requirements()
+    object.__setattr__(requirements, "requires", {})
+    with pytest.raises(AlgorithmWiringRefusal, match="wiring denominator is empty"):
+        check_algorithm_wiring(
+            requirements,
+            policy_pair=_pair(),
+            loss_fn=_loss_fn("pg_loss"),
+            supplied={},
+        )
+
+
 def test_wiring_refuses_reference_requirement_against_a_pair_with_no_references() -> None:
-    requirements = _requirements(requires_reference_policy=True)
+    requirements = _requirements(
+        requires={
+            "rollout_source": True,
+            "advantage_fn": True,
+            "weight_sync": True,
+            "reference_policy": True,
+        }
+    )
     with pytest.raises(AlgorithmWiringRefusal, match="carries no references"):
         check_algorithm_wiring(
             requirements,
             policy_pair=_pair(references={}),
             loss_fn=_loss_fn("pg_loss"),
-            rollout_source=cast(Any, object()),
-            advantage_fn=cast(Any, object()),
-            weight_sync=cast(Any, object()),
+            supplied=_supplied(),
         )
 
 
@@ -424,9 +558,7 @@ def test_wiring_refuses_unrequired_references_and_names_the_reference_key() -> N
             _requirements(),
             policy_pair=_pair(references={"ref_a": object()}),
             loss_fn=_loss_fn("pg_loss"),
-            rollout_source=cast(Any, object()),
-            advantage_fn=cast(Any, object()),
-            weight_sync=cast(Any, object()),
+            supplied=_supplied(),
         )
     assert "ref_a" in str(excinfo.value)
 
@@ -440,9 +572,7 @@ def test_wiring_refuses_rollout_requirement_against_a_pair_with_no_generate_view
             _requirements(),
             policy_pair=_pair(generate_view=None),
             loss_fn=_loss_fn("pg_loss"),
-            rollout_source=cast(Any, object()),
-            advantage_fn=cast(Any, object()),
-            weight_sync=cast(Any, object()),
+            supplied=_supplied(),
         )
 
 
@@ -451,22 +581,25 @@ def test_wiring_returns_the_sorted_consumed_roles_for_grpo() -> None:
         _requirements(),
         policy_pair=_pair(),
         loss_fn=_loss_fn("pg_loss"),
-        rollout_source=cast(Any, object()),
-        advantage_fn=cast(Any, object()),
-        weight_sync=cast(Any, object()),
+        supplied=_supplied(),
     )
     assert consumed == ("advantage_fn", "rollout_source", "weight_sync")
 
 
 def test_wiring_includes_reference_policy_in_consumed_roles_when_required() -> None:
-    requirements = _requirements(requires_reference_policy=True)
+    requirements = _requirements(
+        requires={
+            "rollout_source": True,
+            "advantage_fn": True,
+            "weight_sync": True,
+            "reference_policy": True,
+        }
+    )
     consumed = check_algorithm_wiring(
         requirements,
         policy_pair=_pair(references={"ref_b": object()}),
         loss_fn=_loss_fn("pg_loss"),
-        rollout_source=cast(Any, object()),
-        advantage_fn=cast(Any, object()),
-        weight_sync=cast(Any, object()),
+        supplied=_supplied(),
     )
     assert "reference_policy" in consumed
     assert consumed == (
@@ -477,21 +610,48 @@ def test_wiring_includes_reference_policy_in_consumed_roles_when_required() -> N
     )
 
 
+def test_wiring_returns_consumed_roles_sorted_regardless_of_declaration_order() -> None:
+    # The mapping is written in non-alphabetical order and carries roles
+    # declared False (including one no check knows) on purpose: what a
+    # caller records is the SORTED set of exactly the roles whose requires
+    # value is True, never the iteration order the writer happened to use.
+    requirements = _requirements(
+        requires={
+            "weight_sync": True,
+            "reference_policy": False,
+            "critic": False,
+            "rollout_source": True,
+            "advantage_fn": True,
+        }
+    )
+    consumed = check_algorithm_wiring(
+        requirements,
+        policy_pair=_pair(),
+        loss_fn=_loss_fn("pg_loss"),
+        supplied=_supplied(),
+    )
+    assert consumed == ("advantage_fn", "rollout_source", "weight_sync")
+    assert consumed == tuple(sorted(consumed))
+
+
 def test_wiring_returns_empty_tuple_for_the_degenerate_sft_shape() -> None:
     # SFT must stay degenerate; if it needed stubs to satisfy this
     # handshake the abstraction would be drawn wrong, so this shape needs
     # neither role objects nor a generation view on the pair.
     requirements = _requirements(
         name="sft",
-        requires_rollout=False,
-        requires_advantage=False,
-        requires_weight_sync=False,
-        requires_reference_policy=False,
+        requires={
+            "rollout_source": False,
+            "advantage_fn": False,
+            "weight_sync": False,
+            "reference_policy": False,
+        },
     )
     consumed = check_algorithm_wiring(
         requirements,
         policy_pair=_pair(generate_view=None, references={}),
         loss_fn=_loss_fn("pg_loss"),
+        supplied={},
     )
     assert consumed == ()
 
@@ -499,10 +659,14 @@ def test_wiring_returns_empty_tuple_for_the_degenerate_sft_shape() -> None:
 def test_wiring_refuses_a_policy_pair_that_is_not_a_policy_pair() -> None:
     # Every other refusal here names the disagreement it found; reading the
     # views off a foreign object would raise an AttributeError that names
-    # nothing.
+    # nothing. The mapping half runs BEFORE the pair's type is established,
+    # so the wiring must agree for this refusal to be the one that fires.
     with pytest.raises(AlgorithmWiringRefusal, match="rather than a PolicyPair"):
         check_algorithm_wiring(
-            _requirements(), policy_pair=cast(Any, object()), loss_fn=_loss_fn("pg_loss")
+            _requirements(),
+            policy_pair=cast(Any, object()),
+            loss_fn=_loss_fn("pg_loss"),
+            supplied=_supplied(),
         )
 
 
@@ -514,13 +678,15 @@ def test_wiring_accepts_an_unrequired_generation_view() -> None:
     # nothing would read.
     requirements = _requirements(
         name="sft",
-        requires_rollout=False,
-        requires_advantage=False,
-        requires_weight_sync=False,
-        requires_reference_policy=False,
+        requires={
+            "rollout_source": False,
+            "advantage_fn": False,
+            "weight_sync": False,
+            "reference_policy": False,
+        },
     )
     consumed = check_algorithm_wiring(
-        requirements, policy_pair=_pair(references={}), loss_fn=_loss_fn("pg_loss")
+        requirements, policy_pair=_pair(references={}), loss_fn=_loss_fn("pg_loss"), supplied={}
     )
     assert consumed == ()
 
@@ -534,9 +700,7 @@ def test_wiring_refuses_a_loss_declaration_that_repeats_a_component() -> None:
             _requirements(),
             policy_pair=_pair(),
             loss_fn=_loss_fn("pg_loss", "pg_loss"),
-            rollout_source=cast(Any, object()),
-            advantage_fn=cast(Any, object()),
-            weight_sync=cast(Any, object()),
+            supplied=_supplied(),
         )
 
 
@@ -550,9 +714,7 @@ def test_wiring_refuses_disagreeing_component_sets_with_both_direction_counts() 
             requirements,
             policy_pair=_pair(),
             loss_fn=_loss_fn("pg_loss", "kl_loss", "entropy"),
-            rollout_source=cast(Any, object()),
-            advantage_fn=cast(Any, object()),
-            weight_sync=cast(Any, object()),
+            supplied=_supplied(),
         )
     message = str(excinfo.value)
     # Each side is counted against ITS OWN denominator: the algorithm names
@@ -572,9 +734,7 @@ def test_wiring_refuses_equal_sized_but_different_component_sets() -> None:
             requirements,
             policy_pair=_pair(),
             loss_fn=_loss_fn("pg_loss", "entropy"),
-            rollout_source=cast(Any, object()),
-            advantage_fn=cast(Any, object()),
-            weight_sync=cast(Any, object()),
+            supplied=_supplied(),
         )
     message = str(excinfo.value)
     assert "kl_loss" in message
@@ -589,9 +749,7 @@ def test_wiring_refuses_a_loss_declaration_that_repeats_a_metric() -> None:
             loss_fn=_loss_fn(
                 "pg_loss", metrics=(_expectation("accuracy"), _expectation("accuracy"))
             ),
-            rollout_source=cast(Any, object()),
-            advantage_fn=cast(Any, object()),
-            weight_sync=cast(Any, object()),
+            supplied=_supplied(),
         )
 
 
@@ -602,9 +760,7 @@ def test_wiring_refuses_disagreeing_metric_sets() -> None:
             requirements,
             policy_pair=_pair(),
             loss_fn=_loss_fn("pg_loss", metrics=(_expectation("accuracy"),)),
-            rollout_source=cast(Any, object()),
-            advantage_fn=cast(Any, object()),
-            weight_sync=cast(Any, object()),
+            supplied=_supplied(),
         )
     message = str(excinfo.value)
     assert "kl" in message
@@ -616,9 +772,7 @@ def test_wiring_passes_when_both_metric_sides_are_empty() -> None:
         _requirements(),
         policy_pair=_pair(),
         loss_fn=_loss_fn("pg_loss"),
-        rollout_source=cast(Any, object()),
-        advantage_fn=cast(Any, object()),
-        weight_sync=cast(Any, object()),
+        supplied=_supplied(),
     )
     assert consumed == ("advantage_fn", "rollout_source", "weight_sync")
 
@@ -629,9 +783,7 @@ def test_wiring_passes_when_both_metric_sides_name_the_same_metric() -> None:
         requirements,
         policy_pair=_pair(),
         loss_fn=_loss_fn("pg_loss", metrics=(_expectation("accuracy"),)),
-        rollout_source=cast(Any, object()),
-        advantage_fn=cast(Any, object()),
-        weight_sync=cast(Any, object()),
+        supplied=_supplied(),
     )
     # Asserting the consumed tuple proves the function ran past the metric
     # cross-check rather than merely not raising somewhere earlier.
@@ -690,7 +842,14 @@ def test_verify_step_passes_when_both_metric_sides_are_empty() -> None:
 
 
 def test_verify_step_refuses_reward_stats_when_no_advantage_function() -> None:
-    requirements = _requirements(requires_advantage=False)
+    requirements = _requirements(
+        requires={
+            "rollout_source": True,
+            "advantage_fn": False,
+            "weight_sync": True,
+            "reference_policy": False,
+        }
+    )
     with pytest.raises(StepReportRefusal, match="declares no advantage function"):
         verify_step(_report(), requirements)
 
@@ -701,7 +860,14 @@ def test_verify_step_refuses_missing_reward_stats_when_advantage_required() -> N
 
 
 def test_verify_step_refuses_a_reported_sync_when_no_weight_sync_consumed() -> None:
-    requirements = _requirements(requires_weight_sync=False)
+    requirements = _requirements(
+        requires={
+            "rollout_source": True,
+            "advantage_fn": True,
+            "weight_sync": False,
+            "reference_policy": False,
+        }
+    )
     with pytest.raises(StepReportRefusal, match="declares no weight sync"):
         verify_step(_report(), requirements)
 
@@ -736,3 +902,76 @@ def test_verify_step_counts_components_regardless_of_their_order() -> None:
     requirements = _requirements(declared_components=("pg_loss", "kl_loss"))
     report = _report(loss=_loss("kl_loss", "pg_loss"))
     assert verify_step(report, requirements) == 2
+
+
+def test_semantics_refuses_an_empty_string_kl_estimator() -> None:
+    # Absence of a name is not a name: a gate cannot grade a seam it
+    # cannot name, so the refusal names the field AND the empty value.
+    with pytest.raises(AlgorithmWiringRefusal, match=r"kl_estimator=''") as excinfo:
+        AlgorithmSemantics(kl_estimator="")
+    assert "absence of a name is not a name" in str(excinfo.value)
+
+
+def test_semantics_refuses_clip_bounds_that_are_not_a_pair() -> None:
+    # The refusal must state the received tuple and its entry count, not
+    # just that the shape was wrong.
+    with pytest.raises(AlgorithmWiringRefusal, match="got 3 entries") as excinfo:
+        AlgorithmSemantics(clip_bounds=cast(Any, (0.1, 0.2, 0.3)))
+    message = str(excinfo.value)
+    assert "clip_bounds=(0.1, 0.2, 0.3)" in message
+    assert "(low, high) pair" in message
+
+
+def test_semantics_refuses_a_clip_bound_that_is_not_a_real_number() -> None:
+    # A clip bound is a measured quantity; an untypable one cannot be
+    # compared against any loss-side declaration, so the refusal shows
+    # the tuple exactly as received, offending value included.
+    with pytest.raises(AlgorithmWiringRefusal, match="both bounds are real") as excinfo:
+        AlgorithmSemantics(clip_bounds=cast(Any, (0.1, "0.3")))
+    assert "clip_bounds=(0.1, '0.3')" in str(excinfo.value)
+
+
+def test_semantics_refuses_a_truthy_stand_in_for_reference_free() -> None:
+    # A truthy stand-in would let an unmeasured value pose as a
+    # declaration; abstention is None, and the refusal says so.
+    with pytest.raises(AlgorithmWiringRefusal, match=r"reference_free='yes'") as excinfo:
+        AlgorithmSemantics(reference_free=cast(Any, "yes"))
+    assert "True or False, or " in str(excinfo.value)
+
+
+def test_requirements_refuses_a_requires_declaration_that_is_not_a_mapping() -> None:
+    # A bare list of names cannot say False, and False is a declaration
+    # this surface must be able to refuse against -- the message names
+    # the received type.
+    with pytest.raises(AlgorithmWiringRefusal, match="role declaration is a") as excinfo:
+        _requirements(requires=["rollout_source"])
+    assert "role declaration is a Mapping" in str(excinfo.value)
+
+
+def test_requirements_refuses_a_semantics_declaration_it_cannot_read() -> None:
+    # None means the algorithm constrains no seam; anything that is
+    # neither None nor an AlgorithmSemantics is a declaration this
+    # contract cannot read, and the refusal says both halves.
+    with pytest.raises(AlgorithmWiringRefusal, match="semantics=") as excinfo:
+        _requirements(semantics=object())
+    assert "AlgorithmSemantics" in str(excinfo.value)
+
+
+def test_step_report_refuses_a_non_integer_rows() -> None:
+    # bool is refused by its own earlier check; a float is not a bool but
+    # is still not the int denominator the gradient was priced against.
+    with pytest.raises(StepReportRefusal, match=r"rows=2\.5: a row count is an int"):
+        _report(rows=2.5)
+
+
+def test_wiring_refuses_a_supplied_role_named_by_an_empty_string() -> None:
+    # The supplied side's role names are graded the same way the
+    # declaration's are: absence of a name is not a name, and a wiring
+    # check cannot grade a role it cannot name.
+    with pytest.raises(AlgorithmWiringRefusal, match=r"role named ''"):
+        check_algorithm_wiring(
+            _requirements(),
+            policy_pair=_pair(),
+            loss_fn=_loss_fn("pg_loss"),
+            supplied={"": cast(Any, object())},
+        )

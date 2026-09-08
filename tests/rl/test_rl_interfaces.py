@@ -52,11 +52,24 @@ TORCH_FREE_MODULES = {
     "foundationscale.rl.algorithm": (
         "Algorithm",
         "AlgorithmRequirements",
+        "AlgorithmSemantics",
         "AlgorithmWiringRefusal",
         "StepReport",
         "StepReportRefusal",
         "check_algorithm_wiring",
         "verify_step",
+    ),
+    "foundationscale.rl.grpo": (
+        "GRPOAlgorithm",
+        "GRPOPolicyLoss",
+        "check_grpo_requirements",
+    ),
+    "foundationscale.rl.registry": (
+        "AlgorithmRegistryRefusal",
+        "available_algorithm_names",
+        "lookup_algorithm",
+        "register_algorithm",
+        "reset_algorithm_registry",
     ),
     "foundationscale.rl.interfaces": (
         "BatchRefusal",
@@ -71,6 +84,17 @@ TORCH_FREE_MODULES = {
     ),
     "foundationscale.rl.losses": ("DPOLoss", "SFTLoss"),
     "foundationscale.rl.policy": ("PolicyPair", "PolicyRoleRefusal"),
+    "foundationscale.rl.policy_gradient": (
+        "RLOOAlgorithm",
+        "RLOOPolicyLoss",
+        "ReinforceBaselineAlgorithm",
+        "ReinforceBaselineLoss",
+        "ReinforcePlusPlusAlgorithm",
+        "ReinforcePlusPlusLoss",
+        "check_reinforce_baseline_requirements",
+        "check_reinforce_pp_requirements",
+        "check_rloo_requirements",
+    ),
     "foundationscale.rl.rollout": (
         "CapabilityRefusal",
         "RolloutSource",

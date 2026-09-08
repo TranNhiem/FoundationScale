@@ -469,7 +469,7 @@ def _emit_used_rows(
     return _build_result(weights, used_rewards, rows, len(per_sample), method)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GroupNormalisedAdvantage:
     """GRPO-style group normalisation: centre on the group, scale by its std.
 
@@ -527,7 +527,7 @@ class GroupNormalisedAdvantage:
         return _emit_used_rows(per_sample, cleaned_rewards, masks, self.method_name)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class LeaveOneOutAdvantage:
     """RLOO-style advantage: each sample's baseline is the mean of the OTHERS.
 
@@ -575,7 +575,7 @@ class LeaveOneOutAdvantage:
         return _emit_used_rows(per_sample, cleaned_rewards, masks, self.method_name)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GeneralisedAdvantageEstimation:
     """GAE over a terminal per-sample reward, with a ZERO VALUE BASELINE.
 

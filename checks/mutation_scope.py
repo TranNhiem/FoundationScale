@@ -235,6 +235,40 @@ PENDING_ENROLMENT: dict[str, str] = {
         "construction. No test can kill it, and one written to try would be asserting a "
         "distinction the guards above it have removed"
     ),
+    "src/foundationscale/rl/grpo.py": (
+        "the first concrete Algorithm binding, and the only place where a declaration is "
+        "produced rather than merely checked: it emits the AlgorithmRequirements that "
+        "algorithm.py's two gates then adjudicate, so a mutation here moves BOTH sides of "
+        "that comparison at once and the gates above it stay green. Its own arithmetic is "
+        "the group-mean baseline, the ratio, the two clip bounds and the k3 KL estimator's "
+        "expm1 form -- a flipped clip comparison or a dropped group boundary changes which "
+        "sequences are trusted without changing any reported count"
+    ),
+    "src/foundationscale/rl/policy_gradient.py": (
+        "three bindings that differ ONLY in how a reward becomes an advantage, so each "
+        "one's estimator is the whole of what distinguishes it: RLOO's leave-one-out "
+        "group baseline, REINFORCE's mean-return-seeded EMA and its momentum update, and "
+        "Reinforce++'s population mean/std whitening with the two PPO clip bounds derived "
+        "from one epsilon. A mutation to any of those swaps one algorithm's estimator for "
+        "another's while every declaration, count and metric this file emits stays "
+        "internally consistent -- the run reports the name the operator asked for and "
+        "optimises something else. The second surface is the degenerate-batch bookkeeping "
+        "the estimators sit on: the n-1 divisor that makes a one-row group unrepresentable, "
+        "the std == 0.0 branch that must abstain rather than divide, and the "
+        "strictly-above frac_above diagnostic whose 0.0 and 1.0 endpoints are DECLARED "
+        "degenerate -- inverting a comparison there moves a reading inside its declared "
+        "bounds, which is exactly the shape no bounds check can catch"
+    ),
+    "src/foundationscale/rl/registry.py": (
+        "the name->Algorithm lookup: whether `register_algorithm` refuses a duplicate name "
+        "rather than silently rebinding it, and whether `lookup_algorithm` refuses an "
+        "unknown name rather than returning a default. Both inversions produce a run that "
+        "trains under an algorithm the operator did not name, and neither is visible in any "
+        "metric the run emits -- the wrong objective converges to something. It also holds "
+        "`_install_default_algorithms`, the ONE place the built-in bindings are named: "
+        "dropping an assignment there makes a family unreachable by name after every "
+        "reset, and the absence reads as a name that was never built"
+    ),
 }
 
 OUT_OF_SCOPE: dict[str, str] = {

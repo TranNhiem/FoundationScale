@@ -13,7 +13,20 @@ Design section 9 of ``validation_campaigns/nemo_rl_baseline/PHASE3_DESIGN.md``:
   training view to the generation view;
 * stage 3c -- ``Algorithm``, the policy-gradient binding that consumes all of
   the above, with ``AlgorithmRequirements`` as its declaration and
-  ``StepReport`` as what one step evidences.
+  ``StepReport`` as what one step evidences;
+* stage 3d -- the registry that resolves a name to a binding, and
+  ``GRPOAlgorithm``, the first concrete binding to pass through it. The
+  registry is the seam the remaining algorithm families plug into: a family
+  adds a module and one line in the registry's default install, not an edit
+  to the contracts above. The install lives in the registry rather than in
+  each family's module import so that ``reset_algorithm_registry`` restores
+  the same set every time;
+* stage 3e -- the policy-gradient family ``RLOOAlgorithm``,
+  ``ReinforceBaselineAlgorithm`` and ``ReinforcePlusPlusAlgorithm``, the first
+  use of that seam by something other than the binding it was designed
+  around. The three differ only in how a reward becomes an advantage, so they
+  are the cheapest available test of whether the seam is a seam or a shape
+  fitted to GRPO. It held: no contract in stages 1--3c changed to admit them.
 
 ``WeightSync`` could only be specified once the section-7 item-3
 weight-transfer measurement was taken. It has been, and it returned
@@ -53,11 +66,17 @@ from foundationscale.rl.advantage import (
 from foundationscale.rl.algorithm import (
     Algorithm,
     AlgorithmRequirements,
+    AlgorithmSemantics,
     AlgorithmWiringRefusal,
     StepReport,
     StepReportRefusal,
     check_algorithm_wiring,
     verify_step,
+)
+from foundationscale.rl.grpo import (
+    GRPOAlgorithm,
+    GRPOPolicyLoss,
+    check_grpo_requirements,
 )
 from foundationscale.rl.interfaces import (
     BatchRefusal,
@@ -72,6 +91,24 @@ from foundationscale.rl.interfaces import (
 )
 from foundationscale.rl.losses import DPOLoss, SFTLoss
 from foundationscale.rl.policy import PolicyPair, PolicyRoleRefusal
+from foundationscale.rl.policy_gradient import (
+    ReinforceBaselineAlgorithm,
+    ReinforceBaselineLoss,
+    ReinforcePlusPlusAlgorithm,
+    ReinforcePlusPlusLoss,
+    RLOOAlgorithm,
+    RLOOPolicyLoss,
+    check_reinforce_baseline_requirements,
+    check_reinforce_pp_requirements,
+    check_rloo_requirements,
+)
+from foundationscale.rl.registry import (
+    AlgorithmRegistryRefusal,
+    available_algorithm_names,
+    lookup_algorithm,
+    register_algorithm,
+    reset_algorithm_registry,
+)
 from foundationscale.rl.rollout import (
     CapabilityRefusal,
     RolloutSource,
@@ -95,13 +132,17 @@ __all__ = (
     "AdvantageRefusal",
     "AdvantageResult",
     "Algorithm",
+    "AlgorithmRegistryRefusal",
     "AlgorithmRequirements",
+    "AlgorithmSemantics",
     "AlgorithmWiringRefusal",
     "BatchRefusal",
     "CapabilityRefusal",
     "DPOLoss",
     "ExperienceBatch",
     "ForwardFn",
+    "GRPOAlgorithm",
+    "GRPOPolicyLoss",
     "GeneralisedAdvantageEstimation",
     "GroupNormalisedAdvantage",
     "LeaveOneOutAdvantage",
@@ -111,6 +152,12 @@ __all__ = (
     "LossOutput",
     "PolicyPair",
     "PolicyRoleRefusal",
+    "RLOOAlgorithm",
+    "RLOOPolicyLoss",
+    "ReinforceBaselineAlgorithm",
+    "ReinforceBaselineLoss",
+    "ReinforcePlusPlusAlgorithm",
+    "ReinforcePlusPlusLoss",
     "RewardStats",
     "RolloutSource",
     "SFTLoss",
@@ -123,10 +170,18 @@ __all__ = (
     "SyncReport",
     "SyncReportRefusal",
     "WeightSync",
+    "available_algorithm_names",
     "build_objective_gate_context",
     "check_algorithm_wiring",
     "check_capabilities",
+    "check_grpo_requirements",
+    "check_reinforce_baseline_requirements",
+    "check_reinforce_pp_requirements",
+    "check_rloo_requirements",
     "check_sync_capabilities",
+    "lookup_algorithm",
+    "register_algorithm",
+    "reset_algorithm_registry",
     "verify_generated",
     "verify_step",
     "verify_sync",
