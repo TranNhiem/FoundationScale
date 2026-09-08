@@ -447,7 +447,7 @@ itself, from the Makefile's own accounting:
 
 `src/` = 20039 LOC across 27 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 33385 Python LOC and 6414 shell LOC on top of the
-package. `tools/` contains 9514 Python LOC. 136363 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 9514 Python LOC. 137230 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,

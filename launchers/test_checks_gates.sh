@@ -1485,6 +1485,190 @@ else
   fi
 fi
 
+# --- MUST_PASS: mutation-scope gate self-test (checks/mutation_scope.py) -----
+# Finding #317: the mutation battery's module scope was UNDECLARED. tools/mutate.py's
+# MODULE_PATHS covered 9 files; the git index tracked 47; the other 38 sat in no set and
+# no gate could say so. A pinned COUNT (tests/tooling/test_mutation_anchor_freshness.py
+# pins MODULE_PATHS at 9) is not a denominator: it stops the map shrinking, and says
+# nothing about the tree it is supposed to reach. #316 is the proof -- 444 new lines of
+# adjudication logic landed in the largest unmapped library file and every gate stayed
+# green. This gate partitions the index into covered + pending + out-of-scope and reds
+# on undeclared, double-membership, stale, empty-reason and pasteable-reason.
+#
+# Same floor convention as the f252 and f303 legs above, for the same reason: rc=0 is not
+# the measurement. The trailing tally is parsed and held to a FLOOR of 13 so a self-test
+# that quietly drops controls cannot still read green.
+#
+# The floor spans both families -- 6 MUST_FIRE (one per rule R1-R5, with R3 twice because
+# a stale path can come from PENDING_ENROLMENT or from MODULE_PATHS and those are
+# different code paths) and 7 MUST_PASS (clean synthetic partition, all three UNMEASURED
+# arms, the abstain path, the live shipped tree, and the --mutate-py flag). The last of
+# those is a control ON THE HARNESS: it is what the MUST_FIRE leg below depends on, and a
+# flag that parsed but was never read would leave that leg measuring the shipped tree
+# while believing it measured a doctored one.
+#
+# Floor history: 13 at introduction (#317).
+if [ ! -r "checks/mutation_scope.py" ]; then
+  f317_msg="MUST_PASS FAILED (mutation_scope self-test) UNMEASURED:"
+  f317_msg="$f317_msg checks/mutation_scope.py is not readable -- unreadable is not empty"
+  f317_msg="$f317_msg (doctrine 4); the gate cannot run, so 0 of 13 controls were measured"
+  no "$f317_msg"
+else
+  f317_rc=0
+  f317_out=$(python3 -S checks/mutation_scope.py --self-test 2>&1) || f317_rc=$?
+  f317_last=$(printf '%s\n' "$f317_out" | tail -n 1)
+  f317_have=$(printf '%s\n' "$f317_last" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved;.*/\1/p')
+  f317_want=$(printf '%s\n' "$f317_last" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved;.*/\2/p')
+  if [ "$f317_rc" -ne 0 ]; then
+    f317_msg="MUST_PASS FAILED (mutation_scope self-test): rc=$f317_rc over the gate's"
+    f317_msg="$f317_msg declared denominator of 13 controls (6 MUST_FIRE + 7 MUST_PASS);"
+    f317_msg="$f317_msg 0 of 13 are accepted as behaved, so the leg fails closed. Output:"
+    f317_msg="$f317_msg $(printf '%s\n' "$f317_out" | tr '\n' ' ')"
+    no "$f317_msg"
+  elif [ -z "$f317_have" ] || [ -z "$f317_want" ]; then
+    f317_msg="MUST_PASS FAILED (mutation_scope self-test) UNMEASURED: rc=0 but the last"
+    f317_msg="$f317_msg line carries no parseable 'SELF-TEST DENOMINATOR: N of N controls"
+    f317_msg="$f317_msg behaved' tally -- the measuring unit printed no denominator, so 0 of"
+    f317_msg="$f317_msg 13 declared controls are auditable here. Unparseable is not passing;"
+    f317_msg="$f317_msg fail closed and update this leg in the same commit as the wording"
+    f317_msg="$f317_msg change. Last line: $f317_last"
+    no "$f317_msg"
+  elif [ "$f317_have" -ne "$f317_want" ]; then
+    f317_msg="MUST_PASS FAILED (mutation_scope self-test): denominator $f317_have of"
+    f317_msg="$f317_msg $f317_want controls is not self-consistent -- the self-test examined"
+    f317_msg="$f317_msg fewer controls than it claims to have. rc=0 cannot certify a partial"
+    f317_msg="$f317_msg control set, so the inconsistency fails closed."
+    no "$f317_msg"
+  elif [ "$f317_have" -lt 13 ]; then
+    f317_msg="MUST_PASS FAILED (mutation_scope self-test): control set shrank to $f317_have"
+    f317_msg="$f317_msg of $f317_want, below the measured floor of 13 (6 MUST_FIRE +"
+    f317_msg="$f317_msg 7 MUST_PASS). A shortened self-test still exits 0, so the floor is"
+    f317_msg="$f317_msg the control and this leg fails closed."
+    no "$f317_msg"
+  else
+    f317_msg="MUST_PASS mutation_scope self-test: rc=0 under python3 -S, denominator"
+    f317_msg="$f317_msg $f317_have of $f317_want controls (>= the measured floor of 13,"
+    f317_msg="$f317_msg 6 MUST_FIRE + 7 MUST_PASS): $f317_last"
+    ok "$f317_msg"
+  fi
+fi
+
+# --- MUST_FIRE: mutation_scope discriminates an undeclared file from a declared one ---
+# The self-test above exercises the gate's INTERNAL fixture path over synthetic
+# declarations. This leg exercises the shipped CLI over the REAL git index and the REAL
+# shipped declaration constants, and it is a discrimination PAIR: the same tree, the same
+# 47 files, differing ONLY in whether one path is present in MODULE_PATHS, must give 5
+# (RED) and then 0 (CLEAR).
+#
+# A synthetic tree is deliberately NOT used here. PENDING_ENROLMENT and OUT_OF_SCOPE are
+# pinned module constants naming 38 real repository paths, so pointed at a temporary tree
+# the gate would correctly fire R3 on all of them and the arms would differ by far more
+# than one variable. The one input that is legitimately variable is the covered set, and
+# --mutate-py is what exposes it. Nothing in the working tree is touched: both arms read
+# COPIES in a temp directory, so a killed suite cannot strand a mutated tools/mutate.py
+# (the mutation-battery lesson).
+#
+# The assertion is rc=5 exactly, not merely nonzero: nonzero would accept a crash (1/2) or
+# an UNMEASURED (95) or a REFUSE (96) as the control firing, and none of those is this
+# gate's declared RED. The RED arm additionally asserts that R1 names THE PATH THAT WAS
+# REMOVED -- a gate that reddens for some other reason would satisfy an rc-only check
+# while measuring something else entirely.
+if [ ! -r "checks/mutation_scope.py" ]; then
+  f317b_msg="MUST_FIRE FAILED (mutation_scope undeclared discrimination) UNMEASURED:"
+  f317b_msg="$f317b_msg checks/mutation_scope.py is not readable -- unreadable is not empty"
+  f317b_msg="$f317b_msg (doctrine 4); 0 of 2 discrimination arms were measured"
+  no "$f317b_msg"
+elif [ ! -r "tools/mutate.py" ]; then
+  f317b_msg="MUST_FIRE FAILED (mutation_scope undeclared discrimination) UNMEASURED:"
+  f317b_msg="$f317b_msg tools/mutate.py is not readable, and it is the covered-set source"
+  f317b_msg="$f317b_msg both arms are built from -- the fixture cannot exist, so 0 of 2 ran"
+  no "$f317b_msg"
+else
+  f317b_tmp=$(mktemp -d)
+  # Drop exactly ONE entry from a COPY of MODULE_PATHS. The key is chosen by sort order,
+  # not hard-coded, so the leg cannot go stale the day the map is re-ordered or renamed.
+  f317b_dropped=$(python3 -S - "$f317b_tmp" <<'F317B_PY'
+import ast, sys
+from pathlib import Path
+
+tmp = Path(sys.argv[1])
+src = Path("tools/mutate.py").read_text(encoding="utf-8")
+for node in ast.walk(ast.parse(src)):
+    name = None
+    if isinstance(node, ast.Assign):
+        name = next((t.id for t in node.targets if isinstance(t, ast.Name)), None)
+    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        name = node.target.id
+    if name != "MODULE_PATHS" or node.value is None:
+        continue
+    mapping = ast.literal_eval(node.value)
+    if not mapping:
+        break
+    key = sorted(mapping)[0]
+    lines = src.splitlines(keepends=True)
+    kept = [ln for ln in lines if not (f'"{key}"' in ln and mapping[key] in ln)]
+    if len(kept) == len(lines):
+        break  # the entry is not on one line; say nothing rather than mis-doctor
+    (tmp / "intact.py").write_text(src, encoding="utf-8")
+    (tmp / "doctored.py").write_text("".join(kept), encoding="utf-8")
+    print(mapping[key])
+    break
+F317B_PY
+  ) || f317b_dropped=""
+  if [ -z "$f317b_dropped" ] || [ ! -r "$f317b_tmp/doctored.py" ] || [ ! -r "$f317b_tmp/intact.py" ]; then
+    rm -rf "$f317b_tmp"
+    f317b_msg="MUST_FIRE FAILED (mutation_scope undeclared discrimination) UNMEASURED: the"
+    f317b_msg="$f317b_msg one-entry-removed copy of tools/mutate.py could not be built --"
+    f317b_msg="$f317b_msg MODULE_PATHS is absent, empty, or its first entry is not on a"
+    f317b_msg="$f317b_msg single line. Mis-doctoring would make the arms differ by more than"
+    f317b_msg="$f317b_msg the one variable, so the leg abstains rather than guess; 0 of 2 arms"
+    f317b_msg="$f317b_msg ran."
+    no "$f317b_msg"
+  else
+    f317b_red_rc=0
+    f317b_red_out=$(python3 -S checks/mutation_scope.py --mutate-py "$f317b_tmp/doctored.py" 2>&1) ||
+      f317b_red_rc=$?
+    f317b_clear_rc=0
+    f317b_clear_out=$(python3 -S checks/mutation_scope.py --mutate-py "$f317b_tmp/intact.py" 2>&1) ||
+      f317b_clear_rc=$?
+    rm -rf "$f317b_tmp"
+    if [ "$f317b_red_rc" -ne 5 ]; then
+      f317b_msg="MUST_FIRE FAILED (mutation_scope undeclared discrimination): removing"
+      f317b_msg="$f317b_msg $f317b_dropped from a copy of MODULE_PATHS gave"
+      f317b_msg="$f317b_msg rc=$f317b_red_rc, expected exactly 5 (RED). rc=0 would launder an"
+      f317b_msg="$f317b_msg undeclared tracked file into CLEAR -- the whole of #317 -- and any"
+      f317b_msg="$f317b_msg other nonzero is not this gate's declared RED. Output:"
+      f317b_msg="$f317b_msg $(printf '%s\n' "$f317b_red_out" | tr '\n' ' ')"
+      no "$f317b_msg"
+    elif ! printf '%s\n' "$f317b_red_out" | grep -q "R1 UNDECLARED: $f317b_dropped"; then
+      f317b_msg="MUST_FIRE FAILED (mutation_scope undeclared discrimination): the gate"
+      f317b_msg="$f317b_msg exited 5, but its R1 row does not name $f317b_dropped -- the one"
+      f317b_msg="$f317b_msg path removed. A RED attributed to some other file is not this"
+      f317b_msg="$f317b_msg control firing, and rc alone cannot tell the two apart. Output:"
+      f317b_msg="$f317b_msg $(printf '%s\n' "$f317b_red_out" | tr '\n' ' ')"
+      no "$f317b_msg"
+    elif [ "$f317b_clear_rc" -ne 0 ]; then
+      f317b_msg="MUST_FIRE FAILED (mutation_scope undeclared discrimination): the undeclared"
+      f317b_msg="$f317b_msg arm fired correctly at rc=5 naming $f317b_dropped, but the"
+      f317b_msg="$f317b_msg UNMODIFIED copy of the same file -- the only difference -- still"
+      f317b_msg="$f317b_msg gave rc=$f317b_clear_rc instead of 0. Only 1 of 2 arms held; a gate"
+      f317b_msg="$f317b_msg that reddens a fully-declared partition is stuck RED, not"
+      f317b_msg="$f317b_msg discriminating, so the leg fails closed. Output:"
+      f317b_msg="$f317b_msg $(printf '%s\n' "$f317b_clear_out" | tr '\n' ' ')"
+      no "$f317b_msg"
+    else
+      f317b_msg="MUST_FIRE mutation_scope undeclared discrimination: over the live 47-file"
+      f317b_msg="$f317b_msg index and the shipped declarations, a copy of tools/mutate.py"
+      f317b_msg="$f317b_msg missing $f317b_dropped exited rc=5 with R1 naming that exact path,"
+      f317b_msg="$f317b_msg and the unmodified copy exited rc=0 -- the covered set the only"
+      f317b_msg="$f317b_msg variable, the working tree untouched. Both outcomes held"
+      ok "$f317b_msg"
+    fi
+  fi
+fi
+
 echo "abstentions: $abstain named (each named at its site above with its denominator; 0 added to pass or fail)"
 echo "controls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

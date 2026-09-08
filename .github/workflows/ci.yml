@@ -508,6 +508,31 @@ jobs:
       - name: Citation lines (every in-repo path:N citation names a line that exists)
         run: python3 checks/citation_lines.py
 
+      # #317, and it is the same class one level up: not "does this pointer name a
+      # thing that exists" but "does every thing that exists sit in some declared
+      # set". tools/mutate.py's MODULE_PATHS named 9 files; `git ls-files
+      # src/foundationscale tools` returns 47; the other 38 were in no set, and no
+      # gate could say so. tests/tooling/test_mutation_anchor_freshness.py pins
+      # MODULE_PATHS at 9, which stops the map SHRINKING and asserts nothing about
+      # the tree -- a pinned number is not a denominator.
+      #
+      # #316 is the proof, not the motivation: 444 lines of new adjudication logic
+      # landed in the largest unmapped library file and every gate stayed green.
+      #
+      # PENDING_ENROLMENT is deliberately an UNMEASURED population being COUNTED,
+      # never a green one being hidden: its size prints on every CLEAR line, so the
+      # gap between "lines execute under tests" (coverage-floor) and "rules are
+      # checked against mutants" (the battery) cannot widen quietly. Those are
+      # different claims and the first is not evidence for the second.
+      #
+      # It is in the SAME commit as the `mutation-scope` Makefile target it mirrors,
+      # for the reason the citation-lines step above gives: #286 is still open, so
+      # the Makefile<->CI pairing is held by hand.
+      - name: Mutation-scope controls (MUST_FIRE per rule + the live tree as a control)
+        run: python3 checks/mutation_scope.py --self-test
+      - name: Mutation scope (every tracked file sits in exactly one declared set)
+        run: python3 checks/mutation_scope.py
+
       # Standing gates (#293). The H100 campaign's nine gate_*.py scripts were
       # invoked ONLY by build_h100_plane.sh, which no make target and no CI step
       # runs -- so the whole tail of that gate plane was reachable by nobody.

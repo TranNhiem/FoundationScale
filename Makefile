@@ -103,7 +103,7 @@ ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
 endif
 
-.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers citation-lines launcher-contracts checks-gates standing-gates mutation mutation-module skip-guard-probe check clean
+.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope launcher-contracts checks-gates standing-gates mutation mutation-module skip-guard-probe check clean
 
 install:
 	$(PY) -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
@@ -343,6 +343,31 @@ citation-lines:
 	$(PY) checks/citation_lines.py --self-test
 	$(PY) checks/citation_lines.py
 
+# Finding #317. The mutation battery's module scope was UNDECLARED: MODULE_PATHS in
+# tools/mutate.py named 9 files, `git ls-files src/foundationscale tools` returned 47,
+# and the other 38 sat in no set at all. tests/tooling/test_mutation_anchor_freshness.py
+# pins MODULE_PATHS at 9, which stops the map SHRINKING and says nothing about the tree
+# it is meant to reach -- a pinned number is not a denominator.
+#
+# #316 is the proof rather than the motivation: it added 444 lines of adjudication logic
+# to src/foundationscale/gates/objective_gates.py, at the time the largest unmapped
+# library file, and every gate in the repository stayed green. Nothing was wrong; the
+# denominator had quietly stopped reaching part of the surface it certifies.
+#
+# The gate partitions the index into covered + pending + out-of-scope and requires every
+# tracked file in exactly one. PENDING_ENROLMENT is an UNMEASURED population being
+# COUNTED, not a green one being hidden -- its size prints on every CLEAR line so the gap
+# cannot grow silently. Coverage-floor touching a file means its LINES execute; the
+# battery covering it means its RULES are checked against mutants. Different claims, and
+# the first is not evidence for the second.
+#
+# Self-test first, same order and same reason as doc-pointers and citation-lines. It is
+# in the SAME commit as the CI step that mirrors it: #286 (no Makefile<->CI mirror gate)
+# is still open, so that pairing is held by hand.
+mutation-scope:
+	$(PY) checks/mutation_scope.py --self-test
+	$(PY) checks/mutation_scope.py
+
 # Finding #254. CI runs launchers/test_launcher_contracts.sh; until this target
 # existed, no `make` goal did, so the largest gate in the repository was one a
 # developer could not run before pushing. That is the #230 asymmetry with the
@@ -452,7 +477,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers citation-lines launcher-contracts checks-gates standing-gates mutation
+check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope launcher-contracts checks-gates standing-gates mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \
