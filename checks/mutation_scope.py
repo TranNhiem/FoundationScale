@@ -200,6 +200,20 @@ PENDING_ENROLMENT: dict[str, str] = {
         "later mutation from changing what a run scores against -- every one of them a "
         "guard whose inversion is silent at runtime"
     ),
+    "src/foundationscale/rl/rollout.py": (
+        "the seam between what a rollout source CLAIMS it produces and what it actually "
+        "produced: check_capabilities reads the claim, verify_generated measures the "
+        "artifact, and the refusal on an EMPTY required set is what stops a source from "
+        "clearing by asking for nothing -- inverting any of those is a vacuous pass, "
+        "not a wrong number"
+    ),
+    "src/foundationscale/rl/advantage.py": (
+        "the advantage arithmetic AND the exclusion bookkeeping around it: the "
+        "population-vs-sample divisor, the leave-one-out baseline's n-1, the backward "
+        "GAE recursion, and the used/offered/rows triple that says WHICH samples "
+        "survived a degenerate group -- a mutation to the rows bookkeeping misattributes "
+        "gradients to the wrong sequences while every reported number stays plausible"
+    ),
 }
 
 OUT_OF_SCOPE: dict[str, str] = {

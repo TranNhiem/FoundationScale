@@ -609,6 +609,36 @@ path (`foundationscale.rl`) is unchanged, so the move is invisible to callers.
 3. Land `RolloutSource`, `AdvantageFn`, and `WeightSync` together — they are not
    separable — behind one policy-gradient algorithm, gated on the transport
    measurement (section 7, item 3).
+
+   **Stage 3 was SPLIT at 3a/3b, and the split is the gate doing its job.** The
+   claim that the three contracts "are not separable" is true of the *algorithm*
+   that uses them and false of the contracts themselves. `RolloutSource` and
+   `AdvantageFn` are specified entirely by what a rollout produces and what a
+   reward becomes — neither needs a number from a cluster. `WeightSync` and the
+   `Algorithm` binding are the opposite: both are shaped by how expensive a
+   weight transfer is, which is exactly the section-7 item-3 measurement, and
+   which has not been taken. Writing them now would mean *asserting* a cost model
+   and then discovering it, which is the failure this campaign keeps finding
+   under a different name.
+
+   So: **3a has landed** (`rollout.py`, `advantage.py`) and **3b is blocked on the
+   item-3 measurement, deliberately and by name** — not deferred for want of time.
+   Three advantage functions ship in 3a (`GroupNormalisedAdvantage`,
+   `LeaveOneOutAdvantage`, `GeneralisedAdvantageEstimation`); section 4's four
+   algorithms need no more than these, so 3b adds a binding, not more arithmetic.
+
+   Two contracts in 3a exist only because a count is not an attribution.
+   `RolloutSource.capabilities()` is a CLAIM and `verify_generated` is the
+   MEASUREMENT of the same thing, kept as separate calls so a source that
+   mis-declares itself is caught by the artifact rather than believed. And
+   `AdvantageResult` carries `rows` alongside `used`/`offered`: an advantage
+   function that drops a degenerate group returns a COMPACTED weights tuple, so
+   `used < offered` says how many samples survived but not which — and with
+   interleaved groups the survivors are not a prefix. A caller zipping weights
+   positionally against its batch would apply one group's advantages to another
+   group's sequences and never raise. `rows` names the survivors; the strictly-
+   increasing constraint makes it a subsequence of the offered batch, so the zip
+   is safe without also trusting the producer to have preserved batch order.
 4. Reward-model training last, because its misfit (section 4) may force a contract
    revision, and revisions are cheapest before anything depends on the contract.
 
