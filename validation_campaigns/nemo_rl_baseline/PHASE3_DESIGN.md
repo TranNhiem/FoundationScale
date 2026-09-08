@@ -579,6 +579,33 @@ measurements — the gate plane's fail-closed discipline is the motivation, and 
    degenerate=(0.0,))`), because `0.0` is inside an accuracy's natural range and
    bounds alone cannot refuse it. Conditions (a) and (c) are the same finding on
    two axes: declaration is what puts a quantity in the denominator.
+
+   **Condition (a) is unsatisfiable as literally written, and was implemented as
+   its intent instead.** Reading the gate rather than assuming it:
+   `LossComponentCoverageGate` FAILS any declared component whose `weight` is
+   `0.0` (`src/foundationscale/gates/objective_gates.py`, the `zero_weight`
+   branch), and the section-7 item-4 measurement table says the same thing in its
+   own row — `sft_loss`, 0.0000, declared, weight 0.0, **FAIL**. That gate runs at
+   `Lifecycle.STEP_ZERO`, so a DPO run that declared an inactive `sft_loss` would
+   be refused before step 1: the instruction as written makes every sft-off DPO
+   run unlaunchable. The gate's bidirectional leg blocks the obvious escape too —
+   computing the term without declaring it fails on the other side.
+
+   What (a) actually requires is that *an inactive term and a broken term cannot
+   read identically*. `DPOLoss` gets that by deriving BOTH the declaration and the
+   computation from one field, `sft_weight`: `declaration()` names
+   `sft_component_name` exactly when `sft_weight != 0.0`, and `__call__` computes
+   and emits the component under exactly the same condition. There is therefore no
+   computed-but-undeclared state for a gate to be blind to, and no declared-but-
+   zero-weight state for a gate to refuse. `tests/rl/test_dpo_loss.py` pins the
+   declared set equal to the observed set across both settings of that one field;
+   that equality, not the declaration of an inert term, is the property (a) was
+   reaching for.
+
+**Stages 1 and 2 have landed** (`src/foundationscale/rl/`: `interfaces.py`,
+`losses.py`, `policy.py`). Stage 2 split implementations out of `interfaces.py`
+because stage 3 adds three more contracts plus an algorithm; the public import
+path (`foundationscale.rl`) is unchanged, so the move is invisible to callers.
 3. Land `RolloutSource`, `AdvantageFn`, and `WeightSync` together — they are not
    separable — behind one policy-gradient algorithm, gated on the transport
    measurement (section 7, item 3).
@@ -587,9 +614,14 @@ measurements — the gate plane's fail-closed discipline is the motivation, and 
 
 ## 10. What this document does NOT establish
 
-* No code has been written. Every interface named in section 3 is a proposal; no
-  proposed component exists.
-* Nothing proposed here has been run. There is no implementation to run.
+* Stages 1 and 2 of section 9 have been written; stages 3 and 4 have not.
+  `ExperienceBatch`, `LossFn`, `LossDeclaration`, `SFTLoss`, `DPOLoss`,
+  `PolicyPair` and `build_objective_gate_context` exist under
+  `src/foundationscale/rl/`. `Algorithm`, `RolloutSource`, `AdvantageFn`,
+  `WeightSync` and `StepReport` remain proposals with no implementation.
+* What exists has been unit-tested, not RUN: stage 1 was exercised inside
+  `train(cfg)`, and stage 2's DPO has never trained a model. No RL training run
+  of any kind has been executed through this plane.
 * This is not a benchmark. No relative performance claim is made or implied; Phase
   4 is the benchmark.
 * Both sides of this design were read at API-skeleton granularity: signatures and

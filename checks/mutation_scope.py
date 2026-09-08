@@ -181,10 +181,24 @@ PENDING_ENROLMENT: dict[str, str] = {
         "UNVERIFIED, so it is declared pending rather than excluded"
     ),
     "src/foundationscale/rl/interfaces.py": (
-        "SFTLoss, BatchRefusal, SupervisionRefusal, _mask_value and "
-        "build_objective_gate_context over 22 branch or raise sites (measured); "
-        "all three review passes read it as a data declaration and two flagged their "
-        "own uncertainty"
+        "ExperienceBatch, the LossFn/LossDeclaration contracts and "
+        "build_objective_gate_context -- the bridge that decides which components and "
+        "metrics reach the objective gates at all; a mutation here narrows a "
+        "denominator rather than changing a number, which is the failure mode this "
+        "campaign keeps finding and the one a value assertion does not catch"
+    ),
+    "src/foundationscale/rl/losses.py": (
+        "the RL objective arithmetic -- SFTLoss's masked mean and DPOLoss's stable "
+        "softplus margin, plus the sft_weight field that drives BOTH the computed term "
+        "and its declaration; a mutation that desynchronises those two reproduces "
+        "design condition (a) exactly, and the sign and comparison sites are where a "
+        "silently-wrong loss lives"
+    ),
+    "src/foundationscale/rl/policy.py": (
+        "PolicyPair's role namespace: the refusals that keep 'train'/'generate' "
+        "disjoint from reference roles, and the frozen dict copy that stops a caller's "
+        "later mutation from changing what a run scores against -- every one of them a "
+        "guard whose inversion is silent at runtime"
     ),
 }
 

@@ -24,16 +24,26 @@ from foundationscale.rl import (
     build_objective_gate_context,
 )
 
-PUBLIC_NAMES = (
-    "BatchRefusal",
-    "ExperienceBatch",
-    "ForwardFn",
-    "LossFn",
-    "LossOutput",
-    "SFTLoss",
-    "SupervisionRefusal",
-    "build_objective_gate_context",
-)
+# Per MODULE, not per package: stage 2 split implementations out of
+# ``interfaces`` into ``losses`` and ``policy``, and a torch import can creep
+# into any of the three. Asserting over the package alone would leave two of
+# three modules in no denominator -- and the modules that hold the arithmetic
+# are exactly the two that would have dropped out.
+TORCH_FREE_MODULES = {
+    "foundationscale.rl.interfaces": (
+        "BatchRefusal",
+        "ExperienceBatch",
+        "ForwardFn",
+        "LossConfigRefusal",
+        "LossDeclaration",
+        "LossFn",
+        "LossOutput",
+        "SupervisionRefusal",
+        "build_objective_gate_context",
+    ),
+    "foundationscale.rl.losses": ("DPOLoss", "SFTLoss"),
+    "foundationscale.rl.policy": ("PolicyPair", "PolicyRoleRefusal"),
+}
 
 
 def _measured_loss() -> LossOutput:
@@ -191,6 +201,40 @@ def test_weight_scales_loss_and_is_recorded_on_component() -> None:
     (component,) = output.components
     assert component.weight == 0.5
     assert component.contribution == output.loss
+
+
+def test_sft_declaration_states_one_component_and_a_declared_metric_abstention() -> None:
+    declaration = SFTLoss().declaration()
+    assert declaration.components == ("sft_loss",)
+    assert declaration.metrics == ()
+    # Asserting the empty tuple alone cannot tell a DECLARED abstention from an
+    # oversight -- both are `()`. Feeding it to the plane can: with nothing
+    # declared and nothing observed, objective.metrics answers SKIP, so the
+    # absence stays in the sweep's denominator instead of reading as coverage.
+    step0_hparams = {"lr": 1e-5}
+    ctx = build_objective_gate_context(
+        _measured_loss(),
+        objective=_DECLARED_OBJECTIVE,
+        declared_components=declaration.components,
+        declared_metrics=declaration.metrics,
+        current_hparams=dict(step0_hparams),
+        step0_fingerprint=fingerprint_hparams(step0_hparams),
+        step0_hparams=step0_hparams,
+    )
+    report = run_event(REGISTRY, Lifecycle.STEP_ZERO, ctx, missing_ctx="report-skip")
+    assert _result_by_id(report, "objective.metrics").verdict.name == "SKIP"
+
+
+def test_sft_declared_and_observed_component_names_cannot_diverge() -> None:
+    # Both the declaration and the computed component read the ONE field
+    # component_name, so renaming it cannot leave a declared-but-unobserved
+    # component behind -- the state LossComponentCoverageGate blocks on.
+    loss_fn = SFTLoss(component_name="policy_loss")
+    batch = ExperienceBatch(columns={"loss_mask": [[1, 1]]})
+    output = loss_fn(lambda _batch: [[-0.5, -0.25]], batch)
+    declared = set(loss_fn.declaration().components)
+    assert declared == {"policy_loss"}
+    assert {component.name for component in output.components} == declared
 
 
 def test_fractional_mask_entry_is_refused_with_row_and_position() -> None:
@@ -366,7 +410,8 @@ def test_bridge_passes_loss_components_through_unchanged() -> None:
         assert reached is original
 
 
-def test_module_imports_with_torch_absent() -> None:
+@pytest.mark.parametrize("module_name", sorted(TORCH_FREE_MODULES))
+def test_module_imports_with_torch_absent(module_name: str) -> None:
     class _TorchBlocker:
         def find_spec(self, name: str, path: Any = None, target: Any = None) -> Any:
             if name == "torch" or name.startswith("torch."):
@@ -374,13 +419,12 @@ def test_module_imports_with_torch_absent() -> None:
                 raise ImportError(msg)
             return None
 
-    module_name = "foundationscale.rl.interfaces"
     blocker = _TorchBlocker()
     saved = sys.modules.pop(module_name, None)
     sys.meta_path.insert(0, cast(Any, blocker))
     try:
         module = importlib.import_module(module_name)
-        for public_name in PUBLIC_NAMES:
+        for public_name in TORCH_FREE_MODULES[module_name]:
             assert hasattr(module, public_name), public_name
     finally:
         # Restore both the finder chain and sys.modules exactly: a leaked

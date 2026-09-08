@@ -1,10 +1,14 @@
-"""Phase 3 stage-1 contracts: the batch, the loss, and the gate bridge.
+"""Phase 3 RL contracts: the batch, the loss contract, and the gate bridge.
 
-Design section 9 stage 1: ``ExperienceBatch``, ``LossFn`` with supervised
-fine-tuning only, and the objective-gate bridge. ``Algorithm``,
-``RolloutSource``, ``AdvantageFn``, ``PolicyPair``, ``WeightSync`` and
-``StepReport`` are later stages and are deliberately absent -- shipping them
-here would be wrong, not ahead.
+This module holds CONTRACTS. The ``LossFn`` implementations live beside it in
+``losses.py`` and the model-view container in ``policy.py``; the split happened
+when stage 2 added a second loss, because stage 3 adds more still.
+
+Design section 9 stages 1-2: ``ExperienceBatch``, ``LossFn`` and its
+``LossDeclaration``, and the objective-gate bridge. ``Algorithm``,
+``RolloutSource``, ``AdvantageFn``, ``WeightSync`` and ``StepReport`` are later
+stages and are deliberately absent -- shipping them here would be wrong, not
+ahead.
 
 No torch at module scope: the gate plane is imported by torch-free host
 tooling, so every tensor interaction in this file is duck-typed and no
@@ -29,9 +33,10 @@ __all__ = (
     "BatchRefusal",
     "ExperienceBatch",
     "ForwardFn",
+    "LossConfigRefusal",
+    "LossDeclaration",
     "LossFn",
     "LossOutput",
-    "SFTLoss",
     "SupervisionRefusal",
     "build_objective_gate_context",
 )
@@ -47,6 +52,16 @@ class SupervisionRefusal(ValueError):
     # Raised when the supervision mask selects nothing. The loss is
     # UNMEASURABLE on such a batch; returning 0.0 would report a perfect
     # loss for a batch that taught the model nothing.
+    pass
+
+
+class LossConfigRefusal(ValueError):
+    # Raised when a loss's OWN configuration is incoherent -- a non-positive
+    # beta, a zero weight on a component the loss will declare, two components
+    # sharing one name. Distinct from BatchRefusal because the offending value
+    # is the algorithm's, not the data's, and it is knowable at construction:
+    # refusing there costs nothing, while refusing at step zero costs an
+    # allocation.
     pass
 
 
@@ -164,6 +179,33 @@ class LossOutput:
 ForwardFn = Callable[[ExperienceBatch], Any]
 
 
+@dataclass(frozen=True)
+class LossDeclaration:
+    """What an algorithm states it will put in the objective's denominator.
+
+    ``components`` names the loss terms and ``metrics`` the diagnostic readings,
+    each with the bounds and degenerate values the algorithm knows and the gate
+    plane cannot guess. Declaration is what puts a quantity in a denominator:
+    the measurement behind design section 7 item 4 found that an undeclared
+    ``sft_loss`` reading 0.0000 for a whole run passed four green gates, and that
+    an undeclared metric is refused outright.
+
+    This is the statement a run RECORDS -- at step zero, into the manifest. It is
+    NOT an input to :func:`build_objective_gate_context`. The gates compare what
+    the run recorded against what the live step observed; handing them a
+    declaration derived from the live loss object would compare what is in force
+    against what is in force, which is vacuous and is precisely the reading the
+    gates exist to refuse.
+    """
+
+    components: tuple[str, ...]
+    metrics: tuple[MetricExpectation, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "components", tuple(self.components))
+        object.__setattr__(self, "metrics", tuple(self.metrics))
+
+
 class LossFn(Protocol):
     """Maps one forward pass over a typed batch to a scalar plus components.
 
@@ -172,114 +214,17 @@ class LossFn(Protocol):
     blind. The call signature is FoundationScale's own; the reference
     implementation's signature (Phase 1 unknown 1) is unverified and no
     equivalence with it is claimed.
+
+    ``declaration`` is part of the contract rather than a convention at the call
+    site because condition (a) of design section 9 stage 2 is a requirement on
+    the ALGORITHM: a loss that can compute a term it does not declare has a
+    state in which an inactive term and a broken term read identically. Deriving
+    both from the loss's own fields is what removes that state.
     """
 
     def __call__(self, forward_fn: ForwardFn, batch: ExperienceBatch) -> LossOutput: ...
 
-
-def _mask_value(raw: Any, row: int, position: int) -> float:
-    # `isinstance(True, int)` is True in Python, so the bool branch comes
-    # FIRST. Everything after it is admitted by VALUE, via float(), rather
-    # than by an isinstance test against int/float: a mask arriving as a
-    # foreign scalar (one framework's 0-d array element) is the ordinary
-    # case at the loop seam, and a type test would refuse a well-formed
-    # mask for carrying the wrong Python class. The value check is what
-    # holds the contract -- entries outside {0, 1} are refused rather than
-    # read as fractional weights, because admitting one would silently
-    # change the supervised-token count this loss divides by.
-    if isinstance(raw, bool):
-        return 1.0 if raw else 0.0
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        pass
-    else:
-        if value in (0.0, 1.0):
-            return value
-    raise BatchRefusal(
-        f"mask entry at row {row}, position {position} is {raw!r}; "
-        f"supervision mask entries must be 0 or 1"
-    )
-
-
-def _as_float(raw: Any, row: int, position: int) -> float:
-    try:
-        return float(raw)
-    except (TypeError, ValueError) as exc:
-        raise BatchRefusal(
-            f"log-probability at row {row}, position {position} does not "
-            f"convert to a scalar float ({type(raw).__name__}); forward_fn "
-            f"must return one scalar target log-probability per token"
-        ) from exc
-
-
-@dataclass(frozen=True)
-class SFTLoss:
-    """Supervised fine-tuning loss: masked mean of negative target log-probs.
-
-    ``forward_fn`` is invoked once with the batch and must return per-token
-    TARGET log-probabilities: one row per batch row, one scalar per token
-    position, as any iterable of iterables whose leaves support ``float()``
-    (a plain nested list satisfies this; so does a row-iterable of scalar
-    leaves). Raw logits are NOT accepted: who owns the log-softmax and the
-    label gather is an open question (Phase 1 unknown 1, design section
-    3.2), and this stage takes the narrowest option -- the caller
-    normalises -- rather than inventing a mechanism here.
-
-    The mask column must contain only 0 or 1 entries. A batch whose mask
-    selects zero supervised tokens is REFUSED with the batch's row count
-    and the measured supervised-token count in the message; the loss is
-    unmeasurable on that batch.
-    """
-
-    mask_column: str = "loss_mask"
-    component_name: str = "sft_loss"
-    weight: float = 1.0
-
-    def __call__(self, forward_fn: ForwardFn, batch: ExperienceBatch) -> LossOutput:
-        if self.mask_column not in batch.columns:
-            raise BatchRefusal(
-                f"SFTLoss requires mask column {self.mask_column!r}; this "
-                f"batch carries {tuple(batch.columns)}"
-            )
-        mask = batch.column(self.mask_column)
-        log_probs = forward_fn(batch)
-        rows = [tuple(row) for row in log_probs]
-        if len(rows) != len(batch):
-            raise BatchRefusal(
-                f"forward_fn returned {len(rows)} per-token rows for a batch "
-                f"of {len(batch)} rows; one row of log-probabilities per "
-                f"batch row is required"
-            )
-        total = 0.0
-        supervised = 0
-        for row_index, (lp_row, mask_row) in enumerate(zip(rows, mask, strict=True)):
-            mask_entries = tuple(mask_row)
-            if len(lp_row) != len(mask_entries):
-                raise BatchRefusal(
-                    f"row {row_index}: forward_fn returned {len(lp_row)} "
-                    f"per-token log-probabilities but the mask has "
-                    f"{len(mask_entries)} entries"
-                )
-            for position, (lp, raw_mask) in enumerate(zip(lp_row, mask_entries, strict=True)):
-                if _mask_value(raw_mask, row_index, position):
-                    supervised += 1
-                    total += _as_float(lp, row_index, position)
-        if supervised == 0:
-            raise SupervisionRefusal(
-                f"supervision mask {self.mask_column!r} selected 0 supervised "
-                f"tokens across {len(batch)} batch rows; the loss is "
-                f"unmeasurable on this batch, and returning 0.0 would report "
-                f"a perfect loss for a batch that taught the model nothing"
-            )
-        loss = -self.weight * (total / supervised)
-        component = LossComponent(
-            name=self.component_name,
-            weight=self.weight,
-            observed=True,
-            contribution=loss,
-        )
-        return LossOutput(loss=loss, components=(component,))
+    def declaration(self) -> LossDeclaration: ...
 
 
 def build_objective_gate_context(
