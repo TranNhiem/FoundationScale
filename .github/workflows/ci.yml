@@ -1191,7 +1191,18 @@ jobs:
     # ever fires, the run is `cancelled` again and we are back to a neutral
     # word for an unmeasured gate; the inner deadline exists so that never
     # happens, and this is only the backstop behind it.
-    timeout-minutes: 25
+    #
+    # Raised 25 -> 38 with the inner deadline 18m -> 30m (#356). A shard's cost
+    # is O(mutants x FULL suite): tools/mutate.py runs `pytest tests/` once per
+    # mutant and a SECOND confirmation run whenever the first looks like a kill,
+    # so a module whose rows all die costs 2n+1 suite runs. The suite grew ~70
+    # tests in one cycle and `manifest` (11 rows, the largest shard) crossed 18m
+    # mid-mutant: 9 killed, then SIGKILL landed inside run 20 of 23. That is
+    # exit 2 over a module nobody measured. The walls move rather than the
+    # per-mutant scope, because the battery's claim is "does ANY test in this
+    # repo catch this mutation" and scoping the suite down would narrow the
+    # claim while leaving the number looking the same.
+    timeout-minutes: 38
     strategy:
       # Every shard reports. fail-fast would cancel the siblings of the first
       # red one, and a cancelled sibling is an unmeasured module wearing the
@@ -1238,12 +1249,12 @@ jobs:
         # which is exactly the "looks like something else" failure being fixed.
         run: |
           set +e
-          timeout --signal=INT --kill-after=60s 18m \
+          timeout --signal=INT --kill-after=60s 30m \
             python tools/mutate.py --module "${{ matrix.module }}"
           rc=$?
           set -e
           if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
-            echo "::error::mutation shard ${{ matrix.module }} exceeded its 18-minute deadline."
+            echo "::error::mutation shard ${{ matrix.module }} exceeded its 30-minute deadline."
             echo "::error::NOTHING WAS MEASURED for this module. This is exit 2 (never"
             echo "::error::measured), not a cancellation and not a pass: no mutant in"
             echo "::error::${{ matrix.module }} was scored, so no claim about it holds."
