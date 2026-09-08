@@ -4,7 +4,7 @@ FoundationScale describes itself, in `src/foundationscale/__init__.py`, as "veri
 
 ## 1. What the repository physically contains
 
-The census records 142236 git-tracked .py/.sh/.md lines repo-wide. The trees, from largest to smallest:
+The census records 142253 git-tracked .py/.sh/.md lines repo-wide. The trees, from largest to smallest:
 
 - **`validation_campaigns/h100_validation/`** — an off-package validation-and-repair plane for an H100 estate launch. `validation_campaigns/h100_validation/` (33385 .py LOC, 65 files) plus `validation_campaigns/h100_validation/*.sh` (6414 LOC, 5 files). It is the single largest tree in the repository, bigger than the installable package. It contains a large family of `patch_*.py` scripts, a second family of `gate_*.py` scripts, executor `apply_*.py` scripts, a generated subtree at `validation_campaigns/h100_validation/h100/gen/`, deliverable documents under `validation_campaigns/h100_validation/h100/` (architecture review, validation report, matrix, EVIDENCE.md, LAUNCH.md), and two pytest files.
 - **`tests/`** — `tests/` (32221 .py LOC, 73 files; 114 import statements) in the census's wording. Test file names are not in the evidence slice, so this review cannot enumerate what the suite covers by file; section 9 reasons from what is visible elsewhere.
