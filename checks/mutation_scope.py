@@ -305,6 +305,43 @@ PENDING_ENROLMENT: dict[str, str] = {
         "dropping an assignment there makes a family unreachable by name after every "
         "reset, and the absence reads as a name that was never built"
     ),
+    "src/foundationscale/rl/group_policy_objectives.py": (
+        "GSPO, Dr.GRPO and DAPO stated as four declared axes -- ratio_scope, the advantage "
+        "estimator, clip_bounds and reduction. The axes are READ by the tensor kernel, so a "
+        "mutated axis does not fail: it silently prices a DIFFERENT algorithm under the "
+        "requested name. DAPO's asymmetric upper clip is the sharpest case, because a "
+        "symmetric bound leaves it arithmetically identical to GRPO"
+    ),
+    "src/foundationscale/rl/group_policy.py": (
+        "the ONE binding all three sequence-level objectives share, and the three "
+        "default-configured factories the registry installs. A swapped factory registers a "
+        "real, working algorithm under another algorithm's name"
+    ),
+    "src/foundationscale/rl/torch_backend.py": (
+        "the ONE generic tensor kernel: it turns any axes-speaking objective into the 0-dim "
+        "differentiable scalar the optimizer sees. Every arithmetic surface here is silent "
+        "when wrong -- a flipped loss sign, a wrong reduction denominator, a reversed k3 "
+        "direction and an ignored clip bound all still produce a finite loss that descends "
+        "to the wrong place. It is held to the pure-python oracle by a numerical-equivalence "
+        "suite, and 13 of a 14-row local battery die against it"
+    ),
+    "src/foundationscale/rl/corpus.py": (
+        "turns the on-disk corpus into typed Samples and extracts the verifiable MCQ gold. "
+        "Both halves fail silently: a suffix the directory scan does not admit reads as an "
+        "ABSENT corpus, and a loosened gold rule invents supervision by guessing a letter "
+        "rather than abstaining -- which trains the policy against a wrong target while "
+        "reporting a clean accuracy"
+    ),
+    "src/foundationscale/rl/rewards.py": (
+        "scores a generated answer against the extracted gold. A reward that is wrong in a "
+        "CONSTANT direction still produces a converging run, aimed at the wrong objective"
+    ),
+    "src/foundationscale/rl/trainer.py": (
+        "the one module that owns torch and transformers end to end: generation, the "
+        "no-grad old-logprob recompute, the supervision mask, and the optimizer step. The "
+        "attention/response mask width split is the sharpest surface -- conflating the two "
+        "either raises or shifts every position by one, and the shifted variant trains"
+    ),
 }
 
 OUT_OF_SCOPE: dict[str, str] = {

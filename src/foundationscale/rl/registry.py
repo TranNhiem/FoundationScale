@@ -159,6 +159,11 @@ def _install_default_algorithms() -> None:
     # ``if name not in available_algorithm_names(): register(...)`` would
     # SKIP silently when a different binding already held the name -- the
     # absence would then read as a successful install.
+    from foundationscale.rl.group_policy import (
+        dapo_algorithm,
+        dr_grpo_algorithm,
+        gspo_algorithm,
+    )
     from foundationscale.rl.grpo import GRPOAlgorithm
     from foundationscale.rl.policy_gradient import (
         ReinforceBaselineAlgorithm,
@@ -190,6 +195,13 @@ def _install_default_algorithms() -> None:
     _REGISTRY["kto"] = kto_algorithm
     _REGISTRY["orpo"] = orpo_algorithm
     _REGISTRY["simpo"] = simpo_algorithm
+    # The sequence-level and variance-reduced family registers FACTORIES for
+    # the same reason the preference family does: each binding carries a
+    # configured objective, so the zero-argument callable is the family's
+    # default-configured factory rather than the unconfigured class.
+    _REGISTRY["dapo"] = dapo_algorithm
+    _REGISTRY["dr_grpo"] = dr_grpo_algorithm
+    _REGISTRY["gspo"] = gspo_algorithm
 
 
 _install_default_algorithms()

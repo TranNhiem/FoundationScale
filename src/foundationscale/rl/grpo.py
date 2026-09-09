@@ -23,7 +23,7 @@ import math
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 from foundationscale.gates.objective_gates import LossComponent
 from foundationscale.rl.advantage import (
@@ -273,6 +273,31 @@ class GRPOPolicyLoss:
                 f"treats group_size as the exact K, not merely as a lower "
                 f"bound"
             )
+
+    # The three axis properties below state, in the shared axes vocabulary,
+    # facts this class already asserted in prose and in ``semantics()``. They
+    # add no field, no configuration and no behaviour: ``ratio_scope`` repeats
+    # ``semantics().ratio_scope``, ``clip_bounds`` pairs the two bounds
+    # ``semantics()`` already pairs, and ``reduction`` names the
+    # supervised-token mean the class docstring describes. They exist because
+    # the generic tensor kernel reads an objective's axes rather than its
+    # class, so an objective that does not speak the vocabulary is invisible
+    # to it. Restating a declaration is the alternative to a per-algorithm
+    # branch, and this module stays torch-free either way.
+    @property
+    def ratio_scope(self) -> Literal["token", "sequence"]:
+        """Declare GRPO's token-scope importance ratio."""
+        return "token"
+
+    @property
+    def reduction(self) -> Literal["token_mean", "sequence_mean", "constant"]:
+        """Declare GRPO's supervised-token-mean policy denominator."""
+        return "token_mean"
+
+    @property
+    def clip_bounds(self) -> tuple[float, float]:
+        """Pair the two separately configured ratio clip bounds."""
+        return (float(self.clip_low), float(self.clip_high))
 
     @property
     def required_columns(self) -> tuple[str, ...]:

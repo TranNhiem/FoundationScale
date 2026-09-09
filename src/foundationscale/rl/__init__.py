@@ -86,6 +86,31 @@ Design section 9 of ``validation_campaigns/nemo_rl_baseline/PHASE3_DESIGN.md``:
   guessed, because a class check would silently default an unrecognised
   objective to paired and fail by mis-shaping the forward closure instead of
   by refusing.
+* stage 3j -- the sequence-level and variance-reduced family: ``GSPOLoss``,
+  ``DrGRPOLoss`` and ``DAPOLoss`` in ``group_policy_objectives``, bound by one
+  ``SequencePolicyAlgorithm`` in ``group_policy``. The three differ from GRPO
+  and from each other along exactly four declared axes -- ``ratio_scope``
+  (token or sequence), the advantage estimator, ``clip_bounds`` (DAPO's upper
+  bound is ASYMMETRIC), and ``reduction`` (token mean, sequence mean, or a
+  constant denominator). Those axes are a shared VOCABULARY, not per-class
+  behaviour: ``GRPOPolicyLoss`` was retrofitted to speak it too, so the family
+  is read by axis rather than by class anywhere it matters. The alternative --
+  a branch per algorithm in the consumer -- is exactly the duplication the
+  axes matrix exists to remove, and it would have to be re-opened for every
+  future member.
+
+The tensor plane, and why it is NOT re-exported here. ``torch_backend``
+supplies ``TensorPolicyLoss``, the ONE generic kernel that turns any objective
+speaking the axes vocabulary into the 0-dim differentiable tensor an optimizer
+can consume; ``trainer`` drives a real model end to end. Both import torch,
+and this package does not. Re-exporting either from here would make ``import
+foundationscale.rl`` require torch, which would silently end the torch-free
+property every other module in the plane is held to -- the objectives would
+still BE torch-free while becoming unimportable without torch, and the gate
+measuring that property would go dark for the whole package. So they are
+reached by explicit submodule import. The objectives remain the ORACLE: the
+kernel is trustworthy exactly insofar as it reproduces their arithmetic, and a
+numerical-equivalence suite holds it there.
 
 ``WeightSync`` could only be specified once the section-7 item-3
 weight-transfer measurement was taken. It has been, and it returned
@@ -134,6 +159,24 @@ from foundationscale.rl.algorithm import (
     check_algorithm_wiring,
     check_role_map,
     verify_step,
+)
+from foundationscale.rl.corpus import (
+    Sample,
+    extract_mcq_gold,
+    load_sharegpt,
+)
+from foundationscale.rl.group_policy import (
+    SequenceObjective,
+    SequencePolicyAlgorithm,
+    check_group_policy_requirements,
+    dapo_algorithm,
+    dr_grpo_algorithm,
+    gspo_algorithm,
+)
+from foundationscale.rl.group_policy_objectives import (
+    DAPOLoss,
+    DrGRPOLoss,
+    GSPOLoss,
 )
 from foundationscale.rl.grpo import (
     GRPOAlgorithm,
@@ -202,6 +245,7 @@ from foundationscale.rl.registry import (
     register_algorithm,
     reset_algorithm_registry,
 )
+from foundationscale.rl.rewards import MCQLetterReward
 from foundationscale.rl.rollout import (
     CapabilityRefusal,
     RolloutSource,
@@ -241,12 +285,15 @@ __all__ = (
     "BatchRefusal",
     "CPOLoss",
     "CapabilityRefusal",
+    "DAPOLoss",
     "DPOLoss",
+    "DrGRPOLoss",
     "ExperienceBatch",
     "FixedKLCoefficient",
     "ForwardFn",
     "GRPOAlgorithm",
     "GRPOPolicyLoss",
+    "GSPOLoss",
     "GeneralisedAdvantageEstimation",
     "GroupNormalisedAdvantage",
     "IPOLoss",
@@ -259,6 +306,7 @@ __all__ = (
     "LossDeclaration",
     "LossFn",
     "LossOutput",
+    "MCQLetterReward",
     "ORPOLoss",
     "PPOAlgorithm",
     "PPOClippedPolicyLoss",
@@ -276,6 +324,9 @@ __all__ = (
     "RewardStats",
     "RolloutSource",
     "SFTLoss",
+    "Sample",
+    "SequenceObjective",
+    "SequencePolicyAlgorithm",
     "SimPOLoss",
     "SourceCapabilities",
     "StepReport",
@@ -296,6 +347,7 @@ __all__ = (
     "build_objective_gate_context",
     "check_algorithm_wiring",
     "check_capabilities",
+    "check_group_policy_requirements",
     "check_grpo_requirements",
     "check_ppo_requirements",
     "check_preference_requirements",
@@ -306,9 +358,14 @@ __all__ = (
     "check_sync_capabilities",
     "check_value_capabilities",
     "cpo_algorithm",
+    "dapo_algorithm",
     "dpo_algorithm",
+    "dr_grpo_algorithm",
+    "extract_mcq_gold",
+    "gspo_algorithm",
     "ipo_algorithm",
     "kto_algorithm",
+    "load_sharegpt",
     "lookup_algorithm",
     "orpo_algorithm",
     "register_algorithm",

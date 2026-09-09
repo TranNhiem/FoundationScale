@@ -62,11 +62,30 @@ TORCH_FREE_MODULES = {
         "check_role_map",
         "verify_step",
     ),
+    "foundationscale.rl.corpus": (
+        "Sample",
+        "extract_mcq_gold",
+        "load_sharegpt",
+    ),
+    "foundationscale.rl.group_policy": (
+        "SequenceObjective",
+        "SequencePolicyAlgorithm",
+        "check_group_policy_requirements",
+        "dapo_algorithm",
+        "dr_grpo_algorithm",
+        "gspo_algorithm",
+    ),
+    "foundationscale.rl.group_policy_objectives": (
+        "DAPOLoss",
+        "DrGRPOLoss",
+        "GSPOLoss",
+    ),
     "foundationscale.rl.grpo": (
         "GRPOAlgorithm",
         "GRPOPolicyLoss",
         "check_grpo_requirements",
     ),
+    "foundationscale.rl.rewards": ("MCQLetterReward",),
     "foundationscale.rl.registry": (
         "AlgorithmRegistryRefusal",
         "available_algorithm_names",
@@ -153,7 +172,24 @@ TORCH_FREE_MODULES = {
         "check_sync_capabilities",
         "verify_sync",
     ),
+    "foundationscale.rl.torch_backend": ("TensorPolicyLoss",),
+    "foundationscale.rl.trainer": (
+        "RLTrainConfig",
+        "RLTrainer",
+        "TrainerRefusal",
+    ),
 }
+
+# ``torch_backend`` and ``trainer`` are in the set ABOVE, and the reason is
+# worth stating because it is counter-intuitive: both of them USE torch
+# heavily, and both are nonetheless torch-free AT IMPORT. The packaging
+# census (tests/packaging/test_emitter_torch_free_imports.py) forbids an
+# import-time torch import anywhere under src/, so every torch use in the
+# plane is a function-local import. The distinction those two modules carry
+# is CALL-time, not import-time: importing them succeeds without torch and
+# calling them raises. So there is ONE denominator here, not two -- a
+# second "torch-dependent" set would today be empty, and a parametrised
+# sweep over an empty set is a vacuous pass wearing a measurement's clothes.
 
 
 def _measured_loss() -> LossOutput:
@@ -563,16 +599,21 @@ def test_every_rl_module_is_in_the_torch_free_denominator() -> None:
         "and an empty denominator makes this control vacuously pass -- which "
         "is the exact failure it exists to catch"
     )
-    unmeasured = sorted(present - set(TORCH_FREE_MODULES))
+    declared = set(TORCH_FREE_MODULES)
+    unmeasured = sorted(present - declared)
     assert not unmeasured, (
         f"{len(unmeasured)} of {len(present)} foundationscale.rl modules sit in "
         f"no torch-free denominator: {', '.join(unmeasured)}. Add each to "
         f"TORCH_FREE_MODULES with the public names it must expose under a "
-        f"blocked torch import; being torch-free today is not being held there"
+        f"blocked torch import. A module that USES torch still belongs here: "
+        f"the packaging census forbids an import-time torch import under "
+        f"src/, so every such module imports torch inside its functions and "
+        f"is importable without it. Being torch-free today is not being "
+        f"held there"
     )
-    stale = sorted(set(TORCH_FREE_MODULES) - present)
+    stale = sorted(declared - present)
     assert not stale, (
-        f"{len(stale)} of {len(TORCH_FREE_MODULES)} declared torch-free modules "
-        f"do not exist: {', '.join(stale)}. A declaration naming a module that "
-        f"is gone reports coverage it cannot deliver"
+        f"{len(stale)} of {len(declared)} declared modules do not exist: "
+        f"{', '.join(stale)}. A declaration naming a module that is gone "
+        f"reports coverage it cannot deliver"
     )

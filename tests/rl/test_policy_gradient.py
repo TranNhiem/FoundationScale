@@ -114,8 +114,11 @@ def test_registry_round_trip_returns_fresh_binding_for_all_three() -> None:
     reset_algorithm_registry()
     assert available_algorithm_names() == (
         "cpo",
+        "dapo",
         "dpo",
+        "dr_grpo",
         "grpo",
+        "gspo",
         "ipo",
         "kto",
         "orpo",
@@ -156,7 +159,7 @@ def test_registry_refuses_duplicate_family_name_with_denominators() -> None:
     message = str(exc_info.value)
     assert "field name='rloo'" in message
     assert "1 of 1 new registrations" in message
-    assert "1 of 10 registered names" in message
+    assert "1 of 13 registered names" in message
     reset_algorithm_registry()
 
 

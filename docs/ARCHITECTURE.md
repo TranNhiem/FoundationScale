@@ -14,7 +14,7 @@ gate contract (stdlib-only core: Verdict, Gate, REGISTRY)
    ├── checkpoint + verify DCP metadata, parity checks
    ├── provenance          the run manifest — what was claimed, measured, emitted
    ├── topology            validates the declared parallel geometry
-   ├── rl/                 the post-training contracts: batch, loss, policy pair
+   ├── rl/                 post-training: contracts, 13 algorithms, tensor kernel
    └── train/              cli + loop: validate → delegate to Trainer → save gates
 ```
 
@@ -265,9 +265,44 @@ Then the objectives and the bindings that compose them:
   KL-control trio.
 * `preference_objectives.py` — `IPOLoss`, `KTOLoss`, `ORPOLoss`, `SimPOLoss`,
   `CPOLoss`.
-* `grpo.py`, `policy_gradient.py`, `ppo.py`, `preference.py` — the bindings:
-  GRPO; RLOO, REINFORCE-with-baseline and Reinforce++; PPO with its composite
-  loss; and the preference family.
+* `group_policy_objectives.py` — `GSPOLoss`, `DrGRPOLoss`, `DAPOLoss`.
+* `grpo.py`, `policy_gradient.py`, `ppo.py`, `preference.py`,
+  `group_policy.py` — the bindings: GRPO; RLOO, REINFORCE-with-baseline and
+  Reinforce++; PPO with its composite loss; the preference family; and the
+  sequence-level and variance-reduced family.
+
+And the plane that turns an objective into something an optimizer can step:
+
+* `torch_backend.py` — `TensorPolicyLoss`, ONE generic kernel producing the
+  0-dim differentiable tensor. It is parameterised by the objective's declared
+  axes, never by its class, so a new objective that speaks the vocabulary gets
+  a gradient path with no edit here.
+* `corpus.py`, `rewards.py`, `trainer.py` — the ShareGPT loader (`.json` and
+  `.jsonl`) with verifiable MCQ gold extraction, the letter reward, and the
+  single-model training loop.
+
+**The objectives are the ORACLE and the kernel is held to them.** The
+objectives compute the loss in pure Python; `TensorPolicyLoss` recomputes the
+same arithmetic in tensors, and a numerical-equivalence suite requires the two
+to agree to 1e-6 across every declared combination of the axes. On a
+disagreement the tensor path is what is wrong. That split is why the
+arithmetic can stay auditable, CPU-testable and mutation-covered while the
+training path is differentiable.
+
+The four axes that distinguish the group-relative family are a shared
+**vocabulary**, not per-class behaviour:
+
+| axis | GRPO | GSPO | Dr.GRPO | DAPO |
+|---|---|---|---|---|
+| `ratio_scope` | token | **sequence** | token | token |
+| advantage | (r−mean)/std | (r−mean)/std | **(r−mean) only** | (r−mean)/std |
+| `clip_bounds` | (0.8, 1.2) | **(0.9997, 1.0003)** | (0.8, 1.2) | **(0.8, 1.28)** |
+| `reduction` | token_mean | **sequence_mean** | **constant** | token_mean |
+
+`GRPOPolicyLoss` was retrofitted to declare these three properties even though
+it predates them, because the kernel reads an objective's axes rather than its
+class — and an objective that does not speak the vocabulary is invisible to it.
+Restating a declaration is the alternative to a per-algorithm branch.
 
 `preference.py` is one binding for six algorithms rather than six classes,
 because the six differ only in their objective. The objective slot is typed by
@@ -362,7 +397,7 @@ working home fails a test rather than an import at a user's site.
 
 ## Around the package
 
-`src/` is 32235 LOC across 41 files; `tests/` adds 45363 `.py` LOC (its
+`src/` is 35516 LOC across 47 files; `tests/` adds 47199 `.py` LOC (its
 conftest carries the skip guard). Beside the package:
 
 | Tree | Contents |
@@ -374,7 +409,7 @@ conftest carries the skip guard). Beside the package:
 | `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 167771 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 172964 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 

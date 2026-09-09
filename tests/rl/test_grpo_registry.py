@@ -75,11 +75,11 @@ def _grpo_batch(*, rewards: tuple[float, float] = (2.0, 4.0)) -> _Batch:
     )
 
 
-def test_registry_default_reset_restores_the_ten_default_names() -> None:
-    """The supported reset leaves exactly the ten deterministic default bindings.
+def test_registry_default_reset_restores_the_thirteen_default_names() -> None:
+    """The supported reset leaves exactly the thirteen default bindings.
 
-    WHAT IS CLAIMED: reset removes test entries and reinstalls all ten
-    built-in names, and a second reset restores the SAME set. The ten are
+    WHAT IS CLAIMED: reset removes test entries and reinstalls all thirteen
+    built-in names, and a second reset restores the SAME set. The thirteen are
     hand-stated here rather than read back from the registry, because a test
     that asked the registry what it holds would agree with any answer.
 
@@ -94,15 +94,18 @@ def test_registry_default_reset_restores_the_ten_default_names() -> None:
     binding that appears, and it cannot catch one that never arrives. That
     second direction is a different measurement and is taken by
     ``test_every_exported_algorithm_binding_is_reachable_through_the_registry``.
-    Also not claimed: that the ten bindings are interchangeable, or that any
+    Also not claimed: that the thirteen bindings are interchangeable, or any
     of them is wired -- lookup constructs, setup is a separate handshake.
     """
     register_algorithm("z_test_algorithm", GRPOAlgorithm)
     reset_algorithm_registry()
     expected = (
         "cpo",
+        "dapo",
         "dpo",
+        "dr_grpo",
         "grpo",
+        "gspo",
         "ipo",
         "kto",
         "orpo",
@@ -189,7 +192,7 @@ def test_every_exported_algorithm_binding_is_reachable_through_the_registry() ->
     pins the install against a hand-written list -- the list and the install
     are the same statement made twice, so they agree by construction. That is
     exactly how ``PPOAlgorithm`` shipped: ``lookup_algorithm("ppo")`` refuses
-    with "0 of 10 available algorithm names matched" while the class is
+    with "0 of 13 available algorithm names matched" while the class is
     public, zero-argument, and passes the registry's own runtime
     ``isinstance`` check.
 
@@ -290,7 +293,7 @@ def test_registry_refuses_duplicate_name_without_overwrite() -> None:
     message = str(exc_info.value)
     assert "field name='grpo'" in message
     assert "1 of 1 new registrations" in message
-    assert "1 of 10 registered names" in message
+    assert "1 of 13 registered names" in message
     assert lookup_algorithm("grpo") is not first
     reset_algorithm_registry()
 
@@ -298,7 +301,7 @@ def test_registry_refuses_duplicate_name_without_overwrite() -> None:
 def test_registry_unknown_name_names_key_and_available_count() -> None:
     """Lookup absence is reported against every available registry name.
 
-    WHAT IS CLAIMED: the requested key and all ten available names appear.
+    WHAT IS CLAIMED: the requested key and all thirteen available names appear.
 
     WHAT IS NOT CLAIMED: that the requested spelling was close to ``grpo``;
     no correction or distance measurement exists.
@@ -306,14 +309,15 @@ def test_registry_unknown_name_names_key_and_available_count() -> None:
     reset_algorithm_registry()
     with pytest.raises(
         AlgorithmRegistryRefusal,
-        match="0 of 10 available algorithm names matched",
+        match="0 of 13 available algorithm names matched",
     ) as exc_info:
         lookup_algorithm("missing")
     message = str(exc_info.value)
     assert "requested key name='missing'" in message
     assert (
-        "available names (10): ('cpo', 'dpo', 'grpo', 'ipo', 'kto', 'orpo', "
-        "'reinforce_baseline', 'reinforce_pp', 'rloo', 'simpo')"
+        "available names (13): ('cpo', 'dapo', 'dpo', 'dr_grpo', 'grpo', "
+        "'gspo', 'ipo', 'kto', 'orpo', 'reinforce_baseline', 'reinforce_pp', "
+        "'rloo', 'simpo')"
     ) in message
     reset_algorithm_registry()
 
@@ -350,8 +354,11 @@ def test_registry_available_names_are_sorted_after_extra_registration() -> None:
     assert available_algorithm_names() == (
         "a_first",
         "cpo",
+        "dapo",
         "dpo",
+        "dr_grpo",
         "grpo",
+        "gspo",
         "ipo",
         "kto",
         "orpo",

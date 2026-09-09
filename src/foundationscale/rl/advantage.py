@@ -37,6 +37,7 @@ __all__ = (
     "AdvantageFn",
     "AdvantageRefusal",
     "AdvantageResult",
+    "CentredAdvantage",
     "GeneralisedAdvantageEstimation",
     "GroupNormalisedAdvantage",
     "LearnedValueAdvantageEstimation",
@@ -526,6 +527,80 @@ class GroupNormalisedAdvantage:
                 continue
             for i in indices:
                 per_sample[i] = (cleaned_rewards[i] - mean) / std
+        return _emit_used_rows(per_sample, cleaned_rewards, masks, self.method_name)
+
+
+@dataclass(frozen=True, slots=True)
+class CentredAdvantage:
+    """Dr.GRPO-style centring: subtract the group mean, divide by NOTHING.
+
+    Each sample's group is the set of samples sharing its prompt id. Within
+    a group of at least ``min_group_size`` samples,
+    ``advantage = reward - group_mean`` -- full stop. There is no
+    standard-deviation division, because Dr.GRPO removes the std scaling as
+    the difficulty-bias fix it exists for: dividing by std inflates the
+    gradient of low-variance groups and deflates that of high-variance ones,
+    which systematically re-weights easy-versus-hard prompts.
+
+    THE ONE SEMANTIC DIFFERENCE FROM GroupNormalisedAdvantage, and it is the
+    point of the class. :class:`GroupNormalisedAdvantage` DROPS a
+    zero-variance group, because dividing by ``std == 0.0`` is undefined;
+    the drop stays visible as ``used < offered``. This class performs no
+    division, so a zero-variance group is perfectly well defined: every
+    member is exactly equal to its group mean, so every member's weight is
+    a measured 0.0, and the group is KEPT -- for such a group
+    ``used == offered``. This is a deliberate divergence between two sibling
+    estimators, not an oversight.
+
+    WHY IT MATTERS: under Dr.GRPO an all-identical-reward group (every
+    sample right, or every sample wrong) contributes a ZERO GRADIENT at its
+    positions while still occupying its share of the batch -- it does not
+    vanish from the denominator. Vanishing is what biases the aggregate
+    towards groups that happened to produce mixed outcomes, which is
+    precisely the length/difficulty bias Dr.GRPO's centring-only estimator
+    exists to correct.
+
+    WHAT IS CLAIMED: used samples carry a centred advantage broadcast across
+    their unmasked positions; only a group smaller than ``min_group_size``
+    is excluded (one sample has nothing to centre against), and that
+    exclusion stays visible in the used/offered gap. WHAT IS NOT CLAIMED:
+    any convergence, benchmark, or equivalence-to-the-paper result -- nothing
+    here has been trained -- and any comparability of weight MAGNITUDE with
+    :class:`GroupNormalisedAdvantage`: dropping the std divisor changes the
+    scale of the weights, and the two estimators' outputs are not
+    interchangeable.
+    """
+
+    min_group_size: int = 2
+    method_name: str = "CentredAdvantage"
+
+    def __post_init__(self) -> None:
+        _require_min_group_size(self.min_group_size)
+        _require_name("method_name", self.method_name)
+
+    def compute(
+        self,
+        *,
+        prompt_ids: Sequence[str],
+        rewards: Sequence[float],
+        mask: Sequence[Sequence[int]],
+    ) -> AdvantageResult:
+        ids, cleaned_rewards, masks = _checked_rows(prompt_ids, rewards, mask)
+        per_sample: list[float | None] = [None] * len(ids)
+        for indices in _group_indices(ids):
+            if len(indices) < self.min_group_size:
+                # Too few samples for a baseline. The samples leave the
+                # result entirely -- no weight row -- so used < offered is
+                # the visible record of the exclusion.
+                continue
+            group = [cleaned_rewards[i] for i in indices]
+            mean = sum(group) / len(group)
+            # No std division and NO zero-variance branch: a zero-variance
+            # group yields a measured 0.0 per member and is KEPT, so for it
+            # used == offered -- the deliberate divergence from
+            # GroupNormalisedAdvantage stated in the class docstring.
+            for i in indices:
+                per_sample[i] = cleaned_rewards[i] - mean
         return _emit_used_rows(per_sample, cleaned_rewards, masks, self.method_name)
 
 

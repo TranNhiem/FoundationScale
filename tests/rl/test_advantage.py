@@ -17,6 +17,7 @@ from foundationscale.rl.advantage import (
     AdvantageFn,
     AdvantageRefusal,
     AdvantageResult,
+    CentredAdvantage,
     GeneralisedAdvantageEstimation,
     GroupNormalisedAdvantage,
     LeaveOneOutAdvantage,
@@ -637,3 +638,38 @@ def test_the_gate_plane_admits_the_impossible_records_the_rl_plane_refuses() -> 
     with pytest.raises(AdvantageRefusal) as negative_exc_info:
         RewardStats(count=-3, mean=0.5, std=0.3, minimum=-1.0, maximum=2.0)
     assert "count=-3" in str(negative_exc_info.value)
+
+
+def test_centred_advantage_drops_a_group_below_min_group_size() -> None:
+    """A group too small for a baseline leaves the result, and the gap shows.
+
+    Dr.GRPO's advantage is CentredAdvantage, so this exclusion is on the
+    shipped path of a real algorithm. It is measured here rather than assumed
+    because the failure mode is silent in the wrong direction: a lone sample
+    admitted with a baseline computed from itself has advantage exactly zero,
+    which trains nothing while reporting a full-sized batch. Dropping the row
+    makes ``used < offered`` the visible record of what happened.
+    """
+    prompt_ids = ("alpha", "alpha", "lonely")
+    rewards = (1.0, 0.0, 5.0)
+    mask = ((1, 1), (1, 1), (1, 1))
+
+    result = CentredAdvantage(min_group_size=2).compute(
+        prompt_ids=prompt_ids,
+        rewards=rewards,
+        mask=mask,
+    )
+
+    # Row 2 is the only member of its prompt group, so it is excluded.
+    assert result.rows == (0, 1), (
+        f"rows {result.rows!r}: the single-sample group should have been "
+        f"dropped, leaving only the two rows that share a prompt"
+    )
+    assert len(result.weights) == 2
+    # Centred, not normalised: the two weights are the rewards minus their
+    # mean, so they are equal and opposite -- and NOT +/-1 as a std-divided
+    # advantage would be.
+    first = result.weights[0][0]
+    second = result.weights[1][0]
+    assert first == pytest.approx(0.5)
+    assert second == pytest.approx(-0.5)
