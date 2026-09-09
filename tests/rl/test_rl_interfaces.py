@@ -46,8 +46,10 @@ TORCH_FREE_MODULES = {
         "AdvantageResult",
         "GeneralisedAdvantageEstimation",
         "GroupNormalisedAdvantage",
+        "LearnedValueAdvantageEstimation",
         "LeaveOneOutAdvantage",
         "RewardStats",
+        "TemporalAdvantageFn",
     ),
     "foundationscale.rl.algorithm": (
         "Algorithm",
@@ -94,6 +96,14 @@ TORCH_FREE_MODULES = {
         "check_reinforce_baseline_requirements",
         "check_reinforce_pp_requirements",
         "check_rloo_requirements",
+    ),
+    "foundationscale.rl.ppo_objectives": (
+        "AdaptiveKLController",
+        "FixedKLCoefficient",
+        "KLCoefficientController",
+        "KLPenaltyLoss",
+        "PPOClippedPolicyLoss",
+        "ValueFunctionLoss",
     ),
     "foundationscale.rl.rollout": (
         "CapabilityRefusal",

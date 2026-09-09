@@ -259,6 +259,22 @@ PENDING_ENROLMENT: dict[str, str] = {
         "degenerate -- inverting a comparison there moves a reading inside its declared "
         "bounds, which is exactly the shape no bounds check can catch"
     ),
+    "src/foundationscale/rl/ppo_objectives.py": (
+        "the three objectives that make PPO PPO, and each one hides its mutation behind a "
+        "number that still looks like a loss. The clipped surrogate is a MIN of two terms "
+        "whose relative order flips with the SIGN of the advantage, so swapping min for "
+        "max, or swapping the two clip bounds, still trains -- it just stops bounding the "
+        "trust region in one direction, and the clip_fraction diagnostic keeps reporting a "
+        "plausible number because tokens are still being clipped, only the wrong ones. The "
+        "value loss is a MAX of a clipped and an unclipped squared error, the opposite "
+        "extremum from the surrogate above it, which is exactly the pair a copy-paste "
+        "inversion collapses into one. The KL trio's surface is the dead-band comparison "
+        "and the two clamps: inverting `>` and `<` around the target turns the adaptive "
+        "controller into a divergence amplifier, and it reports its coefficient truthfully "
+        "the whole way down. Its metric_ceiling is the one FINITE bound the objective-gate "
+        "plane needs from this module -- mutate it to something unreachable and the bound "
+        "examines nothing while still reading as coverage"
+    ),
     "src/foundationscale/rl/registry.py": (
         "the name->Algorithm lookup: whether `register_algorithm` refuses a duplicate name "
         "rather than silently rebinding it, and whether `lookup_algorithm` refuses an "

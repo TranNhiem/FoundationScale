@@ -26,7 +26,19 @@ Design section 9 of ``validation_campaigns/nemo_rl_baseline/PHASE3_DESIGN.md``:
   use of that seam by something other than the binding it was designed
   around. The three differ only in how a reward becomes an advantage, so they
   are the cheapest available test of whether the seam is a seam or a shape
-  fitted to GRPO. It held: no contract in stages 1--3c changed to admit them.
+  fitted to GRPO. It held: no contract in stages 1--3c changed to admit them;
+* stage 3f -- the PPO objectives: ``PPOClippedPolicyLoss``,
+  ``ValueFunctionLoss`` and the KL-control trio
+  (``KLCoefficientController`` with its fixed and adaptive realizations,
+  consumed by ``KLPenaltyLoss``), alongside
+  ``LearnedValueAdvantageEstimation`` and its sibling seam
+  ``TemporalAdvantageFn`` in ``advantage``. PPO is the first family whose
+  advantage estimator needs a per-token VALUE input, which is why the temporal
+  seam is a sibling of ``AdvantageFn`` rather than a subtype of it: both extra
+  parameters are required, so substitutability runs the wrong way. It is also
+  the first family with state that survives a step -- the adaptive KL
+  coefficient -- and that state is threaded the frozen way, by ``update()``
+  returning a NEW controller the caller rebinds, never by mutating one.
 
 ``WeightSync`` could only be specified once the section-7 item-3
 weight-transfer measurement was taken. It has been, and it returned
@@ -60,8 +72,10 @@ from foundationscale.rl.advantage import (
     AdvantageResult,
     GeneralisedAdvantageEstimation,
     GroupNormalisedAdvantage,
+    LearnedValueAdvantageEstimation,
     LeaveOneOutAdvantage,
     RewardStats,
+    TemporalAdvantageFn,
 )
 from foundationscale.rl.algorithm import (
     Algorithm,
@@ -102,6 +116,14 @@ from foundationscale.rl.policy_gradient import (
     check_reinforce_pp_requirements,
     check_rloo_requirements,
 )
+from foundationscale.rl.ppo_objectives import (
+    AdaptiveKLController,
+    FixedKLCoefficient,
+    KLCoefficientController,
+    KLPenaltyLoss,
+    PPOClippedPolicyLoss,
+    ValueFunctionLoss,
+)
 from foundationscale.rl.registry import (
     AlgorithmRegistryRefusal,
     available_algorithm_names,
@@ -127,6 +149,7 @@ from foundationscale.rl.weightsync import (
 )
 
 __all__ = (
+    "AdaptiveKLController",
     "AdvantageConfigRefusal",
     "AdvantageFn",
     "AdvantageRefusal",
@@ -140,16 +163,21 @@ __all__ = (
     "CapabilityRefusal",
     "DPOLoss",
     "ExperienceBatch",
+    "FixedKLCoefficient",
     "ForwardFn",
     "GRPOAlgorithm",
     "GRPOPolicyLoss",
     "GeneralisedAdvantageEstimation",
     "GroupNormalisedAdvantage",
+    "KLCoefficientController",
+    "KLPenaltyLoss",
+    "LearnedValueAdvantageEstimation",
     "LeaveOneOutAdvantage",
     "LossConfigRefusal",
     "LossDeclaration",
     "LossFn",
     "LossOutput",
+    "PPOClippedPolicyLoss",
     "PolicyPair",
     "PolicyRoleRefusal",
     "RLOOAlgorithm",
@@ -169,6 +197,8 @@ __all__ = (
     "SyncCapabilityRefusal",
     "SyncReport",
     "SyncReportRefusal",
+    "TemporalAdvantageFn",
+    "ValueFunctionLoss",
     "WeightSync",
     "available_algorithm_names",
     "build_objective_gate_context",

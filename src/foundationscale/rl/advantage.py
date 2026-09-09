@@ -1,6 +1,6 @@
 """Stage-3 advantage functions (design section 3.4): rewards to per-token weights.
 
-This module holds the ``AdvantageFn`` protocol and its three implementations;
+This module holds the ``AdvantageFn`` protocol and its four implementations;
 the batch and loss contracts live in ``interfaces.py``/``losses.py`` and the
 model views in ``policy.py``. An advantage function CONSUMES rewards and does
 not produce them: who turns completions into rewards is the open scoring edge
@@ -39,8 +39,10 @@ __all__ = (
     "AdvantageResult",
     "GeneralisedAdvantageEstimation",
     "GroupNormalisedAdvantage",
+    "LearnedValueAdvantageEstimation",
     "LeaveOneOutAdvantage",
     "RewardStats",
+    "TemporalAdvantageFn",
 )
 
 
@@ -641,6 +643,317 @@ class GeneralisedAdvantageEstimation:
         # index list is the identity and used == offered. It is still stated
         # rather than defaulted, because a caller must not have to know which
         # advantage functions compact and which do not.
+        return _build_result(
+            weights,
+            list(cleaned_rewards),
+            list(range(len(ids))),
+            len(ids),
+            self.method_name,
+        )
+
+
+# ---------------------------------------------------------------------------
+# PROPOSED SEAM EXTENSION (see the accompanying DESIGN NOTE). The AdvantageFn
+# seam above carries prompt ids, one terminal scalar reward per sample, and
+# the supervision mask -- nothing temporal. GAE with a learned value function
+# needs per-token value estimates V(t) and a caller-side declaration of what
+# the sequence tail is; the seam cannot express either. The extension is a
+# runtime-checkable SUB-PROTOCOL: AdvantageFn itself is untouched, so every
+# existing implementation above remains conformant and the gate bridge is
+# unaffected. New keyword-only parameters on the existing Protocol were
+# rejected because implementations that do not accept them would silently
+# stop conforming, and the runtime check would never surface that.
+# ---------------------------------------------------------------------------
+
+
+def _coerce_value(raw: Any, row: int, position: int) -> float:
+    # A value estimate is one scalar per token position, so refusal
+    # coordinates are the row and the position within it. Non-finite is
+    # refused outright, mirroring _coerce_reward: a single poisoned V(t)
+    # enters every delta from t back to that ROW's first supervised token,
+    # while the run reads as healthy on every other row.
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise AdvantageRefusal(
+            f"value estimate at row {row}, position {position} is {raw!r}, "
+            f"which does not convert to a scalar float "
+            f"({type(raw).__name__}); value estimates must be one finite "
+            f"scalar per token position"
+        ) from exc
+    if not math.isfinite(value):
+        raise AdvantageRefusal(
+            f"value estimate at row {row}, position {position} is {raw!r}, "
+            f"which is not finite; V(t) enters every delta from the row's "
+            f"tail back to position {position}, so one non-finite reading "
+            f"would poison the whole row's recursion"
+        )
+    return value
+
+
+def _checked_temporal(
+    values: Sequence[Sequence[float]],
+    terminated: Sequence[bool],
+    masks: tuple[tuple[bool, ...], ...],
+) -> tuple[tuple[tuple[float, ...], ...], tuple[bool, ...]]:
+    # Temporal-side validation, kept parallel to _checked_rows: the data-side
+    # checks stay the shared ones, and every refusal here names the offending
+    # row, position, or count and says why the value cannot be USED, never a
+    # generic "invalid input".
+    raw_values = _as_tuple(values, "values")
+    if len(raw_values) != len(masks):
+        raise AdvantageRefusal(
+            f"values and mask disagree on the sample count: {len(raw_values)} "
+            f"value rows but {len(masks)} mask rows; every sample needs one "
+            f"value estimate per token position, and a silent mismatch would "
+            f"subtract one row's baseline from another row's rewards"
+        )
+    ends = _as_tuple(terminated, "terminated")
+    if len(ends) != len(masks):
+        raise AdvantageRefusal(
+            f"terminated and mask disagree on the sample count: {len(ends)} "
+            f"tail declarations but {len(masks)} mask rows; every sample's "
+            f"tail must be declared, because an unattributed declaration "
+            f"makes the bootstrap land on the wrong sequence"
+        )
+    cleaned_ends: list[bool] = []
+    for row, raw_end in enumerate(ends):
+        if not isinstance(raw_end, bool):
+            raise AdvantageRefusal(
+                f"terminated[{row}] is {raw_end!r} ({type(raw_end).__name__}); "
+                f"each row's tail must be DECLARED -- True for a terminal "
+                f"state (V(T) = 0.0), False for a truncation (bootstrap from "
+                f"the last value estimate) -- and this module will not guess: "
+                f"a guessed default biases every advantage in the row, "
+                f"silently and in a known-to-be-wrong direction"
+            )
+        cleaned_ends.append(raw_end)
+    cleaned_values: list[tuple[float, ...]] = []
+    for row, raw_row in enumerate(raw_values):
+        entries = tuple(
+            _coerce_value(raw, row, position)
+            for position, raw in enumerate(_as_tuple(raw_row, f"values row {row}"))
+        )
+        if len(entries) != len(masks[row]):
+            raise AdvantageRefusal(
+                f"values row {row} has {len(entries)} entries but mask row "
+                f"{row} has {len(masks[row])} positions; one value estimate "
+                f"per token position is required, because delta_t = r_t + "
+                f"gamma * V(t+1) - V(t) cannot be formed where V(t) is "
+                f"missing any more than where it is doubled"
+            )
+        cleaned_values.append(entries)
+    return tuple(cleaned_values), tuple(cleaned_ends)
+
+
+def _whitened(
+    weights: list[tuple[float, ...]],
+    masks: tuple[tuple[bool, ...], ...],
+) -> list[tuple[float, ...]] | None:
+    # Population whitening over ALL supervised-token advantages in the batch
+    # (divisor n, matching RewardStats.over: this describes the measured set,
+    # it is not an estimate of a wider population). A spread of exactly 0.0
+    # is NEVER divided by: whitening ABSTAINS -- returns None -- and the
+    # caller keeps the raw estimates. Masked positions contribute nothing to
+    # either statistic and stay the literal 0.0 the mask wrote.
+    supervised = [
+        weight
+        for row, mask_row in zip(weights, masks, strict=True)
+        for weight, entry in zip(row, mask_row, strict=True)
+        if entry
+    ]
+    if not supervised:  # pragma: no cover -- unreachable through _checked_rows
+        # _checked_rows refuses any row with no supervised token and refuses
+        # an empty batch, so this branch has no public path. It is kept, and
+        # excluded rather than reached, because reaching it would mean
+        # calling _whitened past its caller with a hand-built argument -- a
+        # test that can only fire against a fake is measuring the fake. The
+        # guard stands because statistics over zero elements are UNMEASURED,
+        # never zero, and the next caller may not be _checked_rows.
+        return None
+    mean = sum(supervised) / len(supervised)
+    variance = sum((weight - mean) ** 2 for weight in supervised) / len(supervised)
+    std = math.sqrt(variance)
+    if std == 0.0:
+        return None
+    return [
+        tuple(
+            (weight - mean) / std if entry else 0.0
+            for weight, entry in zip(row, mask_row, strict=True)
+        )
+        for row, mask_row in zip(weights, masks, strict=True)
+    ]
+
+
+@runtime_checkable
+class TemporalAdvantageFn(Protocol):
+    """SIBLING of :class:`AdvantageFn` for estimators that need value inputs.
+
+    WHAT IS CLAIMED: ``compute`` takes everything :class:`AdvantageFn` takes
+    plus ``values`` -- one value estimate V(t) per token position, aligned
+    with ``mask`` row by row and position by position -- and ``terminated``,
+    one bool per sample DECLARING whether the row's last supervised token
+    ends a terminal state or is a truncation. WHAT IS NOT CLAIMED: that this
+    is a SUBTYPE of :class:`AdvantageFn`. It deliberately does not inherit
+    from it. Both extra parameters are REQUIRED, so a caller holding an
+    :class:`AdvantageFn` cannot call one of these -- substitutability runs
+    the wrong way, and spelling the inheritance would have the type system
+    assert a relation that does not hold. They are two seams an algorithm
+    picks between, not a base and a refinement. Also NOT CLAIMED: that any
+    existing :class:`AdvantageFn` implementation satisfies this seam (none
+    does), nor that ``@runtime_checkable`` settles more than method
+    presence -- it never checks signatures, so an :class:`AdvantageFn` will
+    pass ``isinstance`` against this Protocol and then fail at the call.
+    Phase 1 unknown 2 stays open: no equivalence with any reference
+    binding's value plumbing is claimed or implied.
+    """
+
+    def compute(
+        self,
+        *,
+        prompt_ids: Sequence[str],
+        rewards: Sequence[float],
+        mask: Sequence[Sequence[int]],
+        values: Sequence[Sequence[float]],
+        terminated: Sequence[bool],
+    ) -> AdvantageResult: ...
+
+
+@dataclass(frozen=True, slots=True)
+class LearnedValueAdvantageEstimation:
+    """GAE (Schulman et al. 2015) over PER-TOKEN value estimates.
+
+    Implements the proposed :class:`TemporalAdvantageFn` extension above. The
+    recursion is ``delta_t = r_t + gamma * V(t + 1) - V(t)`` and
+    ``A_t = delta_t + gamma * lambda_ * A_{t+1}``, run BACKWARD over each
+    row's supervised (unmasked) token positions. The scalar ``rewards[i]``
+    is a TERMINAL reward landing on the last supervised position of row
+    ``i`` -- the same reward convention the rest of this module commits to.
+    Masked positions are skipped by the recursion AND written a literal 0.0,
+    which is a mask statement, never a measured zero advantage.
+
+    THE EPISODE BOUNDARY IS DECLARED, NOT GUESSED. ``terminated[i]`` being
+    ``True`` means the row ended at a terminal state: the tail is
+    ``V(T) = 0.0``, the only honest value for a state after the episode.
+    ``terminated[i]`` being ``False`` means the row was TRUNCATED: the tail
+    delta then bootstraps from the last value estimate,
+    ``V(T) = values[i][last]``. There is no default because there is no
+    honest one: guessing terminal when the row was truncated throws away the
+    last-step delta signal, and guessing truncation when the row was terminal
+    invents value at a state that does not exist. Both bias every advantage
+    in the row, silently, which is exactly the failure this class exists to
+    refuse. A non-bool entry is refused with the row named.
+
+    A CONSEQUENCE OF THAT CHOICE, stated because it is not obvious and the
+    default configuration hits it: on a truncated row the tail delta is
+    ``r + gamma * V(t_last) - V(t_last)``, so at ``gamma == 1.0`` -- this
+    class's default -- the value terms cancel and the last supervised
+    position carries the RAW reward with no baseline subtracted. That is
+    arithmetic, not a defect, and it follows from there being no state after
+    the last token to estimate a value AT. WHAT IS NOT CLAIMED: that
+    ``V(t_last)`` is a good estimate of ``V(t_last + 1)``. It is a stand-in
+    for a quantity this contract cannot observe, and its error enters every
+    advantage in the row through the recursion.
+
+    OPTIONAL WHITENING (``whiten=True``) centres and scales by the POPULATION
+    std over ALL supervised-token advantages in the batch -- a batch-level
+    transform, never a per-row one. When that spread is exactly 0.0,
+    whitening ABSTAINS: :func:`_whitened` returns ``None`` and the raw
+    estimates pass through; nothing is divided by nothing and no row of
+    zeros is written as if it were a measurement.
+
+    WHAT IS CLAIMED: every offered sample carries exactly one weight row --
+    ``used == offered`` by construction, as with
+    :class:`GeneralisedAdvantageEstimation` -- ``gamma`` and ``lambda_`` are
+    each validated at construction as finite numbers in ``[0.0, 1.0]`` with
+    the offending value named, a row with no supervised token is REFUSED
+    with the same message and voice as every other row-level refusal in
+    this module, and each refusal names the row, position, or count it
+    cannot count. WHAT IS NOT CLAIMED: anything about the QUALITY of the
+    value estimates -- the class consumes V, and the bias/variance trade of
+    estimating V belongs to the caller, with ``lambda_`` the only dial this
+    class owns; any dense per-token reward stream (token-level KL shaping,
+    per-step costs) -- the seam carries one terminal scalar per sample and
+    this class does not invent a richer one; and whether whitening actually
+    APPLIED -- when the batch spread is zero the abstention leaves no
+    footprint in :class:`AdvantageResult`, and that gap is stated here
+    rather than filled with a quiet 0.0, 1.0, or sentinel. No equivalence
+    with any reference implementation's GAE plumbing is claimed.
+    """
+
+    lambda_: float = 0.95
+    gamma: float = 1.0
+    whiten: bool = False
+    method_name: str = "LearnedValueAdvantageEstimation"
+
+    def __post_init__(self) -> None:
+        _require_name("method_name", self.method_name)
+        for field_name, value in (("gamma", self.gamma), ("lambda_", self.lambda_)):
+            # Outside [0, 1] a "discount" amplifies instead of discounting --
+            # or is not a number at all (NaN fails the comparison because
+            # every comparison against NaN is False, bools admitted the same
+            # way _coerce_reward admits them) -- and the recursion carries
+            # the error into every position's weight in every row.
+            if not isinstance(value, (int, float)) or not 0.0 <= value <= 1.0:
+                raise AdvantageConfigRefusal(
+                    f"{field_name}={value!r}: gamma and lambda_ are discount "
+                    f"factors and must be finite numbers in [0.0, 1.0]"
+                )
+        if not isinstance(self.whiten, bool):
+            raise AdvantageConfigRefusal(
+                f"whiten={self.whiten!r}: whitening is a declared per-run "
+                f"policy choice, so it must be a bool; a truthy stand-in "
+                f"hides which behaviour a manifest recorded as chosen"
+            )
+
+    def compute(
+        self,
+        *,
+        prompt_ids: Sequence[str],
+        rewards: Sequence[float],
+        mask: Sequence[Sequence[int]],
+        values: Sequence[Sequence[float]],
+        terminated: Sequence[bool],
+    ) -> AdvantageResult:
+        ids, cleaned_rewards, masks = _checked_rows(prompt_ids, rewards, mask)
+        cleaned_values, ends = _checked_temporal(values, terminated, masks)
+        gamma = float(self.gamma)
+        lam = float(self.lambda_)
+        weights: list[tuple[float, ...]] = []
+        for row, mask_row in enumerate(masks):
+            row_weights = [0.0] * len(mask_row)
+            unmasked = [position for position, entry in enumerate(mask_row) if entry]
+            next_advantage = 0.0
+            previous_position = -1
+            for step, position in enumerate(reversed(unmasked)):
+                # reversed() visits the LAST supervised position FIRST, so it
+                # alone carries the terminal scalar reward; earlier positions
+                # see r_t == 0.0. The tail is whatever the caller DECLARED:
+                # terminal rows read V(T) == 0.0, truncated rows bootstrap
+                # from that last position's own value estimate. Inside the
+                # row, V(t + 1) is the value at the previous visited --
+                # temporally NEXT -- supervised position.
+                r_t = cleaned_rewards[row] if step == 0 else 0.0
+                if step == 0:
+                    v_next = 0.0 if ends[row] else cleaned_values[row][position]
+                else:
+                    v_next = cleaned_values[row][previous_position]
+                delta_t = r_t + gamma * v_next - cleaned_values[row][position]
+                next_advantage = delta_t + gamma * lam * next_advantage
+                row_weights[position] = next_advantage
+                previous_position = position
+            weights.append(tuple(row_weights))
+        if self.whiten:
+            transformed = _whitened(weights, masks)
+            if transformed is not None:
+                weights = transformed
+            # transformed is None exactly when the batch's supervised-token
+            # spread is 0.0: whitening ABSTAINS and the raw estimates ride
+            # through, recorded in this branch and in the class docstring,
+            # never laundered into a fabricated 0.0 row or a 1.0 divisor.
+        # GAE excludes nothing: every offered row gets a weight row, so the
+        # index list is the identity and used == offered, stated rather than
+        # defaulted for the same reason as in the zero-baseline sibling.
         return _build_result(
             weights,
             list(cleaned_rewards),
