@@ -95,6 +95,14 @@ PENDING_ENROLMENT: dict[str, str] = {
         "derives declared config facts, censuses expert families, and adjudicates the "
         "real-checkpoint alias control feeding gate contexts"
     ),
+    "src/foundationscale/rl/ppo.py": (
+        "composes the stage-3f objectives into one algorithm and is the first binding that "
+        "measures a learned value estimate once and hands the single reading to two consumers"
+    ),
+    "src/foundationscale/rl/value_head.py": (
+        "grades an untrusted per-token value estimate against a batch mask and decides which "
+        "positions are supervised at all, so a wrong count is an unmeasured advantage"
+    ),
     "src/foundationscale/train/loop.py": (
         "sequences pre-GPU blocking, save-gate callback adjudication, missing-extra "
         "refusal, and the 0/5/95/96 exit-code contract"

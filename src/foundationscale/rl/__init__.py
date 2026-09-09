@@ -38,7 +38,18 @@ Design section 9 of ``validation_campaigns/nemo_rl_baseline/PHASE3_DESIGN.md``:
   parameters are required, so substitutability runs the wrong way. It is also
   the first family with state that survives a step -- the adaptive KL
   coefficient -- and that state is threaded the frozen way, by ``update()``
-  returning a NEW controller the caller rebinds, never by mutating one.
+  returning a NEW controller the caller rebinds, never by mutating one;
+* stage 3g -- the PPO binding itself: the ``ValueHead`` seam and its
+  capability contract in ``value_head``, then ``PPOAlgorithm`` and
+  ``PPOCompositeLoss`` in ``ppo``, which compose the stage-3f objectives into
+  one algorithm. The value head is a seam rather than a field on the composite
+  because PPO is the first family needing a SECOND learned model inside the
+  step, and its estimate is measured ONCE and handed to both the value
+  regression and the temporal estimator -- measuring it twice would let two
+  consumers disagree about the same batch. The KL controller chain stays with
+  the trainer rather than the binding: a frozen binding cannot advance state
+  across a step without either mutating a frozen object or staling the map it
+  was constructed from.
 
 ``WeightSync`` could only be specified once the section-7 item-3
 weight-transfer measurement was taken. It has been, and it returned
@@ -117,6 +128,11 @@ from foundationscale.rl.policy_gradient import (
     check_reinforce_pp_requirements,
     check_rloo_requirements,
 )
+from foundationscale.rl.ppo import (
+    PPOAlgorithm,
+    PPOCompositeLoss,
+    check_ppo_requirements,
+)
 from foundationscale.rl.ppo_objectives import (
     AdaptiveKLController,
     FixedKLCoefficient,
@@ -138,6 +154,14 @@ from foundationscale.rl.rollout import (
     SourceCapabilities,
     check_capabilities,
     verify_generated,
+)
+from foundationscale.rl.value_head import (
+    ValueCapabilities,
+    ValueCapabilityRefusal,
+    ValueEstimateRefusal,
+    ValueHead,
+    check_value_capabilities,
+    verify_estimates,
 )
 from foundationscale.rl.weightsync import (
     SyncCapabilities,
@@ -178,7 +202,9 @@ __all__ = (
     "LossDeclaration",
     "LossFn",
     "LossOutput",
+    "PPOAlgorithm",
     "PPOClippedPolicyLoss",
+    "PPOCompositeLoss",
     "PolicyPair",
     "PolicyRoleRefusal",
     "RLOOAlgorithm",
@@ -199,21 +225,28 @@ __all__ = (
     "SyncReport",
     "SyncReportRefusal",
     "TemporalAdvantageFn",
+    "ValueCapabilities",
+    "ValueCapabilityRefusal",
+    "ValueEstimateRefusal",
     "ValueFunctionLoss",
+    "ValueHead",
     "WeightSync",
     "available_algorithm_names",
     "build_objective_gate_context",
     "check_algorithm_wiring",
     "check_capabilities",
     "check_grpo_requirements",
+    "check_ppo_requirements",
     "check_reinforce_baseline_requirements",
     "check_reinforce_pp_requirements",
-    "check_role_map",
     "check_rloo_requirements",
+    "check_role_map",
     "check_sync_capabilities",
+    "check_value_capabilities",
     "lookup_algorithm",
     "register_algorithm",
     "reset_algorithm_registry",
+    "verify_estimates",
     "verify_generated",
     "verify_step",
     "verify_sync",

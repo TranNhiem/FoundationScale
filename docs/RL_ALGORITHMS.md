@@ -1,15 +1,25 @@
 # The RL plane: design record and binding seams
 
-FoundationScale has an RL plane at `src/foundationscale/rl/` — three advantage estimators, two losses, six protocols — and **zero** concrete RL algorithms bound to it. Before binding GRPO, PPO, DPO, GSPO and the rest, five independent design reviews were run against the current interfaces. All five concluded the interfaces do not fit: not in a way that any single signature change repairs, but in the shape of the seams themselves. NeMo-RL and comparable frameworks show which algorithm families exist; this record states what the seams must be so every one of those families plugs in without the core branching on algorithm identity.
+FoundationScale has an RL plane at `src/foundationscale/rl/`. This record was written on 2026-09-09 **before any algorithm was bound to it**, to fix the shape of the seams first: five independent design reviews were run against the interfaces as they then stood, and all five concluded those interfaces did not fit: not in a way that any single signature change repairs, but in the shape of the seams themselves. NeMo-RL and comparable frameworks show which algorithm families exist; this record states what the seams must be so every one of those families plugs in without the core branching on algorithm identity.
 
 WHAT IS CLAIMED:
 - A design. Six decisions about interface shape, each anchored to a verified site in the current source, each argued from the failure it prevents.
 - That the seams as described are sufficient for the algorithm families in the table below, at the level of interface coverage.
 
 WHAT IS NOT CLAIMED:
-- A measurement. No algorithm is bound today; the reviews rated interfaces, not running code.
+- A measurement. The reviews rated interfaces, not running code, and they rated them as they stood on the day above — no review here was re-run against a bound family.
 - Any benchmark, convergence claim, or performance result. None exists for this plane.
-- Completeness. The open questions at the end are live, and at least one decision may need revision once a second algorithm family actually binds.
+- Completeness. The open questions at the end were live when written; five families have since bound and only the one noted there as CLOSED has been retested.
+
+**STATUS — corrected after the fact, measured at this commit.** The lead paragraph and the
+open questions below originally stated, in the present tense, that nothing had bound. That
+was true for one day. Five families have since bound — GRPO, RLOO, REINFORCE-with-baseline,
+Reinforce++ and PPO — over a plane that now carries four advantage estimators, eight
+protocols and ten loss classes. The design argument is left exactly as it was argued; only
+the sentences that read as claims about the tree's present state are corrected, and they are
+corrected in place rather than deleted, so the record still shows what was believed when the
+seams were chosen. Counts here are measured from the source, not maintained by hand: re-take
+them with `make countables` and the class census.
 
 ## The five seams
 
@@ -126,4 +136,4 @@ Sequence-level ratio is objective geometry and belongs to the loss declaration. 
 - **`sync` cadence as data.** The `algorithm.py:573` precedent (a cadence-bound absence is not a refusal) suggests `supplied` may need a per-role cadence field; no shape has been chosen.
 - **Is `ratio_scope` a closed union?** `token | sequence` covers the families in the table. Whether a third geometry (per-group, or a length-normalised sequence ratio) needs its own member, or is expressible as a sequence ratio plus a declared denominator, is untested — and guessing wrong turns D6's refusal into an obstacle rather than an instrument.
 - **Whether semantics comparison should be structural or advisory.** `check_algorithm_wiring` refusing on any `None`-vs-value semantics mismatch may over-block algorithms that genuinely do not fix a KL estimator; the refusal policy per field is open.
-- **No second family has bound.** Every decision here is rated against one set of interfaces; the first binding that forces a revision is a feature of this process, not a failure of it.
+- **~~No second family has bound.~~ CLOSED by the bindings above.** This was written expecting that the first binding to force a revision would be a feature of the process rather than a failure of it, and that is what happened: the seams held for all five families, and the one shape they did not anticipate was a SECOND learned model inside a single step. PPO needs a value estimate that two consumers — the value regression and the temporal estimator — must agree about, which the seams as designed had no place for; it became the `ValueHead` protocol rather than a field on the composite. The remaining open questions below have not been retested.

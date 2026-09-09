@@ -98,6 +98,11 @@ TORCH_FREE_MODULES = {
         "check_reinforce_pp_requirements",
         "check_rloo_requirements",
     ),
+    "foundationscale.rl.ppo": (
+        "PPOAlgorithm",
+        "PPOCompositeLoss",
+        "check_ppo_requirements",
+    ),
     "foundationscale.rl.ppo_objectives": (
         "AdaptiveKLController",
         "FixedKLCoefficient",
@@ -112,6 +117,14 @@ TORCH_FREE_MODULES = {
         "SourceCapabilities",
         "check_capabilities",
         "verify_generated",
+    ),
+    "foundationscale.rl.value_head": (
+        "ValueCapabilities",
+        "ValueCapabilityRefusal",
+        "ValueEstimateRefusal",
+        "ValueHead",
+        "check_value_capabilities",
+        "verify_estimates",
     ),
     "foundationscale.rl.weightsync": (
         "SyncCapabilities",
