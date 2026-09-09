@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, get_origin
 
 import pytest
 
@@ -116,6 +116,63 @@ def test_registry_default_reset_restores_the_ten_default_names() -> None:
     assert available_algorithm_names() == expected
 
 
+def _is_plain_class(candidate: object) -> bool:
+    """Return True for a real class and False for a parametrised generic alias.
+
+    ``isinstance(x, type)`` is NOT that predicate, and the gap between them is
+    interpreter-dependent: ``isinstance(Callable[[X], Y], type)`` is True on
+    Python 3.10 and False on 3.11+. A package that exports a type ALIAS
+    therefore reaches ``issubclass`` on the OLDEST supported interpreter only,
+    where it raises ``TypeError: issubclass() arg 1 must be a class`` --
+    ``ForwardFn = Callable[[ExperienceBatch], Any]`` is such an alias, and it
+    is exported. The local gate runs one interpreter, so a divergence of this
+    shape is invisible until CI's 3.10 leg runs it; that is how it shipped.
+
+    ``get_origin`` is the half that means the same thing everywhere: it is
+    non-None for every parametrised alias on every version this package
+    supports, so the composite selects the same objects on all of them and the
+    sweep's denominator stops depending on the interpreter.
+    """
+    return isinstance(candidate, type) and get_origin(candidate) is None
+
+
+def test_the_exported_class_filter_excludes_a_parametrised_alias() -> None:
+    """``_is_plain_class`` discriminates alias from class on the running version.
+
+    WHAT IS CLAIMED: the filter guarding the ``__all__`` sweep below rejects the
+    alias the package actually exports, accepts a real binding, and is
+    load-bearing rather than decorative.
+
+    The reject leg alone would be VACUOUS on 3.11+, where ``isinstance`` already
+    excludes the alias and ``get_origin`` is never consulted -- it would pass on
+    every interpreter except the one that was broken. So the two legs that carry
+    the measurement are the version-stable ones: ``get_origin`` is asserted
+    non-None directly, and ``issubclass`` is shown to RAISE on the same object,
+    which it does on every supported version. Together they say the filter is
+    the only thing standing between the sweep and a hard error.
+
+    WHAT IS NOT CLAIMED: that ``ForwardFn`` is the only non-class export, or
+    that the sweep's other exclusions are correct; the protocol exclusion is
+    argued at its own site.
+    """
+    # Read the alias off the PACKAGE, which is where the sweep reads it from.
+    # Importing it from its defining module instead would measure a same-named
+    # object rather than the one the sweep is handed.
+    alias = rl_package.ForwardFn
+    assert "ForwardFn" in rl_package.__all__, (
+        "the sweep no longer sees a parametrised alias, so this control guards "
+        "a hypothetical; re-point it at whatever non-class name __all__ exports"
+    )
+    assert get_origin(alias) is not None
+    with pytest.raises(TypeError, match="issubclass"):
+        issubclass(alias, Algorithm)  # type: ignore[arg-type]
+    assert _is_plain_class(alias) is False
+    # Accept side: a filter that rejected everything would empty the sweep's
+    # denominator and make its "no exported bindings found" assertion the only
+    # thing left standing.
+    assert _is_plain_class(GRPOAlgorithm) is True
+
+
 def test_every_exported_algorithm_binding_is_reachable_through_the_registry() -> None:
     """Every ``Algorithm`` the package exports can be resolved by name.
 
@@ -171,7 +228,10 @@ def test_every_exported_algorithm_binding_is_reachable_through_the_registry() ->
     exported: dict[str, type] = {}
     for name in rl_package.__all__:
         candidate = getattr(rl_package, name)
-        if not isinstance(candidate, type) or not issubclass(candidate, Algorithm):
+        # _is_plain_class, not a bare isinstance(candidate, type): the package
+        # exports a type ALIAS, and on Python 3.10 an alias answers True to
+        # that check and then explodes inside issubclass. See the helper.
+        if not _is_plain_class(candidate) or not issubclass(candidate, Algorithm):
             continue
         # ``Algorithm`` itself satisfies ``issubclass(Algorithm, Algorithm)``, and a
         # contract is not a binding: nothing constructs the protocol, so counting it

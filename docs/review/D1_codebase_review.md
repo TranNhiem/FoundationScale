@@ -4,10 +4,10 @@ FoundationScale describes itself, in `src/foundationscale/__init__.py`, as "veri
 
 ## 1. What the repository physically contains
 
-The census records 167711 git-tracked .py/.sh/.md lines repo-wide. The trees, from largest to smallest:
+The census records 167771 git-tracked .py/.sh/.md lines repo-wide. The trees, from largest to smallest:
 
 - **`validation_campaigns/h100_validation/`** — an off-package validation-and-repair plane for an H100 estate launch. `validation_campaigns/h100_validation/` (33385 .py LOC, 65 files) plus `validation_campaigns/h100_validation/*.sh` (6414 LOC, 5 files). It is the single largest tree in the repository, bigger than the installable package. It contains a large family of `patch_*.py` scripts, a second family of `gate_*.py` scripts, executor `apply_*.py` scripts, a generated subtree at `validation_campaigns/h100_validation/h100/gen/`, deliverable documents under `validation_campaigns/h100_validation/h100/` (architecture review, validation report, matrix, EVIDENCE.md, LAUNCH.md), and two pytest files.
-- **`tests/`** — `tests/` (45303 .py LOC, 95 files; 203 import statements) in the census's wording. Test file names are not in the evidence slice, so this review cannot enumerate what the suite covers by file; section 9 reasons from what is visible elsewhere.
+- **`tests/`** — `tests/` (45363 .py LOC, 95 files; 203 import statements) in the census's wording. Test file names are not in the evidence slice, so this review cannot enumerate what the suite covers by file; section 9 reasons from what is visible elsewhere.
 - **`src/`** — the installable package. `src/ = 18761 LOC across 25 files`. Only three files exceed 2000 lines: `src/foundationscale/provenance/manifest.py`, `src/foundationscale/gates/adjudication.py`, and `src/foundationscale/gates/checkpoint_gates.py`.
 - **`launchers/`** — `launchers/` contains 10864 shell LOC plus 1615 Python LOC, according to the census. The two largest files are `launchers/test_launcher_contracts.sh` (4381) and `launchers/launch_g4e4b_lora_1tray.sh` (1913). Notably, `launchers/__pycache__/` with two `.pyc` files appears in this listing; the pycache directory also appears in the census's exclusion list, so those artifacts do not count in any anchored number, but their presence in the tree listing is a hygiene smell.
 - **`tools/`** — script-level adjudicators. `tools/` contains 9533 Python LOC. Dominated by the `tools/preflight/` package (4184 across 23 modules); `tools/mutate.py` (1745) is the largest single file.
@@ -118,7 +118,7 @@ Covered, with evidence:
 - The gate engine's controls themselves are executed by `gates/controls.py:main`, and `tools/mutate.py` mutates the verification framework to prove the suite can kill mutants — this is the strongest coverage claim in the repository but it is a *meta* claim: it certifies the suite's lethality, not semantic coverage of any particular defect class beyond the mutations defined there.
 - `tools/preflight/` and the bash launchers carry shell contract suites (`launchers/test_launcher_contracts.sh` is effectively a launchers-plane test runner).
 - `validation_campaigns/h100_validation/` has two measured pytest files (`test_fs_argv_preflight.py`, `test_fs_ckpt_scalars.py`).
-- The test suite (45303 .py LOC) over `tests/` (95 tracked test files in the census's wording) — the individual test module names are not in this slice, so per-area coverage inside `tests/` is **unmeasured** from here; enumerating it requires a file listing of `tests/`.
+- The test suite (45363 .py LOC) over `tests/` (95 tracked test files in the census's wording) — the individual test module names are not in this slice, so per-area coverage inside `tests/` is **unmeasured** from here; enumerating it requires a file listing of `tests/`.
 
 NOT covered, with evidence for the absence or the gap:
 
