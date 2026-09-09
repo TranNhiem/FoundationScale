@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from foundationscale import rl as rl_package
 from foundationscale.rl.advantage import (
     AdvantageRefusal,
     AdvantageResult,
@@ -17,6 +18,7 @@ from foundationscale.rl.advantage import (
     RewardStats,
 )
 from foundationscale.rl.algorithm import (
+    Algorithm,
     AlgorithmWiringRefusal,
     StepReport,
     StepReportRefusal,
@@ -73,11 +75,11 @@ def _grpo_batch(*, rewards: tuple[float, float] = (2.0, 4.0)) -> _Batch:
     )
 
 
-def test_registry_default_reset_restores_the_four_default_names() -> None:
-    """The supported reset leaves exactly the four deterministic default bindings.
+def test_registry_default_reset_restores_the_ten_default_names() -> None:
+    """The supported reset leaves exactly the ten deterministic default bindings.
 
-    WHAT IS CLAIMED: reset removes test entries and reinstalls all four
-    built-in names, and a second reset restores the SAME set. The four are
+    WHAT IS CLAIMED: reset removes test entries and reinstalls all ten
+    built-in names, and a second reset restores the SAME set. The ten are
     hand-stated here rather than read back from the registry, because a test
     that asked the registry what it holds would agree with any answer.
 
@@ -86,15 +88,127 @@ def test_registry_default_reset_restores_the_four_default_names() -> None:
     that is never re-imported still comes back. A family that registered on
     its own import would survive only the first reset.
 
-    WHAT IS NOT CLAIMED: that the four bindings are interchangeable, or that
-    any of them is wired -- lookup constructs, setup is a separate handshake.
+    WHAT IS NOT CLAIMED: that this list is COMPLETE with respect to the
+    bindings the package ships. Hand-stating the set is what makes the claim
+    checkable, and it is also what makes it one-directional: it catches a
+    binding that appears, and it cannot catch one that never arrives. That
+    second direction is a different measurement and is taken by
+    ``test_every_exported_algorithm_binding_is_reachable_through_the_registry``.
+    Also not claimed: that the ten bindings are interchangeable, or that any
+    of them is wired -- lookup constructs, setup is a separate handshake.
     """
     register_algorithm("z_test_algorithm", GRPOAlgorithm)
     reset_algorithm_registry()
-    expected = ("grpo", "reinforce_baseline", "reinforce_pp", "rloo")
+    expected = (
+        "cpo",
+        "dpo",
+        "grpo",
+        "ipo",
+        "kto",
+        "orpo",
+        "reinforce_baseline",
+        "reinforce_pp",
+        "rloo",
+        "simpo",
+    )
     assert available_algorithm_names() == expected
     reset_algorithm_registry()
     assert available_algorithm_names() == expected
+
+
+def test_every_exported_algorithm_binding_is_reachable_through_the_registry() -> None:
+    """Every ``Algorithm`` the package exports can be resolved by name.
+
+    WHAT IS CLAIMED: for each public name in ``foundationscale.rl`` that is a
+    class satisfying the ``Algorithm`` protocol, some registered name
+    constructs an instance of exactly that class. The reachable side is
+    measured by CONSTRUCTING through ``lookup_algorithm`` rather than by
+    reading the registry mapping, so a name bound to a factory that cannot
+    build is not counted as reachable.
+
+    This is the direction the reset test above cannot see. A binding that
+    ships a module, an ``__init__`` export and a full test suite, and is then
+    simply never added to the default install, is invisible to a test that
+    pins the install against a hand-written list -- the list and the install
+    are the same statement made twice, so they agree by construction. That is
+    exactly how ``PPOAlgorithm`` shipped: ``lookup_algorithm("ppo")`` refuses
+    with "0 of 10 available algorithm names matched" while the class is
+    public, zero-argument, and passes the registry's own runtime
+    ``isinstance`` check.
+
+    An unreachable binding may be DECLARED, and the declaration must say why.
+    A declaration is not a suppression: the second assertion below fails when
+    a declared name becomes reachable, so the note cannot outlive the gap it
+    describes. The abstention exists because the alternative -- deleting the
+    test until the gap closes -- is how the gap stayed invisible in the first
+    place.
+
+    WHAT IS NOT CLAIMED: that the registry holds NO name beyond the exported
+    bindings -- registering an extra name is the documented extension point,
+    and the reset test is what pins the DEFAULT set. Also not claimed: that a
+    reachable binding is correct, or that its ``setup`` succeeds against any
+    particular role map; nor that a DECLARED binding is unusable -- an
+    explicit ``register_algorithm`` call reaches it, only the default install
+    does not.
+    """
+    declared_unreachable = {
+        "PPOAlgorithm": (
+            "finding #359: PPOAlgorithm is not a STATIC subtype of Algorithm. Its "
+            "setup narrows advantage_fn to LearnedValueAdvantageEstimation, which "
+            "advantage.py declares a SIBLING of AdvantageFn rather than a subtype, "
+            "and a parameter type is contravariant -- so a setup accepting less "
+            "than the protocol promises cannot stand in for it. isinstance cannot "
+            "see this: Algorithm is runtime_checkable, which measures attribute "
+            "PRESENCE only. Registering the binding is what makes mypy check the "
+            "registry's Callable[[], Algorithm] slot, and it is red. The "
+            "resolution is a separate protocol slot per seam rather than a union, "
+            "because both seams are structurally just __call__ and no runtime "
+            "check can separate them; that touches all five algorithm families."
+        ),
+    }
+
+    reset_algorithm_registry()
+    exported: dict[str, type] = {}
+    for name in rl_package.__all__:
+        candidate = getattr(rl_package, name)
+        if not isinstance(candidate, type) or not issubclass(candidate, Algorithm):
+            continue
+        # ``Algorithm`` itself satisfies ``issubclass(Algorithm, Algorithm)``, and a
+        # contract is not a binding: nothing constructs the protocol, so counting it
+        # would make the denominator permanently short by one. The exclusion keys on
+        # what the object IS -- a protocol -- and not on the name ``Algorithm``, so a
+        # second protocol added to this package is excluded for the same reason
+        # rather than needing its own entry.
+        if getattr(candidate, "_is_protocol", False):
+            continue
+        exported[name] = candidate
+    assert exported, "no exported Algorithm bindings found; the denominator is vacuous"
+    unknown_declarations = sorted(set(declared_unreachable) - set(exported))
+    assert unknown_declarations == [], (
+        f"{len(unknown_declarations)} declared-unreachable name(s) are not exported "
+        f"Algorithm bindings at all: {unknown_declarations}; a declaration that names "
+        f"nothing suppresses nothing and hides a rename"
+    )
+
+    reachable = {type(lookup_algorithm(name)) for name in available_algorithm_names()}
+    undeclared = sorted(
+        name
+        for name, binding in exported.items()
+        if binding not in reachable and name not in declared_unreachable
+    )
+    assert undeclared == [], (
+        f"{len(undeclared)} of {len(exported)} exported Algorithm binding(s) cannot "
+        f"be resolved by any registered name and are not declared: {undeclared}; "
+        f"registered names ({len(available_algorithm_names())}): "
+        f"{available_algorithm_names()}"
+    )
+
+    stale = sorted(name for name in declared_unreachable if exported[name] in reachable)
+    assert stale == [], (
+        f"{len(stale)} of {len(declared_unreachable)} declared-unreachable binding(s) "
+        f"are now reachable: {stale}; the declaration outlived the gap and must be "
+        f"deleted, not carried"
+    )
 
 
 def test_registry_refuses_duplicate_name_without_overwrite() -> None:
@@ -116,7 +230,7 @@ def test_registry_refuses_duplicate_name_without_overwrite() -> None:
     message = str(exc_info.value)
     assert "field name='grpo'" in message
     assert "1 of 1 new registrations" in message
-    assert "1 of 4 registered names" in message
+    assert "1 of 10 registered names" in message
     assert lookup_algorithm("grpo") is not first
     reset_algorithm_registry()
 
@@ -124,7 +238,7 @@ def test_registry_refuses_duplicate_name_without_overwrite() -> None:
 def test_registry_unknown_name_names_key_and_available_count() -> None:
     """Lookup absence is reported against every available registry name.
 
-    WHAT IS CLAIMED: the requested key and all four available names appear.
+    WHAT IS CLAIMED: the requested key and all ten available names appear.
 
     WHAT IS NOT CLAIMED: that the requested spelling was close to ``grpo``;
     no correction or distance measurement exists.
@@ -132,12 +246,15 @@ def test_registry_unknown_name_names_key_and_available_count() -> None:
     reset_algorithm_registry()
     with pytest.raises(
         AlgorithmRegistryRefusal,
-        match="0 of 4 available algorithm names matched",
+        match="0 of 10 available algorithm names matched",
     ) as exc_info:
         lookup_algorithm("missing")
     message = str(exc_info.value)
     assert "requested key name='missing'" in message
-    assert "available names (4): ('grpo', 'reinforce_baseline', 'reinforce_pp', 'rloo')" in message
+    assert (
+        "available names (10): ('cpo', 'dpo', 'grpo', 'ipo', 'kto', 'orpo', "
+        "'reinforce_baseline', 'reinforce_pp', 'rloo', 'simpo')"
+    ) in message
     reset_algorithm_registry()
 
 
@@ -172,10 +289,16 @@ def test_registry_available_names_are_sorted_after_extra_registration() -> None:
     register_algorithm("a_first", lambda: GRPOAlgorithm())
     assert available_algorithm_names() == (
         "a_first",
+        "cpo",
+        "dpo",
         "grpo",
+        "ipo",
+        "kto",
+        "orpo",
         "reinforce_baseline",
         "reinforce_pp",
         "rloo",
+        "simpo",
     )
     assert tuple(sorted(available_algorithm_names())) == available_algorithm_names()
     reset_algorithm_registry()

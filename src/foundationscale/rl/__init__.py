@@ -49,7 +49,43 @@ Design section 9 of ``validation_campaigns/nemo_rl_baseline/PHASE3_DESIGN.md``:
   consumers disagree about the same batch. The KL controller chain stays with
   the trainer rather than the binding: a frozen binding cannot advance state
   across a step without either mutating a frozen object or staling the map it
-  was constructed from.
+  was constructed from;
+* stage 3h -- the preference-optimisation objectives ``IPOLoss``, ``KTOLoss``,
+  ``ORPOLoss``, ``SimPOLoss`` and ``CPOLoss``, joining ``DPOLoss`` from stage
+  2. This family is the first to need NO rollout source, NO advantage
+  estimator and NO weight sync: its supervision arrives as preference data
+  rather than as sampled trajectories, so most of the section-3 contract set
+  is not on its path at all. That is why it is a test of the seam in the
+  opposite direction from stage 3e -- the question there was whether a new
+  family could reuse the contracts, and the question here is whether a family
+  can ABSTAIN from most of them without a contract having to soften. Two
+  splits within the family are load-bearing and are declared rather than
+  inferred: ``IPOLoss`` and ``KTOLoss`` are reference-ANCHORED and read a
+  frozen model's scores from batch columns, while ``ORPOLoss``, ``SimPOLoss``
+  and ``CPOLoss`` are reference-FREE; and ``KTOLoss`` alone is UNPAIRED, taking
+  one labelled completion per row where the other five take a chosen/rejected
+  pair. Each objective states ``reference_free`` once, as a property, and its
+  ``semantics()`` derives from that property instead of restating it, so the
+  loss side of the five-field wiring check cannot drift from the objective's
+  own account of itself. The other four semantics fields abstain with ``None``:
+  a preference objective forms no importance ratio and reads no group, so it
+  constrains neither seam, and a number there would be a guess wearing a
+  measurement's clothes.
+* stage 3i -- the preference BINDING: ``PreferenceAlgorithm`` in
+  ``preference``, one algorithm parameterised by an objective rather than six
+  near-identical algorithm classes. The objective slot is typed by the
+  ``PreferenceObjective`` protocol, not by a union of the six shipped classes,
+  because a union is a closed set that a seventh objective could not join
+  without editing the binding -- the opposite of what a seam is for. Opening
+  it costs no discrimination: ``reference_free`` is declared by exactly the
+  six preference objectives and by no other loss in the plane. Two facts the
+  binding needs are READ from the objective's own declarations rather than
+  from its class: whether it is reference-anchored, and whether it is paired.
+  Pairedness is derived from the ``chosen_*``/``rejected_*`` columns the
+  objective declares, and a half-declared schema is REFUSED rather than
+  guessed, because a class check would silently default an unrecognised
+  objective to paired and fail by mis-shaping the forward closure instead of
+  by refusing.
 
 ``WeightSync`` could only be specified once the section-7 item-3
 weight-transfer measurement was taken. It has been, and it returned
@@ -141,6 +177,24 @@ from foundationscale.rl.ppo_objectives import (
     PPOClippedPolicyLoss,
     ValueFunctionLoss,
 )
+from foundationscale.rl.preference import (
+    PreferenceAlgorithm,
+    PreferenceObjective,
+    check_preference_requirements,
+    cpo_algorithm,
+    dpo_algorithm,
+    ipo_algorithm,
+    kto_algorithm,
+    orpo_algorithm,
+    simpo_algorithm,
+)
+from foundationscale.rl.preference_objectives import (
+    CPOLoss,
+    IPOLoss,
+    KTOLoss,
+    ORPOLoss,
+    SimPOLoss,
+)
 from foundationscale.rl.registry import (
     AlgorithmRegistryRefusal,
     available_algorithm_names,
@@ -185,6 +239,7 @@ __all__ = (
     "AlgorithmSemantics",
     "AlgorithmWiringRefusal",
     "BatchRefusal",
+    "CPOLoss",
     "CapabilityRefusal",
     "DPOLoss",
     "ExperienceBatch",
@@ -194,19 +249,24 @@ __all__ = (
     "GRPOPolicyLoss",
     "GeneralisedAdvantageEstimation",
     "GroupNormalisedAdvantage",
+    "IPOLoss",
     "KLCoefficientController",
     "KLPenaltyLoss",
+    "KTOLoss",
     "LearnedValueAdvantageEstimation",
     "LeaveOneOutAdvantage",
     "LossConfigRefusal",
     "LossDeclaration",
     "LossFn",
     "LossOutput",
+    "ORPOLoss",
     "PPOAlgorithm",
     "PPOClippedPolicyLoss",
     "PPOCompositeLoss",
     "PolicyPair",
     "PolicyRoleRefusal",
+    "PreferenceAlgorithm",
+    "PreferenceObjective",
     "RLOOAlgorithm",
     "RLOOPolicyLoss",
     "ReinforceBaselineAlgorithm",
@@ -216,6 +276,7 @@ __all__ = (
     "RewardStats",
     "RolloutSource",
     "SFTLoss",
+    "SimPOLoss",
     "SourceCapabilities",
     "StepReport",
     "StepReportRefusal",
@@ -237,15 +298,22 @@ __all__ = (
     "check_capabilities",
     "check_grpo_requirements",
     "check_ppo_requirements",
+    "check_preference_requirements",
     "check_reinforce_baseline_requirements",
     "check_reinforce_pp_requirements",
     "check_rloo_requirements",
     "check_role_map",
     "check_sync_capabilities",
     "check_value_capabilities",
+    "cpo_algorithm",
+    "dpo_algorithm",
+    "ipo_algorithm",
+    "kto_algorithm",
     "lookup_algorithm",
+    "orpo_algorithm",
     "register_algorithm",
     "reset_algorithm_registry",
+    "simpo_algorithm",
     "verify_estimates",
     "verify_generated",
     "verify_step",

@@ -165,11 +165,31 @@ def _install_default_algorithms() -> None:
         ReinforcePlusPlusAlgorithm,
         RLOOAlgorithm,
     )
+    from foundationscale.rl.preference import (
+        cpo_algorithm,
+        dpo_algorithm,
+        ipo_algorithm,
+        kto_algorithm,
+        orpo_algorithm,
+        simpo_algorithm,
+    )
 
     _REGISTRY["grpo"] = GRPOAlgorithm
     _REGISTRY["reinforce_baseline"] = ReinforceBaselineAlgorithm
     _REGISTRY["reinforce_pp"] = ReinforcePlusPlusAlgorithm
     _REGISTRY["rloo"] = RLOOAlgorithm
+    # The preference family registers six FACTORIES, not six classes. The other
+    # four entries are classes because their constructors take no argument; a
+    # preference binding always carries an objective, so the zero-argument
+    # callable the registry needs is the family's default-configured factory.
+    # Registering `PreferenceAlgorithm` itself would put an unconfigured
+    # binding behind a name, and an objective is not a default.
+    _REGISTRY["cpo"] = cpo_algorithm
+    _REGISTRY["dpo"] = dpo_algorithm
+    _REGISTRY["ipo"] = ipo_algorithm
+    _REGISTRY["kto"] = kto_algorithm
+    _REGISTRY["orpo"] = orpo_algorithm
+    _REGISTRY["simpo"] = simpo_algorithm
 
 
 _install_default_algorithms()

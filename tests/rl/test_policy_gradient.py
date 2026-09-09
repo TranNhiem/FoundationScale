@@ -103,20 +103,26 @@ def test_registry_round_trip_returns_fresh_binding_for_all_three() -> None:
     """Every family name resolves to a fresh, structurally valid algorithm.
 
     WHAT IS CLAIMED: sorted names are exactly grpo plus the three family
-    entries, two lookups per name are distinct objects, and each abstains
-    (``None``) on wiring before setup.
+    entries plus the six preference bindings, two lookups per name are
+    distinct objects, and each abstains (``None``) on wiring before setup.
 
     WHAT IS NOT CLAIMED: that any module-import side effect installs the
-    family; the reset itself reinstalls all four, which is the property
+    family; the reset itself reinstalls all ten, which is the property
     under test -- a family that registered on its own import would survive
     a reset only if something re-imported it.
     """
     reset_algorithm_registry()
     assert available_algorithm_names() == (
+        "cpo",
+        "dpo",
         "grpo",
+        "ipo",
+        "kto",
+        "orpo",
         "reinforce_baseline",
         "reinforce_pp",
         "rloo",
+        "simpo",
     )
     for name, cls in (
         ("rloo", RLOOAlgorithm),
@@ -150,7 +156,7 @@ def test_registry_refuses_duplicate_family_name_with_denominators() -> None:
     message = str(exc_info.value)
     assert "field name='rloo'" in message
     assert "1 of 1 new registrations" in message
-    assert "1 of 4 registered names" in message
+    assert "1 of 10 registered names" in message
     reset_algorithm_registry()
 
 

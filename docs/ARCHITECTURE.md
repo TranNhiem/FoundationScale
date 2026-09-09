@@ -238,17 +238,63 @@ Around that sit the support modules named in README §1:
 
 ## The RL plane: `src/foundationscale/rl/`
 
-The post-training contracts. Three modules, split so that a contract and an
-implementation of it are never the same file:
+The post-training contracts, split so that a contract and an implementation of
+it are never the same file. The contract modules first:
 
 * `interfaces.py` — the contracts only. `ExperienceBatch` (the data contract),
   `LossFn`/`ForwardFn` (the protocols), `LossOutput` (what one measured step
   produced), `LossDeclaration` (what a loss *says* it will produce), the three
   refusals `BatchRefusal`/`SupervisionRefusal`/`LossConfigRefusal`, and
   `build_objective_gate_context`.
+* `algorithm.py` — `Algorithm` (the protocol a family binds to),
+  `AlgorithmRequirements` (what a binding declares it needs),
+  `AlgorithmSemantics` (the five seam fields), `StepReport` (what one step
+  evidences), and the three gates `check_algorithm_wiring`, `verify_step`,
+  `check_role_map`.
+* `rollout.py`, `advantage.py`, `weightsync.py`, `value_head.py`, `policy.py` —
+  the five role seams a binding may require: where trajectories come from, how
+  a reward becomes an advantage, how weights reach the generation view, how a
+  per-token value is estimated, and the policy/reference role split.
+* `registry.py` — name → binding. A family adds a module and one line in the
+  default install; it does not edit a contract.
+
+Then the objectives and the bindings that compose them:
+
 * `losses.py` — `SFTLoss` and `DPOLoss`.
-* `policy.py` — `PolicyPair` and `PolicyRoleRefusal`: the policy/reference role
-  split DPO needs.
+* `ppo_objectives.py` — `PPOClippedPolicyLoss`, `ValueFunctionLoss`, and the
+  KL-control trio.
+* `preference_objectives.py` — `IPOLoss`, `KTOLoss`, `ORPOLoss`, `SimPOLoss`,
+  `CPOLoss`.
+* `grpo.py`, `policy_gradient.py`, `ppo.py`, `preference.py` — the bindings:
+  GRPO; RLOO, REINFORCE-with-baseline and Reinforce++; PPO with its composite
+  loss; and the preference family.
+
+`preference.py` is one binding for six algorithms rather than six classes,
+because the six differ only in their objective. The objective slot is typed by
+the `PreferenceObjective` **protocol**, not by a union of the six shipped
+classes: a union is closed, so a seventh objective could not be bound without
+editing the binding. Opening it costs no discrimination — `reference_free` is
+declared by exactly the six preference objectives and by no other loss in the
+plane, so the protocol admits the same six and still refuses `SFTLoss`. The two
+facts the binding needs are read from the objective's own declarations rather
+than from its class: reference-anchored versus reference-free from
+`reference_free`, and paired versus unpaired from whether its
+`required_columns` name `chosen_*`/`rejected_*`. A half-declared schema is
+refused rather than guessed, because a class check would silently default an
+unknown objective to paired and fail by mis-shaping the forward closure instead
+of by refusing.
+
+A binding pairs with its loss through one cross-check, not through a comment:
+`AlgorithmSemantics` has five fields (`group_size`, `ratio_scope`,
+`kl_estimator`, `clip_bounds`, `reference_free`), the algorithm and the loss
+each state all five, and a disagreement on any one raises
+`AlgorithmWiringRefusal`. **`None` in that record is an abstention — "this
+family does not constrain that seam" — not a default and not a measurement.**
+The preference family is the clearest case: it forms no importance ratio and
+reads no group, so four of its five fields are `None` and only
+`reference_free` carries a claim. Each preference objective states
+`reference_free` once as a property and derives `semantics()` from it, so the
+two statements about that seam cannot drift.
 
 `build_objective_gate_context` is the whole reason this plane sits under the
 gate contract rather than beside it. It turns one measured step into an
@@ -276,11 +322,13 @@ outside `tests/packaging/test_front_door.py`'s denominator. They are in the
 coverage-floor and mutation-scope denominators (`checks/coverage_floor.py`,
 `checks/mutation_scope.py`).
 
-The contracts named in the Phase 3 design that are *not* here — `Algorithm`,
-`RolloutSource`, `AdvantageFn`, `WeightSync` — are later stages and are
-deliberately absent. Nothing in this plane has been benchmarked against the
-reference implementation; `validation_campaigns/nemo_rl_baseline/PHASE3_DESIGN.md`
-section 10 states what is not established.
+Section 3's contract set is complete: `Algorithm`, `RolloutSource`,
+`AdvantageFn` and `WeightSync` all landed in stages 3a–3c, and the families
+that followed added modules without editing any of them. What is *not*
+established is separate from that: **nothing in this plane has been
+benchmarked against the reference implementation.**
+`validation_campaigns/nemo_rl_baseline/PHASE3_DESIGN.md` section 10 states what
+that leaves open.
 
 ## The training plane: `src/foundationscale/train/`
 
@@ -314,7 +362,7 @@ working home fails a test rather than an import at a user's site.
 
 ## Around the package
 
-`src/` is 29755 LOC across 39 files; `tests/` adds 42372 `.py` LOC (its
+`src/` is 32235 LOC across 41 files; `tests/` adds 45303 `.py` LOC (its
 conftest carries the skip guard). Beside the package:
 
 | Tree | Contents |
@@ -326,7 +374,7 @@ conftest carries the skip guard). Beside the package:
 | `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 162238 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 167711 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 

@@ -99,6 +99,18 @@ PENDING_ENROLMENT: dict[str, str] = {
         "composes the stage-3f objectives into one algorithm and is the first binding that "
         "measures a learned value estimate once and hands the single reading to two consumers"
     ),
+    "src/foundationscale/rl/preference.py": (
+        "derives two facts about an objective from its own declarations rather than its "
+        "class -- whether it is reference-anchored, and whether it is paired -- and the "
+        "pairedness derivation decides the SHAPE of the forward closure, so a wrong "
+        "reading mis-scores every row instead of refusing the batch"
+    ),
+    "src/foundationscale/rl/preference_objectives.py": (
+        "five preference objectives whose arithmetic decides a preference direction from "
+        "hand-computable scalars, and whose refusals -- ORPO's exact-zero odds wall, SimPO's "
+        "zero-supervision row, KTO's paired-batch rejection -- are the only thing between a "
+        "silently halved denominator and a reported loss"
+    ),
     "src/foundationscale/rl/value_head.py": (
         "grades an untrusted per-token value estimate against a batch mask and decides which "
         "positions are supervised at all, so a wrong count is an unmeasured advantage"

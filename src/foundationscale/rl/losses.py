@@ -23,6 +23,7 @@ from foundationscale.gates.objective_gates import (
     MetricExpectation,
     MetricObservation,
 )
+from foundationscale.rl.algorithm import AlgorithmSemantics
 from foundationscale.rl.interfaces import (
     BatchRefusal,
     ExperienceBatch,
@@ -299,6 +300,36 @@ class DPOLoss:
             self.reference_chosen_column,
             self.reference_rejected_column,
         )
+
+    @property
+    def reference_free(self) -> bool:
+        """Whether the objective consumes a frozen reference model's scores.
+
+        DPO is reference-ANCHORED -- it reads two reference columns -- so
+        this is False. The property is the SOURCE that ``semantics()``
+        derives from, so the two statements about this seam cannot drift
+        apart.
+        """
+        return False
+
+    def semantics(self) -> AlgorithmSemantics:
+        """The loss side of the two-declaration seam check.
+
+        Exactly one of the five cross-checked fields -- ``reference_free``
+        -- is constrained by a preference objective, and it is derived from
+        the ``reference_free`` property rather than restated. The other four
+        abstain with ``None``, which the record defines as "this does not
+        constrain that seam": DPO forms no importance ratio, so it has no
+        ratio geometry, no clip bounds and no KL estimator to state, and it
+        reads no group, so it has no group size. Declaring a number there
+        would be a measured value posing as an unconstrained seam.
+
+        What is NOT claimed: that reference-freeness is CHECKED against a
+        wired reference model. This record states what the loss consumes;
+        whether a reference policy is actually present is the role-presence
+        layer's question, answered by ``AlgorithmRequirements``.
+        """
+        return AlgorithmSemantics(reference_free=self.reference_free)
 
     def declaration(self) -> LossDeclaration:
         """The manifest's statement of what this loss is configured to emit.
