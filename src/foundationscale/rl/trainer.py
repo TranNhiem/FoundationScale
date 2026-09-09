@@ -43,6 +43,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, NoReturn
 
+from foundationscale.rl.advantage import AdvantageRefusal, RewardStats
 from foundationscale.rl.algorithm import StepReport, StepReportRefusal
 from foundationscale.rl.corpus import Sample, load_sharegpt
 from foundationscale.rl.interfaces import BatchRefusal, LossOutput
@@ -369,25 +370,65 @@ class RLTrainer:
         current_logprobs = forward_logprobs().requires_grad_(True)
 
         prompt_id_values = [f"row-{index // self.config.group_size}" for index, _ in rows]
-        mask_1d = torch.ones(len(rows), dtype=torch.float32, device=device)
-        advantages = objective.advantage_fn.compute(
-            prompt_ids=tuple(prompt_id_values),
-            rewards=tuple(float(value) for value in rewards.tolist()),
-            mask=tuple(float(value) for value in mask_1d.tolist()),
-        )
-        advantage_values = []
-        kept_rows = []
-        for row_number, value in enumerate(advantages):
-            if value is None:
-                continue
-            kept_rows.append(row_number)
-            advantage_values.append(float(value))
+        # The estimator reads the PER-TOKEN supervision mask, not a per-row
+        # flag: it denominates each response by its own supervised length.
+        # Handing it a 1-D tensor of ones made every row non-iterable and
+        # refused the batch, and the row count it would have implied is not
+        # the quantity the estimator needs.
+        try:
+            advantage = objective.advantage_fn.compute(
+                prompt_ids=tuple(prompt_id_values),
+                rewards=tuple(float(value) for value in rewards.tolist()),
+                mask=tuple(tuple(int(entry) for entry in row) for row in response_mask.tolist()),
+            )
+        except AdvantageRefusal as exc:
+            # The estimator refuses when NO row survives: every group was too
+            # small for a baseline once abstentions were dropped. That is a
+            # genuine UNMEASURED step, not a crash. Letting the refusal
+            # propagate ended an entire multi-step run on one unlucky draw --
+            # and a run that dies at step 4 of 8 reports nothing about steps
+            # 5 to 8, which is a worse outcome than saying "this step taught
+            # nothing" and continuing.
+            print(
+                f"UNMEASURED step {step}: the advantage estimator used 0 of "
+                f"{len(rows)} offered row(s) -- {exc}",
+                file=sys.stderr,
+            )
+            return None
+        # AdvantageResult is a RECORD, not a per-row sequence: `rows` names the
+        # batch indices it used and `weights` carries one per-token weight row
+        # for each. Enumerating the record itself treated its fields as
+        # advantages. `used < offered` is the estimator's own visible account
+        # of what it dropped -- a group too small for a baseline leaves here.
+        kept_rows = list(advantage.rows)
         if not kept_rows:
             return None
         keep = torch.tensor(kept_rows, device=device)
         advantage_tensor = torch.tensor(
-            advantage_values, dtype=torch.float32, device=device
+            [list(weights) for weights in advantage.weights],
+            dtype=torch.float32,
+            device=device,
         ).detach()
+
+        # A SATURATED step is unmeasured, not a step. When every completion in
+        # a group earns the same reward -- all correct or all wrong -- the
+        # group-relative advantage is identically zero, the surrogate is zero,
+        # and the gradient is zero. The optimiser then "steps" without moving,
+        # and the report would carry loss=-0.0 over a healthy-looking row
+        # count: a run that taught nothing, reported as a run that trained.
+        # That is this framework's founding failure wearing new clothes, so it
+        # is named and skipped rather than counted.
+        if not bool(advantage_tensor.abs().any()):
+            used_rewards = [float(rewards[row]) for row in kept_rows]
+            distinct = sorted(set(used_rewards))
+            print(
+                f"UNMEASURED step {step}: advantage is identically zero over "
+                f"{len(kept_rows)} of {len(rows)} used row(s); the reward has "
+                f"no within-group variance (distinct rewards: {distinct}). "
+                f"No gradient exists to take, so no step is claimed.",
+                file=sys.stderr,
+            )
+            return None
 
         loss_tensor = loss_fn(
             current_logprobs=current_logprobs.index_select(0, keep),
@@ -404,11 +445,19 @@ class RLTrainer:
             loss=measured,
             components=_loss_components(objective, measured),
         )
+        # Reward telemetry over the rows the gradient ACTUALLY touched, not
+        # over everything offered. Leaving this None made the one number that
+        # explains a step invisible: a saturated batch and a healthy one
+        # produce the same-looking report, and on the first step -- where the
+        # ratio is exactly 1 because old and current come from the same
+        # weights -- the surrogate is the mean of centred advantages and reads
+        # ~0 even when the gradient is large. Without the reward spread there
+        # is no way to tell those two apart from the report alone.
         return StepReport(
             step=step,
             loss=loss_output,
             rows=len(kept_rows),
-            reward_stats=None,
+            reward_stats=RewardStats.over(tuple(float(rewards[row]) for row in kept_rows)),
             sync=None,
         )
 
