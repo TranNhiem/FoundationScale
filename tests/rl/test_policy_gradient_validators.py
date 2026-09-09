@@ -6,7 +6,8 @@ role helpers of ``foundationscale.rl.policy_gradient``. No private helper is
 imported: each targeted guard (``_checked_name``, ``_positive_finite``,
 ``_outer_sequence``, ``_row_sequence``, ``_mask_entry``, ``_logprob_value``,
 ``_reward_scalar``, ``_advantage_weight``, ``_token_ratio``,
-``_supplied_is_present`` and ``_check_policy_gradient_roles``) is exercised by
+``_supplied_is_present`` and ``check_role_map``, now shared in
+``algorithm``) is exercised by
 the public caller that reaches it in production order, so the refusals
 asserted here are the ones real callers observe.
 """
@@ -424,7 +425,7 @@ def test_role_check_refuses_absent_boolean_and_unrequired_supplied_roles() -> No
     """Presence is measured by the actual object, never None or a boolean.
 
     WHAT IS CLAIMED: a None-valued required role reads as ABSENT (the
-    ``_supplied_is_present`` None arm) so the absent-required refusal names
+    shared ``_supplied_is_present`` None arm) so the absent-required refusal names
     1 of 1 required inputs for the rloo origin; True and False as supplied
     values refuse as not-supplied-components; and a present but unrequired
     role refuses naming the 1-of-2 denominator for the reinforce_pp origin.

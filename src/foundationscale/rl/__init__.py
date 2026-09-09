@@ -85,6 +85,7 @@ from foundationscale.rl.algorithm import (
     StepReport,
     StepReportRefusal,
     check_algorithm_wiring,
+    check_role_map,
     verify_step,
 )
 from foundationscale.rl.grpo import (
@@ -207,6 +208,7 @@ __all__ = (
     "check_grpo_requirements",
     "check_reinforce_baseline_requirements",
     "check_reinforce_pp_requirements",
+    "check_role_map",
     "check_rloo_requirements",
     "check_sync_capabilities",
     "lookup_algorithm",

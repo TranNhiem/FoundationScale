@@ -59,6 +59,7 @@ TORCH_FREE_MODULES = {
         "StepReport",
         "StepReportRefusal",
         "check_algorithm_wiring",
+        "check_role_map",
         "verify_step",
     ),
     "foundationscale.rl.grpo": (

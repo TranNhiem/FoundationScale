@@ -38,6 +38,7 @@ from foundationscale.rl.algorithm import (
     StepReport,
     StepReportRefusal,
     check_algorithm_wiring,
+    check_role_map,
 )
 from foundationscale.rl.interfaces import (
     BatchRefusal,
@@ -153,19 +154,6 @@ def _advantage_weight(raw: Any, row: int, position: int) -> float:
             f"non-finite advantage as gradient"
         )
     return value
-
-
-def _supplied_is_present(value: Any) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        raise AlgorithmWiringRefusal(
-            f"field supplied contains the boolean {value!r}: True and "
-            f"False are not supplied components; presence must be the actual "
-            f"wired object and absence must be represented by no key or by "
-            f"None"
-        )
-    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -627,82 +615,11 @@ def check_grpo_requirements(
 
     WHAT IS NOT CLAIMED: that any role object is a valid model, dataloader,
     estimator, or loss. Type and semantic checks remain with the component
-    handshakes; this helper checks the declared denominator only.
+    handshakes; this helper checks the declared denominator only. The
+    implementation is shared with every other family's role-map check --
+    only the ``origin`` this binding names differs.
     """
-    if not isinstance(requires, Mapping):
-        raise AlgorithmWiringRefusal(
-            f"field requires={requires!r}: 1 of 1 requirement mappings must implement Mapping"
-        )
-    if not isinstance(supplied, Mapping):
-        raise AlgorithmWiringRefusal(
-            f"field supplied={supplied!r}: 1 of 1 supplied mappings must implement Mapping"
-        )
-    requirement_map = dict(requires)
-    supplied_map = dict(supplied)
-    bad_requirement_names = tuple(
-        name for name in requirement_map if not isinstance(name, str) or not name
-    )
-    bad_supplied_names = tuple(
-        name for name in supplied_map if not isinstance(name, str) or not name
-    )
-    if bad_requirement_names:
-        raise AlgorithmWiringRefusal(
-            f"field requires: {len(bad_requirement_names)} of "
-            f"{len(requirement_map)} names are not non-empty strings: "
-            f"{bad_requirement_names!r}"
-        )
-    if bad_supplied_names:
-        raise AlgorithmWiringRefusal(
-            f"field supplied: {len(bad_supplied_names)} of "
-            f"{len(supplied_map)} names are not non-empty strings: "
-            f"{bad_supplied_names!r}"
-        )
-    bad_values = tuple(
-        name for name, required in requirement_map.items() if not isinstance(required, bool)
-    )
-    if bad_values:
-        raise AlgorithmWiringRefusal(
-            f"field requires: {len(bad_values)} of "
-            f"{len(requirement_map)} requirement values are not bool: "
-            f"{bad_values!r}; a required role must be measured True or "
-            f"declared unrequired False"
-        )
-    union = tuple(sorted(set(requirement_map) | set(supplied_map)))
-    if not union:
-        raise AlgorithmWiringRefusal(
-            f"fields requires and supplied: 0 roles appear in either map "
-            f"for {origin}; a wiring check over an empty union would pass "
-            f"vacuously by measuring nothing"
-        )
-    required = tuple(name for name in union if requirement_map.get(name) is True)
-    if not required:
-        raise AlgorithmWiringRefusal(
-            f"field requires: 0 of {len(requirement_map)} declared roles "
-            f"are required for {origin}; an empty required-set is refused "
-            f"as vacuous"
-        )
-    present = {name: value for name, value in supplied_map.items() if _supplied_is_present(value)}
-    absent_required = tuple(name for name in required if name not in present)
-    if absent_required:
-        raise AlgorithmWiringRefusal(
-            f"field supplied: {len(absent_required)} of {len(required)} "
-            f"required inputs absent for {origin}: {absent_required!r}; "
-            f"the checked denominator was {len(union)} roles from "
-            f"{len(requirement_map)} requires keys and {len(supplied_map)} "
-            f"supplied keys"
-        )
-    unrequired_supplied = tuple(
-        name for name in union if name in present and requirement_map.get(name) is not True
-    )
-    if unrequired_supplied:
-        raise AlgorithmWiringRefusal(
-            f"field supplied: {len(unrequired_supplied)} of "
-            f"{len(present)} supplied inputs are not required by "
-            f"{origin}: {unrequired_supplied!r}; the checked denominator "
-            f"was {len(union)} roles from {len(requirement_map)} requires "
-            f"keys and {len(supplied_map)} supplied keys"
-        )
-    return tuple(sorted(name for name in required if name in present))
+    return check_role_map(requires=requires, supplied=supplied, origin=origin)
 
 
 @dataclass(frozen=True, slots=True)

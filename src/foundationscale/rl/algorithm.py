@@ -53,6 +53,7 @@ __all__ = (
     "StepReport",
     "StepReportRefusal",
     "check_algorithm_wiring",
+    "check_role_map",
     "verify_step",
 )
 
@@ -902,3 +903,120 @@ def verify_step(
     # one, and refusing it would make every cadence other than
     # every-step unrepresentable.
     return len(report.loss.components)
+
+
+def _supplied_is_present(value: Any) -> bool:
+    # Absence is None or a missing key, never a boolean: True read as
+    # presence would launder a declaration into wiring. Shared by every
+    # family through check_role_map; it was duplicated per family before.
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        raise AlgorithmWiringRefusal(
+            f"field supplied contains the boolean {value!r}: True and "
+            f"False are not supplied components; presence must be the actual "
+            f"wired object and absence must be represented by no key or by "
+            f"None"
+        )
+    return True
+
+
+def check_role_map(
+    *,
+    requires: Mapping[str, bool],
+    supplied: Mapping[str, Any],
+    origin: str,
+) -> tuple[str, ...]:
+    """Check one algorithm's role map over the union of both key sets.
+
+    This is the shared implementation behind every family's
+    ``check_*_requirements`` entry point. It lived in three byte-identical
+    copies (GRPO, the policy-gradient family, and -- had it been restated
+    again -- PPO) before this consolidation. A role-map check is ONE
+    countable, and the package refuses one countable stated in several
+    objects, so the copies became delegators that differ only in the
+    ``origin`` they name.
+
+    WHAT IS CLAIMED on success: every required role names a supplied object,
+    no required set was emptily satisfied, no supplied required-role value is
+    ``None``, and the returned tuple is the sorted set of roles actually
+    consumed.
+
+    WHAT IS NOT CLAIMED: that any role object is a valid model, dataloader,
+    estimator, value head, or loss. Type and semantic checks remain with the
+    component handshakes; this helper checks the declared denominator only.
+    """
+    if not isinstance(requires, Mapping):
+        raise AlgorithmWiringRefusal(
+            f"field requires={requires!r}: 1 of 1 requirement mappings must implement Mapping"
+        )
+    if not isinstance(supplied, Mapping):
+        raise AlgorithmWiringRefusal(
+            f"field supplied={supplied!r}: 1 of 1 supplied mappings must implement Mapping"
+        )
+    requirement_map = dict(requires)
+    supplied_map = dict(supplied)
+    bad_requirement_names = tuple(
+        name for name in requirement_map if not isinstance(name, str) or not name
+    )
+    bad_supplied_names = tuple(
+        name for name in supplied_map if not isinstance(name, str) or not name
+    )
+    if bad_requirement_names:
+        raise AlgorithmWiringRefusal(
+            f"field requires: {len(bad_requirement_names)} of "
+            f"{len(requirement_map)} names are not non-empty strings: "
+            f"{bad_requirement_names!r}"
+        )
+    if bad_supplied_names:
+        raise AlgorithmWiringRefusal(
+            f"field supplied: {len(bad_supplied_names)} of "
+            f"{len(supplied_map)} names are not non-empty strings: "
+            f"{bad_supplied_names!r}"
+        )
+    bad_values = tuple(
+        name for name, required in requirement_map.items() if not isinstance(required, bool)
+    )
+    if bad_values:
+        raise AlgorithmWiringRefusal(
+            f"field requires: {len(bad_values)} of "
+            f"{len(requirement_map)} requirement values are not bool: "
+            f"{bad_values!r}; a required role must be measured True or "
+            f"declared unrequired False"
+        )
+    union = tuple(sorted(set(requirement_map) | set(supplied_map)))
+    if not union:
+        raise AlgorithmWiringRefusal(
+            f"fields requires and supplied: 0 roles appear in either map "
+            f"for {origin}; a wiring check over an empty union would pass "
+            f"vacuously by measuring nothing"
+        )
+    required = tuple(name for name in union if requirement_map.get(name) is True)
+    if not required:
+        raise AlgorithmWiringRefusal(
+            f"field requires: 0 of {len(requirement_map)} declared roles "
+            f"are required for {origin}; an empty required-set is refused "
+            f"as vacuous"
+        )
+    present = {name: value for name, value in supplied_map.items() if _supplied_is_present(value)}
+    absent_required = tuple(name for name in required if name not in present)
+    if absent_required:
+        raise AlgorithmWiringRefusal(
+            f"field supplied: {len(absent_required)} of {len(required)} "
+            f"required inputs absent for {origin}: {absent_required!r}; "
+            f"the checked denominator was {len(union)} roles from "
+            f"{len(requirement_map)} requires keys and {len(supplied_map)} "
+            f"supplied keys"
+        )
+    unrequired_supplied = tuple(
+        name for name in union if name in present and requirement_map.get(name) is not True
+    )
+    if unrequired_supplied:
+        raise AlgorithmWiringRefusal(
+            f"field supplied: {len(unrequired_supplied)} of "
+            f"{len(present)} supplied inputs are not required by "
+            f"{origin}: {unrequired_supplied!r}; the checked denominator "
+            f"was {len(union)} roles from {len(requirement_map)} requires "
+            f"keys and {len(supplied_map)} supplied keys"
+        )
+    return tuple(sorted(name for name in required if name in present))
