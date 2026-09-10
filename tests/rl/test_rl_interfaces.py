@@ -90,6 +90,12 @@ TORCH_FREE_MODULES = {
         "check_reward_model_requirements",
     ),
     "foundationscale.rl.rewards": ("MCQLetterReward",),
+    "foundationscale.rl.prompt_surface": (
+        "PromptSurface",
+        "chat_template_or_refuse",
+        "encode_prompts",
+        "resolve_prompt_surface",
+    ),
     "foundationscale.rl.registry": (
         "AlgorithmRegistryRefusal",
         "available_algorithm_names",

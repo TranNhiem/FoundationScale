@@ -223,12 +223,12 @@ FLOORS: dict[str, int] = {
     # add a line by hand, and do not lower one to make a red run green.
     "src/foundationscale/checkpoint/dcp_meta.py": 81,  # set by --update; measured 81.4%
     "src/foundationscale/rl/group_policy.py": 67,  # set by --update; measured 67.6%
-    "src/foundationscale/rl/trainer.py": 82,  # set by --update; measured 82.7%
+    "src/foundationscale/rl/trainer.py": 82,  # set by --update; measured 82.9%
     "src/foundationscale/train/__init__.py": 87,  # set by --update; measured 87.5%
     "src/foundationscale/train/__main__.py": 0,  # set by --update; measured 0.0%
     "src/foundationscale/train/loop.py": 86,  # set by --update; measured 86.2%
     "tools/emit_run_manifest.py": 80,  # set by --update; measured 80.9%
-    # RATCHET -- 35 module(s) ABOVE the default band. These record what
+    # RATCHET -- 36 module(s) ABOVE the default band. These record what
     # the tree already achieves, so a regression to a merely-passing 90% is RED
     # rather than invisible.
     "src/foundationscale/__init__.py": 100,  # set by --update; measured 100.0%
@@ -255,6 +255,7 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/rl/ppo_objectives.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/preference.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/preference_objectives.py": 99,  # set by --update; measured 99.1%
+    "src/foundationscale/rl/prompt_surface.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/reward_model.py": 98,  # set by --update; measured 98.6%
     "src/foundationscale/rl/rewards.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/rollout.py": 100,  # set by --update; measured 100.0%

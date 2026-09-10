@@ -189,7 +189,7 @@ From a clean clone, exactly what `make install` and CI run:
 
 ```bash
 git clone https://github.com/TranNhiem/FoundationScale && cd FoundationScale
-python -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" \
+python3 -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" \
     --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
@@ -199,8 +199,8 @@ exercise the gate contract. It deliberately cannot train. To run the training ex
 own accelerator):
 
 ```bash
-python -m pip install -e ".[train]"
-python examples/train_tiny.py          # measured: exits 0 PASS
+python3 -m pip install -e ".[train]"
+python3 examples/train_tiny.py          # measured: exits 0 PASS
 ```
 
 The extras, as declared in `pyproject.toml`:
@@ -225,15 +225,15 @@ exactly; the source of truth is `pyproject.toml` plus `.github/workflows/ci.yml`
 # after installing per §8:
 
 # 1. Unit and gate suite, coverage floor included
-python -m pytest --cov=foundationscale --cov-report=term-missing --cov-fail-under=90
+python3 -m pytest --cov=foundationscale --cov-report=term-missing --cov-fail-under=90
 
 # 2. Gate controls: every registered gate's MUST_FIRE / MUST_PASS fixtures.
 #    Exits nonzero if a gate fails to block its defective input, declares no
 #    MUST_FIRE control at all, or the registry is empty.
-python -m foundationscale.gates.controls
+python3 -m foundationscale.gates.controls
 
 # 3. Mutation battery, one module shard the way CI runs it:
-python tools/mutate.py --list        # names the modules
+python3 tools/mutate.py --list        # names the modules
 FS_FORBID_SKIPS=1 python tools/mutate.py --module checkpoint_gates
 
 # 4. Everything at once (lint, typecheck, skip-guard probe, tests, controls,
@@ -266,8 +266,8 @@ assert result.verdict is Verdict.VACUOUS and result.blocking
 Real training is one command, and it runs:
 
 ```bash
-python -m pip install -e ".[train]"
-python examples/train_tiny.py
+python3 -m pip install -e ".[train]"
+python3 examples/train_tiny.py
 ```
 
 `examples/train_tiny.py` is one screen — a `ClusterProfile` describing the machine and a
@@ -448,14 +448,14 @@ itself, from the Makefile's own accounting:
 
 ## 23. Project structure
 
-`src/` = 37236 LOC across 49 files. `launchers/` contains 10231 shell LOC plus 1615 Python
+`src/` = 37534 LOC across 50 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 33385 Python LOC and 6414 shell LOC on top of the
-package. `tools/` contains 9533 Python LOC. 176520 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 9533 Python LOC. 177244 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (48958 .py LOC); conftest carries the skip guard
+tests/                 the test suite (49383 .py LOC); conftest carries the skip guard
 tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
                        real_checkpoint_probe, preflight/, mutate, census)
 checks/                standalone repository gates: countables drift, packaging

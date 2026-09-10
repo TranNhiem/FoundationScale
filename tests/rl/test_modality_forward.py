@@ -65,7 +65,12 @@ class _FakeTokenizer:
     def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True):
         return "PROMPT"
 
-    def __call__(self, texts, *, return_tensors=None, padding=True, add_special_tokens=False):
+    # The parameter is `text`, matching PreTrainedTokenizerBase.__call__ and
+    # ProcessorMixin.__call__. It was `texts` here, which is a double NARROWER
+    # than the type it replaces -- the same shape as #252/#372 -- and it went
+    # unnoticed only because the caller passed positionally. encode_prompts
+    # now calls by keyword on purpose, so the mismatch surfaced immediately.
+    def __call__(self, text, *, return_tensors=None, padding=True, add_special_tokens=False):
         ids = torch.arange(1, _B * _PROMPT_W + 1, dtype=torch.long).reshape(_B, _PROMPT_W)
         return _FakeBatch(
             input_ids=ids,

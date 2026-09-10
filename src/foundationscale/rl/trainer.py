@@ -52,6 +52,7 @@ from foundationscale.rl.advantage import AdvantageRefusal, RewardStats
 from foundationscale.rl.algorithm import StepReport, StepReportRefusal
 from foundationscale.rl.corpus import Sample, load_sharegpt
 from foundationscale.rl.interfaces import BatchRefusal, LossOutput
+from foundationscale.rl.prompt_surface import encode_prompts, resolve_prompt_surface
 from foundationscale.rl.registry import lookup_algorithm
 from foundationscale.rl.rewards import MCQLetterReward
 from foundationscale.rl.torch_backend import TensorPolicyLoss
@@ -313,20 +314,32 @@ class RLTrainer:
         # refusal. Naming the sample and the modality matters: "some records
         # have images" is not actionable, and a count alone would let a single
         # stray record look like a corpus-wide problem.
-        carriers = [
-            (sample.sample_id, "image" if sample.images else "video")
-            for sample in samples
-            if sample.images or sample.video is not None
-        ]
+        # NARROWED once the processor path landed. IMAGES are now routed: an
+        # image-carrying batch resolves an AutoProcessor (prompt_surface), whose
+        # extra keys -- pixel_values and friends -- are group-expanded and
+        # forwarded to the scorer alongside input_ids. Measured on gemma-4-E4B:
+        # 258.0 prompt tokens per image, exactly linear at n = 1, 2, 4, 8.
+        #
+        # VIDEO is still refused, and deliberately so. Nothing in this repo
+        # samples frames from a clip, and the missing pieces are DATA decisions
+        # rather than plumbing: frame count, sampling strategy, per-frame
+        # resolution. Any default chosen here would silently redefine the
+        # dataset. Against the measured 131,072-token context, 258 tok/frame
+        # puts the ceiling near 508 frames -- ample, which is precisely why the
+        # frame budget should be chosen rather than inherited from whoever
+        # wrote this line.
+        carriers = [(sample.sample_id, "video") for sample in samples if sample.video is not None]
         if carriers:
             shown = ", ".join(f"{sid} ({kind})" for sid, kind in carriers[:5])
             more = f" and {len(carriers) - 5} more" if len(carriers) > 5 else ""
             _refuse_exit_96(
-                f"{len(carriers)} of {len(samples)} sample(s) carry a modality "
-                f"this trainer cannot yet route to the model: {shown}{more}. "
-                "The corpus parses images and video; the training path is "
-                "text-only, so training on them would silently discard the "
-                "pixels. Refusing rather than dropping them."
+                f"{len(carriers)} of {len(samples)} sample(s) carry video, which "
+                f"no component in this repository decodes: {shown}{more}. "
+                "Frame count, sampling strategy and per-frame resolution are "
+                "dataset decisions with no safe default -- picking one here "
+                "would silently redefine the corpus. Images ARE supported and "
+                "are routed through the processor; video refuses until the "
+                "frame budget is declared."
             )
         try:
             import torch
@@ -339,7 +352,6 @@ class RLTrainer:
             from transformers import (
                 AutoModelForCausalLM,
                 AutoModelForImageTextToText,
-                AutoTokenizer,
             )
         except ImportError:
             _refuse_exit_96(
@@ -358,7 +370,23 @@ class RLTrainer:
             )
 
         try:
-            tokenizer = AutoTokenizer.from_pretrained(self.config.model)
+            # #371: resolve the prompt SURFACE, not just a tokenizer. A batch
+            # carrying images needs an AutoProcessor -- it is the only thing
+            # that produces pixel_values -- and prompt_surface REFUSES (96)
+            # rather than downgrading to a tokenizer, because that downgrade
+            # is exactly the silent drop this work removed.
+            #
+            # `tokenizer` stays bound for the 16 existing call sites
+            # (pad_token_id, batch_decode, apply_chat_template): a processor
+            # carries its own .tokenizer, so both paths expose the same
+            # surface and no call site had to change to gain the capability.
+            needs_images = any(sample.images for sample in samples)
+            prompt_surface = resolve_prompt_surface(self.config.model, needs_images)
+            tokenizer = (
+                prompt_surface.surface
+                if prompt_surface.kind == "tokenizer"
+                else prompt_surface.surface.tokenizer
+            )
         except Exception as exc:  # noqa: BLE001 -- load surface failure is a refusal
             _refuse_exit_96(f"tokenizer load failed for {self.config.model!r}: {exc}")
         try:
@@ -441,6 +469,7 @@ class RLTrainer:
                 chunk=chunk,
                 model=model,
                 tokenizer=tokenizer,
+                surface=prompt_surface,
                 reward=reward,
                 objective=objective,
                 loss_fn=loss_fn,
@@ -458,6 +487,7 @@ class RLTrainer:
         chunk: list[Sample],
         model: Any,
         tokenizer: Any,
+        surface: Any,
         reward: MCQLetterReward,
         objective: Any,
         loss_fn: TensorPolicyLoss,
@@ -474,19 +504,15 @@ class RLTrainer:
         """
         import torch
 
-        prompts: list[str] = [
-            tokenizer.apply_chat_template(
-                [{"role": role, "content": text} for role, text in sample.prompt_turns],
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-            for sample in chunk
-        ]
         golds: list[str | None] = [sample.gold for sample in chunk]
 
-        prompt_ids = tokenizer(
-            prompts, return_tensors="pt", padding=True, add_special_tokens=False
-        ).to(device)
+        # #371: encode through the SURFACE, not the bare tokenizer. For a
+        # text-only chunk this is the same tokenizer call as before; for a
+        # chunk carrying images it is the processor, which is the only thing
+        # that emits pixel_values. Everything downstream is unchanged --
+        # prompt_width still comes from the encoded tensor, and the extra
+        # modality keys are group-expanded and forwarded to the scorer below.
+        prompt_ids = encode_prompts(surface, chunk, device)
         with torch.no_grad():
             generated = model.generate(
                 **prompt_ids,
