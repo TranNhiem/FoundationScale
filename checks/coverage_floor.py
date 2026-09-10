@@ -223,7 +223,7 @@ FLOORS: dict[str, int] = {
     # add a line by hand, and do not lower one to make a red run green.
     "src/foundationscale/checkpoint/dcp_meta.py": 81,  # set by --update; measured 81.4%
     "src/foundationscale/rl/group_policy.py": 67,  # set by --update; measured 67.6%
-    "src/foundationscale/rl/trainer.py": 30,  # set by --update; measured 30.7%
+    "src/foundationscale/rl/trainer.py": 42,  # set by --update; measured 42.6%
     "src/foundationscale/train/__init__.py": 87,  # set by --update; measured 87.5%
     "src/foundationscale/train/__main__.py": 0,  # set by --update; measured 0.0%
     "src/foundationscale/train/loop.py": 86,  # set by --update; measured 86.2%

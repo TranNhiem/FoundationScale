@@ -191,6 +191,18 @@ class RLTrainConfig:
     master_weights: bool | None = None
     max_steps: int = 10
     max_new_tokens: int = 64
+    # #370: sampling is DECLARED here, never inherited. Before this the trainer
+    # called generate(do_sample=True) with no temperature/top_p/top_k, so the
+    # sampling distribution came from the checkpoint's generation_config.json --
+    # a file the training config never mentions. Group-relative objectives
+    # (GRPO/GSPO/Dr.GRPO/DAPO) are DEFINED by within-group reward variance, and
+    # temperature is the primary lever on it, so the trainer could not influence
+    # the one quantity its objective family depends on. Measured consequence: an
+    # end-to-end run refused every step with "advantage is identically zero over
+    # 4 of 4 rows, distinct rewards: [1.0]".
+    temperature: float = 1.0
+    top_p: float = 0.95
+    top_k: int = 0
     prompts_per_step: int = 2
     seed: int = 0
     device: str | None = None
@@ -270,6 +282,21 @@ class RLTrainer:
 
     def run(self) -> list[StepReport]:
         """Run the training loop and return one report per completed step."""
+        # #370: refuse BEFORE any allocation is burned. Greedy decoding makes
+        # every completion in a group byte-identical, so their rewards are equal,
+        # so the group-relative advantage is identically zero and no gradient
+        # exists -- for the whole GRPO/GSPO/Dr.GRPO/DAPO family this is not a
+        # bad hyperparameter, it is a configuration in which training cannot
+        # happen. Refusing is louder than emitting N identical rows and letting
+        # the advantage estimator abstain once per step forever.
+        if self.config.group_size > 1 and self.config.temperature <= 0.0:
+            _refuse_exit_96(
+                f"temperature={self.config.temperature} with "
+                f"group_size={self.config.group_size}: greedy decoding yields "
+                "identical completions, so within-group reward variance is zero "
+                "by construction and a group-relative objective has no gradient "
+                "to take. Raise the temperature or set group_size=1."
+            )
         try:
             import torch
         except ImportError:
@@ -436,6 +463,12 @@ class RLTrainer:
                 max_new_tokens=self.config.max_new_tokens,
                 num_return_sequences=self.config.group_size,
                 do_sample=True,
+                temperature=self.config.temperature,
+                top_p=self.config.top_p,
+                # top_k=0 disables the cutoff; generate() wants the sentinel, and
+                # passing None would silently restore the checkpoint's value --
+                # the very inheritance #370 removed.
+                top_k=self.config.top_k,
                 pad_token_id=tokenizer.pad_token_id,
             )
         prompt_width = prompt_ids["input_ids"].shape[1]

@@ -291,6 +291,12 @@ And the plane that turns an objective into something an optimizer can step:
   accumulates), while masters reach 11.73% and drop the loss 17.20 → 8.73
   against 17.20 → 14.73. Device peak FALLS 85.29 → 53.30 GiB, because the
   optimiser state leaves the GPU. Selection is printed, never silent.
+* Sampling is DECLARED on `RLTrainConfig` (`temperature`, `top_p`, `top_k`),
+  never inherited from the checkpoint's `generation_config.json`. Group-
+  relative objectives are defined by within-group reward variance, so the
+  trainer must own the lever on it; greedy decoding with a group is
+  REFUSED (96) because identical completions make the advantage zero by
+  construction.
 * `corpus.py`, `rewards.py`, `trainer.py` — the ShareGPT loader (`.json` and
   `.jsonl`) with verifiable MCQ gold extraction, the letter reward, and the
   single-model training loop.
@@ -411,7 +417,7 @@ working home fails a test rather than an import at a user's site.
 
 ## Around the package
 
-`src/` is 37136 LOC across 49 files; `tests/` adds 48569 `.py` LOC (its
+`src/` is 37169 LOC across 49 files; `tests/` adds 48668 `.py` LOC (its
 conftest carries the skip guard). Beside the package:
 
 | Tree | Contents |
@@ -423,7 +429,7 @@ conftest carries the skip guard). Beside the package:
 | `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 175980 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 176118 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 
