@@ -297,6 +297,18 @@ And the plane that turns an objective into something an optimizer can step:
   trainer must own the lever on it; greedy decoding with a group is
   REFUSED (96) because identical completions make the advantage zero by
   construction.
+* MODALITY. `corpus.py` parses `image` and `video` into `Sample.images` /
+  `Sample.video`. The trainer used to reference NEITHER, so a vision record
+  loaded, validated, and trained on the text alone with the pixels dropped
+  silently. It now REFUSES (96) such a record, naming the sample and the
+  modality, before torch is imported. Where a surface does supply modality
+  tensors they are forwarded to the log-prob scorer as well as to
+  `generate` — measured on gemma-4-E4B, one image expands the prompt
+  16 → 273 tokens and the processor emits `pixel_values`,
+  `mm_token_type_ids` and `image_position_ids`; scoring without them would
+  compare two different conditionals and stay finite while doing it.
+* Guards run CHEAPEST FIRST — config, then corpus, then the model load —
+  and a test pins that order. Each stage costs more than the one before.
 * `corpus.py`, `rewards.py`, `trainer.py` — the ShareGPT loader (`.json` and
   `.jsonl`) with verifiable MCQ gold extraction, the letter reward, and the
   single-model training loop.
@@ -417,7 +429,7 @@ working home fails a test rather than an import at a user's site.
 
 ## Around the package
 
-`src/` is 37169 LOC across 49 files; `tests/` adds 48668 `.py` LOC (its
+`src/` is 37236 LOC across 49 files; `tests/` adds 48958 `.py` LOC (its
 conftest carries the skip guard). Beside the package:
 
 | Tree | Contents |
@@ -429,7 +441,7 @@ conftest carries the skip guard). Beside the package:
 | `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 176118 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 176520 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 

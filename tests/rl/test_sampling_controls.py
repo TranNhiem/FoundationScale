@@ -22,6 +22,7 @@ import dataclasses
 
 import pytest
 
+from foundationscale.rl.interfaces import BatchRefusal
 from foundationscale.rl.trainer import RLTrainConfig, RLTrainer, TrainerRefusal
 
 
@@ -84,16 +85,45 @@ def test_group_size_one_is_refused_by_the_GROUP_guard_not_the_greedy_one() -> No
 
 
 def test_a_positive_temperature_does_not_trip_the_greedy_guard() -> None:
-    # The other side of the failing input: a legal, sampling configuration must
+    # The other side of the failing input: a legal sampling configuration must
     # get PAST the #370 guard. Without this the guard could refuse everything
-    # and the RED leg above would still pass, which is the vacuous-gate shape.
+    # and the RED leg above would still pass -- the vacuous-gate shape.
+    #
+    # What stops the run instead is the NEXT guard in the chain, the #371
+    # corpus check, which reports the missing dataset. Asserting on that exact
+    # message is deliberate: it proves the run reached a LATER stage, so this
+    # leg cannot be satisfied by the greedy guard firing for another reason.
+    # The ordering it pins -- config checks, then corpus, then the model load --
+    # is itself load-bearing: each stage costs more than the one before, and
+    # #183 records what happens when a cheap check hides behind an expensive one.
     config = RLTrainConfig(
         model="never-loaded",
         dataset="never-read",
         group_size=4,
         temperature=1.0,
     )
+    with pytest.raises(BatchRefusal) as excinfo:
+        RLTrainer(config=config).run()
+    assert "corpus path" in str(excinfo.value)
+    assert "greedy decoding" not in str(excinfo.value)
+
+
+def test_guards_run_cheapest_first() -> None:
+    # The ORDER is load-bearing, not incidental. Each stage costs more than the
+    # one before -- a config check needs nothing, a corpus check needs the
+    # dataset file, a model check needs a multi-GB load -- and #183 records what
+    # happens when a cheap check hides behind an expensive one. I hit exactly
+    # that here: the #371 modality guard was first placed after the model load,
+    # and its own positive control caught it by never firing.
+    #
+    # This leg pins the order by giving a config that violates BOTH the config
+    # guard and the corpus guard, and asserting the CONFIG one wins.
+    config = RLTrainConfig(
+        model="never-loaded",
+        dataset="also-never-read",
+        group_size=4,
+        temperature=0.0,
+    )
     with pytest.raises(SystemExit) as excinfo:
         RLTrainer(config=config).run()
-    # It exits on the bogus model path, NOT on sampling.
-    assert "greedy decoding" not in str(excinfo.value)
+    assert excinfo.value.code == 96

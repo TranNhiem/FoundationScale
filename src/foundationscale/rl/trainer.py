@@ -282,6 +282,7 @@ class RLTrainer:
 
     def run(self) -> list[StepReport]:
         """Run the training loop and return one report per completed step."""
+
         # #370: refuse BEFORE any allocation is burned. Greedy decoding makes
         # every completion in a group byte-identical, so their rewards are equal,
         # so the group-relative advantage is identically zero and no gradient
@@ -296,6 +297,36 @@ class RLTrainer:
                 "identical completions, so within-group reward variance is zero "
                 "by construction and a group-relative objective has no gradient "
                 "to take. Raise the temperature or set group_size=1."
+            )
+
+        samples = load_sharegpt(self.config.dataset)
+        # #371: corpus.py PARSES `image` and `video` into Sample.images/.video,
+        # and its docstring advertises "text-only, image-text, multi-image, and
+        # video" records. This trainer references neither field: it builds every
+        # prompt from prompt_turns alone through a TOKENIZER, never a processor,
+        # and `pixel_values` appears nowhere in this file. So a vision record
+        # used to load cleanly, pass every validation, and train on the TEXT
+        # ALONE -- the pixels dropped between loader and model with no error and
+        # no UNMEASURED line, while the run looked completely healthy.
+        #
+        # Until the processor path lands, that silent drop becomes a loud
+        # refusal. Naming the sample and the modality matters: "some records
+        # have images" is not actionable, and a count alone would let a single
+        # stray record look like a corpus-wide problem.
+        carriers = [
+            (sample.sample_id, "image" if sample.images else "video")
+            for sample in samples
+            if sample.images or sample.video is not None
+        ]
+        if carriers:
+            shown = ", ".join(f"{sid} ({kind})" for sid, kind in carriers[:5])
+            more = f" and {len(carriers) - 5} more" if len(carriers) > 5 else ""
+            _refuse_exit_96(
+                f"{len(carriers)} of {len(samples)} sample(s) carry a modality "
+                f"this trainer cannot yet route to the model: {shown}{more}. "
+                "The corpus parses images and video; the training path is "
+                "text-only, so training on them would silently discard the "
+                "pixels. Refusing rather than dropping them."
             )
         try:
             import torch
@@ -390,7 +421,6 @@ class RLTrainer:
             file=sys.stderr,
         )
 
-        samples = load_sharegpt(self.config.dataset)
         usable = tuple(sample for sample in samples if sample.gold is not None)
         if not usable:
             _refuse_exit_96(
@@ -502,8 +532,45 @@ class RLTrainer:
         response_mask = torch.zeros_like(target_ids, dtype=torch.float32)
         response_mask[:, prompt_width - 1 :] = shifted_attention[:, prompt_width - 1 :]
 
+        # #371: on a vision model the sequence is GENERATED conditioned on the
+        # image, so it must be SCORED conditioned on the same image. Passing
+        # only input_ids here would score an image-free conditional against
+        # image-conditioned tokens -- the importance ratio would then compare
+        # two different distributions, and it would stay finite and plausible
+        # the whole way. Measured on gemma-4-E4B: one image expands the prompt
+        # 16 -> 273 tokens and the processor emits pixel_values,
+        # mm_token_type_ids and image_position_ids alongside input_ids.
+        #
+        # Every non-text key the surface produced is forwarded verbatim. It is
+        # built once, outside the closure, so BOTH the no_grad old-logprob pass
+        # and the graph-carrying current pass see exactly the same conditioning
+        # -- recomputing it per call would let them drift.
+        _TEXT_KEYS = {"input_ids", "attention_mask"}
+        modality_kwargs = {
+            key: value
+            for key, value in prompt_ids.items()
+            if key not in _TEXT_KEYS and hasattr(value, "index_select")
+        }
+        if modality_kwargs:
+            # generate() expanded each prompt into group_size rows; the modality
+            # tensors are still one row per PROMPT, so they are repeated to
+            # match and then narrowed to the kept rows, in that order. Doing it
+            # the other way round selects against the wrong axis silently.
+            group = self.config.group_size
+            modality_kwargs = {
+                key: value.repeat_interleave(group, dim=0).index_select(0, kept_indices)
+                for key, value in modality_kwargs.items()
+            }
+            print(
+                "[trainer] forwarding modality keys to the scorer: "
+                + ", ".join(sorted(modality_kwargs)),
+                file=sys.stderr,
+            )
+
         def forward_logprobs() -> Any:
-            logits = model(input_ids=kept_sequences, attention_mask=attention).logits
+            logits = model(
+                input_ids=kept_sequences, attention_mask=attention, **modality_kwargs
+            ).logits
             logps = torch.log_softmax(logits, dim=-1)
             return torch.gather(logps, 2, target_ids.unsqueeze(-1)).squeeze(-1)
 

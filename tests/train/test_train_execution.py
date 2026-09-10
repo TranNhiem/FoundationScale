@@ -64,6 +64,7 @@ _WORD_TOKENS = tuple(f"w{i}" for i in range(253))
 # control below can compare the double against the real thing. It cannot read
 # the original itself: the autouse fixture has already run by the time any test
 # body executes, so `torch.backends.mps.is_available` is the double there.
+_ORIGINAL_CUDA_PROBES: dict[str, object] = {}
 _ORIGINAL_MPS_PROBES: dict[str, Any] = {}
 
 
@@ -151,6 +152,28 @@ def _offline_and_cpu_env(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.setattr(
                 torch.backends.mps, _probe, _false_probe_like(_original), raising=False
             )
+    # #372: CUDA needs the SAME direct patch, for the same reason the docstring
+    # above gives for MPS -- the env-var route does not close it. Blanking
+    # CUDA_VISIBLE_DEVICES only takes effect if CUDA has not yet initialised,
+    # and in a full-suite run an earlier module has already touched torch, so
+    # the value is cached and the blanking is a no-op.
+    #
+    # MEASURED: on GB200 (aarch64, torch 2.14.0+cu130, cuda True) this test
+    # failed with `resolved cuda:0` while passing on every x86 GitHub runner
+    # and on the developer Mac. It passed there because those hosts have NO
+    # CUDA DEVICE -- the assertion was satisfied by absent hardware, not by
+    # anything the fixture did. A control that can only pass where it is
+    # vacuous is worse than no control: it occupies the slot a real one needs.
+    if hasattr(torch, "cuda"):
+        for _probe in ("is_available", "device_count"):
+            _original = getattr(torch.cuda, _probe, None)
+            if _original is None:
+                continue
+            _ORIGINAL_CUDA_PROBES[_probe] = _original
+            _double = (
+                _false_probe_like(_original) if _probe == "is_available" else (lambda *a, **k: 0)
+            )
+            monkeypatch.setattr(torch.cuda, _probe, _double, raising=False)
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
     monkeypatch.setenv("HF_DATASETS_OFFLINE", "1")
