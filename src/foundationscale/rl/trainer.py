@@ -41,7 +41,12 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, never executed at runtime
+    from collections.abc import Iterable
+
+    import torch
 
 from foundationscale.rl.advantage import AdvantageRefusal, RewardStats
 from foundationscale.rl.algorithm import StepReport, StepReportRefusal
@@ -77,6 +82,77 @@ def _refuse_exit_96(message: str) -> NoReturn:
     raise SystemExit(96)
 
 
+class MasterWeightOptimizer:
+    """Host-fp32-master wrapper around torch.optim.AdamW.
+
+    WHY THIS EXISTS (measured, do not re-derive): model params load as
+    bf16, and at the default lr=1e-6 each AdamW update is BELOW the bf16
+    ulp of the param it targets. bf16 arithmetic DISCARDS such an update
+    outright -- it does not attenuate it, and nothing accumulates. Over 50
+    direct-bf16 steps only 0.98% of param entries ever move, IDENTICAL to
+    after 1 step: the optimiser runs, the model does not learn. Holding
+    fp32 MASTER copies on the HOST (device peak 109.51 -> 68.08 GiB, the
+    Adam state leaves the GPU) and casting results back down moves 20.58%
+    of entries by step 50, 21x. Full fp32 params ON DEVICE do not fit
+    (183.41 of 184.31 GiB, OOM), so the masters live on the host.
+
+    SCHEME: at construction, snapshot every requires-grad device param as
+    an fp32 CPU tensor; that CPU list is what AdamW holds and steps. At
+    each step(): (1) copy each device grad UP into the matching master as
+    fp32, (2) run the wrapped AdamW step over the masters (true fp32
+    arithmetic, so updates at lr=1e-6 are representable and accumulate),
+    (3) copy each master back DOWN into its device param, cast to that
+    param's dtype. zero_grad() clears BOTH planes: the device grads are
+    the ones the training loop writes, and the master grads are the ones
+    AdamW reads, so leaving either stale would double-count.
+
+    Drop-in for the existing ``optimizer`` variable: exposes step() and
+    zero_grad() only. zip uses strict=True on every pairing of the two
+    parallel lists -- a silent length mismatch here would train the wrong
+    tensors, which is exactly the class of invisible failure this wrapper
+    exists to eliminate.
+    """
+
+    def __init__(self, params: Iterable[torch.nn.Parameter], **adamw_kwargs: Any) -> None:
+        import torch  # function-local: see module docstring
+
+        self.device_params = [p for p in params if p.requires_grad]
+        self.masters = [
+            p.detach().to(device="cpu", dtype=torch.float32, copy=True) for p in self.device_params
+        ]
+        for master in self.masters:
+            master.requires_grad_(True)
+        self.optimizer = torch.optim.AdamW(self.masters, **adamw_kwargs)
+
+    def zero_grad(self, set_to_none: bool = True) -> None:
+        import torch  # function-local: see module docstring
+
+        for p in self.device_params:
+            p.grad = None if set_to_none else torch.zeros_like(p)
+        for m in self.masters:
+            m.grad = None if set_to_none else torch.zeros_like(m)
+
+    def step(self, closure: Any = None) -> Any:
+        import torch  # function-local: see module docstring
+
+        # (1) device grads up to fp32 masters.
+        for p, m in zip(self.device_params, self.masters, strict=True):
+            if p.grad is None:
+                m.grad = None
+            else:
+                m.grad = p.grad.detach().to(device="cpu", dtype=torch.float32, copy=True)
+        # (2) true fp32 step: lr=1e-6 updates are representable here and
+        # therefore ACCUMULATE instead of being discarded at the bf16 ulp.
+        result = (
+            self.optimizer.step(closure=closure) if closure is not None else self.optimizer.step()
+        )
+        # (3) masters back down to the device params' dtype; the cast cost
+        # is one bf16 rounding per step, not one per micro-update.
+        for p, m in zip(self.device_params, self.masters, strict=True):
+            p.data.copy_(m.to(dtype=p.dtype, copy=False))
+        return result
+
+
 @dataclass
 class RLTrainConfig:
     """Configuration for one RL training run.
@@ -105,6 +181,14 @@ class RLTrainConfig:
     algorithm: str = "dr_grpo"
     group_size: int = 4
     learning_rate: float = 1e-6
+    # None means "decide by measurement": use host-fp32 master weights whenever
+    # the parameters are not fp32. At this lr a bf16 parameter's AdamW update is
+    # below its ulp and is DISCARDED rather than attenuated, so 50 steps move the
+    # same 0.98% of entries as 1 -- the loop runs and the model does not learn,
+    # with every emitted signal (loss, grad-norm, throughput, changed checkpoint
+    # bytes) looking healthy. True/False force the choice; forcing it is an
+    # operator decision and is recorded either way.
+    master_weights: bool | None = None
     max_steps: int = 10
     max_new_tokens: int = 64
     prompts_per_step: int = 2
@@ -249,7 +333,35 @@ class RLTrainer:
         objective = self._resolve_objective()
         reward = MCQLetterReward()
         loss_fn = TensorPolicyLoss(objective=objective)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=self.config.learning_rate)  # noqa: B014
+        # #369: bf16 params stepped directly by AdamW at lr=1e-6 discard every
+        # sub-ulp update, so the loop trains ~nothing while loss, grad-norm,
+        # throughput and changed checkpoint bytes all look healthy. Selection is
+        # EXPLICIT and printed, because a silent choice here IS the defect.
+        param_dtype = next(model.parameters()).dtype
+        if self.config.master_weights is not None:
+            use_masters = self.config.master_weights
+            master_reason = f"forced by config master_weights={self.config.master_weights}"
+        else:
+            use_masters = param_dtype != torch.float32
+            master_reason = (
+                f"auto: params are {param_dtype}, whose ulp exceeds the update at this lr"
+                if use_masters
+                else "auto: params already fp32, no mastering needed"
+            )
+        optimizer: Any
+        if use_masters:
+            optimizer = MasterWeightOptimizer(model.parameters(), lr=self.config.learning_rate)
+        else:
+            optimizer = torch.optim.AdamW(  # noqa: B014
+                model.parameters(), lr=self.config.learning_rate
+            )
+        print(
+            "[trainer] optimizer="
+            + ("MasterWeightOptimizer(host-fp32)" if use_masters else "AdamW(direct)")
+            + f" param_dtype={param_dtype} lr={self.config.learning_rate}"
+            + f" reason={master_reason}",
+            file=sys.stderr,
+        )
 
         samples = load_sharegpt(self.config.dataset)
         usable = tuple(sample for sample in samples if sample.gold is not None)

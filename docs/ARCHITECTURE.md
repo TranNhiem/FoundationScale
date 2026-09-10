@@ -284,6 +284,13 @@ And the plane that turns an objective into something an optimizer can step:
   0-dim differentiable tensor. It is parameterised by the objective's declared
   axes, never by its class, so a new objective that speaks the vocabulary gets
   a gradient path with no edit here.
+* `trainer.py` also carries `MasterWeightOptimizer`: host-fp32 master weights
+  for bf16 parameters. Measured on gemma-4-E4B at lr=1e-6 over 30 matched
+  steps — stepping bf16 params directly moves 1.10% of entries and is FLAT
+  (each update is below the bf16 ulp and is discarded, so nothing
+  accumulates), while masters reach 11.73% and drop the loss 17.20 → 8.73
+  against 17.20 → 14.73. Device peak FALLS 85.29 → 53.30 GiB, because the
+  optimiser state leaves the GPU. Selection is printed, never silent.
 * `corpus.py`, `rewards.py`, `trainer.py` — the ShareGPT loader (`.json` and
   `.jsonl`) with verifiable MCQ gold extraction, the letter reward, and the
   single-model training loop.
@@ -404,7 +411,7 @@ working home fails a test rather than an import at a user's site.
 
 ## Around the package
 
-`src/` is 37024 LOC across 49 files; `tests/` adds 48462 `.py` LOC (its
+`src/` is 37136 LOC across 49 files; `tests/` adds 48569 `.py` LOC (its
 conftest carries the skip guard). Beside the package:
 
 | Tree | Contents |
@@ -416,7 +423,7 @@ conftest carries the skip guard). Beside the package:
 | `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 175754 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 175980 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 
