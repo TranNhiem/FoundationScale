@@ -95,6 +95,16 @@ PENDING_ENROLMENT: dict[str, str] = {
         "derives declared config facts, censuses expert families, and adjudicates the "
         "real-checkpoint alias control feeding gate contexts"
     ),
+    "src/foundationscale/rl/online_objectives.py": (
+        "the online and iterative family -- Online DPO, Iterative DPO, RAFT and "
+        "Best-of-N -- whose selection rules decide WHICH rows train; a mutated "
+        "selection silently trains on the wrong subset and still reports a finite loss"
+    ),
+    "src/foundationscale/rl/reward_model.py": (
+        "the reward-model training path, whose scores become the reward every "
+        "downstream algorithm optimises; a mutated pairwise comparison inverts the "
+        "preference direction with no shape change and no exception"
+    ),
     "src/foundationscale/rl/ppo.py": (
         "composes the stage-3f objectives into one algorithm and is the first binding that "
         "measures a learned value estimate once and hands the single reading to two consumers"

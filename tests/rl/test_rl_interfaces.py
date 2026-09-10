@@ -85,6 +85,10 @@ TORCH_FREE_MODULES = {
         "GRPOPolicyLoss",
         "check_grpo_requirements",
     ),
+    "foundationscale.rl.reward_model": (
+        "RewardModelLoss",
+        "check_reward_model_requirements",
+    ),
     "foundationscale.rl.rewards": ("MCQLetterReward",),
     "foundationscale.rl.registry": (
         "AlgorithmRegistryRefusal",
@@ -105,6 +109,12 @@ TORCH_FREE_MODULES = {
         "build_objective_gate_context",
     ),
     "foundationscale.rl.losses": ("DPOLoss", "SFTLoss"),
+    "foundationscale.rl.online_objectives": (
+        "BestOfNLoss",
+        "IterativeDPOLoss",
+        "OnlineDPOLoss",
+        "RAFTLoss",
+    ),
     "foundationscale.rl.policy": ("PolicyPair", "PolicyRoleRefusal"),
     "foundationscale.rl.policy_gradient": (
         "RLOOAlgorithm",

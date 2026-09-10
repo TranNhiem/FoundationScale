@@ -195,6 +195,12 @@ from foundationscale.rl.interfaces import (
     build_objective_gate_context,
 )
 from foundationscale.rl.losses import DPOLoss, SFTLoss
+from foundationscale.rl.online_objectives import (
+    BestOfNLoss,
+    IterativeDPOLoss,
+    OnlineDPOLoss,
+    RAFTLoss,
+)
 from foundationscale.rl.policy import PolicyPair, PolicyRoleRefusal
 from foundationscale.rl.policy_gradient import (
     ReinforceBaselineAlgorithm,
@@ -245,6 +251,10 @@ from foundationscale.rl.registry import (
     register_algorithm,
     reset_algorithm_registry,
 )
+from foundationscale.rl.reward_model import (
+    RewardModelLoss,
+    check_reward_model_requirements,
+)
 from foundationscale.rl.rewards import MCQLetterReward
 from foundationscale.rl.rollout import (
     CapabilityRefusal,
@@ -283,6 +293,7 @@ __all__ = (
     "AlgorithmSemantics",
     "AlgorithmWiringRefusal",
     "BatchRefusal",
+    "BestOfNLoss",
     "CPOLoss",
     "CapabilityRefusal",
     "DAPOLoss",
@@ -297,6 +308,7 @@ __all__ = (
     "GeneralisedAdvantageEstimation",
     "GroupNormalisedAdvantage",
     "IPOLoss",
+    "IterativeDPOLoss",
     "KLCoefficientController",
     "KLPenaltyLoss",
     "KTOLoss",
@@ -308,6 +320,7 @@ __all__ = (
     "LossOutput",
     "MCQLetterReward",
     "ORPOLoss",
+    "OnlineDPOLoss",
     "PPOAlgorithm",
     "PPOClippedPolicyLoss",
     "PPOCompositeLoss",
@@ -315,12 +328,14 @@ __all__ = (
     "PolicyRoleRefusal",
     "PreferenceAlgorithm",
     "PreferenceObjective",
+    "RAFTLoss",
     "RLOOAlgorithm",
     "RLOOPolicyLoss",
     "ReinforceBaselineAlgorithm",
     "ReinforceBaselineLoss",
     "ReinforcePlusPlusAlgorithm",
     "ReinforcePlusPlusLoss",
+    "RewardModelLoss",
     "RewardStats",
     "RolloutSource",
     "SFTLoss",
@@ -353,6 +368,7 @@ __all__ = (
     "check_preference_requirements",
     "check_reinforce_baseline_requirements",
     "check_reinforce_pp_requirements",
+    "check_reward_model_requirements",
     "check_rloo_requirements",
     "check_role_map",
     "check_sync_capabilities",

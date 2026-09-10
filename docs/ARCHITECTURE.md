@@ -266,6 +266,13 @@ Then the objectives and the bindings that compose them:
 * `preference_objectives.py` — `IPOLoss`, `KTOLoss`, `ORPOLoss`, `SimPOLoss`,
   `CPOLoss`.
 * `group_policy_objectives.py` — `GSPOLoss`, `DrGRPOLoss`, `DAPOLoss`.
+* `online_objectives.py` — `OnlineDPOLoss`, `IterativeDPOLoss`, `RAFTLoss`,
+  `BestOfNLoss`: the online and iterative family, where the objective also
+  decides WHICH sampled rows train.
+* `reward_model.py` — `RewardModelLoss` and `check_reward_model_requirements`:
+  the reward-model training path. It speaks ONE of the five declared semantic
+  axes (`reference_free`) and abstains on the other four, because a model that
+  scores sequences forms no importance ratio, reads no group and clips nothing.
 * `grpo.py`, `policy_gradient.py`, `ppo.py`, `preference.py`,
   `group_policy.py` — the bindings: GRPO; RLOO, REINFORCE-with-baseline and
   Reinforce++; PPO with its composite loss; the preference family; and the
@@ -397,7 +404,7 @@ working home fails a test rather than an import at a user's site.
 
 ## Around the package
 
-`src/` is 35565 LOC across 47 files; `tests/` adds 47438 `.py` LOC (its
+`src/` is 37024 LOC across 49 files; `tests/` adds 48462 `.py` LOC (its
 conftest carries the skip guard). Beside the package:
 
 | Tree | Contents |
@@ -409,7 +416,7 @@ conftest carries the skip guard). Beside the package:
 | `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 173252 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 175754 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 
