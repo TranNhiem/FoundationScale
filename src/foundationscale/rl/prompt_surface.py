@@ -153,7 +153,7 @@ def _load_image_or_refuse(sample_id: str, path: str) -> Any:
             "defect one layer down; fix the corpus or the path."
         )
     try:
-        from PIL import Image  # type: ignore[import-not-found]
+        from PIL import Image
     except ImportError:
         _refuse_exit_96(
             f"sample {sample_id!r} has images but PIL is absent; cannot "
@@ -251,11 +251,16 @@ def encode_prompts(
         # because some sample carries images, then a chunk arrives with none.
         #
         # add_special_tokens=False on BOTH paths and in the image branch
-        # above: apply_chat_template has already emitted BOS and the turn
-        # markers, so letting the tokenizer add them again yields a second
-        # BOS. That would make an image-carrying corpus train against a
-        # different prompt distribution than a text-only one -- silent, and
-        # exactly the instrument-mismatch class this plane keeps hitting.
+        # above. MEASURED against a real Idefics3Processor, not argued:
+        #     with the kwarg   : width 3038, first ids [128000, 1502, 25]
+        #     without it       : width 3039, first ids [128000, 128000, ...]
+        # BOS (128000) is emitted TWICE without it, because
+        # apply_chat_template already wrote it. The same run confirmed a
+        # real processor ACCEPTS the kwarg rather than raising TypeError.
+        # Left unset, an image-carrying corpus would train against a
+        # different prompt distribution than a text-only one -- silent,
+        # and exactly the instrument-mismatch class this plane keeps
+        # hitting.
         encoded = surface.surface(
             text=texts,
             return_tensors="pt",

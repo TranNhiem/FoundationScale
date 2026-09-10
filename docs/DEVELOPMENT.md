@@ -24,7 +24,7 @@ see [The interpreter is two decisions](#the-interpreter-is-two-decisions) and
 | `make fmt` | `ruff check --fix` + `ruff format` over the same four directories | rewrites in place |
 | `make typecheck` | mypy over `src` plus three adjudicating CLIs | see [typecheck](#typecheck-and-typecheck-checks) |
 | `make typecheck-checks` | `mypy checks` | a gate, in `check`, and not error-suppressed |
-| `make controls` | `python -m foundationscale.gates.controls` | the gate controls entry point |
+| `make controls` | `python3 -m foundationscale.gates.controls` | the gate controls entry point |
 | `make packaging` | `checks/packaging_reachability.py --self-test`, then the real run | self-test first, deliberately two lines |
 | `make training-plane` | `checks/training_plane_probe.py --self-test`, then the real run | reports training primitives and delegation as separate axes |
 | `make makefile-tooling` | `checks/makefile_tooling.py --self-test`, then the real run | forbids bare tool names in recipes |

@@ -55,8 +55,8 @@ The example is deliberately one file and one screen: a `ClusterProfile` describi
 machine as **data**, and a `TrainConfig` naming a model, a dataset and a topology.
 
 ```bash
-python -m pip install -e ".[train]"
-python examples/train_tiny.py
+python3 -m pip install -e ".[train]"
+python3 examples/train_tiny.py
 ```
 
 It trains `sshleifer/tiny-gpt2` on `fancyzhx/ag_news` for 20 steps, adjudicates the
@@ -110,7 +110,7 @@ the next section.
 Set `dry_run=True` in the config, or use the CLI with `--dry-run`:
 
 ```bash
-python -m foundationscale.train.cli ... --dry-run
+python3 -m foundationscale.train.cli ... --dry-run
 ```
 
 `--dry-run` runs the full validation prologue — profile resolution, topology arithmetic,
@@ -121,10 +121,10 @@ finds out.
 ## The offline variant
 
 For a corpus that needs no network, the shipped toy dataset drives through the console
-script `foundationscale-train` (equivalently `python -m foundationscale.train.cli`):
+script `foundationscale-train` (equivalently `python3 -m foundationscale.train.cli`):
 
 ```bash
-HF_HUB_OFFLINE=1 python -m foundationscale.train.cli \
+HF_HUB_OFFLINE=1 python3 -m foundationscale.train.cli \
   --model sshleifer/tiny-gpt2 --dataset examples/data/toy_text.jsonl \
   --output-dir /tmp/fs_train_demo --profile-name local-single-node \
   --nodes 1 --gpus-per-node 1 --dp 1 --max-steps 8 --save-interval 4
@@ -138,7 +138,7 @@ fields, the save gates, the symptom→cause table — is [docs/TRAINING.md](TRAI
 ## How `examples/` got a denominator
 
 `tests/train/test_examples_runnable.py` exists because the example rotted: the suite was
-green while `python examples/train_tiny.py` — the one command a new user runs first —
+green while `python3 examples/train_tiny.py` — the one command a new user runs first —
 died on its own line 22 with the `node_pattern` error above. The two tests needing the
 same profile each carried their own correct copy of it, so the shipped copy was never
 the tested copy. The fix is not a fixture patch; it is a generic sweep:

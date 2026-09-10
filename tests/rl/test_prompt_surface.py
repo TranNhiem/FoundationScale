@@ -412,3 +412,38 @@ def test_a_plain_mapping_batch_is_moved_value_by_value_without_torch(
 
     assert batch["input_ids"].device == "meta"
     assert batch["attention_mask"].device == "meta"
+
+
+def test_the_train_extra_DECLARES_the_vision_backends() -> None:
+    # FAILING INPUT: a clean `pip install -e ".[train]"` followed by a corpus
+    # that carries one image. Measured, not reasoned: transformers cannot
+    # construct ANY image processor without Pillow, and on transformers 5.x it
+    # resolves to a backend PAIR (pil / torchvision) and needs one of them
+    # importable. With neither, the loader raises
+    #     ValueError("Could not load any image processor class for <model>")
+    # which reads as a broken checkpoint, not a missing dependency.
+    #
+    # Both were absent from every extra while VLM training is the headline
+    # capability -- #226's shape a third time ("the extra was written by
+    # reading imports, not by running the path"). prompt_surface imports PIL
+    # FUNCTION-LOCALLY, so no import-time signal exists and only running the
+    # path reveals it.
+    #
+    # Parsed by text rather than tomllib because the package supports 3.10,
+    # where tomllib does not exist; a skip here would be forbidden by
+    # FS_FORBID_SKIPS and would silently retire the check on the one
+    # interpreter CI still runs.
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r"^train = \[(.*?)^\]", text, re.S | re.M)
+    assert match, "the [train] extra must exist -- #224 is what happens when it does not"
+    block = match.group(1)
+    declared = set(re.findall(r'^\s*"([A-Za-z0-9_.\-]+)', block, re.M))
+    for package in ("pillow", "torchvision"):
+        assert package in declared, (
+            f"{package} is not declared in the [train] extra, so the advertised "
+            f"image path cannot run on a clean install. Declared: {sorted(declared)}"
+        )

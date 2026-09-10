@@ -53,7 +53,7 @@ not coerced:
 * A negative count is refused; expert counts are unsigned.
 * `classify_config` refuses a config that is not a JSON object.
 
-Refusals are raises, not asserts — `python -O` strips asserts, and a guard that
+Refusals are raises, not asserts — `python3 -O` strips asserts, and a guard that
 vanishes under a flag is not a guard.
 
 ### `classify_config` and `Architecture`

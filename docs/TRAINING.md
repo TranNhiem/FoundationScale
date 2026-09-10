@@ -3,8 +3,8 @@
 The worked end-to-end recipe README §10 defers to. Two paths are shown, both run and
 measured on the machine that wrote this document, both exiting `0 PASS`:
 
-1. **The example** — `python examples/train_tiny.py`, model and dataset from the Hub.
-2. **The CLI, offline** — `python -m foundationscale.train.cli` against a toy `.jsonl`
+1. **The example** — `python3 examples/train_tiny.py`, model and dataset from the Hub.
+2. **The CLI, offline** — `python3 -m foundationscale.train.cli` against a toy `.jsonl`
    that ships in this repository, with `HF_HUB_OFFLINE=1`.
 
 Everything below is transcript, not illustration. Where output is quoted it was copied
@@ -20,7 +20,7 @@ box you need a torch build for your accelerator rather than the CPU wheel:
 
 ```bash
 git clone https://github.com/TranNhiem/FoundationScale && cd FoundationScale
-python -m pip install -e ".[train]"
+python3 -m pip install -e ".[train]"
 ```
 
 `train` pulls torch, transformers, datasets and accelerate. Without it the loop refuses
@@ -30,7 +30,7 @@ half-started run and an `ImportError` three minutes in.
 Verify the entry point resolves before going further:
 
 ```bash
-python -m foundationscale.train.cli --help
+python3 -m foundationscale.train.cli --help
 ```
 
 ---
@@ -56,7 +56,7 @@ what that looks like in practice.
 ## 3. Path A — the example, model and dataset from the Hub
 
 ```bash
-python examples/train_tiny.py
+python3 examples/train_tiny.py
 ```
 
 That is the whole command. `examples/train_tiny.py` is one screen: a `ClusterProfile`
@@ -134,7 +134,7 @@ Any of them must expose a `text` column. A 16-row toy corpus ships at
 `examples/data/toy_text.jsonl` so the recipe below needs no dataset download:
 
 ```bash
-HF_HUB_OFFLINE=1 python -m foundationscale.train.cli \
+HF_HUB_OFFLINE=1 python3 -m foundationscale.train.cli \
   --model sshleifer/tiny-gpt2 \
   --dataset examples/data/toy_text.jsonl \
   --output-dir /tmp/fs_train_demo \
@@ -178,7 +178,7 @@ named error — but it catches it at *your* first run, so it is worth knowing.
 ### Validate without training
 
 ```bash
-python -m foundationscale.train.cli ... --dry-run
+python3 -m foundationscale.train.cli ... --dry-run
 ```
 
 Runs the whole prologue — profile resolution, topology arithmetic, validation — and stops

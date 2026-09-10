@@ -44,7 +44,7 @@ flowchart TB
   OK["Operator or bash continues"]
   NO["Operator blocks or remediates"]
 
-  PKG["[installed foundationscale package]<br/>37,534 LOC / 50 files<br/>verification plane + delegating train/ (1,305 LOC)<br/>0 training primitives, step loop rented from transformers.Trainer"]
+  PKG["[installed foundationscale package]<br/>37,539 LOC / 50 files<br/>verification plane + delegating train/ (1,305 LOC)<br/>0 training primitives, step loop rented from transformers.Trainer"]
 
   O --> PF
   O --> L
@@ -96,11 +96,11 @@ The census reports counts per importing area, not unique dependencies or a file-
 
 ```mermaid
 flowchart TB
-  TESTS["tests/<br/>111 Python files / 49,383 LOC"]
+  TESTS["tests/<br/>111 Python files / 49,418 LOC"]
   TOOLS["tools/<br/>31 Python files / 9,533 LOC"]
-  SRC["src/ as importer<br/>50 Python files / 37,534 LOC"]
+  SRC["src/ as importer<br/>50 Python files / 37,539 LOC"]
 
-  FS["src/foundationscale<br/>50 Python files / 37,534 LOC<br/>root __init__.py exports nothing"]
+  FS["src/foundationscale<br/>50 Python files / 37,539 LOC<br/>root __init__.py exports nothing"]
 
   GATES["gates/<br/>9 files / 10,059 LOC"]
   CKPT["checkpoint/<br/>3 files / 2,199 LOC"]
@@ -196,4 +196,4 @@ There is no verified end-to-end trace of a generated trainer run, so an unqualif
 
 The training payload has no measured in-process call into `Lifecycle.SAVE` or `run_event`. Consequently, the current architecture is **save-side verification around an estate training path**, not yet a model-agnostic FoundationScale trainer with verification built into its runtime.
 
-> **Census correction (applied post-draft).** This document was written against a census of 13,667 lines in `src/foundationscale/`. The T2 library/script boundary move has since relocated the 2,546-line checkpoint-decision API from `tools/live_save_gate.py` into `src/foundationscale/gates/adjudication.py`, and the fixes landed since have added the rest; `src/foundationscale/` now measures **37,534 lines**. Re-measured after the move, the structural finding is UNCHANGED: 0 files define `nn.Module`, call `backward()`, construct a `DataLoader`, or define `forward`, and 0 files import torch at module scope. The three `optimizer` hits and three `broadcast`/`all_*` hits are gate vocabulary (checkpoint optimizer-state fields; the registry broadcasting a context to gates), not NCCL collectives, and the single `torch.distributed` reference is a read-only DCP reader. What changed is that `src/` now holds real decision logic where it previously held none.
+> **Census correction (applied post-draft).** This document was written against a census of 13,667 lines in `src/foundationscale/`. The T2 library/script boundary move has since relocated the 2,546-line checkpoint-decision API from `tools/live_save_gate.py` into `src/foundationscale/gates/adjudication.py`, and the fixes landed since have added the rest; `src/foundationscale/` now measures **37,539 lines**. Re-measured after the move, the structural finding is UNCHANGED: 0 files define `nn.Module`, call `backward()`, construct a `DataLoader`, or define `forward`, and 0 files import torch at module scope. The three `optimizer` hits and three `broadcast`/`all_*` hits are gate vocabulary (checkpoint optimizer-state fields; the registry broadcasting a context to gates), not NCCL collectives, and the single `torch.distributed` reference is a read-only DCP reader. What changed is that `src/` now holds real decision logic where it previously held none.

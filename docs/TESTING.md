@@ -193,7 +193,7 @@ $(PY) -m pytest --cov=foundationscale --cov=tools --cov-report=term-missing --co
 | `test` | pytest with coverage (above) | The suite |
 | `coverage-floor` | `checks/coverage_floor.py --self-test`, then the real run | Per-module coverage floors; missing `coverage.json` exits 95 (UNMEASURED), never 0 |
 | `ci-suite-extras` | `checks/ci_suite_extras.py --self-test`, then the real run | Parity of installed extras across pytest-executing CI jobs |
-| `controls` | `python -m foundationscale.gates.controls` | The gate fixtures |
+| `controls` | `python3 -m foundationscale.gates.controls` | The gate fixtures |
 | `packaging` | `checks/packaging_reachability.py --self-test`, then the real run | Console scripts reachable, resolved against the interpreter's own script directory and install record |
 | `training-plane` | `checks/training_plane_probe.py --self-test`, then the real run | Reports "no training primitives" and "package delegates to `transformers.Trainer`" as separate axes, and scans every git-tracked `*.md` for retired phrasings |
 | `makefile-tooling` | `checks/makefile_tooling.py --self-test`, then the real run | No recipe invokes a bare tool name |
@@ -201,7 +201,7 @@ $(PY) -m pytest --cov=foundationscale --cov=tools --cov-report=term-missing --co
 | `launcher-contracts` | `bash launchers/test_launcher_contracts.sh` | The launcher bash contract suites — 146 controls |
 | `checks-gates` | `bash launchers/test_checks_gates.sh` | The gate-script self-test legs — 19 controls |
 | `skip-guard-probe` | compound recipe | The armed skip guard fires and names its probe |
-| `mutation` | `FS_FORBID_SKIPS=1 python tools/mutate.py` | The detectors catch their MUST_FIRE mutants |
+| `mutation` | `FS_FORBID_SKIPS=1 python3 tools/mutate.py` | The detectors catch their MUST_FIRE mutants |
 
 Two ordering rules are load-bearing:
 
@@ -242,4 +242,4 @@ Removes build and packaging output, tool caches (`.pytest_cache`, `.mypy_cache`,
 Two items a reader may want are not resolvable from the sources this chapter is written against:
 
 - **The full pyproject.toml pytest configuration.** Only `testpaths`, the two markers, and `--strict-markers` are attested here. Additional options (coverage defaults, filter warnings, `pythonpath`) are not quoted in the available material; consult `pyproject.toml` directly.
-- **The shard list for the mutation matrix.** `make mutation-module MODULE=<name>` takes a module name, and `python tools/mutate.py --list` enumerates them; only `checkpoint_gates` and `dcp` are named in the sources above. The matrix is enumerated from the mutation table itself, so the Makefile and CI cannot drift apart on it.
+- **The shard list for the mutation matrix.** `make mutation-module MODULE=<name>` takes a module name, and `python3 tools/mutate.py --list` enumerates them; only `checkpoint_gates` and `dcp` are named in the sources above. The matrix is enumerated from the mutation table itself, so the Makefile and CI cannot drift apart on it.

@@ -18,7 +18,7 @@ From a clean clone:
 
 ```bash
 git clone https://github.com/TranNhiem/FoundationScale && cd FoundationScale
-python -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" \
+python3 -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" \
     --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
@@ -46,8 +46,8 @@ Two properties of this table matter in daily use:
 To run the training example instead, add the `train` extra and drop the CPU index, so pip resolves a torch build for your own accelerator:
 
 ```bash
-python -m pip install -e ".[train]"
-python examples/train_tiny.py          # measured: exits 0 PASS
+python3 -m pip install -e ".[train]"
+python3 examples/train_tiny.py          # measured: exits 0 PASS
 ```
 
 ## The interpreter question
@@ -83,7 +83,7 @@ After installing per above, these are the commands CI executes, in order of incr
 ### 1. Test suite, coverage floor included
 
 ```bash
-python -m pytest --cov=foundationscale --cov-report=term-missing --cov-fail-under=90
+python3 -m pytest --cov=foundationscale --cov-report=term-missing --cov-fail-under=90
 ```
 
 The `make test` target adds two things to this shape: `--cov=tools` (so the Makefile measures the two adjudicating `tools/` modules the way CI does) and `--cov-report=json` (which writes the `coverage.json` that the `coverage-floor` gate below adjudicates):
@@ -107,7 +107,7 @@ This is the general pattern for every gate in the repository: **self-test first,
 ### 3. Gate controls
 
 ```bash
-python -m foundationscale.gates.controls
+python3 -m foundationscale.gates.controls
 ```
 
 Also reachable as the console script:
@@ -123,8 +123,8 @@ This executes every registered gate's MUST_FIRE / MUST_PASS fixtures and exits n
 List the module shards, then run one exactly as CI runs it:
 
 ```bash
-python tools/mutate.py --list
-FS_FORBID_SKIPS=1 python tools/mutate.py --module checkpoint_gates
+python3 tools/mutate.py --list
+FS_FORBID_SKIPS=1 python3 tools/mutate.py --module checkpoint_gates
 ```
 
 Or through the Makefile:
@@ -216,8 +216,8 @@ Note what the assertion is. The fixture declares 128 experts and supplies none, 
 Real training is one command, and it runs:
 
 ```bash
-python -m pip install -e ".[train]"
-python examples/train_tiny.py
+python3 -m pip install -e ".[train]"
+python3 examples/train_tiny.py
 ```
 
 `examples/train_tiny.py` is one screen — a `ClusterProfile` describing the machine and a `TrainConfig` naming a model, a dataset, and a topology. It trains `sshleifer/tiny-gpt2` on `fancyzhx/ag_news` for 20 steps and exits `0 PASS`, having adjudicated both intermediate checkpoints and the final save.
@@ -230,10 +230,10 @@ torchrun --nproc_per_node=4
 
 The profile, the declared topology, and the DDP degree all read that one value, and the declared topology is then checked against the one torchrun actually built.
 
-For a corpus that needs no network, a 16-row toy dataset ships at `examples/data/toy_text.jsonl`, driven through the console script `foundationscale-train` (equivalently `python -m foundationscale.train.cli`):
+For a corpus that needs no network, a 16-row toy dataset ships at `examples/data/toy_text.jsonl`, driven through the console script `foundationscale-train` (equivalently `python3 -m foundationscale.train.cli`):
 
 ```bash
-HF_HUB_OFFLINE=1 python -m foundationscale.train.cli \
+HF_HUB_OFFLINE=1 python3 -m foundationscale.train.cli \
   --model sshleifer/tiny-gpt2 --dataset examples/data/toy_text.jsonl \
   --output-dir /tmp/fs_train_demo --profile-name local-single-node \
   --nodes 1 --gpus-per-node 1 --dp 1 --max-steps 8 --save-interval 4

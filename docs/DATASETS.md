@@ -60,7 +60,7 @@ the offline recipe needs no dataset download. Each line is one JSON object with 
 The canonical local-file invocation is the offline one from docs/TRAINING.md §4:
 
 ```bash
-HF_HUB_OFFLINE=1 python -m foundationscale.train.cli \
+HF_HUB_OFFLINE=1 python3 -m foundationscale.train.cli \
   --model sshleifer/tiny-gpt2 \
   --dataset examples/data/toy_text.jsonl \
   --output-dir /tmp/fs_train_demo \

@@ -234,7 +234,7 @@ python3 -m foundationscale.gates.controls
 
 # 3. Mutation battery, one module shard the way CI runs it:
 python3 tools/mutate.py --list        # names the modules
-FS_FORBID_SKIPS=1 python tools/mutate.py --module checkpoint_gates
+FS_FORBID_SKIPS=1 python3 tools/mutate.py --module checkpoint_gates
 
 # 4. Everything at once (lint, typecheck, skip-guard probe, tests, controls,
 #    packaging and countables gates, full mutation corpus):
@@ -280,10 +280,10 @@ torchrun actually built.
 
 For a corpus that needs no network, a 16-row toy dataset ships at
 `examples/data/toy_text.jsonl`, driven through the console script
-`foundationscale-train` (equivalently `python -m foundationscale.train.cli`):
+`foundationscale-train` (equivalently `python3 -m foundationscale.train.cli`):
 
 ```bash
-HF_HUB_OFFLINE=1 python -m foundationscale.train.cli \
+HF_HUB_OFFLINE=1 python3 -m foundationscale.train.cli \
   --model sshleifer/tiny-gpt2 --dataset examples/data/toy_text.jsonl \
   --output-dir /tmp/fs_train_demo --profile-name local-single-node \
   --nodes 1 --gpus-per-node 1 --dp 1 --max-steps 8 --save-interval 4
@@ -448,14 +448,14 @@ itself, from the Makefile's own accounting:
 
 ## 23. Project structure
 
-`src/` = 37534 LOC across 50 files. `launchers/` contains 10231 shell LOC plus 1615 Python
+`src/` = 37539 LOC across 50 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 33385 Python LOC and 6414 shell LOC on top of the
-package. `tools/` contains 9533 Python LOC. 177244 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 9533 Python LOC. 177291 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (49383 .py LOC); conftest carries the skip guard
+tests/                 the test suite (49418 .py LOC); conftest carries the skip guard
 tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
                        real_checkpoint_probe, preflight/, mutate, census)
 checks/                standalone repository gates: countables drift, packaging

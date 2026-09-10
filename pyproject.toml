@@ -74,6 +74,28 @@ train = [
     "torch>=2.1",
     "transformers>=4.40",
     "datasets>=2.18",
+    # Pillow, and it is NOT optional the moment a corpus carries an image.
+    # transformers cannot construct ANY image processor without PIL -- it does
+    # not raise ImportError, it raises
+    #     ValueError("Could not load any image processor class for <model>")
+    # which reads like a broken checkpoint rather than a missing dependency,
+    # and sends the operator to inspect the model directory. FoundationScale's
+    # own refusal then correctly reports "processor failed to load" (96), so
+    # the plane is honest but the diagnosis points one layer too far down.
+    #
+    # Found by RUNNING the path on real hardware, not by reading imports --
+    # the same way accelerate and numpy were found above, and the third time
+    # this class has appeared (#226). rl/prompt_surface.py imports PIL
+    # function-locally, so nothing at import time reveals the need.
+    "pillow>=10.0",
+    # torchvision, for the same reason and found in the same run. On
+    # transformers 5.x an image processor resolves to a BACKEND pair --
+    # "pil: Idefics3ImageProcessorPil, torchvision: Idefics3ImageProcessor" --
+    # and with neither importable the loader raises the same misleading
+    # ValueError. Installing Pillow ALONE was not sufficient: the measured
+    # error then named torchvision explicitly as the missing dependency.
+    # Two packages, one defect: the vision path was declared by nobody.
+    "torchvision>=0.16",
     # transformers does NOT declare accelerate, but `Trainer` requires it and
     # raises ImportError from inside TrainingArguments.__post_init__ -- long
     # after the guarded import in train/loop.py has already succeeded. Same
@@ -285,3 +307,13 @@ disallow_untyped_defs = false
 [[tool.mypy.overrides]]
 module = ["preflight", "preflight.*", "tools.preflight", "tools.preflight.*"]
 ignore_errors = true
+
+# PIL ships no stubs and is installed ONLY by the [train] extra, so whether the
+# inline `# type: ignore[import-not-found]` in rl/prompt_surface.py was
+# REQUIRED or UNUSED depended on which extras the checking machine had --
+# green here, red in CI, or the reverse. That is #83/#111/#229's class: a
+# verdict that measures the environment rather than the code. Declaring it
+# here makes the answer the same everywhere.
+[[tool.mypy.overrides]]
+module = ["PIL.*"]
+ignore_missing_imports = true

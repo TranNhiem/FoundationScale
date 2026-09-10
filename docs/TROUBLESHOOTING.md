@@ -71,7 +71,7 @@ installed distribution whether every advertised name resolves.
 **Verify before proceeding:**
 
 ```bash
-python -m foundationscale.train.cli --help
+python3 -m foundationscale.train.cli --help
 ```
 
 ## 4. `make ...` says `python: command not found`
@@ -229,7 +229,7 @@ values to diff when a mismatch is suspected. Identity and provenance live in
 If the whole prologue is what you doubt, re-run it without training:
 
 ```bash
-python -m foundationscale.train.cli ... --dry-run
+python3 -m foundationscale.train.cli ... --dry-run
 ```
 
 `--dry-run` runs profile resolution, topology arithmetic and validation, and stops
