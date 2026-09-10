@@ -105,8 +105,14 @@ endif
 
 .PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope launcher-contracts checks-gates standing-gates campaign-self-tests mutation mutation-module skip-guard-probe check clean
 
+# [train] is here because CI's suite jobs install it and this target is the
+# developer's mirror of them. Without it `make install` provisions a WEAKER
+# environment than CI, so `make check` can pass locally on a machine CI would
+# fail -- and the gap is invisible to anyone whose venv already happens to
+# carry torch, which is the PATH-dependent-verdict class (#83/#111/#229) and
+# the same missing-extra that #253 found in the mutation job.
 install:
-	$(PY) -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
+	$(PY) -m pip install -e ".[checkpoint,train,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
 
 # --cov=tools joined this line with #251, so the Makefile measures what CI measures.
 # It had drifted the other way from #230's case: there CI was the weaker of the two,
