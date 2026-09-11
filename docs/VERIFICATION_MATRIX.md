@@ -2,7 +2,7 @@
 
 ## The measurement that shapes everything
 
-The instrument was a grep over `src/foundationscale` (excluding `rl/`), read against the code. The measurement: FoundationScale's training plane does NOT implement an inner loop. It builds a `transformers.Trainer` (`src/foundationscale/train/loop.py:1799`) out of `TrainingArguments`, from a kwargs dict (`src/foundationscale/train/loop.py:1703`) whose ENTIRE content is:
+The instrument was a grep over `src/foundationscale` (excluding `rl/`), read against the code. The measurement: FoundationScale's training plane does NOT implement an inner loop. It builds a `transformers.Trainer` (`src/foundationscale/train/loop.py:1895`) out of `TrainingArguments`, from a kwargs dict (`src/foundationscale/train/loop.py:1799`) whose ENTIRE content is:
 
     output_dir, max_steps, per_device_train_batch_size, learning_rate,
     save_strategy, save_steps, seed, logging_steps, report_to,
@@ -24,7 +24,7 @@ The consequence, and it is the whole point: every named axis — optimizer, CPU 
 
 Those six values are measured, not assumed: they are the `TrainingArguments` defaults read out of transformers 5.16.1. Stating the version is not pedantry — it is the whole shape of the problem. An undeclared axis takes its value from the installed engine, so the same FoundationScale config trains differently under a different transformers release, and no artifact of either run would record that anything changed. Note in particular that the optimizer default is the *fused* AdamW, not the reference one: T1-9 proposes to measure step time across optimizers, and it would be measuring against a fused baseline without ever saying so.
 
-That is the #346 class at scale: unmeasured reads as green. It is why 14 of this matrix's 32 rows are unrunnable today.
+That is the #346 class at scale: unmeasured reads as green. It is why 14 of this matrix's 33 rows are unrunnable today.
 
 ## Two tiers, and tier 0 is not optional
 
@@ -54,6 +54,7 @@ Tier 0 blocks tier 1 because a tier-1 row that toggles an undeclared axis measur
 | T0-7 | sharding strategy (ddp\|fsdp\|deepspeed) is declared and recorded | ddp | a strategy with no wiring REFUSES 96 rather than silently running DDP | 0 GPU | no key |
 | T0-8 | CPU optimizer offload is declared and recorded | off | declaring on with no backend REFUSES | 0 GPU | no key |
 | T0-9 | code.status is a real commit | run from a git checkout | #346: a COPY must record status=not_a_repository AND the run must say so loudly, not proceed silently | 0 GPU | RED (#346) |
+| T0-10 | the effective topology is read from runtime evidence, never echoed from the config | WORLD_SIZE=8 LOCAL_WORLD_SIZE=8 against a config declaring tp=pp=ep=cp=4 and gpus_per_node=4 | #375: the pre-fix `_effective_topology`, which sourced 5 of the 7 fields from cfg -- 11 of the 14 legs in `tests/train/test_effective_topology.py` go RED against it and 14 of 14 pass after | 0 GPU | SHIPPED (#375): 14 of 14 legs green, 11 RED on the pre-fix tree |
 
 ### T1 — precision (GPU)
 
@@ -90,7 +91,7 @@ Tier 0 blocks tier 1 because a tier-1 row that toggles an undeclared axis measur
 |---|---|---|---|---|---|
 | T1-15 | a dense model trains end-to-end and the bytes move | Qwen dense, lr>0 | an `lr=0` arm through the same path: weight parity must show ZERO movement | ~15 min x2 | done (#162/#176, #366) — re-take under new manifest, control arm never run |
 | T1-16 | an MoE model trains and experts receive gradient | MoE arm | a router that never routes = zero grad on some experts; must be detected | ~40 min | classification SHIPPED, runtime ABSENT |
-| T1-17 | ep=2 shards experts across ranks | ep=2 vs ep=1 | identical per-rank memory = no expert sharding | ~40 min | PARTIAL |
+| T1-17 | ep=2 shards experts across ranks | ep=2 vs ep=1 | identical per-rank memory = no expert sharding | ~40 min | REFUSED by the package plane (#375): ep>1 refuses before load |
 | T1-18 | LoRA through the package: adapter weights train, base frozen | LoRA arm | base-weight parity must show ZERO movement; adapter parity must show movement | ~20 min | ABSENT from the package plane (#329) |
 | T1-19 | tied embeddings: tying survives save/load and sharding | a tied-embedding model | untied model as control | ~20 min | ABSENT (#172/#202 shape) |
 
@@ -112,6 +113,8 @@ The control-arm rule: a row with no arm that must come out differently is a row 
 T0-9 first (a run whose commit is unrecorded is unattributable — every row below inherits it). Then T0-1..T0-8, which are CPU-only and cheap. Then T1 cheapest-first: T1-3, T1-6, T1-22, T1-23 (minutes), then T1-4, T1-1, T1-12, T1-10, T1-11, then the long ones (T1-5, T1-14, T1-16, T1-21).
 
 ## The honest count
-32 rows: 9 that need no GPU and 23 that do. Of those, 8 name an axis the training plane does not expose at all and 6 more are blocked by one of those, so 14 cannot be run today. 3 are already measured and need only a re-take under a manifest that records them. 2 are refusals that must be PROVEN to be refusals rather than silent fallbacks.
+33 rows: 10 that need no GPU and 23 that do. Of those, 8 name an axis the training plane does not expose at all and 6 more are blocked by one of those, so 14 cannot be run today. 3 are already measured and need only a re-take under a manifest that records them. 2 are refusals that must be PROVEN to be refusals rather than silent fallbacks.
+
+The expert-parallel row belongs to none of those buckets and is still not runnable through this plane. It is refused before a model is loaded, and that refusal is already proven by the topology legs, so it is neither blocked by another row nor awaiting a proof — the axis is simply not wired, and the plane now says so instead of training pure DDP under the label.
 
 Every number in that paragraph is derived from `matrix.json` by `checks/verification_matrix.py`, which reads them back positionally and refuses a row whose control arm is a placeholder. They are not restated by hand, and the table above is a rendering of the same ledger. The two tiers are described in words here rather than by their numeric labels because the countables check reads every integer in this section positionally, so a digit inside a label would itself be adjudicated as a countable.

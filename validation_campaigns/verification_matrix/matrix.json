@@ -112,6 +112,20 @@
       ]
     },
     {
+      "id": "T0-10",
+      "tier": 0,
+      "group": "declaration and recording",
+      "claim": "the effective topology is read from runtime evidence, never echoed from the config",
+      "run_arm": "WORLD_SIZE=8 LOCAL_WORLD_SIZE=8 against a config declaring tp=pp=ep=cp=4 and gpus_per_node=4",
+      "control_arm": "#375: the pre-fix _effective_topology, which sourced 5 of the 7 fields from cfg -- 11 of the 14 legs in tests/train/test_effective_topology.py go RED against it and 14 of 14 pass after",
+      "cost": "0 GPU",
+      "status": "SHIPPED (#375): 14 of 14 legs green, 11 RED on the pre-fix tree",
+      "blocked_by": [],
+      "findings": [
+        "#375"
+      ]
+    },
+    {
       "id": "T1-1",
       "tier": 1,
       "group": "precision",
@@ -337,9 +351,11 @@
       "run_arm": "ep=2 vs ep=1",
       "control_arm": "identical per-rank memory = no expert sharding",
       "cost": "~40 min",
-      "status": "PARTIAL",
+      "status": "REFUSED by the package plane (#375): ep>1 refuses before load",
       "blocked_by": [],
-      "findings": []
+      "findings": [
+        "#375"
+      ]
     },
     {
       "id": "T1-18",

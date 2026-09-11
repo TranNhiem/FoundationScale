@@ -329,11 +329,33 @@ def _resolve_profile(cfg: TrainConfig) -> ClusterProfile:
     return profile_by_name(cfg.profile_name)
 
 
-def _effective_topology(cfg: TrainConfig) -> Topology | Finding | None:
+def _effective_topology(cfg: TrainConfig) -> Topology | Finding | None:  # noqa: ARG001
     """The topology the runtime actually built, derived from torchrun env.
 
-    Returns ``None`` on the driver process (no WORLD_SIZE), a :class:`Finding`
-    when the runtime evidence cannot form a topology, else the effective one.
+    Every field comes from runtime evidence, never from ``cfg`` -- the
+    previous version sourced tp/pp/ep/cp AND gpus_per_node from ``cfg``, so
+    5 of the 7 fields declared_vs_effective compares were equal by
+    construction and could never differ:
+
+    * ``dp`` is ``WORLD_SIZE``. Measured, not assumed: the
+      transformers.Trainer kwargs dict built in :func:`train` carries no
+      tensor/pipeline/expert/context-parallel key of any kind, so every rank
+      the launcher started is a data-parallel replica.
+    * ``tp``/``pp``/``ep``/``cp`` are pinned to 1 for the same reason: no
+      model-parallel degree is wired anywhere in this plane, so 1 is the
+      degree the runtime executes. :func:`train` refuses any declared degree
+      > 1 before a model is loaded, which is what makes the pin honest
+      rather than a second silent default.
+    * ``gpus_per_node`` is ``LOCAL_WORLD_SIZE``, the launcher's own
+      statement of how many ranks landed on each node.
+    * ``nodes`` is ``WORLD_SIZE // LOCAL_WORLD_SIZE``.
+
+    ``cfg`` is retained in the signature so a test can hand this function a
+    config whose axes DISAGREE with the runtime and prove the return value
+    does not echo it -- a control that dropping the parameter would delete.
+    It is deliberately unread. Returns ``None`` on the driver process (no
+    WORLD_SIZE), a :class:`Finding` when the runtime evidence cannot form a
+    topology, else the effective one.
     """
     raw = os.environ.get("WORLD_SIZE")
     if raw is None:
@@ -346,16 +368,64 @@ def _effective_topology(cfg: TrainConfig) -> Topology | Finding | None:
             severity=_loudest(),
             message=f"WORLD_SIZE={raw!r} is not an integer",
         )
-    mpw = cfg.tp * cfg.pp * cfg.ep * cfg.cp
-    gpn = cfg.gpus_per_node
+    local_raw = os.environ.get("LOCAL_WORLD_SIZE")
+    if local_raw is None:
+        # An axis with no runtime evidence is UNMEASURED, not a default:
+        # reading gpus_per_node from cfg here was the equal-by-construction
+        # defect, and it recorded a 4-rank run as an 8-GPU topology.
+        return Finding(
+            code="train.local_world_size_unset",
+            severity=_loudest(),
+            message=(
+                f"WORLD_SIZE={world} but LOCAL_WORLD_SIZE is unset: "
+                "gpus_per_node has no runtime evidence, and an axis with no "
+                "runtime evidence is UNMEASURED -- it is never defaulted "
+                "from cfg"
+            ),
+        )
     try:
+        gpn = int(local_raw)
+    except ValueError:
+        return Finding(
+            code="train.local_world_size",
+            severity=_loudest(),
+            message=f"LOCAL_WORLD_SIZE={local_raw!r} is not an integer",
+        )
+    if gpn < 1 or gpn > world:
+        return Finding(
+            code="train.local_world_size",
+            severity=_loudest(),
+            message=(
+                f"LOCAL_WORLD_SIZE={gpn} lies outside [1, WORLD_SIZE={world}]: "
+                "the launcher's own ranks-per-node statement is impossible, "
+                "so no topology can be derived from it"
+            ),
+        )
+    if world % gpn != 0:
+        return Finding(
+            code="train.ragged_world",
+            severity=_loudest(),
+            message=(
+                f"WORLD_SIZE={world} is not divisible by "
+                f"LOCAL_WORLD_SIZE={gpn}: the last node carries fewer ranks. "
+                "An uneven last node is real runtime evidence, and it is "
+                "not a Topology"
+            ),
+        )
+    try:
+        # tp=pp=ep=cp=1 is measured, not assumed: the transformers.Trainer
+        # kwargs dict in train() carries no tensor/pipeline/expert/context-
+        # parallel key of any kind, so the plane executes pure data
+        # parallelism and dp is the whole world. There is no max(..., 1)
+        # clamp: a degree that cannot be derived is a Finding above, never
+        # a fabricated 1.
         return Topology(
-            dp=max(world // mpw, 1),
-            tp=cfg.tp,
-            pp=cfg.pp,
-            ep=cfg.ep,
-            cp=cfg.cp,
-            nodes=-(-world // gpn),
+            dp=world,
+            tp=1,
+            pp=1,
+            ep=1,
+            cp=1,
+            nodes=world // gpn,
             gpus_per_node=gpn,
         )
     except Exception as exc:  # noqa: BLE001 -- malformed runtime evidence is a finding
@@ -1422,6 +1492,32 @@ def train(cfg: TrainConfig) -> int:
             cfg,
             stage="refused",
             extra={"exit": EXIT_REFUSE, "precision": "nvfp4"},
+        )
+        return EXIT_REFUSE
+
+    # Measured, not assumed: cfg.tp/pp/ep/cp have ZERO execution consumers in
+    # this plane. Every occurrence is a record or validate site, and the
+    # Trainer kwargs dict built in step 6 carries no tensor/pipeline/expert/
+    # context-parallel key of any kind -- a run declaring tp=8 would train
+    # 8-way DDP while the manifest records tp=8. That is the unwired-knob
+    # class, and the house idiom for it is refusal (nvfp4 above), never a
+    # silent 1. Each degree is named independently: a guard on the product
+    # would pass tp=2, pp=1 combinations it must catch.
+    unwired = [name for name in ("tp", "pp", "ep", "cp") if getattr(cfg, name) > 1]
+    if unwired:
+        _mark(
+            Step.REFUSE,
+            f"declared {', '.join(f'{name}={getattr(cfg, name)}' for name in unwired)} "
+            "cannot be executed: the plane builds a transformers.Trainer "
+            "whose kwargs carry no tensor/pipeline/expert/context-parallel "
+            "key, so the degree would be recorded but never executed. "
+            "Refusing rather than training pure DDP under a parallel label "
+            "the run does not have",
+        )
+        _emit_manifest(
+            cfg,
+            stage="refused",
+            extra={"exit": EXIT_REFUSE, "unwired_degrees": ",".join(unwired)},
         )
         return EXIT_REFUSE
 

@@ -65,11 +65,31 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--dp", type=int, default=1)
-    p.add_argument("--tp", type=int, default=1)
-    p.add_argument("--pp", type=int, default=1)
-    p.add_argument("--ep", type=int, default=1)
-    p.add_argument("--cp", type=int, default=1)
+    p.add_argument(
+        "--dp",
+        type=int,
+        default=1,
+        help=(
+            "declared data-parallel degree; compared against the runtime's "
+            "WORLD_SIZE and recorded, not used to configure anything"
+        ),
+    )
+    # These four are DECLARATIONS, not knobs. The plane builds a
+    # transformers.Trainer whose kwargs carry no tensor/pipeline/expert/
+    # context-parallel key, so any degree > 1 is refused (EXIT_REFUSE) before a
+    # model is loaded rather than trained as pure DDP under a parallel label.
+    # Stated here so an operator learns it at --help time instead of after an
+    # allocation is burned -- a knob that appears configurable and is not is
+    # worse than a missing knob.
+    _unwired = (
+        "declared {name}-parallel degree. REFUSED when > 1: no {name} is wired "
+        "into this plane, so a larger degree would be recorded and never "
+        "executed (finding #375)"
+    )
+    p.add_argument("--tp", type=int, default=1, help=_unwired.format(name="tensor"))
+    p.add_argument("--pp", type=int, default=1, help=_unwired.format(name="pipeline"))
+    p.add_argument("--ep", type=int, default=1, help=_unwired.format(name="expert"))
+    p.add_argument("--cp", type=int, default=1, help=_unwired.format(name="context"))
     # Machine facts: no defaults, fail closed (doctrine 4).
     p.add_argument("--nodes", type=int, required=True)
     p.add_argument("--gpus-per-node", type=int, required=True)

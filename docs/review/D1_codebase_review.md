@@ -4,7 +4,7 @@ FoundationScale describes itself, in `src/foundationscale/__init__.py`, as "veri
 
 ## 1. What the repository physically contains
 
-The census records 179386 git-tracked .py/.sh/.md lines repo-wide. The trees, from largest to smallest:
+The census records 179505 git-tracked .py/.sh/.md lines repo-wide. The trees, from largest to smallest:
 
 - **`validation_campaigns/h100_validation/`** — an off-package validation-and-repair plane for an H100 estate launch. `validation_campaigns/h100_validation/` (34167 .py LOC, 66 files) plus `validation_campaigns/h100_validation/*.sh` (6489 LOC, 5 files). It is the single largest tree in the repository, bigger than the installable package. It contains a large family of `patch_*.py` scripts, a second family of `gate_*.py` scripts, executor `apply_*.py` scripts, a generated subtree at `validation_campaigns/h100_validation/h100/gen/`, deliverable documents under `validation_campaigns/h100_validation/h100/` (architecture review, validation report, matrix, EVIDENCE.md, LAUNCH.md), and two pytest files.
 - **`tests/`** — `tests/` (49452 .py LOC, 111 files; 236 import statements) in the census's wording. Test file names are not in the evidence slice, so this review cannot enumerate what the suite covers by file; section 9 reasons from what is visible elsewhere.
@@ -18,7 +18,7 @@ The census itself flags that the previously circulating repo-wide total cannot b
 
 ## 2. Module structure and core abstractions of the installable package
 
-`src/foundationscale/` measures 37539 lines in the census's wording and is organised into six subpackages plus two top-level modules:
+`src/foundationscale/` measures 37655 lines in the census's wording and is organised into six subpackages plus two top-level modules:
 
 - **`checkpoint/`** — weight reading. `checkpoint/dcp.py` defines the central abstraction, `WeightSource` (a `Protocol` with `tensor_keys`, `nontensor_keys`, `shape`, `dtype`, `chunks`, `read_chunk`, `read_box`, `read_full`, `close`), plus two implementations: `DcpReader` (torch DCP directories) and `SafetensorsReader` (with a bounded `_HandleCache` for shard files). `open_weights` dispatches on format and refuses zero-tensor sources. `checkpoint/dcp_meta.py` is the torch-free metadata layer: `read_metadata` returns a `CheckpointMetadata` of `StoredTensorMeta` records, whose load-bearing field is `storage_id` — identity of bytes on disk, not of names.
 - **`gates/`** — the verification engine. `gates/core.py` holds the contract: `Gate` (ABC, with `ok`/`fail`/`skip` result constructors, abstract `check`, optional `coerce_context`), `GateRegistry` / module-level `REGISTRY` / `register`, `Verdict`, `AbstentionKind`, `Coverage` (checked vs. declared, with `none()` marked vacuous), `GateResult`, `GateReport`, `GateBlocked`, and `Control` with `ControlKind` (MUST_FIRE / MUST_PASS). Concrete gate families live in `gates/checkpoint_gates.py` (`ExpertDistinctnessGate`, `ExpertByteVolumeGate`, `SaveCompletenessGate`, `FirstSaveGate`), `gates/objective_gates.py` (`ObjectiveDeclaredGate`, `LossComponentCoverageGate`, `RewardScaleSanityGate`, `HyperparameterDriftGate`), and the single parity gate in `verify/parity.py`. `gates/example.py` (`ExpertAliasGate`) is explicitly teaching material. `gates/fixtures.py` builds the deterministic synthetic expert sets consumed by controls. `gates/adjudication.py` is the production decision layer (see section 5). `gates/probe.py` holds pure measurement helpers. `gates/controls.py` is a CLI self-test (see section 4).
