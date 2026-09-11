@@ -30,7 +30,7 @@ see [The interpreter is two decisions](#the-interpreter-is-two-decisions) and
 | `make makefile-tooling` | `checks/makefile_tooling.py --self-test`, then the real run | forbids bare tool names in recipes |
 | `make countables` | census self-test, census run, then `checks/countables_drift.py` over the corpus | census is measured, never committed |
 | `make launcher-contracts` | `bash launchers/test_launcher_contracts.sh` | 146 controls; measured at 27.8s wall / 4.1s user on the developer machine |
-| `make checks-gates` | `bash launchers/test_checks_gates.sh` | 19 controls; 1.5s wall / 0.9s user |
+| `make checks-gates` | `bash launchers/test_checks_gates.sh` | 27 controls; 7.1s wall / 4.6s user |
 | `make mutation` | `FS_FORBID_SKIPS=1 tools/mutate.py` — the whole corpus | a surviving mutant fails it |
 | `make mutation-module MODULE=x` | one mutation shard, as CI runs it | `tools/mutate.py --list` names the modules |
 | `make skip-guard-probe` | generates a skipped test, asserts the armed guard fails the run and names it | creates and deletes `tests/test__skip_guard_probe.py` |
@@ -224,7 +224,7 @@ Two bash suites sit beside the Python gates:
   scans every `launchers/*.py` plus `checks/*.py` for call sites and refuses
   a file that has none.
 - `make checks-gates` runs `launchers/test_checks_gates.sh`, the gate
-  self-tests split out of the launcher suite (19 controls; 1.5s wall).
+  self-tests split out of the launcher suite (27 controls; 7.1s wall).
 
 Both must run: the anti-orphan leg's corpus is the two suites concatenated,
 so running only one indicts every helper called solely from the other. That

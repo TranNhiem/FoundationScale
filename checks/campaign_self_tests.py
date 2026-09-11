@@ -91,6 +91,14 @@ RUNNABLE: dict[str, str] = {
         "are literals in the module rather than read from a live job, so the check is a "
         "pure table comparison that needs neither Slurm nor a container."
     ),
+    "validation_campaigns/h100_validation/control_scratch_restore.py": (
+        "Fourteen controls over the #294 restore instruments -- the rm-line parser, the "
+        "survivor counter, the byte comparator, the snapshot-leak detector, the reached-site "
+        "banner and the verdict precedence -- each planted so it fires BOTH ways. The "
+        "two-arm measurement itself runs the build script twice and is invoked separately "
+        "by `make control-scratch-restore`; the self-test is pure stdlib over "
+        "TemporaryDirectory fixtures, so a laptop and the estate see the same 14."
+    ),
     "validation_campaigns/nemo_rl_baseline/adjudicate_bench_exit.py": (
         "Twelve controls that plant every verdict plus negative controls in a "
         "TemporaryDirectory and prove exit codes {0, 5, 95, 96} are each distinctly "

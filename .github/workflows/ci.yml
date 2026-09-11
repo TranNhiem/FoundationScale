@@ -541,9 +541,20 @@ jobs:
       # mirror gate exists yet (#286), so the pairing is held by hand here.
       #
       # The runner executes each gate directly, read-only, in seconds. It does
-      # NOT run the build: while #294 is open the build DELETES tracked
-      # artifacts when a stage refuses, and a CI step that mutates the tree it
-      # is certifying is the mistake this campaign keeps finding.
+      # NOT run the build, and the REASON changed when #294 closed. It used to
+      # be that the build deleted eight tracked artifacts whenever a stage
+      # refused -- the ordinary case on a public checkout, where the first
+      # stage's private upstream is absent -- so a CI step that ran it would
+      # have mutated the tree it was certifying, which is the mistake this
+      # campaign keeps finding. The build now snapshots those eight paths
+      # before its `rm` and, at exit, restores only the ones no stage
+      # regenerated; the control step below is what licenses that sentence.
+      #
+      # What remains is the plainer reason, and it was always the stronger one:
+      # on a public checkout the build REFUSES (96) at its first stage, so its
+      # verdict would say nothing about these nine gates while still writing
+      # into h100/gen for the duration. The gates are what CI can actually
+      # measure here, so the gates are what CI runs.
       #
       # --self-test first and as its own step, the same rule every gate above
       # follows: seven controls are the licence to believe the verdict, and a
@@ -579,10 +590,12 @@ jobs:
       # in both places on purpose).
       #
       # pyproject.toml sets testpaths = ["tests"], so pytest collects NOTHING
-      # under validation_campaigns/. Six campaign modules ship a --self-test flag
-      # whose controls return 0 only if every one passes, and five of the six
-      # were invoked by nobody. That is #278/#293 on a third population: a gate
-      # that runs nowhere states no coverage, however good its controls are.
+      # under validation_campaigns/. When #352 was found, six campaign modules
+      # shipped a --self-test flag whose controls return 0 only if every one
+      # passes, and five of the six were invoked by nobody. That is #278/#293 on
+      # a third population: a gate that runs nowhere states no coverage, however
+      # good its controls are. Seven modules carry the literal now, six of them
+      # runnable here -- the population is measured, so it moves on its own.
       #
       # Controls first, and their rc gates the real run -- the `&&` is load-
       # bearing, exactly as in the standing-gate pair above. An instrument whose
@@ -598,8 +611,33 @@ jobs:
       # its generated location it doubles its own fixture prefix.
       - name: Campaign self-test runner controls (R1..R6 each must fire)
         run: python3 checks/campaign_self_tests.py --self-test
-      - name: Campaign self-tests (five declared campaign --self-test modules)
+      - name: Campaign self-tests (six declared campaign --self-test modules)
         run: python3 checks/campaign_self_tests.py
+
+      # Finding #294, and the mirror of the `control-scratch-restore` Makefile
+      # target in the SAME commit (#286: held by hand, so it is stated in both
+      # places on purpose).
+      #
+      # The step above certifies this control's six instruments in temporary
+      # fixtures. This step is the MEASUREMENT those instruments exist for, and
+      # it is separate because it is the only thing in this job that EXECUTES
+      # build_h100_plane.sh rather than reading it.
+      #
+      # Two arms. Arm A is the tree as committed. Arm B strips the two restore
+      # anchors, reproducing the pre-fix build. Arm A must end with 8/8 tracked
+      # artifacts present and byte-identical to the copy taken before the run;
+      # arm B must end with 0/8. Both arms must independently be shown to have
+      # REACHED the rm site, because a run that refused earlier for an unrelated
+      # reason also leaves 8/8 intact and would read as a pass. If arm B also
+      # survives, the restore is not what saved arm A and the green means
+      # nothing -- that leg is what makes this control non-vacuous.
+      #
+      # Cost: 6s wall, measured. Both arms refuse at stage one here, because the
+      # private upstreams the build needs are absent from a public checkout by
+      # design; the deletion happens before that refusal, which is the whole
+      # point of the finding.
+      - name: Scratch-restore control (#294 two-arm; arm B must lose 8/8)
+        run: python3 validation_campaigns/h100_validation/control_scratch_restore.py
 
   launchers:
     name: launcher contracts (a silent suite fails this job)

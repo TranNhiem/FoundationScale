@@ -1739,20 +1739,27 @@ fi
 # --- MUST_FIRE: campaign_self_tests actually EXECUTES what it certifies ----------------
 # The self-test above exercises the gate's internal fixture path over planted stubs. This
 # leg exercises the shipped CLI over the REAL git index and the REAL shipped declarations,
-# and it is a discrimination PAIR: the same tree, the same five RUNNABLE modules, differing
+# and it is a discrimination PAIR: the same tree, the same RUNNABLE population, differing
 # ONLY in --timeout, must give 5 (RED) and then 0 (CLEAR).
 #
 # The variable is chosen deliberately. The failure this gate exists to prevent is a gate
 # that reports coverage without running anything -- #278/#293 -- and a declaration audit
-# alone would still exit 0 with the five subprocesses never spawned. Making every spawn
+# alone would still exit 0 with every subprocess never spawned. Making every spawn
 # unmeetable is the one input that separates "the partition is declared correctly" from
 # "the modules were executed and adjudicated". If the CLEAR arm's rc=0 survived an
 # unmeetable timeout, the run would be certifying files it never touched.
 #
 # The assertion is rc=5 exactly, not merely nonzero: nonzero would accept a crash (1/2), an
 # UNMEASURED (95) or a REFUSE (96) as the control firing, and none of those is this gate's
-# declared RED. The RED arm additionally asserts that all five modules are named TIMEOUT --
-# an rc-only check would be satisfied by a RED raised for some unrelated reason.
+# declared RED. The RED arm additionally asserts that EVERY runnable module is named
+# TIMEOUT -- an rc-only check would be satisfied by a RED raised for some unrelated reason.
+#
+# The expected count is READ OFF THE CLEAR ARM ("N of N runnable"), not written here as a
+# literal. A literal was here, it said five, and the sixth module (#294's restore control)
+# falsified it the day it enrolled -- turning a correct enrolment into a red leg that
+# accused the gate. The population is measured on both arms of the same tree, so it moves
+# on its own; a count that cannot be parsed, or a zero, fails closed rather than passing
+# vacuously over an empty denominator (doctrine 1).
 if [ ! -r "checks/campaign_self_tests.py" ]; then
   f352b_msg="MUST_FIRE FAILED (campaign_self_tests execution discrimination) UNMEASURED:"
   f352b_msg="$f352b_msg checks/campaign_self_tests.py is not readable -- unreadable is not"
@@ -1765,16 +1772,33 @@ else
   f352b_clear_rc=0
   f352b_clear_out=$(python3 -S checks/campaign_self_tests.py 2>&1) || f352b_clear_rc=$?
   f352b_timeouts=$(printf '%s\n' "$f352b_red_out" | grep -c '^TIMEOUT validation_campaigns/')
-  if [ "$f352b_red_rc" -ne 5 ]; then
+  # The RUNNABLE population, measured off the gate's own verdict line rather than
+  # restated here. awk (ERE) not sed: BSD sed has no \| alternation, and a pattern
+  # that silently matches nothing would set the expectation to empty and take this
+  # leg straight to the unparseable branch below on every macOS run.
+  f352b_pop=$(printf '%s\n' "$f352b_clear_out" |
+    awk '/campaign_self_tests: [0-9]+ of [0-9]+ runnable/ {
+           for (i = 1; i <= NF; i++) if ($i == "of") { print $(i + 1); exit }
+         }')
+  if ! printf '%s' "$f352b_pop" | grep -q '^[0-9][0-9]*$' || [ "$f352b_pop" -lt 1 ]; then
+    f352b_msg="MUST_FIRE FAILED (campaign_self_tests execution discrimination) UNMEASURED: the"
+    f352b_msg="$f352b_msg CLEAR arm named no parseable RUNNABLE population (read"
+    f352b_msg="$f352b_msg '${f352b_pop:-<empty>}'), so this leg has no denominator to assert"
+    f352b_msg="$f352b_msg against. Asserting 0 TIMEOUTs against 0 declared modules would pass"
+    f352b_msg="$f352b_msg over an empty population -- exactly the vacuity #352 is about -- so"
+    f352b_msg="$f352b_msg the leg fails closed. Output:"
+    f352b_msg="$f352b_msg $(printf '%s\n' "$f352b_clear_out" | tr '\n' ' ')"
+    no "$f352b_msg"
+  elif [ "$f352b_red_rc" -ne 5 ]; then
     f352b_msg="MUST_FIRE FAILED (campaign_self_tests execution discrimination): an unmeetable"
     f352b_msg="$f352b_msg --timeout gave rc=$f352b_red_rc, expected exactly 5 (RED). rc=0 would"
     f352b_msg="$f352b_msg mean the gate reached CLEAR without any module having run -- the"
     f352b_msg="$f352b_msg whole of #352 -- and any other nonzero is not its declared RED."
     f352b_msg="$f352b_msg Output: $(printf '%s\n' "$f352b_red_out" | tr '\n' ' ')"
     no "$f352b_msg"
-  elif [ "$f352b_timeouts" -ne 5 ]; then
+  elif [ "$f352b_timeouts" -ne "$f352b_pop" ]; then
     f352b_msg="MUST_FIRE FAILED (campaign_self_tests execution discrimination): the gate"
-    f352b_msg="$f352b_msg exited 5, but $f352b_timeouts of the 5 RUNNABLE modules are named"
+    f352b_msg="$f352b_msg exited 5, but $f352b_timeouts of the $f352b_pop RUNNABLE modules are named"
     f352b_msg="$f352b_msg TIMEOUT. Under an unmeetable timeout every declared module must be"
     f352b_msg="$f352b_msg observed timing out; a smaller count means some module was never"
     f352b_msg="$f352b_msg spawned, and a RED raised for another reason is not this control"
@@ -1782,7 +1806,7 @@ else
     no "$f352b_msg"
   elif [ "$f352b_clear_rc" -ne 0 ]; then
     f352b_msg="MUST_FIRE FAILED (campaign_self_tests execution discrimination): the unmeetable"
-    f352b_msg="$f352b_msg arm fired correctly at rc=5 with all 5 modules TIMEOUT, but the same"
+    f352b_msg="$f352b_msg arm fired correctly at rc=5 with all $f352b_pop modules TIMEOUT, but the same"
     f352b_msg="$f352b_msg command at the default timeout -- the only difference -- gave"
     f352b_msg="$f352b_msg rc=$f352b_clear_rc instead of 0. Only 1 of 2 arms held; a gate that"
     f352b_msg="$f352b_msg reddens on a healthy tree is stuck RED, not discriminating, so the"
@@ -1792,7 +1816,7 @@ else
   else
     f352b_msg="MUST_FIRE campaign_self_tests execution discrimination: over the live git index"
     f352b_msg="$f352b_msg and the shipped declarations, an unmeetable --timeout exited rc=5"
-    f352b_msg="$f352b_msg with all 5 RUNNABLE modules named TIMEOUT, and the default timeout"
+    f352b_msg="$f352b_msg with all $f352b_pop RUNNABLE modules named TIMEOUT, and the default timeout"
     f352b_msg="$f352b_msg exited rc=0 -- the spawn budget the only variable. The CLEAR is"
     f352b_msg="$f352b_msg therefore contingent on the modules having actually run, which a"
     f352b_msg="$f352b_msg declaration audit alone would not be. Both outcomes held"

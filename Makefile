@@ -103,7 +103,7 @@ ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
 endif
 
-.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope launcher-contracts checks-gates standing-gates campaign-self-tests mutation mutation-module skip-guard-probe check clean
+.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation mutation-module skip-guard-probe check clean
 
 # [train] is here because CI's suite jobs install it and this target is the
 # developer's mirror of them. Without it `make install` provisions a WEAKER
@@ -413,8 +413,12 @@ checks-gates:
 # invoked ONLY by build_h100_plane.sh, which no make target and no CI step runs
 # -- so the whole tail of the gate plane was reachable by nobody, which is #278
 # at nine times the scale. This target is their automated runner. It executes
-# each gate directly, read-only, in seconds; it does NOT run the build, because
-# while #294 is open the build DELETES tracked artifacts when a stage refuses.
+# each gate directly, read-only, in seconds; it does NOT run the build. Before
+# #294 that was because the build DELETED eight tracked artifacts on any
+# refusing stage. #294 closed that (snapshot before the `rm`, restore at exit
+# whatever no stage regenerated -- see the control-scratch-restore target), so
+# the reason is now the plainer one: without the private upstreams the build
+# refuses at stage one, and a refusal says nothing about these nine gates.
 #
 # --self-test first, and its rc is what gates the real run: a runner whose own
 # eleven controls are broken cannot certify anything, and running the plane with
@@ -435,11 +439,38 @@ standing-gates:
 		FS_ESTATE_IDENT_PAT=NONE bash validation_campaigns/h100_validation/run_standing_gates.sh \
 			--allow-refused gate_launch_doc.py
 
+# Finding #294. The build snapshots eight tracked artifacts before its `rm -f`
+# and restores whatever no stage regenerated, so a clone that runs the build and
+# hits a refusing stage no longer ends with fewer files than it started with.
+# This target is the two-arm measurement of that claim, and it is a SEPARATE
+# target from campaign-self-tests on purpose: the self-test certifies the six
+# instruments in TemporaryDirectory fixtures in under a second, whereas this runs
+# the real build script twice and is the only thing here that does.
+#
+# Arm A is the tree as committed. Arm B is the same build with the two restore
+# anchors textually stripped -- the pre-fix build. Both arms must REACH the rm
+# site, which the control asserts separately from the outcome (L1), because a run
+# that refused earlier for some unrelated reason would leave 8/8 intact and look
+# exactly like a pass. L5 is the leg that makes the green attributable: arm B
+# must lose 8/8. If both arms survive, the fix is not what saved arm A and this
+# control certifies nothing.
+#
+# Cost: 6s wall, measured -- the build refuses at stage one without the private
+# upstreams, so each arm is short. That is cheap enough for `check`, which is
+# where it runs; it is also the only target here that EXECUTES the build script
+# rather than reading it, so it stays a named target rather than folding into
+# campaign-self-tests.
+control-scratch-restore:
+	$(PY) validation_campaigns/h100_validation/control_scratch_restore.py --self-test && \
+		$(PY) validation_campaigns/h100_validation/control_scratch_restore.py
+
 # Finding #352. pyproject.toml sets testpaths = ["tests"], so pytest collects
-# NOTHING under validation_campaigns/. Six campaign modules ship a --self-test
-# flag that plants controls and returns 0 only if every control passes, and five
-# of the six were invoked by nobody -- #278/#293 again, on a third population.
-# This target invokes them.
+# NOTHING under validation_campaigns/. When #352 was found, six campaign modules
+# shipped a --self-test flag that plants controls and returns 0 only if every
+# control passes, and five of the six were invoked by nobody -- #278/#293 again,
+# on a third population. This target invokes them. It is seven modules now, six
+# of them runnable here; the population is measured, so it moves without this
+# comment having to.
 #
 # --self-test first, and its rc gates the real run, for the same reason as the
 # sibling above: a runner whose own controls are broken cannot certify anything.
@@ -452,7 +483,9 @@ standing-gates:
 # files with no self-test need no reason strings: they are outside the claim by
 # measurement rather than excused from it by a table someone has to maintain.
 #
-# Cost: 12s wall, five self-tests spawned as subprocesses.
+# Cost: 2s wall, six self-tests spawned as subprocesses. The count is the
+# population at the time of writing, not a cap -- the denominator is measured,
+# so a seventh enrols by carrying the literal and being declared.
 campaign-self-tests:
 	$(PY) checks/campaign_self_tests.py --self-test && $(PY) checks/campaign_self_tests.py
 
@@ -504,7 +537,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope launcher-contracts checks-gates standing-gates campaign-self-tests mutation
+check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \

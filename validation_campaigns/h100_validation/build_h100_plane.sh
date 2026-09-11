@@ -454,6 +454,69 @@ STAGES=(
 )
 
 echo "=== rebuilding from scratch (removing generated artifacts first) ==="
+
+# #294: "from scratch" must keep meaning exactly that, so the rm below STAYS -- a stale
+# artifact must never be able to masquerade as one a stage just generated. But all eight
+# of those paths are GIT-TRACKED, and the stage loop can end having regenerated NONE of
+# them: #290's refuse path (a stage returns 95/96, sets stage_refused, and `break`s) is
+# the ORDINARY case on a public clone, where the first stage's private upstream is absent.
+# Same exposure on any RED stage, any crash, any Ctrl-C. The operator is then left with
+# eight deletions nobody asked for, and the build has mutated the tree it was asked to
+# certify -- which is what made #291 look like a location-dependent verdict.
+#
+# The gates below are REQUIRED to see the incomplete tree, so nothing is restored DURING
+# the build. The invariant is only about how the tree is LEFT: snapshot before the rm, and
+# at exit put back ONLY the files still absent from disk. A file a stage regenerated is
+# never overwritten by its own snapshot.
+#
+# Two trap installs, because bash REPLACES an EXIT trap and never chains one. This install
+# covers the window from here to the roll-call trap; that trap is rewritten to name BOTH
+# handlers, roll_call_gates FIRST so its `_rc=$?` still reads the build's true status.
+# Slots are INDEXED, not basename-keyed: two artifacts must never collide into one slot.
+_s294_files=("$LAUNCHER" "$BACKEND" "$ENTRY" "$SPLICED" "$MODELROOT" "$MRTEST" "$ADJ" "$ADJTEST")
+_s294_snap=
+if ! _s294_snap=$(mktemp -d "${TMPDIR:-/tmp}/h100-build-294.XXXXXX"); then
+  echo "SNAPSHOT UNMEASURED (rc=95): no snapshot directory, so the 'from scratch' rm below" >&2
+  echo "  would be unrecoverable. Nothing has been deleted; fix \$TMPDIR and rerun (#294)." >&2
+  exit 95
+fi
+_s294_i=0
+for _s294_f in "${_s294_files[@]}"; do
+  if [[ -f "$_s294_f" ]]; then
+    cp "$_s294_f" "$_s294_snap/$_s294_i" || {
+      echo "SNAPSHOT UNMEASURED (rc=95): could not snapshot $_s294_f." >&2
+      echo "  Nothing has been deleted (#294)." >&2
+      rm -rf "$_s294_snap"
+      exit 95
+    }
+  fi
+  _s294_i=$((_s294_i + 1))
+done
+restore_scratch_294() {
+  [[ -n "${_s294_snap:-}" && -d "$_s294_snap" ]] || return 0
+  local _i _f _lost=0
+  for _i in "${!_s294_files[@]}"; do
+    _f=${_s294_files[$_i]}
+    # -L alongside -e: a dangling symlink is still a byte the operator had on disk.
+    if [[ ! -e "$_f" && ! -L "$_f" && -f "$_s294_snap/$_i" ]]; then
+      mkdir -p "$(dirname "$_f")"
+      if cp "$_s294_snap/$_i" "$_f"; then
+        printf '#294 restore: %s was deleted and never regenerated — put back from the pre-rm snapshot\n' "$_f" >&2
+      else
+        # Never silently drop the only surviving copy: name where it is.
+        printf '#294: could NOT restore %s — the surviving copy is at %s\n' "$_f" "$_s294_snap/$_i" >&2
+        _lost=1
+      fi
+    fi
+  done
+  if [[ "$_lost" == 0 ]]; then
+    rm -rf "$_s294_snap" || :
+    _s294_snap=
+  fi
+  return 0
+}
+trap restore_scratch_294 EXIT
+
 rm -f "$LAUNCHER" "$BACKEND" "$ENTRY" "$SPLICED" "$MODELROOT" "$MRTEST" "$ADJ" "$ADJTEST"
 
 # #290: a stage that REFUSES has not failed. 95 means UNMEASURED and 96 means CANNOT-MEASURE;
@@ -635,7 +698,19 @@ roll_call_gates() {
   fi
   return "$_rc"
 }
-trap roll_call_gates EXIT
+# #294: COMPOSE, do not replace. A bare `trap roll_call_gates EXIT` here would silently
+# drop the snapshot restore installed beside the rm above -- bash EXIT traps replace, they
+# do not chain -- which is the original defect wearing a new hat. roll_call_gates runs
+# FIRST so its `_rc=$?` still reads the build's true exit status; the restore runs after
+# and cannot alter the verdict it printed or the status this script exits with.
+#
+# `|| :` is LOAD-BEARING, not defensive tidiness. roll_call_gates ends `return "$_rc"`,
+# and errexit is in force inside a trap handler: on any nonzero exit the handler aborted
+# at that return and restore_scratch_294 never ran. MEASURED -- the first cut of this fix
+# was written without it and lost 8/8 artifacts on a refusing build, indistinguishable
+# from no fix at all. That is also the only case #294 is about: on a green build there is
+# nothing to restore, so the bug hid in exactly the arm that matters.
+trap 'roll_call_gates || :; restore_scratch_294' EXIT
 
 echo -e "\n=== standing gate: bidirectional env drift ==="
 python3 gate_env_drift.py || {

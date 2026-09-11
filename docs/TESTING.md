@@ -199,7 +199,7 @@ $(PY) -m pytest --cov=foundationscale --cov=tools --cov-report=term-missing --co
 | `makefile-tooling` | `checks/makefile_tooling.py --self-test`, then the real run | No recipe invokes a bare tool name |
 | `countables` | `checks/countables_drift.py --self-test`; `tools/countables_census.py`; drift check against the census | Fixed numbers in docs match the measured census |
 | `launcher-contracts` | `bash launchers/test_launcher_contracts.sh` | The launcher bash contract suites — 146 controls |
-| `checks-gates` | `bash launchers/test_checks_gates.sh` | The gate-script self-test legs — 19 controls |
+| `checks-gates` | `bash launchers/test_checks_gates.sh` | The gate-script self-test legs — 27 controls |
 | `skip-guard-probe` | compound recipe | The armed skip guard fires and names its probe |
 | `mutation` | `FS_FORBID_SKIPS=1 python3 tools/mutate.py` | The detectors catch their MUST_FIRE mutants |
 
@@ -227,7 +227,7 @@ A directory argument is walked for `*.md`; a file named outright is scanned what
 
 ### Launcher suites come in two halves
 
-`launcher-contracts` and `checks-gates` must both run. The anti-orphan leg's corpus is the two suites concatenated — it scans every `launchers/*.py` and `checks/*.py` for call sites and refuses a file that has none — so running only one half indicts every helper called solely from the other. Measured costs on the developer machine: 27.8s wall / 4.1s user for the launcher suite (the watchdog legs run their wall budgets concurrently, which is why user time is a fraction of wall), and 1.5s wall / 0.9s user for the checks-gates half.
+`launcher-contracts` and `checks-gates` must both run. The anti-orphan leg's corpus is the two suites concatenated — it scans every `launchers/*.py` and `checks/*.py` for call sites and refuses a file that has none — so running only one half indicts every helper called solely from the other. Measured costs on the developer machine: 27.8s wall / 4.1s user for the launcher suite (the watchdog legs run their wall budgets concurrently, which is why user time is a fraction of wall), and 7.1s wall / 4.6s user for the checks-gates half (that half is dominated by `campaign_self_tests`, which spawns one subprocess per enrolled `--self-test` module, and by the discrimination leg that runs the whole gate twice to prove it can go red).
 
 ### Clean
 
