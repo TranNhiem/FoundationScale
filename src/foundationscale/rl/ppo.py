@@ -57,6 +57,7 @@ from types import MappingProxyType
 from typing import Any
 
 from foundationscale.rl.advantage import (
+    AdvantageFn,
     AdvantageResult,
     LearnedValueAdvantageEstimation,
 )
@@ -580,7 +581,42 @@ class PPOAlgorithm:
         dataloader: Iterable[ExperienceBatch],
         config: Mapping[str, Any],
         rollout_source: RolloutSource | None = None,
-        advantage_fn: LearnedValueAdvantageEstimation | None = None,
+        # #359/#395: declared at least as WIDE as the protocol's, never
+        # narrower. A narrower parameter type on an implementer is a
+        # contravariance violation -- it makes PPOAlgorithm unsubstitutable
+        # for Algorithm, which is what kept it out of the registry (whose
+        # value type is Callable[[], Algorithm]) while it was otherwise
+        # shipped and working.
+        #
+        # The union is not decoration. MEASURED (#396), and the scope word
+        # matters: the two arms are disjoint STATICALLY, not at runtime.
+        # LearnedValueAdvantageEstimation.compute requires two further
+        # keyword-only arguments (`values`, `terminated`) that
+        # AdvantageFn.compute does not declare, so mypy refuses the
+        # substitution and names the conflicting member. At RUNTIME the same
+        # pair is NOT disjoint: `@runtime_checkable` checks method PRESENCE
+        # only and never signatures, so `isinstance(lv, AdvantageFn)` returns
+        # True and the mismatch surfaces later as a TypeError at the call
+        # rather than as a refusal at the seam. Annotating this slot as
+        # AdvantageFn alone would therefore be false in the OTHER direction:
+        # it would name a width PPO can never accept.
+        # Stating both arms keeps the parameter a supertype of the
+        # protocol's (substitutable) while remaining true about what PPO
+        # can be handed.
+        #
+        # The narrowing PPO genuinely needs is not lost: it is RE-STATED
+        # BELOW as a runtime refusal, which is the stronger of the two
+        # claims. A static annotation is a promise about callers; an
+        # isinstance refusal is a measurement of the object actually handed
+        # over, and only the second survives a dynamic wiring path.
+        #
+        # That refusal is written against the CONCRETE class, not against a
+        # Protocol, and #396 is why. An isinstance against AdvantageFn would
+        # admit anything carrying a method named `compute` -- including this
+        # very class, whose signature does not fit -- so the Protocol arm
+        # cannot carry a runtime gate. Where a seam must actually REFUSE, it
+        # names the class.
+        advantage_fn: AdvantageFn | LearnedValueAdvantageEstimation | None = None,
         value_head: ValueHead | None = None,
         weight_sync: WeightSync | None = None,
     ) -> None:
@@ -622,6 +658,16 @@ class PPOAlgorithm:
         if advantage_fn is None:
             raise AlgorithmWiringRefusal(
                 "field advantage_fn: 1 of 1 required inputs absent for ppo: {'advantage_fn'}"
+            )
+        if not isinstance(advantage_fn, LearnedValueAdvantageEstimation):
+            raise AlgorithmWiringRefusal(
+                f"field advantage_fn={advantage_fn!r}: PPO binds "
+                f"learned-baseline advantage estimation, so 1 of 1 "
+                f"advantage slots must carry a "
+                f"LearnedValueAdvantageEstimation; it carries "
+                f"{type(advantage_fn).__name__}. The parameter is annotated "
+                f"at the Algorithm protocol's width so this binding stays "
+                f"substitutable; the width is narrowed HERE, by measurement"
             )
         if advantage_fn is not loss_fn.advantage_fn:
             raise AlgorithmWiringRefusal(

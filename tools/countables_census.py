@@ -458,6 +458,67 @@ def main() -> int:
     # ERROR-BEARING count for the denominator. A directory that appears in a
     # claim needs a census key, or the claim sits in nothing.
     gt["checks_files"], gt["checks_loc"] = _count_subtree(REPO / "checks")
+    # #357: the RL plane is stated as a plane in the docs ("N modules", "N
+    # algorithm names"), so it needs keys of its own or the claim sits in
+    # nothing. Same helper as every other subtree: these files are already
+    # inside src_files/src_loc, and counting them here by a different method
+    # would put two derivations of one tree under two different words.
+    gt["rl_files"], gt["rl_loc"] = _count_subtree(REPO / "src/foundationscale/rl")
+    # ast, not a regex, and PARSE, never import. A regex cannot tell the
+    # subscript write `_REGISTRY["grpo"] = ...` from the same spelling inside a
+    # docstring; importing to read `_REGISTRY` would execute every trainer
+    # module's top level, and this census stays side-effect-free (the file
+    # already parses for _shim_names and _embedded_must_pass). Both shapes a
+    # registry takes are read -- a literal `_REGISTRY = {...}` binding, plain or
+    # annotated, and incremental constant-key writes. "Distinct" is a property
+    # of the SET, not of the loop, so a key written twice counts once.
+    #
+    # DENOMINATOR SCOPE: this is the DEFAULT INSTALL. register() is a public
+    # runtime API, so names a caller adds after import are deliberately outside
+    # this count -- a static parse cannot see them, and the docs say "default
+    # install" for exactly that reason.
+    rl_registry = ast.parse(
+        (REPO / "src/foundationscale/rl/registry.py").read_text(encoding="utf-8")
+    )
+    rl_algos: set[str] = set()
+    for node in ast.walk(rl_registry):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        for target in targets:
+            if (
+                isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "_REGISTRY"
+                and isinstance(target.slice, ast.Constant)
+                and isinstance(target.slice.value, str)
+            ):
+                rl_algos.add(target.slice.value)
+            elif (
+                isinstance(target, ast.Name)
+                and target.id == "_REGISTRY"
+                and isinstance(value, ast.Dict)
+            ):
+                rl_algos.update(
+                    key.value
+                    for key in value.keys
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                )
+    if not rl_algos:
+        # REFUSE rather than ship 0. A registry that moved to `.update(...)`, a
+        # `**merge` or a decorator that writes through a helper is invisible to
+        # a static walk, and the honest report of that is a stop, not a number
+        # the drift gate would then anchor prose to.
+        raise SystemExit(
+            "countables_census: parsed src/foundationscale/rl/registry.py and "
+            "found ZERO constant registry keys. The registry's population shape "
+            "changed and this measure no longer measures it. Fix the walk; do "
+            "not publish 0."
+        )
+    gt["rl_algorithm_names"] = len(rl_algos)
     gt["gates_files"] = len(_py_files(REPO / "src/foundationscale/gates"))
     gt["root_init_loc"] = _loc([REPO / "src/foundationscale/__init__.py"])
     gt["adjudication_loc"] = _loc([REPO / "src/foundationscale/gates/adjudication.py"])

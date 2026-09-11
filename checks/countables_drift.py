@@ -219,6 +219,49 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         regex=re.compile(r"(?P<num>" + NUMBER + r") shell LOC in `?launchers/`?"),
         bindings=(("launch_sh_loc", "num"),),
     ),
+    # --- #357: the RL plane's published countables ------------------------
+    #
+    # Four numbers were stated about the RL plane and none of them sat in a
+    # census denominator, so a restatement could not drift -- there was nothing
+    # to drift FROM. These three anchor the sentence that now carries them.
+    # The evidence comments quote the SHIPPED line; the numbers in them are
+    # part of that quotation, not a measurement frozen into this file.
+    PatternSpec(
+        label="the RL plane is N modules (rl_files)",
+        # evidence: docs/ARCHITECTURE.md
+        #   "The RL plane is 25 modules; `src/foundationscale/rl/` measures ..."
+        # `[Tt]he` because the clause opens a sentence today and may not
+        # tomorrow; the "RL plane is" phrase is the anchor, since a bare count
+        # followed by "modules" is the unanchored shape #233 rejects.
+        regex=re.compile(r"[Tt]he RL plane is `?(?P<num>" + NUMBER + r")`? modules\b"),
+        bindings=(("rl_files", "num"),),
+    ),
+    PatternSpec(
+        label="src/foundationscale/rl/ measures N lines (rl_loc)",
+        # evidence: docs/ARCHITECTURE.md
+        #   "`src/foundationscale/rl/` measures 17347 lines and ..."
+        # Optional backticks sit OUTSIDE both the path and the capture: markup
+        # may delimit either side, but it must not contaminate the value nor
+        # make a restatement invisible to this gate (#249).
+        regex=re.compile(
+            r"`?src/foundationscale/rl/`? measures `?(?P<num>" + NUMBER + r")`? lines\b"
+        ),
+        bindings=(("rl_loc", "num"),),
+    ),
+    PatternSpec(
+        label="the default install registers N algorithm names (rl_algorithm_names)",
+        # evidence: docs/ARCHITECTURE.md
+        #   "the default install registers 14 algorithm names."
+        # "default install" is deliberately IN the anchor. register() is a
+        # public runtime API, so a caller's additions are outside the census
+        # denominator; a looser anchor ("N algorithm names") would let a claim
+        # about the RUNTIME registry bind to a STATIC count of the source.
+        regex=re.compile(
+            r"the default install registers `?(?P<num>" + NUMBER + r")`? "
+            r"algorithm names\b"
+        ),
+        bindings=(("rl_algorithm_names", "num"),),
+    ),
     # --- #240: the mermaid inventory and its prose twin -------------------
     #
     # These eight anchors exist because of a number that was never right, not

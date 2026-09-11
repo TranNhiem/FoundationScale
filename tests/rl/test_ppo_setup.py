@@ -9,7 +9,9 @@ from typing import Any
 import pytest
 
 from foundationscale.rl.advantage import (
+    AdvantageFn,
     AdvantageResult,
+    GroupNormalisedAdvantage,
     LearnedValueAdvantageEstimation,
     RewardStats,
 )
@@ -176,6 +178,62 @@ def test_setup_refuses_an_absent_setup_side_advantage_fn() -> None:
     with pytest.raises(AlgorithmWiringRefusal, match=r"\{'advantage_fn'\}") as excinfo:
         PPOAlgorithm(with_kl=False).setup(**_setup_kwargs(advantage_fn=None))
     assert "1 of 1 required inputs absent for ppo" in str(excinfo.value)
+
+
+def test_setup_refuses_a_protocol_satisfying_estimator_that_is_not_learned_value() -> None:
+    """The width the annotation admits is narrowed HERE, by measurement (#359/#395).
+
+    WHAT IS CLAIMED: handing ``setup`` an object that genuinely satisfies the
+    ``AdvantageFn`` protocol -- ``GroupNormalisedAdvantage``, a shipped binding,
+    not a stub -- is refused, and the refusal names the type it received.
+
+    This leg exists because the parameter annotation was WIDENED to the
+    protocol's own width so ``PPOAlgorithm`` would be substitutable for
+    ``Algorithm`` and could enter the registry. Widening a parameter type
+    deletes a static claim; if nothing replaced it, PPO would accept an
+    estimator that cannot supply the ``values``/``terminated`` arguments its
+    GAE binding requires, and the failure would surface later as a TypeError
+    from inside the estimator rather than as a wiring refusal naming the
+    field. The runtime guard is the replacement, and this is the measurement
+    that it fires.
+
+    The probe is a REAL AdvantageFn rather than a fake for a reason: a stub
+    would leave open whether the guard rejects everything unfamiliar or
+    rejects precisely the protocol-satisfying-but-wrong-shape case, which is
+    the case that the widened annotation newly admits.
+
+    WHAT IS NOT CLAIMED: that the refusal fires before every other setup
+    check -- the loss-side composite refuses the same type at construction,
+    so this leg wires a VALID loss and corrupts only the setup-side argument.
+    """
+    wrong_but_valid_protocol_impl = GroupNormalisedAdvantage()
+    # Positive control on the premise: the probe really does satisfy the
+    # protocol, so this test measures the guard and not a typo. Without this
+    # line a renamed method would make the object refusable for the wrong
+    # reason and the leg would still pass.
+    assert isinstance(wrong_but_valid_protocol_impl, AdvantageFn)
+
+    value_head = _value_head()
+    loss_fn = PPOCompositeLoss(
+        value_head=value_head, advantage_fn=LearnedValueAdvantageEstimation()
+    )
+    with pytest.raises(
+        AlgorithmWiringRefusal, match="1 of 1 advantage slots must carry a"
+    ) as excinfo:
+        PPOAlgorithm(with_kl=False).setup(
+            policy_pair=_pair(),
+            loss_fn=loss_fn,
+            dataloader=[_batch()],
+            config={"policy_logprob_column": "current_logprobs"},
+            advantage_fn=wrong_but_valid_protocol_impl,
+            value_head=value_head,
+        )
+    message = str(excinfo.value)
+    assert "field advantage_fn=" in message
+    # The type it actually received, not just the type it wanted: a refusal
+    # that names only the requirement leaves the operator to guess what was
+    # handed over.
+    assert "it carries GroupNormalisedAdvantage" in message
 
 
 def test_setup_refuses_a_distinct_but_equal_setup_side_estimator() -> None:

@@ -919,7 +919,7 @@ jobs:
           #   launchers/test_checks_gates.sh -> controls: 39 passed, 0 failed
           # Raised in the same commit as those legs, same reason again.
           FLOOR_LAUNCHER=149
-          FLOOR_CHECKS=39
+          FLOOR_CHECKS=40
           FLOOR=$((FLOOR_LAUNCHER + FLOOR_CHECKS))
 
           verify_summary() {

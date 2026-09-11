@@ -2106,6 +2106,165 @@ else
   fi
 fi
 
+# --- MUST_PASS: every RUNNABLE campaign module runs under a BARE interpreter -----------
+# Finding #394, and this leg is the class behind it rather than the instance. A RUNNABLE
+# campaign module imported foundationscale inside its self-test. The runner executes each
+# one as [sys.executable, path, "--self-test"] and requires exit 0, so the child inherits
+# whatever interpreter is running the suite. Locally that interpreter had `pip install -e .`
+# applied and the module ran; the launcher-contracts CI job's python3 never did, the import
+# raised ModuleNotFoundError, the child exited 1, and an UNMEASURED harness state was read
+# as tree-RED on main.
+#
+# The instance is repaired. The class is what this leg closes, because nothing else in this
+# suite can see it: whether the defect is visible depends entirely on which python3 is on
+# PATH and whether anyone installed the package into it, so a developer can run every leg
+# here green and still push a commit that reddens CI. That is precisely what happened.
+#
+# Each module is re-run under an interpreter that cannot see an installed distribution and
+# cannot be helped by the ambient environment -- -S drops site-packages (an editable install
+# goes invisible, the CI shape), -E makes the interpreter ignore PYTHONPATH, and the env -u
+# closes the same hole for anything the module itself spawns. The accepted outcomes are 0
+# (it ran and its controls behaved) and 95 (it declared itself UNMEASURED and said why).
+# Any other exit is the defect; 1 is the ModuleNotFoundError shape specifically.
+#
+# The population is READ FROM THE REGISTRY, never declared here. A hand-written list of the
+# seven current paths is a second thing that rots: the next RUNNABLE module to enrol would
+# sit in no denominator while this leg still read "7 of 7". Reading RUNNABLE out of
+# checks/campaign_self_tests.py also beats parsing the runner's output, which only names
+# modules it actually reached -- a runner that died early would silently shrink the
+# denominator on both sides at once. An empty registry, an unreadable one, or one that has
+# lost the anchor is UNMEASURED, never PASS: zero units is not a pass (doctrine 1) and
+# unreadable is not empty (doctrine 4).
+f394c_anchor=validation_campaigns/verification_matrix/t1_6_symlinked_shard.py
+if [ ! -r "checks/campaign_self_tests.py" ]; then
+  f394c_msg="MUST_PASS FAILED (RUNNABLE campaign modules under a bare interpreter)"
+  f394c_msg="$f394c_msg UNMEASURED: checks/campaign_self_tests.py is not readable --"
+  f394c_msg="$f394c_msg unreadable is not empty (doctrine 4), so the RUNNABLE registry could"
+  f394c_msg="$f394c_msg not be read and 0 modules were measured"
+  no "$f394c_msg"
+else
+  f394c_derive_rc=0
+  f394c_list=$(env -u PYTHONPATH python3 -S -E -c 'import importlib.util as u, sys
+s = u.spec_from_file_location("_cst", "checks/campaign_self_tests.py")
+m = u.module_from_spec(s)
+sys.modules["_cst"] = m
+s.loader.exec_module(m)
+print("\n".join(sorted(m.RUNNABLE)))' 2>&1) || f394c_derive_rc=$?
+  f394c_total=$(printf '%s\n' "$f394c_list" |
+    awk '/^validation_campaigns\/.*\.py$/ { n++ } END { print n + 0 }')
+  if [ "$f394c_derive_rc" -ne 0 ] || [ "$f394c_total" -lt 1 ]; then
+    f394c_msg="MUST_PASS FAILED (RUNNABLE campaign modules under a bare interpreter)"
+    f394c_msg="$f394c_msg UNMEASURED: reading the RUNNABLE registry out of"
+    f394c_msg="$f394c_msg checks/campaign_self_tests.py exited rc=$f394c_derive_rc and yielded"
+    f394c_msg="$f394c_msg $f394c_total module path(s). Zero units is never a pass (doctrine 1)"
+    f394c_msg="$f394c_msg -- an empty denominator reported green is the vacuity this refuses."
+    f394c_msg="$f394c_msg Output: $(printf '%s\n' "$f394c_list" | tr '\n' ' ')"
+    no "$f394c_msg"
+  elif ! printf '%s\n' "$f394c_list" | grep -qxF "$f394c_anchor"; then
+    f394c_msg="MUST_PASS FAILED (RUNNABLE campaign modules under a bare interpreter)"
+    f394c_msg="$f394c_msg UNMEASURED: the registry yielded $f394c_total module(s) and none of"
+    f394c_msg="$f394c_msg them is $f394c_anchor -- the module whose ModuleNotFoundError"
+    f394c_msg="$f394c_msg reddened main and the reason this leg exists. A derivation that has"
+    f394c_msg="$f394c_msg silently lost its own anchor is a broken derivation, not a"
+    f394c_msg="$f394c_msg measurement (doctrine 2)"
+    no "$f394c_msg"
+  else
+    # An instrument that has never been observed refusing is not an instrument
+    # (doctrine 3). Before trusting the sweep below, plant a module at exactly the
+    # shape #394 had -- a module-scope import of a package that is not installed
+    # anywhere -- and require the SAME command line to reject it. If the decoy comes
+    # back 0 or 95, the rule cannot tell a broken module from a working one and the
+    # seven greens underneath it mean nothing, so the leg reports UNMEASURED rather
+    # than a pass it did not earn. The decoy imports a name with no distribution on
+    # PyPI or in this tree, so it cannot be accidentally satisfied.
+    f394c_decoy_dir=$(mktemp -d "${TMPDIR:-/tmp}/fs-394c-decoy.XXXXXX")
+    f394c_decoy_rc=0
+    f394c_decoy_state="plant failed"
+    if [ -d "$f394c_decoy_dir" ]; then
+      f394c_decoy=$f394c_decoy_dir/decoy_self_test.py
+      printf 'import _fs_no_such_distribution_394\nprint(_fs_no_such_distribution_394)\n' \
+        > "$f394c_decoy"
+      if [ -s "$f394c_decoy" ]; then
+        env -u PYTHONPATH python3 -S -E "$f394c_decoy" --self-test >/dev/null 2>&1 ||
+          f394c_decoy_rc=$?
+        f394c_decoy_state="rc=$f394c_decoy_rc"
+      fi
+    fi
+    rm -rf "$f394c_decoy_dir"
+  fi
+  if [ ! -r "checks/campaign_self_tests.py" ] || [ "$f394c_total" -lt 1 ] ||
+     ! printf '%s\n' "$f394c_list" | grep -qxF "$f394c_anchor"; then
+    : # already adjudicated above
+  elif [ "$f394c_decoy_rc" -eq 0 ] || [ "$f394c_decoy_rc" -eq 95 ]; then
+    f394c_msg="MUST_PASS FAILED (RUNNABLE campaign modules under a bare interpreter)"
+    f394c_msg="$f394c_msg UNMEASURED: the planted decoy -- a module whose only statement is"
+    f394c_msg="$f394c_msg an import of a distribution that exists nowhere, i.e. exactly the"
+    f394c_msg="$f394c_msg #394 shape -- came back $f394c_decoy_state under the same"
+    f394c_msg="$f394c_msg 'env -u PYTHONPATH python3 -S -E' command line, which this leg"
+    f394c_msg="$f394c_msg treats as acceptable. A rule that accepts the defect it exists to"
+    f394c_msg="$f394c_msg catch cannot attribute the greens beneath it (doctrine 3), so the"
+    f394c_msg="$f394c_msg sweep was not run and nothing is claimed"
+    no "$f394c_msg"
+  else
+    f394c_ran=0
+    f394c_unm=0
+    f394c_bad=""
+    f394c_saved_ifs=$IFS
+    IFS='
+'
+    for f394c_mod in $f394c_list; do
+      IFS=$f394c_saved_ifs
+      case "$f394c_mod" in
+        validation_campaigns/*.py) ;;
+        *) IFS='
+'
+           continue ;;
+      esac
+      f394c_mod_rc=0
+      f394c_mod_out=$(env -u PYTHONPATH python3 -S -E "$f394c_mod" --self-test 2>&1) ||
+        f394c_mod_rc=$?
+      if [ "$f394c_mod_rc" -eq 0 ]; then
+        f394c_ran=$((f394c_ran + 1))
+      elif [ "$f394c_mod_rc" -eq 95 ]; then
+        f394c_unm=$((f394c_unm + 1))
+      else
+        f394c_last=$(printf '%s\n' "$f394c_mod_out" | tail -n 1)
+        [ -z "$f394c_bad" ] || f394c_bad="$f394c_bad ; "
+        f394c_bad="$f394c_bad$f394c_mod rc=$f394c_mod_rc (last line:"
+        f394c_bad="$f394c_bad ${f394c_last:-<no output>})"
+      fi
+      IFS='
+'
+    done
+    IFS=$f394c_saved_ifs
+    if [ -n "$f394c_bad" ]; then
+      f394c_msg="MUST_PASS FAILED (RUNNABLE campaign modules under a bare interpreter):"
+      f394c_msg="$f394c_msg $((f394c_ran + f394c_unm)) of $f394c_total module(s) read from the"
+      f394c_msg="$f394c_msg RUNNABLE registry exited 0 or 95 under"
+      f394c_msg="$f394c_msg 'env -u PYTHONPATH python3 -S -E <module> --self-test'; the rest"
+      f394c_msg="$f394c_msg did not, and any other exit is finding #394's class. An exit 1 is"
+      f394c_msg="$f394c_msg the ModuleNotFoundError shape: the module leaned on a distribution"
+      f394c_msg="$f394c_msg installed into the developer's interpreter and absent from CI's,"
+      f394c_msg="$f394c_msg which is an UNMEASURED harness state that reads as tree-RED."
+      f394c_msg="$f394c_msg Offenders: $f394c_bad"
+      no "$f394c_msg"
+    else
+      f394c_msg="MUST_PASS bare-interpreter campaign self-tests: $f394c_total of $f394c_total"
+      f394c_msg="$f394c_msg RUNNABLE campaign module(s) -- read from the RUNNABLE registry in"
+      f394c_msg="$f394c_msg checks/campaign_self_tests.py rather than declared here, and"
+      f394c_msg="$f394c_msg containing the anchor $f394c_anchor -- each exited 0 or 95 under"
+      f394c_msg="$f394c_msg 'env -u PYTHONPATH python3 -S -E <module> --self-test'"
+      f394c_msg="$f394c_msg ($f394c_ran measured rc=0, $f394c_unm declared UNMEASURED at"
+      f394c_msg="$f394c_msg rc=95). None of them leans on an installed distribution the CI"
+      f394c_msg="$f394c_msg interpreter does not have, which is the #394 defect class."
+      f394c_msg="$f394c_msg The same command line REFUSED a planted decoy at that exact"
+      f394c_msg="$f394c_msg shape ($f394c_decoy_state), so the rule was observed answering"
+      f394c_msg="$f394c_msg both ways in this run and the greens are attributable"
+      ok "$f394c_msg"
+    fi
+  fi
+fi
+
 # --- ORPHAN DISCHARGE: checks/verification_matrix.py -------------------------
 # This block is also the suite's call site for checks/verification_matrix.py.
 # The fix78-orphan leg scans every launchers/*.py and checks/*.py for a call

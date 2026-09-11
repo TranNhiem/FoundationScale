@@ -31,7 +31,7 @@ see [The interpreter is two decisions](#the-interpreter-is-two-decisions) and
 | `make mirror` | `checks/makefile_ci_mirror.py --self-test`, then the real run | this file and `ci.yml` must run the same check scripts |
 | `make countables` | census self-test, census run, then `checks/countables_drift.py` over the corpus | census is measured, never committed |
 | `make launcher-contracts` | `bash launchers/test_launcher_contracts.sh` | 149 controls; 28.9s wall / 4.1s user, measured 2026-09-11 on an idle developer machine |
-| `make checks-gates` | `bash launchers/test_checks_gates.sh` | 39 controls; 9.4s wall / 5.8s user, same conditions |
+| `make checks-gates` | `bash launchers/test_checks_gates.sh` | 40 controls; 9.4s wall / 5.8s user, same conditions |
 | `make mutation` | `FS_FORBID_SKIPS=1 tools/mutate.py` — the whole corpus | a surviving mutant fails it |
 | `make mutation-module MODULE=x` | one mutation shard, as CI runs it | `tools/mutate.py --list` names the modules |
 | `make skip-guard-probe` | generates a skipped test, asserts the armed guard fails the run and names it | creates and deletes `tests/test__skip_guard_probe.py` |
@@ -225,7 +225,7 @@ Two bash suites sit beside the Python gates:
   wall because the watchdog legs run their budgets concurrently. Its
   anti-orphan leg scans every `launchers/*.py` plus `checks/*.py` for call
   sites and refuses a file that has none.
-- `make checks-gates` runs `launchers/test_checks_gates.sh` — 39 controls,
+- `make checks-gates` runs `launchers/test_checks_gates.sh` — 40 controls,
   the gate self-tests split out of the launcher suite, 9.4s wall under the
   same conditions.
 

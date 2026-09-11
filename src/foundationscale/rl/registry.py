@@ -170,6 +170,7 @@ def _install_default_algorithms() -> None:
         ReinforcePlusPlusAlgorithm,
         RLOOAlgorithm,
     )
+    from foundationscale.rl.ppo import PPOAlgorithm
     from foundationscale.rl.preference import (
         cpo_algorithm,
         dpo_algorithm,
@@ -183,6 +184,11 @@ def _install_default_algorithms() -> None:
     _REGISTRY["reinforce_baseline"] = ReinforceBaselineAlgorithm
     _REGISTRY["reinforce_pp"] = ReinforcePlusPlusAlgorithm
     _REGISTRY["rloo"] = RLOOAlgorithm
+    # #395: PPO shipped in B3 as a class whose constructor takes no argument, and
+    # every other zero-argument-constructible binding in the plane owns a name.
+    # It was reachable only by importing the module, so `lookup_algorithm("ppo")`
+    # refused for a binding the package advertises as shipped.
+    _REGISTRY["ppo"] = PPOAlgorithm
     # The preference family registers six FACTORIES, not six classes. The other
     # four entries are classes because their constructors take no argument; a
     # preference binding always carries an objective, so the zero-argument
