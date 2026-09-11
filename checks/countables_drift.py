@@ -936,6 +936,82 @@ def census_is_current(given: Mapping[str, int]) -> tuple[bool, str]:
     return compare_census(given, fresh)
 
 
+# --- #379: the denominator neither census measurement can see -----------------
+#
+# census_is_current() (#314) compares the supplied census against a fresh
+# measurement, and BOTH take their denominator from the git INDEX (`git
+# ls-files`, as run by tools/countables_census.py). An untracked, non-ignored
+# .py/.sh/.md file is invisible to both sides by construction: the comparison
+# agrees, --fix writes CLEAR, and the operator's very next act -- `git add` +
+# `git commit`, the only reason --fix was run at all -- puts the file into
+# the index and falsifies every number just written. Measured: a new 298-line
+# test module, untracked when --fix ran; CLEAR 86/86 locally; CI, over the
+# committed tree, 19 of 86 anchored sites drifted (tests_loc 49452 vs 49749,
+# tests_files 111 vs 112, tracked_py_sh_md_loc 179505 vs 179802).
+#
+# The remedy is not inside the comparison -- there is nothing to compare --
+# but beside it: ask the index whether it is about to grow.
+
+# The suffixes the census counts, stated once, mirroring the census tool's
+# own filter. A scattered literal here would be the producer/consumer drift
+# of #244 in miniature; the refusal below and the fixture controls read this
+# one table.
+COUNTABLE_SUFFIXES: Final[tuple[str, ...]] = (".py", ".sh", ".md")
+REPO_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
+
+# Three states, spelled out, because two of them must never collapse. OK:
+# the index is known not to be about to grow. FOUND: here are the names.
+# UNMEASURED: git did not answer -- and an index git cannot describe is NOT
+# an index known to be clean, so --fix refuses this state too, naming the
+# reason in the message.
+UNTRACKED_OK: Final[str] = "ok"
+UNTRACKED_FOUND: Final[str] = "found"
+UNTRACKED_UNMEASURED: Final[str] = "unmeasured"
+
+
+def untracked_countables(repo: Path) -> tuple[str, tuple[str, ...], str]:
+    """Untracked, non-ignored files under `repo` the census would count.
+
+    Returns (state, names, why). state is UNTRACKED_OK with names empty,
+    UNTRACKED_FOUND with names the sorted repo-relative list as git prints it,
+    or UNTRACKED_UNMEASURED with names empty and why carrying the reason --
+    which of the two it is (git could not be run at all, vs ran and exited
+    non-zero), because those demand different operator action and one
+    undifferentiated "failed" would hide which.
+    """
+    # Closed argv: the git binary, a path derived from __file__, literals. No
+    # shell. `-z` so an embedded space in a name cannot smuggle a second one.
+    cmd = ["git", "-C", str(repo), "ls-files", "--others", "--exclude-standard", "-z"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        return UNTRACKED_UNMEASURED, (), f"could not run git ls-files: {exc}"
+    if proc.returncode != 0:
+        tail = proc.stderr.strip().splitlines()[-1:] or ["(no stderr)"]
+        return (
+            UNTRACKED_UNMEASURED,
+            (),
+            f"git ls-files exited {proc.returncode}: {tail[0][:160]}",
+        )
+    names = sorted(n for n in proc.stdout.split("\0") if n and Path(n).suffix in COUNTABLE_SUFFIXES)
+    if not names:
+        return UNTRACKED_OK, (), "no untracked countable-suffix files"
+    return (
+        UNTRACKED_FOUND,
+        tuple(names),
+        f"{len(names)} untracked countable-suffix file(s)",
+    )
+
+
+def untracked_summary(names: Sequence[str], cap: int = 8) -> str:
+    """One-line name list for messages: every name when few, capped then
+    '+N more' when many -- a refusal that names none is unactionable, and one
+    that names hundreds is unreadable."""
+    shown = ", ".join(names[:cap])
+    more = f" (+{len(names) - cap} more)" if len(names) > cap else ""
+    return shown + more
+
+
 def print_provenance() -> None:
     # A verdict is attributable only to the interpreter that produced it.
     print(f"interpreter: {sys.executable}")
@@ -1388,11 +1464,71 @@ def self_test() -> int:
         ok, detail = census_is_current(fresh)
         return ok and len(fresh) > 0, f"{len(fresh)} keys; {detail}"
 
+    def mk_repo(repo: Path, files: dict[str, str]) -> tuple[bool, str]:
+        # The harness's `root` is a plain temporary directory, not a git repo,
+        # so #379's controls build the one seam they need themselves: `git
+        # init` in a fixture subdir, closed argv, no shell. File contents are
+        # filler -- the check reads only names -- but the fixture must exist
+        # on disk because the instrument under test is the live subprocess.
+        repo.mkdir(parents=True, exist_ok=True)
+        for rel, text in files.items():
+            f = repo / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(text, encoding="utf-8")
+        try:
+            proc = subprocess.run(
+                ["git", "init", str(repo)], capture_output=True, text=True, check=False
+            )
+        except OSError as exc:
+            return False, f"could not run git init: {exc}"
+        if proc.returncode != 0:
+            return False, f"git init exited {proc.returncode}"
+        return True, "ok"
+
+    def c_untracked_index_named(root: Path) -> tuple[bool, str]:
+        # MUST_FIRE, #379, the measured instance reduced to one file: an
+        # EMPTY index with a new module, countable suffix, sitting in the
+        # working tree beside it. census_is_current sees nothing (both sides
+        # measure the same tree), so without this check --fix writes CLEAR
+        # over numbers `git add` is about to falsify. The report must come
+        # back FOUND and must name the file -- a refusal that does not name
+        # what it saw is unactionable, the same standard compare_census is
+        # held to.
+        plant = "tests_new_contract.py"
+        ok_git, why = mk_repo(root / "repo", {plant: "x = 1\n"})
+        if not ok_git:
+            return False, f"could not build the fixture repo: {why}"
+        state, names, _ = untracked_countables(root / "repo")
+        ok = state == UNTRACKED_FOUND and names == (plant,)
+        return ok, f"state={state} names={list(names)}"
+
+    def c_untracked_uncounted_suffix(root: Path) -> tuple[bool, str]:
+        # MUST_PASS, #379's boundary: the check refuses FILES THE CENSUS
+        # COUNTS, never untracked-ness itself. The only untracked file here
+        # carries a suffix in no census denominator (.txt), and the answer
+        # must be OK -- otherwise --fix is unusable in any working tree
+        # holding so much as a scratch note, and the refusal becomes noise
+        # operators learn to bypass. This is what lets the MUST_FIRE above
+        # mean something: the check is not "refuses when anything is
+        # untracked".
+        ok_git, why = mk_repo(root / "repo", {"scratch_notes.txt": "do not count me\n"})
+        if not ok_git:
+            return False, f"could not build the fixture repo: {why}"
+        state, names, _ = untracked_countables(root / "repo")
+        ok = state == UNTRACKED_OK and names == ()
+        return ok, f"state={state} names={list(names)}"
+
     controls: list[tuple[str, str, ControlFn]] = [
         ("association", "MUST_PASS", c_association),
         ("#314 freshness: identical censuses read as current", "MUST_PASS", c_freshness_agrees),
         ("#314 freshness: moved value AND gained key both named", "MUST_FIRE", c_freshness_stale),
         ("#314 freshness: the live re-measurement path runs", "MUST_PASS", c_freshness_live),
+        ("#379 untracked countable file reported by name", "MUST_FIRE", c_untracked_index_named),
+        (
+            "#379 uncounted suffix: untracked is not a refusal",
+            "MUST_PASS",
+            c_untracked_uncounted_suffix,
+        ),
         (
             "sentence-initial and second-parenthetical seen (#266)",
             "MUST_FIRE",
@@ -1502,6 +1638,49 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return EXIT_REFUSE
         print(f"fix-precondition: {detail}")
+        # #379: freshness is necessary and not sufficient. Both census
+        # measurements take their denominator from the git index, so an
+        # UNTRACKED countable-suffix file is invisible to that comparison by
+        # construction and joins the denominator at the operator's very next
+        # act, `git add`. Refuse before anything is written. The UNMEASURED
+        # state refuses as well, with its own reason on the wire: an index
+        # git cannot describe is not an index known to be clean, and must
+        # never read as one.
+        untr_state, untracked, untr_why = untracked_countables(REPO_ROOT)
+        if untr_state == UNTRACKED_UNMEASURED:
+            print(f"REFUSE (unmeasured index): {untr_why}", file=sys.stderr)
+            return EXIT_REFUSE
+        if untr_state == UNTRACKED_FOUND:
+            print(
+                f"REFUSE: {len(untracked)} untracked countable-suffix file(s): "
+                f"{untracked_summary(untracked)} -- the census denominator is the "
+                "git index, so `git add` will put these into it and falsify the "
+                "numbers being written now (track and regenerate first)",
+                file=sys.stderr,
+            )
+            return EXIT_REFUSE
+        print(f"fix-precondition: {untr_why}")
+
+    # #379, read-only side: NOT a refusal. census_is_current() documents the
+    # asymmetry -- a stale read-only verdict is recoverable by re-running, a
+    # stale --fix launders wrong numbers into the corpus -- and this preserves
+    # it. An untracked countable costs one NOTE line here, on the wire so CI
+    # logs keep it visible; the verdict below stays a property of the tracked
+    # corpus only.
+    if not args.fix:
+        ro_state, ro_untracked, ro_why = untracked_countables(REPO_ROOT)
+        if ro_state == UNTRACKED_FOUND:
+            print(
+                f"NOTE: {len(ro_untracked)} untracked countable-suffix file(s) are "
+                f"outside the census denominator ({untracked_summary(ro_untracked)}); "
+                "they enter the git index at `git add` and a read-only verdict "
+                "follows the index"
+            )
+        elif ro_state == UNTRACKED_UNMEASURED:
+            print(
+                "NOTE: untracked-file check unmeasurable "
+                f"({ro_why}); adjudicating against the tracked corpus only"
+            )
 
     files, excluded = collect_files(roots)
     print(
