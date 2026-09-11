@@ -44,7 +44,7 @@ flowchart TB
   OK["Operator or bash continues"]
   NO["Operator blocks or remediates"]
 
-  PKG["[installed foundationscale package]<br/>38,257 LOC / 50 files<br/>verification plane + delegating train/ (1,305 LOC)<br/>0 training primitives, step loop rented from transformers.Trainer"]
+  PKG["[installed foundationscale package]<br/>38,296 LOC / 50 files<br/>verification plane + delegating train/ (1,305 LOC)<br/>0 training primitives, step loop rented from transformers.Trainer"]
 
   O --> PF
   O --> L
@@ -84,7 +84,7 @@ flowchart TB
 
 ### What the diagram establishes — and what it deliberately does not
 
-- The operational plane is shell and tool-heavy: `launchers/` contains 11,862 shell LOC plus 1,615 Python LOC, while `tools/` contains 9,533 Python LOC. `validation_campaigns/h100_validation/` adds another 34,167 Python LOC and 6,683 shell LOC.
+- The operational plane is shell and tool-heavy: `launchers/` contains 11,865 shell LOC plus 1,615 Python LOC, while `tools/` contains 9,533 Python LOC. `validation_campaigns/h100_validation/` adds another 34,169 Python LOC and 6,706 shell LOC.
 - The installed package is consumed by tools, but the measured `run_event` call-site count is **0 in both `tools/` and `validation_campaigns/h100_validation/`**. No evidence shows an actual trainer firing the lifecycle engine.
 - The package's three-line `__init__.py` exports nothing, so there is still no top-level public surface. The production save-gate decision function `adjudicate_checkpoint` **is now importable** from `foundationscale.gates.adjudication` (moved during this review, T2#0), but it is reachable only by its fully-qualified submodule path, and 60 private names still cross the boundary through the `tools/live_save_gate.py` compatibility shim.
 - There is **no load-side path after saving**: the `Lifecycle` enum has no `RESUME`, `LOAD`, `BEFORE_LOAD`, or `RESTORE` member.
@@ -96,11 +96,11 @@ The census reports counts per importing area, not unique dependencies or a file-
 
 ```mermaid
 flowchart TB
-  TESTS["tests/<br/>119 Python files / 52,556 LOC"]
+  TESTS["tests/<br/>119 Python files / 52,709 LOC"]
   TOOLS["tools/<br/>31 Python files / 9,533 LOC"]
-  SRC["src/ as importer<br/>50 Python files / 38,257 LOC"]
+  SRC["src/ as importer<br/>50 Python files / 38,296 LOC"]
 
-  FS["src/foundationscale<br/>50 Python files / 38,257 LOC<br/>root __init__.py exports nothing"]
+  FS["src/foundationscale<br/>50 Python files / 38,296 LOC<br/>root __init__.py exports nothing"]
 
   GATES["gates/<br/>9 files / 10,059 LOC"]
   CKPT["checkpoint/<br/>3 files / 2,199 LOC"]
@@ -158,7 +158,7 @@ This table uses the declared scope in the question as the reference architecture
 | Distributed runtime | Zero distributed-collective occurrences in the package | **MISSING from package** |
 | Parallel topology model | `foundationscale.topology` includes construction-time product validation | **PRESENT as library; production trainer use UNMEASURED** |
 | Target-hardware profiles | `_PROFILE_DATA` contains only `slurm-generic` and `local-single-node`; neither is MNNVL-capable | **MISSING H100/H200/GB200/GB300 profiles** |
-| Launch orchestration | 11,862 shell LOC in `launchers/`; preflight is scoped to one Gemma-4-E4B / GB200-tray launch; census denominator control is hardwired to one launcher | **ESTATE-ONLY, not a package launcher API** |
+| Launch orchestration | 11,865 shell LOC in `launchers/`; preflight is scoped to one Gemma-4-E4B / GB200-tray launch; census denominator control is hardwired to one launcher | **ESTATE-ONLY, not a package launcher API** |
 | In-process lifecycle hooks | `train/loop.py`'s `FoundationScaleSaveGate.on_save` calls `registry.run(event, ctx)` with `FIRST_SAVE` on the first save and `SAVE` thereafter, and fails closed by setting `control.should_training_stop`. The convenience wrapper `run_event` still has zero production call sites (`gates/core.py`, `integrate.py`, `tools/preflight/_cli.py` only), and `STEP_ZERO`, `LAUNCH`, `EXPORT`, `PROMOTE` have no in-process caller | **PRESENT for the save seam; MISSING for the other four lifecycle points** |
 | Checkpoint readers and metadata | `checkpoint/dcp.py`, `checkpoint/dcp_meta.py`, `open_weights`, `read_metadata`, chunk reads, and fail-closed format sniffing exist | **PRESENT; end-to-end trainer consumption UNMEASURED** |
 | Trainer-owned checkpoint saving | `train/loop.py` calls `trainer.save_model()` at :1097 and reads `model.state_dict()` at :536 to build the pre-save declaration, and its save callback gates every checkpoint. What is UNMEASURED is the *estate* trainer: the in-container Megatron/NeMo path the launchers drive has no such seam | **PRESENT in the packaged trainer; UNMEASURED in the estate trainer** |
@@ -173,7 +173,7 @@ This table uses the declared scope in the question as the reference architecture
 | Tool discoverability | Only `foundationscale-controls` is a measured console entry point; emit-manifest, mutate, preflight, and census tools lack the same registration story | **PARTIAL** |
 | Package troubleshooting/API docs | Zero API-reference or module-reference headings across all 19 markdown files; exactly one markdown file names `from foundationscale` | **MISSING product documentation** |
 | SFT, RL, multimodal recipes | Docs contain worked recipes written against an entrypoint and a YAML schema that do not exist. The shipped `train/` entry point is causal-LM SFT over a `datasets` source only — no RL loop, no multimodal collator, no recipe registry that could load those YAMLs | **MISSING executable recipes** |
-| Hardware validation plane | `validation_campaigns/h100_validation/` contributes 34,167 Python LOC and 6,683 shell LOC | **CODE PRESENT, estate-scoped; it is not an installed trainer** |
+| Hardware validation plane | `validation_campaigns/h100_validation/` contributes 34,169 Python LOC and 6,706 shell LOC | **CODE PRESENT, estate-scoped; it is not an installed trainer** |
 | 100+-node scale evidence | The scaling design's own dissent/open-risk material identifies 100+-node claims as unvalidated | **EXPRESSIBLE, UNMEASURED** |
 
 ## 4. One run's evidence-backed artifact walkthrough
@@ -196,4 +196,4 @@ There is no verified end-to-end trace of a generated trainer run, so an unqualif
 
 The training payload has no measured in-process call into `Lifecycle.SAVE` or `run_event`. Consequently, the current architecture is **save-side verification around an estate training path**, not yet a model-agnostic FoundationScale trainer with verification built into its runtime.
 
-> **Census correction (applied post-draft).** This document was written against a census of 13,667 lines in `src/foundationscale/`. The T2 library/script boundary move has since relocated the 2,546-line checkpoint-decision API from `tools/live_save_gate.py` into `src/foundationscale/gates/adjudication.py`, and the fixes landed since have added the rest; `src/foundationscale/` now measures **38,257 lines**. Re-measured after the move, the structural finding is UNCHANGED: 0 files define `nn.Module`, call `backward()`, construct a `DataLoader`, or define `forward`, and 0 files import torch at module scope. The three `optimizer` hits and three `broadcast`/`all_*` hits are gate vocabulary (checkpoint optimizer-state fields; the registry broadcasting a context to gates), not NCCL collectives, and the single `torch.distributed` reference is a read-only DCP reader. What changed is that `src/` now holds real decision logic where it previously held none.
+> **Census correction (applied post-draft).** This document was written against a census of 13,667 lines in `src/foundationscale/`. The T2 library/script boundary move has since relocated the 2,546-line checkpoint-decision API from `tools/live_save_gate.py` into `src/foundationscale/gates/adjudication.py`, and the fixes landed since have added the rest; `src/foundationscale/` now measures **38,296 lines**. Re-measured after the move, the structural finding is UNCHANGED: 0 files define `nn.Module`, call `backward()`, construct a `DataLoader`, or define `forward`, and 0 files import torch at module scope. The three `optimizer` hits and three `broadcast`/`all_*` hits are gate vocabulary (checkpoint optimizer-state fields; the registry broadcasting a context to gates), not NCCL collectives, and the single `torch.distributed` reference is a read-only DCP reader. What changed is that `src/` now holds real decision logic where it previously held none.
