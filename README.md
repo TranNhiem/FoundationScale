@@ -283,11 +283,20 @@ For a corpus that needs no network, a 16-row toy dataset ships at
 `foundationscale-train` (equivalently `python3 -m foundationscale.train.cli`):
 
 ```bash
-HF_HUB_OFFLINE=1 python3 -m foundationscale.train.cli \
+python3 -m foundationscale.train.cli \
   --model sshleifer/tiny-gpt2 --dataset examples/data/toy_text.jsonl \
   --output-dir /tmp/fs_train_demo --profile-name local-single-node \
   --nodes 1 --gpus-per-node 1 --dp 1 --max-steps 8 --save-interval 4
 ```
+
+The *corpus* needs no network; the *model* still needs one fetch. `sshleifer/tiny-gpt2`
+is a hub id, so the first run downloads it (seconds). Once it is in the HF cache, the
+same command is airgapped and `HF_HUB_OFFLINE=1` in front of it succeeds. Measured on a
+clean cache (`HF_HOME` pointed at an empty directory): offline-on-first-run exits **5**,
+naming the refusal — `OSError: couldn't connect to 'https://huggingface.co' ... and
+couldn't find them in the cached files`; warm-then-offline exits **0 PASS** twice over.
+The exit 5 is the loop behaving correctly, but it is not a first-run recipe, which is
+why the offline flag is documented as the *second* step and not the first.
 
 Without the `train` extra the loop refuses (96) and prints the install remedy rather than
 half-starting. `--dry-run` runs the whole validation prologue and stops before importing
@@ -442,15 +451,22 @@ itself, from the Makefile's own accounting:
   worked examples of launch-time verification (§7, §15).
 * **The harness evidence** — `validation_campaigns/h100_validation/h100/EVIDENCE.md` and the published
   deliverables show gates firing against real launches.
-* **`examples/`** exists at the repository root. Its contents are unmeasured by the
-  evidence slice this README was written from; interactively, `ls examples/` is what
-  measures them. [-> docs/EXAMPLES.md — the catalogue that should exist]
+* **`examples/`** holds exactly two things, both reachable from §10: `train_tiny.py`
+  (the gate example) and `data/toy_text.jsonl` (the 16-row offline corpus). This line
+  previously said the directory's contents were "unmeasured by the evidence slice this
+  README was written from" while §10 stated a measured verdict for one of the two files
+  — the same document disagreeing with itself, which is the kind of thing a reader
+  checks in a minute. `ls examples/` is still the instrument; it has now been run.
+  Note what CI does and does not cover: `train_tiny.py` is invoked by **no** CI job and
+  **no** `make` target (`grep -rn train_tiny .github/workflows/ Makefile` returns
+  nothing), so its `exits 0 PASS` is a by-hand measurement, not a standing gate.
+  [-> docs/EXAMPLES.md]
 
 ## 23. Project structure
 
 `src/` = 37539 LOC across 50 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 33385 Python LOC and 6414 shell LOC on top of the
-package. `tools/` contains 9533 Python LOC. 177291 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 9533 Python LOC. 177312 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
@@ -504,10 +520,15 @@ everything listed. [-> docs/DEVELOPMENT.md]
   modules. Of those, 69 are MUST_FIRE mutants and 9 are MUST_PASS controls. Exit codes
   separate "a mutant survived" (1) from "nothing was measured" (2) — a red suite, any
   skipped test, or a stale anchor all read as never-measured, never as caught.
-* **CI has four jobs on purpose**: `check` (hygiene across Python 3.10/3.11/3.12),
+* **CI has five jobs on purpose**: `check` (hygiene across Python 3.10/3.11/3.12),
   `controls` (gate fixtures), `launchers` (the bash contract suites plus the workflow-YAML
-  and bash-`lc` standing legs), and `mutation` (sharded per module, enumerated from the
-  mutation table itself). [-> docs/TESTING.md]
+  and bash-`lc` standing legs), `mutation-shards` (reads the module list out of the
+  mutation table and emits it as the matrix), and `mutation` (one shard per module,
+  `needs: mutation-shards`). The last two are one mechanism in two jobs because a matrix
+  must be enumerated by a job before it can be consumed by one; the enumerator refuses an
+  empty list rather than fanning out to zero shards, since a matrix over nothing is
+  `all([])` in workflow form — a green wall in front of an unmeasured gate.
+  [-> docs/TESTING.md]
 
 ## 26. Troubleshooting
 
