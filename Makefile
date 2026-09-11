@@ -103,7 +103,7 @@ ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
 endif
 
-.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope verification-matrix launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation mutation-module skip-guard-probe check clean
+.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling mirror countables doc-pointers citation-lines mutation-scope verification-matrix launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation mutation-module skip-guard-probe check clean
 
 # [train] is here because CI's suite jobs install it and this target is the
 # developer's mirror of them. Without it `make install` provisions a WEAKER
@@ -269,6 +269,24 @@ training-plane:
 makefile-tooling:
 	$(PY) checks/makefile_tooling.py --self-test
 	$(PY) checks/makefile_tooling.py
+
+# Finding #286. THIS target and the CI workflow are supposed to run the same
+# checks, and that mirror has been maintained by hand and by memory. It has
+# already drifted in both directions -- #230 landed a mypy widening in the
+# Makefile and not in CI, and the reverse prefix defect was sitting in this
+# file at the same time -- so the convention now has a reader.
+#
+# The gate compares WHICH check scripts run on each side, not their argv: the
+# two sides legitimately differ in output paths, in sharding, and in whether a
+# --self-test is invoked directly or through campaign_self_tests.py. Its first
+# draft keyed on the literal argument string, reported four findings on a
+# correct tree, and all four were false; the banner it prints on every verdict
+# states that narrowing and both of its blind spots rather than hiding them.
+#
+# Self-test first, same order and same reason as makefile-tooling above.
+mirror:
+	$(PY) checks/makefile_ci_mirror.py --self-test
+	$(PY) checks/makefile_ci_mirror.py
 
 # Mirrors the three steps in CI's countables leg (#220). The census is measured,
 # never committed -- see the ci.yml comment for why a frozen oracle is worse than
@@ -560,7 +578,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope verification-matrix launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation
+check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling mirror countables doc-pointers citation-lines mutation-scope verification-matrix launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \

@@ -392,6 +392,42 @@ jobs:
       - name: Makefile tooling (no bare tool names in any recipe)
         run: python3 checks/makefile_tooling.py
 
+      # Makefile <-> CI mirror (#286). The Makefile's `check` target and THIS
+      # file are supposed to run the same checks, and until now that mirror was
+      # a hand-synchronised convention with no reader. It had already drifted in
+      # both directions: #230 widened the Makefile's mypy denominator and left
+      # this file behind, and the `check` target was simultaneously carrying a
+      # `-$(PY) -m mypy checks` prefix that silently swallowed the failure CI
+      # would have reported. Two drifts, opposite directions, one file pair.
+      #
+      # The steps go HERE, immediately below makefile_tooling, because the two
+      # gates read the same pair of files and a reader tracing "what enforces
+      # the Makefile" should find both in one place.
+      #
+      # The gate compares WHICH check scripts run on each side -- the set of
+      # script paths, tool names and `python -m` modules -- and NOT their argv.
+      # That narrowing is deliberate and is printed in a banner on every verdict,
+      # CLEAR and RED alike: the two sides legitimately differ in output paths
+      # ($(CURDIR)/... here against "$RUNNER_TEMP/..."), in sharding (one
+      # whole-corpus tools/mutate.py run against the per-module matrix below),
+      # and in whether a --self-test is invoked directly or reached through
+      # checks/campaign_self_tests.py. The gate's first draft keyed on the
+      # literal argument string, reported four findings on a correct tree, and
+      # all four were false -- a gate that is RED on a correct tree gets an
+      # exception added or gets deleted, so the denominator was moved to the
+      # thing the claim is actually about.
+      #
+      # --self-test FIRST and as a separate step, same reason as every gate
+      # above. Its 10 controls include BOTH drift directions on planted inputs
+      # and both acknowledged blind spots (same key with different argv; shell
+      # suites, which sit in no denominator here because this file reaches the
+      # two launcher suites through a loop variable and the literal .sh path
+      # therefore never occupies a command position).
+      - name: Makefile/CI mirror controls (MUST_FIRE/MUST_NOT_FIRE/ABSTAIN)
+        run: python3 checks/makefile_ci_mirror.py --self-test
+      - name: Makefile/CI mirror (same check scripts on both sides)
+        run: python3 checks/makefile_ci_mirror.py
+
       # CI suite extras (#253). Every job in THIS FILE that executes the pytest
       # suite must install the same extras. The measured failure it closes: #228
       # added tests/train/test_train_execution.py, the `check` job's install gained
@@ -845,8 +881,17 @@ jobs:
           # two exact instruments over one number is the "exactly one copy"
           # violation the paragraph above legislates against -- CI's job here is
           # to refuse a SHRINK it can see without reading any document.
+          #
+          # #286 added five legs to the checks suite (the Makefile/CI mirror
+          # gate: its self-test, CLEAR on this tree, RED in each drift
+          # direction, and UNMEASURED on a Makefile with no check: target).
+          # RE-MEASURED on this commit, same machine, rc=0:
+          #   launchers/test_checks_gates.sh -> controls: 36 passed, 0 failed
+          # Raised in the same commit as the legs, for the reason two
+          # paragraphs up: a floor five below the measured count is a floor
+          # that has already been spent.
           FLOOR_LAUNCHER=149
-          FLOOR_CHECKS=31
+          FLOOR_CHECKS=36
           FLOOR=$((FLOOR_LAUNCHER + FLOOR_CHECKS))
 
           verify_summary() {

@@ -697,6 +697,280 @@ else
   rm -rf "$f247_tmp"
 fi
 
+echo "== fix286-mirror: checks/makefile_ci_mirror.py real legs =="
+# --- finding #286: the Makefile 'check' tree and .github/workflows/ci.yml
+# are two lists of the same instrument panel, and they drifted in BOTH
+# directions -- #230 landed a mypy widening on the Makefile side that CI
+# never ran, and the reverse prefix defect sat in the workflow at the same
+# time. The gate compares WHICH check scripts run on each side and is RED
+# on any key that is single-sided.
+#
+# Two narrowings are deliberate and printed in a banner on every verdict:
+# argv is NOT compared (the two sides legitimately differ in output paths
+# and sharding), and *.sh suites are in no denominator (measured: ci.yml
+# reaches two launcher suites through a loop variable, so widening to shell
+# would emit false Makefile-only findings).
+#
+# Five legs, because the gate declares four states and a state that no leg
+# ever reaches is a state that is written down rather than measured
+# (#198/#200): the self-test, CLEAR on this tree with the self-wiring
+# proof, RED in each drift direction, and UNMEASURED on a Makefile with no
+# check: target.
+
+# --- MUST_PASS: makefile_ci_mirror self-test ---------------------------------
+# MEASURED on the commit that introduces the gate: `python3 -S
+# checks/makefile_ci_mirror.py --self-test` exits 0 and its last line reads
+# `SELF-TEST DENOMINATOR: 10 of 10 controls behaved; ...`. The floor is a
+# floor: controls may be ADDED, never silently dropped, and a shrinking
+# control set is how a detector quietly stops discriminating.
+f286_floor=10
+if [ ! -r "checks/makefile_ci_mirror.py" ]; then
+  f286_msg="MUST_PASS FAILED (makefile_ci_mirror self-test) UNMEASURED:"
+  f286_msg="$f286_msg checks/makefile_ci_mirror.py is not readable -- unreadable is not"
+  f286_msg="$f286_msg empty and it is not clean (doctrine 4); 0 of 1 self-tests measured"
+  no "$f286_msg"
+else
+  f286_rc=0
+  f286_out=$(python3 -S checks/makefile_ci_mirror.py --self-test 2>&1) || f286_rc=$?
+  f286_have=$(printf '%s\n' "$f286_out" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved.*/\1/p')
+  f286_tot=$(printf '%s\n' "$f286_out" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved.*/\2/p')
+  if [ "$f286_rc" -ne 0 ]; then
+    f286_msg="MUST_PASS FAILED (makefile_ci_mirror self-test): rc=$f286_rc under python3 -S."
+    f286_msg="$f286_msg A red self-test means the instrument no longer discriminates, so its"
+    f286_msg="$f286_msg verdict on the live mirror is worth nothing. Output:"
+    f286_msg="$f286_msg $(printf '%s\n' "$f286_out" | tr '\n' ' ')"
+    no "$f286_msg"
+  elif [ -z "$f286_have" ] || [ -z "$f286_tot" ]; then
+    f286_msg="MUST_PASS FAILED (makefile_ci_mirror self-test) UNMEASURED: rc=0 but no"
+    f286_msg="$f286_msg 'SELF-TEST DENOMINATOR: N of M controls behaved' line was found -- a"
+    f286_msg="$f286_msg control suite that reports no denominator has not reported (doctrine 2)."
+    f286_msg="$f286_msg Output: $(printf '%s\n' "$f286_out" | tr '\n' ' ')"
+    no "$f286_msg"
+  elif [ "$f286_have" != "$f286_tot" ]; then
+    f286_msg="MUST_PASS FAILED (makefile_ci_mirror self-test): $f286_have of $f286_tot controls"
+    f286_msg="$f286_msg behaved but rc=0 -- the exit code and the summary disagree, and one side"
+    f286_msg="$f286_msg of the contract is lying (doctrine 6)"
+    no "$f286_msg"
+  elif [ "$f286_tot" -lt "$f286_floor" ]; then
+    f286_msg="MUST_PASS FAILED (makefile_ci_mirror self-test): control set shrank to $f286_tot,"
+    f286_msg="$f286_msg below the $f286_floor measured when the gate landed -- controls may be"
+    f286_msg="$f286_msg added, never dropped, and a green run over a shrunken set is doctrine 1"
+    no "$f286_msg"
+  else
+    f286_msg="MUST_PASS makefile_ci_mirror self-test: rc=0 under python3 -S, $f286_have of"
+    f286_msg="$f286_msg $f286_tot controls behaved, at or above the $f286_floor-control floor"
+    ok "$f286_msg"
+  fi
+fi
+
+# --- MUST_PASS: the live tree's own verdict ----------------------------------
+# The self-test proves the instrument discriminates on fixtures; this leg
+# runs it against THIS repository's Makefile and ci.yml, which is the
+# reading the #286 repair claims. MEASURED on the landing commit: rc=0 over
+# 19 mirrored check scripts against 43 CI run steps.
+#
+# The strongest assertion is the self-wiring proof: the enumerated
+# denominator must name checks/makefile_ci_mirror.py itself. The gate runs
+# on both sides of the mirror, so it must see ITSELF in both lists -- the
+# one thing a mirror gate wired into only one side could never report. A
+# gate file entering checks/ with no call site on each side is the #86
+# orphan class, which the fix78-orphan block below refuses in general; this
+# leg refuses it for this gate in particular.
+if [ ! -r "checks/makefile_ci_mirror.py" ]; then
+  f286_msg="MUST_PASS FAILED (makefile_ci_mirror live verdict) UNMEASURED:"
+  f286_msg="$f286_msg checks/makefile_ci_mirror.py is not readable -- unreadable is not empty"
+  f286_msg="$f286_msg (doctrine 4); 0 of 1 live verdicts measured"
+  no "$f286_msg"
+else
+  f286_rc=0
+  f286_out=$(python3 -S checks/makefile_ci_mirror.py 2>&1) || f286_rc=$?
+  f286_mk=$(printf '%s\n' "$f286_out" |
+    sed -n 's/^CLEAR: \([0-9][0-9]*\) check scripts run on both sides of the mirror (Makefile .check. tree against \([0-9][0-9]*\) CI run steps).*/\1/p')
+  f286_ci=$(printf '%s\n' "$f286_out" |
+    sed -n 's/^CLEAR: \([0-9][0-9]*\) check scripts run on both sides of the mirror (Makefile .check. tree against \([0-9][0-9]*\) CI run steps).*/\2/p')
+  if [ "$f286_rc" -ne 0 ]; then
+    f286_msg="MUST_PASS FAILED (makefile_ci_mirror live verdict): rc=$f286_rc on this tree."
+    f286_msg="$f286_msg rc=5 means a check script is single-sided again -- the #286/#230 drift"
+    f286_msg="$f286_msg shape; rc=95 means the Makefile or ci.yml went unreadable or the check:"
+    f286_msg="$f286_msg target vanished; rc=96 means the gate crashed, which is not a verdict."
+    f286_msg="$f286_msg Output: $(printf '%s\n' "$f286_out" | tr '\n' ' ')"
+    no "$f286_msg"
+  elif [ -z "$f286_mk" ] || [ -z "$f286_ci" ]; then
+    f286_msg="MUST_PASS FAILED (makefile_ci_mirror live verdict) UNMEASURED: rc=0 but no"
+    f286_msg="$f286_msg 'CLEAR: N check scripts run on both sides of the mirror ...' line was"
+    f286_msg="$f286_msg found -- unparseable is not passing (doctrine 2). Output:"
+    f286_msg="$f286_msg $(printf '%s\n' "$f286_out" | tr '\n' ' ')"
+    no "$f286_msg"
+  elif [ "$f286_mk" -lt 1 ] || [ "$f286_ci" -lt 1 ]; then
+    f286_msg="MUST_PASS FAILED (makefile_ci_mirror live verdict): denominator is $f286_mk"
+    f286_msg="$f286_msg mirrored scripts against $f286_ci CI run steps -- zero units is"
+    f286_msg="$f286_msg UNMEASURED, never a pass (doctrine 1)"
+    no "$f286_msg"
+  elif ! printf '%s\n' "$f286_out" | grep -q 'checks/makefile_ci_mirror\.py'; then
+    f286_msg="MUST_PASS FAILED (makefile_ci_mirror live verdict): CLEAR over $f286_mk scripts"
+    f286_msg="$f286_msg but the enumerated denominator does not name checks/makefile_ci_mirror.py"
+    f286_msg="$f286_msg -- the gate does not see itself running on both sides, which is the #86"
+    f286_msg="$f286_msg orphan class wearing a green verdict. Output:"
+    f286_msg="$f286_msg $(printf '%s\n' "$f286_out" | tr '\n' ' ')"
+    no "$f286_msg"
+  else
+    f286_msg="MUST_PASS makefile_ci_mirror live verdict: rc=0, $f286_mk check scripts mirrored"
+    f286_msg="$f286_msg against $f286_ci CI run steps, and the denominator names the gate"
+    f286_msg="$f286_msg itself -- the mirror is wired into both sides it watches"
+    ok "$f286_msg"
+  fi
+fi
+
+# --- MUST_FIRE: a Makefile-only script is RED --------------------------------
+# The exemplar copies its gate into a throwaway tree because that gate
+# resolves its Makefile from its own location; THIS gate takes explicit
+# --makefile/--ci paths, so no copy is needed and the real tree is never
+# mutated -- a control that mutates the tree it guards can leave the
+# repository dirty on any early exit, and #239 was exactly a leg committed
+# red against its own target.
+#
+# The fixture must define PY and a check: target: without them the gate
+# would abstain at 95 for a reason that has nothing to do with the planted
+# drift, and the leg would be measuring a staging defect rather than the
+# gate's discrimination -- a fire leg that cannot reach the fire is a pass
+# for the wrong reason waiting to happen.
+#
+# The fixture also runs ruff on BOTH sides, and that is load-bearing rather
+# than scenery. A fixture carrying only the planted key drifts in both
+# directions at once -- MEASURED: ci.yml's own `ruff check src` came back as
+# a CI-only finding -- so the leg would claim to test one direction while
+# firing on two, and could not tell a one-directional detector from a
+# blanket "the two lists differ". With ruff mirrored, the planted key is the
+# ONLY finding, and the shared key going unflagged is the discrimination:
+# the gate separates the defect from its own fix.
+#
+# The must-NOT-fire assertion is anchored to the finding-line shape
+# `^  CI-only:` rather than to the bare word. The banner this gate prints on
+# every verdict discusses "Makefile-only findings on a correct tree" in
+# prose, so an unanchored must-not-contain would match the gate's own
+# explanation of itself and fail a correct leg.
+f286_tmp=$(mktemp -d 2>/dev/null || mktemp -d -t fs286)
+if [ ! -r "checks/makefile_ci_mirror.py" ] || [ -z "$f286_tmp" ] || [ ! -d "$f286_tmp" ]; then
+  f286_msg="MUST_FIRE UNREACHABLE (makefile_ci_mirror Makefile-only drift) UNMEASURED: could"
+  f286_msg="$f286_msg not stage a throwaway tree (gate readable? mktemp ok?) -- an unreachable"
+  f286_msg="$f286_msg control is a declared state, not a silent pass (doctrine 5)"
+  no "$f286_msg"
+else
+  printf 'PY := python3\n\ncheck: lint planted-gate\n\nlint:\n\t$(PY) -m ruff check src\n\nplanted-gate:\n\t$(PY) checks/planted_gate.py\n' \
+    > "$f286_tmp/Makefile"
+  printf 'name: ci\non: [push]\njobs:\n  lint:\n    steps:\n      - run: ruff check src\n' \
+    > "$f286_tmp/ci.yml"
+  f286_rc=0
+  f286_out=$(python3 -S checks/makefile_ci_mirror.py \
+    --makefile "$f286_tmp/Makefile" --ci "$f286_tmp/ci.yml" 2>&1) || f286_rc=$?
+  if [ "$f286_rc" -eq 5 ] &&
+     printf '%s\n' "$f286_out" | grep -q '^  Makefile-only: *checks/planted_gate\.py' &&
+     ! printf '%s\n' "$f286_out" | grep -q '^  CI-only:'; then
+    f286_msg="MUST_FIRE makefile_ci_mirror: a check: tree reaching '\$(PY)"
+    f286_msg="$f286_msg checks/planted_gate.py' against a ci.yml that never runs it was scored"
+    f286_msg="$f286_msg rc=5 (RED) and named under Makefile-only, while the ruff invocation"
+    f286_msg="$f286_msg mirrored on both sides of the same fixture produced NO finding -- the"
+    f286_msg="$f286_msg gate catches the #230 direction of the drift, Makefile ahead of CI, and"
+    f286_msg="$f286_msg discriminates it from a correctly mirrored sibling"
+    ok "$f286_msg"
+  else
+    f286_msg="MUST_FIRE UNREACHABLE (makefile_ci_mirror Makefile-only drift): rc=$f286_rc on a"
+    f286_msg="$f286_msg Makefile whose check: tree runs checks/planted_gate.py and a ci.yml that"
+    f286_msg="$f286_msg does not, expected exactly 5 with that key under Makefile-only and NO"
+    f286_msg="$f286_msg CI-only line. rc=0 means the detector is blind to the #230 shape; rc=95"
+    f286_msg="$f286_msg means the fixture lost its check: target or PY and the leg measured"
+    f286_msg="$f286_msg staging, not the gate; a CI-only line means the mirrored ruff key was"
+    f286_msg="$f286_msg ALSO flagged, so the leg would be firing on two directions while"
+    f286_msg="$f286_msg claiming one. Output:"
+    f286_msg="$f286_msg $(printf '%s\n' "$f286_out" | tr '\n' ' ')"
+    no "$f286_msg"
+  fi
+  rm -rf "$f286_tmp"
+fi
+
+# --- MUST_FIRE: a CI-only script is RED (the other direction) ----------------
+# The reverse direction needs its own leg because #286 drifted in BOTH
+# directions at once: #230 landed a mypy widening in the Makefile and not
+# in CI, and the reverse prefix defect sat in the workflow at the same
+# time. A gate controlled in one direction only is half an instrument --
+# the single-sided test must fire whichever side grew the extra key.
+#
+# Same fixture discipline as the leg above, mirrored: ruff runs on BOTH
+# sides so the planted CI-only key is the only finding, and the must-NOT-
+# fire assertion is anchored to `^  Makefile-only:` because that phrase also
+# occurs in the gate's own banner prose.
+f286_tmp=$(mktemp -d 2>/dev/null || mktemp -d -t fs286)
+if [ ! -r "checks/makefile_ci_mirror.py" ] || [ -z "$f286_tmp" ] || [ ! -d "$f286_tmp" ]; then
+  f286_msg="MUST_FIRE UNREACHABLE (makefile_ci_mirror CI-only drift) UNMEASURED: could not"
+  f286_msg="$f286_msg stage a throwaway tree (gate readable? mktemp ok?) -- an unreachable"
+  f286_msg="$f286_msg control is a declared state, not a silent pass (doctrine 5)"
+  no "$f286_msg"
+else
+  printf 'PY := python3\n\ncheck: lint\n\nlint:\n\t$(PY) -m ruff check src\n' \
+    > "$f286_tmp/Makefile"
+  printf 'name: ci\non: [push]\njobs:\n  gates:\n    steps:\n      - run: ruff check src\n      - run: python3 tools/planted_ci_only.py\n' \
+    > "$f286_tmp/ci.yml"
+  f286_rc=0
+  f286_out=$(python3 -S checks/makefile_ci_mirror.py \
+    --makefile "$f286_tmp/Makefile" --ci "$f286_tmp/ci.yml" 2>&1) || f286_rc=$?
+  if [ "$f286_rc" -eq 5 ] &&
+     printf '%s\n' "$f286_out" | grep -q '^  CI-only: *tools/planted_ci_only\.py' &&
+     ! printf '%s\n' "$f286_out" | grep -q '^  Makefile-only:'; then
+    f286_msg="MUST_FIRE makefile_ci_mirror: a ci.yml step running tools/planted_ci_only.py"
+    f286_msg="$f286_msg against a check: tree that never reaches it was scored rc=5 (RED) and"
+    f286_msg="$f286_msg named under CI-only, with no Makefile-only line -- the gate catches the"
+    f286_msg="$f286_msg reverse direction of the #286 drift, CI ahead of the Makefile, and the"
+    f286_msg="$f286_msg two directions are separately reachable rather than one shared verdict"
+    ok "$f286_msg"
+  else
+    f286_msg="MUST_FIRE UNREACHABLE (makefile_ci_mirror CI-only drift): rc=$f286_rc on a ci.yml"
+    f286_msg="$f286_msg that runs tools/planted_ci_only.py and a Makefile that does not, expected"
+    f286_msg="$f286_msg exactly 5 with that key under CI-only and NO Makefile-only line. rc=0"
+    f286_msg="$f286_msg means the detector is blind to the reverse drift and is half an"
+    f286_msg="$f286_msg instrument; rc=95 means the fixture lost its check: target and the leg"
+    f286_msg="$f286_msg measured staging, not the gate. Output:"
+    f286_msg="$f286_msg $(printf '%s\n' "$f286_out" | tr '\n' ' ')"
+    no "$f286_msg"
+  fi
+  rm -rf "$f286_tmp"
+fi
+
+# --- MUST_FIRE: no check: target is UNMEASURED, not CLEAR --------------------
+# A Makefile with recipes but no check: target gives the Makefile side zero
+# units to mirror. `all([])` is True, so the natural implementation returns
+# 0 and reads as "clean" -- a vacuous green over an empty denominator. This
+# leg pins the refusal: the gate must exit 95 and say UNMEASURED, and 95
+# must not be 0 (doctrine 1).
+f286_tmp=$(mktemp -d 2>/dev/null || mktemp -d -t fs286)
+if [ ! -r "checks/makefile_ci_mirror.py" ] || [ -z "$f286_tmp" ] || [ ! -d "$f286_tmp" ]; then
+  f286_msg="MUST_FIRE UNREACHABLE (makefile_ci_mirror no check: target) UNMEASURED: could not"
+  f286_msg="$f286_msg stage a throwaway tree -- unreachable is a declared state (doctrine 5)"
+  no "$f286_msg"
+else
+  printf 'PY := python3\n\nlint:\n\t$(PY) -m ruff check src\n' > "$f286_tmp/Makefile"
+  printf 'name: ci\non: [push]\njobs:\n  lint:\n    steps:\n      - run: ruff check src\n' \
+    > "$f286_tmp/ci.yml"
+  f286_rc=0
+  f286_out=$(python3 -S checks/makefile_ci_mirror.py \
+    --makefile "$f286_tmp/Makefile" --ci "$f286_tmp/ci.yml" 2>&1) || f286_rc=$?
+  if [ "$f286_rc" -eq 95 ] && printf '%s\n' "$f286_out" | grep -q '^UNMEASURED:'; then
+    f286_msg="MUST_FIRE makefile_ci_mirror: over a Makefile with no check: target the gate"
+    f286_msg="$f286_msg exited 95 (UNMEASURED) and said so, rather than exiting 0 over an empty"
+    f286_msg="$f286_msg denominator -- zero units on one side of the mirror is not a pass"
+    f286_msg="$f286_msg (doctrine 1)"
+    ok "$f286_msg"
+  else
+    f286_msg="MUST_FIRE UNREACHABLE (makefile_ci_mirror no check: target): rc=$f286_rc over a"
+    f286_msg="$f286_msg Makefile with recipes but no check: target, expected exactly 95. rc=0 is"
+    f286_msg="$f286_msg the vacuous truth itself -- a mirror reporting CLEAR with nothing on one"
+    f286_msg="$f286_msg side. Output: $(printf '%s\n' "$f286_out" | tr '\n' ' ')"
+    no "$f286_msg"
+  fi
+  rm -rf "$f286_tmp"
+fi
+
 echo "== fix78-orphan: every launchers/*.py and checks/*.py harness helper carries at least one call site in this suite (anti-orphan, #86 class) =="
 # This control was earned the hard way: the F78 census-writer driver
 # shipped a full round with ZERO call sites while its two legs burned red
@@ -748,11 +1022,19 @@ f78_orph_scan() {
 # checks/*.py helper, but their CALL SITES are now spread across TWO suite
 # files. Reading $0 would indict every helper called only from the other suite,
 # so the corpus is both suites concatenated. This is load-bearing rather than
-# defensive, and the number was measured on the split commit: of the 11 helpers
-# in the denominator, 5 (countables_drift, makefile_tooling,
-# packaging_reachability, training_plane_probe, wf_yaml_audit) have ZERO
+# defensive, and it was measured on the split commit: of the 11 helpers in the
+# denominator THEN, 5 (countables_drift, makefile_tooling,
+# packaging_reachability, training_plane_probe, wf_yaml_audit) had ZERO
 # citations in test_launcher_contracts.sh and would have gone red on the first
-# push -- and 4 more run the other way, cited only in the launcher suite.
+# push -- and 4 more ran the other way, cited only in the launcher suite.
+# RE-MEASURED 2026-09-11, when #286 added makefile_ci_mirror.py: the
+# denominator is now 17, of which 11 are cited only in this suite and 4 only in
+# the launcher suite. The split has widened, not closed, so reading $0 alone
+# would now indict 11 helpers rather than 5. The counts are restated rather
+# than left at the split-commit figures because a historical marker on a
+# sentence that also reads as a present-tense claim shields nothing (#196);
+# the CLAIM here -- neither suite is a sufficient corpus on its own -- is what
+# the numbers are evidence for, and it got stronger.
 # Fail-closed: if either member is
 # unreadable the corpus path is pointed at a nonexistent file, which the
 # [ -r ] guard below routes to the UNMEASURED-red arm rather than to a pass --

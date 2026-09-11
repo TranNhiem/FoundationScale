@@ -28,9 +28,10 @@ see [The interpreter is two decisions](#the-interpreter-is-two-decisions) and
 | `make packaging` | `checks/packaging_reachability.py --self-test`, then the real run | self-test first, deliberately two lines |
 | `make training-plane` | `checks/training_plane_probe.py --self-test`, then the real run | reports training primitives and delegation as separate axes |
 | `make makefile-tooling` | `checks/makefile_tooling.py --self-test`, then the real run | forbids bare tool names in recipes |
+| `make mirror` | `checks/makefile_ci_mirror.py --self-test`, then the real run | this file and `ci.yml` must run the same check scripts |
 | `make countables` | census self-test, census run, then `checks/countables_drift.py` over the corpus | census is measured, never committed |
 | `make launcher-contracts` | `bash launchers/test_launcher_contracts.sh` | 149 controls; 28.9s wall / 4.1s user, measured 2026-09-11 on an idle developer machine |
-| `make checks-gates` | `bash launchers/test_checks_gates.sh` | 31 controls; 8.3s wall / 4.9s user, same conditions |
+| `make checks-gates` | `bash launchers/test_checks_gates.sh` | 36 controls; 8.9s wall / 5.5s user, same conditions |
 | `make mutation` | `FS_FORBID_SKIPS=1 tools/mutate.py` — the whole corpus | a surviving mutant fails it |
 | `make mutation-module MODULE=x` | one mutation shard, as CI runs it | `tools/mutate.py --list` names the modules |
 | `make skip-guard-probe` | generates a skipped test, asserts the armed guard fails the run and names it | creates and deletes `tests/test__skip_guard_probe.py` |
@@ -182,6 +183,7 @@ detector whose controls misbehave has no licence to report a verdict.
 | `checks/packaging_reachability.py` | `packaging` | both console scripts reachable, resolved against the interpreter's script directory and the install record — never against PATH, which is operator convenience and can never be red |
 | `checks/training_plane_probe.py` | `training-plane` | reports "no training primitives" and "delegates to `transformers.Trainer`" as two axes; scans every git-tracked `*.md` for the retired phrasings |
 | `checks/makefile_tooling.py` | `makefile-tooling` | no recipe line may invoke pip, pytest, ruff, mypy, coverage or a bare interpreter by name |
+| `checks/makefile_ci_mirror.py` | `mirror` | the `check` tree and `.github/workflows/ci.yml` run the same set of `checks/` scripts — it compares WHICH scripts, not their argv |
 | `checks/countables_drift.py` | `countables` | drift between the measured census and what the shipped documents claim |
 | `checks/coverage_floor.py` | `coverage-floor` | per-module coverage, against `coverage.json` |
 | `checks/ci_suite_extras.py` | `ci-suite-extras` | CI jobs that execute pytest or `tools/mutate.py` all install the same extras |
@@ -223,8 +225,8 @@ Two bash suites sit beside the Python gates:
   wall because the watchdog legs run their budgets concurrently. Its
   anti-orphan leg scans every `launchers/*.py` plus `checks/*.py` for call
   sites and refuses a file that has none.
-- `make checks-gates` runs `launchers/test_checks_gates.sh` — 31 controls,
-  the gate self-tests split out of the launcher suite, 8.3s wall under the
+- `make checks-gates` runs `launchers/test_checks_gates.sh` — 36 controls,
+  the gate self-tests split out of the launcher suite, 8.9s wall under the
   same conditions.
 
 Take the wall figures as dated observations, not budgets. The launcher
