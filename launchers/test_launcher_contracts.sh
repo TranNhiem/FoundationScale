@@ -4394,6 +4394,13 @@ echo "== fix252-gatewiring: coverage_floor + ci_suite_extras real legs =="
 # hygiene: it prevents ambient site-packages from changing a verdict from one
 # runner to another.
 
+# fs377: the last two controls are about this suite's own published size. They
+# run last because assert_documented_control_total counts the controls that
+# preceded it, plus itself -- see launchers/_suite_prelude.sh for why this
+# countable cannot live in the static census.
+assert_control_claims_attributed
+assert_documented_control_total test_launcher_contracts.sh
+
 echo "abstentions: $abstain named (each named at its site above with its denominator; 0 added to pass or fail)"
 echo "controls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

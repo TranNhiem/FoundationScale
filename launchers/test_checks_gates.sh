@@ -2051,6 +2051,13 @@ PY
   fi
 fi
 
+# fs377: the last two controls are about this suite's own published size. They
+# run last because assert_documented_control_total counts the controls that
+# preceded it, plus itself -- see launchers/_suite_prelude.sh for why this
+# countable cannot live in the static census.
+assert_control_claims_attributed
+assert_documented_control_total test_checks_gates.sh
+
 echo "abstentions: $abstain named (each named at its site above with its denominator; 0 added to pass or fail)"
 echo "controls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

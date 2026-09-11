@@ -29,8 +29,8 @@ see [The interpreter is two decisions](#the-interpreter-is-two-decisions) and
 | `make training-plane` | `checks/training_plane_probe.py --self-test`, then the real run | reports training primitives and delegation as separate axes |
 | `make makefile-tooling` | `checks/makefile_tooling.py --self-test`, then the real run | forbids bare tool names in recipes |
 | `make countables` | census self-test, census run, then `checks/countables_drift.py` over the corpus | census is measured, never committed |
-| `make launcher-contracts` | `bash launchers/test_launcher_contracts.sh` | 146 controls; measured at 27.8s wall / 4.1s user on the developer machine |
-| `make checks-gates` | `bash launchers/test_checks_gates.sh` | 27 controls; 7.1s wall / 4.6s user |
+| `make launcher-contracts` | `bash launchers/test_launcher_contracts.sh` | 149 controls; 28.9s wall / 4.1s user, measured 2026-09-11 on an idle developer machine |
+| `make checks-gates` | `bash launchers/test_checks_gates.sh` | 31 controls; 8.3s wall / 4.9s user, same conditions |
 | `make mutation` | `FS_FORBID_SKIPS=1 tools/mutate.py` — the whole corpus | a surviving mutant fails it |
 | `make mutation-module MODULE=x` | one mutation shard, as CI runs it | `tools/mutate.py --list` names the modules |
 | `make skip-guard-probe` | generates a skipped test, asserts the armed guard fails the run and names it | creates and deletes `tests/test__skip_guard_probe.py` |
@@ -217,14 +217,25 @@ working tree as `.countables_census.json`; `make clean` removes it and
 
 Two bash suites sit beside the Python gates:
 
-- `make launcher-contracts` runs `launchers/test_launcher_contracts.sh`, the
-  largest gate in the repository (146 controls; 27.8s wall / 4.1s user
-  measured on the developer machine — user time is a sixth of wall because
-  the watchdog legs run their budgets concurrently). Its anti-orphan leg
-  scans every `launchers/*.py` plus `checks/*.py` for call sites and refuses
-  a file that has none.
-- `make checks-gates` runs `launchers/test_checks_gates.sh`, the gate
-  self-tests split out of the launcher suite (27 controls; 7.1s wall).
+- `make launcher-contracts` runs `launchers/test_launcher_contracts.sh` — 149 controls,
+  the largest gate in the repository. Measured 2026-09-11 on an idle
+  developer machine at 28.9s wall / 4.1s user; user time is a seventh of
+  wall because the watchdog legs run their budgets concurrently. Its
+  anti-orphan leg scans every `launchers/*.py` plus `checks/*.py` for call
+  sites and refuses a file that has none.
+- `make checks-gates` runs `launchers/test_checks_gates.sh` — 31 controls,
+  the gate self-tests split out of the launcher suite, 8.3s wall under the
+  same conditions.
+
+Take the wall figures as dated observations, not budgets. The launcher
+suite measured 63.6s wall on this same machine under concurrent load —
+2.2x — while its user time held at 4.0s. That asymmetry is why the two
+halves are treated differently: a control count is a property of the
+repository and is worth anchoring, whereas a wall time is a property of
+whatever else the machine happens to be running, and gating it would
+manufacture a red that says nothing about the code. Re-measure the wall
+figures when you care about them; do not treat a slower run as a
+regression.
 
 Both must run: the anti-orphan leg's corpus is the two suites concatenated,
 so running only one indicts every helper called solely from the other. That
