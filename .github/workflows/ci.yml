@@ -593,6 +593,27 @@ jobs:
       - name: Verification matrix (every row can fail, and the doc equals the ledger)
         run: python3 checks/verification_matrix.py
 
+      # Finding #381. The shipped trainer's entry points -- loop.train and
+      # cli.main -- sat in NO exit-contract denominator: the only gate on that
+      # axis scopes a GENERATED H100 artifact. #380 found 65 statements
+      # standing outside train()'s guards, each one an exit 1 waiting to
+      # happen, and #381 found the same hole on the other side of the handoff,
+      # in everything main() does before `return train(cfg)`.
+      #
+      # tests/train/test_train_boundary_is_total.py pins the boundary
+      # behaviourally and runs in the suite jobs; this is the static half, and
+      # the two are not redundant -- a test covers the sites it was written
+      # for, while the defect class is "a statement was added and nobody
+      # wrapped it". The three axes report separate denominators so an axis
+      # that goes inert cannot hide inside one collapsed number.
+      #
+      # Same commit as the `exit-contract-scope` Makefile target it mirrors,
+      # for the reason the steps above give.
+      - name: Exit-contract scope controls (11 MUST_FIRE + 2 MUST_PASS + 2 UNMEASURED)
+        run: python3 checks/exit_contract_scope.py --self-test
+      - name: Exit-contract scope (shipped entry points stay inside 0/5/95/96)
+        run: python3 checks/exit_contract_scope.py
+
       # Standing gates (#293). The H100 campaign's nine gate_*.py scripts were
       # invoked ONLY by build_h100_plane.sh, which no make target and no CI step
       # runs -- so the whole tail of that gate plane was reachable by nobody.
@@ -890,8 +911,15 @@ jobs:
           # Raised in the same commit as the legs, for the reason two
           # paragraphs up: a floor five below the measured count is a floor
           # that has already been spent.
+          #
+          # #381 added three more (checks/exit_contract_scope.py: its
+          # self-test, its CLEAR verdict on this tree, and a MUST_FIRE that
+          # plants the pre-#381 unguarded statement into a COPY of the shipped
+          # cli.py). RE-MEASURED on this commit, same machine, rc=0:
+          #   launchers/test_checks_gates.sh -> controls: 39 passed, 0 failed
+          # Raised in the same commit as those legs, same reason again.
           FLOOR_LAUNCHER=149
-          FLOOR_CHECKS=36
+          FLOOR_CHECKS=39
           FLOOR=$((FLOOR_LAUNCHER + FLOOR_CHECKS))
 
           verify_summary() {

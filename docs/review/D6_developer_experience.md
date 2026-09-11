@@ -6,7 +6,7 @@ was attempted against the shipped tree only — what is in `src/foundationscale/
 `launchers/`, `tools/`, `checks/`, `validation_campaigns/h100_validation/`, the README, the Makefile,
 `pyproject.toml`, and the CI workflow. Where a workflow has no documented path in
 that evidence, it is rated **Absent** rather than assigned a plausible invented one.
-`src/foundationscale/` measures 38201 lines; `launchers/` contains 9500 shell LOC
+`src/foundationscale/` measures 38257 lines; `launchers/` contains 9500 shell LOC
 plus 1615 Python LOC; `validation_campaigns/h100_validation/` (34167 .py LOC, 66 files) is a validation
 harness, not a training product. The framework's own README says it plainly: "The
 trainer itself is early." This review measures what "early" feels like from the
@@ -200,7 +200,7 @@ controls, packaging, countables, mutation. Frictions I hit:
   Makefile. CI shards it across a job matrix derived from the mutation table;
   locally you get one big bill.
 - mypy checks `src` plus three named `tools/` files, and — since the `checks/`
-  errors were cleared — all 14 files under `checks/`, via a second invocation
+  errors were cleared — all 15 files under `checks/`, via a second invocation
   (`make typecheck-checks`, in `check` and mirrored as its own CI step). The
   remaining `tools/` modules are still unchecked.
 - `checks/countables_drift.py` will fail your docs edit if a countable wording

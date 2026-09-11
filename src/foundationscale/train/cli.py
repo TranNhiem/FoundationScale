@@ -19,10 +19,12 @@ every advertised name resolves.
 from __future__ import annotations
 
 import argparse
+import sys
+import traceback
 from collections.abc import Sequence
 from pathlib import Path
 
-from foundationscale.train.loop import EXIT_REFUSE, TrainConfig, fs_version, train
+from foundationscale.train.loop import EXIT_RED, EXIT_REFUSE, TrainConfig, fs_version, train
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -297,25 +299,79 @@ def _declared_fields(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    """Bind the command line, then hand off to ``train`` -- totally.
+
+    #380 made ``train`` total over the exit contract, and the reasoning there
+    stops at ``train``'s own boundary: everything BEFORE the handoff still ran
+    naked. ``build_parser`` calls ``fs_version()``, which asks importlib for
+    installed distribution metadata and raises when the package is not
+    installed the way it thinks; ``_build_config`` reads forty-odd namespace
+    attributes and is guarded for ``ValueError`` and nothing else, so a
+    ``TypeError`` from a mistyped argparse action leaves it untouched. Either
+    one reached the interpreter and exited **1** -- outside 0/5/95/96, the
+    code #171 showed a launcher cannot interpret, and the same escape #380
+    closed one layer along.
+
+    So the pre-handoff region is wrapped and the handoff is not. That split
+    is the whole design:
+
+    * the outer ``except Exception`` covers parser construction, parsing and
+      config binding -- the statements that have no other adjudicator;
+    * ``return train(cfg)`` sits OUTSIDE it, because ``train`` is already
+      total and re-wrapping it would put a second reporter over a verdict
+      that has already been made (and, if it were folded into the refusal
+      block instead, would report a training failure as a refusal -- the
+      laundering ``_build_config``'s docstring exists to prevent).
+
+    RED, not UNMEASURED: it is the answer ``train`` gives for "crashed", and
+    a caller that cannot tell which side of the handoff the crash happened on
+    should not have to. ``BaseException`` is deliberately not caught, so
+    argparse's own ``SystemExit`` -- 2 for a usage error, 0 for ``--help``
+    and ``--version`` -- still passes through. Those three codes are outside
+    the contract and are argparse's to emit, not this plane's to relabel;
+    finding #387 records that surface rather than hiding it here.
+    """
     try:
-        cfg = _build_config(argv, args)
-    except ValueError as exc:
-        # TrainConfig.__post_init__ validates every declaration it can check
-        # without a GPU, and it signals a bad one by raising. Uncaught, that
-        # left the interpreter to print a traceback and exit 1 -- a code this
-        # plane does not define, in the one namespace (0/5/95/96) whose whole
-        # purpose is that a caller can tell REFUSED from RED from UNMEASURED
-        # without parsing prose. `--max-grad-norm -1` exited 1 with a stack
-        # trace; a launcher reading that saw neither a refusal nor a verdict.
-        #
-        # 96, not 5: nothing was measured. The operator stated something the
-        # plane will not honour, and it says so before a profile is resolved,
-        # before a model is loaded, and before an allocation is burned. The
-        # marker matches train()'s own refusal site so one grep finds both.
-        print(f"[fs:train:refuse] declaration rejected: {exc}")
-        return EXIT_REFUSE
+        parser = build_parser()
+        args = parser.parse_args(argv)
+        try:
+            cfg = _build_config(argv, args)
+        except ValueError as exc:
+            # TrainConfig.__post_init__ validates every declaration it can
+            # check without a GPU, and it signals a bad one by raising.
+            # Uncaught, that left the interpreter to print a traceback and
+            # exit 1 -- a code this plane does not define, in the one
+            # namespace (0/5/95/96) whose whole purpose is that a caller can
+            # tell REFUSED from RED from UNMEASURED without parsing prose.
+            # `--max-grad-norm -1` exited 1 with a stack trace; a launcher
+            # reading that saw neither a refusal nor a verdict.
+            #
+            # 96, not 5: nothing was measured. The operator stated something
+            # the plane will not honour, and it says so before a profile is
+            # resolved, before a model is loaded, and before an allocation is
+            # burned. The marker matches train()'s own refusal site so one
+            # grep finds both.
+            #
+            # This handler is nested INSIDE the crash guard rather than made
+            # a sibling of it so that it still wraps construction and nothing
+            # else -- a ValueError out of `build_parser` or `parse_args` is
+            # not a rejected declaration, and reporting it as one would be
+            # the laundering _build_config's docstring exists to prevent.
+            print(f"[fs:train:refuse] declaration rejected: {exc}")
+            return EXIT_REFUSE
+    except Exception as exc:  # noqa: BLE001 -- the contract has no code for "crashed"
+        # Same shape as train()'s boundary handler: the traceback is the only
+        # diagnosis of an unclassified crash, so it goes to stderr exactly
+        # where the interpreter would have put it. What changes is the exit
+        # code, not the operator's evidence.
+        traceback.print_exc(file=sys.stderr)
+        print(
+            f"[fs:train:red] unhandled {type(exc).__name__} escaped command-line "
+            f"binding: {exc}. Adjudicated RED (5) at the main() boundary rather "
+            f"than allowed to exit 1, which sits outside the 0/5/95/96 contract. "
+            f"Full traceback on stderr"
+        )
+        return EXIT_RED
     return train(cfg)
 
 

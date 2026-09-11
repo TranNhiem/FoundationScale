@@ -103,7 +103,7 @@ ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
 endif
 
-.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling mirror countables doc-pointers citation-lines mutation-scope verification-matrix launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation mutation-module skip-guard-probe check clean
+.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling mirror countables doc-pointers citation-lines mutation-scope verification-matrix exit-contract-scope launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation mutation-module skip-guard-probe check clean
 
 # [train] is here because CI's suite jobs install it and this target is the
 # developer's mirror of them. Without it `make install` provisions a WEAKER
@@ -415,6 +415,29 @@ verification-matrix:
 	$(PY) checks/verification_matrix.py --self-test
 	$(PY) checks/verification_matrix.py
 
+# Finding #381. #380 made loop.train total over the 0/5/95/96 contract; #381
+# measured the other side of the same handoff and found everything cli.main
+# does BEFORE `return train(cfg)` guarded for ValueError and nothing else, so
+# a TypeError in parser construction still exited 1 -- the one code the
+# contract has no room for, because it is what the interpreter prints a
+# traceback with. tests/train/test_train_boundary_is_total.py pins that
+# behaviourally; this gate pins it STATICALLY over three axes (RETURN,
+# MODULE-EXIT, ESCAPE), because a test covers the sites it was written for
+# while the defect class is "a statement was added and nobody wrapped it" --
+# #380 found 65 of those at once.
+#
+# The predecessor gate (validation_campaigns/h100_validation/
+# patch_trainer_exit_contract.py) scopes a GENERATED artifact, so the SHIPPED
+# entry points sat in no exit-contract denominator at all. This one takes the
+# repository root as a positional and reads src/, which is also what lets the
+# suite's MUST_FIRE leg plant the pre-#381 shape into a COPY rather than
+# mutate the tree it guards (#239).
+#
+# Self-test first, same order and same reason as the four targets above.
+exit-contract-scope:
+	$(PY) checks/exit_contract_scope.py --self-test
+	$(PY) checks/exit_contract_scope.py
+
 # Finding #254. CI runs launchers/test_launcher_contracts.sh; until this target
 # existed, no `make` goal did, so the largest gate in the repository was one a
 # developer could not run before pushing. That is the #230 asymmetry with the
@@ -445,8 +468,10 @@ launcher-contracts:
 # solely from the other. That is why this target is in `check` beside its
 # sibling and not merely available to type.
 #
-# Cost: 1.5s wall / 0.9s user, 19 controls. It is fast because the wall-budget
-# watchdog legs all stayed on the launcher side.
+# Cost: 9.4s wall / 5.8s user, 39 controls (re-measured for #381 on an idle
+# developer machine). It is cheaper than its sibling because the wall-budget
+# watchdog legs all stayed on the launcher side; it has grown because each new
+# checks/*.py gate lands its MUST_PASS/MUST_FIRE pair here.
 checks-gates:
 	bash launchers/test_checks_gates.sh
 
@@ -578,7 +603,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling mirror countables doc-pointers citation-lines mutation-scope verification-matrix launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation
+check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling mirror countables doc-pointers citation-lines mutation-scope verification-matrix exit-contract-scope launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \

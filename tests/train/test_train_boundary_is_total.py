@@ -9,12 +9,21 @@ found **65** statements standing outside all of them, including
 and ``_run_save_gates``. The last one parses safetensors headers off disk and
 is the likeliest raiser in the set.
 
-Nothing downstream contained the escape. ``cli.py:319`` is a bare
+Nothing downstream contained the escape. ``cli.py``'s handoff is a bare
 ``return train(cfg)``, and that is deliberate: its docstring explains that
 wrapping the call in the neighbouring ``except ValueError`` would report a
 training failure as a refusal. So a raise left ``train``, left ``main``, and
 reached the interpreter, which prints a traceback and exits **1** -- outside
 0/5/95/96, and the exact code #171 showed a launcher cannot interpret.
+
+#381 then measured the OTHER side of that handoff and found the same hole.
+``train`` is total, but everything ``main`` does BEFORE it -- building the
+parser (which asks importlib for installed distribution metadata), parsing,
+and binding forty-odd namespace attributes into a ``TrainConfig`` -- was
+guarded for ``ValueError`` and nothing else. A ``TypeError`` there exited 1
+just as surely, one function earlier. The last three arms pin that boundary
+and the split that makes it correct: the pre-handoff region is wrapped, the
+handoff is not, and argparse's own ``SystemExit`` still passes through.
 
 This module pins the boundary rather than any one site, because the defect
 class is "a statement was added and nobody wrapped it". Guarding 65 sites
@@ -42,9 +51,10 @@ from typing import Any
 
 import pytest
 
-from foundationscale.train import loop
+from foundationscale.train import cli, loop
 
 _EXIT_RED = 5
+_EXIT_REFUSE = 96
 
 
 def _cfg(tmp_path: Path) -> Any:
@@ -163,3 +173,105 @@ def test_keyboard_interrupt_still_propagates(
 
     with pytest.raises(KeyboardInterrupt):
         loop.train(_cfg(tmp_path))
+
+
+# --- the cli.main boundary (#381) -------------------------------------------
+#
+# These arms never reach train(): each one raises in the pre-handoff region,
+# so no model, dataset or profile is touched and they cost microseconds. The
+# argv below is the minimum the parser requires, and it is never honoured.
+
+_MIN_ARGV = [
+    "--model",
+    "m",
+    "--dataset",
+    "d",
+    "--output-dir",
+    "o",
+    "--nodes",
+    "1",
+    "--gpus-per-node",
+    "1",
+    "--profile-name",
+    "synthetic-profile",
+]
+
+
+def test_cli_crash_before_the_handoff_adjudicates_red(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A crash in parser construction is a verdict, not a traceback.
+
+    ``build_parser`` calls ``fs_version()``, and importlib raises when the
+    distribution is not installed the way it expects. Before #381 that left
+    ``main``, reached the interpreter and exited 1.
+    """
+
+    def _boom() -> str:
+        raise RuntimeError("distribution metadata unavailable")
+
+    monkeypatch.setattr(cli, "fs_version", _boom)
+
+    rc = cli.main(_MIN_ARGV)
+
+    assert rc == _EXIT_RED, (
+        f"main() returned {rc} when parser construction raised, not "
+        f"{_EXIT_RED}. Before #381 it did not return at all -- the raise "
+        "reached the interpreter and exited 1, outside 0/5/95/96"
+    )
+    out = capsys.readouterr().out
+    assert "RuntimeError" in out, (
+        "the verdict does not name the exception type, so the operator "
+        f"learns that something failed but not what. stdout was: {out[-300:]!r}"
+    )
+
+
+def test_cli_non_valueerror_is_red_not_refuse(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The crash guard must not be reachable THROUGH the refusal handler.
+
+    ``_build_config`` is wrapped for ``ValueError`` because that is how
+    ``TrainConfig`` rejects a declaration. Anything else out of it is a defect
+    in the plane, not a refusal by the operator, and reporting it as 96 would
+    tell a launcher that the operator asked for something impossible when in
+    fact the code broke. This arm fails if the two handlers are ever merged.
+    """
+
+    def _boom(argv: object, args: object) -> object:
+        raise TypeError("argparse action produced an unexpected type")
+
+    monkeypatch.setattr(cli, "_build_config", _boom)
+
+    rc = cli.main(_MIN_ARGV)
+
+    assert rc == _EXIT_RED, (
+        f"a TypeError out of _build_config returned {rc}. {_EXIT_RED} (RED) "
+        f"is the answer: {_EXIT_REFUSE} (REFUSE) would claim the operator's "
+        "declaration was rejected, which is a different fact"
+    )
+
+
+def test_cli_lets_argparse_exit_through() -> None:
+    """``except Exception`` over ``except BaseException``, one layer along.
+
+    argparse exits 2 on a usage error and 0 on ``--help``/``--version``, and
+    it does it by raising ``SystemExit`` from inside the stdlib. Both codes
+    sit outside 0/5/95/96. Catching them here would let this plane relabel
+    another library's contract -- a usage error reported as a FoundationScale
+    RED. Finding #387 records the surface instead of hiding it, and this arm
+    is what stops a future widening to ``BaseException`` from closing it
+    silently.
+    """
+    with pytest.raises(SystemExit) as usage:
+        cli.main(["--model", "m"])  # --dataset and --output-dir are required
+    assert usage.value.code == 2, (
+        f"argparse's usage exit came back as {usage.value.code!r}, not 2. If "
+        "main() has started catching SystemExit, the 2 has become a "
+        "FoundationScale verdict and #387's blind spot is now a silent lie"
+    )
+
+    with pytest.raises(SystemExit) as helped:
+        cli.main(["--help"])
+    assert helped.value.code == 0, (
+        f"--help exited {helped.value.code!r}, not 0 -- asking for help is "
+        "not a failure, and a wrapper that reads the code would record one"
+    )

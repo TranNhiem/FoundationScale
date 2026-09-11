@@ -2333,6 +2333,266 @@ PY
   fi
 fi
 
+# --- ORPHAN DISCHARGE: checks/exit_contract_scope.py -------------------------
+# This block is also the suite's call site for checks/exit_contract_scope.py.
+# The fix78-orphan leg scans every launchers/*.py and checks/*.py for a call
+# site IN THIS SUITE and refuses a file that has none; a Makefile target is
+# NOT accepted as a call site. The gate was just added and is indicted BY
+# NAME as an orphan -- the three legs below are the in-suite call site that
+# discharges the indictment.
+echo "== fix381-exit-contract: checks/exit_contract_scope.py real legs =="
+# --- finding #381: #380 made loop.train total over the 0/5/95/96 contract,
+# and #381 measured the OTHER side of the same handoff -- everything
+# cli.main does BEFORE `return train(cfg)` was guarded for ValueError and
+# nothing else, so a TypeError in parser construction or config binding
+# still reached the interpreter and exited 1, one function earlier.
+#
+# The behavioural pin lives in tests/train/test_train_boundary_is_total.py.
+# This gate is the STATIC half, and the two are not redundant: a test
+# covers the sites it was written for, while the defect class is "a
+# statement was added and nobody wrapped it" -- #380 found 65 of them at
+# once. The gate partitions the whole body instead, over three axes
+# (RETURN, MODULE-EXIT, ESCAPE) reported with separate denominators,
+# because one collapsed number cannot say which axis went inert.
+#
+# Three legs. The self-test proves the instrument discriminates on
+# fixtures; the live leg is the reading the #381 repair actually claims,
+# on this tree; and the discrimination leg re-plants the defect INTO A
+# COPY of the shipped cli.py, because a self-test built entirely from
+# synthetic fixtures can stay green while the parser has quietly stopped
+# understanding the real file.
+
+# --- MUST_PASS: exit_contract_scope self-test --------------------------------
+# MEASURED on the commit that introduces the gate: `python3 -S
+# checks/exit_contract_scope.py --self-test` exits 0 and its last line reads
+# `SELF-TEST DENOMINATOR: 15 of 15 controls behaved; 11 MUST_FIRE, 2
+# MUST_PASS, 2 MUST_BE_UNMEASURED`. The floor is a floor: controls may be
+# ADDED, never silently dropped, and a shrinking control set is how a
+# detector quietly stops discriminating.
+f381_floor=15
+if [ ! -r "checks/exit_contract_scope.py" ]; then
+  f381_msg="MUST_PASS FAILED (exit_contract_scope self-test) UNMEASURED:"
+  f381_msg="$f381_msg checks/exit_contract_scope.py is not readable -- unreadable is not empty"
+  f381_msg="$f381_msg and it is not clean (doctrine 4); 0 of 1 self-tests measured"
+  no "$f381_msg"
+else
+  f381_rc=0
+  f381_out=$(python3 -S checks/exit_contract_scope.py --self-test 2>&1) || f381_rc=$?
+  f381_have=$(printf '%s\n' "$f381_out" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved.*/\1/p')
+  f381_tot=$(printf '%s\n' "$f381_out" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved.*/\2/p')
+  if [ "$f381_rc" -ne 0 ]; then
+    f381_msg="MUST_PASS FAILED (exit_contract_scope self-test): rc=$f381_rc under python3 -S."
+    f381_msg="$f381_msg A red self-test means the instrument no longer discriminates, so its"
+    f381_msg="$f381_msg verdict on the shipped entry points is worth nothing. Output:"
+    f381_msg="$f381_msg $(printf '%s\n' "$f381_out" | tr '\n' ' ')"
+    no "$f381_msg"
+  elif [ -z "$f381_have" ] || [ -z "$f381_tot" ]; then
+    f381_msg="MUST_PASS FAILED (exit_contract_scope self-test) UNMEASURED: rc=0 but no"
+    f381_msg="$f381_msg 'SELF-TEST DENOMINATOR: N of M controls behaved' line was found -- a"
+    f381_msg="$f381_msg control suite that reports no denominator has not reported (doctrine 2)."
+    f381_msg="$f381_msg Output: $(printf '%s\n' "$f381_out" | tr '\n' ' ')"
+    no "$f381_msg"
+  elif [ "$f381_have" != "$f381_tot" ]; then
+    f381_msg="MUST_PASS FAILED (exit_contract_scope self-test): $f381_have of $f381_tot controls"
+    f381_msg="$f381_msg behaved but rc=0 -- the exit code and the summary disagree, and one side"
+    f381_msg="$f381_msg of the contract is lying (doctrine 6)"
+    no "$f381_msg"
+  elif [ "$f381_tot" -lt "$f381_floor" ]; then
+    f381_msg="MUST_PASS FAILED (exit_contract_scope self-test): control set shrank to $f381_tot,"
+    f381_msg="$f381_msg below the $f381_floor measured when the gate landed -- controls may be"
+    f381_msg="$f381_msg added, never dropped, and a green run over a shrunken set is doctrine 1"
+    no "$f381_msg"
+  else
+    f381_msg="MUST_PASS exit_contract_scope self-test: rc=0 under python3 -S, $f381_have of"
+    f381_msg="$f381_msg $f381_tot controls behaved, at or above the $f381_floor-control floor"
+    ok "$f381_msg"
+  fi
+fi
+
+# --- MUST_PASS: the live tree's own verdict ----------------------------------
+# The self-test proves the instrument discriminates on fixtures; this leg
+# runs it against THIS repository's shipped entry points, which is the
+# reading the #381 repair claims. MEASURED on the landing commit: rc=0 with
+# `2 PROTECTED, 0 UNPROTECTED, 0 UNMEASURED over 2 entry point(s)`.
+#
+# Three assertions beyond rc, each closing a different way a green verdict
+# could be empty. The ESCAPE axis must parse at all (doctrine 2). Its
+# denominator must be nonzero -- a gate whose ENTRY_POINTS tuple was
+# emptied would exit 0 over nothing, and #381's own blind spot 4 says the
+# denominator is DECLARED, never discovered, so shrinking it is a one-line
+# edit no other control would see. And the output must name
+# cli.py::main PROTECTED by that literal: that single line IS #381's
+# repair, and asserting the aggregate alone would let a future edit
+# protect train, drop main from the tuple, and still read 1/1 clean.
+if [ ! -r "checks/exit_contract_scope.py" ]; then
+  f381_msg="MUST_PASS FAILED (exit_contract_scope live verdict) UNMEASURED:"
+  f381_msg="$f381_msg checks/exit_contract_scope.py is not readable -- unreadable is not empty"
+  f381_msg="$f381_msg (doctrine 4); 0 of 1 live verdicts measured"
+  no "$f381_msg"
+else
+  f381_rc=0
+  f381_out=$(python3 -S checks/exit_contract_scope.py 2>&1) || f381_rc=$?
+  f381_prot=$(printf '%s\n' "$f381_out" |
+    sed -n 's/^ *axis ESCAPE: *\([0-9][0-9]*\) PROTECTED, \([0-9][0-9]*\) UNPROTECTED, \([0-9][0-9]*\) UNMEASURED over \([0-9][0-9]*\) entry point.*/\1/p')
+  f381_eps=$(printf '%s\n' "$f381_out" |
+    sed -n 's/^ *axis ESCAPE: *\([0-9][0-9]*\) PROTECTED, \([0-9][0-9]*\) UNPROTECTED, \([0-9][0-9]*\) UNMEASURED over \([0-9][0-9]*\) entry point.*/\4/p')
+  if [ "$f381_rc" -ne 0 ]; then
+    f381_msg="MUST_PASS FAILED (exit_contract_scope live verdict): rc=$f381_rc on this tree."
+    f381_msg="$f381_msg rc=5 means a shipped entry point returns outside 0/5/95/96, exits the"
+    f381_msg="$f381_msg module outside it, or has an unguarded statement -- #380/#381's own"
+    f381_msg="$f381_msg defect class, back; rc=95 means a declared file went unreadable or"
+    f381_msg="$f381_msg unparseable; rc=96 means the gate crashed, which is not a verdict."
+    f381_msg="$f381_msg Output: $(printf '%s\n' "$f381_out" | tr '\n' ' ')"
+    no "$f381_msg"
+  elif [ -z "$f381_prot" ] || [ -z "$f381_eps" ]; then
+    f381_msg="MUST_PASS FAILED (exit_contract_scope live verdict) UNMEASURED: rc=0 but no"
+    f381_msg="$f381_msg 'axis ESCAPE: N PROTECTED, ... over M entry point(s)' line was found --"
+    f381_msg="$f381_msg unparseable is not passing (doctrine 2). Output:"
+    f381_msg="$f381_msg $(printf '%s\n' "$f381_out" | tr '\n' ' ')"
+    no "$f381_msg"
+  elif [ "$f381_eps" -lt 1 ] || [ "$f381_prot" -lt 1 ]; then
+    f381_msg="MUST_PASS FAILED (exit_contract_scope live verdict): the ESCAPE axis ran over"
+    f381_msg="$f381_msg $f381_eps entry point(s) and found $f381_prot PROTECTED -- zero units is"
+    f381_msg="$f381_msg UNMEASURED, never a pass (doctrine 1), and ENTRY_POINTS is DECLARED by"
+    f381_msg="$f381_msg hand (blind spot 4), so emptying it is a one-line edit that would"
+    f381_msg="$f381_msg otherwise read as clean"
+    no "$f381_msg"
+  elif ! printf '%s\n' "$f381_out" |
+    grep -q '^ *PROTECTED  *src/foundationscale/train/cli\.py::main:'; then
+    f381_msg="MUST_PASS FAILED (exit_contract_scope live verdict): rc=0 over $f381_eps entry"
+    f381_msg="$f381_msg point(s), but no line reads 'PROTECTED"
+    f381_msg="$f381_msg src/foundationscale/train/cli.py::main:'. That one line IS #381's repair"
+    f381_msg="$f381_msg -- the pre-handoff region of main() being contained. An aggregate that"
+    f381_msg="$f381_msg is clean because main was dropped from ENTRY_POINTS is #381 reopened"
+    f381_msg="$f381_msg under a green verdict. Output:"
+    f381_msg="$f381_msg $(printf '%s\n' "$f381_out" | tr '\n' ' ')"
+    no "$f381_msg"
+  else
+    f381_msg="MUST_PASS exit_contract_scope live verdict: rc=0 with $f381_prot of $f381_eps"
+    f381_msg="$f381_msg declared entry point(s) PROTECTED, and cli.py::main -- the boundary"
+    f381_msg="$f381_msg #381 repaired -- named PROTECTED by that literal, not merely counted"
+    ok "$f381_msg"
+  fi
+fi
+
+# --- MUST_FIRE: the pre-#381 shape is RED on a COPY of the shipped file ------
+# The self-test's fire legs are built from synthetic fixtures, which is
+# the right shape for a control -- but a parser can keep passing its own
+# fixtures long after it has stopped understanding the real file (a
+# renamed decorator, a walrus, a `match`). This leg plants the defect into
+# a COPY of the SHIPPED cli.py and requires the gate to see it there.
+#
+# The gate takes an optional repository root as a positional, so the copy
+# is measured in place and the real tree is never mutated -- #239 was
+# exactly a leg committed red against its own target, and a control that
+# edits the tree it guards can leave the repository dirty on any early
+# exit.
+#
+# Two arms, and the CLEAR arm is the load-bearing one. Copying three files
+# into a scratch root could redden the gate for reasons that have nothing
+# to do with the plant (a cross-module import that no longer resolves, a
+# file the copy missed), and a fire leg that fires for the wrong reason is
+# a pass waiting to happen. So the unmodified copy must read rc=0 FIRST;
+# only then does the same copy with one statement planted have to read
+# rc=5.
+#
+# The plant is a source construction, not a data splice: one statement is
+# inserted immediately before main's `try:`, which is precisely the shape
+# #381 found -- a statement added ahead of the guard. Its line number is
+# read back out of the mutated file and the finding must name THAT line,
+# so a RED inherited from pre-existing dirt cannot be mistaken for this
+# control firing. If the insertion does not self-match, the leg reports
+# UNMEASURED rather than passing: a positive control that did not plant
+# proves nothing.
+f381_tmp=$(mktemp -d 2>/dev/null || mktemp -d -t fs381)
+f381_dst="$f381_tmp/src/foundationscale/train"
+if [ ! -r "checks/exit_contract_scope.py" ] || [ -z "$f381_tmp" ] || [ ! -d "$f381_tmp" ]; then
+  f381_msg="MUST_FIRE UNREACHABLE (exit_contract_scope unguarded pre-handoff statement)"
+  f381_msg="$f381_msg UNMEASURED: could not stage a throwaway tree (gate readable? mktemp ok?)"
+  f381_msg="$f381_msg -- an unreachable control is a declared state, not a silent pass"
+  f381_msg="$f381_msg (doctrine 5)"
+  no "$f381_msg"
+else
+  mkdir -p "$f381_dst"
+  f381_staged=1
+  for f381_f in src/foundationscale/train/cli.py \
+                src/foundationscale/train/loop.py \
+                src/foundationscale/train/__main__.py; do
+    cp "$f381_f" "$f381_dst/" 2>/dev/null || f381_staged=0
+  done
+  f381_cli="$f381_dst/cli.py"
+  if [ "$f381_staged" -ne 1 ] || [ ! -r "$f381_cli" ]; then
+    f381_msg="MUST_FIRE UNREACHABLE (exit_contract_scope unguarded pre-handoff statement)"
+    f381_msg="$f381_msg UNMEASURED: could not copy the three declared files (cli.py, loop.py,"
+    f381_msg="$f381_msg __main__.py) into the scratch root -- the leg would have measured"
+    f381_msg="$f381_msg staging, not the gate (doctrine 5)"
+    no "$f381_msg"
+  else
+    f381_clean_rc=0
+    f381_clean_out=$(python3 -S checks/exit_contract_scope.py "$f381_tmp" 2>&1) || f381_clean_rc=$?
+    awk 'BEGIN{seen=0; done=0}
+         /^def main\(/ {seen=1}
+         {
+           if (seen==1 && done==0 && $0=="    try:") {
+             print "    _fs381_plant = int(\"not a number\")  # planted unguarded statement";
+             done=1
+           }
+           print
+         }' "$f381_cli" > "$f381_tmp/cli.planted" && mv "$f381_tmp/cli.planted" "$f381_cli"
+    f381_line=$(grep -n '_fs381_plant' "$f381_cli" | head -1 | cut -d: -f1)
+    if [ "$f381_clean_rc" -ne 0 ]; then
+      f381_msg="MUST_FIRE UNREACHABLE (exit_contract_scope unguarded pre-handoff statement):"
+      f381_msg="$f381_msg the UNMODIFIED copy of the three shipped files scored"
+      f381_msg="$f381_msg rc=$f381_clean_rc in the scratch root, not 0. The fire arm cannot be"
+      f381_msg="$f381_msg attributed to the plant while the control arm is already red -- this"
+      f381_msg="$f381_msg is the harness manufacturing a finding, and it measures staging"
+      f381_msg="$f381_msg rather than discrimination. Output:"
+      f381_msg="$f381_msg $(printf '%s\n' "$f381_clean_out" | tr '\n' ' ')"
+      no "$f381_msg"
+    elif [ -z "$f381_line" ]; then
+      f381_msg="MUST_FIRE UNREACHABLE (exit_contract_scope unguarded pre-handoff statement)"
+      f381_msg="$f381_msg UNMEASURED: the plant did not self-match -- no '_fs381_plant' line in"
+      f381_msg="$f381_msg the mutated copy, so awk found no '    try:' after 'def main(' and"
+      f381_msg="$f381_msg nothing was planted. A positive control that did not plant proves"
+      f381_msg="$f381_msg nothing, and reporting it as a pass would be doctrine 5"
+      no "$f381_msg"
+    else
+      f381_red_rc=0
+      f381_red_out=$(python3 -S checks/exit_contract_scope.py "$f381_tmp" 2>&1) || f381_red_rc=$?
+      if [ "$f381_red_rc" -ne 5 ]; then
+        f381_msg="MUST_FIRE FAILED (exit_contract_scope unguarded pre-handoff statement):"
+        f381_msg="$f381_msg planting one statement at line $f381_line of main(), ahead of its"
+        f381_msg="$f381_msg guard, scored rc=$f381_red_rc, expected exactly 5 (RED). rc=0 means"
+        f381_msg="$f381_msg the ESCAPE axis is blind to the exact shape #381 found on the real"
+        f381_msg="$f381_msg file; any other nonzero is not this gate's declared RED. Output:"
+        f381_msg="$f381_msg $(printf '%s\n' "$f381_red_out" | tr '\n' ' ')"
+        no "$f381_msg"
+      elif ! printf '%s\n' "$f381_red_out" |
+        grep -q "cli\.py::main: unguarded statement at line $f381_line"; then
+        f381_msg="MUST_FIRE FAILED (exit_contract_scope unguarded pre-handoff statement): rc=5,"
+        f381_msg="$f381_msg but no finding reads 'cli.py::main: unguarded statement at line"
+        f381_msg="$f381_msg $f381_line' -- the one line planted. A RED attributed to something"
+        f381_msg="$f381_msg else in the copied tree is not this control firing, and rc alone"
+        f381_msg="$f381_msg cannot tell the two apart (#233's attribution lesson). Output:"
+        f381_msg="$f381_msg $(printf '%s\n' "$f381_red_out" | tr '\n' ' ')"
+        no "$f381_msg"
+      else
+        f381_msg="MUST_FIRE exit_contract_scope unguarded pre-handoff statement: an unmodified"
+        f381_msg="$f381_msg copy of the three SHIPPED declared files scored rc=0 in a scratch"
+        f381_msg="$f381_msg root, and the same copy with one statement planted at line"
+        f381_msg="$f381_msg $f381_line -- immediately before main()'s guard, the pre-#381 shape"
+        f381_msg="$f381_msg -- scored rc=5 with the ESCAPE finding naming cli.py::main at that"
+        f381_msg="$f381_msg exact line. The plant is the only variable and the live tree was"
+        f381_msg="$f381_msg never touched"
+        ok "$f381_msg"
+      fi
+    fi
+  fi
+  rm -rf "$f381_tmp"
+fi
+
 # fs377: the last two controls are about this suite's own published size. They
 # run last because assert_documented_control_total counts the controls that
 # preceded it, plus itself -- see launchers/_suite_prelude.sh for why this
