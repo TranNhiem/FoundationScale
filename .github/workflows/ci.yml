@@ -15,7 +15,7 @@
 # 134 controls and was invoked by no CI step — a suite that only runs when a
 # human remembers is a control that never RUNS, which is to say not a control.
 # Under #257 that file was split: the checks/*.py gate self-tests now live in
-# launchers/test_checks_gates.sh, and this job runs BOTH (146 + 19 = 165
+# launchers/test_checks_gates.sh, and this job runs BOTH (149 + 31 = 180
 # controls). Running only one would be worse than running neither loudly —
 # the anti-orphan leg's corpus is the two suites concatenated, so a half-run
 # indicts every helper cited solely from the absent half.
@@ -827,8 +827,26 @@ jobs:
           # would not fail CI -- it would silently license giving the new leg
           # back. A floor one below the measured count is a floor that has
           # already been spent.
-          FLOOR_LAUNCHER=147
-          FLOOR_CHECKS=19
+          #
+          # #386: FLOOR_CHECKS had not moved since the split, while the checks
+          # suite grew 19 -> 31. Twelve controls could have been deleted and
+          # this floor would have accepted the result -- the exact quiet shrink
+          # the comment below says it refuses, and the previous paragraph's own
+          # rule ("a floor one below the measured count is a floor that has
+          # already been spent") applied twelve times over. RE-MEASURED on this
+          # commit, on an otherwise-idle machine, both suites rc=0:
+          #   launchers/test_launcher_contracts.sh -> controls: 149 passed, 0 failed
+          #   launchers/test_checks_gates.sh       -> controls:  31 passed, 0 failed
+          # The +2 on each side is #377, which gave every suite two controls
+          # over its own published size. Note what this floor is NOT: since
+          # #377 the suites themselves compare their exact count against the
+          # three developer docs and go red on any drift, in either direction.
+          # This stays a floor rather than becoming a second equality, because
+          # two exact instruments over one number is the "exactly one copy"
+          # violation the paragraph above legislates against -- CI's job here is
+          # to refuse a SHRINK it can see without reading any document.
+          FLOOR_LAUNCHER=149
+          FLOOR_CHECKS=31
           FLOOR=$((FLOOR_LAUNCHER + FLOOR_CHECKS))
 
           verify_summary() {
