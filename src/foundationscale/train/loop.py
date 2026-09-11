@@ -21,6 +21,7 @@ import json
 import os
 import struct
 import sys
+import traceback
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -98,6 +99,13 @@ PRECISIONS: tuple[str, ...] = ("bf16", "fp16", "fp32", "nvfp4")
 # The adapter modes the package plane wires itself. "lora" is the only one;
 # TrainConfig.adapter=None means full fine-tune, and it means it explicitly.
 ADAPTERS: tuple[str, ...] = ("lora",)
+# The sharding declarations the execution plane can actually HONOUR. "ddp" is
+# the only one: transformers.Trainer as wired here provides data parallelism
+# only, and every sharded alternative (FSDP/ZeRO/DeepSpeed) is adjudicated and
+# recorded in gates/ and provenance/ -- measured, named, and never built. The
+# tuple exists so the refusal message can name the accepted set, the same
+# reason PRECISIONS is a tuple; sorted for the verbatim-interpolation contract.
+SHARDING_STRATEGIES: tuple[str, ...] = ("ddp",)
 
 
 class Step:
@@ -226,6 +234,37 @@ class TrainConfig:
     adapter_alpha: float | None = None
     adapter_targets: tuple[str, ...] | None = None
     adapter_dropout: float | None = None
+    # --- The nine declaration axes -------------------------------------------
+    # Every one of these defaults to None, and None means exactly what
+    # precision's None means: not declared -- claim nothing, apply nothing,
+    # record the absence. Each axis has a live HF Trainer default behind it
+    # (AdamW, accumulation 1, max_grad_norm 1.0, no recompute, linear LR with
+    # zero warmup, model-config attention), and coercing None to that default
+    # here would launder an absent statement into a measured claim (#342) while
+    # making a manifest-less runtime default look like a declaration. The
+    # defaults therefore stay transformers' problem, unrecorded and unclaimed;
+    # a declared value is wired in train() and resolved through the manifest's
+    # ConfigResolver path like everything else.
+    optimizer: str | None = None
+    gradient_accumulation_steps: int | None = None
+    max_grad_norm: float | None = None
+    gradient_checkpointing: bool | None = None
+    # attn_implementation is NOT a TrainingArguments knob: it binds at MODEL
+    # construction (AutoModelForCausalLM.from_pretrained), and train() refuses
+    # (96) when this transformers release does not name the parameter, because
+    # older releases route it through opaque **kwargs where a misspelt or
+    # unsupported name is silently ignored. Never passed when None.
+    attn_implementation: str | None = None
+    lr_scheduler_type: str | None = None
+    warmup_steps: int | None = None
+    # Declarable only -- there is NO wiring behind these two. sharding_strategy
+    # of None or "ddp" proceeds ("ddp" is what the backend actually executes);
+    # anything else is REFUSED (96) at START rather than run as plain DDP under
+    # a declaration that says otherwise (#375's defect class). True
+    # cpu_optimizer_offload is REFUSED (96) for the same reason: no offload
+    # backend exists in this plane.
+    sharding_strategy: str | None = None
+    cpu_optimizer_offload: bool | None = None
     # Harmless knobs.
     max_steps: int = 20
     per_device_batch_size: int = 1
@@ -244,6 +283,20 @@ class TrainConfig:
     # that requests one. When it is None the scan is reported UNMEASURED, never
     # silently skipped and never faked clean.
     launch_corpus: Path | None = None
+    # NOT a declaration axis -- provenance ABOUT the other fields. It carries
+    # the field names the command line actually supplied, so the manifest can
+    # say `source="cli"` of a value the operator typed and `source="default"`
+    # of one nobody did. Without it every key was stamped "cli", which is a
+    # claim about where a value came from that the loop had not measured, and
+    # it was false for every omitted axis.
+    #
+    # None is a third state and it is load-bearing: it means this config was
+    # not built by the parser at all (a test, an embedding caller, a future
+    # config-file path), and the manifest then records "config" rather than
+    # inventing a command line that never ran. An empty tuple means the parser
+    # DID run and supplied nothing -- observably different, and only the
+    # sentinel-parse in cli.py can tell them apart.
+    cli_declared: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "output_dir", Path(self.output_dir))
@@ -276,6 +329,20 @@ class TrainConfig:
                 raise ValueError(f"{field_name} must be >= 1")
         if self.precision is not None and self.precision not in PRECISIONS:
             raise ValueError(f"precision={self.precision!r} is not one of {PRECISIONS}")
+        # Range checks on the declared optional axes mirror the ones
+        # TrainingArguments performs -- but performed HERE, at statement time,
+        # so an out-of-range declaration is a config error with a named field
+        # rather than a rejection buried inside a constructor three steps later.
+        # Values these checks cannot see (unknown optimizer names, unschedulable
+        # schedulers) are refused at Trainer-construction time instead, where
+        # transformers is the authority on its own accepted vocabulary.
+        accum = self.gradient_accumulation_steps
+        if accum is not None and int(accum) < 1:
+            raise ValueError("gradient_accumulation_steps must be >= 1")
+        if self.warmup_steps is not None and int(self.warmup_steps) < 0:
+            raise ValueError("warmup_steps must be >= 0")
+        if self.max_grad_norm is not None and float(self.max_grad_norm) <= 0:
+            raise ValueError("max_grad_norm must be > 0; 0 would zero every step")
         if self.adapter is not None and self.adapter not in ADAPTERS:
             raise ValueError(f"adapter={self.adapter!r} is not one of {ADAPTERS}")
         if self.adapter is None:
@@ -1076,6 +1143,23 @@ def _manifest_payload(
                 list(cfg.adapter_targets) if cfg.adapter_targets is not None else None
             ),
             "adapter_dropout": cfg.adapter_dropout,
+            # The nine declaration axes are recorded UNCONDITIONALLY -- None and
+            # all. That is the precision rule (#342) applied to every axis: a
+            # key present carrying None says "the operator abstained and the
+            # engine default applied, unclaimed"; a missing key would say
+            # "this version of the loop never populated the field", and a
+            # reader must be able to tell those apart. Omitting None keys here
+            # is exactly the defect provenance exists to catch: an axis the
+            # manifest cannot distinguish from unpopulated.
+            "optimizer": cfg.optimizer,
+            "gradient_accumulation_steps": cfg.gradient_accumulation_steps,
+            "max_grad_norm": cfg.max_grad_norm,
+            "gradient_checkpointing": cfg.gradient_checkpointing,
+            "attn_implementation": cfg.attn_implementation,
+            "lr_scheduler_type": cfg.lr_scheduler_type,
+            "warmup_steps": cfg.warmup_steps,
+            "sharding_strategy": cfg.sharding_strategy,
+            "cpu_optimizer_offload": cfg.cpu_optimizer_offload,
         },
         "extra": extra or {},
     }
@@ -1346,15 +1430,52 @@ def _build_run_manifest(
     def _put(key: str, value: Any, source: str) -> None:
         config[key] = EffectiveValue(key=key, value=str(value), source=source)
 
+    def _config_source(field: str) -> str:
+        """Where this config field's value came from -- recorded, not guessed.
+
+        Every key used to be stamped ``"cli"``, which said the operator typed
+        it. For an omitted axis that is simply false, and it is the worst kind
+        of false: the field exists BECAUSE the 24-run split happened when the
+        decisive value came from somewhere nothing recorded, so a source that
+        is filled in by construction reports full provenance while carrying
+        none.
+
+        The answer is not inferred from the value. ``value is None`` would work
+        for the nine axes, whose only absence marker is None, and would be
+        wrong for ``max_steps=20``, which is ambiguous between a typed flag and
+        the field default. cli.py measures the distinction with a sentinel
+        parse and hands the answer over in ``cli_declared``.
+
+        A config the parser never touched gets ``"config"`` -- the vocabulary's
+        word for a value set programmatically, and already what the objective
+        provenance uses for a TrainConfig-sourced value. Guessing ``"default"``
+        there would be the same defect one layer along: a caller that passed
+        ``optimizer="adamw_torch"`` in Python did not accept a default.
+        """
+        if cfg.cli_declared is None:
+            return "config"
+        return "cli" if field in cfg.cli_declared else "default"
+
     for key, value in detail["config"].items():
         if isinstance(value, dict):
             # Flatten rather than str() a dict. `topology.tp = 2` is greppable
             # and diffable against another run's manifest; "{'dp': 1, 'tp': 2}"
             # is one opaque string whose equality depends on key insertion order.
+            #
+            # The SOURCE is looked up on the leaf name, not the dotted key:
+            # `topology.tp` is a presentation choice of this emitter, while the
+            # thing the operator did or did not type is `--tp`, whose field is
+            # `tp`.
             for sub, subvalue in value.items():
-                _put(f"{key}.{sub}", subvalue, "cli")
+                _put(f"{key}.{sub}", subvalue, _config_source(sub))
         else:
-            _put(key, value, "cli")
+            # None reaches here for every undeclared axis and is written as
+            # "None" -- an EXPLICIT record of absence. The ConfigResolver's
+            # contract is {key, value, source, ...} for every field, and the
+            # key is never what carries the abstention: key present + value
+            # None = abstained; key absent = this loop never populated the
+            # field. All nine declaration axes go through this same path.
+            _put(key, value, _config_source(key))
     # argv is the composed launch command; without it a run is not reproducible
     # from its own output (#180). stage says WHICH point in the lifecycle wrote
     # this file, so a manifest found beside a checkpoint is self-dating.
@@ -1457,10 +1578,36 @@ def _emit_manifest(
 
 
 def train(cfg: TrainConfig) -> int:
-    """Run the thin path and adjudicate it.
+    """Run the thin path and adjudicate it, totally.
 
     Returns 0/5/95/96 per the exit-code contract. Never raises for an
     expected condition; unexpected trainer exceptions adjudicate as RED.
+
+    That second sentence used to be a claim rather than an implementation.
+    ``_train`` guards the trainer construction, the ``trainer.train()`` call
+    and the final save individually -- but an AST census of its body found 65
+    top-level statements standing outside any ``try`` whose handlers return an
+    ``EXIT_`` constant, among them ``_effective_topology``, the gate-callback
+    constructors, ``_emit_manifest`` and ``_run_save_gates``. The last one
+    parses safetensors headers off disk and is the most realistic raiser of
+    the set. An exception from any of them left ``_train``, left ``main``
+    (``cli.py`` deliberately keeps its ``except ValueError`` off the call, so
+    that a training failure is never reported as a refusal), and reached the
+    interpreter, which prints a traceback and exits **1** -- the one code the
+    0/5/95/96 contract forbids, and the code #171 already showed a launcher
+    cannot interpret.
+
+    Guarding those 65 sites one by one is the version of this fix that is
+    wrong the day someone adds a 66th. The contract is a property of THIS
+    function's boundary, so the boundary is where it is enforced: ``train``
+    is a total wrapper over ``_train``. Inner handlers still run first and
+    keep their specific verdicts -- REFUSE for an unhonourable declaration,
+    RED for a trainer that failed -- and this catch only ever sees what none
+    of them claimed. RED (not UNMEASURED) is the verdict, matching the
+    existing ``except Exception`` arms around trainer construction and the
+    save: an unclassified crash means the run did not establish its claim,
+    and the safe direction is the blocking one. ``BaseException`` is
+    deliberately not caught, so Ctrl-C and ``SystemExit`` pass through.
 
     ``precision='nvfp4'`` is REFUSED (96) before anything runs. That refusal
     is the choice, made deliberately over a seam: transformers has no
@@ -1472,7 +1619,41 @@ def train(cfg: TrainConfig) -> int:
     not exist yet; a refusal names exactly what is true. The {full, LoRA} x
     {bf16, nvfp4} matrix keeps its nvfp4 cells empty until a real backend
     lands.
+
+    The same refuse-over-claim rule now covers three more declarations,
+    all at START, before a GPU is touched (the #375 batch): any of
+    tp/pp/ep/cp > 1 (the backend executes data parallelism only);
+    sharding_strategy outside {"ddp"}; and cpu_optimizer_offload=True
+    (no offload backend exists in this plane). A declaration the runtime
+    cannot honour is a manifest entry waiting to lie.
     """
+    try:
+        return _train(cfg)
+    except Exception as exc:  # noqa: BLE001 -- the contract has no code for "crashed"
+        # The traceback is the only diagnosis of an unclassified crash, so it
+        # goes to stderr exactly where the interpreter would have put it. What
+        # changes is the exit code, not the operator's evidence.
+        traceback.print_exc(file=sys.stderr)
+        try:
+            _mark(
+                Step.RED,
+                f"unhandled {type(exc).__name__} escaped the thin path: {exc}. "
+                "Adjudicated RED (5) at the train() boundary rather than "
+                "allowed to exit 1, which sits outside the 0/5/95/96 "
+                "contract. Full traceback on stderr",
+            )
+            _emit_manifest(
+                cfg,
+                stage="crashed",
+                extra={"exit": EXIT_RED, "unhandled_exception": type(exc).__name__},
+            )
+        except Exception:  # noqa: BLE001 -- reporting must not replace the verdict
+            pass
+        return EXIT_RED
+
+
+def _train(cfg: TrainConfig) -> int:
+    """Body of :func:`train`; see there for the contract this is wrapped in."""
     _mark(
         Step.START,
         f"model={cfg.model} dataset={cfg.dataset} "
@@ -1510,7 +1691,8 @@ def train(cfg: TrainConfig) -> int:
             f"declared {', '.join(f'{name}={getattr(cfg, name)}' for name in unwired)} "
             "cannot be executed: the plane builds a transformers.Trainer "
             "whose kwargs carry no tensor/pipeline/expert/context-parallel "
-            "key, so the degree would be recorded but never executed. "
+            "key, so the degree would be recorded but never executed "
+            "(finding #375). "
             "Refusing rather than training pure DDP under a parallel label "
             "the run does not have",
         )
@@ -1518,6 +1700,48 @@ def train(cfg: TrainConfig) -> int:
             cfg,
             stage="refused",
             extra={"exit": EXIT_REFUSE, "unwired_degrees": ",".join(unwired)},
+        )
+        return EXIT_REFUSE
+
+    # Declaring a sharded execution this plane does not have is #375 written on
+    # a second axis: None and "ddp" are what transformers.Trainer actually
+    # executes here, everything else is REFUSED rather than silently run as
+    # plain DDP underneath a manifest that says otherwise.
+    if cfg.sharding_strategy not in (None, *SHARDING_STRATEGIES):
+        _mark(
+            Step.REFUSE,
+            f"sharding_strategy={cfg.sharding_strategy!r} is declared, but no "
+            f"sharded backend is wired in this plane: the execution path is "
+            f"transformers.Trainer, which provides data parallelism only, and "
+            f"the only honourable declarations are None and {SHARDING_STRATEGIES}. "
+            "FSDP / ZeRO / DeepSpeed were measured, adjudicated and recorded in "
+            "gates/ and provenance/ -- and never built. Refusing rather than "
+            "running plain DDP while the manifest claims something else "
+            "happened (#375's defect class: declaration without execution)",
+        )
+        _emit_manifest(
+            cfg,
+            stage="refused",
+            extra={"exit": EXIT_REFUSE, "sharding_strategy": cfg.sharding_strategy},
+        )
+        return EXIT_REFUSE
+
+    if cfg.cpu_optimizer_offload is True:
+        _mark(
+            Step.REFUSE,
+            "cpu_optimizer_offload=True is declared, but this plane has no "
+            "optimizer-offload backend: the only routes transformers offers for "
+            "it are the DeepSpeed/FSDP integrations, and those executors are "
+            "adjudicated and recorded in gates/ and provenance/, never built. "
+            "Refusing rather than training with optimizer states resident on "
+            "device while the manifest records an offload that never happened "
+            "(--cpu-optimizer-offload false or omit the flag to declare the "
+            "execution this backend actually performs)",
+        )
+        _emit_manifest(
+            cfg,
+            stage="refused",
+            extra={"exit": EXIT_REFUSE, "cpu_optimizer_offload": True},
         )
         return EXIT_REFUSE
 
@@ -1631,9 +1855,89 @@ def train(cfg: TrainConfig) -> int:
 
     # --- 5. Model + tokenizer + dataset -----------------------------------
     torch.manual_seed(cfg.seed)
+    # attn_implementation binds at MODEL CONSTRUCTION, not on TrainingArguments
+    # -- no such knob exists there, so it rides from_pretrained. The contract is
+    # the same one the TrainingArguments introspection below enforces (#342: a
+    # silent drop is worse than an honest refusal), but the INSTRUMENT is not:
+    # acceptance is MEASURED after the load, never inferred from a signature.
+    #
+    # It used to be inferred, and the inference was false in every release.
+    # ``AutoModelForCausalLM.from_pretrained`` is a dispatcher whose signature
+    # is ``(*model_args, **kwargs)``; it has never named ``attn_implementation``
+    # and neither does ``PreTrainedModel.from_pretrained`` on transformers 5.x.
+    # A guard reading "absent from the signature => absent from the release"
+    # therefore refused EVERY declared value, on a stack that measurably accepts
+    # it -- the axis was 100% dead while its test stayed green by asserting the
+    # refusal. The oracle below is the one transformers itself publishes:
+    # ``config._attn_implementation``, the loader's own record of what it
+    # selected. It is strictly stronger than introspection, because it observes
+    # the outcome rather than predicting it from the calling convention.
+    #
+    # Three refusals, all of them measurements: the load rejected the value
+    # (ValueError from from_pretrained), the loaded model exposes no reading at
+    # all (acceptance unprovable), or the reading disagrees with the declaration
+    # (accepted then overridden). When None was declared, NOTHING is passed and
+    # the model-config default applies, unclaimed (#342's rule) -- and nothing
+    # is verified, because there is no declaration to verify.
+    model_kwargs: dict[str, Any] = {}
+    if cfg.attn_implementation is not None:
+        model_kwargs["attn_implementation"] = cfg.attn_implementation
     try:
         tokenizer = AutoTokenizer.from_pretrained(cfg.model)
-        model = AutoModelForCausalLM.from_pretrained(cfg.model)
+        try:
+            model = AutoModelForCausalLM.from_pretrained(cfg.model, **model_kwargs)
+        except (ValueError, TypeError, ImportError) as exc:
+            if cfg.attn_implementation is None:
+                raise
+            # REFUSE (96), not RED (5). The operator stated a kernel and the
+            # load did not complete; no training was attempted, so there is no
+            # run to score. Scoring it RED would report a failed run where
+            # there was a rejected request -- the same conflation the
+            # TrainingArguments arm refuses one layer down.
+            #
+            # ImportError is in the tuple because that is what an UNAVAILABLE
+            # backend raises: transformers 5.16.1 answers
+            # attn_implementation="flash_attention_2" on a build without
+            # flash-attn with ImportError, and an unsupported NAME with
+            # ValueError. Both are the same event to the operator -- "this
+            # build cannot give you the kernel you asked for" -- and both must
+            # land on 96 rather than one on 96 and one on 5. The exception is
+            # quoted rather than paraphrased: the cause is whatever the loader
+            # said it was, and this marker does not claim to have diagnosed it.
+            _mark(
+                Step.REFUSE,
+                f"model load did not complete while attn_implementation="
+                f"{cfg.attn_implementation!r} was declared, on transformers "
+                f"{_tf_version()}: {type(exc).__name__}: {exc}",
+            )
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={"exit": EXIT_REFUSE, "attn_implementation": cfg.attn_implementation},
+            )
+            return EXIT_REFUSE
+        if cfg.attn_implementation is not None:
+            selected = getattr(model.config, "_attn_implementation", None)
+            if selected != cfg.attn_implementation:
+                _mark(
+                    Step.REFUSE,
+                    f"attn_implementation={cfg.attn_implementation!r} is declared, but "
+                    f"the loaded model reports {selected!r}: the value was accepted "
+                    "by the call and then dropped or overridden on the way in "
+                    "(or this release publishes no _attn_implementation reading, "
+                    "in which case acceptance cannot be proved). Refusing rather "
+                    "than training under an unverified kernel declaration",
+                )
+                _emit_manifest(
+                    cfg,
+                    stage="refused",
+                    extra={
+                        "exit": EXIT_REFUSE,
+                        "attn_implementation": cfg.attn_implementation,
+                        "attn_implementation_selected": selected,
+                    },
+                )
+                return EXIT_REFUSE
         raw = _load_raw_dataset(hf_datasets, cfg.dataset)
         split = "train" if "train" in raw else next(iter(raw))
         columns = raw[split].column_names
@@ -1829,6 +2133,31 @@ def train(cfg: TrainConfig) -> int:
     elif cfg.precision == "fp32":
         kwargs["bf16"] = False
         kwargs["fp16"] = False
+    # The remaining declaration axes, each wired ONLY when declared -- the
+    # precision rule applied verbatim: None adds NOTHING, no flag, no claim, no
+    # coercion, because every one of these has a live TrainingArguments default
+    # behind it (AdamW, accumulation 1, max_grad_norm 1.0, no recompute, linear
+    # LR with zero warmup) and passing that default undeclared would convert an
+    # abstention into the appearance of a statement (#342). Two of the nine are
+    # deliberately NOT in this dict: attn_implementation binds at model
+    # construction (introspected and possibly refused at its own site above),
+    # and sharding_strategy / cpu_optimizer_offload have no TrainingArguments
+    # wiring at all -- they are refused at START rather than silently dropped.
+    # Every key added here flows through the `accepted` introspection check
+    # below, so an older transformers REFUSES on a knob it does not know
+    # instead of silently training without it.
+    if cfg.optimizer is not None:
+        kwargs["optim"] = cfg.optimizer
+    if cfg.gradient_accumulation_steps is not None:
+        kwargs["gradient_accumulation_steps"] = cfg.gradient_accumulation_steps
+    if cfg.max_grad_norm is not None:
+        kwargs["max_grad_norm"] = cfg.max_grad_norm
+    if cfg.gradient_checkpointing is not None:
+        kwargs["gradient_checkpointing"] = cfg.gradient_checkpointing
+    if cfg.lr_scheduler_type is not None:
+        kwargs["lr_scheduler_type"] = cfg.lr_scheduler_type
+    if cfg.warmup_steps is not None:
+        kwargs["warmup_steps"] = cfg.warmup_steps
     accepted = set(inspect.signature(TrainingArguments.__init__).parameters)
     if "save_safetensors" in accepted:
         kwargs["save_safetensors"] = True
@@ -1905,6 +2234,31 @@ def train(cfg: TrainConfig) -> int:
             Step.REFUSE,
             f"transformers {_tf_version()} needs {missing!r} to build a Trainer, "
             f"and it is absent; install with {EXTRA_HINT}",
+        )
+        return EXIT_REFUSE
+    except (ValueError, TypeError) as exc:
+        # A ValueError/TypeError here is a REJECTED DECLARATION, not a training
+        # failure: TrainingArguments.__post_init__ is where the newly declarable
+        # axes (an optimizer name this release does not know, an unschedulable
+        # lr_scheduler_type, a warmup_steps its version rejects) are adjudicated
+        # by the authority on its own vocabulary. Uncaught, that escape is a
+        # traceback and exit 1 -- a code in none of the four declared states
+        # (#171's rule reaches this plane too). Catching it here is the same
+        # contract the ImportError arm above already honours: the run cannot
+        # honour the requested config, so it REFUSES, naming the rejection.
+        # Transformers' message is interpolated verbatim -- it names the knob
+        # and its accepted values better than a paraphrase would.
+        _mark(
+            Step.REFUSE,
+            f"transformers {_tf_version()} rejected the declared config at "
+            f"Trainer/TrainingArguments construction: {exc}. Refusing (96) "
+            f"rather than retrying with a guessed value -- the operator "
+            f"declared it, so the operator corrects it",
+        )
+        _emit_manifest(
+            cfg,
+            stage="refused",
+            extra={"exit": EXIT_REFUSE, "trainer_construction": str(exc)},
         )
         return EXIT_REFUSE
     _mark(
