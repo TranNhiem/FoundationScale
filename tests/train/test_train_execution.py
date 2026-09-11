@@ -199,20 +199,54 @@ def test_fixture_pins_execution_to_cpu(tmp_path: Path) -> None:
     rather than a coverage gap -- and it would be invisible, because every
     other test here asserts on artifacts, not on where they were computed.
 
-    Two assertions, because either one alone can be laundered.
+    Several assertions, because each alone can be laundered.
     `TrainingArguments` resolves its device through accelerate's PartialState,
     a process-wide singleton: whichever caller runs FIRST fixes the answer for
     the rest of the process, so a later CPU reading may be inherited from an
     earlier test rather than produced by the fixture. The direct probe cannot
     be masked that way, and the resolved device is what the Trainer will act
     on. Neither is redundant; they fail on different breakages.
+
+    SUBSTITUTION is asserted separately from OUTCOME, and that separation is
+    the whole point of the #372 re-take. `is_available() is False` and
+    `device.type == "cpu"` are both satisfiable by a host that simply has no
+    accelerator -- true of every x86 GitHub runner and of the developer Mac --
+    so on those hosts they measure the machine, not the fixture. The
+    `_ORIGINAL_*_PROBES` records are written only by the fixture's patch loops,
+    so asserting they are populated fails on ANY host the moment a loop is
+    deleted. That is what makes this leg non-vacuous off-GPU; the outcome
+    assertions are what make it bite on-GPU.
+
+    MEASURED on a GB200 host (aarch64, torch 2.14.0+cu130) with the instrument
+    confirmed live beforehand at `cuda True, device_count 1`: this leg green
+    there, while the SAME host with the fixture absent resolves `cuda` in a
+    fresh process. So the green here is attributable to the fixture rather
+    than to absent hardware -- which is the claim the x86 runners cannot make
+    on their own, and the reason the substitution assertions above exist.
     """
     import torch
     from transformers import TrainingArguments
 
     if hasattr(torch.backends, "mps"):
+        assert _ORIGINAL_MPS_PROBES, (
+            "autouse fixture never recorded an MPS probe; its patch loop did not run"
+        )
         assert torch.backends.mps.is_available() is False, (
             "autouse fixture did not neutralise the MPS availability probe"
+        )
+
+    # The CUDA arm, symmetric with MPS above. Before this, _ORIGINAL_CUDA_PROBES
+    # was written by the fixture and read by nothing -- the arm added to fix #372
+    # was itself uncontrolled.
+    if hasattr(torch, "cuda"):
+        assert _ORIGINAL_CUDA_PROBES, (
+            "autouse fixture never recorded a CUDA probe; its patch loop did not run"
+        )
+        assert torch.cuda.is_available() is False, (
+            "autouse fixture did not neutralise the CUDA availability probe"
+        )
+        assert torch.cuda.device_count() == 0, (
+            "autouse fixture did not neutralise the CUDA device_count probe"
         )
 
     resolved = TrainingArguments(output_dir=str(tmp_path / "probe")).device
