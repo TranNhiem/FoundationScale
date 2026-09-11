@@ -57,9 +57,10 @@ which ships at the repository root) -- the same class of defect the census
 exists to catch, turned on the census. The repository is resolved in order,
 and the resolution is printed: $FS_PUBLISHED_REPO_ROOT (set and not a
 directory is REFUSE 96, named), else walking up from the plane directory for
-a .git (in a clone the stage sits at <repo>/h100_validation/, so this
-resolves with no configuration; in the build tree it does not, which is the
-honest answer there). Tracked files come from git -C <root> ls-files; git
+a .git (in a clone the stage sits at <repo>/validation_campaigns/
+h100_validation/, so this resolves with no configuration -- the walk is
+depth-independent, so the level it sits at is not load-bearing; in the build
+tree it does not, which is the honest answer there). Tracked files come from git -C <root> ls-files; git
 absent or erroring is UNMEASURED for the repo half, never a silent fall-back
 to the publish set as the whole world. A token in neither half with the repo
 half RESOLVED is RED (5) -- the denominator can answer. A token in neither
@@ -236,9 +237,10 @@ def _resolve_repo_root(plane_dir: pathlib.Path, explicit):
     """Resolve the enclosing published repository, in order: the explicit
     $FS_PUBLISHED_REPO_ROOT value (set and not a directory is a REFUSE,
     named), else walk up from the plane directory looking for a .git. In a
-    clone the stage sits at <repo>/h100_validation/, so the walk resolves
-    with no configuration; in the build tree it does not, which is the honest
-    answer there. Returns (root_or_None, how)."""
+    clone the stage sits at <repo>/validation_campaigns/h100_validation/, so
+    the walk resolves with no configuration -- it is depth-independent, so the
+    level does not matter; in the build tree it does not resolve, which is the
+    honest answer there. Returns (root_or_None, how)."""
     if explicit:
         root = pathlib.Path(explicit)
         if not root.is_dir():

@@ -929,27 +929,30 @@ f81_probe_pair_report() { # $1=LoRA slot file, $2=full-FT slot file -> one
   [ "$have" -eq 2 ]
 }
 # --- SEAM REPAIR (fix #81 pair-contract, INSTRUMENT side) -------------------
-# The pre-#81 definition of f81_probe_file_ok above was written against the
-# LoRA launcher's TEXTUAL shape: its conjunct 3 demanded the '_probe' suffix
-# appear inside the guard region ON the output-dir assignment. The full-FT
-# launcher implements the same contract with a different, deliberate shape:
-# the branch sets RUN_SUFFIX=_probe (its lines 267-275) and the suffix is
-# folded into OUT_DIR at the line where OUT_DIR is BORN (its line 294) so
-# that every consumer — mkdir/write-probe, disk watermark, WANDB_DIR, ckpt
-# load/save, the resume read — sees the suffixed dir, and a probe can never
-# write into the stable auto-resume chain (launcher lines 279-293 pin this
-# ordering as load-bearing; suffixing later reopens the #81 collision).
-# Conjuncts 1/2/4 hold on BOTH launchers as shipped (full-FT 252-262 / LoRA
-# 346-348 header docs; full-FT 267 / LoRA 349 wired branches; full-FT 317
-# banner echo of the RESOLVED knob), so the named offender was the
-# instrument, not the launcher. This redefinition sits textually AFTER the
-# old one and is therefore the live binding for every call below (845/880/
-# 889/921/926): it keeps all four conjuncts strict, repairs conjunct 3 to
-# accept both sanctioned shapes, and ADDS a column-zero '^PROBE=' clobber
-# guard so the instrument itself goes red on the #81 shape (a path
-# assignment colliding the operator's knob away) even with the branch left
-# intact. Nothing here weakens any detector (doctrines 3/5); unreadable
-# still fails CLOSED (doctrine 4).
+# The first definition of f81_probe_file_ok above was written against the
+# pre-#81 LoRA launcher's TEXTUAL shape: conjunct 3 demanded the '_probe'
+# suffix appear inside the guard region ON the output-dir assignment. The
+# full-FT launcher meets the same contract with a different, deliberate
+# shape: its PROBE branch sets RUN_SUFFIX=_probe, and the suffix is folded
+# into OUT_DIR where OUT_DIR is born, so every consumer — mkdir/write-probe,
+# disk watermark, WANDB_DIR, ckpt load/save, the resume read — sees the
+# suffixed dir, and a probe can never write into the stable auto-resume
+# chain. The auto-resume ordering beside those assignments is load-bearing;
+# suffixing later reopens the #81 collision. Conjuncts 1/2/4 hold on BOTH
+# launchers as shipped: the header contract blocks, the wired PROBE branches,
+# and the resolved-knob banner/echo are the greppable evidence, so the named
+# offender was the instrument, not the launcher. Bash resolves a function
+# name when the call executes, so the textually-last definition run before
+# the first call wins; this second definition, immediately below, is the live
+# binding for sole caller f81_probe_pair_report at every call site below.
+# That second definition keeps all four conjuncts strict, repairs conjunct 3
+# for both sanctioned shapes, and ADDS a column-zero '^PROBE=' clobber guard
+# so the instrument goes red on the #81 shape — a path assignment colliding
+# the operator's knob away — even with the branch left intact. Nothing here
+# weakens any detector (doctrines 3/5); unreadable still fails CLOSED
+# (doctrine 4).
+# No line numbers are cited here on purpose: they rot on every edit above,
+# and a reader could not verify them.
 f81_probe_file_ok() { # $1=launcher path -> rc 0 iff the repaired 4-part contract holds
   local f=$1 br fi_line
   [ -f "$f" ] && [ -r "$f" ] || return 1   # fail closed: unreadable is not empty

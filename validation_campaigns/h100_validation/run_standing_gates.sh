@@ -309,7 +309,30 @@ if [[ "$SELF_TEST" == 1 ]]; then
   # Stated once and consumed by both the per-control line and the summary, so a fifteenth
   # control cannot be added while the banner still says fourteen — a self-inflicted stale
   # countable of exactly the #220/#233 shape.
+  #
+  # #390: "stated once" was still stated, not MEASURED. The literal below is a declaration;
+  # nothing compared it to the number of controls that actually run, so adding a fifteenth
+  # `run_control` call would have left every line printing "of 14" and the summary claiming
+  # a denominator it never had. So DERIVE the count from this file's own call sites and
+  # refuse if the two disagree. The declaration is kept rather than replaced by the derived
+  # number, because a count that is only ever derived cannot be wrong and therefore proves
+  # nothing: it is the AGREEMENT of an independent statement with an independent measurement
+  # that is the instrument. Disagreement is 96 (CANNOT-MEASURE: the suite cannot say how many
+  # controls it has), not 5 — it is a defect in this file, not a finding about the tree.
+  #
+  # The pattern is anchored to the CALL shape (leading whitespace, then the name, then the
+  # ordinal): `run_control() {` has no ordinal, the usage comment above it is prefixed by
+  # `#`, and the grep line here writes the name inside a bracket expression rather than
+  # after whitespace, so the scanner is not inside its own denominator. That last point is
+  # asserted by measurement below, not by this comment: if the scanner counted itself the
+  # derived total would be 15 and this block would refuse.
   CONTROL_TOTAL=14
+  CONTROL_DERIVED=$(grep -cE '^[[:space:]]+run_control[[:space:]]+[0-9]+[[:space:]]' "$SELF" || true)
+  if [[ "$CONTROL_DERIVED" != "$CONTROL_TOTAL" ]]; then
+    printf 'REFUSE 96: control count is unmeasured -- the suite declares CONTROL_TOTAL=%s but %s run_control call site(s) are present in %s\n' \
+      "$CONTROL_TOTAL" "$CONTROL_DERIVED" "$SELF" >&2
+    exit 96
+  fi
 
   # make_stub_campaign <dir> <name:rc>... — write a stub build file whose gate lines the
   # anchored derivation will find, plus a stub gate script per name that exits <rc>.
