@@ -103,7 +103,7 @@ ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
 endif
 
-.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation mutation-module skip-guard-probe check clean
+.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope verification-matrix launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation mutation-module skip-guard-probe check clean
 
 # [train] is here because CI's suite jobs install it and this target is the
 # developer's mirror of them. Without it `make install` provisions a WEAKER
@@ -374,6 +374,29 @@ mutation-scope:
 	$(PY) checks/mutation_scope.py --self-test
 	$(PY) checks/mutation_scope.py
 
+# Finding #378. validation_campaigns/verification_matrix/matrix.json is the ledger of
+# what this repository claims to have verified, and docs/VERIFICATION_MATRIX.md is its
+# rendering. Two failure modes, neither of which had a reader: the two drift (they are
+# edited by hand, in either direction), and a row rots in place -- its control_arm slides
+# from a real arm to a placeholder while every presence check stays green. A row with no
+# arm that must come out DIFFERENT is a row that cannot fail, which is the defect this
+# campaign has now filed four times (#291, #294, #372, #203), so the ledger that tracks
+# it is the last place it should be allowed to recur.
+#
+# C5 is what makes the doc DERIVED rather than mirrored in practice: the table rows are
+# compared cell-for-cell against the JSON, with markdown ticks normalised on BOTH sides
+# (one-sided normalisation manufactures drift). C4 reads the honest-count paragraph
+# POSITIONALLY, so every integer in that section is a countable -- which is why the two
+# tiers are named in words there and not by their numeric labels.
+#
+# Self-test first, same order and same reason as doc-pointers, citation-lines and
+# mutation-scope. SC6 (unmodified files must be CLEAR) is what makes SC1-SC5 mean
+# anything, and SC8 pins RED over UNMEASURED -- without it the precedence was a claim
+# no scenario measured, and it was inverted when the gate first ran.
+verification-matrix:
+	$(PY) checks/verification_matrix.py --self-test
+	$(PY) checks/verification_matrix.py
+
 # Finding #254. CI runs launchers/test_launcher_contracts.sh; until this target
 # existed, no `make` goal did, so the largest gate in the repository was one a
 # developer could not run before pushing. That is the #230 asymmetry with the
@@ -537,7 +560,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation
+check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling countables doc-pointers citation-lines mutation-scope verification-matrix launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \

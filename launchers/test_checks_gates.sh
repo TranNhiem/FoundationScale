@@ -1824,6 +1824,233 @@ else
   fi
 fi
 
+# --- ORPHAN DISCHARGE: checks/verification_matrix.py -------------------------
+# This block is also the suite's call site for checks/verification_matrix.py.
+# The fix78-orphan leg scans every launchers/*.py and checks/*.py for a call
+# site IN THIS SUITE and refuses a file that has none; a Makefile target is
+# NOT accepted as a call site. The gate was just added and is indicted BY
+# NAME as an orphan -- these two legs are the in-suite call site that
+# discharges the indictment.
+
+# --- MUST_PASS: verification-matrix gate self-test (checks/verification_matrix.py)
+# Finding #378: matrix.json is the ledger of what this repository claims to
+# have verified, and docs/VERIFICATION_MATRIX.md is its rendering. A row
+# whose control arm is a placeholder is a row that CANNOT FAIL -- the defect
+# this campaign has already filed four times (#291, #294, #372, #203). The
+# gate exists to keep that from recurring in the ledger that tracks it.
+#
+# Same floor convention as the f317 legs above, for the same reason: rc=0 is
+# not the measurement. The trailing tally is parsed and held to a FLOOR of 8
+# so a self-test that quietly drops controls cannot still read green. A leg
+# that only checked rc==0 would pass over a self-test that had silently
+# shrunk to one control -- the denominator goes on the wire.
+#
+# The floor spans four families, as counted by the gate's own banner: 5
+# MUST_FIRE (SC1-SC5, one planted defect per check C1-C5), 1
+# MUST_PASS_NEGATIVE (SC6, the unmodified files must be CLEAR), 1
+# MUST_ABSTAIN (SC7, a missing matrix is UNMEASURED), and 1 MUST_OUTRANK
+# (SC8, RED outranks UNMEASURED).
+#
+# Floor history: 8 at introduction (#378).
+if [ ! -r "checks/verification_matrix.py" ]; then
+  f378_msg="MUST_PASS FAILED (verification_matrix self-test) UNMEASURED:"
+  f378_msg="$f378_msg checks/verification_matrix.py is not readable --"
+  f378_msg="$f378_msg unreadable is not empty (doctrine 4); the gate cannot"
+  f378_msg="$f378_msg run, so 0 of 8 controls were measured"
+  no "$f378_msg"
+else
+  f378_rc=0
+  f378_out=$(python3 -S checks/verification_matrix.py --self-test 2>&1) || f378_rc=$?
+  f378_last=$(printf '%s\n' "$f378_out" | tail -n 1)
+  f378_have=$(printf '%s\n' "$f378_last" |
+    sed -n 's/^self-test denominator: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls .*/\1/p')
+  f378_want=$(printf '%s\n' "$f378_last" |
+    sed -n 's/^self-test denominator: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls .*/\2/p')
+  if [ "$f378_rc" -ne 0 ]; then
+    f378_msg="MUST_PASS FAILED (verification_matrix self-test): rc=$f378_rc"
+    f378_msg="$f378_msg over the gate's declared denominator of 8 controls"
+    f378_msg="$f378_msg (5 MUST_FIRE + 1 MUST_PASS_NEGATIVE + 1 MUST_ABSTAIN"
+    f378_msg="$f378_msg + 1 MUST_OUTRANK); 0 of 8 are accepted as behaved,"
+    f378_msg="$f378_msg so the leg fails closed. Output:"
+    f378_msg="$f378_msg $(printf '%s\n' "$f378_out" | tr '\n' ' ')"
+    no "$f378_msg"
+  elif [ -z "$f378_have" ] || [ -z "$f378_want" ]; then
+    f378_msg="MUST_PASS FAILED (verification_matrix self-test) UNMEASURED:"
+    f378_msg="$f378_msg rc=0 but the last line carries no parseable"
+    f378_msg="$f378_msg 'self-test denominator: N of M controls' tally --"
+    f378_msg="$f378_msg the measuring unit printed no denominator, so 0 of 8"
+    f378_msg="$f378_msg declared controls are auditable here. Unparseable is"
+    f378_msg="$f378_msg not passing; fail closed and update this leg in the"
+    f378_msg="$f378_msg same commit as the wording change. Last line:"
+    f378_msg="$f378_msg $f378_last"
+    no "$f378_msg"
+  elif [ "$f378_have" -ne "$f378_want" ]; then
+    f378_msg="MUST_PASS FAILED (verification_matrix self-test): denominator"
+    f378_msg="$f378_msg $f378_have of $f378_want controls is not"
+    f378_msg="$f378_msg self-consistent -- the self-test examined fewer"
+    f378_msg="$f378_msg controls than it claims to have. rc=0 cannot certify"
+    f378_msg="$f378_msg a partial control set, so the inconsistency fails"
+    f378_msg="$f378_msg closed."
+    no "$f378_msg"
+  elif [ "$f378_have" -lt 8 ]; then
+    f378_msg="MUST_PASS FAILED (verification_matrix self-test): control set"
+    f378_msg="$f378_msg shrank to $f378_have of $f378_want, below the"
+    f378_msg="$f378_msg measured floor of 8 (5 MUST_FIRE + 1"
+    f378_msg="$f378_msg MUST_PASS_NEGATIVE + 1 MUST_ABSTAIN + 1"
+    f378_msg="$f378_msg MUST_OUTRANK). A shortened self-test still exits 0,"
+    f378_msg="$f378_msg so the floor is the control and this leg fails"
+    f378_msg="$f378_msg closed."
+    no "$f378_msg"
+  else
+    f378_msg="MUST_PASS verification_matrix self-test: rc=0 under python3"
+    f378_msg="$f378_msg -S, denominator $f378_have of $f378_want controls"
+    f378_msg="$f378_msg (>= the measured floor of 8, 5 MUST_FIRE + 1"
+    f378_msg="$f378_msg MUST_PASS_NEGATIVE + 1 MUST_ABSTAIN + 1"
+    f378_msg="$f378_msg MUST_OUTRANK): $f378_last"
+    ok "$f378_msg"
+  fi
+fi
+
+# --- MUST_FIRE: verification_matrix discriminates a placeholder arm (C2) -----
+# The self-test above exercises the gate's INTERNAL controls over temp copies
+# it makes itself. This leg exercises the shipped CLI over COPIES of the real
+# ledger and the real doc, the plant the only difference between a green arm
+# and a red arm.
+#
+# The plant is a placeholder control_arm on the FIRST row -- the exact #378
+# shape, a row that cannot fail. BOTH copies are doctored, and that is
+# deliberate: C2 (CONTROL_ARM_SUBSTANTIVE) is the control under test, and
+# doctoring only the JSON would ALSO trip C5 (doc-equals-ledger), so the RED
+# could not be attributed to the plant. The doc's one table row for that id
+# gets the same substitution, keeping the doc equal to the ledger so C2
+# alone fires.
+if [ ! -r "checks/verification_matrix.py" ] ||
+  [ ! -r "validation_campaigns/verification_matrix/matrix.json" ] ||
+  [ ! -r "docs/VERIFICATION_MATRIX.md" ]; then
+  f378b_msg="MUST_FIRE FAILED (verification_matrix placeholder"
+  f378b_msg="$f378b_msg discrimination) UNMEASURED: the gate, the ledger, or"
+  f378b_msg="$f378b_msg the doc is not readable -- unreadable is not empty"
+  f378b_msg="$f378b_msg (doctrine 4); 0 of 2 arms ran"
+  no "$f378b_msg"
+else
+  f378b_tmp=$(mktemp -d)
+  cp "validation_campaigns/verification_matrix/matrix.json" \
+    "$f378b_tmp/matrix.json"
+  cp "docs/VERIFICATION_MATRIX.md" "$f378b_tmp/VERIFICATION_MATRIX.md"
+  f378b_green_rc=0
+  f378b_green_out=$(python3 -S checks/verification_matrix.py \
+    --matrix "$f378b_tmp/matrix.json" --doc "$f378b_tmp/VERIFICATION_MATRIX.md" 2>&1) ||
+    f378b_green_rc=$?
+  f378b_denom=$(printf '%s\n' "$f378b_green_out" |
+    sed -n 's/^DENOMINATOR: \([0-9][0-9]*\) matrix row(s).*/\1/p')
+  if [ "$f378b_green_rc" -ne 0 ]; then
+    rm -rf "$f378b_tmp"
+    f378b_msg="MUST_FIRE FAILED (verification_matrix placeholder"
+    f378b_msg="$f378b_msg discrimination): the UNMODIFIED copies of the live"
+    f378b_msg="$f378b_msg ledger and doc gave rc=$f378b_green_rc instead of"
+    f378b_msg="$f378b_msg 0 -- the gate is stuck RED, not discriminating, so"
+    f378b_msg="$f378b_msg the leg fails closed. Output:"
+    f378b_msg="$f378b_msg $(printf '%s\n' "$f378b_green_out" | tr '\n' ' ')"
+    no "$f378b_msg"
+  elif [ -z "$f378b_denom" ]; then
+    rm -rf "$f378b_tmp"
+    f378b_msg="MUST_FIRE FAILED (verification_matrix placeholder"
+    f378b_msg="$f378b_msg discrimination) UNMEASURED: the green arm exited 0 but"
+    f378b_msg="$f378b_msg printed no parseable 'DENOMINATOR: N matrix row(s)'"
+    f378b_msg="$f378b_msg line, so this leg has no row count to report. The"
+    f378b_msg="$f378b_msg success message below states that count; stating one"
+    f378b_msg="$f378b_msg the arm never printed is the defect this campaign"
+    f378b_msg="$f378b_msg files as #216/#310, so the leg fails closed rather"
+    f378b_msg="$f378b_msg than claim an unmeasured denominator. Output:"
+    f378b_msg="$f378b_msg $(printf '%s\n' "$f378b_green_out" | tr '\n' ' ')"
+    no "$f378b_msg"
+  else
+    f378b_doc_rc=0
+    f378b_rid=$(python3 -S - "$f378b_tmp/matrix.json" \
+      "$f378b_tmp/VERIFICATION_MATRIX.md" <<'PY'
+import json
+import sys
+
+matrix_path, doc_path = sys.argv[1], sys.argv[2]
+with open(matrix_path, encoding="utf-8") as fh:
+    data = json.load(fh)
+row = data["rows"][0]
+rid = row["id"]
+old = row["control_arm"]
+row["control_arm"] = "n/a"
+with open(matrix_path, "w", encoding="utf-8") as fh:
+    fh.write(json.dumps(data, indent=2) + "\n")
+with open(doc_path, encoding="utf-8") as fh:
+    lines = fh.read().splitlines(keepends=True)
+for i, line in enumerate(lines):
+    body = line.rstrip("\r\n")
+    cells = body.split("|")
+    if len(cells) >= 5 and cells[1].strip() == rid:
+        if old not in cells[4]:
+            sys.exit(4)
+        cells[4] = cells[4].replace(old, "n/a", 1)
+        lines[i] = "|".join(cells) + line[len(body):]
+        break
+else:
+    sys.exit(3)
+with open(doc_path, "w", encoding="utf-8") as fh:
+    fh.write("".join(lines))
+print(rid)
+PY
+    ) || f378b_doc_rc=$?
+    if [ "$f378b_doc_rc" -ne 0 ] || [ -z "$f378b_rid" ]; then
+      rm -rf "$f378b_tmp"
+      f378b_msg="MUST_FIRE FAILED (verification_matrix placeholder"
+      f378b_msg="$f378b_msg discrimination) UNMEASURED: the placeholder plant"
+      f378b_msg="$f378b_msg could not be built -- the first row's id or"
+      f378b_msg="$f378b_msg control_arm is missing, or the doc carries no"
+      f378b_msg="$f378b_msg table row for that id. Mis-doctoring would make"
+      f378b_msg="$f378b_msg the arms differ by more than the one variable,"
+      f378b_msg="$f378b_msg so the leg abstains rather than guess; 1 of 2"
+      f378b_msg="$f378b_msg arms ran."
+      no "$f378b_msg"
+    else
+      f378b_red_rc=0
+      f378b_red_out=$(python3 -S checks/verification_matrix.py \
+        --matrix "$f378b_tmp/matrix.json" --doc "$f378b_tmp/VERIFICATION_MATRIX.md" 2>&1) ||
+        f378b_red_rc=$?
+      rm -rf "$f378b_tmp"
+      if [ "$f378b_red_rc" -ne 5 ]; then
+        f378b_msg="MUST_FIRE FAILED (verification_matrix placeholder"
+        f378b_msg="$f378b_msg discrimination): planting 'n/a' as the"
+        f378b_msg="$f378b_msg control_arm of $f378b_rid in both copies gave"
+        f378b_msg="$f378b_msg rc=$f378b_red_rc, expected exactly 5 (RED)."
+        f378b_msg="$f378b_msg rc=0 would launder a row that cannot fail into"
+        f378b_msg="$f378b_msg CLEAR -- the whole of #378 -- and any other"
+        f378b_msg="$f378b_msg nonzero is not this gate's declared RED."
+        f378b_msg="$f378b_msg Output:"
+        f378b_msg="$f378b_msg $(printf '%s\n' "$f378b_red_out" | tr '\n' ' ')"
+        no "$f378b_msg"
+      elif ! printf '%s\n' "$f378b_red_out" |
+        grep -q "C2 CONTROL_ARM_SUBSTANTIVE finding: $f378b_rid"; then
+        f378b_msg="MUST_FIRE FAILED (verification_matrix placeholder"
+        f378b_msg="$f378b_msg discrimination): the gate exited 5, but no C2"
+        f378b_msg="$f378b_msg finding names $f378b_rid -- the one row"
+        f378b_msg="$f378b_msg planted. A RED attributed to pre-existing dirt"
+        f378b_msg="$f378b_msg is not this control firing, and rc alone"
+        f378b_msg="$f378b_msg cannot tell the two apart. Output:"
+        f378b_msg="$f378b_msg $(printf '%s\n' "$f378b_red_out" | tr '\n' ' ')"
+        no "$f378b_msg"
+      else
+        f378b_msg="MUST_FIRE verification_matrix placeholder discrimination:"
+        f378b_msg="$f378b_msg over the copied ledger ($f378b_denom rows"
+        f378b_msg="$f378b_msg under adjudication, 5 checks), the unmodified"
+        f378b_msg="$f378b_msg pair exited rc=0 and the same pair with"
+        f378b_msg="$f378b_msg $f378b_rid's control_arm planted as 'n/a'"
+        f378b_msg="$f378b_msg exited rc=5 with C2 naming that exact row --"
+        f378b_msg="$f378b_msg the placeholder the only variable, the live"
+        f378b_msg="$f378b_msg files untouched. Both outcomes held"
+        ok "$f378b_msg"
+      fi
+    fi
+  fi
+fi
+
 echo "abstentions: $abstain named (each named at its site above with its denominator; 0 added to pass or fail)"
 echo "controls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

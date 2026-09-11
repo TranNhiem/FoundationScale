@@ -533,6 +533,30 @@ jobs:
       - name: Mutation scope (every tracked file sits in exactly one declared set)
         run: python3 checks/mutation_scope.py
 
+      # #378. The verification matrix is the ledger of what this repository claims
+      # to have verified, and docs/VERIFICATION_MATRIX.md renders it. Both are
+      # hand-edited, so they drift in either direction; worse, a row can rot in
+      # place when its control_arm slides to a placeholder while every presence
+      # check stays green. A row with no arm that must come out DIFFERENT cannot
+      # fail, and that is the defect this campaign has filed four times already
+      # (#291, #294, #372, #203) -- the ledger tracking it is the last place it
+      # should be allowed to recur, so C2 tests for the placeholder shape that C1
+      # by construction cannot see.
+      #
+      # It earned its keep on first run: C5 found 31 drifts (the doc's claim cells
+      # carried topic prefixes the ledger did not), C4 found the honest-count
+      # paragraph mis-shaped, and the gate's own precedence was INVERTED -- it
+      # returned 95 while C5 was RED. SC8 exists because that precedence was a
+      # claim no scenario measured.
+      #
+      # It is in the SAME commit as the `verification-matrix` Makefile target it
+      # mirrors, for the reason the two steps above give: #286 is still open, so
+      # the Makefile<->CI pairing is held by hand.
+      - name: Verification-matrix controls (5 MUST_FIRE + negative, abstention, precedence)
+        run: python3 checks/verification_matrix.py --self-test
+      - name: Verification matrix (every row can fail, and the doc equals the ledger)
+        run: python3 checks/verification_matrix.py
+
       # Standing gates (#293). The H100 campaign's nine gate_*.py scripts were
       # invoked ONLY by build_h100_plane.sh, which no make target and no CI step
       # runs -- so the whole tail of that gate plane was reachable by nobody.

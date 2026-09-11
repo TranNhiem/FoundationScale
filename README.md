@@ -466,7 +466,7 @@ itself, from the Makefile's own accounting:
 
 `src/` = 37539 LOC across 50 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 34167 Python LOC and 6489 shell LOC on top of the
-package. `tools/` contains 9533 Python LOC. 178235 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 9533 Python LOC. 179386 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
@@ -529,6 +529,16 @@ everything listed. [-> docs/DEVELOPMENT.md]
   empty list rather than fanning out to zero shards, since a matrix over nothing is
   `all([])` in workflow form — a green wall in front of an unmeasured gate.
   [-> docs/TESTING.md]
+* **What is *not* yet verified is enumerated, not implied.** The verification matrix lists
+  every claim this framework has not yet proven, one row each, split into tier-0 rows that
+  make a training axis declarable and recorded and tier-1 rows that spend GPU time. Every
+  row carries a *control arm* — an arm that must come out different — because a row with no
+  such arm cannot fail, and a row that cannot fail is not a measurement.
+  `checks/verification_matrix.py` enforces that rule over the matrix's JSON rendering, and
+  refuses a control arm that is a placeholder rather than an arm. The row counts are stated
+  in the matrix and derived there by the gate, so they are deliberately not restated here:
+  a countable is owned by exactly one document, the one whose gate measures it.
+  [-> docs/VERIFICATION_MATRIX.md]
 
 ## 26. Troubleshooting
 

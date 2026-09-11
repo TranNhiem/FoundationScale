@@ -1,0 +1,424 @@
+{
+  "schema_version": 1,
+  "rows": [
+    {
+      "id": "T0-1",
+      "tier": 0,
+      "group": "declaration and recording",
+      "claim": "optimizer name is declared and recorded",
+      "run_arm": "build with optimizer=adamw_torch",
+      "control_arm": "declaring an unsupported optimizer REFUSES 96, does not fall back",
+      "cost": "0 GPU",
+      "status": "no key",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T0-2",
+      "tier": 0,
+      "group": "declaration and recording",
+      "claim": "grad accumulation steps are declared and recorded",
+      "run_arm": "accum=4",
+      "control_arm": "kwargs actually carries gradient_accumulation_steps=4 (introspect args)",
+      "cost": "0 GPU",
+      "status": "no key",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T0-3",
+      "tier": 0,
+      "group": "declaration and recording",
+      "claim": "max_grad_norm is declared and recorded",
+      "run_arm": "1.0 vs 0.0",
+      "control_arm": "args.max_grad_norm reads back what was declared",
+      "cost": "0 GPU",
+      "status": "no key",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T0-4",
+      "tier": 0,
+      "group": "declaration and recording",
+      "claim": "gradient checkpointing (recompute) is declared and recorded",
+      "run_arm": "on",
+      "control_arm": "model.is_gradient_checkpointing is True (not just the flag set)",
+      "cost": "0 GPU",
+      "status": "no key",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T0-5",
+      "tier": 0,
+      "group": "declaration and recording",
+      "claim": "attention implementation is declared and recorded",
+      "run_arm": "sdpa",
+      "control_arm": "model.config._attn_implementation == declared; an impl the build cannot supply REFUSES",
+      "cost": "0 GPU",
+      "status": "no key",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T0-6",
+      "tier": 0,
+      "group": "declaration and recording",
+      "claim": "LR schedule and warmup are declared and recorded",
+      "run_arm": "cosine, warmup=2",
+      "control_arm": "the LR at step 1 != LR at step 10 (read the log)",
+      "cost": "0 GPU",
+      "status": "no key",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T0-7",
+      "tier": 0,
+      "group": "declaration and recording",
+      "claim": "sharding strategy (ddp|fsdp|deepspeed) is declared and recorded",
+      "run_arm": "ddp",
+      "control_arm": "a strategy with no wiring REFUSES 96 rather than silently running DDP",
+      "cost": "0 GPU",
+      "status": "no key",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T0-8",
+      "tier": 0,
+      "group": "declaration and recording",
+      "claim": "CPU optimizer offload is declared and recorded",
+      "run_arm": "off",
+      "control_arm": "declaring on with no backend REFUSES",
+      "cost": "0 GPU",
+      "status": "no key",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T0-9",
+      "tier": 0,
+      "group": "declaration and recording",
+      "claim": "code.status is a real commit",
+      "run_arm": "run from a git checkout",
+      "control_arm": "#346: a COPY must record status=not_a_repository AND the run must say so loudly, not proceed silently",
+      "cost": "0 GPU",
+      "status": "RED (#346)",
+      "blocked_by": [],
+      "findings": [
+        "#346"
+      ]
+    },
+    {
+      "id": "T1-1",
+      "tier": 1,
+      "group": "precision",
+      "claim": "fp32 masters change the update magnitude relative to bf16",
+      "run_arm": "fp32 masters",
+      "control_arm": "bf16 masters, same seed/lr/steps",
+      "cost": "~15 min x2",
+      "status": "MEASURED (#367/#368: bf16 discards ~99.99%) — re-take under the new manifest",
+      "blocked_by": [],
+      "findings": [
+        "#367",
+        "#368"
+      ]
+    },
+    {
+      "id": "T1-2",
+      "tier": 1,
+      "group": "precision",
+      "claim": "fp16 grad scaler skips an overflowing step",
+      "run_arm": "fp16",
+      "control_arm": "inject an overflow; scaler must SKIP, loss must not become nan",
+      "cost": "~15 min",
+      "status": "never run",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T1-3",
+      "tier": 1,
+      "group": "precision",
+      "claim": "a 4-bit (nvfp4) declaration REFUSES, never falls back to bf16",
+      "run_arm": "precision=nvfp4",
+      "control_arm": "assert rc==96 AND no checkpoint written",
+      "cost": "~2 min",
+      "status": "REFUSES by design (#345)",
+      "blocked_by": [],
+      "findings": [
+        "#345"
+      ]
+    },
+    {
+      "id": "T1-4",
+      "tier": 1,
+      "group": "checkpoint lifecycle",
+      "claim": "reloaded weights are bit-identical (save->load parity)",
+      "run_arm": "save then load, compare_keys EXACT",
+      "control_arm": "perturb one tensor -> parity must go RED",
+      "cost": "~15 min",
+      "status": "verify/parity.py SHIPPED, no run",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T1-5",
+      "tier": 1,
+      "group": "checkpoint lifecycle",
+      "claim": "10 steps + resume 10 == 20 steps straight (RESUME fidelity)",
+      "run_arm": "resume arm",
+      "control_arm": "straight-through arm; final weights must match within tolerance",
+      "cost": "~40 min",
+      "status": "THE gap — No optimizer/RNG/dataloader restore is proven",
+      "blocked_by": [],
+      "findings": [
+        "#177",
+        "#192"
+      ]
+    },
+    {
+      "id": "T1-6",
+      "tier": 1,
+      "group": "checkpoint lifecycle",
+      "claim": "a checkpoint whose shard is a symlink to the base is CAUGHT",
+      "run_arm": "the #343 artifact",
+      "control_arm": "a real shard must pass the same detector",
+      "cost": "~5 min",
+      "status": "ABSENT, risk rated maximal",
+      "blocked_by": [],
+      "findings": [
+        "#343"
+      ]
+    },
+    {
+      "id": "T1-7",
+      "tier": 1,
+      "group": "checkpoint lifecycle",
+      "claim": "converted weights are parity-equal to source (DCP<->HF)",
+      "run_arm": "convert both ways",
+      "control_arm": "a truncated shard must be caught",
+      "cost": "~20 min",
+      "status": "ABSENT",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T1-8",
+      "tier": 1,
+      "group": "checkpoint lifecycle",
+      "claim": "resharding: save on 4 GPUs, load on 2",
+      "run_arm": "4->2",
+      "control_arm": "4->3 (non-divisor) must REFUSE, not silently drop experts",
+      "cost": "~30 min",
+      "status": "ABSENT",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T1-9",
+      "tier": 1,
+      "group": "optimizer / memory / kernels",
+      "claim": "adamw vs fused vs adafactor vs sgd differ in step time and loss curve",
+      "run_arm": "4 arms, same seed",
+      "control_arm": "identical curves across optimizers = the knob did nothing",
+      "cost": "~15 min x4",
+      "status": "blocked on T0-1",
+      "blocked_by": [
+        "T0-1"
+      ],
+      "findings": []
+    },
+    {
+      "id": "T1-10",
+      "tier": 1,
+      "group": "optimizer / memory / kernels",
+      "claim": "accum=4,bs=1 and accum=1,bs=4 give the SAME loss curve",
+      "run_arm": "both arms",
+      "control_arm": "if they differ beyond tolerance, accumulation is wrong",
+      "cost": "~15 min x2",
+      "status": "blocked on T0-2",
+      "blocked_by": [
+        "T0-2"
+      ],
+      "findings": []
+    },
+    {
+      "id": "T1-11",
+      "tier": 1,
+      "group": "optimizer / memory / kernels",
+      "claim": "grad checkpointing: peak memory DROPS and step time RISES",
+      "run_arm": "on vs off",
+      "control_arm": "neither moving = the flag is a no-op (the silent-fallback shape)",
+      "cost": "~15 min x2",
+      "status": "blocked on T0-4",
+      "blocked_by": [
+        "T0-4"
+      ],
+      "findings": []
+    },
+    {
+      "id": "T1-12",
+      "tier": 1,
+      "group": "optimizer / memory / kernels",
+      "claim": "eager/sdpa/flash agree on logits within tolerance, differ in step time",
+      "run_arm": "3 arms",
+      "control_arm": "identical step times = the impl never changed",
+      "cost": "~10 min x3",
+      "status": "blocked on T0-5",
+      "blocked_by": [
+        "T0-5"
+      ],
+      "findings": []
+    },
+    {
+      "id": "T1-13",
+      "tier": 1,
+      "group": "optimizer / memory / kernels",
+      "claim": "CPU offload: optimizer state leaves GPU memory",
+      "run_arm": "offload on vs off",
+      "control_arm": "GPU memory must drop by ~optimizer-state size; if not, offload did nothing",
+      "cost": "~20 min x2",
+      "status": "blocked on T0-8",
+      "blocked_by": [
+        "T0-8"
+      ],
+      "findings": []
+    },
+    {
+      "id": "T1-14",
+      "tier": 1,
+      "group": "optimizer / memory / kernels",
+      "claim": "ZeRO-1/2/3 reduce per-rank memory monotonically",
+      "run_arm": "3 arms + DDP baseline",
+      "control_arm": "flat memory across stages = no sharding happened",
+      "cost": "~30 min x4",
+      "status": "blocked on T0-7",
+      "blocked_by": [
+        "T0-7"
+      ],
+      "findings": []
+    },
+    {
+      "id": "T1-15",
+      "tier": 1,
+      "group": "architecture",
+      "claim": "a dense model trains end-to-end and the bytes move",
+      "run_arm": "Qwen dense, lr>0",
+      "control_arm": "an `lr=0` arm through the same path: weight parity must show ZERO movement",
+      "cost": "~15 min x2",
+      "status": "done (#162/#176, #366) — re-take under new manifest, control arm never run",
+      "blocked_by": [],
+      "findings": [
+        "#162",
+        "#176",
+        "#366"
+      ]
+    },
+    {
+      "id": "T1-16",
+      "tier": 1,
+      "group": "architecture",
+      "claim": "an MoE model trains and experts receive gradient",
+      "run_arm": "MoE arm",
+      "control_arm": "a router that never routes = zero grad on some experts; must be detected",
+      "cost": "~40 min",
+      "status": "classification SHIPPED, runtime ABSENT",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T1-17",
+      "tier": 1,
+      "group": "architecture",
+      "claim": "ep=2 shards experts across ranks",
+      "run_arm": "ep=2 vs ep=1",
+      "control_arm": "identical per-rank memory = no expert sharding",
+      "cost": "~40 min",
+      "status": "PARTIAL",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T1-18",
+      "tier": 1,
+      "group": "architecture",
+      "claim": "LoRA through the package: adapter weights train, base frozen",
+      "run_arm": "LoRA arm",
+      "control_arm": "base-weight parity must show ZERO movement; adapter parity must show movement",
+      "cost": "~20 min",
+      "status": "ABSENT from the package plane (#329)",
+      "blocked_by": [],
+      "findings": [
+        "#329"
+      ]
+    },
+    {
+      "id": "T1-19",
+      "tier": 1,
+      "group": "architecture",
+      "claim": "tied embeddings: tying survives save/load and sharding",
+      "run_arm": "a tied-embedding model",
+      "control_arm": "untied model as control",
+      "cost": "~20 min",
+      "status": "ABSENT (#172/#202 shape)",
+      "blocked_by": [],
+      "findings": [
+        "#172",
+        "#202"
+      ]
+    },
+    {
+      "id": "T1-20",
+      "tier": 1,
+      "group": "modality",
+      "claim": "text: a text corpus trains end-to-end and the bytes move",
+      "run_arm": "text arm, lr>0",
+      "control_arm": "an `lr=0` arm through the same path: weight parity must show ZERO movement",
+      "cost": "~15 min x2",
+      "status": "done (#162/#176, #366), control arm never run",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T1-21",
+      "tier": 1,
+      "group": "modality",
+      "claim": "an image-bearing corpus trains and the vision tower's weights MOVE",
+      "run_arm": "image arm",
+      "control_arm": "a text-only arm through the same path: tower weights must NOT move",
+      "cost": "~30 min",
+      "status": "#371 routed images, never trained on them",
+      "blocked_by": [],
+      "findings": [
+        "#371"
+      ]
+    },
+    {
+      "id": "T1-22",
+      "tier": 1,
+      "group": "modality",
+      "claim": "declaring video REFUSES cleanly today",
+      "run_arm": "video corpus",
+      "control_arm": "must be 96, not a silent text-only train",
+      "cost": "~5 min",
+      "status": "refuses by design",
+      "blocked_by": [],
+      "findings": []
+    },
+    {
+      "id": "T1-23",
+      "tier": 1,
+      "group": "modality",
+      "claim": "declaring audio REFUSES cleanly today",
+      "run_arm": "audio corpus",
+      "control_arm": "must be 96, not a silent drop of the audio field",
+      "cost": "~5 min",
+      "status": "ABSENT — may silently drop",
+      "blocked_by": [],
+      "findings": []
+    }
+  ]
+}
