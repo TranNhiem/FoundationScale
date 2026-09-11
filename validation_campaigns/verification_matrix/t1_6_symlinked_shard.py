@@ -26,9 +26,13 @@ This harness therefore measures three verdicts and one counter:
 Two ways to run it:
 
   --self-test   builds its own fixtures under TemporaryDirectory and proves each
-                instrument fires BOTH ways (see CONTROLS below). Pure stdlib, no
-                GPU, no cluster, no estate access -- a laptop and the estate see
-                the same eight controls.
+                instrument fires BOTH ways (see CONTROLS below). Stdlib fixtures,
+                no GPU, no cluster, no estate access -- a laptop and the estate
+                see the same eleven controls, 8 of which also pass against a
+                pre-fix tree. ``foundationscale`` itself is required and is
+                bootstrapped from the checkout's own ``src/`` when no
+                distribution is installed, because the suite that runs this file
+                supplies whatever interpreter it is running under.
 
   <ckpt-dir>    runs the three arms against a REAL safetensors checkpoint. Only
                 shard HEADERS are read (8-byte length prefix + JSON), never tensor
@@ -56,6 +60,54 @@ UNMEASURED = 95
 REFUSE = 96
 
 INDEX_NAME = "model.safetensors.index.json"
+
+
+# ---------------------------------------------------------------------------
+# Import bootstrap
+# ---------------------------------------------------------------------------
+
+
+def _repo_src_root(start: Path) -> Path | None:
+    """Walk upward from ``start`` for the ``src/`` of a src-layout checkout, or None.
+
+    The marker is ``src/foundationscale/__init__.py`` -- the package's own module file,
+    not a directory that merely happens to be called ``src`` -- so an unrelated tree with
+    the same directory name does not answer for this repository.
+    """
+    for parent in [start, *start.parents]:
+        candidate = parent / "src"
+        if (candidate / "foundationscale" / "__init__.py").is_file():
+            return candidate
+    return None
+
+
+def _ensure_package_importable() -> str | None:
+    """Make ``foundationscale`` importable; return the reason it is not, or None.
+
+    ``checks/campaign_self_tests.py`` executes this file with the interpreter that is
+    running the suite, and the launcher-contracts CI job runs that suite under a bare
+    ``python3`` which has never had ``pip install -e .`` applied to it. An installed
+    distribution therefore cannot be assumed, so this falls back to the checkout's own
+    ``src/``. An environment where NEITHER works is UNMEASURED (95), never RED (5): a
+    measurement that could not be taken is a different fact from one that disagreed, and
+    collapsing the two is how an environment gap gets read as a defect in the tree.
+    """
+    try:
+        import foundationscale  # noqa: F401  -- probing importability, not using it
+    except ImportError:
+        pass
+    else:
+        return None
+    here = Path(__file__).resolve().parent
+    src = _repo_src_root(here)
+    if src is None:
+        return f"no src/foundationscale/__init__.py in any ancestor of {here}"
+    sys.path.insert(0, os.fspath(src))
+    try:
+        import foundationscale  # noqa: F401  -- probing importability, not using it
+    except ImportError as exc:
+        return f"{src} is on sys.path and `import foundationscale` still failed: {exc}"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +253,7 @@ class _count_link_follows:  # noqa: N801 -- a context manager used as a verb
 
 
 # ---------------------------------------------------------------------------
-# Self-test -- eight controls, each planted so it fires BOTH ways
+# Self-test -- eleven controls, each planted so it fires BOTH ways
 # ---------------------------------------------------------------------------
 
 
@@ -311,6 +363,26 @@ def _self_test() -> int:
         rc_real = main([str(real)])
         record("C9 all arms agree on a fixture", rc_real == GREEN, f"rc={rc_real}")
 
+        # C10/C11: the import bootstrap is itself an instrument, and an instrument that
+        # can only answer one way proves nothing. C10 is the arm this file depends on --
+        # the walk finds THIS checkout from THIS file's directory. C11 is the negative
+        # control at the same shape: started somewhere with no package above it, the walk
+        # must return None rather than volunteering an unrelated ``src``. Without C11 a
+        # walk that returned the first directory it saw would look correct in C10.
+        found = _repo_src_root(Path(__file__).resolve().parent)
+        record(
+            "C10 src-layout walk finds this checkout",
+            found is not None and (found / "foundationscale" / "__init__.py").is_file(),
+            f"src={found}",
+        )
+        outside = base / "no_package_here" / "nested"
+        outside.mkdir(parents=True)
+        record(
+            "C11 walk declines a tree with no package",
+            _repo_src_root(outside) is None,
+            f"walk({outside}) -> {_repo_src_root(outside)}",
+        )
+
     width = max(len(name) for name, _, _ in checks)
     for name, ok, detail in checks:
         print(f"  [{'PASS' if ok else 'FAIL'}] {name:<{width}}  {detail}")
@@ -330,6 +402,10 @@ def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__)
         return REFUSE
+    reason = _ensure_package_importable()
+    if reason is not None:
+        print(f"UNMEASURED: foundationscale is not importable -- {reason}")
+        return UNMEASURED
     if argv[0] == "--self-test":
         return _self_test()
 

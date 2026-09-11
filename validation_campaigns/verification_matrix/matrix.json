@@ -201,7 +201,7 @@
       "run_arm": "the #343 artifact",
       "control_arm": "a real shard must pass the same detector",
       "cost": "~5 min",
-      "status": "SHIPPED (#343): is_symlink() hoisted ahead of exists(), so a linked shard draws no link-following stat at all; GREEN on a real two-shard ~51.6 GB safetensors checkpoint on GB200 with zero byte credit; harness 9/9 here, 6/9 pre-fix",
+      "status": "SHIPPED (#343): is_symlink() hoisted ahead of exists(), so a linked shard draws no link-following stat at all; GREEN on a real two-shard ~51.6 GB safetensors checkpoint on GB200 with zero byte credit; harness 11/11 here, 8/11 pre-fix (the 3 that flip are the detector arms; the 8 that hold include two proving the src-layout import bootstrap both finds this checkout and declines a tree with no package, added after the launcher-contracts job showed the self-test assumed an installed distribution)",
       "blocked_by": [],
       "findings": [
         "#343"
