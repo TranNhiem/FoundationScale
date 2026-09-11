@@ -154,7 +154,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple, NoReturn, Protocol, cast
 
@@ -797,28 +797,51 @@ def emit_json(result: GateResult) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
-def compute_updated_floors(outcomes: Sequence[ModuleOutcome]) -> tuple[dict[str, int], list[str]]:
-    """Build the new floor table from a real measurement.
+def compute_updated_floors(
+    outcomes: Sequence[ModuleOutcome], existing: Mapping[str, int]
+) -> tuple[dict[str, int], list[str], list[str]]:
+    """Build the new floor table from a real measurement, carrying unmeasured floors over.
 
     An entry is only worth writing when the measured value, rounded DOWN, lands outside
     [DEFAULT_FLOOR, DEFAULT_FLOOR + SLACK]; inside that band the default already tells the
     truth, and a table that restates the default for every module stops being auditable.
-    Unmeasured modules are skipped (never floor-typed from thin air) and returned for reporting.
+
+    The carry-over rule is the half #385 broke. Floors derive from measurement, and an
+    ABSENT measurement is not a measurement of DEFAULT_FLOOR -- it is not evidence at all,
+    so the previous evidence stands: a tracked module whose measured is None and which has
+    an entry in `existing` keeps that entry byte-identical, and comes back in `carried`.
+    An unmeasured module with NO existing entry comes back in `unfloored` -- the honest
+    skip: a new module no test imports gets DEFAULT_FLOOR by omission, which is already
+    the right answer, and there was no floor to lose. `existing` is a required argument
+    so no caller can forget which table is being replaced: on 2026-09-11 a narrower
+    --cov scope left three tools/ modules unmeasured, and skipping them silently rewrote
+    the block without two ratchet floors, releasing both ratchets by remedy.
     """
     floors: dict[str, int] = {}
-    skipped: list[str] = []
+    carried: list[str] = []
+    unfloored: list[str] = []
     for outcome in outcomes:
         if outcome.measured is None:
-            skipped.append(outcome.path)
+            # Absence of a measurement is not evidence about coverage: keep the floor the
+            # last measurement justified, or skip honestly if there never was one.
+            if outcome.path in existing:
+                floors[outcome.path] = existing[outcome.path]
+                carried.append(outcome.path)
+            else:
+                unfloored.append(outcome.path)
             continue
         candidate = math.floor(outcome.measured)
         if DEFAULT_FLOOR <= candidate <= DEFAULT_FLOOR + SLACK:
             continue
         floors[outcome.path] = candidate
-    return floors, skipped
+    carried.sort()
+    unfloored.sort()
+    return floors, carried, unfloored
 
 
-def render_floors_block(floors: Mapping[str, int], measured: Mapping[str, float]) -> list[str]:
+def render_floors_block(
+    floors: Mapping[str, int], measured: Mapping[str, float], carried: Collection[str]
+) -> list[str]:
     """Render the table in two LABELLED halves, both generated, neither hand-written.
 
     An entry below DEFAULT_FLOOR and an entry above it are not the same kind of fact, and a flat
@@ -826,9 +849,22 @@ def render_floors_block(floors: Mapping[str, int], measured: Mapping[str, float]
     standard this repository holds; it is the opposite -- a module that meets no standard, whose
     floor exists only to stop it rotting further. Splitting them puts the debt where a reader
     trips over it, with its own count, and every number still comes from --update.
+
+    A path in `carried` has NO measurement in this report, so its line cannot quote one:
+    `measured[path]` would raise KeyError, and a fabricated percentage would attribute to
+    this run a number it never saw. The carried comment says what is true -- the floor
+    stands, unmeasured, on the last --update that did measure the module.
     """
     if not floors:
         return ["FLOORS: dict[str, int] = {}\n"]
+
+    def entry_comment(path: str) -> str:
+        # The carried branch is not a nicety: it is what keeps the renderer honest (and
+        # merely alive) for a floor this report did not measure.
+        if path in carried:
+            return "# carried over unmeasured; last set by --update"
+        return f"# set by --update; measured {measured[path]:.1f}%"
+
     debt = sorted(p for p in floors if floors[p] < DEFAULT_FLOOR)
     ratchet = sorted(p for p in floors if floors[p] >= DEFAULT_FLOOR)
     lines = ["FLOORS: dict[str, int] = {\n"]
@@ -842,10 +878,7 @@ def render_floors_block(floors: Mapping[str, int], measured: Mapping[str, float]
             "    # add a line by hand, and do not lower one to make a red run green.\n"
         )
         for path in debt:
-            lines.append(
-                f"    {json.dumps(path)}: {floors[path]},  # set by --update; measured "
-                f"{measured[path]:.1f}%\n"
-            )
+            lines.append(f"    {json.dumps(path)}: {floors[path]},  {entry_comment(path)}\n")
     if ratchet:
         # No blank separator line between the halves, however much one would help the eye:
         # `ruff format` DELETES every empty line inside a collection literal, so emitting one
@@ -860,10 +893,7 @@ def render_floors_block(floors: Mapping[str, int], measured: Mapping[str, float]
             f"{DEFAULT_FLOOR}% is RED\n    # rather than invisible.\n"
         )
         for path in ratchet:
-            lines.append(
-                f"    {json.dumps(path)}: {floors[path]},  # set by --update; measured "
-                f"{measured[path]:.1f}%\n"
-            )
+            lines.append(f"    {json.dumps(path)}: {floors[path]},  {entry_comment(path)}\n")
     lines.append("}\n")
     return lines
 
@@ -872,7 +902,10 @@ def apply_update(result: GateResult, self_path: Path) -> int:
     """Rewrite ONLY the FLOORS block of this file, between the two sentinel lines.
 
     Floors derive from measurement or they derive from nothing; an update that cannot see a
-    real, current report refuses rather than guess.
+    real, current report refuses rather than guess. The carry-over rule is #385's fix: a
+    tracked module this report does not measure keeps its existing floor byte-for-byte,
+    because an absent measurement is not a measurement of the default -- it is not evidence
+    at all, so the previous evidence stands.
     """
     if result.load_error is not None or result.files_empty or result.stale:
         print(
@@ -880,7 +913,7 @@ def apply_update(result: GateResult, self_path: Path) -> int:
             "does not describe the current source; the table is untouched"
         )
         return EXIT_UNMEASURED
-    floors, skipped = compute_updated_floors(result.outcomes)
+    floors, carried, unfloored = compute_updated_floors(result.outcomes, FLOORS)
     measured = {o.path: o.measured for o in result.outcomes if o.measured is not None}
     try:
         text_lines = self_path.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -896,23 +929,45 @@ def apply_update(result: GateResult, self_path: Path) -> int:
         )
         return EXIT_RED
     new_lines = (
-        text_lines[: begin[0] + 1] + render_floors_block(floors, measured) + text_lines[end[0] :]
+        text_lines[: begin[0] + 1]
+        + render_floors_block(floors, measured, carried)
+        + text_lines[end[0] :]
     )
     try:
         self_path.write_text("".join(new_lines), encoding="utf-8")
     except OSError as exc:
         print(f"UPDATE RED: cannot write {self_path}: {exc}")
         return EXIT_RED
-    for path in skipped:
-        print(f"UPDATE skip {path}: unmeasured in this report; no floor written from no data")
+    # The outcome path set is what separates "the module is gone" from "the module is
+    # unmeasured": evaluate() iterates the tracked set, so a path in FLOORS with no outcome
+    # was deleted or renamed, and a path in FLOORS with an outcome whose measured is None
+    # was merely not measured this run. #385 printed the same "removed" line for both.
+    outcome_paths = {o.path for o in result.outcomes}
+    for path in unfloored:
+        print(
+            f"UPDATE skip {path}: unmeasured in this report and carries no floor; "
+            "nothing written, nothing lost"
+        )
+    for path in carried:
+        print(
+            f"UPDATE carried {path}: floor {FLOORS[path]} kept UNCHANGED; the report does "
+            "not measure this module, and no measurement is not a measurement of "
+            f"{DEFAULT_FLOOR}"
+        )
     for path in sorted(set(FLOORS) | set(floors)):
         if path not in FLOORS:
             print(f"UPDATE added {path}: floor {floors[path]}")
         elif path not in floors:
-            print(
-                f"UPDATE removed {path}: measured value now inside "
-                f"[{DEFAULT_FLOOR}, {DEFAULT_FLOOR + SLACK}]; the default covers it"
-            )
+            if path not in outcome_paths:
+                print(
+                    f"UPDATE dropped {path}: no longer in the tracked set, so this report "
+                    "could not measure it and the floor has nothing left to constrain"
+                )
+            else:
+                print(
+                    f"UPDATE removed {path}: measured value now inside "
+                    f"[{DEFAULT_FLOOR}, {DEFAULT_FLOOR + SLACK}]; the default covers it"
+                )
         elif FLOORS[path] != floors[path]:
             print(f"UPDATE moved {path}: {FLOORS[path]} -> {floors[path]}")
     if floors == FLOORS:
@@ -922,7 +977,12 @@ def apply_update(result: GateResult, self_path: Path) -> int:
 
 
 def run_self_test() -> int:
-    """Drive sixteen controls through measure() against synthetic reports in a temp dir.
+    """Drive twenty controls in a temp dir: sixteen through measure() against synthetic
+    reports, and four -- the --update carry-over controls added as #385's regression
+    drill -- against compute_updated_floors and render_floors_block directly, from
+    hand-built ModuleOutcome values and a hand-built existing floor table, because the
+    axis under test there is the carry-over rule and nothing else, and no report file
+    is needed to build an outcome whose measured is None.
 
     The tracked set and the repo root are both INJECTED, never discovered from the real git
     tree, so the controls are hermetic: they cannot pass or fail because of what happens to be
@@ -1151,7 +1211,111 @@ def run_self_test() -> int:
             resolve_parser=lambda: None,
         )
 
-    total = 16
+        # The four --update controls. Everything above drives measure(); these four drive
+        # compute_updated_floors and render_floors_block DIRECTLY, over hand-built outcomes
+        # and a hand-built existing table, because the axis under test is the carry-over
+        # rule and nothing else -- no report file is needed to build an outcome whose
+        # measured is None. This is the axis finding #385 broke, measured 2026-09-11: a
+        # report produced with a narrower --cov scope than the Makefile's left three tools/
+        # modules unmeasured, and --update DELETED two ratchet floors while printing that
+        # their measured values now sat inside the default band -- the ratchet released by
+        # the very remedy the RED banner advertises. The first control is the drill: it
+        # misfires on the pre-fix code, which skipped an unmeasured path and so dropped its
+        # floor from the rewritten block. The second is the inverse that keeps the drill
+        # non-vacuous: measured inside the band, the same module's floor MUST be removed,
+        # or a "carry everything always" patch would pass. The third pins the honest skip:
+        # unmeasured and never floored writes nothing and loses nothing. The fourth drives
+        # the renderer, where a carried entry has no measurement and the old comment
+        # template would have raised KeyError on measured[path] -- the crash the carry-over
+        # introduces if the renderer is left alone.
+
+        def update_outcome(path: str, measured: float | None) -> ModuleOutcome:
+            # compute_updated_floors reads only `measured`; the status is derived anyway,
+            # so the value stays honest if a future control asserts past the floor axis.
+            if measured is None:
+                return ModuleOutcome(path, "unmeasured", None, DEFAULT_FLOOR, None)
+            status = "clear" if measured <= DEFAULT_FLOOR + SLACK else "red-stale"
+            return ModuleOutcome(path, status, measured, DEFAULT_FLOOR, 0)
+
+        def check_update(label: str, behaved: bool, wanted: str, got: str) -> None:
+            # The same idiom as check(): one line per control in the same shape, and a
+            # misfire lands in the same failures list, under the same denominator sentence.
+            print(
+                f"control {label}: wanted {wanted}, got {got} -- "
+                + ("behaved" if behaved else "MISFIRED")
+            )
+            if not behaved:
+                failures.append(label)
+
+        # The #385 drill. 98 is the floor tools/live_save_gate.py actually carried on
+        # 2026-09-11, when a narrower --cov scope left it unmeasured and --update deleted
+        # the line. The measured sibling keeps the table non-empty -- the shape that made
+        # the deletion silent.
+        drill_path = "tools/live_save_gate.py"
+        drill_existing = {drill_path: 98}
+        drill_floors, drill_carried, drill_unfloored = compute_updated_floors(
+            [update_outcome(drill_path, None), update_outcome(alpha, 99.4)], drill_existing
+        )
+        check_update(
+            "MUST_PASS #385: an UNMEASURED module's existing floor is CARRIED, not deleted",
+            drill_floors.get(drill_path) == 98
+            and drill_path in drill_carried
+            and drill_path not in drill_unfloored,
+            "floor 98 carried into floors, the path named in carried and not in unfloored",
+            f"floors={drill_floors}, carried={drill_carried}, unfloored={drill_unfloored}",
+        )
+
+        # The inverse arm: the SAME two outcomes with the module measured at 92.0, inside
+        # [90, 95]. The floor must now be genuinely REMOVED -- absent from floors, carried
+        # and unfloored alike -- or the drill above would pass under "carry everything".
+        inverse_floors, inverse_carried, inverse_unfloored = compute_updated_floors(
+            [update_outcome(drill_path, 92.0), update_outcome(alpha, 99.4)], drill_existing
+        )
+        check_update(
+            "MUST_PASS the same module MEASURED inside the band is genuinely removed",
+            drill_path not in inverse_floors
+            and drill_path not in inverse_carried
+            and drill_path not in inverse_unfloored,
+            "the floor gone from floors, from carried and from unfloored alike",
+            f"floors={inverse_floors}, carried={inverse_carried}, unfloored={inverse_unfloored}",
+        )
+
+        # Unmeasured and never floored: nothing to carry and nothing to lose. The default
+        # covers a new module by omission, which is already the right answer, so the path
+        # belongs in unfloored -- the honest skip -- and nowhere else.
+        new_path = "src/foundationscale/gamma.py"
+        new_floors, new_carried, new_unfloored = compute_updated_floors(
+            [update_outcome(new_path, None)], {}
+        )
+        check_update(
+            "MUST_PASS an UNMEASURED module with no existing floor is skipped, not carried",
+            new_path not in new_floors
+            and new_path in new_unfloored
+            and new_path not in new_carried,
+            "nothing written, the path named in unfloored and not in carried",
+            f"floors={new_floors}, carried={new_carried}, unfloored={new_unfloored}",
+        )
+
+        # The renderer arm. "unmeasured" contains "measured" as a substring, so the
+        # assertion keys on the full "set by --update; measured" prefix: the carried line
+        # must not quote a measurement this report does not contain, and the measured line
+        # must keep quoting its own.
+        rendered = render_floors_block({drill_path: 98, alpha: 99}, {alpha: 99.4}, [drill_path])
+        rendered_carried = next(line for line in rendered if drill_path in line)
+        rendered_measured = next(line for line in rendered if alpha in line)
+        measured_comment = "set by --update; measured"
+        check_update(
+            "MUST_PASS the renderer marks a carried floor as carried, never as measured",
+            "carried over unmeasured" in rendered_carried
+            and measured_comment not in rendered_carried
+            and "carried over unmeasured" not in rendered_measured
+            and measured_comment in rendered_measured,
+            "the carried line carrying the carried comment, the measured line its own",
+            f"carried line={rendered_carried.strip()!r}, measured "
+            f"line={rendered_measured.strip()!r}",
+        )
+
+    total = 20
     if failures:
         print(
             f"SELF-TEST DENOMINATOR: {total - len(failures)} of {total} controls behaved; "
@@ -1162,10 +1326,12 @@ def run_self_test() -> int:
         return EXIT_REFUSE
     print(
         f"SELF-TEST DENOMINATOR: {total} of {total} controls behaved; 11x MUST_FIRE produced "
-        "the declared nonzero exits, 5x MUST_PASS pinned both band boundaries as inclusive, "
-        "both arms of the in-tree/out-of-tree split, and the fresh-report CLEAR path, with the "
-        "whole freshness arm exercised through an injected parser resolver so the self-test "
-        "runs and means the same under `python3 -S`"
+        "the declared nonzero exits, 9x MUST_PASS pinned both band boundaries as inclusive, "
+        "both arms of the in-tree/out-of-tree split, the fresh-report CLEAR path, and the "
+        "--update carry-over rule -- one of the nine is the #385 drill, MUST_FIRE-shaped in "
+        "that it misfires on the pre-fix code that deleted an unmeasured module's floor -- "
+        "with the whole freshness arm exercised through an injected parser resolver so the "
+        "self-test runs and means the same under `python3 -S`"
     )
     return EXIT_CLEAR
 
