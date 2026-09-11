@@ -21,6 +21,105 @@ pass=0; fail=0; abstain=0
 ok(){ printf '  PASS  %s\n' "$1"; pass=$((pass+1)); }
 no(){ printf '  FAIL  %s\n' "$1"; fail=$((fail+1)); }
 
+# ---- #376: one resolved interpreter, and one named precondition ------------
+#
+# Both suites shell out to bare `python3` in ~150 places -- inside heredocs,
+# inside fixtures a leg writes at run time, inside the sub-suite one of them
+# execs. That binds the verdict to whatever `python3` the caller's PATH
+# happened to hold. On this developer's Mac (/usr/bin/python3 is 3.9.6, below
+# the >=3.10 floor pyproject.toml declares) the checks suite measured
+# "controls: 22 passed, 9 failed": six gate self-tests and three MUST_FIRE
+# discrimination legs, each announcing its gate as broken. No gate was broken.
+# Nine reds for one unmet precondition is not a measurement -- it is noise
+# deep enough to bury whatever the suite was actually run for.
+#
+# Two moves, in this order:
+#
+#   1. Resolve ONE interpreter by the rule the Makefile already uses (repo
+#      .venv first, else bare python3; FS_SUITE_PY overrides), and put a
+#      one-entry shim directory in FRONT of PATH so every bare `python3`
+#      binds to it -- including the call sites a leg generates at run time,
+#      which no textual rewrite of these files could ever reach. Rewriting
+#      the ~150 literal sites was the alternative and is worse on both axes:
+#      its failure mode is a missed site that quietly keeps the old
+#      interpreter, and many of those sites ASSERT about the literal string
+#      `python3` rather than calling it. The shim holds `python3` and nothing
+#      else -- prepending .venv/bin itself would also shadow ruff, mypy,
+#      pytest and torchrun for every leg, a far larger change than the one
+#      being made -- and it is an exec wrapper rather than a symlink so the
+#      interpreter reports the venv it actually belongs to.
+#      Note the direction of travel: this makes the verdict LESS
+#      environment-dependent, not more (#83/#111/#229). The suite now names
+#      the interpreter it ran under instead of silently inheriting one.
+#
+#   2. Measure that interpreter against the floor. Below it, print ONE named
+#      abstention and exit 95 (UNMEASURED) without running a single leg. A
+#      suite that cannot run its gates has not found them defective, and
+#      saying so in one line is the whole finding. Exit 5 would claim the
+#      gates are broken; exit 0 would be a green over controls that never
+#      ran. No "controls:" line is printed on that path, because the frozen
+#      summary line is a report from a suite that RAN -- "0 passed, 0 failed"
+#      would be a claim about the gates, and this is a claim about the host.
+#
+# The shim path is deterministic rather than `mktemp -d` because a
+# prelude-level EXIT trap could not survive: test_launcher_contracts.sh:383
+# installs its own sandbox trap and bash keeps exactly one EXIT trap per
+# shell, so the cleanup would be silently dropped. A fixed per-uid path is
+# rewritten in place by the next run instead of accumulating.
+FS_SUITE_PY_FLOOR=${FS_SUITE_PY_FLOOR:-3.10}
+if [ -z "${FS_SUITE_PY:-}" ]; then
+  if [ -x "$LDIR/../.venv/bin/python3" ]; then
+    FS_SUITE_PY=$(cd "$LDIR/.." && pwd)/.venv/bin/python3
+  else
+    FS_SUITE_PY=$(command -v python3 2>/dev/null)
+  fi
+fi
+_fs_py_state=OK
+_fs_py_ver=
+if [ -z "$FS_SUITE_PY" ] || [ ! -x "$FS_SUITE_PY" ]; then
+  _fs_py_state=ABSENT
+else
+  _fs_py_ver=$("$FS_SUITE_PY" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null)
+  "$FS_SUITE_PY" -c 'import sys
+floor = tuple(int(p) for p in sys.argv[1].split("."))
+raise SystemExit(0 if sys.version_info[:len(floor)] >= floor else 1)' "$FS_SUITE_PY_FLOOR" 2>/dev/null \
+    || _fs_py_state=BELOW_FLOOR
+fi
+if [ "$_fs_py_state" = OK ]; then
+  # Only intervene when the resolved interpreter is NOT already what a bare
+  # `python3` resolves to. On a machine with no repo venv the two are the same
+  # and prepending anything would shadow that machine's other tools for no gain.
+  if [ "$(command -v python3 2>/dev/null)" != "$FS_SUITE_PY" ]; then
+    FS_SUITE_PY_SHIM=${TMPDIR:-/tmp}/fs-suite-py.$(id -u)
+    if mkdir -p "$FS_SUITE_PY_SHIM" 2>/dev/null \
+       && printf '#!/bin/sh\nexec "%s" "$@"\n' "$FS_SUITE_PY" > "$FS_SUITE_PY_SHIM/python3" 2>/dev/null \
+       && chmod +x "$FS_SUITE_PY_SHIM/python3" 2>/dev/null; then
+      PATH=$FS_SUITE_PY_SHIM:$PATH
+    else
+      _fs_py_state=SHIM_FAILED
+    fi
+  fi
+fi
+if [ "$_fs_py_state" != OK ]; then
+  case $_fs_py_state in
+    ABSENT)
+      printf '  ABSTAIN  interpreter precondition: no executable python3 resolved (FS_SUITE_PY=%s)\n' \
+        "${FS_SUITE_PY:-<empty>}" ;;
+    BELOW_FLOOR)
+      printf '  ABSTAIN  interpreter precondition: %s is %s, below the >=%s floor pyproject.toml declares\n' \
+        "$FS_SUITE_PY" "${_fs_py_ver:-unknown}" "$FS_SUITE_PY_FLOOR" ;;
+    SHIM_FAILED)
+      printf '  ABSTAIN  interpreter precondition: resolved %s but could not bind it (shim dir %s not writable)\n' \
+        "$FS_SUITE_PY" "${FS_SUITE_PY_SHIM:-<unset>}" ;;
+  esac
+  printf '           remedy: python3 -m venv .venv && make install, or set FS_SUITE_PY to a >=%s interpreter\n' "$FS_SUITE_PY_FLOOR"
+  printf 'UNMEASURED (95): 0 of this suite'"'"'s controls ran -- an unmet host precondition, not a gate verdict\n'
+  printf 'abstentions: 1 named\n'
+  exit 95
+fi
+export PATH FS_SUITE_PY
+printf 'interpreter: %s (%s), floor >=%s\n' "$FS_SUITE_PY" "${_fs_py_ver:-unknown}" "$FS_SUITE_PY_FLOOR"
+
 # ---- #377: each suite anchors its own control count ------------------------
 #
 # Three developer-facing documents stated 146 and 27 controls while the suites

@@ -170,6 +170,8 @@ make checks-gates         # bash launchers/test_checks_gates.sh      — 31 cont
 
 The first is the largest gate in the repository (measured 2026-09-11 on an otherwise-idle developer machine: 28.9s wall / 4.1s user — the wall half moves with load, see `docs/TESTING.md`). Both must run: the anti-orphan leg's corpus is the two suites concatenated, so running only one indicts every helper called solely from the other. The anti-orphan leg scans every `launchers/*.py` and `checks/*.py` for call sites and refuses a file with none — a new gate file has been indicted as an orphan after a fully green `make check` more than once, which is why `launcher-contracts` is in the aggregate at all. None of these targets is prefix-suppressed: a recipe written `-...` prints "Error (ignored)" and returns 0, which is a gate that reports and cannot fail.
 
+Both suites resolve one interpreter before their first leg — the repo `.venv` if it exists, else your `python3`, overridable with `FS_SUITE_PY` — and print it on their first line. If it is below the `requires-python` floor, they print one named abstention and exit 95 (UNMEASURED) rather than reporting the gates as broken. If you see that, create the checkout venv (`python3 -m venv .venv && make install`) or point `FS_SUITE_PY` at a conforming interpreter, and re-run; see `docs/TESTING.md`.
+
 ### Skips: `FS_FORBID_SKIPS`
 
 `FS_FORBID_SKIPS` is the one declared divergence between `make` and CI. The CI `check` job sets it job-wide so that **any skip fails the build**. `make test` leaves it unset so a laptop may skip — but `tests/conftest.py` still names every skip and its reason in the summary.
