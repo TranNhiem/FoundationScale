@@ -657,7 +657,7 @@ jobs:
       #   one is satisfied by the wrong one. It is a ceiling, not an equality:
       #   measuring MORE than promised is never a failure, so a developer whose
       #   estate environment is present still gets 9 of 9 and exit 0.
-      - name: Standing-gate runner controls (eleven instrument controls)
+      - name: Standing-gate runner controls (fourteen instrument controls)
         run: bash validation_campaigns/h100_validation/run_standing_gates.sh --self-test
       - name: Standing gates (the nine H100 gates, run directly and read-only)
         env:

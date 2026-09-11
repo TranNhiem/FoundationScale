@@ -487,7 +487,7 @@ checks-gates:
 # refuses at stage one, and a refusal says nothing about these nine gates.
 #
 # --self-test first, and its rc is what gates the real run: a runner whose own
-# eleven controls are broken cannot certify anything, and running the plane with
+# fourteen controls are broken cannot certify anything, and running the plane with
 # a broken instrument would produce a verdict nobody should read. The `&&` is
 # deliberate -- controls first, plane second, and no plane verdict at all if the
 # controls did not pass.

@@ -80,10 +80,11 @@
 #
 # --self-test builds SYNTHETIC campaign directories under mktemp -d — never touching the
 # real tree, which is #294's lesson: never mutate the tree you are certifying — and
-# re-invokes this script against them with eleven controls (MUST_FIRE, MUST_PASS,
+# re-invokes this script against them with fourteen controls (MUST_FIRE, MUST_PASS,
 # REFUSAL-IS-NOT-RED, VACUOUS-DENOMINATOR, UNDECLARED-REFUSAL-IS-RED,
 # DECLARED-REFUSAL-IS-GREEN, STALE-ALLOWANCE, UNEXPECTED-RC, RED-BEATS-REFUSED,
-# LOOSE-STRICT-GAP, COMMENTED-IS-NOT-A-GATE). A broken control is a finding about the
+# LOOSE-STRICT-GAP, COMMENTED-IS-NOT-A-GATE, FLOOR-ABSTAINS, FLOOR-INTERPRETER-ABSENT,
+# FLOOR-MET-STILL-RUNS). A broken control is a finding about the
 # instrument, so any control failure exits 5.
 #
 # macOS bash 3.2 compatible: no mapfile/readarray, no associative arrays, no ${x^^}.
@@ -100,7 +101,7 @@ usage: run_standing_gates.sh [--campaign-dir DIR] [--allow-refused LIST] [--self
   --allow-refused LIST comma-separated gate filenames that are PERMITTED to refuse
                        (exit 95/96) in this environment. Refusals confined to this set
                        do not sink the run; a refusal from any gate OUTSIDE it is RED.
-  --self-test          run the eleven instrument controls against synthetic campaign
+  --self-test          run the fourteen instrument controls against synthetic campaign
                        directories built under mktemp -d; does not touch the real tree
 EOF
 }
@@ -166,7 +167,131 @@ SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SELF="$SELF_DIR/$(basename "${BASH_SOURCE[0]}")"
 
 # ---------------------------------------------------------------------------
-# --self-test: the eleven controls. Each one exists because of a specific way this
+# INTERPRETER FLOOR (finding #388): resolve ONE interpreter, then measure it.
+#
+# The idiom is copied inline from launchers/_suite_prelude.sh (#376), which solved this
+# exact problem for the two shell gate suites — and it is COPIED, not sourced, on purpose.
+# #292 in this campaign's own ledger is "a shipped gate cannot import its own dependency
+# because that dependency is published by nothing". This directory is published as a
+# standalone artifact against h100/PUBLISH_SET.txt and launchers/ is not in it, so a
+# `source ../../launchers/_suite_prelude.sh` would be green here and red the day the
+# campaign directory ships alone. The prelude also carries a control-count anchor and two
+# assert_* helpers that belong to those suites and not to this runner. The reasoning below
+# is the prelude's reasoning, restated where it applies.
+#
+# WHY THE FLOOR EXISTS — measured on this runner, on this machine, before the fix:
+#
+#     $ PATH=/usr/bin:/bin ./run_standing_gates.sh
+#     STANDING GATES RED — 1 of 9 gate(s) reported a finding.
+#       RED:  gate_ckpt_naming_agreement.py(1)
+#
+# That RED is a claim about the TREE and it is false. /usr/bin/python3 on this developer's
+# Mac is 3.9.6, below the >=3.10 floor pyproject.toml declares, and
+# gate_ckpt_naming_agreement.py evaluates `Parser = Callable[[str], int | None]` at module
+# scope. Note the precise mechanism, because the near-miss diagnosis is wrong and would
+# send the next reader looking for a syntax problem: the file PARSES cleanly under 3.9
+# (`ast.parse` succeeds on all nine gates) — it dies when that line EXECUTES, with
+# `TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'`, since PEP 604
+# unions on runtime values need 3.10. The gate exits 1, and rc=1 is undeclared in the
+# four-state contract, so the `*)` arm below records it as RED. One unmet host
+# precondition, reported as a finding about the repository. The prelude measured the same
+# shape on the checks suite as "nine reds for one unmet precondition".
+#
+# Two moves, in the prelude's order:
+#
+#   1. Resolve ONE interpreter: FS_GATE_PY if set, else the repo's .venv/bin/python3
+#      (derived from SELF_DIR — this file sits two directories below the repo root — and
+#      never hardcoded), else whatever `command -v python3` offers. When the resolved
+#      interpreter is NOT already what bare `python3` resolves to, put a one-entry shim
+#      directory in FRONT of PATH so every bare `python3` binds to it. That reaches the
+#      call sites a textual rewrite could not: the run loop's `python3 "$_g"`, and the
+#      `python3 gate_... || {` fixture lines --self-test writes at run time. Rewriting the
+#      literal sites is worse on both axes, exactly as the prelude found — a missed site
+#      quietly keeps the old interpreter, and here the literal string is load-bearing: the
+#      derivation grep IS `^python3 gate_...`, the same rule the build's GATE_COUNT= line
+#      uses, so rewriting it would move the denominator. The shim holds `python3` and
+#      nothing else; prepending .venv/bin itself would also shadow ruff, mypy and pytest
+#      for every gate. It is an exec wrapper rather than a symlink so the interpreter
+#      reports the venv it actually belongs to. The path is a fixed per-uid path rather
+#      than mktemp -d because bash keeps exactly one EXIT trap per shell and --self-test
+#      already spends it on TMPROOT; a trap-cleaned shim would silently lose its cleanup.
+#
+#   2. Measure that interpreter against the floor. Below it — or absent, or unbindable —
+#      print ONE named abstention and exit 95 (UNMEASURED) without running a single gate.
+#      Exit 5 would claim the gates are broken; exit 0 would be a green over gates that
+#      never ran; 96 is this runner's code for a malformed INSTRUCTION (an empty
+#      derivation, an inert --allow-refused name) and this is a host precondition, not an
+#      instruction defect. No verdict line prints on that path: "6 green, 1 red" is a
+#      report from a runner that RAN, and this is a claim about the host.
+#
+# --self-test is deliberately subject to the same floor. The self-test is the instrument
+# measuring itself, and letting it print "14/14 controls passed" on a host the real run
+# refuses to certify under would give one runner two contracts.
+#
+# Direction of travel, the prelude's own: this makes the verdict LESS environment-dependent,
+# not more (#83/#111/#229). The runner now names the interpreter it ran under and vouches
+# for it, instead of silently inheriting one and blaming the tree.
+# ---------------------------------------------------------------------------
+FS_GATE_PY_FLOOR=${FS_GATE_PY_FLOOR:-3.10}
+if [[ -z "${FS_GATE_PY:-}" ]]; then
+  _fs_gate_root=$(cd "$SELF_DIR/../.." && pwd)
+  if [[ -x "$_fs_gate_root/.venv/bin/python3" ]]; then
+    FS_GATE_PY=$_fs_gate_root/.venv/bin/python3
+  else
+    FS_GATE_PY=$(command -v python3 2>/dev/null || true)
+  fi
+fi
+_fs_gate_py_state=OK
+FS_GATE_PY_VER=""
+if [[ -z "$FS_GATE_PY" || ! -x "$FS_GATE_PY" ]]; then
+  _fs_gate_py_state=ABSENT
+else
+  FS_GATE_PY_VER=$("$FS_GATE_PY" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null || true)
+  if ! "$FS_GATE_PY" -c 'import sys
+floor = tuple(int(p) for p in sys.argv[1].split("."))
+raise SystemExit(0 if sys.version_info[:len(floor)] >= floor else 1)' "$FS_GATE_PY_FLOOR" 2>/dev/null; then
+    _fs_gate_py_state=BELOW_FLOOR
+  fi
+fi
+if [[ "$_fs_gate_py_state" == OK ]]; then
+  # Only intervene when the resolved interpreter is not already the one bare `python3`
+  # finds. On a machine with no repo venv the two are the same and prepending anything
+  # would shadow that machine's other tools for no gain.
+  if [[ "$(command -v python3 2>/dev/null || true)" != "$FS_GATE_PY" ]]; then
+    FS_GATE_PY_SHIM=${TMPDIR:-/tmp}/fs-standing-gates-py.$(id -u)
+    if mkdir -p "$FS_GATE_PY_SHIM" 2>/dev/null \
+       && printf '#!/bin/sh\nexec "%s" "$@"\n' "$FS_GATE_PY" > "$FS_GATE_PY_SHIM/python3" 2>/dev/null \
+       && chmod +x "$FS_GATE_PY_SHIM/python3" 2>/dev/null; then
+      PATH=$FS_GATE_PY_SHIM:$PATH
+    else
+      _fs_gate_py_state=SHIM_FAILED
+    fi
+  fi
+fi
+if [[ "$_fs_gate_py_state" != OK ]]; then
+  case $_fs_gate_py_state in
+    ABSENT)
+      printf '  ABSTAIN  interpreter precondition: no executable python3 resolved (FS_GATE_PY=%s)\n' \
+        "${FS_GATE_PY:-<empty>}" ;;
+    BELOW_FLOOR)
+      printf '  ABSTAIN  interpreter precondition: %s is %s, below the >=%s floor pyproject.toml declares\n' \
+        "$FS_GATE_PY" "${FS_GATE_PY_VER:-unknown}" "$FS_GATE_PY_FLOOR" ;;
+    SHIM_FAILED)
+      printf '  ABSTAIN  interpreter precondition: resolved %s but could not bind it (shim dir %s not writable)\n' \
+        "$FS_GATE_PY" "${FS_GATE_PY_SHIM:-<unset>}" ;;
+  esac
+  printf '           remedy: python3 -m venv .venv && make install, or set FS_GATE_PY to a >=%s interpreter\n' \
+    "$FS_GATE_PY_FLOOR"
+  printf 'UNMEASURED (95): 0 of this runner'"'"'s standing gates ran — an unmet host precondition, not a gate verdict\n'
+  printf 'abstentions: 1 named\n'
+  exit 95
+fi
+# Exported so the --self-test children inherit the interpreter the parent already
+# verified, rather than each re-deriving one and potentially disagreeing.
+export PATH FS_GATE_PY
+
+# ---------------------------------------------------------------------------
+# --self-test: the fourteen controls. Each one exists because of a specific way this
 # runner could lie, stated with the control below. The synthetic gates are stubs that
 # exit a chosen code; the synthetic build_h100_plane.sh carries lines of the form
 # `python3 gate_xxx.py || {` so the REAL derivation rule is what finds them — a control
@@ -181,10 +306,10 @@ if [[ "$SELF_TEST" == 1 ]]; then
 
   controls_passed=0
   controls_failed=0
-  # Stated once and consumed by both the per-control line and the summary, so a twelfth
-  # control cannot be added while the banner still says eleven — a self-inflicted stale
+  # Stated once and consumed by both the per-control line and the summary, so a fifteenth
+  # control cannot be added while the banner still says fourteen — a self-inflicted stale
   # countable of exactly the #220/#233 shape.
-  CONTROL_TOTAL=11
+  CONTROL_TOTAL=14
 
   # make_stub_campaign <dir> <name:rc>... — write a stub build file whose gate lines the
   # anchored derivation will find, plus a stub gate script per name that exits <rc>.
@@ -217,17 +342,42 @@ if [[ "$SELF_TEST" == 1 ]]; then
   # The needle is positional and mandatory (pass '' for none) so that everything after it
   # can be forwarded to the child as "$@" — properly quoted, rather than word-split out of
   # one string, which is how a flag value containing a space silently becomes two flags.
+  # Two optional inputs, set immediately before a call and CONSUMED-AND-CLEARED here so
+  # they cannot leak into the next control:
+  #
+  #   CTL_ENV     one VAR=value assignment to run the child under (#388's floor controls
+  #               need to vary FS_GATE_PY / FS_GATE_PY_FLOOR). It is a scalar passed to
+  #               `env` as ONE argument rather than word-split, so a value containing a
+  #               space stays one assignment. Not a positional: every existing call site
+  #               forwards "$@" to the child, and threading a twelfth positional through
+  #               eleven working call sites is more edit surface than the feature is
+  #               worth. The clear-after-use is what keeps it honest.
+  #   CTL_ABSENT  a string that MUST NOT appear in the child's output. A needle proves
+  #               something was said; an anti-needle proves something was NOT done, which
+  #               is the whole claim of an abstention control ("0 gates ran"). Without it
+  #               a runner that printed the abstention AND then ran all nine gates anyway
+  #               would pass.
   run_control() {
     local n=$1 label=$2 d=$3 want=$4 needle=$5
     shift 5
-    local out rc ok=1
+    local out rc ok=1 ctl_env=${CTL_ENV:-} ctl_absent=${CTL_ABSENT:-}
+    CTL_ENV=""; CTL_ABSENT=""
     rc=0
-    out=$(bash "$SELF" --campaign-dir "$d" "$@" 2>&1) || rc=$?
+    if [[ -n "$ctl_env" ]]; then
+      out=$(env "$ctl_env" bash "$SELF" --campaign-dir "$d" "$@" 2>&1) || rc=$?
+    else
+      out=$(bash "$SELF" --campaign-dir "$d" "$@" 2>&1) || rc=$?
+    fi
     if [[ "$rc" != "$want" ]]; then
       ok=0
     fi
     if [[ -n "$needle" ]]; then
       if ! printf '%s\n' "$out" | /usr/bin/grep -qF "$needle"; then
+        ok=0
+      fi
+    fi
+    if [[ -n "$ctl_absent" ]]; then
+      if printf '%s\n' "$out" | /usr/bin/grep -qF "$ctl_absent"; then
         ok=0
       fi
     fi
@@ -381,6 +531,51 @@ if [[ "$SELF_TEST" == 1 ]]; then
   printf 'import sys\nsys.exit(0)\n' > "$TMPROOT/c11/gate_real_one.py"
   run_control 11 "COMMENTED_IS_NOT_A_GATE" "$TMPROOT/c11" 0 \
     "strict=1 loose=1 (1 comment mention(s) elided)"
+
+  # CONTROLS 12, 13 and 14 are #388's interpreter floor, and they are a MATCHED TRIPLE
+  # over ONE synthetic tree whose single gate exits 0. Holding the tree fixed is the
+  # point: every difference in verdict between the three is attributable to the
+  # interpreter precondition and to nothing else.
+  #
+  #   12  floor NOT met     -> 95, abstention named, and NO gate ran
+  #   13  interpreter gone  -> 95, by the other arm, so an unresolvable override cannot
+  #                            silently fall back to whatever PATH offers
+  #   14  floor met         -> 0, the same tree still greens
+  #
+  # Control 14 is what makes 12 and 13 mean anything. Without it a floor block that
+  # abstained unconditionally — or a runner broken in some way that always exits 95 —
+  # would pass both MUST_FIREs and the suite would report the floor as working.
+  #
+  # 12 raises the FLOOR rather than pointing FS_GATE_PY at an old interpreter, because
+  # "is there a below-floor python3 on this machine" is a property of the machine. A
+  # control that needs a 3.9 present is green on this Mac and vacuous on CI's 3.11
+  # runner — #372's shape exactly, a test that measures the host and reports it as a
+  # verdict. An unreachable floor is available everywhere and exercises the same
+  # comparison.
+  mkdir -p "$TMPROOT/c12"
+  printf 'python3 gate_floor_probe.py || {\n' > "$TMPROOT/c12/build_h100_plane.sh"
+  printf 'import sys\nprint("stub gate ran")\nsys.exit(0)\n' > "$TMPROOT/c12/gate_floor_probe.py"
+
+  # The anti-needle is the load-bearing half. "0 of this runner's standing gates ran" is
+  # a CLAIM the abstention makes about itself; the banner's absence is the EVIDENCE. A
+  # runner that printed the abstention and then ran the gates anyway would satisfy the
+  # needle and fail this.
+  CTL_ENV="FS_GATE_PY_FLOOR=99.0"
+  CTL_ABSENT="=== standing gates: running"
+  run_control 12 "FLOOR_ABSTAINS" "$TMPROOT/c12" 95 \
+    "below the >=99.0 floor pyproject.toml declares"
+
+  CTL_ENV="FS_GATE_PY=$TMPROOT/no-such-interpreter"
+  CTL_ABSENT="=== standing gates: running"
+  run_control 13 "FLOOR_INTERPRETER_ABSENT" "$TMPROOT/c12" 95 \
+    "no executable python3 resolved"
+
+  # 3.0 rather than the default: this leg must prove the floor was EVALUATED and met, not
+  # that the env var was ignored. Leaving FS_GATE_PY_FLOOR unset would pass identically if
+  # a future edit stopped reading it at all.
+  CTL_ENV="FS_GATE_PY_FLOOR=3.0"
+  run_control 14 "FLOOR_MET_STILL_RUNS" "$TMPROOT/c12" 0 \
+    "STANDING GATES GREEN"
 
   printf '\nSELF-TEST SUMMARY: %s/%s controls passed, %s failed\n' \
     "$controls_passed" "$CONTROL_TOTAL" "$controls_failed"
@@ -590,19 +785,18 @@ fi
 
 N=${#GATES[@]}
 
-# INTERPRETER PROVENANCE (finding #83 in this campaign): a CLEAR verdict with no
-# interpreter attribution is unreproducible — the gates are run by whatever `python3`
-# PATH offers, so record which interpreter that is and its version. Deliberately NOT
-# validated or pinned: the interpreter is a property of the machine, and a gate that
-# reddens on it reports the developer's environment as a repo defect. Just record it, so
-# the verdict is attributable.
-PY3_PATH=$(command -v python3 || true)
-PY3_VERSION=""
-if [[ -n "$PY3_PATH" ]]; then
-  PY3_VERSION=$("$PY3_PATH" --version 2>&1 || true)
-fi
+# INTERPRETER PROVENANCE (finding #83 in this campaign), REVISED by #388.
+#
+# This line used to report `command -v python3` — whatever PATH happened to offer — under
+# a comment that declined to validate it, on the grounds that "a gate that reddens on it
+# reports the developer's environment as a repo defect". That sentence named the defect
+# correctly and then let it happen: provenance was recorded, and the gates then ran under
+# the very interpreter the comment refused to vouch for, so a 3.9.6 on PATH turned into
+# "STANDING GATES RED — 1 of 9". The floor block near the top of this file now resolves
+# and binds the interpreter before any gate runs, so this line reports the one the gates
+# ACTUALLY ran under. One provenance line, not two: two would be two stories.
 echo "=== standing gates: running $N gate(s) derived from $BUILD ==="
-echo "    python3: ${PY3_PATH:-<not found on PATH>} — ${PY3_VERSION:-<version unknown>}"
+echo "    python3: $FS_GATE_PY — ${FS_GATE_PY_VER:-<version unknown>} (resolved; floor >=$FS_GATE_PY_FLOOR)"
 
 # The allowed-to-refuse set, as a space-padded string so membership is a `case` glob —
 # bash 3.2 has no associative arrays. Commas are the caller's separator; spaces are ours.
