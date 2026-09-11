@@ -116,6 +116,20 @@ RUNNABLE: dict[str, str] = {
         "a pre-existing record the launcher never rewrote must REFUSE rather than "
         "adjudicate cleanly, with the positive control proving that detector can fire."
     ),
+    "validation_campaigns/verification_matrix/t1_6_symlinked_shard.py": (
+        "Nine controls over the #343 symlinked-shard detector, split three detector / six "
+        "instrument. The three that assert the defect is caught (a linked shard refuses, a "
+        "dangling link reads as a LINK not as 'missing', the three arms agree on a fixture) "
+        "flip RED against a pre-fix tree; the six that certify the instrument -- a regular "
+        "shard is NOT refused, the byte-credit counter fires on a link-following stat, stays "
+        "silent on lstat and on unwatched paths, patches and restores all three callables, "
+        "an absent shard reads as missing, a directory with no index yields UNMEASURED -- "
+        "hold in BOTH states, which is what makes the three flips attributable. The fixture "
+        "is built from stub shards in a TemporaryDirectory and dcp_meta imports only stdlib "
+        "at module scope (torch is function-local), so a laptop and the estate see the same "
+        "9. The estate measurement against a real multi-shard checkpoint is a separate run "
+        "of the same module with a checkpoint directory as argv."
+    ),
 }
 
 NOT_RUNNABLE_HERE: dict[str, str] = {

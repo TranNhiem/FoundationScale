@@ -316,8 +316,26 @@ _StHeader = dict[str, tuple[str, tuple[int, ...], tuple[int, int]]]
 
 def _read_st_header(shard_path: str) -> _StHeader:
     """Parse one shard's header, failing closed on anything malformed or truncated."""
+    # #343: Path.stat() and Path.exists() follow symlinks, so a shard that is
+    # a link to the base model's shard measures the *target's* size and
+    # passes every check while the run is credited with bytes it never wrote.
+    # is_symlink()/lstat() are the only stdlib views that do not follow links.
+    # A link is not a saved shard regardless of what it points at, so refuse
+    # — naming the link's target — before any size or header question is
+    # asked. "Absent" and "is a link" are different facts and stay different
+    # messages: a missing shard errors below as an unreadable stat, not here.
+    if Path(shard_path).is_symlink():
+        raise CheckpointFormatError(
+            f"shard is a symbolic link to {os.fspath(Path(shard_path).readlink())!r}, not a "
+            f"saved shard; stat() would credit this run with the target's "
+            f"bytes (#343)",
+            path=shard_path,
+        )
     try:
-        file_size = Path(shard_path).stat().st_size
+        # lstat, not stat: the size recorded must be the bytes at this path,
+        # and for a regular file (the only shape that reaches this line)
+        # lstat is exactly today's stat, so real files behave as they did.
+        file_size = os.lstat(shard_path).st_size
     except OSError as exc:
         raise CheckpointFormatError(
             f"cannot stat shard ({type(exc).__name__}: {exc})", path=shard_path
@@ -444,6 +462,24 @@ def _read_safetensors_metadata(path: str) -> CheckpointMetadata:
     for key in sorted(weight_map):
         shard = weight_map[key]
         shard_path = base / shard
+        # Keep "is a link" distinct from "missing" (#343), and ask it FIRST.
+        # exists() follows symlinks, so it both passes for a shard that is a
+        # link to the base model's shard AND issues a link-following stat that
+        # observes the target's size. Refusing after that call still refuses,
+        # but the byte credit has already been read once -- so the order is
+        # load-bearing, not stylistic. is_symlink() is answered by lstat and
+        # never follows, so for a link no link-following stat is issued at all.
+        # A non-link falls through unchanged and exists() still names it
+        # missing; a DANGLING link now reports as a link rather than as
+        # missing, which is the more accurate of the two facts.
+        if shard_path.is_symlink():
+            raise CheckpointFormatError(
+                f"weight_map points at shard {shard!r} that is a symbolic "
+                f"link to {os.fspath(shard_path.readlink())!r}; the target's bytes "
+                f"would be credited to this run as if saved (#343)",
+                path=os.fspath(base),
+                key=key,
+            )
         if not shard_path.exists():
             raise CheckpointFormatError(
                 f"weight_map points at missing shard {shard!r}",

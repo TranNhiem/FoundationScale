@@ -929,6 +929,24 @@ class SafetensorsReader:
                 key=key,
             )
         shard_path = str(Path(self.path) / shard)
+        # "Present" is not the same fact as "saved here" (#343), and the link
+        # question is asked FIRST. exists() follows symlinks, so it both passes
+        # for a shard that is a link to the base model's shard AND issues a
+        # link-following stat that observes the target's size; refusing after
+        # it still refuses, but the byte credit has already been read. This
+        # ordering mirrors the one in dcp_meta._read_safetensors_metadata,
+        # which is where the control test measured the difference.
+        # is_symlink() is the link-not-following view: a link is refused
+        # whatever it points at, and named together with its target so the
+        # verdict says which shard was a link and to what.
+        if Path(shard_path).is_symlink():
+            raise CheckpointFormatError(
+                f"weight_map points at shard {shard!r} that is a symbolic "
+                f"link to {os.fspath(Path(shard_path).readlink())!r}; the target's bytes "
+                f"would be credited to this run as if saved (#343)",
+                path=self.path,
+                key=key,
+            )
         if not Path(shard_path).exists():
             raise CheckpointFormatError(
                 f"weight_map points at missing shard {shard!r}",

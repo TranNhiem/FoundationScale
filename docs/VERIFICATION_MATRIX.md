@@ -82,7 +82,7 @@ Tier 0 blocks tier 1 because a tier-1 row that toggles an undeclared axis measur
 |---|---|---|---|---|---|
 | T1-4 | reloaded weights are bit-identical (save->load parity) | save then load, compare_keys EXACT | perturb one tensor -> parity must go RED | ~15 min | verify/parity.py SHIPPED, no run |
 | T1-5 | 10 steps + resume 10 == 20 steps straight (RESUME fidelity) | resume arm | straight-through arm; final weights must match within tolerance | ~40 min | THE gap — No optimizer/RNG/dataloader restore is proven |
-| T1-6 | a checkpoint whose shard is a symlink to the base is CAUGHT | the #343 artifact | a real shard must pass the same detector | ~5 min | ABSENT, risk rated maximal |
+| T1-6 | a checkpoint whose shard is a symlink to the base is CAUGHT | the #343 artifact | a real shard must pass the same detector | ~5 min | SHIPPED (#343): is_symlink() hoisted ahead of exists(), so a linked shard draws no link-following stat at all; GREEN on a real two-shard ~51.6 GB safetensors checkpoint on GB200 with zero byte credit; harness 9/9 here, 6/9 pre-fix |
 | T1-7 | converted weights are parity-equal to source (DCP<->HF) | convert both ways | a truncated shard must be caught | ~20 min | ABSENT |
 | T1-8 | resharding: save on 4 GPUs, load on 2 | 4->2 | 4->3 (non-divisor) must REFUSE, not silently drop experts | ~30 min | ABSENT |
 
@@ -122,7 +122,7 @@ The control-arm rule: a row with no arm that must come out differently is a row 
 
 ## Ordering rule
 
-T0-9 is still first and still RED (a run whose commit is unrecorded is unattributable — every row below inherits it). T0-1..T0-8 are done: #373 shipped them, and their CPU-only proofs now run in the suite on every commit, so they no longer sit in this queue. What remains is tier 1, cheapest-first: T1-3, T1-6, T1-22, T1-23 (minutes), then T1-4, T1-1, T1-12, T1-10, T1-11, then the long ones (T1-5, T1-16, T1-21). T1-14 has left the queue with T1-13: the plane refuses both run arms, so there is nothing to schedule until a ZeRO or offload backend exists to schedule it against.
+T0-9 is still first and still RED (a run whose commit is unrecorded is unattributable — every row below inherits it). T0-1..T0-8 are done: #373 shipped them, and their CPU-only proofs now run in the suite on every commit, so they no longer sit in this queue. What remains is tier 1, cheapest-first: T1-3, T1-22, T1-23 (minutes), then T1-4, T1-1, T1-12, T1-10, T1-11, then the long ones (T1-5, T1-16, T1-21). T1-6 has left the queue — #343 shipped it — and it is worth saying why it was cheap, because the reason is not that the claim was small. The whole defect is the ORDER of two stdlib calls, so proving it needs one real checkpoint and no tray: only shard headers are read, and a fifty-gigabyte checkpoint costs the same as a fifty-kilobyte one. T1-14 has left the queue with T1-13: the plane refuses both run arms, so there is nothing to schedule until a ZeRO or offload backend exists to schedule it against.
 
 ## The honest count
 33 rows: 10 that need no GPU and 23 that do. Of those, 0 now name an axis the training plane does not expose at all, and 0 are blocked by another row, so 0 are unrunnable for want of a declaration — the lower tier has shipped, and what stands between this matrix and the rest of its rows is a tray, not a missing knob. 3 are already measured and need only a re-take under a manifest that records them. 2 are refusals that must be PROVEN to be refusals rather than silent fallbacks.
