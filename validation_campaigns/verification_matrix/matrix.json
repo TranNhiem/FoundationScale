@@ -9,7 +9,7 @@
       "run_arm": "build with optimizer=adamw_torch",
       "control_arm": "declaring an unsupported optimizer REFUSES 96, does not fall back",
       "cost": "0 GPU",
-      "status": "no key",
+      "status": "SHIPPED (#373): declared optimizer reaches TrainingArguments.optim; an unsupported name REFUSES 96 before a Trainer exists",
       "blocked_by": [],
       "findings": []
     },
@@ -21,7 +21,7 @@
       "run_arm": "accum=4",
       "control_arm": "kwargs actually carries gradient_accumulation_steps=4 (introspect args)",
       "cost": "0 GPU",
-      "status": "no key",
+      "status": "SHIPPED (#373): reaches gradient_accumulation_steps in the kwargs; an omitted axis adds no kwarg and is recorded as an explicit absence",
       "blocked_by": [],
       "findings": []
     },
@@ -33,7 +33,7 @@
       "run_arm": "1.0 vs 0.0",
       "control_arm": "args.max_grad_norm reads back what was declared",
       "cost": "0 GPU",
-      "status": "no key",
+      "status": "SHIPPED (#373): reaches max_grad_norm in the kwargs; a non-positive value REFUSES 96 at the CLI boundary (#384)",
       "blocked_by": [],
       "findings": []
     },
@@ -45,7 +45,7 @@
       "run_arm": "on",
       "control_arm": "model.is_gradient_checkpointing is True (not just the flag set)",
       "cost": "0 GPU",
-      "status": "no key",
+      "status": "SHIPPED (#373): model.is_gradient_checkpointing reads True on the loaded model, not merely the flag",
       "blocked_by": [],
       "findings": []
     },
@@ -57,7 +57,7 @@
       "run_arm": "sdpa",
       "control_arm": "model.config._attn_implementation == declared; an impl the build cannot supply REFUSES",
       "cost": "0 GPU",
-      "status": "no key",
+      "status": "SHIPPED (#373): reaches model.config._attn_implementation; an impl the build cannot supply and one the loader silently overrides both REFUSE 96",
       "blocked_by": [],
       "findings": []
     },
@@ -69,7 +69,7 @@
       "run_arm": "cosine, warmup=2",
       "control_arm": "the LR at step 1 != LR at step 10 (read the log)",
       "cost": "0 GPU",
-      "status": "no key",
+      "status": "SHIPPED (#373): the declared schedule and warmup move the optimizer LR -- early below half the base rate, late above 0.85 of it",
       "blocked_by": [],
       "findings": []
     },
@@ -81,7 +81,7 @@
       "run_arm": "ddp",
       "control_arm": "a strategy with no wiring REFUSES 96 rather than silently running DDP",
       "cost": "0 GPU",
-      "status": "no key",
+      "status": "SHIPPED (#373): declared and recorded; fsdp/zero3 REFUSE 96 rather than silently running DDP, while ddp and undeclared proceed",
       "blocked_by": [],
       "findings": []
     },
@@ -93,7 +93,7 @@
       "run_arm": "off",
       "control_arm": "declaring on with no backend REFUSES",
       "cost": "0 GPU",
-      "status": "no key",
+      "status": "SHIPPED (#373): declared and recorded; offload=true REFUSES 96 with no backend, while false and undeclared proceed",
       "blocked_by": [],
       "findings": []
     },
@@ -239,10 +239,8 @@
       "run_arm": "4 arms, same seed",
       "control_arm": "identical curves across optimizers = the knob did nothing",
       "cost": "~15 min x4",
-      "status": "blocked on T0-1",
-      "blocked_by": [
-        "T0-1"
-      ],
+      "status": "UNBLOCKED by #373 (T0-1 shipped): needs a GPU tray, never run",
+      "blocked_by": [],
       "findings": []
     },
     {
@@ -253,10 +251,8 @@
       "run_arm": "both arms",
       "control_arm": "if they differ beyond tolerance, accumulation is wrong",
       "cost": "~15 min x2",
-      "status": "blocked on T0-2",
-      "blocked_by": [
-        "T0-2"
-      ],
+      "status": "UNBLOCKED by #373 (T0-2 shipped): needs a GPU tray, never run",
+      "blocked_by": [],
       "findings": []
     },
     {
@@ -267,10 +263,8 @@
       "run_arm": "on vs off",
       "control_arm": "neither moving = the flag is a no-op (the silent-fallback shape)",
       "cost": "~15 min x2",
-      "status": "blocked on T0-4",
-      "blocked_by": [
-        "T0-4"
-      ],
+      "status": "UNBLOCKED by #373 (T0-4 shipped): needs a GPU tray, never run",
+      "blocked_by": [],
       "findings": []
     },
     {
@@ -281,10 +275,8 @@
       "run_arm": "3 arms",
       "control_arm": "identical step times = the impl never changed",
       "cost": "~10 min x3",
-      "status": "blocked on T0-5",
-      "blocked_by": [
-        "T0-5"
-      ],
+      "status": "UNBLOCKED by #373 (T0-5 shipped): needs a GPU tray, never run",
+      "blocked_by": [],
       "findings": []
     },
     {
@@ -295,10 +287,8 @@
       "run_arm": "offload on vs off",
       "control_arm": "GPU memory must drop by ~optimizer-state size; if not, offload did nothing",
       "cost": "~20 min x2",
-      "status": "blocked on T0-8",
-      "blocked_by": [
-        "T0-8"
-      ],
+      "status": "REFUSED by the package plane (#373): offload=true refuses before load, so there is no offload arm to weigh against off",
+      "blocked_by": [],
       "findings": []
     },
     {
@@ -309,10 +299,8 @@
       "run_arm": "3 arms + DDP baseline",
       "control_arm": "flat memory across stages = no sharding happened",
       "cost": "~30 min x4",
-      "status": "blocked on T0-7",
-      "blocked_by": [
-        "T0-7"
-      ],
+      "status": "REFUSED by the package plane (#373): fsdp/zero3 refuse before load, so there are no ZeRO stages to compare",
+      "blocked_by": [],
       "findings": []
     },
     {

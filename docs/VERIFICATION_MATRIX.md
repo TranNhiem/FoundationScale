@@ -2,16 +2,18 @@
 
 ## The measurement that shapes everything
 
-The instrument was a grep over `src/foundationscale` (excluding `rl/`), read against the code. The measurement: FoundationScale's training plane does NOT implement an inner loop. It builds a `transformers.Trainer` (`src/foundationscale/train/loop.py:1895`) out of `TrainingArguments`, from a kwargs dict (`src/foundationscale/train/loop.py:1799`) whose ENTIRE content is:
+This matrix exists because of one measurement, taken before any of it was built, and the paragraphs below state that measurement in the past tense on purpose: #373 has since changed most of its numbers, and the next section says exactly which. The zeroes are kept rather than overwritten because they are the reason this matrix exists at all.
+
+The instrument was a grep over `src/foundationscale` (excluding `rl/`), read against the code. The measurement: FoundationScale's training plane does NOT implement an inner loop. It builds a `transformers.Trainer` (`src/foundationscale/train/loop.py:2223`) out of `TrainingArguments`, from a kwargs dict (`src/foundationscale/train/loop.py:2103`) whose ENTIRE content was:
 
     output_dir, max_steps, per_device_train_batch_size, learning_rate,
     save_strategy, save_steps, seed, logging_steps, report_to,
     ddp_find_unused_parameters, (bf16|fp16) from cfg.precision, and
     save_safetensors when the installed transformers accepts it
 
-TrainConfig's full field set is: model, dataset, output_dir, nodes, gpus_per_node, profile*, objective, precision, adapter*, max_steps, per_device_batch_size, learning_rate, save_interval, seed, dp/tp/pp/ep/cp, dry_run, launch_corpus.
+TrainConfig's full field set was: model, dataset, output_dir, nodes, gpus_per_node, profile*, objective, precision, adapter*, max_steps, per_device_batch_size, learning_rate, save_interval, seed, dp/tp/pp/ep/cp, dry_run, launch_corpus.
 
-The grep counts:
+The grep counted, at that time:
 
 - `attn_implementation|flash_attention|sdpa` → 0 occurrences
 - `torch.compile` → 0
@@ -20,11 +22,21 @@ The grep counts:
 - `deepspeed|FSDP|fully_shard|ZeRO` → 2, both in `gates/` + `provenance/` (adjudicated/recorded, never built)
 - `clip_grad|max_grad_norm` → 0
 
-The consequence, and it is the whole point: every named axis — optimizer, CPU offload, DeepSpeed, gradient checkpointing, gradient accumulation, flash attention, LR schedule — is NOT absent from the RUN. HF Trainer supplies a default for each. It is absent from the DECLARATION. The run uses `adamw_torch_fused`, accum=1, max_grad_norm=1.0, no recompute, linear LR with zero warmup, and whatever attention implementation the model config picks — and the manifest cannot say so, because there is no config key to resolve and record.
+The consequence, and it is the whole point: every named axis — optimizer, CPU offload, DeepSpeed, gradient checkpointing, gradient accumulation, flash attention, LR schedule — was NOT absent from the RUN. HF Trainer supplies a default for each. It was absent from the DECLARATION. The run used `adamw_torch_fused`, accum=1, max_grad_norm=1.0, no recompute, linear LR with zero warmup, and whatever attention implementation the model config picks — and the manifest could not say so, because there was no config key to resolve and record.
 
 Those six values are measured, not assumed: they are the `TrainingArguments` defaults read out of transformers 5.16.1. Stating the version is not pedantry — it is the whole shape of the problem. An undeclared axis takes its value from the installed engine, so the same FoundationScale config trains differently under a different transformers release, and no artifact of either run would record that anything changed. Note in particular that the optimizer default is the *fused* AdamW, not the reference one: T1-9 proposes to measure step time across optimizers, and it would be measuring against a fused baseline without ever saying so.
 
-That is the #346 class at scale: unmeasured reads as green. It is why 14 of this matrix's 33 rows are unrunnable today.
+That is the #346 class at scale: unmeasured reads as green. It is why, when this matrix was written, 14 of its 33 rows were unrunnable.
+
+## What #373 changed, and why the grep counts above no longer hold
+
+#373 shipped tier 0, so **every count in the list above is now stale by design.** They are corrected here rather than edited in place because a matrix that quietly rewrites its own premise cannot be audited against the tree it described.
+
+Re-measured on the same instrument, over the same scope, on the same day this section was written: `attn_implementation|flash_attention|sdpa` → 31 occurrences, `get_scheduler|lr_scheduler|warmup` → 26, `clip_grad|max_grad_norm` → 14, `deepspeed|FSDP|fully_shard|ZeRO` → 9 (the original two in `gates/` and `provenance/`, plus seven in `train/`), `AdamW|Adafactor|SGD(` → 3. Only `torch.compile` is still zero: nothing declares it, and it remains T1-15's business.
+
+`TrainConfig` now carries nine tier-0 axes — `optimizer`, `gradient_accumulation_steps`, `max_grad_norm`, `gradient_checkpointing`, `attn_implementation`, `lr_scheduler_type`, `warmup_steps`, `sharding_strategy`, `cpu_optimizer_offload` — each resolved through `ConfigResolver` and recorded. Each is bound into the kwargs dict only when the operator declared it, so an undeclared axis still takes the engine default; what changed is that the ABSENCE is itself recorded, which is precisely the distinction the original measurement said no artifact could make.
+
+Two of the nine are declarable without being executable, and the matrix says so rather than counting them as capability: `sharding_strategy=fsdp|zero3` and `cpu_optimizer_offload=true` REFUSE with 96 rather than accept a declaration this plane cannot honour. That is why T1-13 and T1-14 read REFUSED and not UNBLOCKED — an unrunnable arm is not the same fact as a missing one.
 
 ## Two tiers, and tier 0 is not optional
 
@@ -37,7 +49,7 @@ That is the #346 class at scale: unmeasured reads as green. It is why 14 of this
 
 **Tier 1** (GPU, a 4-GPU tray): one row per claim. Every row carries a CONTROL ARM — an arm that must come out DIFFERENT.
 
-Tier 0 blocks tier 1 because a tier-1 row that toggles an undeclared axis measures nothing attributably: the run would train on the engine default either way, and no artifact could distinguish "the knob worked" from "the knob was never wired." Rows T1-9 through T1-14 each name their tier-0 dependency explicitly.
+Tier 0 blocks tier 1 because a tier-1 row that toggles an undeclared axis measures nothing attributably: the run would train on the engine default either way, and no artifact could distinguish "the knob worked" from "the knob was never wired." Rows T1-9 through T1-14 each named the tier-0 row they waited on. #373 shipped all of those, so each of the six now names what released it: T1-9 through T1-12 are UNBLOCKED and wait only on a tray, while T1-13 and T1-14 are REFUSED — the dependency shipped as a refusal, so their run arms have nothing to execute.
 
 ## The matrix
 
@@ -45,14 +57,14 @@ Tier 0 blocks tier 1 because a tier-1 row that toggles an undeclared axis measur
 
 | ID | Claim | Run arm | Control arm (must differ) | Cost | Status today |
 |---|---|---|---|---|---|
-| T0-1 | optimizer name is declared and recorded | build with optimizer=adamw_torch | declaring an unsupported optimizer REFUSES 96, does not fall back | 0 GPU | no key |
-| T0-2 | grad accumulation steps are declared and recorded | accum=4 | kwargs actually carries gradient_accumulation_steps=4 (introspect args) | 0 GPU | no key |
-| T0-3 | max_grad_norm is declared and recorded | 1.0 vs 0.0 | args.max_grad_norm reads back what was declared | 0 GPU | no key |
-| T0-4 | gradient checkpointing (recompute) is declared and recorded | on | model.is_gradient_checkpointing is True (not just the flag set) | 0 GPU | no key |
-| T0-5 | attention implementation is declared and recorded | sdpa | model.config._attn_implementation == declared; an impl the build cannot supply REFUSES | 0 GPU | no key |
-| T0-6 | LR schedule and warmup are declared and recorded | cosine, warmup=2 | the LR at step 1 != LR at step 10 (read the log) | 0 GPU | no key |
-| T0-7 | sharding strategy (ddp\|fsdp\|deepspeed) is declared and recorded | ddp | a strategy with no wiring REFUSES 96 rather than silently running DDP | 0 GPU | no key |
-| T0-8 | CPU optimizer offload is declared and recorded | off | declaring on with no backend REFUSES | 0 GPU | no key |
+| T0-1 | optimizer name is declared and recorded | build with optimizer=adamw_torch | declaring an unsupported optimizer REFUSES 96, does not fall back | 0 GPU | SHIPPED (#373): declared optimizer reaches TrainingArguments.optim; an unsupported name REFUSES 96 before a Trainer exists |
+| T0-2 | grad accumulation steps are declared and recorded | accum=4 | kwargs actually carries gradient_accumulation_steps=4 (introspect args) | 0 GPU | SHIPPED (#373): reaches gradient_accumulation_steps in the kwargs; an omitted axis adds no kwarg and is recorded as an explicit absence |
+| T0-3 | max_grad_norm is declared and recorded | 1.0 vs 0.0 | args.max_grad_norm reads back what was declared | 0 GPU | SHIPPED (#373): reaches max_grad_norm in the kwargs; a non-positive value REFUSES 96 at the CLI boundary (#384) |
+| T0-4 | gradient checkpointing (recompute) is declared and recorded | on | model.is_gradient_checkpointing is True (not just the flag set) | 0 GPU | SHIPPED (#373): model.is_gradient_checkpointing reads True on the loaded model, not merely the flag |
+| T0-5 | attention implementation is declared and recorded | sdpa | model.config._attn_implementation == declared; an impl the build cannot supply REFUSES | 0 GPU | SHIPPED (#373): reaches model.config._attn_implementation; an impl the build cannot supply and one the loader silently overrides both REFUSE 96 |
+| T0-6 | LR schedule and warmup are declared and recorded | cosine, warmup=2 | the LR at step 1 != LR at step 10 (read the log) | 0 GPU | SHIPPED (#373): the declared schedule and warmup move the optimizer LR -- early below half the base rate, late above 0.85 of it |
+| T0-7 | sharding strategy (ddp\|fsdp\|deepspeed) is declared and recorded | ddp | a strategy with no wiring REFUSES 96 rather than silently running DDP | 0 GPU | SHIPPED (#373): declared and recorded; fsdp/zero3 REFUSE 96 rather than silently running DDP, while ddp and undeclared proceed |
+| T0-8 | CPU optimizer offload is declared and recorded | off | declaring on with no backend REFUSES | 0 GPU | SHIPPED (#373): declared and recorded; offload=true REFUSES 96 with no backend, while false and undeclared proceed |
 | T0-9 | code.status is a real commit | run from a git checkout | #346: a COPY must record status=not_a_repository AND the run must say so loudly, not proceed silently | 0 GPU | RED (#346) |
 | T0-10 | the effective topology is read from runtime evidence, never echoed from the config | WORLD_SIZE=8 LOCAL_WORLD_SIZE=8 against a config declaring tp=pp=ep=cp=4 and gpus_per_node=4 | #375: the pre-fix `_effective_topology`, which sourced 5 of the 7 fields from cfg -- 11 of the 14 legs in `tests/train/test_effective_topology.py` go RED against it and 14 of 14 pass after | 0 GPU | SHIPPED (#375): 14 of 14 legs green, 11 RED on the pre-fix tree |
 
@@ -78,12 +90,12 @@ Tier 0 blocks tier 1 because a tier-1 row that toggles an undeclared axis measur
 
 | ID | Claim | Run arm | Control arm (must differ) | Cost | Status today |
 |---|---|---|---|---|---|
-| T1-9 | adamw vs fused vs adafactor vs sgd differ in step time and loss curve | 4 arms, same seed | identical curves across optimizers = the knob did nothing | ~15 min x4 | blocked on T0-1 |
-| T1-10 | accum=4,bs=1 and accum=1,bs=4 give the SAME loss curve | both arms | if they differ beyond tolerance, accumulation is wrong | ~15 min x2 | blocked on T0-2 |
-| T1-11 | grad checkpointing: peak memory DROPS and step time RISES | on vs off | neither moving = the flag is a no-op (the silent-fallback shape) | ~15 min x2 | blocked on T0-4 |
-| T1-12 | eager/sdpa/flash agree on logits within tolerance, differ in step time | 3 arms | identical step times = the impl never changed | ~10 min x3 | blocked on T0-5 |
-| T1-13 | CPU offload: optimizer state leaves GPU memory | offload on vs off | GPU memory must drop by ~optimizer-state size; if not, offload did nothing | ~20 min x2 | blocked on T0-8 |
-| T1-14 | ZeRO-1/2/3 reduce per-rank memory monotonically | 3 arms + DDP baseline | flat memory across stages = no sharding happened | ~30 min x4 | blocked on T0-7 |
+| T1-9 | adamw vs fused vs adafactor vs sgd differ in step time and loss curve | 4 arms, same seed | identical curves across optimizers = the knob did nothing | ~15 min x4 | UNBLOCKED by #373 (T0-1 shipped): needs a GPU tray, never run |
+| T1-10 | accum=4,bs=1 and accum=1,bs=4 give the SAME loss curve | both arms | if they differ beyond tolerance, accumulation is wrong | ~15 min x2 | UNBLOCKED by #373 (T0-2 shipped): needs a GPU tray, never run |
+| T1-11 | grad checkpointing: peak memory DROPS and step time RISES | on vs off | neither moving = the flag is a no-op (the silent-fallback shape) | ~15 min x2 | UNBLOCKED by #373 (T0-4 shipped): needs a GPU tray, never run |
+| T1-12 | eager/sdpa/flash agree on logits within tolerance, differ in step time | 3 arms | identical step times = the impl never changed | ~10 min x3 | UNBLOCKED by #373 (T0-5 shipped): needs a GPU tray, never run |
+| T1-13 | CPU offload: optimizer state leaves GPU memory | offload on vs off | GPU memory must drop by ~optimizer-state size; if not, offload did nothing | ~20 min x2 | REFUSED by the package plane (#373): offload=true refuses before load, so there is no offload arm to weigh against off |
+| T1-14 | ZeRO-1/2/3 reduce per-rank memory monotonically | 3 arms + DDP baseline | flat memory across stages = no sharding happened | ~30 min x4 | REFUSED by the package plane (#373): fsdp/zero3 refuse before load, so there are no ZeRO stages to compare |
 
 ### T1 — architecture (GPU)
 
@@ -110,10 +122,10 @@ The control-arm rule: a row with no arm that must come out differently is a row 
 
 ## Ordering rule
 
-T0-9 first (a run whose commit is unrecorded is unattributable — every row below inherits it). Then T0-1..T0-8, which are CPU-only and cheap. Then T1 cheapest-first: T1-3, T1-6, T1-22, T1-23 (minutes), then T1-4, T1-1, T1-12, T1-10, T1-11, then the long ones (T1-5, T1-14, T1-16, T1-21).
+T0-9 is still first and still RED (a run whose commit is unrecorded is unattributable — every row below inherits it). T0-1..T0-8 are done: #373 shipped them, and their CPU-only proofs now run in the suite on every commit, so they no longer sit in this queue. What remains is tier 1, cheapest-first: T1-3, T1-6, T1-22, T1-23 (minutes), then T1-4, T1-1, T1-12, T1-10, T1-11, then the long ones (T1-5, T1-16, T1-21). T1-14 has left the queue with T1-13: the plane refuses both run arms, so there is nothing to schedule until a ZeRO or offload backend exists to schedule it against.
 
 ## The honest count
-33 rows: 10 that need no GPU and 23 that do. Of those, 8 name an axis the training plane does not expose at all and 6 more are blocked by one of those, so 14 cannot be run today. 3 are already measured and need only a re-take under a manifest that records them. 2 are refusals that must be PROVEN to be refusals rather than silent fallbacks.
+33 rows: 10 that need no GPU and 23 that do. Of those, 0 now name an axis the training plane does not expose at all, and 0 are blocked by another row, so 0 are unrunnable for want of a declaration — the lower tier has shipped, and what stands between this matrix and the rest of its rows is a tray, not a missing knob. 3 are already measured and need only a re-take under a manifest that records them. 2 are refusals that must be PROVEN to be refusals rather than silent fallbacks.
 
 The expert-parallel row belongs to none of those buckets and is still not runnable through this plane. It is refused before a model is loaded, and that refusal is already proven by the topology legs, so it is neither blocked by another row nor awaiting a proof — the axis is simply not wired, and the plane now says so instead of training pure DDP under the label.
 
