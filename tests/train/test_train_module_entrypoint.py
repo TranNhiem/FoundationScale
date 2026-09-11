@@ -213,28 +213,46 @@ def test_identity_module_help_is_the_console_script_help(tmp_path: Path) -> None
     )
 
 
-def test_exit_code_hygiene_no_arguments_exits_two_without_a_traceback(tmp_path: Path) -> None:
-    """A bare invocation must be a usage error, not a crash.
+def test_exit_code_hygiene_no_arguments_refuses_96_without_a_traceback(tmp_path: Path) -> None:
+    """A bare invocation must be a REFUSAL, not a crash and not a raw stdlib 2.
 
     Denominator: one invocation of ``python -m foundationscale.train`` with no
     arguments. The required options (``--model``, ``--dataset``,
     ``--output-dir``, ``--nodes``, ``--gpus-per-node``, a profile) are absent
-    by construction, so argparse itself must reject the call with exit code 2
-    and a usage line. The ``"Traceback" not in stderr`` clause is #171/#169's
-    rule applied to the module form: the training plane declares a 0/5/95/96
-    exit namespace, and an entry point that leaks a traceback has left that
-    namespace without saying so -- a reader of the exit code cannot tell a
-    refusal from a crash, and a reader of the log cannot tell either from a
-    bug in the gate itself. Argparse's own error handling, exercised here, is
-    what keeps the module form inside the declared contract before any GPU-
-    adjacent code can run.
+    by construction, so argparse rejects the call before any GPU-adjacent code
+    can run. What the plane then DOES with that rejection is the thing under
+    test here, and it changed in #387.
+
+    This arm used to assert ``returncode == 2`` while arguing, in the same
+    paragraph, that the assertion was what "keeps the module form inside the
+    declared contract". Those two statements cannot both be true: the declared
+    namespace is 0/5/95/96 and 2 is not in it. The assertion was pinning the
+    stdlib's exit code and calling it the plane's contract. #387 resolved the
+    contradiction in favour of the contract -- ``cli.main`` now translates a
+    nonzero parser exit to EXIT_REFUSE (96), because a usage error IS a
+    rejected declaration: the operator stated something the plane will not
+    honour, and nothing was measured. 2 was also, specifically, the code a
+    launcher ``case`` statement does not handle, which is #171's shape.
+
+    The other two clauses are unchanged and are what make the translation
+    honest rather than a swallow. ``"Traceback" not in stderr`` is #171/#169
+    applied to the module form: an entry point that leaks a traceback has left
+    the namespace without saying so. ``"usage:" in stderr`` now carries a
+    second job -- argparse's own diagnosis must SURVIVE the translation, so
+    the operator still learns which options were missing. A handler that
+    returned 96 while eating the message would satisfy the exit code and
+    destroy the only actionable half of the output.
     """
     result = _run_module([], SRC, tmp_path)
     stderr = result.stderr.decode(errors="replace")
-    assert result.returncode == 2, (
-        "argparse's usage error for missing required options is exit code 2; "
-        f"the module entry exited {result.returncode}\n"
-        f"stdout:\n{result.stdout.decode(errors='replace')}\n"
+    stdout = result.stdout.decode(errors="replace")
+    assert result.returncode == 96, (
+        "a rejected declaration is REFUSE (96) in this plane's namespace; the "
+        f"module entry exited {result.returncode}. 2 means #387's translation "
+        "is gone and argparse's raw code is reaching launchers again; 5 means "
+        "a usage error is being reported as a crash; 1 means it escaped as a "
+        "traceback\n"
+        f"stdout:\n{stdout}\n"
         f"stderr:\n{stderr}"
     )
     assert "Traceback" not in stderr, (
@@ -242,6 +260,13 @@ def test_exit_code_hygiene_no_arguments_exits_two_without_a_traceback(tmp_path: 
         f"declared 0/5/95/96 namespace (#171/#169):\n{stderr}"
     )
     assert "usage:" in stderr, (
-        "exit 2 must be argparse's own usage error, not some other failure "
-        f"that happens to share the exit code:\n{stderr}"
+        "96 must be a TRANSLATED argparse usage error, not some other failure "
+        "that happens to share the exit code -- and argparse's own diagnosis "
+        f"must survive the translation, or the operator is told 'rejected' "
+        f"with no statement of what was wrong:\n{stderr}"
+    )
+    assert "[fs:train:refuse] declaration rejected:" in stdout, (
+        "the child exited 96 without announcing a refusal on stdout, so the "
+        "code and the log disagree about what happened -- #312's defect. The "
+        f"marker is what a log reader attributes the 96 to\nstdout:\n{stdout}"
     )

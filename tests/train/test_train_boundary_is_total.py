@@ -250,28 +250,42 @@ def test_cli_non_valueerror_is_red_not_refuse(monkeypatch: pytest.MonkeyPatch) -
     )
 
 
-def test_cli_lets_argparse_exit_through() -> None:
+def test_cli_splits_argparse_exits_by_kind() -> None:
     """``except Exception`` over ``except BaseException``, one layer along.
 
-    argparse exits 2 on a usage error and 0 on ``--help``/``--version``, and
-    it does it by raising ``SystemExit`` from inside the stdlib. Both codes
-    sit outside 0/5/95/96. Catching them here would let this plane relabel
-    another library's contract -- a usage error reported as a FoundationScale
-    RED. Finding #387 records the surface instead of hiding it, and this arm
-    is what stops a future widening to ``BaseException`` from closing it
-    silently.
+    argparse exits 2 on a usage error and 0 on ``--help``/``--version``, both
+    by raising ``SystemExit`` from inside the stdlib. This arm originally
+    required BOTH to pass through untouched, on the reasoning that catching
+    them would let this plane relabel another library's contract.
+
+    #387 kept half of that and reversed the other half, because the two are
+    not one surface. Passing 2 through does not preserve argparse's contract
+    for the caller -- it hands a LAUNCHER a code outside the 0/5/95/96
+    namespace this plane publishes, and 2 is precisely the code its case
+    statements do not handle. A usage error is the same event as a rejected
+    declaration (the operator stated something the plane will not honour, and
+    nothing was measured), so ``main`` now translates it to EXIT_REFUSE while
+    leaving argparse's own message on stderr untouched. ``--help`` and
+    ``--version`` still pass through at 0: in-contract by value, and the
+    tool answering a question about itself is not a verdict about a run.
+
+    What this arm still does is what it was written for -- it fails if the
+    translation stops discriminating. Blanket-catching ``SystemExit`` and
+    refusing on all of it turns the ``--help`` leg red.
     """
-    with pytest.raises(SystemExit) as usage:
-        cli.main(["--model", "m"])  # --dataset and --output-dir are required
-    assert usage.value.code == 2, (
-        f"argparse's usage exit came back as {usage.value.code!r}, not 2. If "
-        "main() has started catching SystemExit, the 2 has become a "
-        "FoundationScale verdict and #387's blind spot is now a silent lie"
+    rc = cli.main(["--model", "m"])  # --dataset and --output-dir are required
+    assert rc == _EXIT_REFUSE, (
+        f"argparse's usage exit came back as {rc!r}, not REFUSE "
+        f"({_EXIT_REFUSE}). If this is 2, #387's translation is gone and a raw "
+        "stdlib code is reaching launchers again; if it is 5, a usage error "
+        "is being reported as a crash in this plane"
     )
 
     with pytest.raises(SystemExit) as helped:
         cli.main(["--help"])
     assert helped.value.code == 0, (
         f"--help exited {helped.value.code!r}, not 0 -- asking for help is "
-        "not a failure, and a wrapper that reads the code would record one"
+        "not a failure, and a wrapper that reads the code would record one. "
+        f"{_EXIT_REFUSE} here means the #387 translation stopped testing the "
+        "code and started swallowing every SystemExit alike"
     )

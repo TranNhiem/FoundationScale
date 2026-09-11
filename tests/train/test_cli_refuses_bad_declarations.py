@@ -27,10 +27,17 @@ reason:
   recorder and return what it returned. Without it the refusal arm could be
   passing because argparse rejected the flag upstream of ``_build_config``,
   and nothing here could tell;
-* the channel separation: argparse's own error for an unknown flag is
-  ``SystemExit(2)``, not the 96 path, and carries no refusal marker, so a
-  future rewrite that broadens the ``except`` to swallow argparse's exit is
-  caught.
+* the channel separation. This arm originally pinned argparse's own
+  ``SystemExit(2)`` for an unknown flag as distinct from the 96 path, to
+  catch a future rewrite that broadened the ``except`` until it swallowed
+  argparse's exit. Finding #387 then decided the opposite about the CODE --
+  a usage error is the same event as a rejected declaration, so it now
+  returns 96 -- WITHOUT giving up the discrimination, because the two
+  questions were never the same one. What must not happen is a widening
+  that reports an internal crash as a rejected declaration; that is now
+  pinned directly, by driving a ``TypeError`` out of ``parse_args`` and
+  requiring RED. So the module still fails if the ``except`` broadens, and
+  it fails on the arm that actually names the hazard.
 
 Every arm is torch-free: the recorder replaces ``train``, which is where
 the heavy imports live, so no real run ever starts.
@@ -43,7 +50,7 @@ from pathlib import Path
 import pytest
 
 from foundationscale.train import cli
-from foundationscale.train.loop import EXIT_PASS, EXIT_REFUSE
+from foundationscale.train.loop import EXIT_PASS, EXIT_RED, EXIT_REFUSE
 
 # The marker matches train()'s own refusal site so one grep finds both.
 # Stated once here so a drift in the literal fails four assertions, not
@@ -212,37 +219,144 @@ def test_legal_value_reaches_train_and_main_returns_its_verdict(
     )
 
 
-def test_unknown_flag_is_argparse_error_not_a_refusal(
+def test_unknown_flag_refuses_96_and_keeps_argparse_diagnosis(
+    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The two error channels stay distinct.
+    """A mistyped flag is a rejected declaration -- finding #387.
 
-    An unknown flag is argparse's own rejection: ``parse_args`` raises
-    ``SystemExit(2)`` on the spot, before ``_build_config`` runs. This pins
-    that the 96 arm is reachable ONLY through ``TrainConfig.__post_init__``:
-    a future edit that widened ``except ValueError`` to ``except Exception``
-    -- or wrapped ``parse_args`` -- would launder argparse's 2 into a
-    refusal-shaped 96, and this arm, not the refusal arm, is what fails.
-    No ``train`` recorder is needed: nothing downstream of the parse runs.
+    An unknown flag makes ``parse_args`` raise ``SystemExit(2)`` from inside
+    the stdlib, before ``_build_config`` runs. Until #387 that 2 reached the
+    shell: a code outside 0/5/95/96, the one a launcher's case statement does
+    not handle, for an event -- "you stated something this plane will not
+    honour, and nothing was measured" -- that the arm above already reports
+    as 96. Both halves are asserted here, because translating the code would
+    be a bad trade if it cost the operator argparse's own message: the code
+    a launcher reads changes, the evidence a human reads does not.
+
+    The unknown flag rides on a COMPLETE argv rather than standing alone,
+    which is not cosmetic: argparse checks required arguments before it
+    reports unrecognised ones, so ``main(["--no-such-flag"])`` exits 2 with a
+    message that never mentions the flag. That argv would still satisfy the
+    exit-code half while making the stderr half meaningless -- it would pass
+    for the wrong reason. This one makes the mistyped flag the SOLE defect,
+    so argparse's message is about the thing the test claims to be about.
+    """
+    rc = cli.main(_base_argv(tmp_path, "--no-such-flag"))
+
+    captured = capsys.readouterr()
+    assert rc == EXIT_REFUSE, (
+        f"main() returned {rc} for an unknown flag, not EXIT_REFUSE (96). "
+        "If this is 2, argparse's own exit reached the caller and #387 has "
+        "regressed; if it is 5, the usage error was adjudicated as a crash"
+    )
+    assert _REFUSE_MARKER in captured.out, (
+        f"the usage error printed no {_REFUSE_MARKER!r} marker; stdout was "
+        f"{captured.out[-300:]!r}. 96 is the same verdict the declaration "
+        "arm gives, so it must carry the same marker -- one grep, both sites"
+    )
+    assert "--no-such-flag" in captured.err, (
+        "argparse's own diagnosis is no longer on stderr: "
+        f"{captured.err[-300:]!r}. The translation must change the exit code "
+        "and nothing else. An operator handed 96 with no usage text is worse "
+        "off than one handed 2 with it"
+    )
+
+
+@pytest.mark.parametrize("flag", ["--help", "--version"])
+def test_help_and_version_still_exit_zero(flag: str) -> None:
+    """#387's other half: the self-describing flags are re-raised untouched.
+
+    ``--help`` and ``--version`` are the tool answering a question about
+    itself, not a training run reporting a verdict. Exit 0 is in-contract by
+    value and is what every other CLI on the machine does, so the refusal
+    translation must test the code and let this one through. Without this
+    arm the obvious over-reach -- catching ``SystemExit`` and refusing on all
+    of it -- would pass every other test in this module while making
+    ``--help`` return 96.
     """
     with pytest.raises(SystemExit) as excinfo:
-        cli.main(["--no-such-flag"])
+        cli.main([flag])
 
-    assert excinfo.value.code == 2, (
-        f"argparse rejected the unknown flag with exit "
-        f"{excinfo.value.code}, not its own 2. If this were "
-        f"{EXIT_REFUSE} (96), the refusal except would have swallowed "
-        "argparse's exit -- the 96 path must be reachable only through "
-        "_build_config, and any broadening must fail right here"
+    code = 0 if excinfo.value.code is None else excinfo.value.code
+    assert code == 0, (
+        f"{flag} exited {excinfo.value.code!r}, not 0. If this is "
+        f"{EXIT_REFUSE}, the #387 translation swallowed the self-describing "
+        "flags along with the usage errors"
     )
+
+
+class _DuckCode(Exception):
+    """An internal fault that happens to carry a ``code``, like SystemExit.
+
+    Contrived on purpose. ``except SystemExit`` is a TYPE test, and the only
+    mutation it can have that this module would otherwise miss is one that
+    replaces the type test with something weaker -- a wider ``except``, or a
+    duck-type check on ``.code``. Every exception whose ``.code`` is missing
+    is caught by the widening ANYWAY, because the handler's own
+    ``exc.code`` lookup then raises ``AttributeError`` and the outer handler
+    still answers RED: the right verdict reached by the wrong route, which
+    means such an exception cannot tell the two implementations apart.
+    This one can. ``code = 2`` is the value a widened handler would read and
+    translate, so it is the single input on which "narrow" and "wide" give
+    DIFFERENT answers.
+    """
+
+    code = 2
+
+
+@pytest.mark.parametrize(
+    ("exc", "why"),
+    [
+        (TypeError("simulated internal argparse fault"), "the realistic fault"),
+        (_DuckCode("internal fault that duck-types SystemExit"), "the type probe"),
+    ],
+    ids=["typeerror", "duck_typed_code"],
+)
+def test_internal_crash_in_parse_args_is_red_not_a_refusal(
+    exc: Exception,
+    why: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The discrimination the old channel-separation arm existed for.
+
+    #387 made a usage error return 96, which removes the old signal that a
+    broadened ``except`` had swallowed argparse. The hazard behind that
+    signal is unchanged and is pinned here directly: an internal fault
+    during parsing -- a ``TypeError`` from a mistyped argparse action, the
+    exact example ``main``'s docstring names -- is NOT a rejected
+    declaration, and reporting it as one would tell the operator to fix
+    their command line for a defect in ours. It must fall past the narrow
+    ``except SystemExit`` to the outer handler and adjudicate RED (5).
+
+    Two faults, because ONE of them cannot do the job alone. Measured while
+    writing this: widening the ``except`` to ``BaseException`` and re-running
+    left the ``TypeError`` arm GREEN -- the widened handler catches the
+    ``TypeError``, its own ``exc.code`` lookup then raises ``AttributeError``,
+    and the outer handler answers RED regardless. A control that passes under
+    the mutation it names is not a control. ``_DuckCode`` is the arm that
+    actually kills it, and the ``TypeError`` arm is kept because it is the
+    fault an operator will really meet.
+    """
+
+    class _ExplodingParser:
+        def parse_args(self, argv: object) -> object:
+            raise exc
+
+    monkeypatch.setattr(cli, "build_parser", _ExplodingParser)
+
+    rc = cli.main(["--model", "tiny/model"])
+
     captured = capsys.readouterr()
-    assert _REFUSE_MARKER not in captured.out, (
-        "the refusal marker appeared on stdout for an ARGPARSE error. "
-        f"{_REFUSE_MARKER!r} is reserved for rejected declarations; "
-        "reusing it for a mistyped flag teaches launchers the wrong cause"
+    assert rc == EXIT_RED, (
+        f"an internal {type(exc).__name__} during parsing ({why}) returned "
+        f"{rc}, not EXIT_RED (5). {EXIT_REFUSE} would mean the crash was "
+        "laundered into a rejected declaration -- our bug reported as the "
+        "operator's, and the except is no longer a SystemExit type test"
     )
-    assert _REFUSE_MARKER not in captured.err, (
-        "the refusal marker appeared even in argparse's own stderr channel: "
-        f"{captured.err[-300:]!r}. The channels are distinct on purpose, "
-        "and this arm exists to keep them that way"
+    assert _REFUSE_MARKER not in captured.out, (
+        "the refusal marker appeared for an internal crash: "
+        f"{captured.out[-300:]!r}. The marker means 'your declaration was "
+        "rejected'; a fault in our own parser is not that"
     )

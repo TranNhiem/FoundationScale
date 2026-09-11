@@ -60,7 +60,16 @@ WHAT IS NOT MEASURED (declared blind spots -- printed in the banner on every ver
     1. Third-party code called by an entry point can exit on its own -- notably argparse,
        which calls sys.exit(2) on a usage error and sys.exit(0) on --help/--version from
        inside the stdlib, so cli.py can produce 0 and 2 by a route no AST read of this
-       tree can see. That is a real out-of-contract surface; it is named, not measured.
+       tree can see. Still true of this GATE, and still not measured by it. What changed
+       (#387) is the surface, not the instrument: cli.main now wraps parse_args and
+       translates a nonzero parser exit to EXIT_REFUSE, so the usage-error half no longer
+       reaches the shell out of contract, while --help/--version deliberately keep exiting
+       0 -- in-contract by value, and what every other CLI on the machine does. The half
+       that is closed is closed by a TEST, not by this AST read
+       (tests/train/test_cli_refuses_bad_declarations.py), which is the honest division:
+       a source-text gate cannot see into the stdlib, so the claim is carried by execution.
+       Read this blind spot as "this gate is blind to stdlib exits", not as "the tree has
+       an open 2".
     2. `except Exception` does not catch BaseException: KeyboardInterrupt (status 130) and
        a SystemExit raised by a library pass through a PROTECTED entry point by design.
     3. Resolution is ONE call hop. A two-hop return is UNRESOLVED, never assumed good.
@@ -980,8 +989,11 @@ def _render(a: Assessment, root: Path) -> list[str]:
             "  declared blind spots (named, not hidden):",
             "    1. third-party code can exit on its own: argparse calls sys.exit(2) on a",
             "       usage error and sys.exit(0) on --help/--version from inside the stdlib,",
-            "       so cli.py can produce 0 and 2 by a route no AST read of this tree sees;",
-            "       that out-of-contract surface is named, not measured.",
+            "       by a route no AST read of this tree sees. THIS GATE is still blind to",
+            "       it; the tree is not. #387 made cli.main translate a nonzero parser exit",
+            "       to 96 and keep --help/--version at 0 (in-contract by value), and that",
+            "       half is carried by a test, not by this gate -- source text cannot see",
+            "       into the stdlib. Blind here does not mean open there.",
             "    2. except Exception does not catch BaseException: KeyboardInterrupt (130)",
             "       and a library SystemExit pass through a PROTECTED entry point by design.",
             "    3. resolution is ONE call hop; a two-hop return is UNRESOLVED, not assumed",

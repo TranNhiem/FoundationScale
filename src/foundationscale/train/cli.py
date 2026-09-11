@@ -325,15 +325,54 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     RED, not UNMEASURED: it is the answer ``train`` gives for "crashed", and
     a caller that cannot tell which side of the handoff the crash happened on
-    should not have to. ``BaseException`` is deliberately not caught, so
-    argparse's own ``SystemExit`` -- 2 for a usage error, 0 for ``--help``
-    and ``--version`` -- still passes through. Those three codes are outside
-    the contract and are argparse's to emit, not this plane's to relabel;
-    finding #387 records that surface rather than hiding it here.
+    should not have to. ``BaseException`` is deliberately not caught, so a
+    ``SystemExit`` raised anywhere else still passes through.
+
+    #387 asked what to do about argparse's own exits, which reach the shell
+    from inside the stdlib: 2 for a usage error, 0 for ``--help`` and
+    ``--version``. Resolved by SPLITTING them, because they are not one
+    surface:
+
+    * A usage error is the SAME event as the ``ValueError`` arm below -- the
+      operator stated something the plane will not honour, and nothing was
+      measured -- reported differently only because of which layer noticed
+      first. That is not academic here: #181, #183 and #184 were all
+      composed-argv defects, so a launcher meeting a mistyped flag is this
+      plane's recurring failure rather than a hypothetical, and 2 is the one
+      code its case statements do not handle. A nonzero parser exit is
+      therefore translated to EXIT_REFUSE, under the same marker as the arm
+      below. argparse has already written its own diagnosis to stderr by the
+      time it raises, so the operator's evidence is unchanged; only the code
+      the launcher reads is.
+    * ``--help`` and ``--version`` are re-raised untouched. Exit 0 there is
+      the tool answering a question about itself, it is in-contract by value,
+      and every other CLI on the machine behaves this way.
+
+    The translation catches ``SystemExit`` and nothing wider, and that is what
+    keeps it from being the laundering ``test_cli_refuses_bad_declarations``
+    exists to forbid: a ``TypeError`` from a mistyped argparse action is not a
+    ``SystemExit``, so it still falls through to the outer handler and is
+    adjudicated RED rather than dressed up as a rejected declaration.
     """
     try:
         parser = build_parser()
-        args = parser.parse_args(argv)
+        try:
+            args = parser.parse_args(argv)
+        except SystemExit as exc:
+            # Narrow on purpose -- see the docstring. `exc.code` is None for a
+            # bare SystemExit() and may be a string if some future parser
+            # calls `parser.exit(message=...)`; both are handled by testing
+            # for the ONE code that passes through rather than for the codes
+            # that do not, so an unanticipated spelling refuses rather than
+            # escaping as an unclassified exit.
+            if exc.code is None or exc.code == 0:
+                raise
+            print(
+                f"[fs:train:refuse] declaration rejected: the command line did "
+                f"not parse (argparse exit {exc.code}); its own diagnosis is on "
+                f"stderr above this line"
+            )
+            return EXIT_REFUSE
         try:
             cfg = _build_config(argv, args)
         except ValueError as exc:
