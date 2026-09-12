@@ -569,6 +569,33 @@ jobs:
       - name: Mutation scope (every tracked file sits in exactly one declared set)
         run: python3 checks/mutation_scope.py
 
+      # #360. The RL plane makes 20 claims of the shape "this concrete binding IS a
+      # `Foo`", and every instrument measuring them was a RUNTIME isinstance() against
+      # a @runtime_checkable Protocol. That check asks whether the named attributes
+      # EXIST; it cannot see a signature. A `step` taking the wrong argument types, or
+      # returning the wrong thing, satisfies all of them -- which is #397's finding
+      # from the other direction (three docstrings claimed a setup-time refusal that
+      # runtime_checkable cannot deliver).
+      #
+      # The gate discovers the claims with `ast` and then DELEGATES the verdict to
+      # mypy: it writes a probe module asserting each pair and reports what mypy says.
+      # Its own opinion is never the answer. Discovery walks the whole tree rather
+      # than registry.py's top level, because every binding is imported INSIDE
+      # _install_default_algorithms() to break an import cycle -- a top-level-only
+      # read returns an empty map, and an empty map is indistinguishable from "this
+      # module imports nothing", which is what would make the miss silent.
+      #
+      # The committed baseline covers the axis a subtype checker structurally cannot:
+      # a binding that DISAPPEARS makes the surviving claims more true, not less. So
+      # a shrunken discovery set is RED, and only the baseline can say so.
+      #
+      # mypy absent is 95 (UNMEASURED), never a silent green. Same hand-held
+      # Makefile<->CI pairing as the two steps above: #286 is still open.
+      - name: RL-static-subtype controls (MUST_FIRE + a control on the harness)
+        run: python3 checks/rl_static_subtypes.py --self-test
+      - name: RL static subtypes (mypy, not isinstance, adjudicates every binding claim)
+        run: python3 checks/rl_static_subtypes.py
+
       # #378. The verification matrix is the ledger of what this repository claims
       # to have verified, and docs/VERIFICATION_MATRIX.md renders it. Both are
       # hand-edited, so they drift in either direction; worse, a row can rot in
@@ -918,8 +945,22 @@ jobs:
           # cli.py). RE-MEASURED on this commit, same machine, rc=0:
           #   launchers/test_checks_gates.sh -> controls: 39 passed, 0 failed
           # Raised in the same commit as those legs, same reason again.
+          #
+          # #360 added three more (checks/rl_static_subtypes.py: a
+          # MUST_BE_UNMEASURED arm proving the gate reports 95 rather than a
+          # silent green when no analyzer is reachable, a MUST_PASS over the
+          # live registry's static discovery denominator, and a MUST_FIRE that
+          # plants a ghost binding into a COPY of the committed baseline).
+          # Note what those three do NOT measure: the suite invokes every gate
+          # as `python3 -S`, which drops site-packages, so mypy is absent by
+          # CONSTRUCTION on every runner including this one. The mypy verdict
+          # itself is taken by `make rl-static-subtypes`, which is in the
+          # `check:` chain and runs under the venv interpreter. RE-MEASURED on
+          # this commit, same machine, rc=0:
+          #   launchers/test_checks_gates.sh -> controls: 43 passed, 0 failed
+          # Raised in the same commit as those legs, same reason again.
           FLOOR_LAUNCHER=149
-          FLOOR_CHECKS=40
+          FLOOR_CHECKS=43
           FLOOR=$((FLOOR_LAUNCHER + FLOOR_CHECKS))
 
           verify_summary() {

@@ -1202,15 +1202,19 @@ fi
 # --- MUST_PASS: coverage_floor self-test (checks/coverage_floor.py) --------
 # MEASURED: `python3 -S checks/coverage_floor.py --self-test` exits rc=0 and
 # its last line is the declared
-#   SELF-TEST DENOMINATOR: 16 of 16 controls behaved; ...
+#   SELF-TEST DENOMINATOR: 21 of 21 controls behaved; ...
 # rc=0 alone is NOT the measurement: a control set that shrank to one control
 # would still be capable of exiting 0. The trailing "N of N" tally is parsed,
-# required to be non-empty and self-consistent, and held at N >= 16 -- the 11
-# MUST_FIRE + 5 MUST_PASS controls present when this leg was written. A
-# wording change reds THIS leg and must update it in the same commit.
+# required to be non-empty and self-consistent, and held at N >= 21 -- the 11
+# MUST_FIRE + 10 MUST_PASS controls present when this leg was last re-measured.
+# A wording change reds THIS leg and must update it in the same commit.
 #
-# The floor moved 12 -> 16 when the freshness arm landed (#318). Four of the
-# sixteen drive freshness through an INJECTED parser resolver, not the real
+# The floor moved 12 -> 16 when the freshness arm landed (#318), 16 -> 20 with
+# the #385 drill, and 20 -> 21 with the --update band arm. A floor that lags
+# the measured count is the #386 class: it is still a floor, so it stays green
+# while silently admitting a shrunk control set, which is the one thing the
+# tally exists to refuse. Re-seat it whenever a control lands. Four of the
+# twenty-one drive freshness through an INJECTED parser resolver, not the real
 # coverage.parser: this leg runs the gate under `python3 -S`, deliberately, so
 # that its verdict cannot depend on what happens to be installed. A control
 # that needs an optional third-party import is not a control here -- it reports
@@ -1222,8 +1226,8 @@ fi
 if [ ! -r "checks/coverage_floor.py" ]; then
   f252_msg="MUST_PASS FAILED (coverage_floor self-test) UNMEASURED:"
   f252_msg="$f252_msg checks/coverage_floor.py is not readable -- unreadable is not"
-  f252_msg="$f252_msg empty; the gate cannot run, so 0 of its declared denominator of 16"
-  f252_msg="$f252_msg controls (11 MUST_FIRE + 5 MUST_PASS) were measured. An unreadable"
+  f252_msg="$f252_msg empty; the gate cannot run, so 0 of its declared denominator of 21"
+  f252_msg="$f252_msg controls (11 MUST_FIRE + 10 MUST_PASS) were measured. An unreadable"
   f252_msg="$f252_msg measuring unit is failed closed, never skipped."
   no "$f252_msg"
 else
@@ -1236,15 +1240,15 @@ else
     sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved;.*/\2/p')
   if [ "$f252_rc" -ne 0 ]; then
     f252_msg="MUST_PASS FAILED (coverage_floor self-test): rc=$f252_rc over the gate's"
-    f252_msg="$f252_msg declared denominator of 16 controls (11 MUST_FIRE + 5 MUST_PASS);"
-    f252_msg="$f252_msg 0 of 16 controls were accepted as behaved, so the leg fails closed."
+    f252_msg="$f252_msg declared denominator of 21 controls (11 MUST_FIRE + 10 MUST_PASS);"
+    f252_msg="$f252_msg 0 of 21 controls were accepted as behaved, so the leg fails closed."
     f252_msg="$f252_msg Output: $(printf '%s\n' "$f252_out" | tr '\n' ' ')"
     no "$f252_msg"
   elif [ -z "$f252_have" ] || [ -z "$f252_want" ]; then
     f252_msg="MUST_PASS FAILED (coverage_floor self-test) UNMEASURED: rc=0 but the last"
     f252_msg="$f252_msg line carries no parseable 'SELF-TEST DENOMINATOR: N of N controls"
     f252_msg="$f252_msg behaved' tally -- the measuring unit printed no denominator, so 0 of"
-    f252_msg="$f252_msg 16 declared controls are auditable here. Unparseable is not passing;"
+    f252_msg="$f252_msg 21 declared controls are auditable here. Unparseable is not passing;"
     f252_msg="$f252_msg fail closed and update this leg in the same commit as the wording"
     f252_msg="$f252_msg change. Last line: $f252_last"
     no "$f252_msg"
@@ -1252,19 +1256,19 @@ else
     f252_msg="MUST_PASS FAILED (coverage_floor self-test): denominator $f252_have of"
     f252_msg="$f252_msg $f252_want controls is not self-consistent -- the self-test examined"
     f252_msg="$f252_msg fewer controls than it claims to have, over the declared denominator"
-    f252_msg="$f252_msg of 16. The inconsistency is failed closed because rc=0 cannot certify"
+    f252_msg="$f252_msg of 21. The inconsistency is failed closed because rc=0 cannot certify"
     f252_msg="$f252_msg a partial control set."
     no "$f252_msg"
-  elif [ "$f252_have" -lt 16 ]; then
+  elif [ "$f252_have" -lt 21 ]; then
     f252_msg="MUST_PASS FAILED (coverage_floor self-test): control set shrank to"
-    f252_msg="$f252_msg $f252_have of $f252_want, below the measured floor of 16 controls"
-    f252_msg="$f252_msg (11 MUST_FIRE + 5 MUST_PASS). A shortened self-test can still exit 0,"
+    f252_msg="$f252_msg $f252_have of $f252_want, below the measured floor of 21 controls"
+    f252_msg="$f252_msg (11 MUST_FIRE + 10 MUST_PASS). A shortened self-test can still exit 0,"
     f252_msg="$f252_msg so the floor is the control and this leg fails closed."
     no "$f252_msg"
   else
     f252_msg="MUST_PASS coverage_floor self-test: rc=0 under python3 -S, denominator"
-    f252_msg="$f252_msg $f252_have of $f252_want controls (>= the measured floor of 16,"
-    f252_msg="$f252_msg 11 MUST_FIRE + 5 MUST_PASS): $f252_last"
+    f252_msg="$f252_msg $f252_have of $f252_want controls (>= the measured floor of 21,"
+    f252_msg="$f252_msg 11 MUST_FIRE + 10 MUST_PASS): $f252_last"
     ok "$f252_msg"
   fi
 fi
@@ -1947,6 +1951,297 @@ F317B_PY
       f317b_msg="$f317b_msg and the unmodified copy exited rc=0 -- the covered set the only"
       f317b_msg="$f317b_msg variable, the working tree untouched. Both outcomes held"
       ok "$f317b_msg"
+    fi
+  fi
+fi
+
+# --- rl-static-subtypes gate (checks/rl_static_subtypes.py): three deterministic controls ---
+# Finding #360: nothing in the tree proved a shipped RL binding is a STATIC subtype of
+# the protocol it claims to implement. Duck-typed agreement at the call site is not
+# substitutability: a binding can satisfy every caller today and still drift off the
+# protocol the day a consumer reaches for a member the binding never declared. This gate
+# runs mypy over every (binding, protocol) pair in the registry and reds when the static
+# verdict fails. #359 is the proof the measurement earns its keep: PPOAlgorithm was
+# suspected of exactly that drift, and the gate's measurement REFUTED the suspicion --
+# all 20 pairs check out -- so the live-tree leg below now stands as the continuous
+# control on that refutation instead of a one-off hand audit.
+#
+# This gate's --self-test documents NO trailing 'DENOMINATOR: N of N controls' tally the
+# way mutation_scope's does, so NO denominator is parsed here. Inventing a floor for a
+# tally the gate never published would redden on a wording change rather than on a lost
+# control.
+#
+# rc 95 (mypy not installed) under THIS suite is not a host accident and not "the same
+# disposition this suite gives every unmeasurable arm": it is a CONSTRUCTION. The suite
+# invokes gates as `python3 -S checks/<gate>.py`, and -S skips `import site`, so
+# site-packages is off sys.path for that process and find_spec("mypy") is None on EVERY
+# host -- CI, and this developer machine where the venv interpreter imports mypy fine.
+# -S is load-bearing (#83/#229: it forces the same not-installed condition on every
+# runner so a verdict cannot depend on what happens to be installed). The three arms
+# below therefore ASSERT rc=95 and what the gate still measures without an analyzer,
+# rather than tolerating 95 as a disposition. The real mypy verdict is not lost: it is
+# taken by `make rl-static-subtypes`, whose $(PY) is the repo venv (mypy present, no -S),
+# in the check: chain.
+
+# --- Arm 1 (f360) -- MUST_BE_UNMEASURED: never silently green without an analyzer ----
+if [ ! -r "checks/rl_static_subtypes.py" ]; then
+  f360_msg="MUST_BE_UNMEASURED FAILED (rl_static_subtypes self-test):"
+  f360_msg="$f360_msg checks/rl_static_subtypes.py is not readable -- unreadable is not"
+  f360_msg="$f360_msg empty (doctrine 4); the gate cannot run, so its refusal to report"
+  f360_msg="$f360_msg green without an analyzer was not measured"
+  no "$f360_msg"
+else
+  f360_rc=0
+  f360_out=$(python3 -S checks/rl_static_subtypes.py --self-test 2>&1) || f360_rc=$?
+  if [ "$f360_rc" -eq 95 ] \
+     && printf '%s\n' "$f360_out" | grep -q 'RL-STATIC-SUBTYPES UNMEASURED' \
+     && printf '%s\n' "$f360_out" | grep -q 'mypy'; then
+    f360_msg="MUST_BE_UNMEASURED rl_static_subtypes self-test: rc=95 with"
+    f360_msg="$f360_msg 'RL-STATIC-SUBTYPES UNMEASURED' naming mypy -- the gate refused"
+    f360_msg="$f360_msg to report green without its analyzer. This is a deterministic"
+    f360_msg="$f360_msg control, not a host-dependent one: the suite runs the gate as"
+    f360_msg="$f360_msg python3 -S, which skips import site and removes site-packages"
+    f360_msg="$f360_msg from sys.path BY CONSTRUCTION, so mypy is absent on every host"
+    f360_msg="$f360_msg including CI. The mypy verdict itself is taken by make"
+    f360_msg="$f360_msg rl-static-subtypes (repo venv interpreter, mypy present, no -S,"
+    f360_msg="$f360_msg in the check: chain). Output:"
+    f360_msg="$f360_msg $(printf '%s\n' "$f360_out" | tr '\n' ' ')"
+    ok "$f360_msg"
+  elif [ "$f360_rc" -eq 0 ]; then
+    f360_msg="MUST_BE_UNMEASURED FAILED (rl_static_subtypes self-test): rc=0 under"
+    f360_msg="$f360_msg python3 -S -- the gate reported CLEAR while -S guarantees its"
+    f360_msg="$f360_msg analyzer is absent. That silent-green fake is the exact defect"
+    f360_msg="$f360_msg this control exists to refuse: a subtype verdict with no mypy"
+    f360_msg="$f360_msg behind it is manufactured, not measured. Output:"
+    f360_msg="$f360_msg $(printf '%s\n' "$f360_out" | tr '\n' ' ')"
+    no "$f360_msg"
+  elif [ "$f360_rc" -eq 5 ]; then
+    f360_msg="MUST_BE_UNMEASURED FAILED (rl_static_subtypes self-test): rc=5 under"
+    f360_msg="$f360_msg python3 -S -- the gate reported a RED finding while -S guarantees"
+    f360_msg="$f360_msg its analyzer is absent. A finding manufactured out of an absent"
+    f360_msg="$f360_msg analyzer reddens the suite over nothing and buries real reds."
+    f360_msg="$f360_msg Output: $(printf '%s\n' "$f360_out" | tr '\n' ' ')"
+    no "$f360_msg"
+  elif [ "$f360_rc" -eq 96 ]; then
+    f360_msg="MUST_BE_UNMEASURED FAILED (rl_static_subtypes self-test): rc=96 under"
+    f360_msg="$f360_msg python3 -S -- the gate issued a REFUSAL where an abstention"
+    f360_msg="$f360_msg (rc=95, UNMEASURED) is the owed verdict for an absent analyzer."
+    f360_msg="$f360_msg Output: $(printf '%s\n' "$f360_out" | tr '\n' ' ')"
+    no "$f360_msg"
+  elif [ "$f360_rc" -eq 95 ]; then
+    f360_msg="MUST_BE_UNMEASURED FAILED (rl_static_subtypes self-test): rc=95 but the"
+    f360_msg="$f360_msg output does not carry both the 'RL-STATIC-SUBTYPES UNMEASURED'"
+    f360_msg="$f360_msg marker and the name 'mypy' -- an abstention that does not name"
+    f360_msg="$f360_msg its missing analyzer is unattributable. Output:"
+    f360_msg="$f360_msg $(printf '%s\n' "$f360_out" | tr '\n' ' ')"
+    no "$f360_msg"
+  else
+    f360_msg="MUST_BE_UNMEASURED FAILED (rl_static_subtypes self-test): rc=$f360_rc"
+    f360_msg="$f360_msg under python3 -S, which is none of the gate's declared verdicts"
+    f360_msg="$f360_msg (0 CLEAR / 5 RED / 95 UNMEASURED / 96 REFUSAL). Fail closed."
+    f360_msg="$f360_msg Output: $(printf '%s\n' "$f360_out" | tr '\n' ' ')"
+    no "$f360_msg"
+  fi
+fi
+
+# --- Arm 2 (f360b) -- MUST_PASS: the discovery denominator over the live tree --------
+# Arm 1 proves the gate refuses to fake a verdict without mypy; this leg is a SECOND
+# measurement, not a restatement: the live run's own output proves the gate's STATIC
+# DISCOVERY half runs to completion with no analyzer at all -- pairs=, the algorithm-key
+# list and the lossfn list are all produced before mypy is ever consulted. A discovery
+# layer that silently shrank to zero pairs would keep arm 1 green while making every
+# future mypy verdict vacuous, so this leg holds the denominator: rc=95, pairs >= 20,
+# the registry:ppo / registry:grpo / registry:dpo keys present, lossfn non-empty.
+if [ ! -r "checks/rl_static_subtypes.py" ]; then
+  f360b_msg="MUST_PASS FAILED (rl_static_subtypes live discovery):"
+  f360b_msg="$f360b_msg checks/rl_static_subtypes.py is not readable -- unreadable is"
+  f360b_msg="$f360b_msg not empty (doctrine 4); the live tree's discovery denominator"
+  f360b_msg="$f360b_msg was not measured"
+  no "$f360b_msg"
+else
+  f360b_rc=0
+  f360b_out=$(python3 -S checks/rl_static_subtypes.py 2>&1) || f360b_rc=$?
+  f360b_pairs=$(printf '%s\n' "$f360b_out" |
+    sed -n 's/.*pairs=\([0-9][0-9]*\).*/\1/p' | head -1)
+  f360b_lossfn=$(printf '%s\n' "$f360b_out" |
+    sed -n 's/.*lossfn=\([^;]*\).*/\1/p' | head -1)
+  f360b_missing=""
+  for f360b_key in registry:ppo registry:grpo registry:dpo; do
+    if ! printf '%s\n' "$f360b_out" | grep -q "$f360b_key"; then
+      f360b_missing="$f360b_missing $f360b_key"
+    fi
+  done
+  if [ -n "$f360b_pairs" ]; then f360b_n=$f360b_pairs; else f360b_n=absent; fi
+  if [ -n "$f360b_missing" ]; then f360b_miss=$f360b_missing; else f360b_miss=none; fi
+  if [ "$f360b_rc" -ne 95 ]; then
+    f360b_msg="MUST_PASS FAILED (rl_static_subtypes live discovery): observed"
+    f360b_msg="$f360b_msg rc=$f360b_rc, expected 95 (the -S construction arm 1 asserts);"
+    f360b_msg="$f360b_msg pairs=$f360b_n, missing-keys=$f360b_miss. Any other rc here"
+    f360b_msg="$f360b_msg means the gate reached a verdict its absent analyzer cannot"
+    f360b_msg="$f360b_msg back, or crashed. Output:"
+    f360b_msg="$f360b_msg $(printf '%s\n' "$f360b_out" | tr '\n' ' ')"
+    no "$f360b_msg"
+  elif [ -z "$f360b_pairs" ] || [ "$f360b_pairs" -lt 20 ]; then
+    f360b_msg="MUST_PASS FAILED (rl_static_subtypes live discovery): observed rc=95 but"
+    f360b_msg="$f360b_msg pairs=$f360b_n (floor 20), missing-keys=$f360b_miss -- the"
+    f360b_msg="$f360b_msg static discovery denominator shrank below the registry's known"
+    f360b_msg="$f360b_msg 20 (binding, protocol) pairs. A discovery layer approaching zero"
+    f360b_msg="$f360b_msg pairs keeps arm 1 green while making every future mypy verdict"
+    f360b_msg="$f360b_msg vacuous. Output:"
+    f360b_msg="$f360b_msg $(printf '%s\n' "$f360b_out" | tr '\n' ' ')"
+    no "$f360b_msg"
+  elif [ -n "$f360b_missing" ]; then
+    f360b_msg="MUST_PASS FAILED (rl_static_subtypes live discovery): observed rc=95,"
+    f360b_msg="$f360b_msg pairs=$f360b_n, but the algorithm-key list is missing"
+    f360b_msg="$f360b_msg required key(s):$f360b_missing -- discovery no longer sees"
+    f360b_msg="$f360b_msg bindings the registry ships. Output:"
+    f360b_msg="$f360b_msg $(printf '%s\n' "$f360b_out" | tr '\n' ' ')"
+    no "$f360b_msg"
+  elif [ -z "$f360b_lossfn" ]; then
+    f360b_msg="MUST_PASS FAILED (rl_static_subtypes live discovery): observed rc=95,"
+    f360b_msg="$f360b_msg pairs=$f360b_n, missing-keys=none, but lossfn= is absent or"
+    f360b_msg="$f360b_msg empty -- the loss-function half of static discovery reported"
+    f360b_msg="$f360b_msg nothing. Output:"
+    f360b_msg="$f360b_msg $(printf '%s\n' "$f360b_out" | tr '\n' ' ')"
+    no "$f360b_msg"
+  else
+    f360b_msg="MUST_PASS rl_static_subtypes live discovery: rc=95 (analyzer absent by"
+    f360b_msg="$f360b_msg the -S construction, as arm 1 asserts) yet the STATIC"
+    f360b_msg="$f360b_msg DISCOVERY half ran to completion with no analyzer -- measured"
+    f360b_msg="$f360b_msg pairs=$f360b_pairs (>= 20), algorithm-keys naming registry:ppo"
+    f360b_msg="$f360b_msg by that literal alongside registry:grpo and registry:dpo,"
+    f360b_msg="$f360b_msg lossfn=$f360b_lossfn non-empty. This second measurement holds"
+    f360b_msg="$f360b_msg the denominator arm 1 cannot: discovery of (binding, protocol)"
+    f360b_msg="$f360b_msg pairs over the live registry, where a silent shrink to zero"
+    f360b_msg="$f360b_msg would leave arm 1 green and every future mypy verdict vacuous."
+    f360b_msg="$f360b_msg registry:ppo named by that literal keeps #359's refutation"
+    f360b_msg="$f360b_msg (all 20 pairs check out) under continuous control"
+    ok "$f360b_msg"
+  fi
+fi
+
+# --- Arm 3 (f360c) -- MUST_FIRE: doctored-baseline discrimination ---------------------
+# The legs above prove the gate's discovery half measures the live tree; this leg proves
+# the baseline/completeness axis can refuse -- and it can, with no analyzer: the
+# doctored-baseline arm reaches rc=5 because that axis is adjudicated AHEAD of the mypy
+# axis. The fixture is the SHIPPED checks/rl_static_subtypes.baseline.json copied into a
+# scratch dir (never the live tree), and the doctored copy differs by EXACTLY ONE added
+# ghost binding key, registry:ghost_binding. The doctored copy must score rc=5 with
+# output naming that ghost key; the intact copy must NOT score 5 (0 or 95 both accepted
+# -- 95 is the -S construction arm 1 asserts). The doctoring is PROVEN, not assumed:
+# cmp must report the two files DIFFERENT before either arm runs, because a plant that
+# did not land would hand both arms the same bytes and let the MUST_FIRE pass by never
+# firing. Nothing outside the scratch dir is touched.
+if [ ! -r "checks/rl_static_subtypes.py" ]; then
+  f360c_msg="MUST_FIRE FAILED (rl_static_subtypes doctored-baseline discrimination):"
+  f360c_msg="$f360c_msg checks/rl_static_subtypes.py is not readable -- unreadable is"
+  f360c_msg="$f360c_msg not empty (doctrine 4); 0 of 2 discrimination arms ran"
+  no "$f360c_msg"
+elif [ ! -r "checks/rl_static_subtypes.baseline.json" ]; then
+  f360c_msg="MUST_FIRE FAILED (rl_static_subtypes doctored-baseline discrimination):"
+  f360c_msg="$f360c_msg checks/rl_static_subtypes.baseline.json is not readable --"
+  f360c_msg="$f360c_msg unreadable is not empty (doctrine 4); the fixture both arms are"
+  f360c_msg="$f360c_msg built from does not exist here, and a synthesised one would make"
+  f360c_msg="$f360c_msg the arms differ by more than the one variable. 0 of 2 arms ran"
+  no "$f360c_msg"
+else
+  f360c_tmp=$(mktemp -d)
+  cp "checks/rl_static_subtypes.baseline.json" "$f360c_tmp/intact.json"
+  if [ ! -r "$f360c_tmp/intact.json" ] \
+     || ! cmp -s "$f360c_tmp/intact.json" "checks/rl_static_subtypes.baseline.json"; then
+    rm -rf "$f360c_tmp"
+    f360c_msg="MUST_FIRE FAILED (rl_static_subtypes doctored-baseline discrimination):"
+    f360c_msg="$f360c_msg the copied fixture is unreadable or differs from the shipped"
+    f360c_msg="$f360c_msg checks/rl_static_subtypes.baseline.json -- the fixture must be"
+    f360c_msg="$f360c_msg the real baseline, not a synthesised or corrupted one. 0 of 2"
+    f360c_msg="$f360c_msg arms ran"
+    no "$f360c_msg"
+  else
+    # ADD exactly ONE ghost binding key to the doctored copy. JSON in, JSON out through
+    # python3 so a malformed baseline fails loudly here instead of being half-edited
+    # into something that reds for the wrong reason.
+    f360c_edit_rc=0
+    python3 -S -c '
+import copy, json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+pairs = data.get("pairs") if isinstance(data, dict) else data
+if not isinstance(pairs, list):
+    sys.exit(2)
+ghost = copy.deepcopy(pairs[0]) if pairs else {}
+if isinstance(ghost, dict):
+    ghost["key"] = "registry:ghost_binding"
+else:
+    ghost = "registry:ghost_binding"
+pairs.append(ghost)
+with open(sys.argv[2], "w", encoding="utf-8") as fh:
+    json.dump(data, fh)
+' "$f360c_tmp/intact.json" "$f360c_tmp/doctored.json" || f360c_edit_rc=$?
+    if [ "$f360c_edit_rc" -ne 0 ] || [ ! -r "$f360c_tmp/doctored.json" ]; then
+      rm -rf "$f360c_tmp"
+      f360c_msg="MUST_FIRE FAILED (rl_static_subtypes doctored-baseline"
+      f360c_msg="$f360c_msg discrimination): the JSON doctor failed (rc=$f360c_edit_rc)"
+      f360c_msg="$f360c_msg or wrote no doctored copy -- the shipped baseline carried no"
+      f360c_msg="$f360c_msg 'pairs' list to add the ghost key to. A plant that did not"
+      f360c_msg="$f360c_msg plant proves nothing; 0 of 2 arms ran"
+      no "$f360c_msg"
+    elif cmp -s "$f360c_tmp/intact.json" "$f360c_tmp/doctored.json"; then
+      rm -rf "$f360c_tmp"
+      f360c_msg="MUST_FIRE FAILED (rl_static_subtypes doctored-baseline"
+      f360c_msg="$f360c_msg discrimination): the doctoring changed ZERO bytes -- intact"
+      f360c_msg="$f360c_msg and doctored copies are identical, so both arms would read"
+      f360c_msg="$f360c_msg the same input and the MUST_FIRE could pass by never firing."
+      f360c_msg="$f360c_msg A control whose defect was never planted is not a control;"
+      f360c_msg="$f360c_msg 0 of 2 arms ran"
+      no "$f360c_msg"
+    else
+      f360c_red_rc=0
+      f360c_red_out=$(python3 -S checks/rl_static_subtypes.py \
+        --baseline "$f360c_tmp/doctored.json" 2>&1) || f360c_red_rc=$?
+      f360c_clear_rc=0
+      f360c_clear_out=$(python3 -S checks/rl_static_subtypes.py \
+        --baseline "$f360c_tmp/intact.json" 2>&1) || f360c_clear_rc=$?
+      rm -rf "$f360c_tmp"
+      if [ "$f360c_red_rc" -ne 5 ]; then
+        f360c_msg="MUST_FIRE FAILED (rl_static_subtypes doctored-baseline"
+        f360c_msg="$f360c_msg discrimination): adding the one ghost key"
+        f360c_msg="$f360c_msg registry:ghost_binding scored rc=$f360c_red_rc, expected"
+        f360c_msg="$f360c_msg exactly 5 (RED) -- the baseline/completeness axis is"
+        f360c_msg="$f360c_msg adjudicated ahead of the mypy axis, so no analyzer is"
+        f360c_msg="$f360c_msg needed for this refusal. rc=0 would mean the gate cannot"
+        f360c_msg="$f360c_msg see a baseline pair its discovery cannot reproduce. Output:"
+        f360c_msg="$f360c_msg $(printf '%s\n' "$f360c_red_out" | tr '\n' ' ')"
+        no "$f360c_msg"
+      elif ! printf '%s\n' "$f360c_red_out" | grep -q 'registry:ghost_binding'; then
+        f360c_msg="MUST_FIRE FAILED (rl_static_subtypes doctored-baseline"
+        f360c_msg="$f360c_msg discrimination): rc=5, but the RED output never names"
+        f360c_msg="$f360c_msg registry:ghost_binding -- the one key planted. A RED"
+        f360c_msg="$f360c_msg attributed to anything else is not this control firing,"
+        f360c_msg="$f360c_msg and rc alone cannot tell the two apart. Output:"
+        f360c_msg="$f360c_msg $(printf '%s\n' "$f360c_red_out" | tr '\n' ' ')"
+        no "$f360c_msg"
+      elif [ "$f360c_clear_rc" -eq 5 ]; then
+        f360c_msg="MUST_FIRE FAILED (rl_static_subtypes doctored-baseline"
+        f360c_msg="$f360c_msg discrimination): the doctored arm fired correctly at rc=5"
+        f360c_msg="$f360c_msg naming registry:ghost_binding, but the INTACT arm -- the"
+        f360c_msg="$f360c_msg shipped baseline, the ghost key the only difference --"
+        f360c_msg="$f360c_msg also scored rc=5 (observed intact rc=$f360c_clear_rc). A"
+        f360c_msg="$f360c_msg gate that reddens its own true baseline is stuck RED, not"
+        f360c_msg="$f360c_msg discriminating. Output:"
+        f360c_msg="$f360c_msg $(printf '%s\n' "$f360c_clear_out" | tr '\n' ' ')"
+        no "$f360c_msg"
+      else
+        f360c_msg="MUST_FIRE rl_static_subtypes doctored-baseline discrimination: the"
+        f360c_msg="$f360c_msg fixture was the shipped baseline copied byte-true (cmp"
+        f360c_msg="$f360c_msg proven), ONE ghost binding key registry:ghost_binding was"
+        f360c_msg="$f360c_msg added (byte-change proven by cmp), the doctored copy scored"
+        f360c_msg="$f360c_msg rc=5 with the output naming that exact ghost key, and the"
+        f360c_msg="$f360c_msg intact copy scored rc=$f360c_clear_rc -- not 5 (0 or 95"
+        f360c_msg="$f360c_msg both accepted; 95 is the -S construction arm 1 asserts)."
+        f360c_msg="$f360c_msg The ghost key was the only variable, and the live tree was"
+        f360c_msg="$f360c_msg never touched. Both outcomes held"
+        ok "$f360c_msg"
+      fi
     fi
   fi
 fi

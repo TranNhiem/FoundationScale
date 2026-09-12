@@ -221,13 +221,13 @@ FLOORS: dict[str, int] = {
     # endorsement: it is a ratchet that stops the module rotting further while the
     # tests are written. Delete a line when its module reaches the default; do not
     # add a line by hand, and do not lower one to make a red run green.
-    "src/foundationscale/checkpoint/dcp_meta.py": 81,  # set by --update; measured 81.4%
+    "src/foundationscale/checkpoint/dcp_meta.py": 83,  # set by --update; measured 83.5%
     "src/foundationscale/rl/group_policy.py": 67,  # set by --update; measured 67.6%
     "src/foundationscale/rl/trainer.py": 82,  # set by --update; measured 82.9%
     "src/foundationscale/train/__main__.py": 0,  # set by --update; measured 0.0%
     "src/foundationscale/train/loop.py": 89,  # set by --update; measured 89.8%
     "tools/emit_run_manifest.py": 80,  # set by --update; measured 80.9%
-    # RATCHET -- 38 module(s) ABOVE the default band. These record what
+    # RATCHET -- 39 module(s) ABOVE the default band. These record what
     # the tree already achieves, so a regression to a merely-passing 90% is RED
     # rather than invisible.
     "src/foundationscale/__init__.py": 100,  # set by --update; measured 100.0%
@@ -255,6 +255,7 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/rl/preference.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/preference_objectives.py": 99,  # set by --update; measured 99.1%
     "src/foundationscale/rl/prompt_surface.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/rl/registry.py": 95,  # set by --update; measured 95.1%
     "src/foundationscale/rl/reward_model.py": 98,  # set by --update; measured 98.6%
     "src/foundationscale/rl/rewards.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/rollout.py": 100,  # set by --update; measured 100.0%
@@ -831,10 +832,17 @@ def compute_updated_floors(
             else:
                 unfloored.append(outcome.path)
             continue
-        candidate = math.floor(outcome.measured)
-        if DEFAULT_FLOOR <= candidate <= DEFAULT_FLOOR + SLACK:
+        # The band test reads the MEASURED value, not its floor. measure() adjudicates the
+        # float against floor + SLACK, so a module measured at 95.1 is red-stale there while
+        # math.floor(95.1) == 95 read as "inside the band" here: a window one percentage
+        # point wide, over every module with no explicit entry, in which the gate was RED
+        # and its own prescribed remedy -- the RED line says `--update` fixes this in one
+        # command -- wrote nothing and printed UPDATE ok. Two adjudicators over one axis
+        # must use one comparison. The value WRITTEN stays floored: a floor must never
+        # claim more than the measurement supports.
+        if DEFAULT_FLOOR <= outcome.measured <= DEFAULT_FLOOR + SLACK:
             continue
-        floors[outcome.path] = candidate
+        floors[outcome.path] = math.floor(outcome.measured)
     carried.sort()
     unfloored.sort()
     return floors, carried, unfloored
@@ -1297,6 +1305,25 @@ def run_self_test() -> int:
             f"floors={new_floors}, carried={new_carried}, unfloored={new_unfloored}",
         )
 
+        # The boundary arm, MUST_FIRE-shaped: it misfires on the pre-fix code. 95.1 is what
+        # src/foundationscale/rl/registry.py measured on 2026-09-12 -- red-stale at measure()
+        # because 95.1 > 90 + 5, while math.floor(95.1) == 95 read as inside the band here,
+        # so --update printed UPDATE ok, wrote nothing, and the RED could not be cleared by
+        # the remedy its own message prescribes. An entry MUST be written, and written
+        # FLOORED at 95: 96 is a number no measurement supports.
+        band_path = "src/foundationscale/rl/registry.py"
+        band_floors, band_carried, band_unfloored = compute_updated_floors(
+            [update_outcome(band_path, 95.1)], {}
+        )
+        check_update(
+            "MUST_PASS measured just ABOVE the band is written, at the FLOORED value",
+            band_floors.get(band_path) == 95
+            and band_path not in band_unfloored
+            and band_path not in band_carried,
+            "floor 95 written for the path, the path absent from unfloored and carried",
+            f"floors={band_floors}, carried={band_carried}, unfloored={band_unfloored}",
+        )
+
         # The renderer arm. "unmeasured" contains "measured" as a substring, so the
         # assertion keys on the full "set by --update; measured" prefix: the carried line
         # must not quote a measurement this report does not contain, and the measured line
@@ -1316,7 +1343,7 @@ def run_self_test() -> int:
             f"line={rendered_measured.strip()!r}",
         )
 
-    total = 20
+    total = 21
     if failures:
         print(
             f"SELF-TEST DENOMINATOR: {total - len(failures)} of {total} controls behaved; "
@@ -1327,10 +1354,12 @@ def run_self_test() -> int:
         return EXIT_REFUSE
     print(
         f"SELF-TEST DENOMINATOR: {total} of {total} controls behaved; 11x MUST_FIRE produced "
-        "the declared nonzero exits, 9x MUST_PASS pinned both band boundaries as inclusive, "
+        "the declared nonzero exits, 10x MUST_PASS pinned both band boundaries as inclusive, "
         "both arms of the in-tree/out-of-tree split, the fresh-report CLEAR path, and the "
-        "--update carry-over rule -- one of the nine is the #385 drill, MUST_FIRE-shaped in "
-        "that it misfires on the pre-fix code that deleted an unmeasured module's floor -- "
+        "--update carry-over and band rules -- two of the ten are MUST_FIRE-shaped, misfiring "
+        "on pre-fix code: the #385 drill, against the version that deleted an unmeasured "
+        "module's floor, and the band arm, against the version that skipped math.floor("
+        "measured) where measure() adjudicates the float -- "
         "with the whole freshness arm exercised through an injected parser resolver so the "
         "self-test runs and means the same under `python3 -S`"
     )

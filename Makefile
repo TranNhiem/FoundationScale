@@ -103,7 +103,7 @@ ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
 endif
 
-.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling mirror countables doc-pointers citation-lines mutation-scope verification-matrix exit-contract-scope launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation mutation-module skip-guard-probe check clean
+.PHONY: install test coverage-floor ci-suite-extras lint fmt typecheck typecheck-checks controls packaging training-plane makefile-tooling mirror countables doc-pointers citation-lines mutation-scope rl-static-subtypes verification-matrix exit-contract-scope launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation mutation-module skip-guard-probe check clean
 
 # [train] is here because CI's suite jobs install it and this target is the
 # developer's mirror of them. Without it `make install` provisions a WEAKER
@@ -392,6 +392,31 @@ mutation-scope:
 	$(PY) checks/mutation_scope.py --self-test
 	$(PY) checks/mutation_scope.py
 
+# Finding #360. The RL plane ships 20 claims of the shape "this concrete binding IS a
+# `Foo`", and every instrument measuring them was a RUNTIME isinstance() against a
+# @runtime_checkable Protocol -- which checks that the named methods EXIST and says
+# nothing about their signatures. A binding whose `step` takes the wrong argument
+# types, or returns the wrong thing, passes every one of those checks. #397 is the
+# same edge from the other side: three docstrings claimed a setup-time refusal that
+# runtime_checkable cannot deliver.
+#
+# So this gate does not adjudicate anything itself. It discovers the claims statically
+# with `ast` (registry._REGISTRY entries -- walked, not read top-level, because
+# registry.py imports every binding INSIDE _install_default_algorithms() to break a
+# cycle), writes a probe module asserting each one, and hands the verdict to mypy.
+# The gate's own opinion is never the answer; mypy's is.
+#
+# It carries a committed baseline for the COMPLETENESS axis, which is the axis a
+# subtype checker cannot see: a binding that is deleted, or renamed out of the
+# registry, makes the remaining claims MORE true, not less. Discovery shrinking is
+# therefore RED, and the baseline is the only thing that can say so.
+#
+# Self-test first, same order and same reason as citation-lines and mutation-scope.
+# mypy absent is 95 UNMEASURED, never a silent green.
+rl-static-subtypes:
+	$(PY) checks/rl_static_subtypes.py --self-test
+	$(PY) checks/rl_static_subtypes.py
+
 # Finding #378. validation_campaigns/verification_matrix/matrix.json is the ledger of
 # what this repository claims to have verified, and docs/VERIFICATION_MATRIX.md is its
 # rendering. Two failure modes, neither of which had a reader: the two drift (they are
@@ -603,7 +628,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling mirror countables doc-pointers citation-lines mutation-scope verification-matrix exit-contract-scope launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation
+check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling mirror countables doc-pointers citation-lines mutation-scope rl-static-subtypes verification-matrix exit-contract-scope launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \

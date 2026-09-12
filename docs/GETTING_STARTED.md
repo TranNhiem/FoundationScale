@@ -165,7 +165,7 @@ skip-guard-probe: guard fired and named its probe, as CI requires
 
 ```bash
 make launcher-contracts   # bash launchers/test_launcher_contracts.sh — 149 controls
-make checks-gates         # bash launchers/test_checks_gates.sh      — 40 controls
+make checks-gates         # bash launchers/test_checks_gates.sh      — 43 controls
 ```
 
 The first is the largest gate in the repository (measured 2026-09-11 on an otherwise-idle developer machine: 28.9s wall / 4.1s user — the wall half moves with load, see `docs/TESTING.md`). Both must run: the anti-orphan leg's corpus is the two suites concatenated, so running only one indicts every helper called solely from the other. The anti-orphan leg scans every `launchers/*.py` and `checks/*.py` for call sites and refuses a file with none — a new gate file has been indicted as an orphan after a fully green `make check` more than once, which is why `launcher-contracts` is in the aggregate at all. None of these targets is prefix-suppressed: a recipe written `-...` prints "Error (ignored)" and returns 0, which is a gate that reports and cannot fail.

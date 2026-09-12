@@ -75,11 +75,11 @@ def _grpo_batch(*, rewards: tuple[float, float] = (2.0, 4.0)) -> _Batch:
     )
 
 
-def test_registry_default_reset_restores_the_fourteen_default_names() -> None:
-    """The supported reset leaves exactly the fourteen default bindings.
+def test_registry_default_reset_restores_the_eighteen_default_names() -> None:
+    """The supported reset leaves exactly the eighteen default bindings.
 
-    WHAT IS CLAIMED: reset removes test entries and reinstalls all fourteen
-    built-in names, and a second reset restores the SAME set. The fourteen are
+    WHAT IS CLAIMED: reset removes test entries and reinstalls all eighteen
+    built-in names, and a second reset restores the SAME set. The eighteen are
     hand-stated here rather than read back from the registry, because a test
     that asked the registry what it holds would agree with any answer.
 
@@ -94,12 +94,13 @@ def test_registry_default_reset_restores_the_fourteen_default_names() -> None:
     binding that appears, and it cannot catch one that never arrives. That
     second direction is a different measurement and is taken by
     ``test_every_exported_algorithm_binding_is_reachable_through_the_registry``.
-    Also not claimed: that the fourteen bindings are interchangeable, or any
+    Also not claimed: that the eighteen bindings are interchangeable, or any
     of them is wired -- lookup constructs, setup is a separate handshake.
     """
     register_algorithm("z_test_algorithm", GRPOAlgorithm)
     reset_algorithm_registry()
     expected = (
+        "best_of_n",
         "cpo",
         "dapo",
         "dpo",
@@ -107,9 +108,12 @@ def test_registry_default_reset_restores_the_fourteen_default_names() -> None:
         "grpo",
         "gspo",
         "ipo",
+        "iterative_dpo",
         "kto",
+        "online_dpo",
         "orpo",
         "ppo",
+        "raft",
         "reinforce_baseline",
         "reinforce_pp",
         "rloo",
@@ -292,7 +296,7 @@ def test_registry_refuses_duplicate_name_without_overwrite() -> None:
     message = str(exc_info.value)
     assert "field name='grpo'" in message
     assert "1 of 1 new registrations" in message
-    assert "1 of 14 registered names" in message
+    assert "1 of 18 registered names" in message
     assert lookup_algorithm("grpo") is not first
     reset_algorithm_registry()
 
@@ -300,7 +304,7 @@ def test_registry_refuses_duplicate_name_without_overwrite() -> None:
 def test_registry_unknown_name_names_key_and_available_count() -> None:
     """Lookup absence is reported against every available registry name.
 
-    WHAT IS CLAIMED: the requested key and all fourteen available names appear.
+    WHAT IS CLAIMED: the requested key and all eighteen available names appear.
 
     WHAT IS NOT CLAIMED: that the requested spelling was close to ``grpo``;
     no correction or distance measurement exists.
@@ -308,14 +312,15 @@ def test_registry_unknown_name_names_key_and_available_count() -> None:
     reset_algorithm_registry()
     with pytest.raises(
         AlgorithmRegistryRefusal,
-        match="0 of 14 available algorithm names matched",
+        match="0 of 18 available algorithm names matched",
     ) as exc_info:
         lookup_algorithm("missing")
     message = str(exc_info.value)
     assert "requested key name='missing'" in message
     assert (
-        "available names (14): ('cpo', 'dapo', 'dpo', 'dr_grpo', 'grpo', "
-        "'gspo', 'ipo', 'kto', 'orpo', 'ppo', 'reinforce_baseline', "
+        "available names (18): ('best_of_n', 'cpo', 'dapo', 'dpo', "
+        "'dr_grpo', 'grpo', 'gspo', 'ipo', 'iterative_dpo', 'kto', "
+        "'online_dpo', 'orpo', 'ppo', 'raft', 'reinforce_baseline', "
         "'reinforce_pp', 'rloo', 'simpo')"
     ) in message
     reset_algorithm_registry()
@@ -352,6 +357,7 @@ def test_registry_available_names_are_sorted_after_extra_registration() -> None:
     register_algorithm("a_first", lambda: GRPOAlgorithm())
     assert available_algorithm_names() == (
         "a_first",
+        "best_of_n",
         "cpo",
         "dapo",
         "dpo",
@@ -359,9 +365,12 @@ def test_registry_available_names_are_sorted_after_extra_registration() -> None:
         "grpo",
         "gspo",
         "ipo",
+        "iterative_dpo",
         "kto",
+        "online_dpo",
         "orpo",
         "ppo",
+        "raft",
         "reinforce_baseline",
         "reinforce_pp",
         "rloo",

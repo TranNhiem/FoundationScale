@@ -102,6 +102,13 @@ PENDING_ENROLMENT: dict[str, str] = {
         "derives declared config facts, censuses expert families, and adjudicates the "
         "real-checkpoint alias control feeding gate contexts"
     ),
+    "src/foundationscale/rl/online.py": (
+        "binds the four online objectives through one parameterised algorithm, and is the "
+        "only binding in the plane that also declares what one report row COUNTS; the "
+        "RowsUnit check is measured against pairedness derived from the objective's own "
+        "schema, so a mutant that weakens it lets a preference-pair count be reported as a "
+        "completion count -- a denominator that is wrong by 2x while every shape still fits"
+    ),
     "src/foundationscale/rl/online_objectives.py": (
         "the online and iterative family -- Online DPO, Iterative DPO, RAFT and "
         "Best-of-N -- whose selection rules decide WHICH rows train; a mutated "

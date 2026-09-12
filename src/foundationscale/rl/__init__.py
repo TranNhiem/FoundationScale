@@ -98,6 +98,21 @@ Design section 9 of ``validation_campaigns/nemo_rl_baseline/PHASE3_DESIGN.md``:
   a branch per algorithm in the consumer -- is exactly the duplication the
   axes matrix exists to remove, and it would have to be re-opened for every
   future member.
+* stage 3k -- the online and iterative family: ``OnlineDPOLoss``,
+  ``IterativeDPOLoss``, ``RAFTLoss`` and ``BestOfNLoss`` in
+  ``online_objectives``, bound by one ``OnlineAlgorithm`` in ``online``. The
+  binding carries a second declaration the other families do not need, a
+  ``RowsUnit``, because these four do not agree on what one row of a
+  ``StepReport`` COUNTS -- a preference pair for the two DPO members, a
+  surviving completion for RAFT, a sampled completion for best-of-N.
+  ``StepReport`` carries a bare ``rows`` integer and no unit, so without that
+  declaration the number would state a denominator whose meaning lived only
+  in the factory. It is measured against the pairedness DERIVED from the
+  objective's ``required_columns``, so a unit that contradicts the schema
+  refuses instead of averaging two shapes. What this family does NOT claim
+  is that it produces rollouts: ``rollout_source`` is declared not-required
+  for grpo.py's reason -- rollout production is upstream of the step, and an
+  Algorithm prices a batch.
 
 The tensor plane, and why it is NOT re-exported here. ``torch_backend``
 supplies ``TensorPolicyLoss``, the ONE generic kernel that turns any objective
@@ -195,6 +210,15 @@ from foundationscale.rl.interfaces import (
     build_objective_gate_context,
 )
 from foundationscale.rl.losses import DPOLoss, SFTLoss
+from foundationscale.rl.online import (
+    OnlineAlgorithm,
+    OnlineObjective,
+    RowsUnit,
+    best_of_n_algorithm,
+    iterative_dpo_algorithm,
+    online_dpo_algorithm,
+    raft_algorithm,
+)
 from foundationscale.rl.online_objectives import (
     BestOfNLoss,
     IterativeDPOLoss,
@@ -325,7 +349,9 @@ __all__ = (
     "LossOutput",
     "MCQLetterReward",
     "ORPOLoss",
+    "OnlineAlgorithm",
     "OnlineDPOLoss",
+    "OnlineObjective",
     "PPOAlgorithm",
     "PPOClippedPolicyLoss",
     "PPOCompositeLoss",
@@ -343,6 +369,7 @@ __all__ = (
     "RewardModelLoss",
     "RewardStats",
     "RolloutSource",
+    "RowsUnit",
     "SFTLoss",
     "Sample",
     "SequenceObjective",
@@ -366,6 +393,7 @@ __all__ = (
     "ValueHead",
     "WeightSync",
     "available_algorithm_names",
+    "best_of_n_algorithm",
     "build_objective_gate_context",
     "check_algorithm_wiring",
     "check_capabilities",
@@ -387,10 +415,13 @@ __all__ = (
     "extract_mcq_gold",
     "gspo_algorithm",
     "ipo_algorithm",
+    "iterative_dpo_algorithm",
     "kto_algorithm",
     "load_sharegpt",
     "lookup_algorithm",
+    "online_dpo_algorithm",
     "orpo_algorithm",
+    "raft_algorithm",
     "register_algorithm",
     "reset_algorithm_registry",
     "simpo_algorithm",

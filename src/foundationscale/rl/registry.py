@@ -165,6 +165,12 @@ def _install_default_algorithms() -> None:
         gspo_algorithm,
     )
     from foundationscale.rl.grpo import GRPOAlgorithm
+    from foundationscale.rl.online import (
+        best_of_n_algorithm,
+        iterative_dpo_algorithm,
+        online_dpo_algorithm,
+        raft_algorithm,
+    )
     from foundationscale.rl.policy_gradient import (
         ReinforceBaselineAlgorithm,
         ReinforcePlusPlusAlgorithm,
@@ -208,6 +214,15 @@ def _install_default_algorithms() -> None:
     _REGISTRY["dapo"] = dapo_algorithm
     _REGISTRY["dr_grpo"] = dr_grpo_algorithm
     _REGISTRY["gspo"] = gspo_algorithm
+    # The online family registers FACTORIES for the preference family's reason
+    # plus one of its own: each binding carries BOTH a configured objective and
+    # a RowsUnit declaring what one report row counts, and neither is a value
+    # `OnlineAlgorithm` could default. Registering the class would put a name
+    # behind a binding that cannot say what its own `rows` mean.
+    _REGISTRY["best_of_n"] = best_of_n_algorithm
+    _REGISTRY["iterative_dpo"] = iterative_dpo_algorithm
+    _REGISTRY["online_dpo"] = online_dpo_algorithm
+    _REGISTRY["raft"] = raft_algorithm
 
 
 _install_default_algorithms()

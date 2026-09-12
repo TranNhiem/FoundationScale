@@ -1,0 +1,85 @@
+{
+  "contract": "rl-static-subtypes-v1",
+  "pairs": [
+    {
+      "fingerprint": "foundationscale.rl.interfaces.LossFn<-foundationscale.rl.losses.DPOLoss:structural_class",
+      "key": "lossfn:DPOLoss"
+    },
+    {
+      "fingerprint": "foundationscale.rl.interfaces.LossFn<-foundationscale.rl.losses.SFTLoss:structural_class",
+      "key": "lossfn:SFTLoss"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.online.OnlineAlgorithm:class",
+      "key": "registry:best_of_n"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.preference.PreferenceAlgorithm:class",
+      "key": "registry:cpo"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.group_policy.SequencePolicyAlgorithm:class",
+      "key": "registry:dapo"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.preference.PreferenceAlgorithm:class",
+      "key": "registry:dpo"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.group_policy.SequencePolicyAlgorithm:class",
+      "key": "registry:dr_grpo"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.grpo.GRPOAlgorithm:class",
+      "key": "registry:grpo"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.group_policy.SequencePolicyAlgorithm:class",
+      "key": "registry:gspo"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.preference.PreferenceAlgorithm:class",
+      "key": "registry:ipo"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.online.OnlineAlgorithm:class",
+      "key": "registry:iterative_dpo"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.preference.PreferenceAlgorithm:class",
+      "key": "registry:kto"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.online.OnlineAlgorithm:class",
+      "key": "registry:online_dpo"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.preference.PreferenceAlgorithm:class",
+      "key": "registry:orpo"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.ppo.PPOAlgorithm:class",
+      "key": "registry:ppo"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.online.OnlineAlgorithm:class",
+      "key": "registry:raft"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.policy_gradient.ReinforceBaselineAlgorithm:class",
+      "key": "registry:reinforce_baseline"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.policy_gradient.ReinforcePlusPlusAlgorithm:class",
+      "key": "registry:reinforce_pp"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.policy_gradient.RLOOAlgorithm:class",
+      "key": "registry:rloo"
+    },
+    {
+      "fingerprint": "foundationscale.rl.algorithm.Algorithm<-foundationscale.rl.preference.PreferenceAlgorithm:class",
+      "key": "registry:simpo"
+    }
+  ]
+}

@@ -115,6 +115,15 @@ TORCH_FREE_MODULES = {
         "build_objective_gate_context",
     ),
     "foundationscale.rl.losses": ("DPOLoss", "SFTLoss"),
+    "foundationscale.rl.online": (
+        "OnlineAlgorithm",
+        "OnlineObjective",
+        "RowsUnit",
+        "best_of_n_algorithm",
+        "iterative_dpo_algorithm",
+        "online_dpo_algorithm",
+        "raft_algorithm",
+    ),
     "foundationscale.rl.online_objectives": (
         "BestOfNLoss",
         "IterativeDPOLoss",
