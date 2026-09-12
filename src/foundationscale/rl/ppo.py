@@ -85,6 +85,7 @@ from foundationscale.rl.ppo_objectives import (
     ValueFunctionLoss,
 )
 from foundationscale.rl.rollout import RolloutSource
+from foundationscale.rl.structural import StructuralRefusal, structural_report
 from foundationscale.rl.value_head import (
     ValueHead,
     check_value_capabilities,
@@ -196,6 +197,35 @@ class PPOCompositeLoss:
                 f"field value_head={self.value_head!r}: 1 of 1 value "
                 f"slots must carry a ValueHead (estimate plus "
                 f"capabilities), not {type(self.value_head).__name__}"
+            )
+        # The isinstance above answers PRESENCE and nothing else (#397,
+        # MEASURED): `@runtime_checkable` never compares signatures, so a head
+        # whose `estimate` takes different parameters entirely passes the line
+        # above and dies as a TypeError at the first call -- inside the step
+        # loop, after an allocation. Asking the stronger question here is the
+        # whole point of setup validation: refusing at construction costs
+        # nothing, discovering the gap at step zero costs an allocation.
+        try:
+            report = structural_report(self.value_head, ValueHead, origin="field value_head")
+        except StructuralRefusal as exc:
+            # CANNOT-MEASURE, and it is reported as such rather than being
+            # collapsed into either verdict. It still refuses -- a value head
+            # whose call shape cannot be read is not a head this seam can
+            # certify -- but the message says the question was unanswerable,
+            # not that the answer was no. Laundering the two directions is the
+            # failure this plane keeps re-finding.
+            raise LossConfigRefusal(
+                f"field value_head={self.value_head!r}: carries the ValueHead "
+                f"members, but its call shape CANNOT BE MEASURED, so this "
+                f"seam cannot certify it; {exc}"
+            ) from exc
+        if not report.ok:
+            raise LossConfigRefusal(
+                f"field value_head={self.value_head!r}: carries the ValueHead "
+                f"members but does not MATCH them across "
+                f"{len(report.checked)} of {len(report.checked)} compared "
+                f"({', '.join(report.checked)}); "
+                f"{'; '.join(report.mismatches)}"
             )
         if self.advantage_fn is None:
             raise LossConfigRefusal(

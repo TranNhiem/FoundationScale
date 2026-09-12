@@ -238,7 +238,7 @@ Around that sit the support modules named in README §1:
 
 ## The RL plane: `src/foundationscale/rl/`
 
-The RL plane is 25 modules; `src/foundationscale/rl/` measures 17359 lines and
+The RL plane is 26 modules; `src/foundationscale/rl/` measures 18041 lines and
 the default install registers 14 algorithm names. Those three numbers are
 derived by `tools/countables_census.py` and anchored by
 `checks/countables_drift.py`, so a restatement that drifts here is a gate
@@ -453,7 +453,7 @@ working home fails a test rather than an import at a user's site.
 
 ## Around the package
 
-`src/` is 38402 LOC across 50 files; `tests/` adds 53613 `.py` LOC (its
+`src/` is 39084 LOC across 51 files; `tests/` adds 54903 `.py` LOC (its
 conftest carries the skip guard). Beside the package:
 
 | Tree | Contents |
@@ -465,7 +465,7 @@ conftest carries the skip guard). Beside the package:
 | `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 188804 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 190786 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 

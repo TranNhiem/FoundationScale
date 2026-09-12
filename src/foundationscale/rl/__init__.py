@@ -263,6 +263,11 @@ from foundationscale.rl.rollout import (
     check_capabilities,
     verify_generated,
 )
+from foundationscale.rl.structural import (
+    StructuralRefusal,
+    StructuralReport,
+    structural_report,
+)
 from foundationscale.rl.value_head import (
     ValueCapabilities,
     ValueCapabilityRefusal,
@@ -346,6 +351,8 @@ __all__ = (
     "SourceCapabilities",
     "StepReport",
     "StepReportRefusal",
+    "StructuralRefusal",
+    "StructuralReport",
     "SupervisionRefusal",
     "SyncCapabilities",
     "SyncCapabilityRefusal",
@@ -387,6 +394,7 @@ __all__ = (
     "register_algorithm",
     "reset_algorithm_registry",
     "simpo_algorithm",
+    "structural_report",
     "verify_estimates",
     "verify_generated",
     "verify_step",

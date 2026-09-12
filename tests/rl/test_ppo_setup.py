@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -18,8 +19,9 @@ from foundationscale.rl.advantage import (
 from foundationscale.rl.algorithm import AlgorithmWiringRefusal
 from foundationscale.rl.interfaces import BatchRefusal, ExperienceBatch
 from foundationscale.rl.policy import PolicyPair
-from foundationscale.rl.ppo import PPOAlgorithm, PPOCompositeLoss
+from foundationscale.rl.ppo import LossConfigRefusal, PPOAlgorithm, PPOCompositeLoss
 from foundationscale.rl.ppo_objectives import ValueFunctionLoss
+from foundationscale.rl.structural import StructuralRefusal
 from foundationscale.rl.value_head import ValueCapabilities, ValueHead
 
 # The same hand-computable two-row batch as the happy-path suite: one
@@ -359,3 +361,94 @@ def test_setup_refuses_an_old_value_column_disagreement_naming_both_names() -> N
     message = str(excinfo.value)
     assert "the wired value loss reads 'old_values'" in message
     assert "1 old-value seam was stated 2 ways" in message
+
+
+# ---- value-head call-shape refusals (finding #397) ----------------------
+#
+# `@runtime_checkable` answers PRESENCE and nothing else, so both doubles
+# below are `isinstance(..., ValueHead)`-True. They separate the two arms of
+# the #397 wiring, which must never be laundered into each other: a shape
+# that CANNOT BE MEASURED is a different verdict from a shape that DOES NOT
+# MATCH, and each has its own message.
+
+
+class _UninspectableEstimateValueHead:
+    """`estimate` is a C builtin with no Python-readable signature.
+
+    MEASURED in this venv: ``inspect.signature(max)`` raises
+    ``ValueError: no signature found for builtin <built-in function max>``.
+    Not every C callable behaves this way -- ``dict.get``, ``print`` and
+    ``object.__init__`` all return signatures -- so the test asserts the
+    premise directly rather than assuming "it is a builtin" is enough.
+    """
+
+    # A plain class attribute: builtins are not descriptors, so the instance
+    # attribute IS `max` itself, which is what the checker introspects.
+    estimate: Any = max
+
+    def capabilities(self) -> ValueCapabilities:
+        # Never called. This seam refuses at construction, and the point
+        # under test is SHAPE, not behaviour.
+        raise NotImplementedError
+
+
+class _EstimateWithoutBatchSlotValueHead:
+    """Carries both member names; `estimate` takes no batch at all."""
+
+    def estimate(self) -> list[list[float]]:
+        raise NotImplementedError
+
+    def capabilities(self) -> ValueCapabilities:
+        raise NotImplementedError
+
+
+def test_composite_refuses_an_estimate_whose_call_shape_cannot_be_measured() -> None:
+    """CANNOT-MEASURE arm: the checker abstains, and the seam refuses anyway."""
+    value_head: Any = _UninspectableEstimateValueHead()
+    # The hole this refusal exists to close is still open.
+    assert isinstance(value_head, ValueHead)
+    # The premise, asserted rather than assumed.
+    with pytest.raises(ValueError):
+        inspect.signature(value_head.estimate)
+
+    with pytest.raises(
+        LossConfigRefusal,
+        match=r"carries the ValueHead members, but its call shape CANNOT BE MEASURED",
+    ) as excinfo:
+        PPOCompositeLoss(
+            value_head=value_head,
+            advantage_fn=LearnedValueAdvantageEstimation(),
+        )
+    message = str(excinfo.value)
+    assert "so this seam cannot certify it" in message
+    assert "cannot introspect subject member 'estimate'" in message
+    # The two arms must stay distinguishable.
+    assert "does not MATCH them" not in message
+    assert isinstance(excinfo.value.__cause__, StructuralRefusal)
+
+
+def test_composite_refuses_member_presence_with_a_nonmatching_estimate_shape() -> None:
+    """DOES-NOT-MATCH arm: the shape was measured, and it disagrees."""
+    value_head: Any = _EstimateWithoutBatchSlotValueHead()
+    assert isinstance(value_head, ValueHead)
+
+    with pytest.raises(
+        LossConfigRefusal,
+        match=r"carries the ValueHead members but does not MATCH them across 2 of 2 compared",
+    ) as excinfo:
+        PPOCompositeLoss(
+            value_head=value_head,
+            advantage_fn=LearnedValueAdvantageEstimation(),
+        )
+    message = str(excinfo.value)
+    assert "(capabilities, estimate)" in message
+    # Split across the signature repr, which carries the double's own return
+    # annotation and is not the part under test.
+    assert "member 'estimate' parameter 'batch'" in message
+    assert "protocol declares POSITIONAL_ONLY" in message
+    assert (
+        "has no parameter named 'batch' with kind POSITIONAL_ONLY and no VAR_POSITIONAL catch-all"
+    ) in message
+    # A measured mismatch is not an abstention.
+    assert "CANNOT BE MEASURED" not in message
+    assert excinfo.value.__cause__ is None

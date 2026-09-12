@@ -171,6 +171,11 @@ TORCH_FREE_MODULES = {
         "check_capabilities",
         "verify_generated",
     ),
+    "foundationscale.rl.structural": (
+        "StructuralRefusal",
+        "StructuralReport",
+        "structural_report",
+    ),
     "foundationscale.rl.value_head": (
         "ValueCapabilities",
         "ValueCapabilityRefusal",

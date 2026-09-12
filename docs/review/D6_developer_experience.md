@@ -6,7 +6,7 @@ was attempted against the shipped tree only — what is in `src/foundationscale/
 `launchers/`, `tools/`, `checks/`, `validation_campaigns/h100_validation/`, the README, the Makefile,
 `pyproject.toml`, and the CI workflow. Where a workflow has no documented path in
 that evidence, it is rated **Absent** rather than assigned a plausible invented one.
-`src/foundationscale/` measures 38402 lines; `launchers/` contains 9500 shell LOC
+`src/foundationscale/` measures 39084 lines; `launchers/` contains 9500 shell LOC
 plus 1615 Python LOC; `validation_campaigns/h100_validation/` (34169 .py LOC, 66 files) is a validation
 harness, not a training product. The framework's own README says it plainly: "The
 trainer itself is early." This review measures what "early" feels like from the

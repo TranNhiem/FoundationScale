@@ -322,6 +322,15 @@ class WeightSync(Protocol):
     :func:`check_sync_capabilities`. This protocol is a SIBLING of
     ``RolloutSource``, per the design section 3.3 sizing argument: one
     level wider and every adapter re-implements synchronisation policy.
+
+    Scope of the ``@runtime_checkable`` decorator, stated here because
+    the two sibling protocols were read as promising more than it gives
+    (#397, MEASURED): ``isinstance`` checks method PRESENCE only and
+    never signatures, so it refuses an object with no ``sync`` and
+    admits a ``sync`` whose parameters do not fit. This protocol never
+    claimed otherwise, and it does not claim it now; a caller that needs
+    the mis-signature question answered asks
+    :func:`foundationscale.rl.structural.structural_report`.
     """
 
     def sync(self, mapping: Mapping[str, str]) -> SyncReport: ...

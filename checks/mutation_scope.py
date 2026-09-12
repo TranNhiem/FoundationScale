@@ -122,6 +122,15 @@ PENDING_ENROLMENT: dict[str, str] = {
         "pairedness derivation decides the SHAPE of the forward closure, so a wrong "
         "reading mis-scores every row instead of refusing the batch"
     ),
+    "src/foundationscale/rl/structural.py": (
+        "the #397 introspection seam: it reads a protocol's member set from the "
+        "runtime's OWN reader and compares each member's call SHAPE, because "
+        "@runtime_checkable answers presence and nothing else. Its two verdicts must "
+        "stay distinct -- a shape that CANNOT BE MEASURED is an abstention, a shape "
+        "that DOES NOT MATCH is a refusal -- and a mutant that collapses either into "
+        "the other, or that empties the compared set, certifies a mismatched call "
+        "shape as conforming while raising nothing and changing no signature"
+    ),
     "src/foundationscale/rl/preference_objectives.py": (
         "five preference objectives whose arithmetic decides a preference direction from "
         "hand-computable scalars, and whose refusals -- ORPO's exact-zero odds wall, SimPO's "

@@ -143,14 +143,47 @@ class ValueHead(Protocol):
     returns is MEASURED by :func:`verify_estimates`.
 
     WHAT IS CLAIMED: the signature is FoundationScale's own, and the
-    protocol is runtime-checkable so setup tooling can refuse a
-    non-head before any step rather than at the first ``estimate``
-    call. WHAT IS NOT CLAIMED: anything about the model behind
+    protocol is runtime-checkable, so ``isinstance`` refuses an object
+    that has no ``estimate`` and no ``capabilities`` at all -- before
+    any step rather than at the first call.
+
+    WHAT IS NOT CLAIMED, and the scope word is load-bearing (#397,
+    MEASURED): ``isinstance`` does NOT refuse a MIS-SIGNATURED head.
+    ``@runtime_checkable`` checks method PRESENCE only and never
+    signatures, so an object whose ``estimate`` takes a different
+    keyword argument entirely passes ``isinstance(obj, ValueHead)`` and
+    fails later as a ``TypeError`` at the first call. Setup tooling that
+    needs the stronger question answered must ask
+    :func:`foundationscale.rl.structural.structural_report`, which
+    compares arity and parameter names and reports the denominator it
+    compared. Also not claimed: anything about the model behind
     ``estimate`` -- architecture, device, dtype, and how estimates are
     produced are adapter concerns, and none is assumed in this file.
+
+    ``estimate``'s parameter is POSITIONAL-ONLY, and the ``/`` is a
+    contract term rather than a style choice. It states that the NAME
+    ``batch`` is not part of this seam: no caller may write
+    ``estimate(batch=...)``, so an adapter is free to name the parameter
+    whatever reads best -- including the ``_``-prefixed spelling this
+    repository's own lint rules ask for when the body does not use it.
+    Declaring it POSITIONAL_OR_KEYWORD instead would make the name
+    load-bearing for every third-party adapter, and would leave a
+    failure that neither of this repository's oracles can see (#397,
+    MEASURED): mypy accepts an adapter that renames the parameter AND
+    independently accepts a ``estimate(batch=...)`` call against this
+    protocol, so it blesses both halves of a program that raises
+    ``TypeError`` at runtime. Positional-only removes the call that
+    would fail rather than relying on a checker to notice it. Both
+    in-tree call sites already pass the batch positionally, so this
+    declares what the plane does.
+
+    The sibling seams are NOT uniform in this, deliberately.
+    :class:`~foundationscale.rl.advantage.AdvantageFn` keeps
+    POSITIONAL_OR_KEYWORD parameters because it HAS keyword callers, so
+    its parameter names are genuinely part of its contract.
     """
 
-    def estimate(self, batch: ExperienceBatch) -> Sequence[Sequence[float]]: ...
+    def estimate(self, batch: ExperienceBatch, /) -> Sequence[Sequence[float]]: ...
 
     def capabilities(self) -> ValueCapabilities: ...
 

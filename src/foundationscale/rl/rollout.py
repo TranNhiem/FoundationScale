@@ -133,9 +133,18 @@ class RolloutSource(Protocol):
     the batch ``generate`` returns is what :func:`verify_generated`
     MEASURES; an implementation whose ``generate`` delivers fewer columns
     than its ``capabilities`` declares is not a smaller source, it is a
-    broken one. The protocol is runtime-checkable so setup tooling can
-    refuse a non-source before any step rather than at the first
-    ``generate`` call.
+    broken one. The protocol is runtime-checkable, so ``isinstance``
+    refuses an object carrying neither ``generate`` nor ``capabilities``
+    before any step rather than at the first ``generate`` call.
+
+    It refuses nothing narrower than that, and the scope word is
+    load-bearing (#397, MEASURED): ``@runtime_checkable`` checks method
+    PRESENCE only and never signatures, so a source whose ``generate``
+    takes a different keyword argument entirely passes
+    ``isinstance(obj, RolloutSource)`` and fails later as a
+    ``TypeError``. Setup tooling that needs the mis-signature question
+    answered must ask
+    :func:`foundationscale.rl.structural.structural_report`.
     """
 
     def generate(self, prompts: ExperienceBatch) -> ExperienceBatch: ...
