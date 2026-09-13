@@ -53,7 +53,22 @@
 
 set -u  # any unset variable is a harness bug: fail loudly, never vacuously
 
-FS_GATE_LAUNCHER="${FS_GATE_LAUNCHER:-launchers/launch_g4e4b_fullft_1tray.sh}"
+# Self-locate like the sibling suites do via launchers/_suite_prelude.sh:
+# LDIR resolves from THIS file's directory, so the launcher default below is
+# anchored to the suite and never to the caller's working directory (#431).
+# A caller-set FS_GATE_LAUNCHER still wins.
+LDIR=${LDIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
+FS_GATE_LAUNCHER="${FS_GATE_LAUNCHER:-$LDIR/launch_g4e4b_fullft_1tray.sh}"
+
+# #431 control seam: report the SUBJECT this suite resolved, then stop. The
+# parent suite measures CWD-independence through this, against the suite's own
+# resolution -- a control that re-implements the idiom it checks discriminates
+# nothing (doctrine 3). rc 0 here means the query succeeded; no contract is
+# adjudicated on this path.
+if [ "${1:-}" = "--print-subject" ]; then
+  printf 'SUBJECT: %s\n' "$FS_GATE_LAUNCHER"
+  exit 0
+fi
 MARKER='live_gate wall-clock budget exhausted'
 EPI_TOK_A='live_gate could not measure:'
 EPI_TOK_B='LIVE GATE VERDICT: CLEAR'
@@ -67,16 +82,53 @@ legs_pass=0
 pass() { legs_pass=$((legs_pass + 1)); printf 'PASS %d/%d %s\n' "$legs_pass" "$LEGS_TOTAL" "$1"; }
 fail() { printf 'FAIL %d/%d leg(%s) — %s\n' "$legs_pass" "$LEGS_TOTAL" "$1" "$2"; }
 
-[[ -r $FS_GATE_LAUNCHER ]] || { printf 'FAIL 0/9 launcher unreadable: %s (fail closed)\n' "$FS_GATE_LAUNCHER"; exit 1; }
+# Refuse, not RED, when the SUBJECT itself is unreadable (#431): zero legs
+# can run, so this is CANNOT-MEASURE over a denominator of 0. The message
+# strips the "$LDIR"/ prefix so it stays repo-relative and never prints an
+# absolute estate path.
+[[ -r $FS_GATE_LAUNCHER ]] || { printf 'REFUSE 96 (CANNOT-MEASURE): unmet precondition — launcher unreadable: %s; denominator is 0, no legs ran and nothing was measured\n' "${FS_GATE_LAUNCHER#"$LDIR"/}"; printf 'WATCHDOG CONTRACTS: UNMEASURED (96) — unmet precondition: the launcher is unreadable; 0 of %d declared legs were measured, so the denominator is 0 and no watchdog contract was adjudicated\n' "$LEGS_TOTAL"; exit 96; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fsgate-watch.XXXXXXXX")" || { echo 'FAIL 0/9 mktemp'; exit 1; }
+# Same precondition class (#431): without the scratch dir no leg can run,
+# so refuse 96 over a denominator of 0 rather than print 'FAIL 0/9'.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/fsgate-watch.XXXXXXXX")" || { echo 'REFUSE 96 (CANNOT-MEASURE): unmet precondition — mktemp could not create the shared scratch dir; denominator is 0, no legs ran and nothing was measured'; printf 'WATCHDOG CONTRACTS: UNMEASURED (96) — unmet precondition: mktemp could not create the shared scratch dir; 0 of %d declared legs were measured, so the denominator is 0 and no watchdog contract was adjudicated\n' "$LEGS_TOTAL"; exit 96; }
 # The trap is OWNED: $BASHPID is per-process, $$ is inherited, so only the
 # shell that created $WORK removes it. Measured (#392): without this guard
 # the subshell running the gate under test also fires this trap and deletes
 # the SHARED scratch dir mid-suite, and legs 2..9 fail ENOENT -- 9/9 when the
 # suite owned its process group, 3/9 when it did not. That is what has read
 # as "load-sensitive" since #93; load was never the only variable.
-trap '[ "$BASHPID" = "$$" ] && rm -rf "$WORK"' EXIT
+#
+# The ${BASHPID:-$$} default is not cosmetic. $BASHPID arrived in bash 4.0 and
+# the macOS system bash is 3.2.57, where a bare $BASHPID under `set -u` made
+# the trap ITSELF error: the scratch dir was never removed, and the complaint
+# landed on stderr after the summary line where no reader was looking. On 3.2
+# the guard is also unnecessary -- MEASURED on 3.2.57: a `( )` subshell, a
+# `$( )` command substitution and a backgrounded `{ } &` job all fail to fire
+# the parent's EXIT trap -- so defaulting to $$ there restores exactly the
+# cleanup that shell needs, while 4.0+ keeps the real per-process guard. The
+# parent suite measures the resulting contract (0 leftovers in a private
+# TMPDIR) rather than trusting this comment.
+trap '[ "${BASHPID:-$$}" = "$$" ] && rm -rf "$WORK"' EXIT
+
+# --- #392 DEFECT 2 environment guard ---
+# $WORK is ONE scratch dir shared by all 9 legs. MEASURED: under 3-way
+# concurrency it sometimes disappears within a fraction of a second of its
+# creation, and the run then reports 6-7 independent contract failures
+# (observed 4/9 and 2/9) whose real cause is the vanished dir. The deleter
+# is UNOBSERVABLE from inside this process tree — a trap-identity logger
+# and bash xtrace BOTH suppress the failure (0/6 degraded vs 3/6 for the
+# unmodified file) — so the cause is not attacked here. What CAN be
+# measured is the dir's presence at the start of each leg; its absence is
+# an environment failure, not a watchdog-contract verdict, so the suite
+# REFUSEs 96 (denominator 0 for every leg not yet run) instead of minting
+# more reds. $1 names the leg at which the loss was noticed.
+assert_work_present() {
+  [ -d "$WORK" ] || {
+    printf 'REFUSE 96 (CANNOT-MEASURE): scratch dir %s vanished mid-run; noticed at the start of %s — nothing was measured by this leg and an environment failure must not read as a RED on the watchdog contracts\n' "$WORK" "$1"
+    printf 'WATCHDOG CONTRACTS: UNMEASURED (96) at %s — %d leg(s) had passed before the loss; the denominator for every leg not yet run is 0\n' "$1" "$legs_pass"
+    exit 96
+  }
+}
 
 # --- run_in_container stub, behaviour selected per leg via STUB_MODE ---
 STUB_MODE=rc0
@@ -142,17 +194,22 @@ sed -n '/^fs_live_save_gate() {/,/^}$/p' "$FS_GATE_LAUNCHER" >"$WORK/gate.fn"
 . "$WORK/gate.fn"
 
 # --- leg 1: harness integrity (fail-closed precondition, doctrine 1/4) ---
+assert_work_present 'leg 1'
 if [[ -s $WORK/gate.fn ]] && [[ $(tail -n 1 "$WORK/gate.fn") == '}' ]] \
    && [[ $(wc -l <"$WORK/gate.fn" | tr -d ' ') -ge 40 ]] \
    && type fs_live_save_gate >/dev/null 2>&1; then
   pass 'leg1 harness integrity — fs_live_save_gate extracted from the SHIPPED launcher and defined'
 else
-  fail 'extraction' 'gate.fn empty/truncated or function undefined — refusing to run legs against nothing'
-  printf 'WATCHDOG CONTRACTS: PASS %d/%d\n' "$legs_pass" "$LEGS_TOTAL"
-  exit 1
+  # Extraction produced nothing usable: the SUBJECT could not be obtained
+  # from the shipped launcher, so no contract can be measured (#431).
+  # Refuse 96 over a denominator of 0 — not nine failed contracts.
+  printf 'REFUSE 96 (CANNOT-MEASURE): unmet precondition — gate.fn empty/truncated or fs_live_save_gate undefined: extraction from the shipped launcher produced nothing; denominator is 0, no legs ran and nothing was measured\n'
+  printf 'WATCHDOG CONTRACTS: UNMEASURED (96) — unmet precondition: extraction from the shipped launcher produced nothing; 0 of %d declared legs were measured, so the denominator is 0 and no watchdog contract was adjudicated\n' "$LEGS_TOTAL"
+  exit 96
 fi
 
 # --- leg 2: rc passthrough sweep, 0->0 1->1 3->3 127->127, untouched ---
+assert_work_present 'leg 2'
 ok2=0
 for want in 0 1 3 127; do
   STUB_MODE="rc$want"; FS_GATE_TIMEOUT_S=30
@@ -164,6 +221,7 @@ done
 [[ $ok2 == 4 ]] && pass 'leg2 rc passthrough 4/4 (0->0 1->1 3->3 127->127, bit-exact)'
 
 # --- leg 3: MUST-PASS on elapsed time — the measured reproduction, as detector ---
+assert_work_present 'leg 3'
 # budget 30, threshold 5: green path is builtins + instant stub (<0.05s
 # real, ~100x headroom); the pre-repair code reads 29-30s here no matter
 # the truncation — the 600s wedge scaled 1/20 and OBSERVED as red.
@@ -179,6 +237,7 @@ else
 fi
 
 # --- leg 4: consequence-(i) tripwire — a CLEARED gate's record stays clean ---
+assert_work_present 'leg 4'
 # budget 3; wait budget+grace+3 so any surviving watchdog code has had
 # every chance to discharge; then demand: rc 0, real CLEAR line present,
 # marker ABSENT. Fires on the production TERM-deferral semantics where
@@ -195,6 +254,7 @@ else
 fi
 
 # --- leg 5: MUST_FIRE, TERM-responsive executor — mechanism, not clock ---
+assert_work_present 'leg 5'
 # DISCRIMINATES ON MECHANISM, NOT CLOCK (same defect class as leg 6;
 # changed on the numbers: the retired `delta -le 8` left ~4-5s of
 # headroom over the ~3s mechanism, less than the ~6-7s load stretch
@@ -232,6 +292,7 @@ else
 fi
 
 # --- leg 6: MUST_FIRE, TERM-IGNORING executor — grace+KILL path ---
+assert_work_present 'leg 6'
 # THE PROPERTY IS MECHANICAL: "TERM was delivered, the process ignored
 # it, SIGKILL was required". The stub, not the clock, answers:
 #   TERM_SEEN present      — TERM was DELIVERED and observed (handler
@@ -284,6 +345,7 @@ else
 fi
 
 # --- leg 7: pin the stated epilogue non-consequence (consequence i, rc paths) ---
+assert_work_present 'leg 7'
 # "fs_gate_verdict_to_rc cannot be moved by the injected line" rests on
 # TEXT DISJUNCTION. Pin it: every marker-bearing line in the launcher
 # must contain NEITHER epilogue token. If a future edit to the marker
@@ -298,6 +360,7 @@ else
 fi
 
 # --- leg 8: invalid knob refuses closed — never an unbounded gate ---
+assert_work_present 'leg 8'
 # STUB_MODE=rc0 deliberately: if the gate WRONGLY ran, the stub's CLEAR
 # line would land in the capture; its ABSENCE proves refusal happened
 # BEFORE any executor spawn — a minted 124 must not carry the tool's
@@ -313,6 +376,7 @@ else
 fi
 
 # --- leg 9: MUST_FIRE control for legs 5/6's detector — the do-nothing case ---
+assert_work_present 'leg 9'
 # doctrine 3 applied to the NEW evidence: legs 5/6's recorded-mechanism
 # predicate must be OBSERVED refusing the case M1 showed the old clock
 # window could not exclude. BUILD the do-nothing case explicitly: the
@@ -340,5 +404,12 @@ else
   fail 'do-nothing control' "do-nothing state unclean or kill predicate not refused on it: rc=$rc marker_count=$(grep -cF "$MARKER" "$cap") TERM_SEEN=$(grep -cF 'TERM_SEEN' "$STUB_TERMLOG") SURVIVED_TERM=$(grep -cF 'SURVIVED_TERM' "$STUB_TERMLOG") COMPLETED=$(grep -cF 'COMPLETED' "$STUB_TERMLOG") (want rc 0, all counts 0 except COMPLETED=1) — legs 5/6 could certify a dead KILL path; M1's hole is OPEN"
 fi
 
+# Four-state contract: all 9 legs ran, so a shortfall is a RED verdict and
+# exits 5. It used to fall off a bare [[ ]] as status 1, which the contract
+# forbids. MEASURED: the one consumer, launchers/test_launcher_contracts.sh,
+# folds on `wd_rc -ne 0` with a parsed summary, so 5 folds exactly as 1 did.
 printf 'WATCHDOG CONTRACTS: PASS %d/%d\n' "$legs_pass" "$LEGS_TOTAL"
-[[ $legs_pass == "$LEGS_TOTAL" ]]
+if [[ $legs_pass == "$LEGS_TOTAL" ]]; then
+  exit 0
+fi
+exit 5

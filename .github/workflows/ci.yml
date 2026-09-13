@@ -959,7 +959,7 @@ jobs:
           # this commit, same machine, rc=0:
           #   launchers/test_checks_gates.sh -> controls: 43 passed, 0 failed
           # Raised in the same commit as those legs, same reason again.
-          FLOOR_LAUNCHER=152
+          FLOOR_LAUNCHER=156
           FLOOR_CHECKS=45
           FLOOR=$((FLOOR_LAUNCHER + FLOOR_CHECKS))
 

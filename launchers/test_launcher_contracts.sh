@@ -4364,12 +4364,37 @@ if [ ! -f "$WD_CONTRACTS" ]; then
 elif [ ! -r "$WD_CONTRACTS" ]; then
   no "watchdog sub-suite UNREADABLE: $WD_CONTRACTS -- 0 of 8 legs measured; failing closed"
 else
-  if wd_out=$(bash "$WD_CONTRACTS" 2>&1); then wd_rc=0; else wd_rc=$?; fi
+  # Run the sub-suite under a PRIVATE TMPDIR so that whether it removes its
+  # own shared scratch dir becomes measurable after the fold below, at the cost
+  # of no additional run.
+  wd_tmp=$(mktemp -d "${TMPDIR:-/tmp}/fs392-wdtmp.XXXXXX") || wd_tmp=''
+  if [ -n "$wd_tmp" ]; then
+    if wd_out=$(TMPDIR="$wd_tmp" bash "$WD_CONTRACTS" 2>&1); then wd_rc=0; else wd_rc=$?; fi
+  else
+    if wd_out=$(bash "$WD_CONTRACTS" 2>&1); then wd_rc=0; else wd_rc=$?; fi
+  fi
   printf '%s\n' "$wd_out" | sed 's/^/  | /'
   wd_line=$(printf '%s\n' "$wd_out" | grep '^WATCHDOG CONTRACTS: PASS [0-9][0-9]*/[0-9][0-9]*$' | tail -n 1 || true)
   wd_p=$(printf '%s\n' "$wd_line" | sed -n 's/^WATCHDOG CONTRACTS: PASS \([0-9][0-9]*\)\/\([0-9][0-9]*\)$/\1/p')
   wd_n=$(printf '%s\n' "$wd_line" | sed -n 's/^WATCHDOG CONTRACTS: PASS \([0-9][0-9]*\)\/\([0-9][0-9]*\)$/\2/p')
-  if [ -z "$wd_line" ]; then
+  wd_declared=$(sed -n 's/^LEGS_TOTAL=\([0-9][0-9]*\)$/\1/p' "$WD_CONTRACTS" | tail -1)
+  if [ "$wd_rc" -eq 96 ] && grep -q '^WATCHDOG CONTRACTS: UNMEASURED (96)' <<<"$wd_out"; then
+    # #392 DEFECT 2, and the #409/#417 class one layer up. The sub-suite lost
+    # the shared scratch dir every leg writes into. MEASURED: under 3-way
+    # concurrency that happens within a fraction of a second of the dir's
+    # creation, and the deleter is unobservable from inside that process tree
+    # (a trap-identity logger and bash xtrace each suppress it: 0 of 6 degraded
+    # against 3 of 6 unmodified). An ENVIRONMENT failure must not be adjudicated
+    # as a RED verdict on the watchdog contracts -- but it must not vanish
+    # either, so it is named here WITH the size of the hole it leaves, and the
+    # abstention is corroborated off the sub-suite's own UNMEASURED record
+    # rather than off a bare rc.
+    abstain=$((abstain + 1))
+    # Hand the shortfall to the total assert so the 9 legs stay in the published
+    # denominator. Without this the abstention above would itself produce a RED.
+    wd_unmeasured=${wd_declared:-0}
+    printf '  ABSTAIN  watchdog contracts UNMEASURED: the sub-suite refused 96 after losing its shared scratch dir -- 0 of its %s declared legs are credited to pass or fail, so this run measured %s fewer controls than a clean one; its own UNMEASURED line is in the gutter above\n' "${wd_declared:-an unread number of}" "${wd_declared:-an unread number of}"
+  elif [ -z "$wd_line" ]; then
     no "watchdog sub-suite gave NO parseable 'WATCHDOG CONTRACTS: PASS n/N' summary (exit $wd_rc) -- raw output above; unparsed is unmeasured, unmeasured is red; 0 legs credited"
   elif [ "$wd_rc" -eq 0 ] && [ "$wd_p" = "$wd_n" ]; then
     pass=$((pass + 10#$wd_p))
@@ -4379,6 +4404,76 @@ else
     printf '  FAIL  watchdog contracts %s of %s green, %s red, exit %s agrees -- +%s pass and +%s fail folded at this site; per-leg evidence above\n' "$wd_p" "$wd_n" "$((10#$wd_n - 10#$wd_p))" "$wd_rc" "$wd_p" "$((10#$wd_n - 10#$wd_p))"
   else
     no "watchdog sub-suite CONTRACT MISMATCH: exit $wd_rc vs summary '$wd_line' -- one side of its contract is lying, 0 legs credited, fail closed (doctrine 4)"
+  fi
+fi
+
+# === fs392 DEFECT 1, third layer: the cleanup contract was shell-dependent ====
+# The sub-suite's ownership guard read $BASHPID, which bash 4.0 introduced and
+# the macOS system bash 3.2.57 does not define. Under `set -u` that made the
+# EXIT trap error instead of run, so the shared scratch dir leaked on every
+# developer run and said so only on stderr, after the summary line. A cleanup
+# contract that holds on one shell and not another is not a contract, so it is
+# MEASURED here against the private TMPDIR the run above was given -- on
+# whichever bash is actually executing this suite.
+if [ -z "${wd_tmp:-}" ]; then
+  no "fs392 scratch cleanup: no private TMPDIR was available for the sub-suite run above (mktemp refused, or the sub-suite is absent/unreadable and never ran), so whether it removes its own scratch dir sits in no denominator -- an unmeasured cleanup contract is not a passing one"
+elif [ -z "${wd_line:-}" ]; then
+  rm -rf "$wd_tmp"
+  abstain=$((abstain + 1))
+  wd_unmeasured=$(( ${wd_unmeasured:-0} + 1 ))
+  printf '  ABSTAIN  fs392 scratch cleanup UNMEASURED: the sub-suite refused before it ever created a scratch dir, so there was nothing whose removal could be observed -- this control stays in the published denominator and enters no score\n'
+else
+  wd_leaked=$(find "$wd_tmp" -maxdepth 1 -name 'fsgate-watch.*' 2>/dev/null | wc -l | tr -d ' ')
+  rm -rf "$wd_tmp"
+  if [ "$wd_leaked" -eq 0 ]; then
+    ok "fs392 scratch cleanup: the watchdog sub-suite left 0 fsgate-watch.* directories in the private TMPDIR it was just run under, on bash ${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]} -- its owner-guarded EXIT trap fires on THIS shell, which a bare \$BASHPID did not on 3.2"
+  else
+    no "fs392 scratch cleanup: the watchdog sub-suite left $wd_leaked fsgate-watch.* scratch director(ies) behind in a private TMPDIR on bash ${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]} -- its EXIT trap did not run to completion on this shell; suspect an idiom in the trap's ownership guard that this bash does not define"
+  fi
+fi
+
+# The parent's abstention (above) keys on a literal line the sub-suite prints.
+# That seam is only worth its ABSTAIN if the sub-suite really prints it, and the
+# scratch-vanish path that motivated it reproduces only under concurrency. The
+# unreadable-launcher refusal reaches the same contract deterministically, so it
+# is what gets forced here.
+fs431_ref=$(FS_GATE_LAUNCHER=/nonexistent/fs431-no-such-launcher bash "$WD_CONTRACTS" 2>&1); fs431_ref_rc=$?
+if [ "$fs431_ref_rc" -eq 96 ] && grep -q '^WATCHDOG CONTRACTS: UNMEASURED (96)' <<<"$fs431_ref"; then
+  ok "fs431 refusal seam: an unmet precondition (unreadable launcher) makes the watchdog sub-suite exit 96 AND print the machine-readable 'WATCHDOG CONTRACTS: UNMEASURED (96)' line the abstention above keys on -- so a CANNOT-MEASURE reaches this suite as an abstention and not as a RED on the watchdog contracts (#409/#417)"
+else
+  no "fs431 refusal seam: forcing an unreadable launcher gave rc $fs431_ref_rc and $(grep -c '^WATCHDOG CONTRACTS: UNMEASURED (96)' <<<"$fs431_ref") summary line(s) -- the parent cannot tell this CANNOT-MEASURE from a RED, so an environment failure would be adjudicated as a watchdog contract failure"
+fi
+
+# === fs431: the watchdog sub-suite resolves its SUBJECT independently of CWD ==
+# #431 was: the sub-suite defaulted FS_GATE_LAUNCHER to a CWD-relative path, so
+# one tree adjudicated differently depending on where the caller stood -- the
+# #83/#229/#402 path-dependence class. These two legs do NOT re-implement the
+# resolution; they ask the sub-suite itself through --print-subject, from two
+# working directories, and require one absolute readable answer.
+fs431_raw_a=$(cd / && bash "$WD_CONTRACTS" --print-subject 2>&1) || fs431_raw_a=''
+fs431_raw_b=$(cd "$LDIR" && bash "$WD_CONTRACTS" --print-subject 2>&1) || fs431_raw_b=''
+fs431_a=$(sed -n 's/^SUBJECT: //p' <<<"$fs431_raw_a")
+fs431_b=$(sed -n 's/^SUBJECT: //p' <<<"$fs431_raw_b")
+if [ -n "$fs431_a" ] && [ "$fs431_a" = "$fs431_b" ] && [ "${fs431_a#/}" != "$fs431_a" ] && [ -r "$fs431_a" ]; then
+  ok "fs431: the watchdog sub-suite resolves the same absolute readable subject from / and from launchers/ ($(basename "$fs431_a")) -- its verdict no longer depends on where the caller stands"
+else
+  no "fs431: the watchdog sub-suite resolved DIFFERENT or non-absolute subjects by working directory (from /: '${fs431_a:-<none>}'; from launchers/: '${fs431_b:-<none>}') -- a path-dependent verdict, the #83/#229/#402 class"
+fi
+
+# MUST_DISCRIMINATE: the leg above is only worth its PASS if --print-subject
+# reports a RESOLUTION and not a constant. Hand it a subject this suite picks
+# and require that exact subject back.
+fs431_ov=$(mktemp "${TMPDIR:-/tmp}/fs431-subject.XXXXXX") || fs431_ov=''
+if [ -z "$fs431_ov" ]; then
+  no "fs431 MUST_DISCRIMINATE UNMEASURED: mktemp refused a scratch file, so the leg above was never shown a known-different subject and its verdict is unattributed"
+else
+  fs431_raw_c=$(cd / && FS_GATE_LAUNCHER="$fs431_ov" bash "$WD_CONTRACTS" --print-subject 2>&1) || fs431_raw_c=''
+  fs431_seen=$(sed -n 's/^SUBJECT: //p' <<<"$fs431_raw_c")
+  rm -f "$fs431_ov"
+  if [ "$fs431_seen" = "$fs431_ov" ]; then
+    ok "fs431 MUST_DISCRIMINATE: an explicit FS_GATE_LAUNCHER override comes back from --print-subject unchanged, so the leg above read a real resolution, not a hard-coded constant"
+  else
+    no "fs431 MUST_DISCRIMINATE: --print-subject ignored an explicit FS_GATE_LAUNCHER override (sent '$fs431_ov', got '${fs431_seen:-<none>}') -- the path-independence verdict above is unattributable"
   fi
 fi
 
@@ -4495,7 +4590,7 @@ fi
 # preceded it, plus itself -- see launchers/_suite_prelude.sh for why this
 # countable cannot live in the static census.
 assert_control_claims_attributed
-assert_documented_control_total test_launcher_contracts.sh
+assert_documented_control_total test_launcher_contracts.sh "${wd_unmeasured:-0}"
 
 echo "abstentions: $abstain named (each named at its site above with its denominator; 0 added to pass or fail)"
 echo "controls: $pass passed, $fail failed"

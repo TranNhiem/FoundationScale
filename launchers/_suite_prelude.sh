@@ -197,8 +197,19 @@ assert_control_claims_attributed(){
 # (#93): the suite runs the same controls either way, and the documented
 # figure is a denominator, not a score.
 assert_documented_control_total(){
-  local suite=$1 total claims bad
-  total=$((pass + fail + 1))
+  local suite=$1 unmeasured=${2:-0} total claims bad note=''
+  # A control this suite HAS but could not RUN is still in the published
+  # denominator, so the caller passes the size of the hole and it is added back
+  # here. MEASURED (#392 DEFECT 2): the watchdog sub-suite loses its shared
+  # scratch dir under this suite's own concurrency and refuses 96, crediting 0
+  # of its 9 legs. Without this the total silently drops by 9 and the assert
+  # reports a doc drift -- an ENVIRONMENT failure adjudicated as a RED on a
+  # documentation claim, the #409/#417 class one layer further up. The number
+  # published in the docs describes the control SET, not one run's luck.
+  total=$((pass + fail + 1 + unmeasured))
+  if [ "$unmeasured" -gt 0 ]; then
+    note=" ($unmeasured of them UNMEASURED on this run and named as an abstention above, so they are in the denominator and in no score)"
+  fi
   claims=$(_control_claims | awk -F'\t' -v s="$suite" '$2==s{print $1"="$3}')
   if [ -z "$claims" ]; then
     no "documented control total ($suite): the three developer docs state a count for this suite in 0 places, so its denominator is published nowhere and a change to it is invisible"
@@ -206,9 +217,9 @@ assert_documented_control_total(){
   fi
   bad=$(printf '%s\n' "$claims" | awk -F'=' -v t="$total" '$2!=t{printf "%s ", $0}')
   if [ -n "$bad" ]; then
-    no "documented control total ($suite): this run adjudicated $total controls; the docs say ${bad% }. Update every site, or -- if you enabled an env-gated battery such as FIX28_ESTATE_GEMMA4_VL -- note that the published figure describes the default environment and your denominator is legitimately larger"
+    no "documented control total ($suite): this run adjudicated $total controls$note; the docs say ${bad% }. Update every site, or -- if you enabled an env-gated battery such as FIX28_ESTATE_GEMMA4_VL -- note that the published figure describes the default environment and your denominator is legitimately larger"
   else
-    ok "documented control total ($suite): $total adjudicated this run, and all $(printf '%s\n' "$claims" | wc -l | tr -d ' ') published statements agree -- the count that #377 left stale in eight places is now checked by the only instrument that can measure it"
+    ok "documented control total ($suite): $total adjudicated this run$note, and all $(printf '%s\n' "$claims" | wc -l | tr -d ' ') published statements agree -- the count that #377 left stale in eight places is now checked by the only instrument that can measure it"
   fi
 }
 
