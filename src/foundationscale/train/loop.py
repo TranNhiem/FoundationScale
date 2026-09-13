@@ -1384,6 +1384,14 @@ def _declare_checkpoint(model: Any) -> tuple[Any, dict[str, str]]:
     that scope is non-empty when adapter mode was declared; an undetected
     wrapper is the residual risk and is named in RISKS.
 
+    #423 CORRECTS 2e on the axis it did not check. Scoping to the adapter
+    subset fixed the CARDINALITY and left the NAMESPACE wrong, so the false
+    RED survived in a form that was harder to read: declared 112, present
+    112, intersection 0. ``get_peft_model_state_dict`` -- the serializer
+    ``save_pretrained`` itself calls -- is now the oracle, measured EXACT
+    against the saved header where the shipped filter scored 0 of 112, and
+    the two sources are cross-checked on their shared axis, the count.
+
     Returns the declaration and a dict of audit notes for the manifest's config
     block, so the basis of every number here survives into the artifact.
     """
@@ -1393,11 +1401,55 @@ def _declare_checkpoint(model: Any) -> tuple[Any, dict[str, str]]:
     state = model.state_dict()
     names = set(state)
     tied = _tied_aliases(model, names)
+    source = "model.state_dict() in memory, before the first save"
+    cross_check = "(not applicable: no peft wrapper)"
     if getattr(model, "peft_config", None) is not None:
-        # peft persists adapters only (see 2e in the docstring): the honest
-        # denominator is the adapter subset of the state dict, not the frozen
-        # base weights the artifact will never contain.
-        declared = {n for n in names if ".lora_" in n} - tied
+        # peft persists adapters only (see 2e in the docstring) -- but the
+        # honest denominator is NOT the adapter subset of state_dict(), which
+        # is what 2e shipped and what #423 measured as a false RED on a
+        # healthy LoRA run. The in-memory module tree carries an adapter-name
+        # segment that the serializer drops:
+        #
+        #   state_dict()  ...q_proj.lora_A.default.weight
+        #   saved file    ...q_proj.lora_A.weight
+        #
+        # so the two sets came out equinumerous and DISJOINT -- declared 112,
+        # present 112, intersection 0. A denominator of the right SIZE in the
+        # wrong NAMESPACE reads downstream as "every adapter tensor is
+        # missing", which is a louder and more confident wrong answer than the
+        # base-model-shaped denominator 2e set out to avoid.
+        #
+        # The oracle is peft's own serializer, because ``save_pretrained``
+        # calls it: whatever renaming peft applies, the declaration inherits
+        # by construction. Stripping ``.default.`` also matches today and is
+        # the fix this deliberately refuses -- "default" is the adapter NAME,
+        # so the first run that names its adapter anything else reinstates
+        # #423 with no signal at all.
+        #
+        # The import is deliberately BARE. If peft ever moves this symbol the
+        # ImportError propagates to the caller at the `_declare_checkpoint`
+        # call site, which records `declaration.error`, marks the step, and
+        # leaves the declaration None -- an UNMEASURED denominator the
+        # completeness gate reads as VACUOUS. That is the honest outcome. A
+        # local `except ImportError` falling back to the module-tree filter
+        # would be worse than no fix at all: it would reinstate the wrong
+        # NAMESPACE silently, which is #423 itself.
+        from peft import get_peft_model_state_dict
+
+        declared = set(get_peft_model_state_dict(model)) - tied
+        source = "peft.get_peft_model_state_dict(model) -- the serializer save_pretrained calls"
+        # Two sources on the one axis where the namespaces are comparable,
+        # the same contract the expert count uses below. The serializer and
+        # the module tree must agree on HOW MANY adapter tensors exist even
+        # while disagreeing on what to call them; a divergence means peft
+        # dropped or synthesised tensors on the way out, and nothing else in
+        # this path would see it.
+        in_memory = {n for n in names if ".lora_" in n} - tied
+        cross_check = (
+            f"agree ({len(declared)})"
+            if len(declared) == len(in_memory)
+            else f"DISAGREE: serializer {len(declared)} vs module tree {len(in_memory)}"
+        )
         adapter_scope = (
             f"peft-wrapped model: declared {len(declared)} adapter tensor(s) "
             "only; the saved artifact carries adapter weights, not base weights"
@@ -1406,10 +1458,11 @@ def _declare_checkpoint(model: Any) -> tuple[Any, dict[str, str]]:
         declared = names - tied
         adapter_scope = "full model (no peft wrapper detected on model.peft_config)"
     notes = {
-        "declaration.source": "model.state_dict() in memory, before the first save",
+        "declaration.source": source,
         "declaration.state_dict_keys": str(len(names)),
         "declaration.tied_excluded": ",".join(sorted(tied)) or "(none)",
         "declaration.adapter_scope": adapter_scope,
+        "declaration.adapter_count_cross_check": cross_check,
     }
 
     config = getattr(model, "config", None)

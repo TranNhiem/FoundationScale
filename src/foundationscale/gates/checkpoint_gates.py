@@ -1755,6 +1755,61 @@ class SaveCompletenessGate(Gate):
                 evidence={"origin": c.origin},
             )
         missing = [f for f in declared if f not in present]
+        if declared and present and len(missing) == len(declared):
+            # Two non-empty sets with NOTHING in common are a namespace
+            # mismatch, not an incomplete save. #423: a healthy LoRA run
+            # declared 112 adapter tensors from the in-memory module tree
+            # (`...lora_A.default.weight`) and saved 112 from peft's
+            # serializer (`...lora_A.weight`), and this gate called it "112 of
+            # 112 declared tensors absent — checkpoint is missing a shard".
+            # Every word of that was wrong: nothing was missing and no shard
+            # was involved.
+            #
+            # The producer is fixed at the declaration site, which is where a
+            # namespace can actually be chosen. This branch exists because the
+            # gate must not state a confident verdict it has no standing to
+            # reach: with no shared vocabulary between the two sets, this gate
+            # cannot tell a renamed artifact from a catastrophically wrong one,
+            # and saying so is the only honest reading. Zero coverage takes the
+            # same enforced-VACUOUS path as the two branches above, so it
+            # BLOCKS — an abstention, not a pass.
+            #
+            # `declared and` is redundant TODAY: the empty-declaration branch
+            # above already returned, so `len(missing) == len(declared)` here
+            # can only mean disjointness. It is written anyway because the
+            # message this branch emits asserts "BOTH non-empty", and a
+            # predicate that states its own precondition cannot be falsified by
+            # someone reordering the branches above it. Without it, 0 == 0 would
+            # route an empty declaration into a message claiming two non-empty
+            # sets.
+            #
+            # A genuine total loss still REDs: it writes no real tensors, so
+            # `present` is empty and this branch never runs. A partial loss
+            # still REDs: any overlap at all makes the sets non-disjoint.
+            sample_declared, sample_present = declared[0], sorted(present)[0]
+            return self.ok(
+                f"the {len(declared)} declared and {len(present)} present tensor "
+                "names are BOTH non-empty and share not one element, which is a "
+                "naming-convention mismatch between the declaring and the saving "
+                "code rather than a measurement of completeness — comparing them "
+                f"would report every tensor missing.\n    declared: {sample_declared}"
+                f"\n    present : {sample_present}\nRefusing to adjudicate "
+                "completeness across two vocabularies; fix the declaration's "
+                "namespace and re-measure",
+                Coverage.none("declared tensors"),
+                evidence={
+                    "declared_sample": declared[:4],
+                    "present_sample": sorted(present)[:4],
+                    "declared_count": len(declared),
+                    "present_count": len(present),
+                    # Equinumerous is corroboration, never the trigger: the
+                    # trigger is disjointness. Requiring equal counts would
+                    # miss a rename that also drops a tensor, which is the
+                    # case most worth catching.
+                    "equinumerous": len(declared) == len(present),
+                    "origin": c.origin,
+                },
+            )
         coverage = Coverage(
             checked=len(declared) - len(missing),
             unit="tensors",
@@ -1808,6 +1863,52 @@ class SaveCompletenessGate(Gate):
                 ),
                 note="a zero-length declared tensor set must block, not auto-"
                 "satisfy as 'all 0 declared tensors present'",
+            ),
+            Control(
+                "disjoint-namespace",
+                ControlKind.MUST_FIRE,
+                lambda: CheckpointGateContext(
+                    # The #423 shape, reproduced exactly: peft's in-memory
+                    # module names declared, peft's serialized names saved.
+                    # Equinumerous and sharing not one element.
+                    tensors=tuple(
+                        TensorMeta(
+                            f"base_model.model.layers.{i}.q_proj.lora_A.weight", (8, 4), "bfloat16"
+                        )
+                        for i in range(4)
+                    ),
+                    declared_fqns=tuple(
+                        f"base_model.model.layers.{i}.q_proj.lora_A.default.weight"
+                        for i in range(4)
+                    ),
+                    num_experts=None,
+                    num_moe_layers=None,
+                    expected_expert_bytes=None,
+                    origin="synthetic:disjoint-namespace",
+                ),
+                note="4 declared and 4 present names with zero overlap must abstain, "
+                "not report '4 of 4 declared tensors absent — missing a shard'",
+            ),
+            Control(
+                "total-loss-still-reds",
+                ControlKind.MUST_FIRE,
+                lambda: CheckpointGateContext(
+                    # The boundary the disjointness branch creates, held from
+                    # the other side. Nothing real was saved, so there is no
+                    # second namespace to mistake this for -- a checkpoint
+                    # that wrote none of its declared tensors is a defect and
+                    # must stay a defect. Without this, widening the abstention
+                    # by one predicate would silently convert the worst
+                    # possible save into an abstention.
+                    tensors=(),
+                    declared_fqns=("model.layers.0.mlp.linear_fc1.weight",),
+                    num_experts=None,
+                    num_moe_layers=None,
+                    expected_expert_bytes=None,
+                    origin="synthetic:total-loss",
+                ),
+                note="zero real tensors saved against a non-empty declaration is a "
+                "RED, and must not be absorbed by the namespace-mismatch abstention",
             ),
             Control(
                 "bloated-metadata",
