@@ -646,19 +646,31 @@ _PRECISION_TORCH_DTYPES: dict[str, str] = {
 }
 
 
-def _dtype_histogram(ckpt_dir: Path) -> dict[str, int] | None:
-    """Count saved tensors by safetensors dtype, stdlib only (no torch).
+# peft writes the adapter parameter marker into EVERY adapter tensor name: the
+# parameter lives in a dotted path component named lora_A / lora_B (or
+# lora_embedding_A / lora_embedding_B), e.g.
+#     base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight
+# Detection keys on THIS component (#424). The "base_model." prefix is peft's
+# WRAPPER namespace, not evidence of base weights: an adapter-only checkpoint's
+# every saved name starts with it, so a detector keyed on the substring "base"
+# inverts -- it reads 224/224 adapter tensors as base tensors and answers the
+# base-weight dtype question with tensors that are not base weights.
+_ADAPTER_NAME_MARKER = ".lora_"
 
-    Reads the 8-byte header length and the JSON header of every
-    ``*.safetensors`` shard, where each tensor entry carries its ``dtype``
-    string. Returns None when there is nothing to look at -- zero shards, or
-    zero tensors across them -- so the caller REFUSES the comparison as
-    vacuous. It never returns ``{}``: an empty dict from here would be a
-    measured zero over an unmeasured set. A malformed shard RAISES; the caller
-    treats unreadable headers the same as absent tensors.
+
+def _safetensors_entries(ckpt_dir: Path) -> list[tuple[str, str]]:
+    """Read every ``*.safetensors`` shard header ONCE, returning (name, dtype).
+
+    This is the single IO point for header inspection (#424): the dtype
+    histogram and the adapter-only reading both derive from this list, so the
+    two can never come from different shard sets and no shard header is read
+    twice. Returns an empty list when there is nothing to look at -- zero
+    shards, or zero tensors across them; what emptiness MEANS is decided by
+    each derivation (the histogram refuses as vacuous; adapter-only requires a
+    non-empty set). A malformed shard RAISES; callers treat unreadable headers
+    the same as absent tensors.
     """
-    counts: dict[str, int] = {}
-    total = 0
+    entries: list[tuple[str, str]] = []
     for shard in sorted(ckpt_dir.glob("*.safetensors")):
         with shard.open("rb") as handle:
             raw = handle.read(8)
@@ -674,11 +686,49 @@ def _dtype_histogram(ckpt_dir: Path) -> dict[str, int] | None:
             dtype = meta.get("dtype") if isinstance(meta, dict) else None
             if not isinstance(dtype, str):
                 raise ValueError(f"{shard}:{name} carries no usable dtype in its header")
-            counts[dtype] = counts.get(dtype, 0) + 1
-            total += 1
-    if total == 0:
-        return None
-    return counts
+            entries.append((name, dtype))
+    return entries
+
+
+def _histogram_from_entries(entries: list[tuple[str, str]]) -> dict[str, int] | None:
+    """Count already-read entries by dtype; None -- never ``{}`` -- when empty.
+
+    Returning None for the empty case preserves the vacuity contract: an empty
+    dict from here would be a measured zero over an unmeasured set.
+    """
+    counts: dict[str, int] = {}
+    for _, dtype in entries:
+        counts[dtype] = counts.get(dtype, 0) + 1
+    return counts or None
+
+
+def _is_adapter_only(entries: list[tuple[str, str]]) -> bool:
+    """True when the artifact holds tensors and EVERY name is adapter-namespaced.
+
+    Measured from the saved tensor NAMES, never from a CLI flag or
+    adapter_config.json -- a declaration-driven detector is the class of
+    defect #422 was, and the artifact is the only witness that cannot lie
+    about what it contains (#424). The ``bool(entries)`` guard is load-bearing:
+    ``all([])`` is True, and an empty artifact is not adapter-only, it is
+    NOTHING; that case is refused as vacuous upstream and must not read True
+    here.
+    """
+    return bool(entries) and all(_ADAPTER_NAME_MARKER in name for name, _ in entries)
+
+
+def _dtype_histogram(ckpt_dir: Path) -> dict[str, int] | None:
+    """Count saved tensors by safetensors dtype, stdlib only (no torch).
+
+    The header read lives in ``_safetensors_entries`` (#424): this histogram
+    and the adapter-only reading derive from that one pass, so they can never
+    disagree about the shard set and no shard is read twice. Returns None when
+    there is nothing to look at -- zero shards, or zero tensors across them --
+    so the caller REFUSES the comparison as vacuous. It never returns ``{}``:
+    an empty dict from here would be a measured zero over an unmeasured set. A
+    malformed shard RAISES; the caller treats unreadable headers the same as
+    absent tensors.
+    """
+    return _histogram_from_entries(_safetensors_entries(ckpt_dir))
 
 
 @dataclass(frozen=True)
@@ -700,6 +750,8 @@ class PrecisionAgreement:
 def check_precision_agreement(
     declared: str | None,
     observed: Mapping[str, int] | None,
+    *,
+    adapter_only: bool,
 ) -> PrecisionAgreement:
     """Compare the declared precision against the observed saved dtypes.
 
@@ -711,13 +763,22 @@ def check_precision_agreement(
     never PASS. Nothing to look at (None or empty) refuses as vacuous -- a
     comparison over zero tensors is the ``all([]) is True`` failure and must
     never pass. A declared precision with no accepted-dtype mapping (nvfp4:
-    declarable, no backend) refuses rather than guessing.
+    declarable, no backend) refuses rather than guessing. An adapter-only
+    artifact (``adapter_only=True``, measured at the call site from the saved
+    tensor NAMES -- every one carrying the peft adapter marker -- never from a
+    CLI flag or adapter_config.json) abstains (#424): the dtypes this question
+    is about belong to base-model weights the artifact does not contain, so a
+    "pass" over it would be a control that cannot fail reported as a control
+    that passed. Abstention is UNMEASURED: recorded, never blocking.
 
     WHAT IS NOT CLAIMED: this reads serialized dtypes, not compute. An honest
     fp32 run and a bf16-autocast run with fp32 master weights serialize the
     same dtypes, so dtype inspection cannot separate them; separating compute
     precision from master-weight storage requires in-step telemetry that the
-    artifact does not carry. This check contracts to serialize-time truth only.
+    artifact does not carry. Nor does the adapter-only reading score the
+    adapters' OWN dtypes: peft holds adapter parameters in fp32 over a bf16
+    base, which is correct peft behaviour, not a training defect (#424). This
+    check contracts to serialize-time truth only.
     """
     # ORDER IS LOAD-BEARING. The absence of a DECLARATION is adjudicated before
     # the absence of TENSORS, and the two are different states. A refusal says
@@ -768,6 +829,28 @@ def check_precision_agreement(
                 f"accepted-dtype mapping in the package plane (no backend); "
                 "refusing to guess one rather than passing by the rule of "
                 "another precision"
+            ),
+        )
+    # The adapter-only abstention sits AFTER the no-backend refusal
+    # deliberately (#424): "this precision has no accepted-dtype mapping" is
+    # the more specific and more actionable diagnosis -- it names a defect in
+    # the plane's backend table, independent of what any artifact contains --
+    # so it wins over the artifact-level abstention below.
+    if adapter_only:
+        total = sum(observed.values())
+        return PrecisionAgreement(
+            status="abstain",
+            declared=declared,
+            observed=dict(sorted(observed.items())),
+            message=(
+                f"declared precision={declared!r} over an adapter-only "
+                f"checkpoint: all {total} of {total} saved tensor names carry "
+                f"the adapter marker {_ADAPTER_NAME_MARKER!r}, so 0 of {total} "
+                "are base-model weights -- the tensors whose dtype this "
+                "question is about are not in the artifact. The check becomes "
+                "answerable when the checkpoint serializes at least one tensor "
+                "outside the adapter namespace; until then UNMEASURED, "
+                "abstaining, never PASS"
             ),
         )
     rejected = {d: n for d, n in observed.items() if d not in accepted}
@@ -858,15 +941,27 @@ class FoundationScaleSaveGate(_CallbackBase):
         # move the verdict -- it is recorded, and the manifest reports it.
         if event is Lifecycle.FIRST_SAVE:
             try:
-                histogram = _dtype_histogram(ckpt_dir)
+                # ONE header read feeds BOTH the histogram and the adapter-only
+                # reading (#424): the names and the dtypes must come from the
+                # same shard set -- two passes could see different shards under
+                # a concurrent writer -- and no shard header is read twice.
+                entries = _safetensors_entries(ckpt_dir)
+                histogram = _histogram_from_entries(entries)
+                adapter_only = _is_adapter_only(entries)
             except Exception as exc:  # noqa: BLE001 -- unreadable shard headers
                 histogram = None
+                # Dead below (a None histogram refuses as vacuous before the
+                # adapter-only step is reached), but bound so the required
+                # keyword below is always supplied a value.
+                adapter_only = False
                 _mark(
                     Step.SAVE_GATE,
                     f"precision: could not read safetensors headers under {ckpt_dir} "
                     f"({exc!r}); the comparison will refuse as vacuous",
                 )
-            agreement = check_precision_agreement(self.declared_precision, histogram)
+            agreement = check_precision_agreement(
+                self.declared_precision, histogram, adapter_only=adapter_only
+            )
             self.precision_agreement = agreement
             self.records.append(
                 {

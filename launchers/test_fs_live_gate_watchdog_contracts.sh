@@ -70,7 +70,13 @@ fail() { printf 'FAIL %d/%d leg(%s) — %s\n' "$legs_pass" "$LEGS_TOTAL" "$1" "$
 [[ -r $FS_GATE_LAUNCHER ]] || { printf 'FAIL 0/9 launcher unreadable: %s (fail closed)\n' "$FS_GATE_LAUNCHER"; exit 1; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fsgate-watch.XXXXXXXX")" || { echo 'FAIL 0/9 mktemp'; exit 1; }
-trap 'rm -rf "$WORK"' EXIT
+# The trap is OWNED: $BASHPID is per-process, $$ is inherited, so only the
+# shell that created $WORK removes it. Measured (#392): without this guard
+# the subshell running the gate under test also fires this trap and deletes
+# the SHARED scratch dir mid-suite, and legs 2..9 fail ENOENT -- 9/9 when the
+# suite owned its process group, 3/9 when it did not. That is what has read
+# as "load-sensitive" since #93; load was never the only variable.
+trap '[ "$BASHPID" = "$$" ] && rm -rf "$WORK"' EXIT
 
 # --- run_in_container stub, behaviour selected per leg via STUB_MODE ---
 STUB_MODE=rc0

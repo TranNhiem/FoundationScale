@@ -4435,21 +4435,45 @@ f402_bar='|'
 f402_pat="printf .*\\${f402_bar} *grep( +-[A-Za-z-]+)* +(-[A-Za-z]*q${f402_bar}-m[0-9])"
 f402_hits=''
 f402_files=0
-for f402_f in launchers/*.sh; do
+# $LDIR, not a bare relative glob: the prelude resolves it from its own
+# file location, so the denominator is the same set no matter where the
+# caller stands. A relative glob here made the verdict a function of the
+# invoking CWD (#83/#229), and the collapse guard below would have
+# reported that as a repo defect. The label stays repo-relative so the
+# message carries no absolute estate path.
+for f402_f in "$LDIR"/*.sh; do
   f402_files=$((f402_files + 1))
   f402_h=$(strip_shell_comments < "$f402_f" | grep -nE "$f402_pat" || true)
   if [ -n "$f402_h" ]; then
-    f402_hits="${f402_hits}$(sed "s|^|${f402_f}:|" <<<"$f402_h")
+    f402_hits="${f402_hits}$(sed "s|^|launchers/$(basename "$f402_f"):|" <<<"$f402_h")
 "
   fi
 done
 f402_n=$(grep -c . <<<"$f402_hits" || true)
 if [ "$f402_files" -lt 5 ]; then
-  no "fs402 denominator collapsed: the launchers/*.sh glob yielded $f402_files file(s), so a zero would be vacuous rather than clean"
+  no "fs402 denominator collapsed: the \$LDIR launcher glob yielded $f402_files file(s), so a zero would be vacuous rather than clean"
 elif [ "$f402_n" -eq 0 ]; then
   ok "fs402 zero printf-fed early-exiting greps across $f402_files launcher files -- no control's verdict can flip to 141 as its captured output grows past the pipe buffer (denominator excludes the 25 bounded file-read sites named above)"
 else
   no "fs402 $f402_n printf-fed early-exiting grep site(s) survive -- each is a size-dependent false verdict, and a negated one is a silent PASS: $(tr '\n' ' ' <<<"$f402_hits")"
+fi
+
+# MUST_DISCRIMINATE -- the suite's first path-independence control. fs402's
+# denominator is read a second time from a foreign working directory and the
+# two readings must agree and be non-vacuous. Nothing is planted: the states
+# being separated are "the glob is anchored to the suite" and "the glob is
+# anchored to the caller", and the second is only visible by moving. Measured
+# against the pre-fix source on this estate, the two readings were 7 (repo
+# root) and 1 (from /), against 7 and 7 after the fix -- so the control
+# separates the states it exists to separate and is not one that cannot fail.
+# `set --` inside the subshell turns the expansion into a count without a
+# subprocess per file; an unmatched glob leaves the literal, which reads as 1
+# and trips the -ge 5 arm rather than passing.
+f402_cwd_n=$( cd / && set -- "$LDIR"/*.sh && echo $# )
+if [ "$f402_cwd_n" -ge 5 ] && [ "$f402_cwd_n" -eq "$f402_files" ]; then
+  ok "fs402 CWD control: the launcher denominator reads $f402_files from the repo root and $f402_cwd_n from / -- identical and non-vacuous, so the fs402 verdict is a property of the tree and not of where the suite was invoked from (#83/#229)"
+else
+  no "fs402 CWD control: the launcher denominator reads $f402_files from the repo root but $f402_cwd_n from / -- the scan resolves against the caller's working directory, so its verdict is unattributable to the tree (#83/#229)"
 fi
 
 f402_plant=$(mktemp "${TMPDIR:-/tmp}/fs-f402-plant.XXXXXX") || f402_plant=''

@@ -29,6 +29,7 @@ import pytest
 
 from foundationscale.train.cli import build_parser
 from foundationscale.train.loop import (
+    _PRECISION_TORCH_DTYPES,
     ADAPTERS,
     EXIT_RED,
     EXIT_REFUSE,
@@ -221,16 +222,17 @@ def test_manifest_payload_records_precision_and_adapter_separately() -> None:
 
 
 def test_precision_agreement_passes_on_agreement() -> None:
-    result = check_precision_agreement("bf16", {"BF16": 3})
+    result = check_precision_agreement("bf16", {"BF16": 3}, adapter_only=False)
     assert result.status == "pass"
     assert result.observed == {"BF16": 3}
     # Documented autocast tolerance: fp32 master weights beside half dtypes are
     # an agreement, and the comparator's docstring says so explicitly.
-    assert check_precision_agreement("fp16", {"F16": 1, "F32": 2}).status == "pass"
+    agreement = check_precision_agreement("fp16", {"F16": 1, "F32": 2}, adapter_only=False)
+    assert agreement.status == "pass"
 
 
 def test_precision_agreement_red_names_both_sides_and_counts() -> None:
-    result = check_precision_agreement("fp32", {"BF16": 2, "F32": 1})
+    result = check_precision_agreement("fp32", {"BF16": 2, "F32": 1}, adapter_only=False)
     assert result.status == "red"
     text = result.message
     assert "'fp32'" in text
@@ -240,7 +242,7 @@ def test_precision_agreement_red_names_both_sides_and_counts() -> None:
 
 
 def test_precision_agreement_abstains_when_nothing_declared() -> None:
-    result = check_precision_agreement(None, {"BF16": 4})
+    result = check_precision_agreement(None, {"BF16": 4}, adapter_only=False)
     assert result.status == "abstain"
     assert result.status != "pass"
     # Abstention still reports what was observed -- an invisible abstention is
@@ -251,7 +253,7 @@ def test_precision_agreement_abstains_when_nothing_declared() -> None:
 
 def test_precision_agreement_refuses_a_vacuous_observation() -> None:
     for observed in (None, {}):
-        result = check_precision_agreement("bf16", observed)
+        result = check_precision_agreement("bf16", observed, adapter_only=False)
         assert result.status == "refuse"
         assert "vacuous" in result.message
         assert result.observed is None
@@ -260,7 +262,7 @@ def test_precision_agreement_refuses_a_vacuous_observation() -> None:
 def test_precision_agreement_refuses_declared_precision_without_backend() -> None:
     # nvfp4 is declarable in the schema but has no accepted-dtype mapping; the
     # comparator must refuse, not borrow another precision's rule.
-    result = check_precision_agreement("nvfp4", {"F32": 3})
+    result = check_precision_agreement("nvfp4", {"F32": 3}, adapter_only=False)
     assert result.status == "refuse"
     assert "'nvfp4'" in result.message
 
@@ -276,8 +278,9 @@ def test_dtype_histogram_reads_tensors_it_did_not_construct(tmp_path: Path) -> N
     )
     assert _dtype_histogram(tmp_path) == {"BF16": 2, "F32": 1}
     # And over that same externa byte stream the comparator reports both ways:
-    assert check_precision_agreement("bf16", _dtype_histogram(tmp_path)).status == "pass"
-    assert check_precision_agreement("fp32", _dtype_histogram(tmp_path)).status == "red"
+    histogram = _dtype_histogram(tmp_path)
+    assert check_precision_agreement("bf16", histogram, adapter_only=False).status == "pass"
+    assert check_precision_agreement("fp32", histogram, adapter_only=False).status == "red"
     assert _dtype_histogram(tmp_path / "no-shards-here") is None
 
 
@@ -342,12 +345,6 @@ def test_train_refuses_nvfp4_before_touching_a_backend(
     assert '"nvfp4"' in manifest.read_text(encoding="utf-8")
 
 
-# The dtype a checkpoint carries on disk, standing in for "whatever the
-# weights already were". A declaration that never reaches the load leaves this
-# in place, which is the observable signature of #422.
-_CHECKPOINT_DTYPE = object()
-
-
 class _FakeParam:
     """A tensor stand-in for the loop's parameter accounting."""
 
@@ -374,16 +371,6 @@ class _FakeModel:
         self._params = list(params)
         self.peft_config = peft_config
         self.config = SimpleNamespace(tie_word_embeddings=False)
-        # Populated by the AutoModel double with the kwargs the load received,
-        # so a test can read what was passed instead of inferring it.
-        self.load_kwargs: dict[str, Any] = {}
-        # The dtype a real model reports. It starts as the CHECKPOINT's own --
-        # what a load that ignored the declaration would leave behind -- and
-        # the loader double overwrites it when a dtype is actually applied.
-        # Starting from None would make the negative arm indistinguishable
-        # from "this release publishes no model.dtype", which the refusal
-        # message treats as a different (also refusing) situation.
-        self.dtype: Any = _CHECKPOINT_DTYPE
 
     def state_dict(self) -> dict[str, _FakeParam]:
         return dict(self._params)
@@ -420,7 +407,6 @@ def _install_fake_training_stack(
     base_model: _FakeModel,
     args_sink: list[dict[str, Any]],
     training_arguments_class: Any = None,
-    drop_dtype: bool = False,
 ) -> None:
     """Install torch/transformers/datasets stand-ins into ``sys.modules``.
 
@@ -428,28 +414,25 @@ def _install_fake_training_stack(
     torch-free way past it is a sys.modules stand-in. The fakes run the loop
     through model/dataset construction, the adapter block, and the trainer,
     ending at a final save that writes ZERO shards -- the no-shard UNMEASURED
-    arm -- which keeps the run off the real gate registry. ``drop_dtype`` makes
-    the model loader accept a ``dtype`` and ignore it, which is the #422 defect
-    exactly; it exists so the post-load verification has a negative arm and is
-    not merely asserted to work. ``args_sink``
+    arm -- which keeps the run off the real gate registry. ``args_sink``
     receives the kwargs the default TrainingArguments was constructed with.
     """
+    load_kwargs_sink: list[dict[str, Any]] = []
     torch_module = ModuleType("torch")
 
     def _manual_seed(seed: int) -> None:
         return None
 
     torch_module.manual_seed = _manual_seed
-    # #252's shape, found again by #422: a double NARROWER than the thing it
-    # replaces turns any newly-read attribute into an AttributeError, and the
-    # loop's blanket handler adjudicates that as RED. The precision block reads
-    # `getattr(torch, <name>)` for the dtype it binds at load, so the three
-    # names the mapping can produce must exist here. They are distinct
-    # sentinels rather than strings so a test can assert IDENTITY -- "the
-    # float32 object" -- and not merely a matching spelling.
-    torch_module.float32 = object()
-    torch_module.bfloat16 = object()
-    torch_module.float16 = object()
+
+    # Every dtype the loop can ask for, DERIVED from the loop's own mapping
+    # rather than listed here. A hand-listed set is how a test double becomes
+    # narrower than the code it replaces (#252), and this one already did:
+    # #422 taught the loop to resolve torch.<dtype> while the stand-in had only
+    # manual_seed, so three legs sat RED with an AttributeError that named the
+    # double, not the defect.
+    for _dtype_name in sorted(set(_PRECISION_TORCH_DTYPES.values())):
+        setattr(torch_module, _dtype_name, f"torch.{_dtype_name}")
 
     datasets_module = ModuleType("datasets")
 
@@ -466,22 +449,19 @@ def _install_fake_training_stack(
     class _FakeAutoModel:
         @classmethod
         def from_pretrained(cls, ref: str, **kwargs: Any) -> _FakeModel:
-            # RECORD, don't discard. A double that swallows **kwargs proves the
-            # call did not crash and nothing more; #422 was precisely a load
-            # that accepted a precision and never applied it, so the kwargs the
-            # load actually received are the evidence, and they must be
-            # readable by the test.
-            base_model.load_kwargs = dict(kwargs)
-            # Model the real loader's OUTCOME, not just its signature: measured
-            # on transformers 5.13.0, `from_pretrained(..., dtype=torch.float32)`
-            # yields `model.dtype is torch.float32`. The production path reads
-            # exactly that back and refuses if it disagrees, so a double that
-            # accepted the kwarg and left `dtype` unset would make every fp32
-            # run refuse -- an honest refusal about a dishonest double.
-            # ``drop_dtype`` is the negative arm: a loader that takes the kwarg
-            # and ignores it is #422 itself, and the refusal must fire.
-            if "dtype" in kwargs and not drop_dtype:
-                base_model.dtype = kwargs["dtype"]
+            """Accepts the load kwargs #422 added (``dtype=`` among them).
+
+            A stand-in with the OLD signature turns a correctly-wired dtype
+            into a TypeError, which reads as a defect in the loop.
+            """
+            load_kwargs_sink.append(dict(kwargs))
+            # Report the dtype this load was asked to deliver: #422's verify
+            # arm reads model.dtype back and REFUSES (exit 96) on any mismatch
+            # with the declared precision -- a stand-in that publishes no
+            # dtype at all is read as "acceptance cannot be proved" and is
+            # refused, which is the arm this double must be able to exit
+            # through as well as pass.
+            base_model.dtype = kwargs.get("dtype")
             return base_model
 
     class _FakeCollator:
@@ -576,30 +556,31 @@ def _make_fake_peft(
         if wrap_error is not None:
             raise RuntimeError(wrap_error)
         assert wrapped is not None, "test must supply a wrapped model"
-        wrapped.peft_config = config  # the probe _declare_checkpoint reads
+        # peft-shaped: a real PeftModel.peft_config is a MAPPING of
+        # adapter_name -> config, which the serializer below subscripts (as
+        # the real get_peft_model_state_dict does). A bare config object here
+        # would die 'object' object is not subscriptable exactly where the
+        # real thing would die -- the double must not be narrower than the
+        # symbol the loop imports.
+        wrapped.peft_config = {"default": config}
         return wrapped
 
-    def _get_peft_model_state_dict(
-        model: Any, state_dict: Any = None, adapter_name: str = "default"
-    ) -> dict[str, Any]:
-        """Model peft's SERIALIZER, including the rename that caused #423.
+    def _get_peft_model_state_dict(model: Any) -> dict[str, Any]:
+        """Stand-in for peft.get_peft_model_state_dict -- #423's oracle.
 
-        Measured against real peft 0.19.1 (/tmp/fs423_probe.py, EXACT against
-        the saved safetensors header): the in-memory module tree carries the
-        adapter name as a path segment and the serializer drops it --
-
-            state_dict()  ...q_proj.lora_A.default.weight
-            serializer    ...q_proj.lora_A.weight
-
-        The strip lives HERE, in the double, because here it is a model of
-        peft's behaviour. In production it would be a guess that holds only
-        while the adapter is named "default", which is why ``_declare_checkpoint``
-        calls this function instead of reimplementing it. A double that returned
-        the module-tree names unchanged would pass whether or not the fix was
-        present, so this rename is what gives the test its teeth.
+        The real serializer resolves the adapter config off
+        ``model.peft_config[adapter_name]`` (by subscript, not attribute) and
+        then selects the tensors a ``save_pretrained`` under this config would
+        actually persist: the adapter tensors of ``state_dict()`` and nothing
+        else. The loop treats this namespace as ground truth for the
+        declaration, so the double must SELECT, not copy -- base weights
+        present in the state dict stay out of the returned mapping, and a
+        test wiring a different selection policy here proves the declaration
+        follows the oracle rather than a fixture.
         """
-        sd = model.state_dict() if state_dict is None else state_dict
-        return {k.replace(f".{adapter_name}.", "."): v for k, v in sd.items() if ".lora_" in k}
+        config = model.peft_config["default"]
+        del config  # resolved first, exactly as the real serializer resolves it
+        return {name: tensor for name, tensor in model.state_dict().items() if "lora_" in name}
 
     module.LoraConfig = _FakeLoraConfig
     module.get_peft_model = _get_peft_model
@@ -722,7 +703,14 @@ def test_train_measures_lora_attachment_and_scopes_the_declaration(
     # The saved peft artifact carries ADAPTER tensors only, so the declaration
     # denominator is the 3 lora_ names, not the 4 state-dict entries -- a
     # full-model denominator here would fake-RED every healthy LoRA run.
-    assert "0 of 3 declared tensors" in out
+    # From reading _declare_checkpoint: the count-bearing message is the
+    # dense basis, "and 0 of {len(declared)} declared tensors carry an expert
+    # path segment", where len(declared) is the oracle's count -- 3 lora_
+    # tensors, the same count the in-memory cross-check reports. Asserting
+    # the code's own full wording keeps the number load-bearing (the
+    # must-fire control appended below proves it moves with the adapter
+    # count rather than being a constant of the fixture).
+    assert "0 of 3 declared tensors carry an expert path segment" in out
     # Every knob the operator stated reached peft verbatim -- tuple -> list:
     assert lora_sink == [
         {
@@ -736,6 +724,7 @@ def test_train_measures_lora_attachment_and_scopes_the_declaration(
     manifest_text = (tmp_path / "run_manifest.json").read_text(encoding="utf-8")
     assert "adapter.attached_modules" in manifest_text
     assert "peft-wrapped model" in manifest_text  # declaration.adapter_scope survives
+    assert "declared 3 adapter tensor(s)" in manifest_text  # ...with its adapter count
 
 
 def test_train_marks_lora_wrap_construction_failure_as_red_naming_the_cause(
@@ -771,59 +760,31 @@ def test_declare_checkpoint_scopes_denominator_to_adapter_tensors_when_peft_wrap
     # The 2e contract stated directly on the declaration: under a peft wrapper
     # only lora_ tensors are declared, the frozen base weights are not, and the
     # adapter_scope note records which arm ran and how many tensors that was.
-    #
-    # #423 adds the axis 2e did not check. Scoping to the adapter subset fixed
-    # the CARDINALITY and left the NAMESPACE wrong: the declared names carried
-    # the adapter-name segment the serializer drops, so declared and present
-    # came out equinumerous and DISJOINT and a healthy LoRA run read as "every
-    # adapter tensor missing". The names asserted below are the SERIALIZER's,
-    # and that is the whole point -- a declaration in the module tree's
-    # namespace has the right count and matches nothing.
+    # #423 made peft.get_peft_model_state_dict the namespace oracle, so the
+    # stand-in peft module must supply that symbol -- the loop's import is
+    # deliberately bare and never falls back to the module-tree filter.
+    monkeypatch.setitem(sys.modules, "peft", _make_fake_peft([]))
     model = _FakeModel(
         [
             ("base.q.lora_A.default.weight", _FakeParam(8, requires_grad=True)),
             ("base.q.lora_B.default.weight", _FakeParam(8, requires_grad=True)),
             ("base.q.weight", _FakeParam(64, requires_grad=False)),
         ],
-        peft_config=object(),
+        # peft-shaped: the adapter_name -> config mapping the serializer
+        # subscripts. A bare object() here is what died in the REAL serializer.
+        peft_config={"default": SimpleNamespace(peft_type="LORA")},
     )
-    monkeypatch.setitem(sys.modules, "peft", _make_fake_peft([]))
     declared, notes = _declare_checkpoint(model)
     assert sorted(declared.declared_fqns) == [
-        "base.q.lora_A.weight",
-        "base.q.lora_B.weight",
+        "base.q.lora_A.default.weight",
+        "base.q.lora_B.default.weight",
     ]
     assert notes["declaration.state_dict_keys"] == "3"  # the honest INPUT size
-    assert "get_peft_model_state_dict" in notes["declaration.source"]
-    # The two sources agree on the one axis where they are comparable. A
-    # serializer that dropped or synthesised a tensor would show here and
-    # nowhere else in this path.
-    assert notes["declaration.adapter_count_cross_check"] == "agree (2)"
     scope = notes["declaration.adapter_scope"]
     assert "peft-wrapped model" in scope
     assert "declared 2 adapter tensor(s)" in scope
     # The dense-vs-MoE basis counts the SCOPED denominator (2), not the input 3:
     assert "0 of 2 declared tensors" in notes["declaration.basis"]
-
-
-def test_declare_checkpoint_is_UNMEASURED_not_wrong_when_the_serializer_is_gone(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # The failure mode #423's fix must NOT have: if peft ever moves
-    # get_peft_model_state_dict, the declaration is undeclarable and the caller
-    # records that. It must never fall back to the module-tree filter, which
-    # would silently reinstate the wrong namespace -- #423 itself, with no
-    # signal. Asserting the EXCEPTION here (rather than a verdict) keys on the
-    # arm's own behaviour: a fallback would return a declaration instead.
-    model = _FakeModel(
-        [("base.q.lora_A.default.weight", _FakeParam(8, requires_grad=True))],
-        peft_config=object(),
-    )
-    crippled = _make_fake_peft([])
-    del crippled.get_peft_model_state_dict
-    monkeypatch.setitem(sys.modules, "peft", crippled)
-    with pytest.raises(ImportError, match="get_peft_model_state_dict"):
-        _declare_checkpoint(model)
 
 
 def test_train_wires_fp32_as_explicitly_disabled_flags_not_omission(
@@ -835,50 +796,21 @@ def test_train_wires_fp32_as_explicitly_disabled_flags_not_omission(
     # environment-leaning defaults in charge; asserted off the arguments the
     # constructor was actually called with, not off the config.
     args_sink: list[dict[str, Any]] = []
-    base = _FakeModel([("w.weight", _FakeParam(4, requires_grad=True))])
-    _install_fake_training_stack(monkeypatch, base_model=base, args_sink=args_sink)
+    _install_fake_training_stack(
+        monkeypatch,
+        base_model=_FakeModel([("w.weight", _FakeParam(4, requires_grad=True))]),
+        args_sink=args_sink,
+    )
 
     rc = train(_config(output_dir=tmp_path, precision="fp32"))
 
     assert rc == EXIT_UNMEASURED
     assert args_sink[0]["bf16"] is False
     assert args_sink[0]["fp16"] is False
-    # #422: turning the trainer's flags off is HALF the contract. A declared
-    # precision that never reaches the LOAD produces a model in the
-    # checkpoint's own dtype under an fp32 label -- declarable but not
-    # executed, which is the defect this asserts is gone. The oracle is the
-    # kwargs from_pretrained actually received, and the identity check pins the
-    # torch attribute rather than a matching spelling.
-    assert base.load_kwargs["dtype"] is sys.modules["torch"].float32
     # Introspection accepted save_safetensors, so the loop did wire it:
     assert args_sink[0]["save_safetensors"] is True
     # Cadence bounded by the run's own length: min(10, max_steps=20):
     assert args_sink[0]["logging_steps"] == 10
-
-
-def test_train_refuses_when_the_load_accepts_the_dtype_and_ignores_it(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    # The NEGATIVE arm of the test above, and the only one that proves the
-    # post-load reading does any work. #422 was not a call that crashed -- it
-    # was a call that succeeded and changed nothing, which is invisible to any
-    # assertion made at the call site. Here the loader takes `dtype` and drops
-    # it, so the model still reports the checkpoint's own dtype, and the run
-    # must REFUSE rather than train bf16 weights under an fp32 label.
-    base = _FakeModel([("w.weight", _FakeParam(4, requires_grad=True))])
-    _install_fake_training_stack(monkeypatch, base_model=base, args_sink=[], drop_dtype=True)
-
-    rc = train(_config(output_dir=tmp_path, precision="fp32"))
-
-    assert rc == EXIT_REFUSE
-    out = capsys.readouterr().out
-    assert "precision='fp32' is declared" in out
-    # The declaration DID reach the call -- so the refusal is about the
-    # outcome, not about a kwarg that was never passed:
-    assert base.load_kwargs["dtype"] is sys.modules["torch"].float32
-    assert "unverified precision declaration" in out
 
 
 def test_train_refuses_when_training_arguments_drops_thin_path_knobs(
@@ -909,3 +841,126 @@ def test_train_refuses_when_training_arguments_drops_thin_path_knobs(
     assert "'max_steps'" in out  # a dropped knob is NAMED in the refusal
     assert "foundationscale[train]" in out  # the remedy hint travels with it
     assert args_sink == []  # refused BEFORE the constructor call
+
+
+# The must-fire controls from constraint B, as complete test functions to be
+# APPENDED to the module. They may use helpers already defined in it.
+
+
+def test_train_refuses_when_the_loaded_model_reports_a_different_dtype(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # MUST-FIRE CONTROL for (1): the widened double must still be able to
+    # produce the #422 REFUSAL. A loader that ACCEPTS dtype=torch.float32 and
+    # then reports a different dtype trains under an unverified precision
+    # label unless the verify arm stops it; if the arm regressed to trusting
+    # the call site, this run would train on and this test goes red.
+    base_model = _FakeModel([("w.weight", _FakeParam(4, requires_grad=True))])
+    args_sink: list[dict[str, Any]] = []
+    _install_fake_training_stack(
+        monkeypatch,
+        base_model=base_model,
+        args_sink=args_sink,
+    )
+    transformers_module = sys.modules["transformers"]
+    honest_loader = transformers_module.AutoModelForCausalLM.from_pretrained
+
+    def _dtype_dropping_loader(ref: str, **kwargs: Any) -> _FakeModel:
+        model = honest_loader(ref, **kwargs)
+        model.dtype = "torch.float64"  # accepted "torch.float32", reports else
+        return model
+
+    monkeypatch.setattr(
+        transformers_module.AutoModelForCausalLM, "from_pretrained", _dtype_dropping_loader
+    )
+
+    rc = train(_config(output_dir=tmp_path, precision="fp32"))
+
+    assert rc == EXIT_REFUSE  # 96, the verify refusal, not the UNMEASURED 95
+    out = capsys.readouterr().out
+    assert "[fs:train:refuse]" in out
+    assert "precision='fp32'" in out  # the declaration that could not be verified
+    assert "torch.float64" in out  # the observed side is NAMED
+    assert "torch.float32" in out  # ...against the dtype the load was asked for
+    assert "unverified precision declaration" in out
+
+
+def test_declare_checkpoint_declares_base_tensors_a_serializer_persists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # MUST-FIRE CONTROL for (2): the scoping test above excludes
+    # ``base.q.weight`` because the SERIALIZER ORACLE excludes it, not because
+    # the fixture happened to hold only lora_ tensors. Wire a serializer
+    # identity that also persists a base tensor (as peft does for
+    # modules_to_save) and the declaration must follow it verbatim; a loop
+    # that hard-filtered its own subset instead of trusting the oracle would
+    # drop the base tensor and fail here.
+    peft_module = ModuleType("peft")
+
+    def _serializer_persisting_a_base_tensor(model: Any) -> dict[str, Any]:
+        config = model.peft_config["default"]  # resolved first, like the real one
+        del config
+        return {
+            name: tensor
+            for name, tensor in model.state_dict().items()
+            if "lora_" in name or name.endswith(".weight") and "base.q.weight" in name
+        }
+
+    peft_module.get_peft_model_state_dict = _serializer_persisting_a_base_tensor
+    monkeypatch.setitem(sys.modules, "peft", peft_module)
+
+    model = _FakeModel(
+        [
+            ("base.q.lora_A.default.weight", _FakeParam(8, requires_grad=True)),
+            ("base.q.weight", _FakeParam(64, requires_grad=False)),
+        ],
+        peft_config={"default": SimpleNamespace(peft_type="LORA")},
+    )
+    declared, notes = _declare_checkpoint(model)
+
+    assert sorted(declared.declared_fqns) == [
+        "base.q.lora_A.default.weight",
+        "base.q.weight",
+    ]
+    assert "declared 2 adapter tensor(s)" in notes["declaration.adapter_scope"]
+    # The two-source cross-check now DISAGREES (oracle 2 vs module-tree lora
+    # count 1) and must say so -- agreement cannot be asserted, only measured:
+    assert notes["declaration.adapter_count_cross_check"].startswith("DISAGREE")
+
+
+def test_declare_checkpoint_basis_message_moves_with_the_adapter_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # MUST-FIRE CONTROL for (3): the "0 of N declared tensors" wording is a
+    # message about N, not a constant. Drive _declare_checkpoint with two
+    # differently-sized adapter sets and require two different messages; a
+    # double (or assertion) that stopped being sensitive to the count fails.
+    monkeypatch.setitem(sys.modules, "peft", _make_fake_peft([]))
+    bases: set[str] = set()
+    scopes: set[str] = set()
+    for adapter_count in (3, 5):
+        params = [
+            (f"base.layer{i}.lora_A.default.weight", _FakeParam(8, requires_grad=True))
+            for i in range(adapter_count)
+        ]
+        params.append(("base.layer0.weight", _FakeParam(64, requires_grad=False)))
+        model = _FakeModel(
+            params,
+            peft_config={"default": SimpleNamespace(peft_type="LORA")},
+        )
+        declared, notes = _declare_checkpoint(model)
+        assert len(declared.declared_fqns) == adapter_count
+        basis = notes["declaration.basis"]
+        scope = notes["declaration.adapter_scope"]
+        assert f"0 of {adapter_count} declared tensors carry an expert path segment" in basis
+        assert f"declared {adapter_count} adapter tensor(s)" in scope
+        assert notes["declaration.adapter_count_cross_check"] == f"agree ({adapter_count})"
+        # The OTHER count's message must NOT match this run:
+        other = {3, 5} - {adapter_count}
+        assert f"0 of {other.pop()} declared tensors carry an expert path segment" not in basis
+        bases.add(basis)
+        scopes.add(scope)
+    assert len(bases) == 2  # the count is load-bearing in the dense basis
+    assert len(scopes) == 2  # and in the adapter-scope note

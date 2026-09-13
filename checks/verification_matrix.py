@@ -56,7 +56,11 @@ Doctrine wiring:
       so it would tally a row that explicitly refused for want of an arm as a
       row that measured something -- the one direction this countable must
       never fail in. Two synthetic rows differing only in the ``UN`` prefix
-      are the whole instrument.
+      are the whole instrument. SC10 guards the #415 adjudicator binding:
+      C3 admits the key to its set, so C3 must READ it. A key admitted and
+      never adjudicated is a quiet exclusion reading as coverage (#231),
+      and the plant is the empty string -- the one value a truthiness test
+      would silently accept as "this row has no adjudicator".
 """
 
 from __future__ import annotations
@@ -99,6 +103,12 @@ EXPECTED_KEYS = {
     "status",
     "blocked_by",
     "findings",
+    # #415 bound each row to the program that judges it: null when the row
+    # has no adjudicator yet, a repo-relative path when it does. It is in
+    # EXPECTED_KEYS so its ABSENCE is drift, and C3 adjudicates its VALUE
+    # below -- a key admitted to the set and then never read is the #231
+    # shape, where a quiet exclusion reads as coverage.
+    "adjudicator",
 }
 
 # C2's exact-match placeholders, compared case-insensitively after strip().
@@ -202,7 +212,14 @@ def check_control_arm_substantive(rows: list[JsonRow]) -> CheckResult:
 
 
 def check_schema(rows: list[JsonRow]) -> CheckResult:
-    """C3: exact key set, unique ids, tier in {0,1}, list fields, no dangles."""
+    """C3: exact key set, unique ids, tier in {0,1}, list fields, no dangles.
+
+    Also adjudicates the #415 adjudicator binding: null, or a non-empty
+    path string. EXISTENCE of that path is NOT checked here -- this
+    function is handed rows, not a repo root, and the controls adjudicate
+    copies in a temp directory, so resolving a root from the matrix path
+    would make the verdict depend on where the file sits (#83/#229).
+    """
     name = "C3 SCHEMA"
     findings: list[str] = []
     ids: list[str] = []
@@ -225,6 +242,14 @@ def check_schema(rows: list[JsonRow]) -> CheckResult:
         for key in ("blocked_by", "findings"):
             if not isinstance(row.get(key), list):
                 findings.append(f"{label}: {key} must be a list")
+        # null is legal and means "no adjudicator bound yet" -- 28 of the 33
+        # rows are honestly in that state. Anything else must be a usable
+        # path. isinstance(True, str) is False, so a bare bool is caught.
+        adjudicator = row.get("adjudicator")
+        if adjudicator is not None and not (isinstance(adjudicator, str) and adjudicator.strip()):
+            findings.append(
+                f"{label}: adjudicator must be null or a non-empty path string, got {adjudicator!r}"
+            )
     seen: set[str] = set()
     for rid in ids:
         if rid in seen:
@@ -692,6 +717,29 @@ def _sc9(_matrix_src: Path, _doc_src: Path) -> bool:
     return measured == 1 and unmeasured == 0
 
 
+def _sc10(matrix_src: Path, doc_src: Path) -> bool:
+    """MUST-FIRE: a mis-shaped #415 adjudicator binding must be caught.
+
+    Widening EXPECTED_KEYS to admit `adjudicator` without this control
+    would be pure tolerance -- the key would pass through C3 unread, which
+    is the #231 shape. The planted value is the empty string because that
+    is the realistic drift: a row edited toward an adjudicator and left
+    half-bound. It is also the one value a truthiness test would silently
+    treat as "no adjudicator", so the plant separates the two readings.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        matrix, doc = _fresh_copies(matrix_src, doc_src, Path(td))
+        target = _plant_matrix_value(matrix, 0, "adjudicator", "")
+        if target is None:
+            return False
+        rc, results = adjudicate(matrix, doc)
+    # REACHED-SITE: C3's own finding must name the planted row AND say what
+    # it objected to. rc==5 alone would also pass on a gate that is RED for
+    # the key-set reason this patch just removed.
+    reached = any(target in f and "adjudicator must be null" in f for f in results["C3"].findings)
+    return reached and rc == RC_RED
+
+
 # The fourth element is the control's KIND, and the banner counts it rather
 # than restating a breakdown by hand: a hand-written "(5 MUST_FIRE, 1 ..., 1
 # ...)" summed to 7 the moment SC8 landed, while the total said 8. A banner
@@ -751,6 +799,12 @@ CONTROLS: list[tuple[str, Callable[[Path, Path], bool], str, str]] = [
         _sc9,
         "an UNMEASURED row must not be tallied as a row that measured something",
         "MUST_DISCRIMINATE",
+    ),
+    (
+        "SC10 mis-shaped adjudicator binding",
+        _sc10,
+        "C3 must read the #415 binding it admits, not merely tolerate the key",
+        "MUST_FIRE",
     ),
 ]
 

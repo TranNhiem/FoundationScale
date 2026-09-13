@@ -138,6 +138,22 @@ RUNNABLE: dict[str, str] = {
         "multi-shard checkpoint is a separate run of the same module with a checkpoint "
         "directory as argv."
     ),
+    "validation_campaigns/verification_matrix/run_row.py": (
+        "Eight controls over the #415 row runner -- the program that executes a matrix "
+        "row's adjudicator and writes the receipt that makes the row say something other "
+        "than 'never run'. All eight are measured here because the runner's job is "
+        "composition and bookkeeping, not training: it introspects the adjudicator's "
+        "--help to compose an argv, spawns it, and maps the four-state exit onto a "
+        "receipt. The controls plant fake adjudicators in a TemporaryDirectory that exit "
+        "0, 5, 95 and 96 and prove each lands as a distinct verdict; one exits 7 and must "
+        "REFUSE 96 naming the code, because a program that broke the contract has not "
+        "said what it measured. Two more pin the receipt against the filesystem rather "
+        "than against itself -- the arms mapping must equal the arm directories on disk, "
+        "and written_at_utc must be the value the caller passed verbatim, so a timestamp "
+        "the runner invented cannot pass for one it was given. No torch, no GPU, no "
+        "cluster: a laptop and the estate see the same 8. What is NOT measured here is a "
+        "real adjudication -- that needs a tray and is a separate invocation with a pass id."
+    ),
     "validation_campaigns/verification_matrix/t1_9_optimizer_arms.py": (
         "Thirteen controls over the T1-9 adjudicator -- the four-optimizer loss-curve "
         "comparison -- and every one is measured here because the ADJUDICATION is pure "

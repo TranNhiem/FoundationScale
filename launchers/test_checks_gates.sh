@@ -2581,13 +2581,20 @@ fi
 # that only checked rc==0 would pass over a self-test that had silently
 # shrunk to one control -- the denominator goes on the wire.
 #
-# The floor spans four families, as counted by the gate's own banner: 5
-# MUST_FIRE (SC1-SC5, one planted defect per check C1-C5), 1
-# MUST_PASS_NEGATIVE (SC6, the unmodified files must be CLEAR), 1
-# MUST_ABSTAIN (SC7, a missing matrix is UNMEASURED), and 1 MUST_OUTRANK
-# (SC8, RED outranks UNMEASURED).
+# The floor spans five families, as counted by the gate's own banner: 6
+# MUST_FIRE (SC1-SC5, one planted defect per check C1-C5, plus SC10's
+# mis-shaped #415 adjudicator binding), 1 MUST_PASS_NEGATIVE (SC6, the
+# unmodified files must be CLEAR), 1 MUST_ABSTAIN (SC7, a missing matrix is
+# UNMEASURED), 1 MUST_OUTRANK (SC8, RED outranks UNMEASURED), and 1
+# MUST_DISCRIMINATE (SC9, an UNMEASURED row is not a row that measured
+# something).
 #
-# Floor history: 8 at introduction (#378).
+# The floor is raised in the same commit as each new control, and that is the
+# point: at 8 against a live 10, SC9 and SC10 could both be deleted and this
+# leg would still read green over a shrunk control set.
+#
+# Floor history: 8 at introduction (#378); 10 when SC9 and SC10 landed (#415,
+# #426).
 if [ ! -r "checks/verification_matrix.py" ]; then
   f378_msg="MUST_PASS FAILED (verification_matrix self-test) UNMEASURED:"
   f378_msg="$f378_msg checks/verification_matrix.py is not readable --"
@@ -2604,9 +2611,10 @@ else
     sed -n 's/^self-test denominator: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls .*/\2/p')
   if [ "$f378_rc" -ne 0 ]; then
     f378_msg="MUST_PASS FAILED (verification_matrix self-test): rc=$f378_rc"
-    f378_msg="$f378_msg over the gate's declared denominator of 8 controls"
-    f378_msg="$f378_msg (5 MUST_FIRE + 1 MUST_PASS_NEGATIVE + 1 MUST_ABSTAIN"
-    f378_msg="$f378_msg + 1 MUST_OUTRANK); 0 of 8 are accepted as behaved,"
+    f378_msg="$f378_msg over the gate's declared denominator of 10 controls"
+    f378_msg="$f378_msg (6 MUST_FIRE + 1 MUST_PASS_NEGATIVE + 1 MUST_ABSTAIN"
+    f378_msg="$f378_msg + 1 MUST_OUTRANK + 1 MUST_DISCRIMINATE); 0 of 10 are"
+    f378_msg="$f378_msg accepted as behaved,"
     f378_msg="$f378_msg so the leg fails closed. Output:"
     f378_msg="$f378_msg $(printf '%s\n' "$f378_out" | tr '\n' ' ')"
     no "$f378_msg"
@@ -2614,7 +2622,7 @@ else
     f378_msg="MUST_PASS FAILED (verification_matrix self-test) UNMEASURED:"
     f378_msg="$f378_msg rc=0 but the last line carries no parseable"
     f378_msg="$f378_msg 'self-test denominator: N of M controls' tally --"
-    f378_msg="$f378_msg the measuring unit printed no denominator, so 0 of 8"
+    f378_msg="$f378_msg the measuring unit printed no denominator, so 0 of 10"
     f378_msg="$f378_msg declared controls are auditable here. Unparseable is"
     f378_msg="$f378_msg not passing; fail closed and update this leg in the"
     f378_msg="$f378_msg same commit as the wording change. Last line:"
@@ -2628,21 +2636,22 @@ else
     f378_msg="$f378_msg a partial control set, so the inconsistency fails"
     f378_msg="$f378_msg closed."
     no "$f378_msg"
-  elif [ "$f378_have" -lt 8 ]; then
+  elif [ "$f378_have" -lt 10 ]; then
     f378_msg="MUST_PASS FAILED (verification_matrix self-test): control set"
     f378_msg="$f378_msg shrank to $f378_have of $f378_want, below the"
-    f378_msg="$f378_msg measured floor of 8 (5 MUST_FIRE + 1"
-    f378_msg="$f378_msg MUST_PASS_NEGATIVE + 1 MUST_ABSTAIN + 1"
-    f378_msg="$f378_msg MUST_OUTRANK). A shortened self-test still exits 0,"
+    f378_msg="$f378_msg measured floor of 10 (6 MUST_FIRE + 1"
+    f378_msg="$f378_msg MUST_PASS_NEGATIVE + 1 MUST_ABSTAIN + 1 MUST_OUTRANK"
+    f378_msg="$f378_msg + 1 MUST_DISCRIMINATE). A shortened self-test still"
+    f378_msg="$f378_msg exits 0,"
     f378_msg="$f378_msg so the floor is the control and this leg fails"
     f378_msg="$f378_msg closed."
     no "$f378_msg"
   else
     f378_msg="MUST_PASS verification_matrix self-test: rc=0 under python3"
     f378_msg="$f378_msg -S, denominator $f378_have of $f378_want controls"
-    f378_msg="$f378_msg (>= the measured floor of 8, 5 MUST_FIRE + 1"
-    f378_msg="$f378_msg MUST_PASS_NEGATIVE + 1 MUST_ABSTAIN + 1"
-    f378_msg="$f378_msg MUST_OUTRANK): $f378_last"
+    f378_msg="$f378_msg (>= the measured floor of 10, 6 MUST_FIRE + 1"
+    f378_msg="$f378_msg MUST_PASS_NEGATIVE + 1 MUST_ABSTAIN + 1 MUST_OUTRANK"
+    f378_msg="$f378_msg + 1 MUST_DISCRIMINATE): $f378_last"
     ok "$f378_msg"
   fi
 fi
@@ -2782,6 +2791,215 @@ PY
         f378b_msg="$f378b_msg the placeholder the only variable, the live"
         f378b_msg="$f378b_msg files untouched. Both outcomes held"
         ok "$f378b_msg"
+      fi
+    fi
+  fi
+fi
+
+# --- ORPHAN DISCHARGE: checks/verification_matrix_results.py -----------------
+# This block is also the suite's call site for checks/verification_matrix_results.py.
+# The fix78-orphan leg scans every launchers/*.py and checks/*.py for a call
+# site IN THIS SUITE and refuses a file that has none; a Makefile target is
+# NOT accepted as a call site. The gate was just added by #415 and is indicted
+# BY NAME as an orphan -- these two legs are the in-suite call site that
+# discharges the indictment.
+echo "== fix415-matrix-results: checks/verification_matrix_results.py real legs =="
+
+# --- MUST_PASS: results-gate self-test (checks/verification_matrix_results.py)
+# Finding #415: checks/verification_matrix.py adjudicates the matrix as a
+# DECLARATION -- every row has a control arm, the doc equals the JSON. It says
+# nothing about whether any row was ever RUN. This second gate reads the
+# receipts tree and answers that separate question, and the two must not be
+# confused: a matrix that is CLEAR on the first gate and 0/33 green on this one
+# is exactly the honest state this repository is in.
+#
+# Same floor convention as f378 above, for the same reason: rc=0 is not the
+# measurement. The trailing tally is parsed and held to a FLOOR of 8 so a
+# self-test that quietly drops controls cannot still read green.
+#
+# Floor history: 8 at introduction (#415).
+if [ ! -r "checks/verification_matrix_results.py" ]; then
+  f415_msg="MUST_PASS FAILED (verification_matrix_results self-test)"
+  f415_msg="$f415_msg UNMEASURED: checks/verification_matrix_results.py is not"
+  f415_msg="$f415_msg readable -- unreadable is not empty (doctrine 4); the"
+  f415_msg="$f415_msg gate cannot run, so 0 of 8 controls were measured"
+  no "$f415_msg"
+else
+  f415_rc=0
+  f415_out=$(python3 -S checks/verification_matrix_results.py --self-test 2>&1) ||
+    f415_rc=$?
+  f415_last=$(printf '%s\n' "$f415_out" | tail -n 1)
+  f415_have=$(printf '%s\n' "$f415_last" |
+    sed -n 's|^verification-matrix gate self-test: \([0-9][0-9]*\)/\([0-9][0-9]*\) controls PASS$|\1|p')
+  f415_want=$(printf '%s\n' "$f415_last" |
+    sed -n 's|^verification-matrix gate self-test: \([0-9][0-9]*\)/\([0-9][0-9]*\) controls PASS$|\2|p')
+  if [ "$f415_rc" -ne 0 ]; then
+    f415_msg="MUST_PASS FAILED (verification_matrix_results self-test):"
+    f415_msg="$f415_msg rc=$f415_rc over the gate's declared denominator of 8"
+    f415_msg="$f415_msg controls; 0 of 8 are accepted as behaved, so the leg"
+    f415_msg="$f415_msg fails closed. Output:"
+    f415_msg="$f415_msg $(printf '%s\n' "$f415_out" | tr '\n' ' ')"
+    no "$f415_msg"
+  elif [ -z "$f415_have" ] || [ -z "$f415_want" ]; then
+    f415_msg="MUST_PASS FAILED (verification_matrix_results self-test)"
+    f415_msg="$f415_msg UNMEASURED: rc=0 but the last line carries no parseable"
+    f415_msg="$f415_msg 'verification-matrix gate self-test: N/M controls PASS'"
+    f415_msg="$f415_msg tally -- the measuring unit printed no denominator, so"
+    f415_msg="$f415_msg 0 of 8 declared controls are auditable here."
+    f415_msg="$f415_msg Unparseable is not passing; fail closed and update this"
+    f415_msg="$f415_msg leg in the same commit as the wording change. Last"
+    f415_msg="$f415_msg line: $f415_last"
+    no "$f415_msg"
+  elif [ "$f415_have" -ne "$f415_want" ]; then
+    f415_msg="MUST_PASS FAILED (verification_matrix_results self-test):"
+    f415_msg="$f415_msg denominator $f415_have of $f415_want controls is not"
+    f415_msg="$f415_msg self-consistent -- the self-test passed fewer controls"
+    f415_msg="$f415_msg than it ran, and rc=0 cannot certify a partial control"
+    f415_msg="$f415_msg set, so the inconsistency fails closed."
+    no "$f415_msg"
+  elif [ "$f415_have" -lt 8 ]; then
+    f415_msg="MUST_PASS FAILED (verification_matrix_results self-test):"
+    f415_msg="$f415_msg control set shrank to $f415_have of $f415_want, below"
+    f415_msg="$f415_msg the measured floor of 8. A shortened self-test still"
+    f415_msg="$f415_msg exits 0, so the floor is the control and this leg"
+    f415_msg="$f415_msg fails closed."
+    no "$f415_msg"
+  else
+    f415_msg="MUST_PASS verification_matrix_results self-test: rc=0 under"
+    f415_msg="$f415_msg python3 -S, denominator $f415_have of $f415_want"
+    f415_msg="$f415_msg controls (>= the measured floor of 8): $f415_last"
+    ok "$f415_msg"
+  fi
+fi
+
+# --- MUST_FIRE: the results gate discriminates a dangling adjudicator --------
+# The self-test above runs over fixtures the gate builds itself. This leg runs
+# the shipped CLI over COPIES of the REAL ledger, the plant the only difference
+# between the two arms.
+#
+# The plant is the #415 EXISTENCE axis, and it is the axis C3 of the sibling
+# gate deliberately does not cover: C3 is handed rows, not a repo root, and
+# its controls adjudicate temp copies, so resolving a root there would make
+# the verdict depend on where the file sits (#83/#229). The existence question
+# is real -- a typo in an unbound row sits undetected until that row is run --
+# and this gate is where it is answered, so this leg is what proves the answer
+# is not vacuous.
+#
+# The clean arm is expected to be 95, not 0: the receipts tree is empty, so
+# every row reads "never measured". That is the honest state, and asserting
+# 95-then-96 rather than 0-then-96 is what keeps this leg measuring the plant
+# instead of measuring how many rows happen to have been run today.
+if [ ! -r "checks/verification_matrix_results.py" ] ||
+  [ ! -r "validation_campaigns/verification_matrix/matrix.json" ]; then
+  f415b_msg="MUST_FIRE FAILED (verification_matrix_results dangling-adjudicator"
+  f415b_msg="$f415b_msg discrimination) UNMEASURED: the gate or the ledger is"
+  f415b_msg="$f415b_msg not readable -- unreadable is not empty (doctrine 4);"
+  f415b_msg="$f415b_msg 0 of 2 arms ran"
+  no "$f415b_msg"
+else
+  f415b_tmp=$(mktemp -d)
+  cp "validation_campaigns/verification_matrix/matrix.json" "$f415b_tmp/matrix.json"
+  mkdir -p "$f415b_tmp/receipts"
+  f415b_clean_rc=0
+  f415b_clean_out=$(python3 -S checks/verification_matrix_results.py \
+    --matrix "$f415b_tmp/matrix.json" --receipts-root "$f415b_tmp/receipts" 2>&1) ||
+    f415b_clean_rc=$?
+  f415b_denom=$(printf '%s\n' "$f415b_clean_out" | tail -n 1 |
+    sed -n 's|^MATRIX SUMMARY: [0-9][0-9]*/\([0-9][0-9]*\) rows green.*|\1|p')
+  if [ "$f415b_clean_rc" -ne 95 ]; then
+    rm -rf "$f415b_tmp"
+    f415b_msg="MUST_FIRE FAILED (verification_matrix_results"
+    f415b_msg="$f415b_msg dangling-adjudicator discrimination): the UNMODIFIED"
+    f415b_msg="$f415b_msg ledger against an empty receipts tree gave"
+    f415b_msg="$f415b_msg rc=$f415b_clean_rc, expected exactly 95 -- with no"
+    f415b_msg="$f415b_msg receipts every row must read 'never measured', and a"
+    f415b_msg="$f415b_msg gate that is already 5 or 96 here cannot attribute"
+    f415b_msg="$f415b_msg the red arm below to the plant. Output:"
+    f415b_msg="$f415b_msg $(printf '%s\n' "$f415b_clean_out" | tr '\n' ' ')"
+    no "$f415b_msg"
+  elif [ -z "$f415b_denom" ]; then
+    rm -rf "$f415b_tmp"
+    f415b_msg="MUST_FIRE FAILED (verification_matrix_results"
+    f415b_msg="$f415b_msg dangling-adjudicator discrimination) UNMEASURED: the"
+    f415b_msg="$f415b_msg clean arm exited 95 but printed no parseable 'MATRIX"
+    f415b_msg="$f415b_msg SUMMARY: N/M rows green' line, so this leg has no row"
+    f415b_msg="$f415b_msg count to report. The success message states that"
+    f415b_msg="$f415b_msg count; stating one the arm never printed is the"
+    f415b_msg="$f415b_msg defect this campaign files as #216/#310. Output:"
+    f415b_msg="$f415b_msg $(printf '%s\n' "$f415b_clean_out" | tr '\n' ' ')"
+    no "$f415b_msg"
+  else
+    f415b_plant_rc=0
+    f415b_rid=$(python3 -S - "$f415b_tmp/matrix.json" <<'PY'
+import json
+import sys
+
+matrix_path = sys.argv[1]
+with open(matrix_path, encoding="utf-8") as fh:
+    data = json.load(fh)
+# Plant on a row that ALREADY names an adjudicator. Inventing a binding on an
+# unbound row would test a different thing (does a null become a path?); the
+# question here is whether a bound path that does not exist is caught.
+for row in data["rows"]:
+    if isinstance(row.get("adjudicator"), str) and row["adjudicator"].strip():
+        row["adjudicator"] = "checks/no_such_adjudicator_planted_by_f415b.py"
+        with open(matrix_path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2) + "\n")
+        print(row["id"])
+        break
+else:
+    sys.exit(3)
+PY
+    ) || f415b_plant_rc=$?
+    if [ "$f415b_plant_rc" -ne 0 ] || [ -z "$f415b_rid" ]; then
+      rm -rf "$f415b_tmp"
+      f415b_msg="MUST_FIRE FAILED (verification_matrix_results"
+      f415b_msg="$f415b_msg dangling-adjudicator discrimination) UNMEASURED:"
+      f415b_msg="$f415b_msg the plant could not be built -- no row in the"
+      f415b_msg="$f415b_msg ledger names an adjudicator, so there is nothing"
+      f415b_msg="$f415b_msg whose existence can be broken. An empty population"
+      f415b_msg="$f415b_msg is not a pass; 1 of 2 arms ran."
+      no "$f415b_msg"
+    else
+      f415b_red_rc=0
+      f415b_red_out=$(python3 -S checks/verification_matrix_results.py \
+        --matrix "$f415b_tmp/matrix.json" --receipts-root "$f415b_tmp/receipts" 2>&1) ||
+        f415b_red_rc=$?
+      rm -rf "$f415b_tmp"
+      if [ "$f415b_red_rc" -ne 96 ]; then
+        f415b_msg="MUST_FIRE FAILED (verification_matrix_results"
+        f415b_msg="$f415b_msg dangling-adjudicator discrimination): repointing"
+        f415b_msg="$f415b_msg $f415b_rid's adjudicator at a path that does not"
+        f415b_msg="$f415b_msg exist gave rc=$f415b_red_rc, expected exactly 96."
+        f415b_msg="$f415b_msg rc=95 would launder a typo'd binding into 'not"
+        f415b_msg="$f415b_msg measured yet', which is indistinguishable from"
+        f415b_msg="$f415b_msg the 28 rows that honestly have no adjudicator."
+        f415b_msg="$f415b_msg Output:"
+        f415b_msg="$f415b_msg $(printf '%s\n' "$f415b_red_out" | tr '\n' ' ')"
+        no "$f415b_msg"
+      elif ! printf '%s\n' "$f415b_red_out" |
+        grep -q "no_such_adjudicator_planted_by_f415b.py"; then
+        f415b_msg="MUST_FIRE FAILED (verification_matrix_results"
+        f415b_msg="$f415b_msg dangling-adjudicator discrimination): the gate"
+        f415b_msg="$f415b_msg exited 96, but no line names the planted path --"
+        f415b_msg="$f415b_msg a refusal attributed to something else is not"
+        f415b_msg="$f415b_msg this control firing, and rc alone cannot tell"
+        f415b_msg="$f415b_msg the two apart. Output:"
+        f415b_msg="$f415b_msg $(printf '%s\n' "$f415b_red_out" | tr '\n' ' ')"
+        no "$f415b_msg"
+      else
+        f415b_msg="MUST_FIRE verification_matrix_results dangling-adjudicator"
+        f415b_msg="$f415b_msg discrimination: over a copy of the real ledger"
+        f415b_msg="$f415b_msg ($f415b_denom rows) and an empty receipts tree,"
+        f415b_msg="$f415b_msg the unmodified arm exited 95 (every row honestly"
+        f415b_msg="$f415b_msg unmeasured) and the same ledger with"
+        f415b_msg="$f415b_msg $f415b_rid's adjudicator repointed at a"
+        f415b_msg="$f415b_msg nonexistent path exited 96 naming that exact"
+        f415b_msg="$f415b_msg path -- the dangling binding the only variable,"
+        f415b_msg="$f415b_msg the live files untouched. Both outcomes held,"
+        f415b_msg="$f415b_msg which is what makes the EXISTENCE axis C3 leaves"
+        f415b_msg="$f415b_msg to this gate a measured one"
+        ok "$f415b_msg"
       fi
     fi
   fi

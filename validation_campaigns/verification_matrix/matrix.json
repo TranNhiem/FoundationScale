@@ -11,7 +11,8 @@
       "cost": "0 GPU",
       "status": "SHIPPED (#373): declared optimizer reaches TrainingArguments.optim; an unsupported name REFUSES 96 before a Trainer exists",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T0-2",
@@ -23,7 +24,8 @@
       "cost": "0 GPU",
       "status": "SHIPPED (#373): reaches gradient_accumulation_steps in the kwargs; an omitted axis adds no kwarg and is recorded as an explicit absence",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T0-3",
@@ -35,7 +37,8 @@
       "cost": "0 GPU",
       "status": "SHIPPED (#373): reaches max_grad_norm in the kwargs; a non-positive value REFUSES 96 at the CLI boundary (#384)",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T0-4",
@@ -47,7 +50,8 @@
       "cost": "0 GPU",
       "status": "SHIPPED (#373): model.is_gradient_checkpointing reads True on the loaded model, not merely the flag",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T0-5",
@@ -59,7 +63,8 @@
       "cost": "0 GPU",
       "status": "SHIPPED (#373): reaches model.config._attn_implementation; an impl the build cannot supply and one the loader silently overrides both REFUSE 96",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T0-6",
@@ -71,7 +76,8 @@
       "cost": "0 GPU",
       "status": "SHIPPED (#373): the declared schedule and warmup move the optimizer LR -- early below half the base rate, late above 0.85 of it",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T0-7",
@@ -83,7 +89,8 @@
       "cost": "0 GPU",
       "status": "SHIPPED (#373): declared and recorded; fsdp/zero3 REFUSE 96 rather than silently running DDP, while ddp and undeclared proceed",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T0-8",
@@ -95,7 +102,8 @@
       "cost": "0 GPU",
       "status": "SHIPPED (#373): declared and recorded; offload=true REFUSES 96 with no backend, while false and undeclared proceed",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T0-9",
@@ -109,7 +117,8 @@
       "blocked_by": [],
       "findings": [
         "#346"
-      ]
+      ],
+      "adjudicator": null
     },
     {
       "id": "T0-10",
@@ -123,7 +132,8 @@
       "blocked_by": [],
       "findings": [
         "#375"
-      ]
+      ],
+      "adjudicator": null
     },
     {
       "id": "T1-1",
@@ -133,12 +143,13 @@
       "run_arm": "fp32 masters",
       "control_arm": "bf16 masters, same seed/lr/steps",
       "cost": "~15 min x2",
-      "status": "MEASURED (#367/#368: bf16 discards ~99.99%) — re-take under the new manifest",
+      "status": "MEASURED (#367/#368: bf16 discards ~99.99%) \u2014 re-take under the new manifest",
       "blocked_by": [],
       "findings": [
         "#367",
         "#368"
-      ]
+      ],
+      "adjudicator": null
     },
     {
       "id": "T1-2",
@@ -150,7 +161,8 @@
       "cost": "~15 min",
       "status": "never run",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T1-3",
@@ -164,7 +176,8 @@
       "blocked_by": [],
       "findings": [
         "#345"
-      ]
+      ],
+      "adjudicator": null
     },
     {
       "id": "T1-4",
@@ -176,7 +189,8 @@
       "cost": "~15 min",
       "status": "verify/parity.py SHIPPED, no run",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T1-5",
@@ -186,12 +200,13 @@
       "run_arm": "resume arm",
       "control_arm": "straight-through arm; final weights must match within tolerance",
       "cost": "~40 min",
-      "status": "THE gap — No optimizer/RNG/dataloader restore is proven",
+      "status": "THE gap \u2014 No optimizer/RNG/dataloader restore is proven",
       "blocked_by": [],
       "findings": [
         "#177",
         "#192"
-      ]
+      ],
+      "adjudicator": null
     },
     {
       "id": "T1-6",
@@ -205,7 +220,8 @@
       "blocked_by": [],
       "findings": [
         "#343"
-      ]
+      ],
+      "adjudicator": "validation_campaigns/verification_matrix/t1_6_symlinked_shard.py"
     },
     {
       "id": "T1-7",
@@ -217,7 +233,8 @@
       "cost": "~20 min",
       "status": "ABSENT",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T1-8",
@@ -229,7 +246,8 @@
       "cost": "~30 min",
       "status": "ABSENT",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T1-9",
@@ -244,7 +262,8 @@
       "findings": [
         "#405",
         "#406"
-      ]
+      ],
+      "adjudicator": "validation_campaigns/verification_matrix/t1_9_optimizer_arms.py"
     },
     {
       "id": "T1-10",
@@ -259,7 +278,8 @@
       "findings": [
         "#405",
         "#406"
-      ]
+      ],
+      "adjudicator": "validation_campaigns/verification_matrix/t1_10_accumulation_equivalence.py"
     },
     {
       "id": "T1-11",
@@ -271,7 +291,8 @@
       "cost": "~15 min x2",
       "status": "UNBLOCKED by #373 (T0-4 shipped): needs a GPU tray, never run",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": "validation_campaigns/verification_matrix/t1_11_grad_checkpointing.py"
     },
     {
       "id": "T1-12",
@@ -286,7 +307,8 @@
       "findings": [
         "#405",
         "#406"
-      ]
+      ],
+      "adjudicator": "validation_campaigns/verification_matrix/t1_12_attention_impl.py"
     },
     {
       "id": "T1-13",
@@ -298,7 +320,8 @@
       "cost": "~20 min x2",
       "status": "REFUSED by the package plane (#373): offload=true refuses before load, so there is no offload arm to weigh against off",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T1-14",
@@ -310,7 +333,8 @@
       "cost": "~30 min x4",
       "status": "REFUSED by the package plane (#373): fsdp/zero3 refuse before load, so there are no ZeRO stages to compare",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T1-15",
@@ -320,13 +344,14 @@
       "run_arm": "Qwen dense, lr>0",
       "control_arm": "an `lr=0` arm through the same path: weight parity must show ZERO movement",
       "cost": "~15 min x2",
-      "status": "done (#162/#176, #366) — re-take under new manifest, control arm never run",
+      "status": "done (#162/#176, #366) \u2014 re-take under new manifest, control arm never run",
       "blocked_by": [],
       "findings": [
         "#162",
         "#176",
         "#366"
-      ]
+      ],
+      "adjudicator": null
     },
     {
       "id": "T1-16",
@@ -338,7 +363,8 @@
       "cost": "~40 min",
       "status": "classification SHIPPED, runtime ABSENT",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T1-17",
@@ -352,7 +378,8 @@
       "blocked_by": [],
       "findings": [
         "#375"
-      ]
+      ],
+      "adjudicator": null
     },
     {
       "id": "T1-18",
@@ -366,7 +393,8 @@
       "blocked_by": [],
       "findings": [
         "#329"
-      ]
+      ],
+      "adjudicator": null
     },
     {
       "id": "T1-19",
@@ -381,7 +409,8 @@
       "findings": [
         "#172",
         "#202"
-      ]
+      ],
+      "adjudicator": null
     },
     {
       "id": "T1-20",
@@ -393,7 +422,8 @@
       "cost": "~15 min x2",
       "status": "done (#162/#176, #366), control arm never run",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T1-21",
@@ -407,7 +437,8 @@
       "blocked_by": [],
       "findings": [
         "#371"
-      ]
+      ],
+      "adjudicator": null
     },
     {
       "id": "T1-22",
@@ -419,7 +450,8 @@
       "cost": "~5 min",
       "status": "refuses by design",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     },
     {
       "id": "T1-23",
@@ -429,9 +461,10 @@
       "run_arm": "audio corpus",
       "control_arm": "must be 96, not a silent drop of the audio field",
       "cost": "~5 min",
-      "status": "ABSENT — may silently drop",
+      "status": "ABSENT \u2014 may silently drop",
       "blocked_by": [],
-      "findings": []
+      "findings": [],
+      "adjudicator": null
     }
   ]
 }
