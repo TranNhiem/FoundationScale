@@ -622,6 +622,29 @@ _PRECISION_ACCEPTED_DTYPES: dict[str, tuple[str, ...]] = {
     "fp32": ("F32",),
 }
 
+# The precisions this plane can EXECUTE, as torch attribute names resolved at the
+# call site (a module-scope torch attribute would put an import in a module the
+# torch-free gates scope, #325).
+#
+# nvfp4 is deliberately absent. It is DECLARABLE -- PRECISIONS admits it, so an
+# operator can name it and the refusal is about the backend rather than the
+# spelling -- and it has no executor, so train() refuses 96 well before the load.
+# The gap this table closes is that fp32 and fp16 were in exactly the same
+# position and did NOT refuse: #342 gave TrainConfig a precision field, and
+# nothing ever bound it to the load. `model_kwargs` carried attn_implementation
+# and nothing else, so `--precision fp32` loaded a bf16 checkpoint as bf16 and
+# trained it, and the first save reported
+#   declared precision='fp32' but the saved tensors disagree: accepted dtypes
+#   ('F32',), observed {'BF16': 338}
+# -- a RED on a scientific claim the plane had never attempted. One declared axis
+# must not have two honesty contracts: either execute the declaration, or refuse
+# it by name. bf16/fp16/fp32 are executable, so they are executed.
+_PRECISION_TORCH_DTYPES: dict[str, str] = {
+    "bf16": "bfloat16",
+    "fp16": "float16",
+    "fp32": "float32",
+}
+
 
 def _dtype_histogram(ckpt_dir: Path) -> dict[str, int] | None:
     """Count saved tensors by safetensors dtype, stdlib only (no torch).
@@ -2083,12 +2106,22 @@ def _train(cfg: TrainConfig) -> int:
     model_kwargs: dict[str, Any] = {}
     if cfg.attn_implementation is not None:
         model_kwargs["attn_implementation"] = cfg.attn_implementation
+    # Bind the declared precision at construction. The spelling is `dtype`, and
+    # that is MEASURED rather than read off a changelog: on transformers 5.13.0
+    # both `dtype` and `torch_dtype` produce torch.float32 and the latter warns
+    # "`torch_dtype` is deprecated! Use `dtype` instead!", while declaring
+    # nothing loads the checkpoint's own torch.bfloat16 -- so the knob is live
+    # and the negative control fires. Same rule as attn_implementation: when
+    # None is declared, NOTHING is passed and the checkpoint's dtype applies,
+    # unclaimed (#342), which keeps every existing run bit-identical.
+    if cfg.precision in _PRECISION_TORCH_DTYPES:
+        model_kwargs["dtype"] = getattr(torch, _PRECISION_TORCH_DTYPES[cfg.precision])
     try:
         tokenizer = AutoTokenizer.from_pretrained(cfg.model)
         try:
             model = AutoModelForCausalLM.from_pretrained(cfg.model, **model_kwargs)
         except (ValueError, TypeError, ImportError) as exc:
-            if cfg.attn_implementation is None:
+            if cfg.attn_implementation is None and cfg.precision is None:
                 raise
             # REFUSE (96), not RED (5). The operator stated a kernel and the
             # load did not complete; no training was attempted, so there is no
@@ -2108,13 +2141,18 @@ def _train(cfg: TrainConfig) -> int:
             _mark(
                 Step.REFUSE,
                 f"model load did not complete while attn_implementation="
-                f"{cfg.attn_implementation!r} was declared, on transformers "
+                f"{cfg.attn_implementation!r} and precision={cfg.precision!r} were "
+                f"declared, on transformers "
                 f"{_tf_version()}: {type(exc).__name__}: {exc}",
             )
             _emit_manifest(
                 cfg,
                 stage="refused",
-                extra={"exit": EXIT_REFUSE, "attn_implementation": cfg.attn_implementation},
+                extra={
+                    "exit": EXIT_REFUSE,
+                    "attn_implementation": cfg.attn_implementation,
+                    "precision": cfg.precision,
+                },
             )
             return EXIT_REFUSE
         if cfg.attn_implementation is not None:
@@ -2139,6 +2177,44 @@ def _train(cfg: TrainConfig) -> int:
                     },
                 )
                 return EXIT_REFUSE
+        if cfg.precision in _PRECISION_TORCH_DTYPES:
+            # Observe the outcome, never infer acceptance from the call. The
+            # kwarg could be renamed, deprecated into a no-op, or overridden by
+            # a config field, and every one of those failures is silent at the
+            # call site and loud here. This is the reading that makes the
+            # save-gate comparison meaningful: without it, "declared fp32" is a
+            # string in a manifest rather than a property of the weights.
+            wanted = getattr(torch, _PRECISION_TORCH_DTYPES[cfg.precision])
+            observed = getattr(model, "dtype", None)
+            if observed != wanted:
+                _mark(
+                    Step.REFUSE,
+                    f"precision={cfg.precision!r} is declared, so the model was "
+                    f"loaded with dtype={wanted}, but the loaded model reports "
+                    f"{observed!r}: the dtype was accepted by the call and then "
+                    "dropped or overridden on the way in (or this release "
+                    "publishes no model.dtype reading, in which case acceptance "
+                    "cannot be proved). Refusing rather than training under an "
+                    "unverified precision declaration -- a run that trains bf16 "
+                    "under an fp32 label is the failure this axis exists to stop",
+                )
+                _emit_manifest(
+                    cfg,
+                    stage="refused",
+                    extra={
+                        "exit": EXIT_REFUSE,
+                        "precision": cfg.precision,
+                        "precision_dtype_observed": str(observed),
+                    },
+                )
+                return EXIT_REFUSE
+            # CONSISTENCY, not a new marker: this is a declared-vs-effective
+            # reading, the same channel that reports the torchrun comparison.
+            _mark(
+                Step.CONSISTENCY,
+                f"precision={cfg.precision!r} bound at load and verified: the "
+                f"loaded model reports dtype={observed}",
+            )
         raw = _load_raw_dataset(hf_datasets, cfg.dataset)
         split = "train" if "train" in raw else next(iter(raw))
         columns = raw[split].column_names
