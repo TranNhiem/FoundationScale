@@ -287,7 +287,9 @@ def test_an_impossible_stored_record_opens_as_a_manifest_error() -> None:
     telemetry source on the WIRE (it cannot be built in memory, which is the
     point) and require the loader's own error type."""
     document = make_manifest(
-        telemetry={"train_runtime_s": TelemetryEntry(key="train_runtime_s", value=1.0, source="measured")}
+        telemetry={
+            "train_runtime_s": TelemetryEntry(key="train_runtime_s", value=1.0, source="measured")
+        }
     ).to_dict()
     document["telemetry"]["train_runtime_s"]["source"] = "cli"  # type: ignore[index]
     with pytest.raises(ManifestError, match="corrupt manifest"):
@@ -299,7 +301,9 @@ def test_the_same_document_loads_when_it_is_not_corrupt() -> None:
     ManifestError unconditionally would pass it. Same builder, same key, one
     legal source value."""
     document = make_manifest(
-        telemetry={"train_runtime_s": TelemetryEntry(key="train_runtime_s", value=1.0, source="measured")}
+        telemetry={
+            "train_runtime_s": TelemetryEntry(key="train_runtime_s", value=1.0, source="measured")
+        }
     ).to_dict()
     loaded = RunManifest.from_dict(document)
     assert loaded.telemetry["train_runtime_s"].source == "measured"
