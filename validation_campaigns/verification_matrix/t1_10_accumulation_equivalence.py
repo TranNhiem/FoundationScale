@@ -61,7 +61,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
-from t1_interpreter_floor import floor_controls, python_floor_reason
+from t1_interpreter_floor import (
+    classify_boundary_exception,
+    floor_controls,
+    python_floor_reason,
+)
 
 GREEN = 0
 RED = 5
@@ -1102,15 +1106,27 @@ def main(argv: list[str]) -> int:
         if args.self_test:
             return _self_test()
         return _run(args)
-    except Exception:  # noqa: BLE001 -- the contract has no code for "crashed"
+    except Exception as exc:  # noqa: BLE001 -- an escaped exception is classified to a boundary code, never adjudicated RED
         tb = traceback.format_exc()
         print(tb, file=sys.stderr, end="")
+        code, reason = classify_boundary_exception(exc)
+        verdict = {95: "UNMEASURED", 96: "CANNOT_MEASURE"}[code]
         if getattr(args, "out_dir", None) is not None:
             with contextlib.suppress(OSError):
-                _write_record(args.out_dir, "error", {"row": ROW, "traceback": tb})
+                _write_record(
+                    args.out_dir,
+                    "error",
+                    {
+                        "row": ROW,
+                        "code": code,
+                        "verdict": verdict,
+                        "reason": reason,
+                        "traceback": tb,
+                    },
+                )
         print("=" * 72)
-        print("T1-10 VERDICT RED: unexpected exception in the run body; traceback on stderr")
-        return RED
+        print(f"T1-10 VERDICT {verdict}: {reason}; traceback on stderr")
+        return code
 
 
 if __name__ == "__main__":

@@ -62,7 +62,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
-from t1_interpreter_floor import floor_controls, python_floor_reason
+from t1_interpreter_floor import (
+    classify_boundary_exception,
+    floor_controls,
+    python_floor_reason,
+)
 
 GREEN = 0
 RED = 5
@@ -1210,25 +1214,31 @@ def main(argv: list[str]) -> int:
         if args.self_test:
             return _self_test()
         return _run(args)
-    except Exception as exc:  # noqa: BLE001 -- the contract has no code for "crashed"
+    except Exception as exc:  # noqa: BLE001 -- an escaped exception is classified, never adjudicated
         traceback.print_exc(file=sys.stderr)
+        code, reason = classify_boundary_exception(exc)
+        verdict = "UNMEASURED" if code == UNMEASURED else "CANNOT_MEASURE"
+        detail = f"{reason}; unexpected {type(exc).__name__} escaped the run body: {exc}"
         record = {
             "row": ROW_ID,
             "file": Path(__file__).name,
             "claim": CLAIM,
             "control_rule": CONTROL_RULE,
-            "status": "error",
-            "reason": f"unexpected {type(exc).__name__} escaped the run body: {exc}",
+            "status": verdict,
+            "verdict": verdict,
+            "boundary_code": code,
+            "reason": detail,
+            "boundary_reason": reason,
             "traceback": traceback.format_exc(),
         }
         try:
-            path = _write_record(args.out_dir, "error", record)
-            print(f"error record: {path}")
+            path = _write_record(args.out_dir, verdict.lower(), record)
+            print(f"{verdict.lower()} record: {path}")
         except Exception:  # noqa: BLE001 -- a failed write must not mask the verdict
             pass
         print("=" * 72)
-        print(f"T1-12 VERDICT RED: unexpected {type(exc).__name__} escaped the run body: {exc}")
-        return RED
+        print(f"T1-12 VERDICT {verdict}: {detail}")
+        return code
 
 
 if __name__ == "__main__":

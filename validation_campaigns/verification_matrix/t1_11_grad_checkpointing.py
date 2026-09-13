@@ -84,7 +84,11 @@ import traceback
 from pathlib import Path
 from typing import NoReturn
 
-from t1_interpreter_floor import floor_controls, python_floor_reason
+from t1_interpreter_floor import (
+    classify_boundary_exception,
+    floor_controls,
+    python_floor_reason,
+)
 
 GREEN = 0
 RED = 5
@@ -1087,7 +1091,8 @@ def main(argv: list[str]) -> int:
             print(f"UNMEASURED: foundationscale is not importable -- {reason}")
             return UNMEASURED
         return _run(args)
-    except Exception as exc:  # noqa: BLE001 -- the contract has no code for "crashed"
+    except Exception as exc:  # noqa: BLE001 -- an escaped exception is classified, never adjudicated
+        code, reason = classify_boundary_exception(exc)
         tb = traceback.format_exc()
         print(tb, file=sys.stderr, end="")
         record: dict[str, object] = {
@@ -1096,7 +1101,7 @@ def main(argv: list[str]) -> int:
             "claim": CLAIM,
             "control_rule": CONTROL_RULE,
             "status": "error",
-            "reason": f"unexpected {type(exc).__name__} escaped the run body: {exc}",
+            "reason": reason,
             "traceback": tb,
         }
         if args.out_dir is not None:
@@ -1107,12 +1112,13 @@ def main(argv: list[str]) -> int:
                 pass
         print("=" * 72)
         print(
-            f"T1-11 VERDICT RED: unexpected {type(exc).__name__} escaped the run body: "
-            f"{exc}. Adjudicated RED (5) at the main() boundary with the traceback on "
-            "stderr, rather than allowed to exit 1, which sits outside the "
-            "0/5/95/96 contract."
+            f"T1-11 VERDICT {'UNMEASURED' if code == UNMEASURED else 'CANNOT_MEASURE'}: "
+            f"unexpected {type(exc).__name__} escaped the run body: {exc}. "
+            f"Classified ({code}) at the main() boundary -- {reason} -- with the "
+            f"traceback on stderr; nothing was measured, so no verdict on the "
+            "scientific claim is emitted."
         )
-        return RED
+        return code
 
 
 if __name__ == "__main__":

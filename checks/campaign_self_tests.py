@@ -116,6 +116,21 @@ RUNNABLE: dict[str, str] = {
         "a pre-existing record the launcher never rewrote must REFUSE rather than "
         "adjudicate cleanly, with the positive control proving that detector can fire."
     ),
+    "validation_campaigns/verification_matrix/control_boundary_classification.py": (
+        "Two self-test legs over the #417 boundary rule -- an environment fault must "
+        "abstain 95 and a harness fault must abstain 96, while a verdict the row "
+        "actually REACHED must pass through untouched. Both legs run against synthetic "
+        "subjects built in a TemporaryDirectory: a PRE-fix subject that launders every "
+        "fault to RED, which the control MUST refute, and a POST-fix subject it MUST "
+        "clear. The MUST_FIRE leg is what makes a CLEAR reading worth anything -- a "
+        "control that cannot fail proves nothing -- and its four disagreeing legs print "
+        "[FIRED] rather than [FAIL] so an audit grepping the token does not self-hit on "
+        "correct output. The synthetic subjects import neither t1_interpreter_floor nor "
+        "any real row, and every leg patches _run out before calling main(), so no arm "
+        "reaches torch or a GPU: a laptop and the estate see the same 2. Adjudicating "
+        "the four SHIPPED rows is the separate --expect postfix entry, which needs those "
+        "rows importable but still no hardware."
+    ),
     "validation_campaigns/verification_matrix/t1_6_symlinked_shard.py": (
         "Eleven controls over the #343 symlinked-shard detector, split three detector / "
         "eight instrument; measured 8/11 against the pre-fix tree and 11/11 against this "

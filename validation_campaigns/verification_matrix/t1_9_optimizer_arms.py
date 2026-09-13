@@ -69,7 +69,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from t1_interpreter_floor import floor_controls, python_floor_reason
+from t1_interpreter_floor import (
+    classify_boundary_exception,
+    floor_controls,
+    python_floor_reason,
+)
 
 GREEN = 0
 RED = 5
@@ -1076,16 +1080,23 @@ def main(argv: list[str]) -> int:
         if args.self_test:
             return _self_test()
         return _run(args)
-    except Exception as exc:  # noqa: BLE001 -- the contract has no code for "crashed"
+    except Exception as exc:  # noqa: BLE001 -- an escaped exception is classified, never adjudicated
         tb = traceback.format_exc()
         print(tb, file=sys.stderr, end="")
-        detail = f"unexpected {type(exc).__name__} escaped the run body: {exc}"
+        code, reason = classify_boundary_exception(exc)
+        verdict = "UNMEASURED" if code == UNMEASURED else "CANNOT_MEASURE"
+        detail = (
+            f"unexpected {type(exc).__name__} escaped the run body: {exc}; "
+            f"classified {verdict} ({code}): {reason}"
+        )
         if args.out_dir is not None:
             try:
                 args.out_dir.mkdir(parents=True, exist_ok=True)
                 payload = {
                     "row": ROW,
-                    "verdict": "RED",
+                    "verdict": verdict,
+                    "code": code,
+                    "reason": reason,
                     "control_rule": CONTROL_RULE,
                     "detail": detail,
                     "traceback": tb,
@@ -1095,8 +1106,10 @@ def main(argv: list[str]) -> int:
             except OSError:
                 pass
         print("=" * 72)
-        print(f"T1-9 VERDICT RED: {detail} -- full traceback on stderr and in {ROW}_error.json")
-        return RED
+        print(
+            f"T1-9 VERDICT {verdict}: {detail} -- full traceback on stderr and in {ROW}_error.json"
+        )
+        return code
 
 
 if __name__ == "__main__":
