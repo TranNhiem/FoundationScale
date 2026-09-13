@@ -72,7 +72,10 @@ from typing import Any
 from t1_interpreter_floor import (
     classify_boundary_exception,
     floor_controls,
+    gpu_reachability_controls,
+    gpu_reachability_reason,
     python_floor_reason,
+    reachable_gpu_count,
 )
 
 GREEN = 0
@@ -659,6 +662,22 @@ def _run(args: argparse.Namespace) -> int:
         )
         return UNMEASURED
 
+    # The gates above ask whether this process can run a kernel at all. #432 asks
+    # the next question down: the tray was allocated N GPUs and the process can
+    # open fewer. A tray allocated gres/gpu=4 that exposes 2 measures the claim on
+    # 2 and publishes it as 4 -- a 2x denominator error no arm would ever notice,
+    # because every arm inherits the same wrong denominator.
+    reachable = reachable_gpu_count()
+    gpu_reason = gpu_reachability_reason(args.gpus_per_node, reachable=reachable)
+    if gpu_reason is not None:
+        # Unknowable and short are different states: one was not measured, the
+        # other was measured and came up short. They get different exit codes.
+        if reachable is None:
+            print(f"UNMEASURED: {gpu_reason}")
+            return UNMEASURED
+        print(f"REFUSE: {gpu_reason}")
+        return REFUSE
+
     out_dir: Path = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -773,6 +792,7 @@ def _self_test() -> int:
         checks.append((name, ok, detail))
 
     floor_controls("T1-9", record)
+    gpu_reachability_controls("T1-9", record)
 
     base = [2.302, 2.101, 1.987, 1.912]
 

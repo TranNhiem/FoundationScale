@@ -68,8 +68,11 @@ from t1_interpreter_floor import (
     capability_floor_reasons,
     classify_boundary_exception,
     floor_controls,
+    gpu_reachability_controls,
+    gpu_reachability_reason,
     interleaved_round_plan,
     python_floor_reason,
+    reachable_gpu_count,
 )
 
 GREEN = 0
@@ -939,6 +942,7 @@ def _self_test() -> int:
         checks.append((name, ok, detail))
 
     floor_controls("T1-12", record)
+    gpu_reachability_controls("T1-12", record)
 
     record(
         "C1 CONTROL_RULE is the matrix's verbatim text",
@@ -1467,6 +1471,21 @@ def _run(args: argparse.Namespace) -> int:
         for miss in floor_misses:
             print(f"UNMEASURED: {miss}")
         return UNMEASURED
+    # The gates above ask whether this process can run a kernel at all. #432 asks
+    # the next question down: the tray was allocated N GPUs and the process can
+    # open fewer. A tray allocated gres/gpu=4 that exposes 2 measures the claim on
+    # 2 and publishes it as 4 -- a 2x denominator error no arm would ever notice,
+    # because every arm inherits the same wrong denominator.
+    reachable = reachable_gpu_count()
+    gpu_reason = gpu_reachability_reason(args.gpus_per_node, reachable=reachable)
+    if gpu_reason is not None:
+        # Unknowable and short are different states: one was not measured, the
+        # other was measured and came up short. They get different exit codes.
+        if reachable is None:
+            print(f"UNMEASURED: {gpu_reason}")
+            return UNMEASURED
+        print(f"REFUSE: {gpu_reason}")
+        return REFUSE
     axis_reason = _trainer_supports_axis()
     if axis_reason is not None:
         print(f"REFUSE: {axis_reason}")

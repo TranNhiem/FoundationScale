@@ -753,3 +753,151 @@ def floor_controls(row: str, record: Callable[[str, bool, str], None]) -> None:
         loader_code == EXIT_CANNOT_MEASURE and "native shared-library link" not in loader_reason,
         repr((loader_code, loader_reason)),
     )
+
+
+# ---------------------------------------------------------------------------
+# #432: the GPU count a row DECLARES versus the count it can actually REACH
+# ---------------------------------------------------------------------------
+#
+# Measured on this estate: a tray allocated ``gres/gpu=4`` -- Slurm's own AllocTRES
+# and TresPerNode both say 4, and the driver enumerates 4 under
+# /proc/driver/nvidia/gpus -- exposes exactly 2 to the process. ``nvidia-smi -L``
+# lists 2, ``torch.cuda.device_count()`` returns 2, and forcing all four indices
+# into CUDA_VISIBLE_DEVICES changes neither number. Two hypotheses were tested and
+# both are REFUTED: the cpuset spans both sockets, so it is not socket affinity
+# narrowing a socket-affine GRES; and the override above rules out the scheduler
+# merely composing a two-entry visibility list. The cause is unattributed.
+#
+# The cause does not have to be known for the harness to stop lying. Every T1 row
+# passes ``--gpus-per-node`` straight through to the trainer, so a row on that tray
+# composes a 4-GPU launch, measures whatever two GPUs do, and publishes the number
+# 4. That is #124's class -- the measured count and the actual launch decoupled --
+# and it is a 2x denominator error on every multi-GPU claim. Recording BOTH numbers
+# and refusing when they disagree is estate-independent: it needs no theory of why
+# this tray is short, and it fires identically on any machine where the allocation
+# and the reachable set diverge.
+
+
+def reachable_gpu_count() -> int | None:
+    """Return the number of GPUs this PROCESS can reach, or None if unknowable.
+
+    None is not zero. A machine with no torch, or a torch built without CUDA, has
+    not told us that there are no GPUs -- it has told us nothing, and collapsing
+    that into 0 would manufacture a disagreement out of an absent instrument.
+
+    torch is imported inside the function deliberately. This module is stdlib-only
+    so that an interpreter BELOW the floor can still import it and be rejected by
+    ``python_floor_reason``; a module-scope torch import would make the floor guard
+    unimportable on exactly the machines it exists to refuse, which is #354's class.
+    """
+    try:
+        import torch
+    except Exception:
+        return None
+    try:
+        if not torch.cuda.is_available():
+            return None
+        return int(torch.cuda.device_count())
+    except Exception:
+        return None
+
+
+def gpu_reachability_reason(
+    declared: int,
+    reachable: int | None = None,
+    probe: Callable[[], int | None] | None = None,
+) -> str | None:
+    """Return None if ``declared`` GPUs are reachable, else a reason naming both.
+
+    ``reachable`` and ``probe`` are injectable ONLY so the refusing branches can be
+    exercised on a healthy machine -- the same reason ``python_floor_reason`` takes
+    a version. A branch that cannot fire on the machine running the suite is not a
+    control.
+
+    The rule is ``reachable < declared``, not ``reachable != declared``. A node that
+    exposes MORE GPUs than the row asked for is not a problem: the launch uses the
+    declared number and the claim is about that number. Only a shortfall silently
+    shrinks the thing being measured while the row keeps publishing the declared
+    count.
+
+    A single-process row (``declared <= 1``) makes no multi-GPU claim, so an
+    unknowable reachable count is not an unmet precondition for it. Above 1 it is:
+    "I am about to publish a 4-GPU measurement and I cannot confirm four reachable
+    GPUs" is UNMEASURED, and reporting that as a pass is how #432 stayed invisible.
+
+    MEASURED EVIDENCE (#432). On a tray allocated ``gres/gpu=4``, ``nvidia-smi -L``
+    listed 2 devices and ``torch.cuda.device_count()`` returned 2. Overriding
+    ``CUDA_VISIBLE_DEVICES`` changed nothing, so the shortfall is not a composition
+    artifact of that variable; a socket-affinity explanation was also tested and
+    REFUTED. The cause is unattributed, and the cure deliberately does not depend on
+    knowing it -- it records both quantities and refuses when they disagree.
+
+    The scheduler is NOT an oracle for this. ``sacct`` reports AllocTRES, which is
+    what the allocation GRANTED; it cannot see what the process can OPEN, and on the
+    tray above it said 4 while the process saw 2. Any guard that asks the scheduler
+    is measuring the wrong side of the gap, which is why the probe here runs inside
+    the process that will do the measuring.
+    """
+    if reachable is None:
+        reachable = probe() if probe is not None else reachable_gpu_count()
+    if declared <= 1:
+        return None
+    if reachable is None:
+        return (
+            f"row declares {declared} GPUs and the reachable count could not be measured "
+            "(no torch, or a torch that cannot see CUDA). A multi-GPU claim "
+            "published without confirming the GPUs are reachable is UNMEASURED, "
+            "not a pass. This is an unmet precondition, NOT a failed claim."
+        )
+    if reachable < declared:
+        return (
+            f"row declares {declared} GPUs and only {reachable} are reachable from this process. "
+            "The allocation and the devices a process can open are different "
+            f"quantities, so the claim would be measured on {reachable} and published as "
+            f"{declared}. This is an unmet precondition, NOT a failed claim."
+        )
+    return None
+
+
+def gpu_reachability_controls(row: str, record: Callable[[str, bool, str], None]) -> None:
+    """Run the five #432 controls for ``row``, reporting through the caller's ``record``.
+
+    Two-halved by construction: a guard that refused everything would pass G1 and
+    G4 while making every row unrunnable, and a guard that refused nothing would
+    pass G2, G3 and G5 while leaving #432 exactly as invisible as it was.
+
+    G1 asserts distinctive phrases, not the bare digits "4" and "2". The finding id
+    "#432" contains both of those digits, so a digit-substring assertion would be
+    satisfied by a message that named neither count -- the self-hit class, where a
+    detector matches its own text and reads as coverage.
+    """
+    short = gpu_reachability_reason(4, reachable=2)
+    record(
+        f"{row} G1 a 4-declared / 2-reachable tray refuses, naming both counts",
+        short is not None and "declares 4 GPUs" in short and "only 2 are reachable" in short,
+        repr(short),
+    )
+    exact = gpu_reachability_reason(4, reachable=4)
+    record(
+        f"{row} G2 a fully-reachable allocation does not refuse (not blanket)",
+        exact is None,
+        repr(exact),
+    )
+    single = gpu_reachability_reason(1, probe=lambda: None)
+    record(
+        f"{row} G3 a single-process row is not refused for an unknowable count",
+        single is None,
+        repr(single),
+    )
+    unknown = gpu_reachability_reason(4, probe=lambda: None)
+    record(
+        f"{row} G4 a multi-GPU row with an unmeasurable count refuses, not passes",
+        unknown is not None and "UNMEASURED" in unknown,
+        repr(unknown),
+    )
+    over = gpu_reachability_reason(2, reachable=4)
+    record(
+        f"{row} G5 a node exposing MORE GPUs than declared does not refuse",
+        over is None,
+        repr(over),
+    )
