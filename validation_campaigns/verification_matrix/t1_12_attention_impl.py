@@ -56,15 +56,19 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 import traceback
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, NoReturn
 
 from t1_interpreter_floor import (
+    DEFAULT_ROUNDS,
+    capability_floor_reasons,
     classify_boundary_exception,
     floor_controls,
+    interleaved_round_plan,
     python_floor_reason,
 )
 
@@ -96,6 +100,24 @@ LOSS_RTOL = 2e-2
 # operationalised as a band: a spread under 5% across three attention impls on
 # a 1.5B model means the knob never reached the model.
 STEP_TIME_IDENTICAL_RTOL = 0.05
+
+# #421, stated where the row can be read rather than only in a ledger. The shared
+# helper's paired reducer, ``reduce_paired_rounds``, is DELIBERATELY not imported
+# here: it reduces a SIGNED two-arm claim (baseline vs treatment, "lower" or
+# "higher"), and this row's claim is three-arm and unsigned -- the impls must
+# AGREE on logits and DIFFER in step time, with no arm declared the faster one.
+# Handing it a direction would fabricate the very assumption the row exists to
+# avoid, so the paired statistic is an honest UNMEASURED for T1-12 and the
+# cross-round rule below is unanimity instead.
+PAIRED_STATISTIC_ABSTENTION = (
+    "PAIRED STATISTIC: UNMEASURED for T1-12. reduce_paired_rounds reduces a "
+    "SIGNED two-arm claim (baseline vs treatment, 'lower' or 'higher'); this "
+    "row's claim is three-arm and unsigned -- the impls must agree on logits and "
+    "differ in step time, with no arm declared faster (#421). Inventing a "
+    "direction would fabricate the assumption the row exists to avoid, so the "
+    "cross-round rule here is unanimity over whole-round verdicts, not a paired "
+    "delta. This is an abstention on ONE axis, not on the row."
+)
 
 ARM_TIMEOUT_S = 3600
 FLASH_PROBE_TIMEOUT_S = 120
@@ -286,6 +308,22 @@ def _arm_specs(args: argparse.Namespace) -> list[_ArmSpec]:
             flags["--profile-path"] = str(args.profile_path)
         specs.append(_ArmSpec(name=impl, impl=impl, flags=flags, work_dir=work_dir))
     return specs
+
+
+def _round_spec(spec: _ArmSpec, round_index: int) -> _ArmSpec:
+    """A per-round copy of ``spec`` with its OWN trainer directory.
+
+    ``_find_manifest`` searches a directory, so two rounds sharing one work dir
+    would hand round 1 the manifest round 0 left behind -- and every round would
+    then agree, which is a worse failure than a crash because it looks like
+    evidence. ``--output-dir`` is the axis assertion's declared mechanical
+    exception (it already differs per arm), so suffixing it cannot widen the
+    row's single axis; the assertion runs on the base specs regardless.
+    """
+    work_dir = spec.work_dir.parent / f"{spec.work_dir.name}_r{round_index}"
+    flags = dict(spec.flags)
+    flags["--output-dir"] = str(work_dir)
+    return replace(spec, flags=flags, work_dir=work_dir)
 
 
 def _assert_single_axis(specs: list[_ArmSpec]) -> None:
@@ -529,7 +567,11 @@ def _arm_line(record: dict[str, Any]) -> str:
 
 
 def _run_arm(
-    spec: _ArmSpec, arm_index: int, master_port_base: int, env: dict[str, str]
+    spec: _ArmSpec,
+    arm_index: int,
+    master_port_base: int,
+    env: dict[str, str],
+    round_index: int = 0,
 ) -> dict[str, Any]:
     """Invoke the shipped trainer once via torchrun, then read its RunManifest telemetry.
 
@@ -545,10 +587,12 @@ def _run_arm(
     from the manifest, never scraped from the stream.
     """
     spec.work_dir.mkdir(parents=True, exist_ok=True)
-    # Deterministic distinct rendezvous port per arm: a fixed port collides
-    # when arms run concurrently on one node; a random port would make a
-    # failure unreproducible.
-    master_port = master_port_base + arm_index
+    # Deterministic distinct rendezvous port per arm AND per round: a fixed port
+    # collides when arms run concurrently on one node, and a port reused by the
+    # next round can still be in TIME_WAIT and refuse the rendezvous. A random
+    # port would make a failure unreproducible, so each round gets its own
+    # contiguous block of len(IMPLS).
+    master_port = master_port_base + round_index * len(IMPLS) + arm_index
     argv = [
         sys.executable,
         "-m",
@@ -749,6 +793,94 @@ def adjudicate(arms: list[dict[str, Any]]) -> tuple[int, list[str]]:
     if failures:
         return RED, failures + details
     return GREEN, details
+
+
+def _reduce_rounds(per_round: list[list[dict[str, Any]]]) -> tuple[int, list[str]]:
+    """Combine whole-round verdicts across INTERLEAVED rounds (#418).
+
+    The reduction rule here is UNANIMITY, not a paired delta: see
+    ``PAIRED_STATISTIC_ABSTENTION`` above for why ``reduce_paired_rounds`` is
+    not applicable to a three-arm unsigned claim (#421). Unanimity is the
+    weaker instrument, and saying so is the point -- an abstention that is
+    named can be closed later, a fabricated direction cannot be un-published.
+
+    Rounds that disagree are 95. A verdict that depends on WHICH round ran is a
+    property of the pass -- cache state, co-tenancy, clock drift -- not of the
+    attention implementation, and the rotation between rounds is what makes the
+    disagreement visible instead of being absorbed into whichever round ran
+    first.
+    """
+    lines: list[str] = []
+    if len(per_round) < 2:
+        lines.append(
+            f"CANNOT MEASURE: {len(per_round)} round(s) reached the cross-round "
+            "reducer; with a single round the arm order cannot rotate, so order "
+            "stays confounded with arm identity (#418)"
+        )
+        return REFUSE, lines
+
+    codes: list[int] = []
+    for round_index, arms in enumerate(per_round):
+        code, details = adjudicate(arms)
+        codes.append(code)
+        lines.append(f"--- round {round_index}: rc={code} ---")
+        lines.extend(details)
+    lines.append(PAIRED_STATISTIC_ABSTENTION)
+
+    unresolved = [index for index, code in enumerate(codes) if code not in (GREEN, RED)]
+    if unresolved:
+        lines.append(
+            f"round(s) {unresolved} of {len(per_round)} could not evaluate the "
+            "control rule, so the row is UNMEASURED: a round that measured "
+            "nothing is not evidence either way, and the remaining rounds are "
+            "not a smaller experiment -- they are a different one"
+        )
+        return UNMEASURED, lines
+    if all(code == RED for code in codes):
+        lines.append(
+            f"every one of {len(per_round)} interleaved rounds refuted the claim, "
+            "with the arm order rotated between them -- the refutation is not an "
+            "order artefact"
+        )
+        return RED, lines
+    if all(code == GREEN for code in codes):
+        lines.append(
+            f"all {len(per_round)} interleaved rounds upheld the claim under "
+            "rotated arm order, so the agreement does not rest on one ordering"
+        )
+        return GREEN, lines
+    greens = [index for index, code in enumerate(codes) if code == GREEN]
+    reds = [index for index, code in enumerate(codes) if code == RED]
+    lines.append(
+        f"rounds DISAGREE: {greens} upheld the claim and {reds} refuted it. "
+        "Which round ran is not a property of the attention implementation "
+        "(#418), so the row is UNMEASURED rather than a coin-flip verdict"
+    )
+    return UNMEASURED, lines
+
+
+def _paired_statistic_record(rounds: int) -> dict[str, Any]:
+    """The #421 abstention as a RECORD, not only as a line of stdout.
+
+    An abstention that lives in a print statement dies with the scrollback. The
+    ``arm`` name is deliberately not one of ``IMPLS`` and ``kind`` says
+    ``control``, so a reader collecting arm payloads cannot mistake it for a
+    fourth attention implementation -- the row's denominator is still three.
+    """
+    return {
+        "row": ROW_ID,
+        "file": Path(__file__).name,
+        "claim": CLAIM,
+        "control_rule": CONTROL_RULE,
+        "arm": "paired_statistic",
+        "kind": "control",
+        "axis": {"cross_round_statistic": "reduce_paired_rounds"},
+        "status": "unmeasured",
+        "verdict": "UNMEASURED",
+        "reason": PAIRED_STATISTIC_ABSTENTION,
+        "rounds": rounds,
+        "metrics": {},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1061,6 +1193,169 @@ def _self_test() -> int:
         f"rc={code_disj}/{code_olap} :: {details_disj[0]} :: {details_olap[0]}",
     )
 
+    # ---- #419: the capability floor, reachable through its injectable seams --
+    # Without the seams the refusing arms would be unreachable decoration, and a
+    # precondition that can never fail is indistinguishable from one that always
+    # passes. These drive the real helper, not a copy of its logic.
+
+    class _StubCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        @staticmethod
+        def device_count() -> int:
+            return 1
+
+    class _StubTorch:
+        cuda = _StubCuda
+
+    def _healthy_import(name: str) -> object:
+        if name == "torch":
+            return _StubTorch
+        raise AssertionError(f"unexpected module probe: {name}")
+
+    def _dead_import(name: str) -> object:
+        raise OSError(f"libcudart.so.12: cannot open shared object file (probing {name})")
+
+    def _dead_smoke(_torch_module: object) -> None:
+        raise RuntimeError("CUDA error: no kernel image is available for execution")
+
+    fires = capability_floor_reasons(import_module=_dead_import)
+    record(
+        "C17 the capability floor FIRES on a dead native library",
+        bool(fires) and any("native libraries are dead" in reason for reason in fires),
+        f"{len(fires)} reason(s)",
+    )
+    clear = capability_floor_reasons(
+        import_module=_healthy_import, smoke_op=lambda _torch_module: None
+    )
+    record(
+        "C18 a healthy tray clears the floor (it does not refuse everything)",
+        clear == [],
+        f"{len(clear)} reason(s)",
+    )
+    smoke_fails = capability_floor_reasons(import_module=_healthy_import, smoke_op=_dead_smoke)
+    record(
+        "C19 a device that counts but cannot run a kernel is a floor miss",
+        bool(smoke_fails),
+        f"{len(smoke_fails)} reason(s)",
+    )
+
+    # C20: three arms rotate, so no impl keeps the cache-cold first slot. With a
+    # fixed order the LAST arm always inherits two warm arms' filesystem cache
+    # and looks fastest -- on a row whose verdict is a step-time spread, that
+    # bias points straight at the claim (#418).
+    plan = interleaved_round_plan(list(IMPLS), rounds=3)
+    order = [[name for round_index, name in plan if round_index == r] for r in range(3)]
+    first_slots = {round_order[0] for round_order in order}
+    record(
+        "C20 the interleaved plan rotates arm order between rounds (#418)",
+        order[0] == list(IMPLS)
+        and len(first_slots) == 3
+        and all(sorted(round_order) == sorted(IMPLS) for round_order in order),
+        f"{order}",
+    )
+
+    def _round(eager_sps: float, sdpa_sps: float, flash_sps: float) -> list[dict[str, Any]]:
+        return [
+            _synthetic_arm("eager", eager_sps, losses),
+            _synthetic_arm("sdpa", sdpa_sps, wiggle),
+            _synthetic_arm("flash_attention_2", flash_sps, losses),
+        ]
+
+    code, _lines = _reduce_rounds([_round(1.000, 1.220, 1.470) for _ in range(3)])
+    record("C21 three agreeing rounds are GREEN", code == GREEN, f"rc={code}")
+
+    # C22: THE MUST-FIRE control for #418 on this row. Round 0 ran cold and its
+    # three impls came out inside the identity band -- the single-round rule
+    # calls that RED -- while rounds 1 and 2 spread cleanly. Whichever round ran
+    # alone would have become the verdict. Disagreement is 95.
+    code, lines = _reduce_rounds(
+        [_round(1.000, 1.004, 0.998), _round(1.000, 1.220, 1.470), _round(1.010, 1.230, 1.460)]
+    )
+    record(
+        "C22 rounds that disagree are 95, never a coin-flip verdict",
+        code == UNMEASURED and any("DISAGREE" in line for line in lines),
+        f"rc={code}",
+    )
+
+    # C23: the silent-fallback shape survives the round loop. Adding rounds must
+    # not be able to launder the row's own control rule into an abstention.
+    code, lines = _reduce_rounds([_round(1.000, 1.004, 0.998) for _ in range(3)])
+    record(
+        "C23 the identical-step-time shape is RED in every round, and stays RED",
+        code == RED and any(CONTROL_RULE in line for line in lines),
+        f"rc={code}",
+    )
+
+    # C24: one unmeasured arm in ONE round sinks the row to 95. The other rounds
+    # are not a smaller experiment, they are a different one.
+    code, lines = _reduce_rounds(
+        [
+            _round(1.000, 1.220, 1.470),
+            [
+                _synthetic_arm("eager", 1.000, losses),
+                _synthetic_arm("sdpa", 1.220, wiggle),
+                _synthetic_unmeasured_arm("flash_attention_2", flash_reason),
+            ],
+        ]
+    )
+    record(
+        "C24 an unmeasured round makes the row 95, not a majority verdict",
+        code == UNMEASURED and any("could not evaluate" in line for line in lines),
+        f"rc={code}",
+    )
+
+    # C25: the #421 abstention is a RECORD and a LINE, not a comment. It must
+    # name the issue, and its arm name must not be mistakable for a fourth impl.
+    abstention = _paired_statistic_record(3)
+    _, abstain_lines = _reduce_rounds([_round(1.000, 1.220, 1.470) for _ in range(2)])
+    record(
+        "C25 the paired statistic abstains in the open, and is not a fourth arm",
+        "#421" in abstention["reason"]
+        and abstention["status"] == "unmeasured"
+        and abstention["arm"] not in IMPLS
+        and any(PAIRED_STATISTIC_ABSTENTION in line for line in abstain_lines),
+        f"arm={abstention['arm']} status={abstention['status']}",
+    )
+
+    # C26: each round gets its OWN trainer directory. _find_manifest searches a
+    # directory, so a shared one would hand round 1 the manifest round 0 left
+    # behind -- and every round would then agree, which looks like evidence.
+    base = _spec("eager")
+    rounded = [_round_spec(base, r) for r in range(3)]
+    dirs = {str(spec.work_dir) for spec in rounded}
+    # The port formula is the one _run_arm uses; a port reused by the next round
+    # can still be in TIME_WAIT and refuse the rendezvous.
+    ports = {29612 + r * len(IMPLS) + i for r in range(3) for i in range(len(IMPLS))}
+    record(
+        "C26 rounds get disjoint work dirs and disjoint rendezvous ports",
+        len(dirs) == 3
+        and str(base.work_dir) not in dirs
+        and all(spec.flags["--output-dir"] == str(spec.work_dir) for spec in rounded)
+        and len(ports) == 3 * len(IMPLS),
+        f"{len(dirs)} dirs, {len(ports)} ports",
+    )
+
+    # C27: one round is not a measurement. --rounds 1 refuses 96 BEFORE any GPU,
+    # trainer or import probe is touched, so the refusal costs nothing.
+    with tempfile.TemporaryDirectory(prefix="t1_12_rounds_") as tmp:
+        one_round = _build_parser().parse_args(
+            ["--out-dir", tmp, "--profile-name", "self-test", "--rounds", "1"]
+        )
+        code = _run(one_round)
+    record("C27 --rounds 1 refuses 96 before touching a GPU", code == REFUSE, f"rc={code}")
+
+    default_rounds = (
+        _build_parser().parse_args(["--out-dir", "/tmp", "--profile-name", "self-test"]).rounds
+    )
+    record(
+        "C28 --rounds defaults to the shared DEFAULT_ROUNDS",
+        default_rounds == DEFAULT_ROUNDS and default_rounds >= 2,
+        f"default={default_rounds}",
+    )
+
     width = max(len(name) for name, _, _ in checks)
     for name, ok, detail in checks:
         print(f"  [{'PASS' if ok else 'FAIL'}] {name:<{width}}  {detail}")
@@ -1105,12 +1400,30 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--nodes", type=int, default=1)
     p.add_argument("--gpus-per-node", type=int, default=1)
     p.add_argument(
+        "--rounds",
+        type=int,
+        default=DEFAULT_ROUNDS,
+        help=(
+            # Percent signs doubled -- argparse interpolates help through `%`.
+            "how many INTERLEAVED rounds the three arms run (default "
+            "%(default)s). The arm order rotates every round: a fixed order "
+            "confounds order with arm identity, and it biases TOWARD the claim, "
+            "because a later arm inherits the earlier arms' warm filesystem "
+            "cache and so looks faster -- which is exactly the step-time spread "
+            "this row adjudicates (#418). Two is the floor. Each extra round "
+            "costs one more trainer subprocess PER ARM."
+        ),
+    )
+    p.add_argument(
         "--master-port-base",
         type=int,
         default=29612,
         help=(
-            "torchrun rendezvous port for arm 0; arm i uses base+i so concurrent "
-            "arms never collide (deterministic, never random)"
+            # Percent signs doubled -- argparse interpolates help through `%`.
+            "torchrun rendezvous port for round 0 arm 0 (default %(default)s); "
+            "round r arm i uses base + r*3 + i, so neither concurrent arms nor a "
+            "port still in TIME_WAIT from the previous round can collide "
+            "(deterministic, never random)"
         ),
     )
     group = p.add_mutually_exclusive_group(required=True)
@@ -1132,9 +1445,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.rounds < 2:
+        print(
+            f"REFUSE: --rounds {args.rounds} cannot rotate the arm order, so order "
+            "stays confounded with arm identity and the later arms keep the warm "
+            "cache the earlier ones left them (#418). Pass 2 or more."
+        )
+        return REFUSE
     reason = _ensure_package_importable()
     if reason is not None:
         print(f"UNMEASURED: foundationscale is not importable -- {reason}")
+        return UNMEASURED
+    # The three gates below ask whether this row's INPUTS are present. The
+    # capability floor asks the deeper question -- is the device the driver
+    # counts one a kernel can actually run on, is the wheel ABI-consistent, are
+    # the native libraries alive -- and its misses are 95 by the helper's own
+    # contract. None of them say anything about attention implementations, so
+    # none of them may read as RED.
+    floor_misses = capability_floor_reasons()
+    if floor_misses:
+        for miss in floor_misses:
+            print(f"UNMEASURED: {miss}")
         return UNMEASURED
     axis_reason = _trainer_supports_axis()
     if axis_reason is not None:
@@ -1158,10 +1489,14 @@ def _run(args: argparse.Namespace) -> int:
         f"fixed across arms: model={MODEL} dataset={DATASET} precision={PRECISION} "
         f"seed={args.seed} max_steps={args.max_steps}"
     )
+    print(f"rounds: {args.rounds}, arm order rotated between them (#418)")
 
     flash_reason = _flash_import_error(env)
-    arms: list[dict[str, Any]] = []
-    for arm_index, spec in enumerate(specs):
+    spec_by_name = {spec.name: spec for spec in specs}
+    arm_position = {spec.name: index for index, spec in enumerate(specs)}
+    per_round: list[list[dict[str, Any]]] = [[] for _ in range(args.rounds)]
+    for round_index, name in interleaved_round_plan(list(spec_by_name), rounds=args.rounds):
+        spec = _round_spec(spec_by_name[name], round_index)
         if spec.impl == "flash_attention_2" and flash_reason is not None:
             record = _unmeasured_arm_record(spec, flash_reason)
             record["detail"] = (
@@ -1169,12 +1504,27 @@ def _run(args: argparse.Namespace) -> int:
                 "work; the arm stays in the denominator (3) as UNMEASURED, never RED"
             )
         else:
-            record = _run_arm(spec, arm_index, args.master_port_base, env)
-        arms.append(record)
+            record = _run_arm(
+                spec,
+                arm_position[name],
+                args.master_port_base,
+                env,
+                round_index=round_index,
+            )
+        record["round"] = round_index
+        per_round[round_index].append(record)
+        # Two paths per arm: the round-stamped one is the evidence, and the
+        # unsuffixed one keeps the name every existing reader already looks for
+        # (last round wins, and it is named in the record's own "round" field).
+        _write_record(args.out_dir, f"{spec.name}_r{round_index}", record)
         path = _write_record(args.out_dir, spec.name, record)
-        print(f"{_arm_line(record)}  [record: {path}]", flush=True)
+        print(f"r{round_index} {_arm_line(record)}  [record: {path}]", flush=True)
 
-    code, details = adjudicate(arms)
+    abstention = _paired_statistic_record(args.rounds)
+    control_path = _write_record(args.out_dir, "paired_statistic", abstention)
+    print(f"{'CONTROL paired_statistic:':<26} UNMEASURED (#421)  [record: {control_path}]")
+
+    code, details = _reduce_rounds(per_round)
     print("=" * 72)
     for d in details:
         print(d)
@@ -1182,6 +1532,8 @@ def _run(args: argparse.Namespace) -> int:
         print("T1-12 VERDICT GREEN: loss curves agree within tolerance and step times differ")
     elif code == RED:
         print("T1-12 VERDICT RED: the agreement half or the control rule refuted the claim")
+    elif code == REFUSE:
+        print("T1-12 VERDICT CANNOT_MEASURE: the cross-round reducer had nothing to reduce")
     else:
         print("T1-12 VERDICT UNMEASURED: a deciding metric is a statement, not a number")
     return code

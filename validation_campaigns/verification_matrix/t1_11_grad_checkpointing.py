@@ -85,9 +85,13 @@ from pathlib import Path
 from typing import NoReturn
 
 from t1_interpreter_floor import (
+    DEFAULT_ROUNDS,
+    capability_floor_reasons,
     classify_boundary_exception,
     floor_controls,
+    interleaved_round_plan,
     python_floor_reason,
+    reduce_paired_rounds,
 )
 
 GREEN = 0
@@ -239,6 +243,21 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--nodes", type=int, default=1)
     p.add_argument("--gpus-per-node", type=int, default=1)
+    p.add_argument(
+        "--rounds",
+        type=int,
+        default=DEFAULT_ROUNDS,
+        help=(
+            # Percent signs doubled -- argparse interpolates help through `%`.
+            "how many INTERLEAVED rounds each arm runs (default %(default)s). The "
+            "arm order rotates every round: a fixed order confounds order with "
+            "arm identity, and it biases TOWARD the claim, because the second arm "
+            "inherits the first's warm filesystem cache and so looks faster "
+            "(#418). Two is the floor -- with one round there is no sign "
+            "agreement to check, and a one-round GREEN is one sample. Each extra "
+            "round costs one more trainer subprocess PER ARM."
+        ),
+    )
     p.add_argument(
         "--master-port-base",
         type=int,
@@ -465,20 +484,31 @@ def _run_arm(
     args: argparse.Namespace,
     env: dict[str, str],
     out_dir: Path,
+    round_index: int = 0,
 ) -> dict[str, object]:
     """Run one arm and build its record. The measurement comes from the manifest's
     telemetry section; the subprocess's stdout is captured and deliberately
-    unread, and stderr is kept only as failure diagnosis, never as a number."""
-    trainer_dir = out_dir / f"t1_11_{name}_trainer"
+    unread, and stderr is kept only as failure diagnosis, never as a number.
+
+    ``round_index`` scopes BOTH the trainer directory and the rendezvous port.
+    The directory must be round-unique or ``_find_manifest`` would hand round 1
+    the manifest round 0 left behind -- a rerun that silently re-reads the first
+    round's numbers is worse than a crash, because every round would then agree.
+    """
+    suffix = f"{name}_r{round_index}"
+    trainer_dir = out_dir / f"t1_11_{suffix}_trainer"
     trainer_dir.mkdir(parents=True, exist_ok=True)
     # Per-arm rendezvous port: arms run concurrently on one node, so a fixed
     # port collides. base + zero-based index -- deterministic, never random,
-    # so a failure stays reproducible.
-    master_port = args.master_port_base + arm_index
+    # so a failure stays reproducible. Rounds get disjoint blocks of
+    # len(_ARMS) + 1 (both arms plus the probe) so a socket left in TIME_WAIT by
+    # one round cannot refuse the next round's rendezvous.
+    master_port = args.master_port_base + round_index * (len(_ARMS) + 1) + arm_index
     argv = _trainer_argv(flag_value, args, trainer_dir, master_port, per_device_batch_size)
     record: dict[str, object] = {
         "row": "T1-11",
         "arm": name,
+        "round": round_index,
         "claim": CLAIM,
         "control_rule": CONTROL_RULE,
         "declaration": declaration,
@@ -747,6 +777,149 @@ def _adjudicate(records: list[dict[str, object]]) -> tuple[int, list[str]]:
     return RED, lines
 
 
+def _deciding_values(record: object) -> dict[str, float] | None:
+    """The two deciding numbers, or None when either is not a clean measurement.
+
+    By the time the cross-round reducer runs, ``_adjudicate`` has already refused
+    every shape this can reject. The guard stays anyway: a silent None here would
+    reach ``reduce_paired_rounds`` as a fabricated sample, and the reducer cannot
+    tell an invented number from a measured one.
+    """
+    if not isinstance(record, dict):
+        return None
+    telemetry = record.get("telemetry")
+    if not isinstance(telemetry, dict):
+        return None
+    values: dict[str, float] = {}
+    for key in _DECIDING:
+        entry = telemetry.get(key)
+        if not isinstance(entry, dict) or entry.get("source") not in ("measured", "derived"):
+            return None
+        value = entry.get("value")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        values[key] = float(value)
+    return values
+
+
+# The two deciding metrics and the DIRECTION the claim asserts for each. Both are
+# "lower": checkpointing is claimed to lower peak memory, and to lower throughput
+# because step time is its inverse -- the row prints step time, but steps/s is
+# what the manifest measures, so the reducer is fed the measured quantity and the
+# claim is restated in its terms rather than the number being flipped.
+_ROUND_METRICS: tuple[tuple[str, str, str], ...] = (
+    (_PEAK_KEY, "lower", "peak memory DROPS"),
+    (_SPS_KEY, "lower", "throughput FALLS, i.e. step time RISES"),
+)
+
+
+def _reduce_rounds(
+    per_round: list[list[dict[str, object]]],
+    tolerance: float = _MOVE_TOLERANCE,
+) -> tuple[int, list[str]]:
+    """Adjudicate every round, then require the ROUNDS to agree before a verdict.
+
+    Each round goes through the untouched single-round rule, so every refusal
+    that rule owns -- a refused arm, an unmeasured deciding metric, the memory
+    instrument's sensitivity floor, the no-op CONTROL_RULE -- still fires on the
+    first round that hits it. What is added is the cross-round gate: a GREEN or a
+    RED that only one round agrees with is ONE SAMPLE (#418), and
+    ``reduce_paired_rounds`` is the instrument that says so. The claim is a PAIR,
+    so both metrics must survive the gate; a 95 on either sinks the pair, because
+    half a pair is not a verdict on it.
+    """
+    if len(per_round) < 2:
+        return REFUSE, [
+            f"T1-11 VERDICT REFUSE: {len(per_round)} round(s) of records reached the "
+            "reducer; fewer than two rounds cannot observe sign agreement, which is "
+            "the whole instrument -- rerun with --rounds 2 or more"
+        ]
+
+    lines: list[str] = []
+    round_codes: list[int] = []
+    for round_index, records in enumerate(per_round):
+        code, round_lines = _adjudicate(records)
+        round_codes.append(code)
+        lines.append(f"--- round {round_index} ---")
+        lines.extend(round_lines)
+        if code in (REFUSE, UNMEASURED):
+            lines.append(
+                f"T1-11 VERDICT {'REFUSE' if code == REFUSE else 'UNMEASURED'}: "
+                f"round {round_index} could not be adjudicated, so the round set "
+                "carries no agreement to check"
+            )
+            return code, lines
+
+    if all(code == RED for code in round_codes):
+        # Unanimity across rounds IS the cross-round agreement, so the paired
+        # reducer is deliberately not consulted here. It measures MOVEMENT, and
+        # the shape the control rule refutes hardest -- neither metric moving --
+        # reaches the reducer as a straddle of +/-tolerance, which it reports as
+        # 95. Letting that outrank a unanimous refutation would retire the row's
+        # own SPEC sentence by accident.
+        lines.append(f"CONTROL RULE: {CONTROL_RULE}")
+        lines.append(
+            f"T1-11 VERDICT RED: every one of {len(per_round)} interleaved rounds "
+            "refuted the claim under the single-round rule, with the arm order "
+            "rotated between them -- the refutation is not an order artefact"
+        )
+        return RED, lines
+
+    samples: dict[str, dict[str, list[float]]] = {key: {} for key, _d, _l in _ROUND_METRICS}
+    for round_index, records in enumerate(per_round):
+        by_arm = {str(r.get("arm")): r for r in records}
+        for name, _flag in _ARMS:
+            values = _deciding_values(by_arm.get(name))
+            if values is None:
+                lines.append(
+                    f"T1-11 VERDICT UNMEASURED: round {round_index} adjudicated "
+                    f"cleanly but carries no readable deciding value for arm "
+                    f"'{name}'; the cross-round statistic would have to invent one"
+                )
+                return UNMEASURED, lines
+            for key, _direction, _label in _ROUND_METRICS:
+                samples[key].setdefault(name, []).append(values[key])
+
+    lines.append("=" * 72)
+    verdicts: dict[str, int] = {}
+    for key, direction, label in _ROUND_METRICS:
+        reduced = reduce_paired_rounds("off", "on", samples[key], tolerance, direction)
+        reduced_code = reduced.get("exit_code")
+        verdicts[key] = reduced_code if isinstance(reduced_code, int) else UNMEASURED
+        movements = reduced.get("round_movements_claim_direction")
+        shown = ", ".join(f"{m:+.1%}" for m in movements) if isinstance(movements, list) else "n/a"
+        lines.append(
+            f"ROUNDS {key} ({label}): {reduced['state']} -- per-round movement "
+            f"{shown}; signs agree={reduced.get('movement_signs_agree')} "
+            f"sd={reduced.get('sd')} sem={reduced.get('sem')}"
+        )
+        lines.append(f"    {reduced['reason']}")
+
+    if all(code == GREEN for code in verdicts.values()):
+        lines.append(
+            "T1-11 VERDICT GREEN: both halves of the pair moved as claimed in "
+            f"EVERY one of {len(per_round)} interleaved rounds -- the flag is "
+            "wired, and the agreement is what rules out a one-pass artefact"
+        )
+        return GREEN, lines
+    if UNMEASURED in verdicts.values():
+        unresolved = [key for key, code in verdicts.items() if code == UNMEASURED]
+        lines.append(
+            f"T1-11 VERDICT UNMEASURED: {unresolved} did not agree across rounds. "
+            "The claim is the pair, and a half-pair is not a verdict on it; "
+            "rounds that disagree in direction are the signature of shared "
+            "per-pass drift, not of the flag (#418)."
+        )
+        return UNMEASURED, lines
+    refuted = [key for key, code in verdicts.items() if code == RED]
+    lines.append(
+        f"T1-11 VERDICT RED: {refuted} moved the WRONG way in every round -- "
+        "the claim is the pair, and every round agrees this half of it did not "
+        "happen"
+    )
+    return RED, lines
+
+
 # ---------------------------------------------------------------------------
 # Self-test -- synthetic records, including shapes the control rule REFUTES
 # ---------------------------------------------------------------------------
@@ -963,6 +1136,134 @@ def _self_test() -> int:
         f"default={default_batch}",
     )
 
+    # C17/C18: the capability floor FIRES, and does not fire spuriously. Both
+    # arms are driven through the injectable import/smoke seams, because on this
+    # machine the real tray is either healthy or absent -- without the seams the
+    # refusing branches would be unreachable decoration, and an unreachable
+    # precondition is indistinguishable from one that always passes.
+    class _StubCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        @staticmethod
+        def device_count() -> int:
+            return 1
+
+    class _StubTorch:
+        cuda = _StubCuda
+
+    def _healthy_import(name: str) -> object:
+        if name == "torch":
+            return _StubTorch
+        raise AssertionError(f"unexpected module probe: {name}")
+
+    def _dead_import(name: str) -> object:
+        raise OSError(f"libcudart.so.12: cannot open shared object file (probing {name})")
+
+    def _dead_smoke(_torch_module: object) -> None:
+        raise RuntimeError("CUDA error: no kernel image is available for execution")
+
+    fires = capability_floor_reasons(import_module=_dead_import)
+    record(
+        "C17 the capability floor FIRES on a dead native library",
+        bool(fires) and any("native libraries are dead" in reason for reason in fires),
+        f"{len(fires)} reason(s)",
+    )
+    clear = capability_floor_reasons(
+        import_module=_healthy_import, smoke_op=lambda _torch_module: None
+    )
+    record(
+        "C18 a healthy tray clears the floor (it does not refuse everything)",
+        clear == [],
+        f"{len(clear)} reason(s)",
+    )
+    smoke_fails = capability_floor_reasons(import_module=_healthy_import, smoke_op=_dead_smoke)
+    record(
+        "C19 a device that counts but cannot run a kernel is a floor miss",
+        bool(smoke_fails),
+        f"{len(smoke_fails)} reason(s)",
+    )
+
+    # C20: the plan ROTATES. Arm order in round 1 is the reverse of round 0, and
+    # every arm runs exactly once per round -- that is what decouples order from
+    # arm identity (#418).
+    plan = interleaved_round_plan([name for name, _flag in _ARMS], rounds=3)
+    order = [[name for round_index, name in plan if round_index == r] for r in range(3)]
+    record(
+        "C20 the interleaved plan rotates arm order between rounds (#418)",
+        order[0] == ["off", "on"] and order[1] == ["on", "off"] and order[2] == ["off", "on"],
+        f"{order}",
+    )
+
+    def _round(peak_off: float, sps_off: float, peak_on: float, sps_on: float) -> list[dict]:
+        return [
+            _synth_record("off", peak_off, sps_off),
+            _synth_record("on", peak_on, sps_on),
+            _synth_record(_PROBE_ARM, 15.20 * _GIB, sps_off),
+        ]
+
+    # C21: three rounds that all show the claimed shape are GREEN. A cross-round
+    # gate that can only refuse is not a gate.
+    code, _lines = _reduce_rounds(
+        [
+            _round(18.01 * _GIB, 1.538, 12.45 * _GIB, 1.247),
+            _round(18.02 * _GIB, 1.529, 12.44 * _GIB, 1.251),
+            _round(18.00 * _GIB, 1.544, 12.46 * _GIB, 1.243),
+        ]
+    )
+    record("C21 three agreeing rounds are GREEN", code == GREEN, f"rc={code}")
+
+    # C22: THE MUST-FIRE control for #418. Round 0 is cache-cold, so its step
+    # time moves the WRONG way while rounds 1 and 2 show the claimed rise. The
+    # single-round rule would have called round 0 RED and rounds 1-2 GREEN --
+    # whichever one ran alone becomes the verdict. Disagreement is 95: it is the
+    # signature of shared per-pass drift, not of the flag either way.
+    code, lines = _reduce_rounds(
+        [
+            _round(18.01 * _GIB, 1.150, 12.45 * _GIB, 1.247),
+            _round(18.02 * _GIB, 1.529, 12.44 * _GIB, 1.251),
+            _round(18.00 * _GIB, 1.544, 12.46 * _GIB, 1.243),
+        ]
+    )
+    record(
+        "C22 rounds that disagree in direction are 95, never a coin-flip verdict",
+        code == UNMEASURED and any("disagree" in line for line in lines),
+        f"rc={code}",
+    )
+
+    # C23: the no-op shape stays RED across rounds. The reducer would call a
+    # sub-tolerance movement a straddle (95); the row's own control rule outranks
+    # it when EVERY round refutes, so the silent-fallback shape cannot be
+    # laundered into an abstention by adding rounds.
+    noop = [_round(12.00e9, 10.00, 12.02e9, 10.03) for _ in range(3)]
+    code, lines = _reduce_rounds(noop)
+    record(
+        "C23 the no-op shape is RED in every round, and stays RED",
+        code == RED and any(CONTROL_RULE in line for line in lines),
+        f"rc={code}",
+    )
+
+    # C24: one round is not a measurement. --rounds 1 refuses 96 BEFORE any GPU
+    # or trainer is touched, so the refusal costs nothing and cannot be mistaken
+    # for a verdict.
+    with tempfile.TemporaryDirectory(prefix="t1_11_rounds_") as tmp:
+        one_round = _build_parser().parse_args(
+            ["--out-dir", tmp, "--profile-name", "self-test", "--rounds", "1"]
+        )
+        code = _run(one_round)
+    record("C24 --rounds 1 refuses 96 before touching a GPU", code == REFUSE, f"rc={code}")
+
+    # C25: the default round count is the module's declared floor-plus, not a
+    # local invention -- it comes from the shared helper, so it cannot drift
+    # away from the reducer that consumes it.
+    default_rounds = _build_parser().parse_args([]).rounds
+    record(
+        "C25 --rounds defaults to the shared DEFAULT_ROUNDS",
+        default_rounds == DEFAULT_ROUNDS and default_rounds >= 2,
+        f"default={default_rounds}",
+    )
+
     width = max(len(name) for name, _, _ in checks)
     for name, ok, detail in checks:
         print(f"  [{'PASS' if ok else 'FAIL'}] {name:<{width}}  {detail}")
@@ -988,10 +1289,28 @@ def _run(args: argparse.Namespace) -> int:
             "this row passes one through and declares nothing itself"
         )
         return REFUSE
+    if args.rounds < 2:
+        print(
+            f"REFUSE: --rounds {args.rounds} cannot observe sign agreement between "
+            "the paired per-round deltas -- a one-round verdict is one sample, and "
+            "with a single round the arm order cannot rotate, so order stays "
+            "confounded with arm identity (#418). Pass 2 or more."
+        )
+        return REFUSE
     refusal = _gpu_refusal()
     if refusal is not None:
         print(f"REFUSE: {refusal}")
         return REFUSE
+    # _gpu_refusal above answers the flat-out-absent question (no torch, no CUDA)
+    # and that is this row's 96. The capability floor asks the deeper one and its
+    # misses are 95 by contract: a device the driver counts but cannot run a
+    # kernel on, an ABI-skewed wheel, a dead native library. None of those say
+    # anything about gradient checkpointing, so none of them may read as RED.
+    floor_misses = capability_floor_reasons()
+    if floor_misses:
+        for miss in floor_misses:
+            print(f"UNMEASURED: {miss}")
+        return UNMEASURED
     absences = _cache_absences()
     if absences:
         for absence in absences:
@@ -1027,15 +1346,10 @@ def _run(args: argparse.Namespace) -> int:
     _assert_single_axis(declarations)
     env = _trainer_env()
 
-    records: list[dict[str, object]] = []
-    arm_lines: list[str] = []
-    for arm_index, ((name, flag), declaration) in enumerate(zip(_ARMS, declarations, strict=True)):
-        record = _run_arm(
-            arm_index, name, flag, declaration, args.per_device_batch_size, args, env, out_dir
-        )
-        _write_record(out_dir / f"t1_11_{name}.json", record)
-        records.append(record)
-        arm_lines.append(_arm_line(name, flag, record))
+    flags = dict(_ARMS)
+    arm_names = [name for name, _flag in _ARMS]
+    declaration_by_arm = dict(zip(arm_names, declarations, strict=True))
+    arm_position = {name: index for index, name in enumerate(arm_names)}
 
     # The sensitivity probe: checkpointing OFF like arm "off", but at half the
     # batch size -- the ONE axis the claim holds fixed is the axis the probe
@@ -1043,6 +1357,14 @@ def _run(args: argparse.Namespace) -> int:
     # still covers the claim pair alone, and its rendezvous port is
     # len(_ARMS), distinct from both arms'. Only its peak memory feeds a
     # verdict; its step time is meaningless.
+    #
+    # It runs FIRST, and that ordering is this row's ONE global warmup. It pulls
+    # the same model and dataset shards through the shared filesystem cache every
+    # later arm reads, so no round pays the cold-cache cost alone -- and that cost
+    # is exactly the shared per-pass drift the paired reducer exists to catch (a
+    # cache-cold pass measured -20.1% against +21.7..+30.2% on this row's metric).
+    # Warming on the probe is free: its step time already carries no meaning, so
+    # spending its timing on the cache costs the row nothing it was going to read.
     probe_declaration = _declaration(
         "false",
         seed=args.seed,
@@ -1053,10 +1375,37 @@ def _run(args: argparse.Namespace) -> int:
         len(_ARMS), _PROBE_ARM, "false", probe_declaration, probe_batch, args, env, out_dir
     )
     _write_record(out_dir / f"t1_11_{_PROBE_ARM}.json", probe_record)
-    records.append(probe_record)
-    arm_lines.append(_arm_line(_PROBE_ARM, "false", probe_record))
+    arm_lines: list[str] = [_arm_line(_PROBE_ARM, "false", probe_record)]
 
-    code, verdict_lines = _adjudicate(records)
+    per_round: list[list[dict[str, object]]] = [[] for _ in range(args.rounds)]
+    for round_index, name in interleaved_round_plan(arm_names, rounds=args.rounds):
+        flag = flags[name]
+        record = _run_arm(
+            arm_position[name],
+            name,
+            flag,
+            declaration_by_arm[name],
+            args.per_device_batch_size,
+            args,
+            env,
+            out_dir,
+            round_index=round_index,
+        )
+        _write_record(out_dir / f"t1_11_{name}_r{round_index}.json", record)
+        # The canonical per-arm evidence path stays where every downstream reader
+        # already looks; the LAST round wins it. The per-round files beside it are
+        # what make the cross-round statistic auditable rather than asserted.
+        _write_record(out_dir / f"t1_11_{name}.json", record)
+        per_round[round_index].append(record)
+        arm_lines.append(f"r{round_index} {_arm_line(name, flag, record)}")
+
+    # Every round is adjudicated against the SAME probe: the memory instrument's
+    # sensitivity is a property of the configuration, not of the round, and
+    # re-running the probe per round would buy a number nothing reads.
+    for round_records in per_round:
+        round_records.append(probe_record)
+
+    code, verdict_lines = _reduce_rounds(per_round)
     for line in arm_lines:
         print(line)
     print("=" * 72)
