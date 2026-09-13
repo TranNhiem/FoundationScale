@@ -502,7 +502,10 @@ class TelemetryEntry:
         value: The value as measured — JSON-serialisable, never stringified,
             so a number stays a number. For ``source="unmeasured"`` this is
             the REASON STRING, never 0 and never None: absence reported as a
-            number reads as a measurement.
+            number reads as a measurement. The converse is guarded too
+            (#427): ``measured`` and ``derived`` may not carry ``None``, or
+            absence would be reported as a measurement from the other
+            direction — the same defect wearing the opposite label.
         source: Exactly one of ``"measured"``, ``"derived"`` or
             ``"unmeasured"``.
         unit: The metric's unit (``"s"``, ``"bytes"``, ``"samples/s"``,
@@ -529,6 +532,20 @@ class TelemetryEntry:
                 f"unmeasured telemetry entry {self.key!r} must carry the reason "
                 f"as a non-empty string, got {self.value!r}: absence reported "
                 f"as a number reads as a measurement"
+            )
+        # #427, the converse guard. The clause above stops absence from wearing
+        # a number's clothes; without this one it may wear a MEASUREMENT's
+        # instead. MEASURED before the fix: TelemetryEntry(key="train_runtime_s",
+        # value=None, source="measured") constructed cleanly and round-tripped
+        # through to_dict/from_dict as {"value": null, "source": "measured"} --
+        # a reader cannot tell that from a genuine zero-information reading, and
+        # the 'unmeasured' state exists precisely so it never has to guess.
+        if self.source in ("measured", "derived") and self.value is None:
+            raise ValueError(
+                f"telemetry entry {self.key!r} claims source={self.source!r} but "
+                f"carries value=None: a null is not a measurement. Say so with "
+                f"source='unmeasured' and a reason string -- absence reported as "
+                f"a measurement is the same defect as absence reported as a number"
             )
 
     def to_dict(self) -> dict[str, object]:
@@ -2481,7 +2498,17 @@ class RunManifest:
                     for k, v in telemetry_data.items()
                 },
             )
-        except (KeyError, TypeError, AttributeError) as exc:
+        # #428: ValueError belongs in this tuple. Everything built above can
+        # raise it -- `_expect_int` and `_expect_mapping` do, and so does every
+        # dataclass __post_init__ that enforces an invariant (MEASURED: a
+        # telemetry entry whose stored `source` is not one of the three legal
+        # states raises ValueError out of TelemetryEntry.from_dict). Those are
+        # exactly the "impossible" on-disk records this loader exists to name,
+        # so letting them escape as a bare ValueError while a missing key is
+        # reported as ManifestError means one caller must know two vocabularies
+        # for one failure. ManifestError is a RuntimeError, not a ValueError, so
+        # nothing upstream catches both by accident.
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
             raise ManifestError(f"corrupt manifest: missing or malformed field ({exc!r})") from exc
         if extras:
             # Findings were derived before the extras existed; re-derive so the

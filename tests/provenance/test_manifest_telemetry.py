@@ -19,6 +19,7 @@ from foundationscale.provenance.manifest import (
     CaptureStatus,
     CodeProvenance,
     EffectiveValue,
+    ManifestError,
     RunManifest,
     TelemetryEntry,
     Topology,
@@ -251,6 +252,57 @@ def test_unmeasured_entry_with_a_reason_round_trips() -> None:
     manifest = make_manifest(telemetry={entry.key: entry})
     loaded = RunManifest.from_dict(manifest.to_dict())
     assert loaded.telemetry[entry.key] == entry
+
+
+@pytest.mark.parametrize("source", ["measured", "derived"])
+def test_a_measured_entry_cannot_be_none(source: str) -> None:
+    """#427, the converse of the refusal above. Catches absence reported as a
+    MEASUREMENT: before the fix ``TelemetryEntry(key="train_runtime_s",
+    value=None, source="measured")`` constructed cleanly and serialised to
+    ``{"value": null, "source": "measured"}``, which no reader can tell from a
+    genuine reading. The message must name the key and point at the state that
+    exists for this — otherwise a caller cannot act on it."""
+    with pytest.raises(ValueError) as excinfo:
+        TelemetryEntry(key="train_runtime_s", value=None, source=source)
+    message = str(excinfo.value)
+    assert "train_runtime_s" in message
+    assert "unmeasured" in message
+
+
+def test_a_measured_zero_is_still_a_measurement() -> None:
+    """MUST_DISCRIMINATE for the refusal above: a guard that rejected every
+    falsy value would pass that test while destroying the type's purpose. 0,
+    0.0 and "" are legitimate measured readings -- only None is absence -- so
+    each must survive construction AND the wire."""
+    for value in (0, 0.0, "", False):
+        entry = TelemetryEntry(key="peak_memory_allocated_bytes", value=value, source="measured")
+        loaded = RunManifest.from_dict(make_manifest(telemetry={entry.key: entry}).to_dict())
+        assert loaded.telemetry[entry.key].value == value
+
+
+def test_an_impossible_stored_record_opens_as_a_manifest_error() -> None:
+    """#428: the loader's except tuple omitted ValueError, so an on-disk record
+    violating a dataclass invariant escaped as a bare ValueError while a missing
+    key came back as ManifestError -- one failure, two vocabularies. Corrupt the
+    telemetry source on the WIRE (it cannot be built in memory, which is the
+    point) and require the loader's own error type."""
+    document = make_manifest(
+        telemetry={"train_runtime_s": TelemetryEntry(key="train_runtime_s", value=1.0, source="measured")}
+    ).to_dict()
+    document["telemetry"]["train_runtime_s"]["source"] = "cli"  # type: ignore[index]
+    with pytest.raises(ManifestError, match="corrupt manifest"):
+        RunManifest.from_dict(document)
+
+
+def test_the_same_document_loads_when_it_is_not_corrupt() -> None:
+    """MUST_DISCRIMINATE for the refusal above: a loader that raised
+    ManifestError unconditionally would pass it. Same builder, same key, one
+    legal source value."""
+    document = make_manifest(
+        telemetry={"train_runtime_s": TelemetryEntry(key="train_runtime_s", value=1.0, source="measured")}
+    ).to_dict()
+    loaded = RunManifest.from_dict(document)
+    assert loaded.telemetry["train_runtime_s"].source == "measured"
 
 
 @pytest.mark.parametrize("key", ["", "   "])
