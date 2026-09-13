@@ -30,7 +30,7 @@ see [The interpreter is two decisions](#the-interpreter-is-two-decisions) and
 | `make makefile-tooling` | `checks/makefile_tooling.py --self-test`, then the real run | forbids bare tool names in recipes |
 | `make mirror` | `checks/makefile_ci_mirror.py --self-test`, then the real run | this file and `ci.yml` must run the same check scripts |
 | `make countables` | census self-test, census run, then `checks/countables_drift.py` over the corpus | census is measured, never committed |
-| `make launcher-contracts` | `bash launchers/test_launcher_contracts.sh` | 149 controls; 28.9s wall / 4.1s user, measured 2026-09-11 on an idle developer machine |
+| `make launcher-contracts` | `bash launchers/test_launcher_contracts.sh` | 151 controls; 28.9s wall / 4.1s user, measured 2026-09-11 on an idle developer machine |
 | `make checks-gates` | `bash launchers/test_checks_gates.sh` | 43 controls; 9.4s wall / 5.8s user, same conditions |
 | `make mutation` | `FS_FORBID_SKIPS=1 tools/mutate.py` — the whole corpus | a surviving mutant fails it |
 | `make mutation-module MODULE=x` | one mutation shard, as CI runs it | `tools/mutate.py --list` names the modules |
@@ -219,7 +219,7 @@ working tree as `.countables_census.json`; `make clean` removes it and
 
 Two bash suites sit beside the Python gates:
 
-- `make launcher-contracts` runs `launchers/test_launcher_contracts.sh` — 149 controls,
+- `make launcher-contracts` runs `launchers/test_launcher_contracts.sh` — 151 controls,
   the largest gate in the repository. Measured 2026-09-11 on an idle
   developer machine at 28.9s wall / 4.1s user; user time is a seventh of
   wall because the watchdog legs run their budgets concurrently. Its

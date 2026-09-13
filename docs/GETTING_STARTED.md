@@ -164,7 +164,7 @@ skip-guard-probe: guard fired and named its probe, as CI requires
 #### `launcher-contracts` and `checks-gates`
 
 ```bash
-make launcher-contracts   # bash launchers/test_launcher_contracts.sh — 149 controls
+make launcher-contracts   # bash launchers/test_launcher_contracts.sh — 151 controls
 make checks-gates         # bash launchers/test_checks_gates.sh      — 43 controls
 ```
 

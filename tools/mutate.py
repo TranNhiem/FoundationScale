@@ -56,7 +56,18 @@ Every module under test is backed up BEFORE any of them is touched, all are
 restored in a `finally`, and each restore is verified byte-for-byte.
 Restoring only the file being mutated when an exception fires would leave an
 earlier module mutated on disk — a corrupted tree that looks perfectly fine.
-A crash mid-run must not leave a mutant in the tree.
+A crash mid-run must not leave a mutant in the tree — but `finally` guards
+exceptions, not signals. #404 measured this directly: a battery SIGTERM'd at
+the CI/tool wall ran no finally at all and left a size-preserving mutant in
+the tree, the next full suite run read it as nine ordinary failures, and a
+`git add -A` would have staged it behind one unremarkable ` M` line. So the
+backups are additionally written, in full, to `.mutate_in_flight.json` the
+moment they are taken; the sentinel is deleted only after the verified
+restore, the next run refuses (exit 96) on any sentinel whose recorded
+hashes do not match the current tree, and heals silently only when every
+file already matches. `tools/mutate.py --recover` puts the recorded
+pre-battery bytes back — by hand, on the operator's decision, because the
+differing bytes may equally be legitimate edits made since the crash.
 
 KILL CRITERIA
 
@@ -146,7 +157,7 @@ import sys
 import tempfile
 import time
 import xml.etree.ElementTree as ET
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -198,6 +209,202 @@ MODULE_PATHS = {
 }
 
 _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")
+
+# #404: the `finally` restore in main() guards EXCEPTIONS, not signals. A
+# battery SIGTERM'd at the CI/tool wall (or SIGKILL'd outright) runs no
+# finally, and the mutant is left in the working tree — measured for real as
+# one enum member deleted from a tuple in gates/core.py, which the next full
+# suite run read as nine ordinary failures and a `git add -A` would have
+# staged behind an ordinary-looking ` M` status line. The sentinel is
+# written the moment the pre-battery bytes are in hand and deleted only after
+# the verified restore, so a sentinel still on disk at startup means exactly
+# one thing: the last battery died in flight. A git-dirty guard is the wrong
+# shape and was rejected — these are ordinary source files that developers
+# edit, "dirty" cannot tell a stranded mutant from uncommitted work, and such
+# a guard would refuse every normal development run.
+IN_FLIGHT_SENTINEL = ROOT / ".mutate_in_flight.json"
+
+
+def _sha256_text(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _display(path: Path) -> str:
+    """Tree-relative when the path is inside the tree, absolute when it is not.
+
+    Injected tables (the meta-suite's scratch files) legitimately live outside
+    ROOT, and ``Path.relative_to`` RAISES on those rather than falling back --
+    so keying the sentinel on it would turn the meta-suite's own fixtures into
+    a crash. Display only; the sentinel keys on the absolute path.
+    """
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+class SentinelUnreadable(Exception):
+    """The sentinel exists and cannot be parsed.
+
+    Its own most likely cause is the failure it exists to report: a process
+    killed mid-write. That must refuse by name, not raise a traceback out of
+    a tool whose whole contract is 0/1/2 exit codes.
+    """
+
+
+def sentinel_path_for(targets: Iterable[Path]) -> Path:
+    """Where the sentinel for THIS battery belongs.
+
+    A battery over the repository's own modules writes to the repository root,
+    which is where ``--recover`` and the startup check look. A battery over an
+    INJECTED table -- the meta-suite drives one over pytest scratch files --
+    writes beside those files instead, and that placement is load-bearing:
+    pinned to the root, a killed meta-suite run would strand a sentinel naming
+    tmpdir paths that pytest then deletes, and the next real battery would
+    read a vanished file as a hash mismatch and refuse 96 over nothing. The
+    sentinel must not outlive the tree it describes.
+
+    Takes any iterable of target paths, not the backups mapping, because the
+    STARTUP check must resolve the same location before a single backup has
+    been taken -- it has only ``resolved_paths`` to go on. One function, one
+    rule, both ends of the battery: the read and the write cannot drift.
+    """
+    import os
+
+    targets = list(targets)
+    if all(p.is_relative_to(ROOT) for p in targets):
+        return IN_FLIGHT_SENTINEL
+    parents = [os.fspath(p.parent) for p in targets]
+    return Path(os.path.commonpath(parents)) / IN_FLIGHT_SENTINEL.name
+
+
+def write_in_flight_sentinel(backups: dict[Path, str], modules: list[str]) -> Path:
+    import json
+    import os
+
+    # The full pre-battery TEXT rides alongside each hash: recovery after a
+    # signal-killed battery must not depend on any git object being
+    # reachable, and the pid and module list make the stranded state
+    # self-describing to whoever reads the file before choosing to recover.
+    #
+    # Keyed on the ABSOLUTE path so an injected table pointing outside the
+    # tree records and recovers like any other file (see _display).
+    payload = {
+        "pid": os.getpid(),
+        "modules": modules,
+        "files": {
+            str(p): {"sha256": _sha256_text(text), "text": text} for p, text in backups.items()
+        },
+    }
+    # Written via a sibling temp file and one atomic rename. A plain write is
+    # not atomic, and this file's entire reason to exist is that the process
+    # can be killed at any instant -- including during this write. A partial
+    # sentinel would be unparseable, and an unparseable sentinel over a
+    # possibly-mutated tree is the worst state the mechanism could produce.
+    target = sentinel_path_for(backups)
+    tmp = target.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", "utf-8")
+    tmp.replace(target)
+    return target
+
+
+def _load_sentinel(sentinel: Path) -> dict:
+    import json
+
+    try:
+        return json.loads(sentinel.read_text("utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SentinelUnreadable(str(exc)) from exc
+
+
+def sentinel_differences(sentinel: Path) -> tuple[bool, list[str]]:
+    """Report whether THIS battery's sentinel exists, and which files differ.
+
+    The sentinel is a parameter, not the module-global, and that is the whole
+    point of the signature. Reading the repository-root sentinel
+    unconditionally made every battery over an INJECTED table read a sentinel
+    it does not own -- and the meta-suite drives exactly such batteries from
+    inside the suite a real battery runs. Measured: with a root sentinel on
+    disk over a differing file (which is precisely what a mutant in flight
+    looks like), 20 of the harness's own tests refused 96, among them
+    ``test_injected_table_never_reads_live_table``, whose name states the
+    hermeticity this violated. Those 20 failures then landed in every trial's
+    junit, so the MUST-PASS inert control read as killed and the battery
+    declared its own attribution unsound. Scope the read exactly as
+    ``write_in_flight_sentinel`` already scopes the write.
+    """
+    if not sentinel.is_file():
+        return False, []
+    payload = _load_sentinel(sentinel)
+    # Differing is judged against the CURRENT bytes, not the sentinel's mere
+    # presence: a file that already matches its pre-battery hash proves the
+    # previous battery was killed in the narrow window AFTER a successful
+    # restore but BEFORE the sentinel came down — a stale sentinel over a
+    # pristine tree, not a stranded mutant.
+    differing = []
+    for key, rec in sorted(payload["files"].items()):
+        path = Path(key)
+        current = path.read_text("utf-8") if path.is_file() else ""
+        if _sha256_text(current) != rec["sha256"]:
+            differing.append(_display(path))
+    return True, differing
+
+
+def recover_from_sentinel(sentinel: Path | None = None) -> int:
+    """Restore the pre-battery bytes an interrupted battery recorded.
+
+    Defaults to the REPOSITORY-ROOT sentinel and not to any battery's scoped
+    one, because ``--recover`` is an operator command run from a shell with no
+    table in hand: the tree it is there to repair is the repository's. The
+    parameter exists so the meta-suite can drive recovery over its own scratch
+    files without touching the developer's tree.
+    """
+    sentinel = IN_FLIGHT_SENTINEL if sentinel is None else sentinel
+    if not sentinel.is_file():
+        print("no in-flight sentinel on disk — nothing to recover.")
+        return 0
+    try:
+        payload = _load_sentinel(sentinel)
+    except SentinelUnreadable as exc:
+        # The sentinel is the ONLY record of the pre-battery bytes. If it is
+        # unreadable there is nothing to recover FROM, and guessing is worse
+        # than refusing: say so and leave the file in place for inspection.
+        print(
+            f"REFUSE: the in-flight sentinel at {sentinel} cannot be parsed "
+            f"({exc}). It holds the only copy of the pre-battery bytes, so recovery is "
+            f"impossible from it; restore from git and delete the file by hand.",
+            file=sys.stderr,
+        )
+        return 96
+    for key, rec in sorted(payload["files"].items()):
+        path = Path(key)
+        rel = _display(path)
+        path.write_text(rec["text"], "utf-8")
+        # As in the battery's own restore, the read-back is ordinary control
+        # flow and never an assert: `python -O` / PYTHONOPTIMIZE=1 compiles
+        # asserts out, and a recovery whose verification a command-line flag
+        # can erase has verified nothing.
+        if path.read_text("utf-8") != rec["text"]:
+            print(
+                f"recovery verification failed for {rel}: the recorded pre-battery "
+                f"bytes were written and read back and do not match — the sentinel "
+                f"is LEFT in place and the tree state is unknown. Exiting 5.",
+                file=sys.stderr,
+            )
+            return 5
+        # #328: a size-preserving mutant restored inside the same integer
+        # second leaves a .pyc whose mtime+size still validate, so the next
+        # run would execute the mutant out of the bytecode cache even with
+        # the .py already correct. Purge every recovered file's cache, or
+        # the recovery has recovered nothing.
+        for stale_pyc in (path.parent / "__pycache__").glob(f"{path.stem}.*.pyc"):
+            stale_pyc.unlink()
+    sentinel.unlink()
+    print(f"recovered {len(payload['files'])} file(s) from the in-flight sentinel; cache purged.")
+    return 0
+
 
 # tools/emit_run_manifest.py mutants (#85). Rows carry exactly _REQUIRED_KEYS;
 # binding to the module is by anchor uniqueness inside the file, which is why
@@ -1361,7 +1568,27 @@ def main(
         action="store_true",
         help="print one module name per line and exit (the CI shard list)",
     )
+    # #404: a battery killed mid-trial leaves the mutant in the working tree.
+    # Recovery is a MUTATION-FREE, MEASUREMENT-FREE path: it restores the
+    # bytes the sentinel recorded and exits, never running the suite. It is a
+    # first-class flag rather than an argv peek so `--help` names it -- the
+    # operator meeting the 96 refusal is being told to run something, and a
+    # flag the parser does not know about is a flag `--help` cannot teach.
+    ap.add_argument(
+        "--recover",
+        action="store_true",
+        help="restore the pre-battery bytes recorded by an interrupted run, then exit",
+    )
     args = ap.parse_args(argv)
+
+    # #404: dispatched HERE, above every table and path check, and that
+    # placement is the whole point. A stranded mutant IS an edited anchor, so
+    # the most likely tree needing recovery is exactly the tree whose anchors
+    # no longer resolve -- and the table check refuses 2 on that tree. Below
+    # that check, `--recover` would be unreachable in the one situation it
+    # exists for. Recovery needs the sentinel and nothing else.
+    if args.recover:
+        return recover_from_sentinel()
 
     resolved_paths: dict[str, Path]
     if module_paths is None:
@@ -1427,6 +1654,71 @@ def main(
         )
         return 2
 
+    # #404: BEFORE check_baseline on purpose — the baseline costs one full
+    # suite run, and a run about to refuse on a stranded mutant (or to heal
+    # a stale sentinel) has no business paying it. The absent case is the
+    # overwhelmingly common one and costs one is_file() and no output.
+    #
+    # Scoped to THIS battery's own targets, via the same function the write
+    # uses. Reading the repository-root sentinel unconditionally is what made
+    # the harness's own self-tests -- which drive mutate.main() over injected
+    # pytest scratch tables from INSIDE the suite a real battery runs -- refuse
+    # 96 the moment the outer battery had a mutant applied. Measured: 20 of the
+    # 42 self-tests failed in every trial, the same 20 every time, which put
+    # 20 spurious failures in every junit and made the MUST-PASS inert control
+    # read as killed. The battery then correctly declared its own attribution
+    # unsound and exited 2 -- a true verdict about a defect that was in the
+    # harness, not in the tree.
+    battery_sentinel = sentinel_path_for(resolved_paths[mod] for mod in sorted(table))
+    try:
+        sentinel_present, differing = sentinel_differences(battery_sentinel)
+    except SentinelUnreadable as exc:
+        # A sentinel truncated mid-write is the signature of exactly the kill
+        # this mechanism exists to survive, so it cannot be allowed to raise:
+        # an uncaught JSONDecodeError exits 1, which this tool never emits and
+        # which reads as an ordinary crash rather than a tree needing a look.
+        print(
+            f"REFUSE: an in-flight sentinel is on disk at {battery_sentinel} and cannot "
+            f"be parsed ({exc}) — most likely the previous battery was killed DURING the "
+            f"write. Its file list is therefore unknown, so this run cannot tell whether a "
+            f"mutant is stranded in the tree. Check `git status` / `git diff` against the "
+            f"mutation targets, restore anything unexpected, then delete the sentinel. "
+            f"Exiting 96.",
+            file=sys.stderr,
+        )
+        return 96
+    if sentinel_present:
+        if not differing:
+            # Every recorded file already matches its pre-battery hash: the
+            # previous battery was killed after a successful restore but
+            # before the sentinel came down. The tree is pristine; refusing
+            # here would be a false positive — say so, drop the stale
+            # sentinel, and continue.
+            print(
+                "stale in-flight sentinel found, but every recorded file matches its "
+                "pre-battery hash (previous battery was killed after a clean restore); "
+                "removing the sentinel and continuing."
+            )
+            battery_sentinel.unlink()
+        else:
+            named = "\n".join(f"  {rel}" for rel in differing)
+            print(
+                f"an in-flight sentinel from an interrupted mutation battery is on disk "
+                f"at {battery_sentinel}, and {len(differing)} recorded file(s) differ "
+                f"from their pre-battery bytes:\n{named}\n"
+                f"the tree may contain a stranded mutant from that run (#404) — but the "
+                f"difference may ALSO be legitimate edits made since, which "
+                f"recovery would OVERWRITE. Refusing instead of auto-restoring is "
+                f"deliberate: silently overwriting a developer's work to fix our own "
+                f"crash is the worse failure. Inspect the files; if they should hold "
+                f"the pre-battery bytes, run exactly:\n"
+                f"  python tools/mutate.py --recover\n"
+                f"(or delete .mutate_in_flight.json by hand if the differences are your "
+                f"own work). Exiting 96.",
+                file=sys.stderr,
+            )
+            return 96
+
     # One mkdtemp per battery run, deliberately never deleted: junit reports
     # are the evidence behind every non-green claim this tool prints.
     junit_dir = Path(tempfile.mkdtemp(prefix="foundationscale-mutate-"))
@@ -1452,6 +1744,12 @@ def main(
             file=sys.stderr,
         )
         return 2
+
+    # #404: the sentinel goes down the moment the pre-battery bytes are in
+    # hand, BEFORE the first mutant is written — from here until the
+    # verified restore in the finally below, it is the only record of what
+    # the tree must be returned to if a signal bypasses that finally.
+    sentinel = write_in_flight_sentinel(backups, sorted(table))
 
     results: dict[str, dict[str, list]] = {}
     try:
@@ -1540,6 +1838,18 @@ def main(
                     f"this file from version control before trusting ANY "
                     f"result this run printed."
                 )
+        # #404: the sentinel must OUTLIVE an unverified restore — it is
+        # deleted only here, after the byte-for-byte read-back above passed
+        # for every module. The RuntimeError on a failed verification rises
+        # before this line and leaves the sentinel on disk: exactly the
+        # state the next run's startup check must catch and refuse on.
+        # Deleting it before the read-back would let an unverifiable
+        # restore pass as a clean one.
+        #
+        # `sentinel`, not IN_FLIGHT_SENTINEL: an injected-table battery puts
+        # its sentinel beside the files it describes, and unlinking the root
+        # one here would delete nothing while stranding that one on disk.
+        sentinel.unlink(missing_ok=True)
         print(f"\n{len(backups)} module(s) restored byte-for-byte.")
 
     print("\n=== per-module tally ===")

@@ -16,6 +16,7 @@ datasets are imported INSIDE :func:`train`, and their absence is a REFUSE
 
 from __future__ import annotations
 
+import errno
 import inspect
 import json
 import os
@@ -68,6 +69,67 @@ EXIT_PASS = 0
 EXIT_RED = 5
 EXIT_UNMEASURED = 95
 EXIT_REFUSE = 96
+
+# --- Environment failures are not this plane's claim to answer (#409) -------
+#
+# A construction failure has two populations and they carry OPPOSITE verdicts.
+# A bad model id, an incompatible architecture or a missing weight file is a
+# real RED: the operator asked for something this plane cannot build, and the
+# claim is false. An ENOLCK from a home directory that serves no file locking,
+# a full disk, a read-only mount or an unreachable hub is not a statement about
+# the plane at all -- construction never got far enough to measure anything, so
+# the honest verdict is 96 CANNOT-MEASURE. This is the rule the kernel-selection
+# arm further down already states for itself; it was never applied to the outer
+# boundary, which is where every other construction failure lands.
+#
+# Collapsing the two is how a framework comes to accuse itself. On an NFS home
+# -- the default on most HPC estates -- the HuggingFace filelock raises
+# OSError(37, "No locks available") before a single parameter is read, and a
+# bare `except Exception -> RED` reports that as a broken training plane.
+# MEASURED on a GB200 estate: four telemetry tests failed their own
+# `rc in (EXIT_PASS, EXIT_UNMEASURED)` precondition on rc=5 for exactly this
+# reason, and the identical suite passed once HF_HOME pointed at node-local
+# scratch. Nothing about the framework differed between those two runs.
+#
+# The table is keyed on ERRNO, not on message text, because an errno is a stable
+# kernel-level fact while the message is libc- and locale-dependent -- keying on
+# text would make the verdict vary by machine, which is the axis #83 refuses.
+_ENVIRONMENT_ERRNOS: dict[int, str] = {
+    errno.ENOLCK: "the filesystem serves no file locking (typical of an NFS home)",
+    errno.ENOSPC: "the filesystem is full",
+    errno.EDQUOT: "the disk quota is exhausted",
+    errno.EROFS: "the filesystem is read-only",
+    errno.EACCES: "the path is not readable by this user",
+    errno.EPERM: "the operation is not permitted for this user",
+    errno.ECONNREFUSED: "the remote host refused the connection",
+    errno.ENETUNREACH: "the network is unreachable",
+    errno.ETIMEDOUT: "the connection timed out",
+    errno.EMFILE: "the per-process open-file limit is exhausted",
+    errno.ENFILE: "the system-wide open-file limit is exhausted",
+}
+
+
+def _environment_failure_reason(exc: BaseException) -> str | None:
+    """Name the environment fault behind `exc`, or None if it is a genuine RED.
+
+    Walks the ``__cause__``/``__context__`` chain rather than judging only the
+    outermost exception, because the libraries this plane calls wrap an OSError
+    in their own exception type far more often than they let it through: a check
+    on the top frame alone would classify every wrapped ENOLCK as RED and leave
+    the split doing nothing at all. The walk is cycle-guarded because an
+    exception raised while handling itself can close the chain into a loop.
+    """
+    seen: set[int] = set()
+    cursor: BaseException | None = exc
+    while cursor is not None and id(cursor) not in seen:
+        seen.add(id(cursor))
+        if isinstance(cursor, OSError) and cursor.errno in _ENVIRONMENT_ERRNOS:
+            detail = _ENVIRONMENT_ERRNOS[cursor.errno]
+            where = f" at {cursor.filename}" if cursor.filename else ""
+            return f"{detail}{where} [errno {cursor.errno}]"
+        cursor = cursor.__cause__ or cursor.__context__
+    return None
+
 
 EXTRA = "foundationscale[train]"
 EXTRA_HINT = f"pip install '{EXTRA}'"
@@ -265,6 +327,15 @@ class TrainConfig:
     # backend exists in this plane.
     sharding_strategy: str | None = None
     cpu_optimizer_offload: bool | None = None
+    # logging_steps sits OUTSIDE the nine axes above on purpose: it is the one
+    # knob whose absence still binds. None means not declared, and the wiring
+    # site in _train then falls back to max(1, min(10, max_steps)) -- the
+    # historical unconditional binding -- so an undeclared run behaves exactly
+    # as it did before the knob existed. The nine axes' None applies NOTHING;
+    # this one's None applies the fallback, and the manifest records both the
+    # declaration (config section) and the value actually bound (telemetry
+    # section's logging_steps_effective).
+    logging_steps: int | None = None
     # Harmless knobs.
     max_steps: int = 20
     per_device_batch_size: int = 1
@@ -341,6 +412,11 @@ class TrainConfig:
             raise ValueError("gradient_accumulation_steps must be >= 1")
         if self.warmup_steps is not None and int(self.warmup_steps) < 0:
             raise ValueError("warmup_steps must be >= 0")
+        if self.logging_steps is not None and int(self.logging_steps) < 1:
+            raise ValueError(
+                "logging_steps must be >= 1; 0 would emit no training log at "
+                "all, and a run that logs nothing is UNMEASURED by construction"
+            )
         if self.max_grad_norm is not None and float(self.max_grad_norm) <= 0:
             raise ValueError("max_grad_norm must be > 0; 0 would zero every step")
         if self.adapter is not None and self.adapter not in ADAPTERS:
@@ -880,10 +956,11 @@ class FoundationScaleObjectiveGate(_CallbackBase):
     the vacuous pass this codebase refuses; a backstop that lies about which
     state it is in is the same defect.
 
-    The backstop is now hard to reach, which is the point: the cadence is bound
-    to ``max(1, min(10, max_steps))``, so every run emits at least one training
-    log. Reaching it means the trainer logged nothing at all, which is worth
-    hearing about rather than papering over.
+    The backstop is now hard to reach, which is the point: the cadence is the
+    declared ``logging_steps`` when the operator set one, and is otherwise
+    bound to ``max(1, min(10, max_steps))``, so every run emits at least one
+    training log. Reaching it means the trainer logged nothing at all, which
+    is worth hearing about rather than papering over.
 
     Importable without transformers/torch: with the extra absent the base
     degrades to ``object`` and the class is driven directly in tests.
@@ -1097,6 +1174,7 @@ def _manifest_payload(
     *,
     stage: str,
     extra: dict[str, Any] | None = None,
+    telemetry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema": "foundationscale.run-manifest/v1",
@@ -1158,10 +1236,20 @@ def _manifest_payload(
             "attn_implementation": cfg.attn_implementation,
             "lr_scheduler_type": cfg.lr_scheduler_type,
             "warmup_steps": cfg.warmup_steps,
+            "logging_steps": cfg.logging_steps,
             "sharding_strategy": cfg.sharding_strategy,
             "cpu_optimizer_offload": cfg.cpu_optimizer_offload,
         },
         "extra": extra or {},
+        # Outcome telemetry is its own top-level section, never folded into
+        # config: config is what the run DECLARED, telemetry is what the run
+        # MEASURED, and a reader diffing two runs' configs must not have to
+        # separate one from the other. Empty before training completes -- an
+        # empty section at stage="train" is a true statement, not a missing
+        # one. The schema string stays v1: the key is additive, and the
+        # validated manifest's schema_version is owned by the provenance
+        # package, not by this payload.
+        "telemetry": telemetry or {},
     }
 
 
@@ -1381,6 +1469,59 @@ def _declare_checkpoint(model: Any) -> tuple[Any, dict[str, str]]:
     )
 
 
+# Units of the outcome metrics the loop records, keyed by metric name. The
+# unit describes the METRIC, not the outcome, so an entry that could not be
+# measured keeps the unit of the thing it failed to measure. A key absent
+# from this table is unitless (None) -- train_loss and every scalar like it.
+_TELEMETRY_UNITS: dict[str, str] = {
+    "train_runtime_s": "s",
+    "samples_per_second": "samples/s",
+    "steps_per_second": "steps/s",
+    "peak_memory_allocated_bytes": "bytes",
+    "peak_memory_reserved_bytes": "bytes",
+    "logging_steps_effective": "steps",
+}
+# total_flos is deliberately ABSENT. It was declared here with no producer: this
+# loop counts no FLOPs, so the key could never be recorded and the table stated a
+# unit for a quantity that does not exist. A units table whose key set is wider
+# than the emitted key set is the drift the telemetry unit control exists to
+# catch, and it caught this one. Adding FLOP accounting later means adding the
+# emission and this row together, never this row alone.
+
+
+def _cuda_availability(torch_module: Any) -> tuple[bool, str]:
+    """Decide whether a CUDA peak-memory counter exists, and say why when it does not.
+
+    Args:
+        torch_module: The imported ``torch``. Passed IN rather than read from
+            module state so this decision is a unit with inputs. That is not
+            decoration: deleting ``torch.cuda`` from the real module to reach the
+            no-module branch breaks transformers long before control arrives
+            here, so through ``train()`` alone that branch is unreachable, and an
+            unreachable branch is untested by construction however it is written.
+
+    Returns:
+        ``(available, reason)``. ``reason`` is the UNMEASURED text to record when
+        ``available`` is False, and is DISTINCT per branch: "this build exposes no
+        torch.cuda" and "torch.cuda.is_available() is False" are different facts
+        about the machine, and a reader of the manifest must be able to tell which
+        one held. When ``available`` is True there is a counter to read and the
+        reason is empty.
+    """
+    cuda = getattr(torch_module, "cuda", None)
+    if cuda is None:
+        return False, (
+            "UNMEASURED: this torch build exposes no torch.cuda module, so this "
+            "run has no CUDA peak-memory counter to read"
+        )
+    if not bool(cuda.is_available()):
+        return False, (
+            "UNMEASURED: torch.cuda.is_available() is False, so this run has "
+            "no CUDA peak-memory counter to read"
+        )
+    return True, ""
+
+
 def _build_run_manifest(
     cfg: TrainConfig,
     *,
@@ -1388,6 +1529,7 @@ def _build_run_manifest(
     extra: dict[str, Any] | None,
     declared: Any = None,
     notes: dict[str, str] | None = None,
+    telemetry: dict[str, tuple[Any, str]] | None = None,
 ) -> Any:
     """Construct the real :class:`~foundationscale.provenance.RunManifest`.
 
@@ -1415,6 +1557,7 @@ def _build_run_manifest(
         from foundationscale.provenance import (
             EffectiveValue,
             RunManifest,
+            TelemetryEntry,
             capture_code_provenance,
             capture_environment,
         )
@@ -1512,6 +1655,23 @@ def _build_run_manifest(
     # Both capture helpers report a DECLARED status rather than raising when
     # there is nothing to capture (NOT_A_REPOSITORY outside a git tree), so an
     # unversioned working directory yields an honest manifest, not a missing one.
+    # Outcome telemetry is ONE top-level section of TelemetryEntry, with the
+    # value passed THROUGH unstringified -- a number surviving as a number is
+    # the whole point of the type. No introspection probe remains here because
+    # there is nothing to probe: foundationscale.provenance lives in THIS
+    # repository and is versioned with this file, so a constructor keyword it
+    # does not accept is a build error that must be loud, never a silent
+    # degradation into config -- the section reserved for what the run
+    # DECLARED.
+    telemetry_section = {
+        key: TelemetryEntry(
+            key=key,
+            value=value,
+            source=source,
+            unit=_TELEMETRY_UNITS.get(key),
+        )
+        for key, (value, source) in (telemetry or {}).items()
+    }
     return RunManifest(
         run_id=_run_id(cfg),
         attempt=int(os.environ.get("FS_ATTEMPT", "1")),
@@ -1525,6 +1685,7 @@ def _build_run_manifest(
         # UNKNOWN and fail closed, which is exactly correct for a run that never
         # built the model it would have been declaring.
         declared=declared,
+        telemetry=telemetry_section,
     )
 
 
@@ -1535,6 +1696,7 @@ def _emit_manifest(
     extra: dict[str, Any] | None = None,
     declared: Any = None,
     notes: dict[str, str] | None = None,
+    telemetry: dict[str, tuple[Any, str]] | None = None,
 ) -> Path:
     """Write the run manifest where the checkpoint gates will look for it.
 
@@ -1550,14 +1712,29 @@ def _emit_manifest(
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / MANIFEST_NAME
-    manifest = _build_run_manifest(cfg, stage=stage, extra=extra, declared=declared, notes=notes)
+    manifest = _build_run_manifest(
+        cfg, stage=stage, extra=extra, declared=declared, notes=notes, telemetry=telemetry
+    )
     if manifest is None:
         # Degrade loudly. The previous implementation probed provenance for four
         # writer names it does not export and fell through here silently on
         # every single run, which read like integration and was none.
         path.write_text(
             json.dumps(
-                _manifest_payload(cfg, stage=stage, extra=extra),
+                # The degraded writer cannot use EffectiveValue -- that
+                # import is exactly what failed above -- so the provenance
+                # shape is spelled out field-for-field to match it. An
+                # unmeasured entry keeps its "unmeasured" source and its
+                # stated reason here too.
+                _manifest_payload(
+                    cfg,
+                    stage=stage,
+                    extra=extra,
+                    telemetry={
+                        key: {"value": str(value), "source": source, "findings": []}
+                        for key, (value, source) in (telemetry or {}).items()
+                    },
+                ),
                 indent=2,
                 sort_keys=True,
                 default=str,
@@ -1634,22 +1811,46 @@ def train(cfg: TrainConfig) -> int:
         # goes to stderr exactly where the interpreter would have put it. What
         # changes is the exit code, not the operator's evidence.
         traceback.print_exc(file=sys.stderr)
-        try:
-            _mark(
-                Step.RED,
+        # #409: an environment fault that escapes the thin path is still an
+        # environment fault. Classify BEFORE adjudicating, or a full disk is
+        # published as a crashed framework. This is the widest of the three
+        # sites -- anything unguarded anywhere in _train lands here.
+        environment = _environment_failure_reason(exc)
+        if environment is None:
+            step, verdict = Step.RED, EXIT_RED
+            detail = (
                 f"unhandled {type(exc).__name__} escaped the thin path: {exc}. "
                 "Adjudicated RED (5) at the train() boundary rather than "
                 "allowed to exit 1, which sits outside the 0/5/95/96 "
-                "contract. Full traceback on stderr",
+                "contract. Full traceback on stderr"
             )
+        else:
+            step, verdict = Step.REFUSE, EXIT_REFUSE
+            detail = (
+                f"unhandled {type(exc).__name__} escaped the thin path, and it is "
+                f"an environment fault: {environment}. Adjudicated REFUSE (96), not "
+                "RED (5): the machine failed, not the training plane, so no claim "
+                "about this plane was measured. Full traceback on stderr"
+            )
+        try:
+            _mark(step, detail)
             _emit_manifest(
                 cfg,
                 stage="crashed",
-                extra={"exit": EXIT_RED, "unhandled_exception": type(exc).__name__},
+                extra={"exit": verdict, "unhandled_exception": type(exc).__name__},
             )
         except Exception:  # noqa: BLE001 -- reporting must not replace the verdict
             pass
-        return EXIT_RED
+        # Return the DECLARED constant on each branch rather than the name
+        # bound above. Identical behaviour -- `verdict` is EXIT_RED exactly
+        # when `environment is None` -- but checks/exit_contract_scope.py
+        # resolves a returned constant and cannot resolve a name assigned in
+        # two branches. Returning `verdict` put this entry point, main(), and
+        # both `raise SystemExit(main())` sites into UNRESOLVED, which is
+        # neither in-contract nor out: six sites in no axis at all (#381).
+        if environment is None:
+            return EXIT_RED
+        return EXIT_REFUSE
 
 
 def _train(cfg: TrainConfig) -> int:
@@ -1953,7 +2154,20 @@ def _train(cfg: TrainConfig) -> int:
             batched=True,
             remove_columns=columns,
         )
-    except Exception as exc:  # noqa: BLE001 -- download/construction failure is RED
+    except Exception as exc:  # noqa: BLE001 -- classified into RED vs REFUSE below
+        environment = _environment_failure_reason(exc)
+        if environment is not None:
+            # 96, not 5. Construction never began, so no claim about this plane
+            # was measured -- see _ENVIRONMENT_ERRNOS for why the two populations
+            # must not share a verdict.
+            _mark(
+                Step.REFUSE,
+                f"model/dataset construction could not be ATTEMPTED: {environment}. "
+                "This is a property of the machine, not of the training plane, so "
+                "there is no run to score. Point HF_HOME (and HF_DATASETS_CACHE) at "
+                f"a filesystem without this fault and re-run. Underlying: {exc!r}",
+            )
+            return EXIT_REFUSE
         _mark(Step.RED, f"model/dataset construction failed: {exc!r}")
         return EXIT_RED
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
@@ -2000,6 +2214,11 @@ def _train(cfg: TrainConfig) -> int:
             try:
                 model = get_peft_model(model, LoraConfig(**lora_config))
             except Exception as exc:  # noqa: BLE001 -- construction failure is RED
+                # Deliberately NOT run through _environment_failure_reason (#409):
+                # get_peft_model() rewrites an already-constructed model in memory
+                # and opens no file and no socket, so there is no environment errno
+                # for the classifier to find. A branch here would be unfireable by
+                # any test, which is a worse defect than the asymmetry it removes.
                 _mark(Step.RED, f"peft wrapping of adapter='lora' failed: {exc!r}")
                 return EXIT_RED
             # MEASURE what the adapter attached to. LoRA parameters are named
@@ -2100,6 +2319,15 @@ def _train(cfg: TrainConfig) -> int:
     # -- the artifact format is ASSERTED after the save in step 8 instead of
     # being trusted here. Introspection alone would carry the same defect one
     # level up: it proves the argument was tolerated, not that it took effect.
+    # logging_steps is the one knob whose absence still binds, so the
+    # effective cadence is resolved ONCE here: the declared value when the
+    # operator set one, the historical run-length-bounded expression when
+    # they did not. Computing it at the wiring site and again at the record
+    # site would be two expressions that can drift; the telemetry section
+    # below records this binding as logging_steps_effective.
+    logging_steps_effective = (
+        cfg.logging_steps if cfg.logging_steps is not None else max(1, min(10, cfg.max_steps))
+    )
     kwargs: dict[str, object] = {
         "output_dir": str(cfg.output_dir),
         "max_steps": cfg.max_steps,
@@ -2115,7 +2343,10 @@ def _train(cfg: TrainConfig) -> int:
         # was landing on the gate's backstop arm (UNMEASURED) purely because the
         # cadence outran the run. The floor of 1 keeps max_steps=1 observable,
         # and any run of 10 steps or more keeps the previous cadence exactly.
-        "logging_steps": max(1, min(10, cfg.max_steps)),
+        # A DECLARED logging_steps wins over that fallback -- that is the whole
+        # point of the knob -- and the effective value is resolved once above
+        # so the telemetry section records the cadence actually bound.
+        "logging_steps": logging_steps_effective,
         "report_to": [],
         "ddp_find_unused_parameters": False,
     }
@@ -2285,9 +2516,39 @@ def _train(cfg: TrainConfig) -> int:
     # exit -- that is intended, since the run's outcome is only knowable then.
     _emit_manifest(cfg, stage="train", declared=declared_ckpt, notes=manifest_notes)
     _mark(Step.RUN, "training starts")
+    # Peak-memory instrumentation starts HERE, before the first step: the peak
+    # counter is reset so the figure read after the last step is the TRAINING
+    # peak, not a high-water mark carried over from model construction or
+    # tokenization. torch was imported locally in step 4, so this adds no
+    # module-scope torch import (#354). Where CUDA is absent there is no
+    # counter to reset and nothing is faked: the telemetry entries are
+    # recorded UNMEASURED with the reason, never 0 and never absent.
+    # Probe for the module before the function: torch.cuda is absent on a
+    # CPU-only build and on the fake torch a test double installs, and reaching
+    # through it unguarded raised AttributeError, which train() adjudicated RED.
+    # An instrument that is not there is UNMEASURED, never a failed run -- and
+    # the two reasons are distinct, so the record says which one applied.
+    cuda_available, no_peak_reason = _cuda_availability(torch)
+    if cuda_available:
+        torch.cuda.reset_peak_memory_stats()
     try:
-        trainer.train()
-    except Exception as exc:  # noqa: BLE001
+        # TrainOutput is RETAINED, not discarded: its .metrics mapping is the
+        # trainer's own statement of train_runtime, train_samples_per_second,
+        # train_steps_per_second and train_loss, and it is the only measured
+        # source the telemetry section has. It used to be dropped on the
+        # floor, so those numbers existed transiently on stdout and nowhere
+        # else.
+        train_output = trainer.train()
+    except Exception as exc:  # noqa: BLE001 -- classified into RED vs REFUSE below
+        environment = _environment_failure_reason(exc)
+        if environment is not None:
+            _mark(
+                Step.REFUSE,
+                f"Trainer.train() could not run to completion: {environment}. This "
+                "is a property of the machine, not of the training plane, so the "
+                f"run is unscored rather than failed. Underlying: {exc!r}",
+            )
+            return EXIT_REFUSE
         _mark(Step.RED, f"Trainer.train() raised: {exc!r}")
         return EXIT_RED
     if objective_callback.blocked:
@@ -2305,11 +2566,137 @@ def _train(cfg: TrainConfig) -> int:
         )
         return EXIT_RED
 
+    # --- Outcome telemetry, read from the instruments that measured it ------
+    #
+    # Every entry is a (value, source) pair bound for the manifest's telemetry
+    # section. source="measured" means the number came from the trainer's own
+    # TrainOutput.metrics or from torch's CUDA peak-memory counters;
+    # source="derived" marks the one entry computed from the config (the
+    # effective logging cadence); an entry that could not be measured is
+    # present with source="unmeasured" and a value STATING the reason --
+    # never 0, never absent-meaning-fine. The peak is read after the last
+    # training step and before the final save, so it prices training rather
+    # than serialization.
+    if cuda_available:
+        peak_allocated: tuple[Any, str] = (torch.cuda.max_memory_allocated(), "measured")
+        peak_reserved: tuple[Any, str] = (torch.cuda.max_memory_reserved(), "measured")
+    else:
+        peak_allocated = (no_peak_reason, "unmeasured")
+        peak_reserved = (no_peak_reason, "unmeasured")
+    train_metrics = getattr(train_output, "metrics", None)
+    if not isinstance(train_metrics, dict):
+        # A TrainOutput without a metrics mapping is not a measured zero; the
+        # entries below say which instrument was unread rather than minting
+        # numbers the trainer never reported.
+        train_metrics = None
+
+    def _metric(key: str) -> tuple[Any, str]:
+        if train_metrics is None:
+            return (
+                "UNMEASURED: Trainer.train() returned no metrics mapping, so "
+                f"{key} was never reported by the trainer",
+                "unmeasured",
+            )
+        value = train_metrics.get(key)
+        if value is None:
+            return (
+                f"UNMEASURED: TrainOutput.metrics carries no {key!r} key on "
+                f"transformers {_tf_version()}",
+                "unmeasured",
+            )
+        return (value, "measured")
+
+    def _loss_curve() -> tuple[Any, str]:
+        """Read the per-step loss series the trainer already logged.
+
+        train_loss is the trainer's aggregate mean over the whole run: one
+        scalar. Adjudicators compare CURVES -- did the loss move when a knob
+        moved, and do two accumulation settings trace the same path -- and a
+        one-point mean cannot answer either, so the series is read from
+        trainer.state.log_history at whatever cadence logging_steps bound.
+        """
+        try:
+            state = getattr(trainer, "state", None)
+            if state is None:
+                return (
+                    "UNMEASURED: trainer exposes no state attribute, so the "
+                    "per-step loss history was never readable",
+                    "unmeasured",
+                )
+            history = getattr(state, "log_history", None)
+            if not isinstance(history, list):
+                return (
+                    "UNMEASURED: trainer.state exposes no log_history list, so "
+                    "the per-step loss history was never readable",
+                    "unmeasured",
+                )
+            by_step: dict[int, float] = {}
+            for entry in history:
+                if not isinstance(entry, dict):
+                    continue
+                loss = entry.get("loss")
+                step = entry.get("step")
+                # bool is an int subclass; a True/False here is a flag, not a
+                # measurement, and the codebase excludes it wherever numbers
+                # are read. The train-summary row has no "loss" key and is
+                # dropped by this same filter, never by position.
+                if isinstance(loss, bool) or isinstance(step, bool):
+                    continue
+                if not isinstance(loss, (int, float)) or not isinstance(step, (int, float)):
+                    continue
+                if isinstance(step, float) and not step.is_integer():
+                    continue
+                # Assignment, not append: a resumed run can log a step twice,
+                # and the later record is the one the run ended believing.
+                by_step[int(step)] = float(loss)
+        except Exception as exc:  # noqa: BLE001 -- telemetry must never turn a run RED
+            return (
+                f"UNMEASURED: reading trainer.state.log_history raised {type(exc).__name__}: {exc}",
+                "unmeasured",
+            )
+        if not by_step:
+            return (
+                "UNMEASURED: trainer.state.log_history carried no entry with "
+                "both a numeric loss and a numeric step; with "
+                f"logging_steps_effective={logging_steps_effective} and "
+                f"cfg.max_steps={cfg.max_steps} the cadence and run length are "
+                "the pair an operator changes to make a loss observable",
+                "unmeasured",
+            )
+        return ([[step, by_step[step]] for step in sorted(by_step)], "measured")
+
+    telemetry: dict[str, tuple[Any, str]] = {
+        "train_runtime_s": _metric("train_runtime"),
+        "samples_per_second": _metric("train_samples_per_second"),
+        "steps_per_second": _metric("train_steps_per_second"),
+        "train_loss": _metric("train_loss"),
+        # The aggregate above stays: it is the trainer's own statement. It is
+        # not a curve -- one mean cannot show divergence or equivalence -- so
+        # the per-step series is carried beside it rather than replacing it.
+        "train_loss_curve": _loss_curve(),
+        "peak_memory_allocated_bytes": peak_allocated,
+        "peak_memory_reserved_bytes": peak_reserved,
+        "logging_steps_effective": (logging_steps_effective, "derived"),
+    }
+
     # --- 8. Final save ------------------------------------------------------
     final_dir = Path(cfg.output_dir) / "final"
     try:
         trainer.save_model(str(final_dir))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 -- classified into RED vs REFUSE below
+        environment = _environment_failure_reason(exc)
+        if environment is not None:
+            # Say plainly that the GPU hours were spent: the weights trained and
+            # the filesystem refused them. An operator who reads only the verdict
+            # must not conclude that nothing ran.
+            _mark(
+                Step.REFUSE,
+                f"the final save could not be written: {environment}. The weights "
+                "trained; the filesystem refused them. That is a property of the "
+                "machine, not of the training plane, so the run is unscored rather "
+                f"than failed. Underlying: {exc!r}",
+            )
+            return EXIT_REFUSE
         _mark(Step.RED, f"final save failed: {exc!r}")
         return EXIT_RED
     # The format the save gate reads is asserted on the ARTIFACT, not inferred
@@ -2343,6 +2730,7 @@ def _train(cfg: TrainConfig) -> int:
             extra={"exit": EXIT_UNMEASURED},
             declared=declared_ckpt,
             notes=manifest_notes,
+            telemetry=telemetry,
         )
         return EXIT_UNMEASURED
     _mark(Step.SAVED, f"final checkpoint -> {final_dir} ({len(shards)} safetensors shard(s))")
@@ -2360,6 +2748,7 @@ def _train(cfg: TrainConfig) -> int:
             extra={"exit": EXIT_UNMEASURED},
             declared=declared_ckpt,
             notes=manifest_notes,
+            telemetry=telemetry,
         )
         return EXIT_UNMEASURED
     _mark(Step.ADJUDICATE, report.render())
@@ -2371,6 +2760,7 @@ def _train(cfg: TrainConfig) -> int:
             extra={"exit": EXIT_UNMEASURED},
             declared=declared_ckpt,
             notes=manifest_notes,
+            telemetry=telemetry,
         )
         return EXIT_UNMEASURED
     rc = EXIT_RED if report.blocking else EXIT_PASS
@@ -2410,6 +2800,7 @@ def _train(cfg: TrainConfig) -> int:
         extra=done_extra,
         declared=declared_ckpt,
         notes=manifest_notes,
+        telemetry=telemetry,
     )
     _mark(Step.DONE, done)
     return rc

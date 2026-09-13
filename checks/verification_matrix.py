@@ -49,7 +49,14 @@ Doctrine wiring:
       missing matrix is UNMEASURED (95), not RED. SC8 is the precedence
       control: with one check RED and another UNMEASURED at the same time the
       verdict must be RED, because 95 is the code this plane reads as "not a
-      failure" and a fired check must not be reported as neutral.
+      failure" and a fired check must not be reported as neutral. SC9 is the
+      discrimination control, and it is the only one that does not plant into
+      a file copy: the defect it guards lives in the COUNTING, not in the
+      ledger. ``"MEASURED" in status`` also matches ``"UNMEASURED"`` (#199),
+      so it would tally a row that explicitly refused for want of an arm as a
+      row that measured something -- the one direction this countable must
+      never fail in. Two synthetic rows differing only in the ``UN`` prefix
+      are the whole instrument.
 """
 
 from __future__ import annotations
@@ -252,7 +259,13 @@ def derive_countables(rows: list[JsonRow]) -> dict[str, int]:
         blocked_by = row.get("blocked_by")
         if isinstance(blocked_by, list) and blocked_by:
             blocked.add(i)
-    measured = sum(1 for s in statuses if "MEASURED" in s or s.startswith("done"))
+    # ANCHORED on purpose (the #199 class): a bare `"MEASURED" in s` also matches
+    # "UNMEASURED", so a row that explicitly refuses for want of an arm would be
+    # counted as a row that measured something -- the one direction this countable
+    # must never fail in. The negation is checked first because it is the superstring.
+    measured = sum(
+        1 for s in statuses if (("MEASURED" in s and "UNMEASURED" not in s) or s.startswith("done"))
+    )
     # CASE-INSENSITIVE on purpose: the matrix carries both "REFUSES by design"
     # (T1-3) and "refuses by design" (T1-22), so a case-sensitive match here
     # silently undercounts the refusals.
@@ -653,6 +666,32 @@ def _sc8(matrix_src: Path, doc_src: Path) -> bool:
     return reached and rc == RC_RED
 
 
+def _sc9(_matrix_src: Path, _doc_src: Path) -> bool:
+    """DISCRIMINATION CONTROL: "UNMEASURED" must not be counted as MEASURED.
+
+    This one does not plant into a file copy, because the defect it guards is
+    not a property of the ledger -- it is a property of the COUNTING. A bare
+    ``"MEASURED" in status`` also matches ``"UNMEASURED"`` (the #199 class), so
+    a row that explicitly refused for want of an arm would be added to the
+    tally of rows that measured something, which is the one direction this
+    countable must never fail in. The two synthetic rows below differ in
+    exactly one character sequence -- the ``UN`` prefix -- so the assertion
+    cannot pass for any reason other than the anchoring.
+
+    It also asserts the OTHER direction (a real MEASURED row still counts), so
+    a fix that simply stopped counting everything would not pass it.
+    """
+
+    def _row(status: str) -> JsonRow:
+        return {"id": "T0-SC9", "tier": 0, "status": status, "blocked_by": []}
+
+    measured = derive_countables([_row("MEASURED on 2xGB200, control arm differed")])["measured"]
+    unmeasured = derive_countables([_row("UNMEASURED: no GPU arm was available")])["measured"]
+    # Both halves are required. measured==1 alone passes a gate that counts
+    # every row; unmeasured==0 alone passes a gate that counts none.
+    return measured == 1 and unmeasured == 0
+
+
 # The fourth element is the control's KIND, and the banner counts it rather
 # than restating a breakdown by hand: a hand-written "(5 MUST_FIRE, 1 ..., 1
 # ...)" summed to 7 the moment SC8 landed, while the total said 8. A banner
@@ -706,6 +745,12 @@ CONTROLS: list[tuple[str, Callable[[Path, Path], bool], str, str]] = [
         _sc8,
         "RED outranks UNMEASURED -- a fired check must not read as neutral",
         "MUST_OUTRANK",
+    ),
+    (
+        "SC9 discrimination control (MEASURED vs UNMEASURED)",
+        _sc9,
+        "an UNMEASURED row must not be tallied as a row that measured something",
+        "MUST_DISCRIMINATE",
     ),
 ]
 

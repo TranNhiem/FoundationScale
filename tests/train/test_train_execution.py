@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 
 from foundationscale.train.loop import (
+    _TELEMETRY_UNITS,
     EXIT_PASS,
     EXIT_RED,
     EXIT_REFUSE,
@@ -585,3 +586,641 @@ def test_dry_run_passes_after_full_prologue_with_zero_artifacts(
     final_dir = Path(cfg.output_dir) / "final"
     assert not final_dir.exists()
     assert sorted(Path(cfg.output_dir).glob("**/*.safetensors")) == []
+
+
+# --- #400: run-manifest outcome telemetry -------------------------------------
+
+
+def _read_run_manifest(output_dir: Any) -> dict[str, Any]:
+    """Locate and JSON-load the run manifest ``train()`` wrote under ``output_dir``.
+
+    ``MANIFEST_NAME`` is imported inside this helper, not at module scope: the
+    module header imports only what the pre-existing tests needed, and the
+    reserved basename is loop.py's constant to rename, never this suite's to
+    retype. The done-stage emission overwrites the train-stage manifest in
+    place (loop.py says so at the first emission), so after ``train()``
+    returns this one path carries the final manifest -- telemetry included.
+    """
+    from foundationscale.train.loop import MANIFEST_NAME
+
+    path = Path(output_dir) / MANIFEST_NAME
+    assert path.exists(), f"no run manifest at {path}; the done-stage emission never ran"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_telemetry_entries_are_value_and_status_records_not_bare_scalars(
+    tiny_model_dir: Path,
+    profile_path: Path,
+    text_dataset: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Pins the telemetry section's SHAPE: every entry is a two-part record.
+
+    Without this test a reader would take "the manifest has a telemetry
+    section" to mean the section carries the run's numbers. A regression that
+    wrote bare scalars -- or a constant placeholder under every key --
+    satisfies that weaker reading while carrying no information: a section of
+    sevens has the same keys as a section of measurements. The (value,
+    source) record is what lets a reader tell a measured number from a stated
+    reason for its absence, so the assertion is on the record shape AND on at
+    least one entry being genuinely ``measured`` -- either check alone can be
+    laundered by a writer that fills both halves with filler.
+    """
+    cfg = _cfg(tmp_path, profile_path, model=str(tiny_model_dir), dataset=str(text_dataset))
+    rc = train(cfg)
+    out = capsys.readouterr().out
+    assert rc in (EXIT_PASS, EXIT_UNMEASURED), out
+
+    telemetry = _read_run_manifest(cfg.output_dir)["telemetry"]
+    assert telemetry, "the done manifest's telemetry section is empty"
+    sources = set()
+    for key, entry in telemetry.items():
+        assert isinstance(entry, dict), (
+            f"telemetry[{key!r}] is a bare {type(entry).__name__} ({entry!r}), not a "
+            f"(value, source) record -- a section of scalars passes a section-exists "
+            f"check while proving nothing was measured"
+        )
+        assert "value" in entry and "source" in entry, (
+            f"telemetry[{key!r}] is not a two-part record: keys {sorted(entry)}"
+        )
+        sources.add(entry["source"])
+    assert sources <= {"measured", "derived", "unmeasured"}, (
+        f"telemetry sources {sorted(sources)} fall outside the vocabulary loop.py emits"
+    )
+    assert "measured" in sources, (
+        "no telemetry entry is measured; on a real one-step run the trainer's own "
+        "TrainOutput.metrics must measure at least train_runtime_s and train_loss"
+    )
+
+
+def test_train_loss_curve_is_a_measured_series_of_per_step_losses(
+    tiny_model_dir: Path,
+    profile_path: Path,
+    text_dataset: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Pins ``train_loss_curve`` as a REAL series: >= 2 measured [step, loss] pairs.
+
+    This test configures max_steps=3 with logging_steps=1 -- three optimizer
+    steps with a loss logged at every one -- because the module-default
+    max_steps=1 could only ever produce a one-point curve, and a one-point
+    curve is the defect shape itself. The step count is raised HERE, in the
+    config this test builds, rather than the assertion weakened to >= 1: a
+    control that cannot fail is the defect this suite exists to refuse.
+
+    Without this test a reader would take the presence of "train_loss_curve"
+    in telemetry as evidence that a curve was recorded. On real GB200 hardware
+    four verification-matrix adjudicators read a "loss curve" of length ONE --
+    the aggregate train_loss wearing a series' name -- and returned GREEN on
+    it. One scalar is not a curve: it cannot show that a knob moved training,
+    and it cannot show that two settings agree. The aggregate is deliberately
+    NOT compared against the curve's losses by float inequality, because a
+    genuine coincidence is legal; the load-bearing claim is structural, that
+    the series has more than one point.
+    """
+    cfg = _cfg(
+        tmp_path,
+        profile_path,
+        model=str(tiny_model_dir),
+        dataset=str(text_dataset),
+        max_steps=3,
+        logging_steps=1,
+    )
+    rc = train(cfg)
+    out = capsys.readouterr().out
+    assert rc in (EXIT_PASS, EXIT_UNMEASURED), out
+
+    telemetry = _read_run_manifest(cfg.output_dir)["telemetry"]
+    assert "train_loss_curve" in telemetry, (
+        "train_loss_curve is absent from telemetry; the per-step loss series is the "
+        "evidence that a knob moved training, and its absence reads as silence"
+    )
+    entry = telemetry["train_loss_curve"]
+    assert entry["source"] == "measured", (
+        f"train_loss_curve has source {entry['source']!r} on a run configured for "
+        f"three logged steps; anything else means the emitter could not read the "
+        f"trainer's log history on a healthy run"
+    )
+    curve = entry["value"]
+    assert isinstance(curve, list), (
+        f"train_loss_curve carries a {type(curve).__name__}, not a list of "
+        f"[step, loss] pairs; the series shape is the whole point of the entry"
+    )
+    assert len(curve) >= 2, (
+        f"train_loss_curve has {len(curve)} point(s): a one-point curve is the "
+        f"aggregate train_loss wearing a series' name -- the exact shape that "
+        f"produced four false GREENs on real GB200 hardware. logging_steps and "
+        f"max_steps are the knobs that determine the series length; this test "
+        f"configures logging_steps=1 and max_steps=3 precisely so the curve "
+        f"cannot degenerate, so a short series here means the emitter stopped "
+        f"reading the trainer's log history"
+    )
+    steps: list[int] = []
+    for point in curve:
+        assert isinstance(point, list) and len(point) == 2, (
+            f"curve point {point!r} is not a 2-element [step, loss] list; the "
+            f"series is consumed element-by-element by adjudicators, so a "
+            f"misshapen point fails downstream as an unrelated unpacking error"
+        )
+        step, loss = point
+        assert isinstance(step, int) and not isinstance(step, bool), (
+            f"curve step {step!r} is a {type(step).__name__}, not an int; bool "
+            f"is an int subclass, so the exclusion is stated explicitly rather "
+            f"than left to isinstance's quiet coercion"
+        )
+        assert isinstance(loss, int | float) and not isinstance(loss, bool), (
+            f"curve loss {loss!r} is a {type(loss).__name__}, not a number; a "
+            f"non-numeric loss cannot show that two settings agree"
+        )
+        steps.append(step)
+    # strict=False, stated rather than defaulted: this is the pairwise idiom, so
+    # the operands differ in length by one BY CONSTRUCTION and strict=True would
+    # raise on every well-formed curve. B905 wants the choice made explicitly,
+    # and the explicit choice here is the permissive one.
+    assert all(earlier < later for earlier, later in zip(steps, steps[1:], strict=False)), (
+        f"curve steps {steps} are not strictly ascending; a repeated or "
+        f"out-of-order step means the emitter is not reading the log history in "
+        f"order, and a curve with duplicate steps is not a curve over steps"
+    )
+
+
+def test_train_loss_curve_is_unmeasured_with_a_reason_when_no_step_is_logged(
+    tiny_model_dir: Path,
+    profile_path: Path,
+    text_dataset: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """MUST-FIRE arm for the curve's unmeasured branch: absence is SAID, not silent.
+
+    The emitter is driven down its own unmeasured branch with the cheapest
+    honest lever the loop already exposes -- no seam is added to loop.py. A
+    DECLARED logging_steps=50 against max_steps=1 is honoured as declared
+    (pinned in test_logging_steps_effective_is_derived_and_matches_the_resolved_cadence),
+    so the single optimizer step falls between log points and the trainer's
+    log_history carries no per-step loss for the emitter to read -- the same
+    shape the happy-path test's comment records for the historical bare-10
+    cadence, under which a 1-step run emitted no training log at all.
+
+    Without this test a reader would believe an unreadable history surfaces
+    somewhere. The vacuous shapes are an entry that is MISSING (silence reads
+    as "nothing to say") and an entry present as [] with source "measured" (a
+    claim that an empty series was measured); both pass a key-exists check
+    while telling the adjudicator nothing, and the second is the false-GREEN
+    class with a series' name attached.
+    """
+    cfg = _cfg(
+        tmp_path,
+        profile_path,
+        model=str(tiny_model_dir),
+        dataset=str(text_dataset),
+        max_steps=1,
+        logging_steps=50,
+    )
+    rc = train(cfg)
+    out = capsys.readouterr().out
+    assert rc in (EXIT_PASS, EXIT_UNMEASURED), out
+
+    telemetry = _read_run_manifest(cfg.output_dir)["telemetry"]
+    assert "train_loss_curve" in telemetry, (
+        "train_loss_curve is absent from telemetry on a run whose cadence logged "
+        "no per-step loss; an unreadable history must be SAID, not omitted -- a "
+        "missing key reads as silence, and silence is the vacuous pass"
+    )
+    entry = telemetry["train_loss_curve"]
+    assert entry["source"] == "unmeasured", (
+        f"train_loss_curve has source {entry['source']!r} on a run whose cadence "
+        f"logged no per-step loss; stamping an unreadable series 'measured' -- "
+        f"above all as an empty list -- claims an instrument reading nobody made"
+    )
+    reason = entry["value"]
+    assert isinstance(reason, str) and reason.strip(), (
+        f"train_loss_curve carries value {reason!r} on the unmeasured arm; the "
+        f"arm must record a non-empty reason -- an empty list here would be the "
+        f"vacuous measured pass wearing an unmeasured stamp"
+    )
+    assert reason.startswith("UNMEASURED: "), (
+        f"the unmeasured reason {reason!r} does not begin 'UNMEASURED: '; the "
+        f"prefix is what lets a reader tell a stated absence from a measured "
+        f"value without parsing the sentence"
+    )
+    assert any(
+        token in reason for token in ("logging_steps", "max_steps", "log_history", "history")
+    ), (
+        f"the recorded reason {reason!r} names neither the cadence knobs "
+        f"(logging_steps / max_steps) nor the history that could not be read; a "
+        f"reason that does not say WHAT was unavailable leaves the reader unable "
+        f"to act on it"
+    )
+
+
+def test_telemetry_units_come_from_the_telemetry_units_table(
+    tiny_model_dir: Path,
+    profile_path: Path,
+    text_dataset: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Pins unit PROVENANCE: each recorded unit is ``_TELEMETRY_UNITS[key]``.
+
+    Without this test a reader would take the unit beside a value as
+    authoritative. The emitter attaches units from one table; a second copy
+    of that table typed into this test would make the test agree with itself
+    -- emitter and table could drift apart and nothing would go red. So the
+    test reads the imported table, and it compares KEY SETS, not only the
+    keys that happen to be present: a metric added to the table but never
+    emitted (or emitted but never added) changes exactly one side of the
+    equality. ``train_loss`` is the deliberate exception the table's own
+    comment names -- a unitless scalar, emitted with unit None -- so the
+    key-set comparison runs over the entries that CARRY a unit.
+    """
+    cfg = _cfg(tmp_path, profile_path, model=str(tiny_model_dir), dataset=str(text_dataset))
+    rc = train(cfg)
+    out = capsys.readouterr().out
+    assert rc in (EXIT_PASS, EXIT_UNMEASURED), out
+
+    telemetry = _read_run_manifest(cfg.output_dir)["telemetry"]
+    assert telemetry, "the done manifest's telemetry section is empty"
+    emitted_units = {key: entry.get("unit") for key, entry in telemetry.items()}
+    for key, unit in emitted_units.items():
+        assert unit == _TELEMETRY_UNITS.get(key), (
+            f"telemetry[{key!r}] carries unit {unit!r}; the table says "
+            f"{_TELEMETRY_UNITS.get(key)!r} -- the emitter stopped reading _TELEMETRY_UNITS"
+        )
+    carried = {key for key, unit in emitted_units.items() if unit is not None}
+    assert carried == set(_TELEMETRY_UNITS), (
+        f"telemetry keys carrying a unit {sorted(carried)} drifted from _TELEMETRY_UNITS "
+        f"{sorted(_TELEMETRY_UNITS)}; a key added to one side and not the other is "
+        f"invisible to per-key assertions"
+    )
+
+
+def test_peak_memory_is_recorded_unmeasured_with_a_reason_when_cuda_is_absent(
+    tiny_model_dir: Path,
+    profile_path: Path,
+    text_dataset: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Pins the CPU arm of the peak-memory probe: UNMEASURED, with a reason.
+
+    Without this test a reader of a CPU run's manifest could meet a 0 and
+    read it as "training allocated no memory" -- a measurement no instrument
+    made -- or meet a missing key and read it as "nothing to say". Zero is a
+    claim about the world; absence is silence; the truth on this host is that
+    no CUDA peak counter exists to read, and the manifest must SAY that. The
+    autouse fixture pins CUDA unavailable, so both peak entries must be
+    present, stamped unmeasured, and carrying a non-empty reason string.
+    """
+    cfg = _cfg(tmp_path, profile_path, model=str(tiny_model_dir), dataset=str(text_dataset))
+    rc = train(cfg)
+    out = capsys.readouterr().out
+    assert rc in (EXIT_PASS, EXIT_UNMEASURED), out
+
+    telemetry = _read_run_manifest(cfg.output_dir)["telemetry"]
+    for key in ("peak_memory_allocated_bytes", "peak_memory_reserved_bytes"):
+        assert key in telemetry, (
+            f"{key} is absent from telemetry; absence reads as silence, not UNMEASURED"
+        )
+        entry = telemetry[key]
+        assert entry["source"] == "unmeasured", (
+            f"{key} has source {entry['source']!r}; on a CUDA-less run the peak counter "
+            f"does not exist, so any other status claims a measurement nobody made"
+        )
+        assert isinstance(entry["value"], str) and entry["value"].strip(), (
+            f"{key} carries value {entry['value']!r}; the unmeasured arm must record a "
+            f"non-empty reason -- a numeric 0 here would be a measurement, not a statement"
+        )
+
+
+def test_the_two_absent_cuda_branches_record_distinguishable_reasons(
+    tiny_model_dir: Path,
+    profile_path: Path,
+    text_dataset: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Pins that the two no-peak-counter branches record WHICH one fired.
+
+    Without this test a reader would assume an UNMEASURED peak entry says why.
+    "This torch build exposes no torch.cuda module" and
+    "torch.cuda.is_available() is False" are different facts about a machine
+    with different remedies; one shared reason string -- or a branch falling
+    through to the other's message -- passes every status-level check while
+    leaving the reader unable to tell a build property from a runtime one.
+
+    The no-module arm is driven through ``_cuda_availability`` rather than
+    through ``train()``, and that is a measurement rather than a shortcut:
+    deleting ``cuda`` from the real torch module breaks transformers long
+    before control reaches the telemetry block, so the run adjudicates RED on
+    an AttributeError raised inside the dependency and the branch is never
+    entered. Reaching it needs the decision to be a unit with inputs, which is
+    why it is one. The default arm stays end-to-end AND asserts that the reason
+    the RUN recorded is the identical string the unit returns -- without that
+    equality the unit could drift into a private opinion no manifest ever
+    carries, and this test would be pinning dead code.
+    """
+    import torch
+
+    from foundationscale.train.loop import _cuda_availability
+
+    cfg_default = _cfg(
+        tmp_path / "available-false",
+        profile_path,
+        model=str(tiny_model_dir),
+        dataset=str(text_dataset),
+    )
+    rc = train(cfg_default)
+    out = capsys.readouterr().out
+    assert rc in (EXIT_PASS, EXIT_UNMEASURED), out
+    entry_default = _read_run_manifest(cfg_default.output_dir)["telemetry"][
+        "peak_memory_allocated_bytes"
+    ]
+    assert entry_default["source"] == "unmeasured", entry_default
+    reason_default = entry_default["value"]
+
+    available, unit_reason = _cuda_availability(torch)
+    assert not available, (
+        "precondition: the autouse fixture pins this run to CPU, so is_available() "
+        "must be False here -- on a box with a visible device this arm measures "
+        "nothing and its reason assertion below could not fire"
+    )
+    assert unit_reason == reason_default, (
+        f"the reason the RUN recorded ({reason_default!r}) is not the reason the unit "
+        f"produces ({unit_reason!r}); they have drifted, so the no-module assertion "
+        f"below is about a string no manifest will ever carry"
+    )
+
+    class _TorchWithoutCuda:
+        """A torch-shaped object with no ``cuda`` attribute: the branch's input."""
+
+    _, reason_no_module = _cuda_availability(_TorchWithoutCuda())
+
+    assert "is_available() is False" in reason_default, (
+        f"the present-but-unavailable arm did not fire or its reason changed: {reason_default!r}"
+    )
+    assert "no torch.cuda module" in reason_no_module, (
+        f"the no-module arm did not fire or its reason changed: {reason_no_module!r}"
+    )
+    assert reason_default != reason_no_module, (
+        "the two absent-CUDA branches record the same reason; a reader cannot tell "
+        "'no cuda module in this torch build' from 'cuda present but unavailable'"
+    )
+
+
+def _altered_telemetry_value(value: Any) -> Any:
+    """Return a different value of the SAME kind as ``value``.
+
+    A flat replacement -- every entry becomes 424242 -- is rejected by the
+    telemetry record itself: an UNMEASURED entry's value IS its reason and must
+    stay a non-empty string, so the flat form dies in validation before the
+    fingerprint is ever computed, and the test would report a schema complaint
+    while claiming to measure fingerprint scope. Altering each value in a
+    type-appropriate way keeps every record legal while still moving every
+    telemetry byte, which is the condition the fingerprint must be blind to.
+
+    The list branch is what keeps that promise for ``train_loss_curve``: its
+    value IS a list of [step, loss] pairs, and the string fallthrough would
+    turn it into ``f"{value} (fs400-altered)"``. That still moves bytes, so
+    the fingerprint test would stay green -- but it would no longer be
+    altering a series as a series, and a future reader would take the string
+    as the intended alteration of the entry. A list must stay a list of the
+    same length, with each element altered by this same function, so the
+    recursion below is the contract, not an implementation detail.
+    """
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, int | float):
+        return 424242
+    if isinstance(value, list):
+        return [_altered_telemetry_value(element) for element in value]
+    return f"{value} (fs400-altered)"
+
+
+def test_altered_telemetry_value_maps_a_list_to_an_altered_list() -> None:
+    """Positive control for the helper's list branch: it is LIVE, not merely present.
+
+    Without this test the branch above could be deleted or shadowed by the
+    string fallthrough and nothing would go red: a stringified list still
+    moves bytes, so the fingerprint test's alteration arm would stay green
+    while quietly stopping testing what it says it tests. Asserting the shape
+    of the alteration directly -- list in, list of the same length out, every
+    element changed -- is what makes the branch's existence measured rather
+    than assumed.
+    """
+    original = [[0, 2.91], [1, 2.88], [2, 2.85]]
+    altered = _altered_telemetry_value(original)
+    assert isinstance(altered, list), (
+        f"_altered_telemetry_value turned a list into a {type(altered).__name__}; "
+        f"the alteration must stay the same KIND as the value, or the fingerprint "
+        f"test's alteration arm no longer alters a series as a series"
+    )
+    assert len(altered) == len(original), (
+        f"the altered list has {len(altered)} elements against {len(original)}; "
+        f"an alteration that changes the length is not the same kind of value"
+    )
+    for before, after in zip(original, altered, strict=True):
+        assert isinstance(after, list) and len(after) == len(before), (
+            f"element {before!r} came back as {after!r}; a [step, loss] pair must "
+            f"come back as an altered pair, not a scalar or a string"
+        )
+        assert after != before, (
+            f"element {before!r} survived the alteration unchanged as {after!r}; "
+            f"an alteration that changes nothing would let the fingerprint "
+            f"equality hold over identical bytes and prove nothing"
+        )
+
+
+def test_telemetry_does_not_move_the_manifest_fingerprint(
+    tiny_model_dir: Path,
+    profile_path: Path,
+    text_dataset: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Pins the fingerprint's SCOPE: configuration in, outcome out.
+
+    Without this test a reader would take the manifest fingerprint as a
+    configuration identity. Telemetry is an OUTCOME of the run; if outcome
+    bytes entered the fingerprint, two identical configurations would
+    fingerprint differently merely because one ran slower, and every tool
+    that diffs runs by fingerprint would report phantom configuration
+    changes. The control arm matters as much: altering something that IS
+    configuration must move the fingerprint, or the equality is vacuous.
+    """
+    cfg = _cfg(tmp_path, profile_path, model=str(tiny_model_dir), dataset=str(text_dataset))
+    rc = train(cfg)
+    out = capsys.readouterr().out
+    assert rc in (EXIT_PASS, EXIT_UNMEASURED), out
+
+    manifest = _read_run_manifest(cfg.output_dir)
+    assert manifest["telemetry"], (
+        "precondition: the done manifest carries a non-empty telemetry section, so "
+        "removing or altering it changes real bytes"
+    )
+    # The entry point is RunManifest.fingerprint(), a method over the record --
+    # not a module function over a dict -- so the manifest is rebuilt from the
+    # bytes actually written before each hash. Imported here rather than at
+    # module scope: this is the only test in the module that needs it.
+    from foundationscale.provenance.manifest import RunManifest
+
+    with_telemetry = RunManifest.from_dict(manifest).fingerprint()
+
+    stripped = RunManifest.from_dict(
+        {k: v for k, v in manifest.items() if k != "telemetry"}
+    ).fingerprint()
+    assert stripped == with_telemetry, (
+        "removing the telemetry section moved the fingerprint, so outcome bytes sit "
+        "inside a configuration identity: two identical configurations would "
+        "fingerprint differently merely because one ran on a busier machine"
+    )
+
+    altered_payload = dict(manifest)
+    altered_payload["telemetry"] = {
+        key: {**entry, "value": _altered_telemetry_value(entry["value"])}
+        for key, entry in manifest["telemetry"].items()
+    }
+    assert altered_payload["telemetry"] != manifest["telemetry"], (
+        "precondition: the alteration changed nothing, so the equality below would "
+        "hold over identical bytes and prove nothing"
+    )
+    altered = RunManifest.from_dict(altered_payload).fingerprint()
+    assert altered == with_telemetry, (
+        "changing every telemetry VALUE moved the fingerprint; absence and alteration "
+        "must BOTH be invisible to it, or a slower re-run of the same configuration "
+        "reads as a different computation"
+    )
+
+    # Control arm: the two equalities above are satisfied by a fingerprint that
+    # never moves at all. Alter something that IS configuration and require it to
+    # move, so the equalities are evidence of scope rather than of constancy.
+    config_key = sorted(manifest["config"])[0]
+    config_payload = dict(manifest)
+    config_payload["config"] = {
+        **manifest["config"],
+        config_key: {**manifest["config"][config_key], "value": "fs400-control-arm-sentinel"},
+    }
+    moved = RunManifest.from_dict(config_payload).fingerprint()
+    assert moved != with_telemetry, (
+        f"altering the configuration key {config_key!r} did NOT move the fingerprint, so "
+        "the two equalities above hold over a constant and prove nothing about scope"
+    )
+
+
+def test_written_manifest_reloads_without_an_unknown_key_finding_for_telemetry(
+    tiny_model_dir: Path,
+    profile_path: Path,
+    text_dataset: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Pins that telemetry is a DECLARED schema section, not a tolerated extra.
+
+    Without this test a reader would assume that because the writer puts a
+    telemetry section in, the reader owns it. loop.py's own docstring says
+    unknown top-level keys are preserved and resurfaced as findings -- and
+    calls that behaviour correct; if telemetry were serialized as an extra
+    key, EVERY well-formed run would report an unknown-key finding, and
+    operators would learn to ignore findings, the exact outcome the findings
+    channel exists to prevent. The reload goes through
+    ``provenance.manifest.load`` -- the reader every manifest consumer goes
+    through, imported inside this body per the module's import rule -- not
+    through a second json.load that would validate nothing. That loader does
+    not raise on an unrecognised key; it stashes it and resurfaces it as a
+    finding, so a tolerated-extra telemetry section would reload CLEAN and
+    only the findings list would say otherwise. That list is what this test
+    reads.
+    """
+    cfg = _cfg(tmp_path, profile_path, model=str(tiny_model_dir), dataset=str(text_dataset))
+    rc = train(cfg)
+    out = capsys.readouterr().out
+    assert rc in (EXIT_PASS, EXIT_UNMEASURED), out
+
+    from foundationscale.provenance.manifest import load as load_manifest
+    from foundationscale.train.loop import MANIFEST_NAME
+
+    manifest_path = Path(cfg.output_dir) / MANIFEST_NAME
+    reloaded = load_manifest(manifest_path)
+    assert reloaded.telemetry, (
+        "the reloaded manifest carries no telemetry section; a loader that silently "
+        "drops the section is indistinguishable from one that never flagged it"
+    )
+    finding_texts = [f if isinstance(f, str) else str(f) for f in reloaded.findings]
+    unknown_telemetry = [
+        text for text in finding_texts if "telemetry" in text and "unknown" in text.lower()
+    ]
+    assert not unknown_telemetry, (
+        f"reloading the written manifest reported unknown-key finding(s) for the "
+        f"telemetry section: {unknown_telemetry}; the section must be schema-declared, "
+        f"not tolerated"
+    )
+
+
+def test_logging_steps_effective_is_derived_and_matches_the_resolved_cadence(
+    tiny_model_dir: Path,
+    profile_path: Path,
+    text_dataset: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Pins the one DERIVED telemetry entry: status derived, value resolved.
+
+    Without this test a reader would take ``logging_steps_effective`` for the
+    cadence the operator requested. It is the cadence the trainer RESOLVED, and
+    the two differ in exactly one direction: a declared value is honoured as
+    declared, and only an ABSENT one is bound against max_steps. That
+    asymmetry is deliberate -- it is the fix for a 1-step run that logged no
+    loss at all under a default cadence of 10 -- so both arms are here. An
+    all-declared test would pass against an implementation that ignored the
+    fallback entirely; an all-absent one would pass against an implementation
+    that overrode the operator. Nothing OBSERVED either value, so both are
+    stamped derived: measured would claim an instrument reading that never
+    happened.
+    """
+    declared_cfg = _cfg(
+        tmp_path / "declared",
+        profile_path,
+        model=str(tiny_model_dir),
+        dataset=str(text_dataset),
+        logging_steps=7,
+    )
+    rc = train(declared_cfg)
+    out = capsys.readouterr().out
+    assert rc in (EXIT_PASS, EXIT_UNMEASURED), out
+
+    declared = _read_run_manifest(declared_cfg.output_dir)["telemetry"]["logging_steps_effective"]
+    assert declared["source"] == "derived", (
+        f"logging_steps_effective is stamped {declared['source']!r}; the value was "
+        f"computed from the config, not observed, and the status must say so"
+    )
+    assert declared["value"] == 7, (
+        f"logging_steps_effective is {declared['value']!r} for a run that DECLARED 7; "
+        f"a declared cadence is honoured as declared, and silently rewriting it to a "
+        f"max_steps-derived number would make the operator's setting unfindable"
+    )
+
+    fallback_cfg = _cfg(
+        tmp_path / "fallback",
+        profile_path,
+        model=str(tiny_model_dir),
+        dataset=str(text_dataset),
+        logging_steps=None,
+        max_steps=1,
+    )
+    rc = train(fallback_cfg)
+    out = capsys.readouterr().out
+    assert rc in (EXIT_PASS, EXIT_UNMEASURED), out
+
+    fallback = _read_run_manifest(fallback_cfg.output_dir)["telemetry"]["logging_steps_effective"]
+    assert fallback["source"] == "derived", (
+        f"the fallback cadence is stamped {fallback['source']!r}; it was derived from "
+        f"max_steps, and the status must not claim it was read off an instrument"
+    )
+    assert fallback["value"] == 1, (
+        f"logging_steps_effective is {fallback['value']!r} for a 1-step run that "
+        f"declared no cadence; the fallback must bind to max_steps, because a bare "
+        f"default of 10 logs no loss at all in a 1-step run and the objective gate's "
+        f"verdict depends on a loss existing at the only step"
+    )

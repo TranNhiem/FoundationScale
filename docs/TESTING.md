@@ -199,7 +199,7 @@ $(PY) -m pytest --cov=foundationscale --cov=tools --cov-report=term-missing --co
 | `makefile-tooling` | `checks/makefile_tooling.py --self-test`, then the real run | No recipe invokes a bare tool name |
 | `mirror` | `checks/makefile_ci_mirror.py --self-test`, then the real run | The Makefile `check` tree and the CI workflow run the same check scripts; drift in either direction is RED |
 | `countables` | `checks/countables_drift.py --self-test`; `tools/countables_census.py`; drift check against the census | Fixed numbers in docs match the measured census |
-| `launcher-contracts` | `bash launchers/test_launcher_contracts.sh` | The launcher bash contract suites — 149 controls, 4 named abstentions |
+| `launcher-contracts` | `bash launchers/test_launcher_contracts.sh` | The launcher bash contract suites — 151 controls, 4 named abstentions |
 | `checks-gates` | `bash launchers/test_checks_gates.sh` | The gate-script self-test legs — 43 controls, 1 named abstention |
 | `skip-guard-probe` | compound recipe | The armed skip guard fires and names its probe |
 | `mutation` | `FS_FORBID_SKIPS=1 python3 tools/mutate.py` | The detectors catch their MUST_FIRE mutants |

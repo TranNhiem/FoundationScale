@@ -77,6 +77,7 @@ __all__ = [
     "Topology",
     "CapturedEnvironment",
     "EffectiveValue",
+    "TelemetryEntry",
     "ConfigResolver",
     "Difference",
     "DeclaredCheckpoint",
@@ -289,6 +290,7 @@ _MANIFEST_KNOWN_KEYS = frozenset(
         "artifact_paths",
         "findings",
         "declared",
+        "telemetry",
     }
 )
 _CODE_KNOWN_KEYS = frozenset(
@@ -333,6 +335,7 @@ _TOPOLOGY_KNOWN_KEYS = frozenset(
     }
 )
 _EFFECTIVE_VALUE_KNOWN_KEYS = frozenset({"key", "value", "source", "env_value", "findings"})
+_TELEMETRY_ENTRY_KNOWN_KEYS = frozenset({"key", "value", "source", "unit"})
 
 
 def _unknown_keys(data: Mapping[str, object], known: frozenset[str]) -> tuple[str, ...]:
@@ -472,6 +475,80 @@ class EffectiveValue:
             source=str(data["source"]),
             env_value=None if data.get("env_value") is None else str(data["env_value"]),
             findings=tuple(str(f) for f in _expect_list(data.get("findings", []), "findings")),
+        )
+
+
+_TELEMETRY_SOURCES: frozenset[str] = frozenset({"measured", "derived", "unmeasured"})
+"""The closed set of provenance states a telemetry entry may claim.
+
+``measured`` and ``derived`` say how the number came to be; ``unmeasured``
+is the load-bearing third state — the entry stays PRESENT with a reason
+string, so a missing number is a statement rather than a hole.
+"""
+
+
+@dataclass(frozen=True)
+class TelemetryEntry:
+    """One outcome the run measured, kept apart from what the run declared.
+
+    :class:`EffectiveValue` types ``value`` as ``str`` because it records one
+    *resolved configuration value*; a number a trainer measured is not that.
+    Forcing ``train_runtime_s=1234.56`` through ``str`` would make every
+    reader parse it back out, and reusing the shape would put two different
+    quantities behind one type — finding #222's defect on a second axis.
+
+    Attributes:
+        key: The metric name, e.g. ``"train_runtime_s"``.
+        value: The value as measured — JSON-serialisable, never stringified,
+            so a number stays a number. For ``source="unmeasured"`` this is
+            the REASON STRING, never 0 and never None: absence reported as a
+            number reads as a measurement.
+        source: Exactly one of ``"measured"``, ``"derived"`` or
+            ``"unmeasured"``.
+        unit: The metric's unit (``"s"``, ``"bytes"``, ``"samples/s"``,
+            ``"steps"``); ``None`` when unitless. The unit describes the
+            metric, not the outcome, so an unmeasured entry keeps the unit of
+            the thing it failed to measure.
+    """
+
+    key: str
+    value: object
+    source: str
+    unit: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.key.strip():
+            raise ValueError("telemetry key must be non-empty")
+        if self.source not in _TELEMETRY_SOURCES:
+            raise ValueError(
+                f"telemetry source {self.source!r} is not one of "
+                f"'measured', 'derived' or 'unmeasured'"
+            )
+        if self.source == "unmeasured" and not (isinstance(self.value, str) and self.value):
+            raise ValueError(
+                f"unmeasured telemetry entry {self.key!r} must carry the reason "
+                f"as a non-empty string, got {self.value!r}: absence reported "
+                f"as a number reads as a measurement"
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "key": self.key,
+            "value": self.value,
+            "source": self.source,
+            "unit": self.unit,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> TelemetryEntry:
+        # value passes through untouched: stringifying it on load would undo
+        # the one property this type exists for — a number stays a number
+        # across the round trip.
+        return cls(
+            key=str(data["key"]),
+            value=data["value"],
+            source=str(data["source"]),
+            unit=None if data.get("unit") is None else str(data["unit"]),
         )
 
 
@@ -2060,6 +2137,12 @@ class RunManifest:
             it out holds fingerprints stable across stores that never wrote the
             block.
         schema_version: Must equal :data:`SCHEMA_VERSION`.
+        telemetry: What the run MEASURED (key → :class:`TelemetryEntry`), as
+            opposed to ``config``, which is what the run DECLARED — the two
+            are separate sections for exactly that reason. An entry that
+            could not be measured is PRESENT with ``source="unmeasured"`` and
+            a value stating the reason, so a missing number is a statement
+            rather than a hole.
         findings: Derived at construction (``__post_init__``); see
             :meth:`_derive_findings`.
     """
@@ -2075,6 +2158,7 @@ class RunManifest:
     artifact_paths: Mapping[str, str] = field(default_factory=dict)
     declared: DeclaredCheckpoint | None = None
     schema_version: int = SCHEMA_VERSION
+    telemetry: Mapping[str, TelemetryEntry] = field(default_factory=dict)
     findings: tuple[str, ...] = field(init=False, default=())
     _loaded_extra_keys: tuple[tuple[str, tuple[str, ...]], ...] = field(
         init=False, default=(), repr=False, compare=False
@@ -2211,10 +2295,16 @@ class RunManifest:
         """Everything that determines what the run computes, and nothing else.
 
         Deliberately excluded: ``run_id``, ``attempt``, ``job_id``,
-        ``created_at``, ``artifact_paths`` — none of these change the training
-        mathematics. Two runs whose payloads are equal may be redundant; two whose
-        payloads differ *would train differently*, which is the contract
-        :meth:`fingerprint` is for.
+        ``created_at``, ``artifact_paths``, ``telemetry`` — none of these change
+        the training mathematics. Telemetry is out for the same reason
+        ``artifact_paths`` and ``created_at`` are, one step further: the
+        fingerprint answers "would these two runs train differently", and it is
+        answered from INPUTS. Outcome telemetry is what the run produced, so
+        folding it in would give every run a unique fingerprint and destroy the
+        redundancy contract the fingerprint exists to provide — two relaunches
+        of one computation would no longer collide. Two runs whose payloads are
+        equal may be redundant; two whose payloads differ *would train
+        differently*, which is the contract :meth:`fingerprint` is for.
         """
         return {
             "code": {
@@ -2302,6 +2392,7 @@ class RunManifest:
             "topology": self.topology.to_dict(),
             "artifact_paths": dict(self.artifact_paths),
             "declared": None if self.declared is None else self.declared.to_dict(),
+            "telemetry": {k: v.to_dict() for k, v in sorted(self.telemetry.items())},
             "findings": list(self.findings),
         }
 
@@ -2329,6 +2420,11 @@ class RunManifest:
             environment_data = _expect_mapping(data["environment"], "environment")
             topology_data = _expect_mapping(data["topology"], "topology")
             config_data = _expect_mapping(data["config"], "config")
+            # Absent is legal and yields {}: manifests written before the
+            # telemetry field exist and must stay readable — the append-only
+            # promise. Present-but-not-a-mapping is refused through the same
+            # boundary idiom as every other section.
+            telemetry_data = _expect_mapping(data.get("telemetry", {}), "telemetry")
 
             extras: list[tuple[str, tuple[str, ...]]] = []
             for scope, mapping, known in (
@@ -2350,6 +2446,11 @@ class RunManifest:
                 unknown = _unknown_keys(value_data, _EFFECTIVE_VALUE_KNOWN_KEYS)
                 if unknown:
                     extras.append((f"config entry {key!r}", unknown))
+            for key, raw_entry in telemetry_data.items():
+                entry_data = _expect_mapping(raw_entry, f"telemetry[{key!r}]")
+                unknown = _unknown_keys(entry_data, _TELEMETRY_ENTRY_KNOWN_KEYS)
+                if unknown:
+                    extras.append((f"telemetry entry {key!r}", unknown))
 
             record = cls(
                 run_id=str(data["run_id"]),
@@ -2375,6 +2476,10 @@ class RunManifest:
                     else DeclaredCheckpoint.from_dict(_expect_mapping(data["declared"], "declared"))
                 ),
                 schema_version=_expect_int(data["schema_version"], "schema_version"),
+                telemetry={
+                    str(k): TelemetryEntry.from_dict(_expect_mapping(v, f"telemetry[{k!r}]"))
+                    for k, v in telemetry_data.items()
+                },
             )
         except (KeyError, TypeError, AttributeError) as exc:
             raise ManifestError(f"corrupt manifest: missing or malformed field ({exc!r})") from exc

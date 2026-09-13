@@ -108,7 +108,7 @@ elif [ "$wfy_bad_rc" -eq 0 ]; then
   wfy_msg="$wfy_msg came back rc=0 -- the auditor does not discriminate, so wiring it above"
   wfy_msg="$wfy_msg changed nothing (output: $(printf '%s\n' "$wfy_bad_out" | tr '\n' ' '))"
   no "$wfy_msg"
-elif ! printf '%s\n' "$wfy_bad_out" | grep -q 'WF-YAML RED'; then
+elif ! grep -q 'WF-YAML RED' <<<"$wfy_bad_out"; then
   wfy_msg="MUST_FIRE UNREACHABLE (workflow YAML audit): planted file rc=$wfy_bad_rc but"
   wfy_msg="$wfy_msg the auditor never indicted it by name (no 'WF-YAML RED' line) --"
   wfy_msg="$wfy_msg red from a crash is not discrimination; output:"
@@ -118,7 +118,7 @@ else
   wfy_msg="MUST_FIRE workflow YAML audit: planted malformed workflow (over-dedent out of"
   wfy_msg="$wfy_msg a '|' block scalar -- refused by PyYAML AND by the structural fallback)"
   wfy_msg="$wfy_msg was indicted by name (rc=$wfy_bad_rc):"
-  wfy_msg="$wfy_msg $(printf '%s\n' "$wfy_bad_out" | grep -m1 'WF-YAML RED')"
+  wfy_msg="$wfy_msg $(grep -m1 'WF-YAML RED' <<<"$wfy_bad_out")"
   ok "$wfy_msg"
 fi
 
@@ -649,7 +649,7 @@ else
     > "$f247_tmp/Makefile"
   f247_rc=0
   f247_out=$(python3 -S "$f247_tmp/checks/makefile_tooling.py" 2>&1) || f247_rc=$?
-  if [ "$f247_rc" -eq 5 ] && printf '%s\n' "$f247_out" | grep -q 'bare `ruff` in command position'; then
+  if [ "$f247_rc" -eq 5 ] && grep -q 'bare `ruff` in command position' <<<"$f247_out"; then
     f247_msg="MUST_FIRE makefile_tooling: a recipe line reading 'ruff check src' was scored"
     f247_msg="$f247_msg rc=5 (RED) and named as a bare command word, while the sibling"
     f247_msg="$f247_msg '\$(PY) -m pytest' line in the same fixture was not flagged -- the gate"
@@ -682,7 +682,7 @@ else
   printf 'PY := python3\n\n.PHONY: all\nall:\n' > "$f247_tmp/Makefile"
   f247_rc=0
   f247_out=$(python3 -S "$f247_tmp/checks/makefile_tooling.py" 2>&1) || f247_rc=$?
-  if [ "$f247_rc" -eq 95 ] && printf '%s\n' "$f247_out" | grep -q '^UNMEASURED makefile_tooling:'; then
+  if [ "$f247_rc" -eq 95 ] && grep -q '^UNMEASURED makefile_tooling:' <<<"$f247_out"; then
     f247_msg="MUST_FIRE makefile_tooling: over a Makefile with 0 recipe lines the gate exited"
     f247_msg="$f247_msg 95 (UNMEASURED) and said so, rather than exiting 0 over an empty"
     f247_msg="$f247_msg denominator -- zero units is not a pass (doctrine 1)"
@@ -808,7 +808,7 @@ else
     f286_msg="$f286_msg mirrored scripts against $f286_ci CI run steps -- zero units is"
     f286_msg="$f286_msg UNMEASURED, never a pass (doctrine 1)"
     no "$f286_msg"
-  elif ! printf '%s\n' "$f286_out" | grep -q 'checks/makefile_ci_mirror\.py'; then
+  elif ! grep -q 'checks/makefile_ci_mirror\.py' <<<"$f286_out"; then
     f286_msg="MUST_PASS FAILED (makefile_ci_mirror live verdict): CLEAR over $f286_mk scripts"
     f286_msg="$f286_msg but the enumerated denominator does not name checks/makefile_ci_mirror.py"
     f286_msg="$f286_msg -- the gate does not see itself running on both sides, which is the #86"
@@ -866,8 +866,8 @@ else
   f286_out=$(python3 -S checks/makefile_ci_mirror.py \
     --makefile "$f286_tmp/Makefile" --ci "$f286_tmp/ci.yml" 2>&1) || f286_rc=$?
   if [ "$f286_rc" -eq 5 ] &&
-     printf '%s\n' "$f286_out" | grep -q '^  Makefile-only: *checks/planted_gate\.py' &&
-     ! printf '%s\n' "$f286_out" | grep -q '^  CI-only:'; then
+     grep -q '^  Makefile-only: *checks/planted_gate\.py' <<<"$f286_out" &&
+     ! grep -q '^  CI-only:' <<<"$f286_out"; then
     f286_msg="MUST_FIRE makefile_ci_mirror: a check: tree reaching '\$(PY)"
     f286_msg="$f286_msg checks/planted_gate.py' against a ci.yml that never runs it was scored"
     f286_msg="$f286_msg rc=5 (RED) and named under Makefile-only, while the ruff invocation"
@@ -916,8 +916,8 @@ else
   f286_out=$(python3 -S checks/makefile_ci_mirror.py \
     --makefile "$f286_tmp/Makefile" --ci "$f286_tmp/ci.yml" 2>&1) || f286_rc=$?
   if [ "$f286_rc" -eq 5 ] &&
-     printf '%s\n' "$f286_out" | grep -q '^  CI-only: *tools/planted_ci_only\.py' &&
-     ! printf '%s\n' "$f286_out" | grep -q '^  Makefile-only:'; then
+     grep -q '^  CI-only: *tools/planted_ci_only\.py' <<<"$f286_out" &&
+     ! grep -q '^  Makefile-only:' <<<"$f286_out"; then
     f286_msg="MUST_FIRE makefile_ci_mirror: a ci.yml step running tools/planted_ci_only.py"
     f286_msg="$f286_msg against a check: tree that never reaches it was scored rc=5 (RED) and"
     f286_msg="$f286_msg named under CI-only, with no Makefile-only line -- the gate catches the"
@@ -955,7 +955,7 @@ else
   f286_rc=0
   f286_out=$(python3 -S checks/makefile_ci_mirror.py \
     --makefile "$f286_tmp/Makefile" --ci "$f286_tmp/ci.yml" 2>&1) || f286_rc=$?
-  if [ "$f286_rc" -eq 95 ] && printf '%s\n' "$f286_out" | grep -q '^UNMEASURED:'; then
+  if [ "$f286_rc" -eq 95 ] && grep -q '^UNMEASURED:' <<<"$f286_out"; then
     f286_msg="MUST_FIRE makefile_ci_mirror: over a Makefile with no check: target the gate"
     f286_msg="$f286_msg exited 95 (UNMEASURED) and said so, rather than exiting 0 over an empty"
     f286_msg="$f286_msg denominator -- zero units on one side of the mirror is not a pass"
@@ -1059,8 +1059,8 @@ f78_orph_orphs=unknown
 if [ -r "$f78_orph_suite" ]; then
   f78_orph_real=$(f78_orph_scan . "$f78_orph_suite")
   f78_orph_rcc=$?
-  f78_orph_n=$(printf '%s\n' "$f78_orph_real" | grep -m1 '^ORPH_HELPERS=' | cut -d= -f2)
-  f78_orph_orphs=$(printf '%s\n' "$f78_orph_real" | grep -m1 '^ORPH_ORPHANS=' | cut -d= -f2-)
+  f78_orph_n=$(grep -m1 '^ORPH_HELPERS=' <<<"$f78_orph_real" | cut -d= -f2)
+  f78_orph_orphs=$(grep -m1 '^ORPH_ORPHANS=' <<<"$f78_orph_real" | cut -d= -f2-)
   if [ "$f78_orph_rcc" -eq 0 ] && [ "${f78_orph_n:-0}" -gt 0 ] && [ "${f78_orph_orphs:-<missing>}" = none ]; then
     f78_orph_passed=0
   fi
@@ -1124,16 +1124,16 @@ if [ -d "$f78_orph_froot" ] && [ -r "$f78_orph_suite" ]; then
   if [ "$f78_orph_realc" -gt 0 ] && [ -s "$f78_orph_scopy" ]; then
     f78_orph_redrc=0
     f78_orph_red=$(f78_orph_scan "$f78_orph_froot" "$f78_orph_scopy") || f78_orph_redrc=$?
-    f78_orph_fn=$(printf '%s\n' "$f78_orph_red" | grep -m1 '^ORPH_HELPERS=' | cut -d= -f2)
-    f78_orph_rset=$(printf '%s\n' "$f78_orph_red" | grep -m1 '^ORPH_ORPHANS=' | cut -d= -f2-)
+    f78_orph_fn=$(grep -m1 '^ORPH_HELPERS=' <<<"$f78_orph_red" | cut -d= -f2)
+    f78_orph_rset=$(grep -m1 '^ORPH_ORPHANS=' <<<"$f78_orph_red" | cut -d= -f2-)
     f78_orph_rset=$(printf '%s' "$f78_orph_rset" | tr -d ' ')
     if [ -z "$f78_orph_rset" ] || [ "$f78_orph_rset" = none ]; then f78_orph_rset=-; fi
     printf 'python3 launchers/%s  # planted call site (copy only)\n' \
       "$f78_orph_decoy" >> "$f78_orph_scopy"
     f78_orph_greenrc=0
     f78_orph_green=$(f78_orph_scan "$f78_orph_froot" "$f78_orph_scopy") || f78_orph_greenrc=$?
-    f78_orph_gn=$(printf '%s\n' "$f78_orph_green" | grep -m1 '^ORPH_HELPERS=' | cut -d= -f2)
-    f78_orph_gset=$(printf '%s\n' "$f78_orph_green" | grep -m1 '^ORPH_ORPHANS=' | cut -d= -f2-)
+    f78_orph_gn=$(grep -m1 '^ORPH_HELPERS=' <<<"$f78_orph_green" | cut -d= -f2)
+    f78_orph_gset=$(grep -m1 '^ORPH_ORPHANS=' <<<"$f78_orph_green" | cut -d= -f2-)
     f78_orph_gset=$(printf '%s' "$f78_orph_gset" | tr -d ' ')
     if [ -z "$f78_orph_gset" ] || [ "$f78_orph_gset" = none ]; then f78_orph_gset=-; fi
     f78_orph_rminus=$(printf '%s' ",$f78_orph_rset," | sed "s/,$f78_orph_decoy,/,/")
@@ -1151,7 +1151,7 @@ if [ -d "$f78_orph_froot" ] && [ -r "$f78_orph_suite" ]; then
     case ",$f78_orph_gset," in
       *",$f78_orph_decoy,"*) f78_orph_rigbad="$f78_orph_rigbad decoy-still-in-green-set" ;;
     esac
-    printf '%s\n' "$f78_orph_red" | grep -qF "ORPH_ORPHAN|$f78_orph_decoy" \
+    grep -qF "ORPH_ORPHAN|$f78_orph_decoy" <<<"$f78_orph_red" \
       || f78_orph_rigbad="$f78_orph_rigbad decoy-not-indicted-by-name"
     if [ "$f78_orph_redrc" -ne 1 ]; then
       f78_orph_rigbad="$f78_orph_rigbad red-rc=$f78_orph_redrc-not-exactly-1"
@@ -1928,7 +1928,7 @@ F317B_PY
       f317b_msg="$f317b_msg other nonzero is not this gate's declared RED. Output:"
       f317b_msg="$f317b_msg $(printf '%s\n' "$f317b_red_out" | tr '\n' ' ')"
       no "$f317b_msg"
-    elif ! printf '%s\n' "$f317b_red_out" | grep -q "R1 UNDECLARED: $f317b_dropped"; then
+    elif ! grep -q "R1 UNDECLARED: $f317b_dropped" <<<"$f317b_red_out"; then
       f317b_msg="MUST_FIRE FAILED (mutation_scope undeclared discrimination): the gate"
       f317b_msg="$f317b_msg exited 5, but its R1 row does not name $f317b_dropped -- the one"
       f317b_msg="$f317b_msg path removed. A RED attributed to some other file is not this"
@@ -1994,8 +1994,8 @@ else
   f360_rc=0
   f360_out=$(python3 -S checks/rl_static_subtypes.py --self-test 2>&1) || f360_rc=$?
   if [ "$f360_rc" -eq 95 ] \
-     && printf '%s\n' "$f360_out" | grep -q 'RL-STATIC-SUBTYPES UNMEASURED' \
-     && printf '%s\n' "$f360_out" | grep -q 'mypy'; then
+     && grep -q 'RL-STATIC-SUBTYPES UNMEASURED' <<<"$f360_out" \
+     && grep -q 'mypy' <<<"$f360_out"; then
     f360_msg="MUST_BE_UNMEASURED rl_static_subtypes self-test: rc=95 with"
     f360_msg="$f360_msg 'RL-STATIC-SUBTYPES UNMEASURED' naming mypy -- the gate refused"
     f360_msg="$f360_msg to report green without its analyzer. This is a deterministic"
@@ -2067,7 +2067,7 @@ else
     sed -n 's/.*lossfn=\([^;]*\).*/\1/p' | head -1)
   f360b_missing=""
   for f360b_key in registry:ppo registry:grpo registry:dpo; do
-    if ! printf '%s\n' "$f360b_out" | grep -q "$f360b_key"; then
+    if ! grep -q "$f360b_key" <<<"$f360b_out"; then
       f360b_missing="$f360b_missing $f360b_key"
     fi
   done
@@ -2212,7 +2212,7 @@ with open(sys.argv[2], "w", encoding="utf-8") as fh:
         f360c_msg="$f360c_msg see a baseline pair its discovery cannot reproduce. Output:"
         f360c_msg="$f360c_msg $(printf '%s\n' "$f360c_red_out" | tr '\n' ' ')"
         no "$f360c_msg"
-      elif ! printf '%s\n' "$f360c_red_out" | grep -q 'registry:ghost_binding'; then
+      elif ! grep -q 'registry:ghost_binding' <<<"$f360c_red_out"; then
         f360c_msg="MUST_FIRE FAILED (rl_static_subtypes doctored-baseline"
         f360c_msg="$f360c_msg discrimination): rc=5, but the RED output never names"
         f360c_msg="$f360c_msg registry:ghost_binding -- the one key planted. A RED"
@@ -2357,7 +2357,7 @@ else
     awk '/campaign_self_tests: [0-9]+ of [0-9]+ runnable/ {
            for (i = 1; i <= NF; i++) if ($i == "of") { print $(i + 1); exit }
          }')
-  if ! printf '%s' "$f352b_pop" | grep -q '^[0-9][0-9]*$' || [ "$f352b_pop" -lt 1 ]; then
+  if ! grep -q '^[0-9][0-9]*$' <<<"$f352b_pop" || [ "$f352b_pop" -lt 1 ]; then
     f352b_msg="MUST_FIRE FAILED (campaign_self_tests execution discrimination) UNMEASURED: the"
     f352b_msg="$f352b_msg CLEAR arm named no parseable RUNNABLE population (read"
     f352b_msg="$f352b_msg '${f352b_pop:-<empty>}'), so this leg has no denominator to assert"
@@ -2455,7 +2455,7 @@ print("\n".join(sorted(m.RUNNABLE)))' 2>&1) || f394c_derive_rc=$?
     f394c_msg="$f394c_msg -- an empty denominator reported green is the vacuity this refuses."
     f394c_msg="$f394c_msg Output: $(printf '%s\n' "$f394c_list" | tr '\n' ' ')"
     no "$f394c_msg"
-  elif ! printf '%s\n' "$f394c_list" | grep -qxF "$f394c_anchor"; then
+  elif ! grep -qxF "$f394c_anchor" <<<"$f394c_list"; then
     f394c_msg="MUST_PASS FAILED (RUNNABLE campaign modules under a bare interpreter)"
     f394c_msg="$f394c_msg UNMEASURED: the registry yielded $f394c_total module(s) and none of"
     f394c_msg="$f394c_msg them is $f394c_anchor -- the module whose ModuleNotFoundError"
@@ -2488,7 +2488,7 @@ print("\n".join(sorted(m.RUNNABLE)))' 2>&1) || f394c_derive_rc=$?
     rm -rf "$f394c_decoy_dir"
   fi
   if [ ! -r "checks/campaign_self_tests.py" ] || [ "$f394c_total" -lt 1 ] ||
-     ! printf '%s\n' "$f394c_list" | grep -qxF "$f394c_anchor"; then
+     ! grep -qxF "$f394c_anchor" <<<"$f394c_list"; then
     : # already adjudicated above
   elif [ "$f394c_decoy_rc" -eq 0 ] || [ "$f394c_decoy_rc" -eq 95 ]; then
     f394c_msg="MUST_PASS FAILED (RUNNABLE campaign modules under a bare interpreter)"

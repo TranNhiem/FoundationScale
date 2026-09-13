@@ -229,6 +229,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--logging-steps",
+        type=int,
+        default=None,
+        help=(
+            "training-log cadence in steps; the cadence decides when a loss "
+            "is first OBSERVED, so a per-step loss curve is unobtainable "
+            "without it. Omit: the loop binds max(1, min(10, max_steps)) -- "
+            "the historical behaviour -- and the manifest records the "
+            "effective value in its telemetry section"
+        ),
+    )
+    p.add_argument(
         "--sharding-strategy",
         default=None,
         help=(
@@ -467,6 +479,7 @@ def _build_config(argv: Sequence[str] | None, args: argparse.Namespace) -> Train
         attn_implementation=args.attn_implementation,
         lr_scheduler_type=args.lr_scheduler_type,
         warmup_steps=args.warmup_steps,
+        logging_steps=args.logging_steps,
         sharding_strategy=args.sharding_strategy,
     )
 

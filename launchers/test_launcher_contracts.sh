@@ -123,13 +123,13 @@ run_block(){ # $1 = EXTRA_OVERRIDES value ("" = unset)
 echo "== full-FT EXTRA_OVERRIDES =="
 # MUST_FIRE: shadowing a first-class knob must be refused, by name.
 out=$(run_block "model.seq_length=8192"); rc=$?
-if [ $rc -eq 9 ] && printf '%s' "$out" | grep -q "already records"; then
+if [ $rc -eq 9 ] && grep -q "already records" <<<"$out"; then
   ok "MUST_FIRE shadowed knob refused (model.seq_length)"
 else no "MUST_FIRE shadowed knob NOT refused (rc=$rc): $out"; fi
 
 # MUST_FIRE: a non-KEY=VALUE entry is unrecordable, so it must not silently ride along.
 out=$(run_block "just_garbage"); rc=$?
-if [ $rc -eq 9 ] && printf '%s' "$out" | grep -q "not KEY=VALUE"; then
+if [ $rc -eq 9 ] && grep -q "not KEY=VALUE" <<<"$out"; then
   ok "MUST_FIRE malformed entry refused"
 else no "MUST_FIRE malformed entry NOT refused (rc=$rc): $out"; fi
 
@@ -142,10 +142,10 @@ else no "MUST_FIRE malformed entry NOT refused (rc=$rc): $out"; fi
 # can check by eye, overstating the run by 2x. Asserting only RECORDED cannot
 # see that: it is the same expression the banner had wrong.
 out=$(run_block "model.moe_router_topk=2 optimizer.weight_decay=0.05"); rc=$?
-if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "RECORDED=4" \
-   && printf '%s' "$out" | grep -q "provenance gate: 2 extra override(s)" \
-   && printf '%s' "$out" | grep -q "ARG:model.moe_router_topk=2" \
-   && printf '%s' "$out" | grep -q "ARG:optimizer.weight_decay=0.05"; then
+if [ $rc -eq 0 ] && grep -q "RECORDED=4" <<<"$out" \
+   && grep -q "provenance gate: 2 extra override(s)" <<<"$out" \
+   && grep -q "ARG:model.moe_router_topk=2" <<<"$out" \
+   && grep -q "ARG:optimizer.weight_decay=0.05" <<<"$out"; then
   ok "MUST_PASS two clean overrides recorded as 2x(--effective k=v), banner says 2"
 else no "MUST_PASS clean overrides not recorded (rc=$rc): $out"; fi
 
@@ -154,14 +154,14 @@ else no "MUST_PASS clean overrides not recorded (rc=$rc): $out"; fi
 # derivation would also satisfy this; an independent counter is what makes it
 # survive a change to the emitter's flag shape.
 out=$(run_block "model.moe_router_topk=2 optimizer.weight_decay=0.05 optimizer.adam_beta1=0.9"); rc=$?
-if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "provenance gate: 3 extra override(s)" \
-   && printf '%s' "$out" | grep -q "RECORDED=6"; then
+if [ $rc -eq 0 ] && grep -q "provenance gate: 3 extra override(s)" <<<"$out" \
+   && grep -q "RECORDED=6" <<<"$out"; then
   ok "MUST_PASS banner counts overrides (3), array counts argv elements (6)"
 else no "MUST_PASS banner/array counts wrong (rc=$rc): $out"; fi
 
 # MUST_PASS: the empty case must not trip set -u on the array expansion.
 out=$(run_block ""); rc=$?
-if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "RECORDED=0"; then
+if [ $rc -eq 0 ] && grep -q "RECORDED=0" <<<"$out"; then
   ok "MUST_PASS unset EXTRA_OVERRIDES survives set -u (empty array expansion)"
 else no "MUST_PASS unset case broke (rc=$rc): $out"; fi
 
@@ -235,7 +235,7 @@ TAG_M0=$(arm_tag_of "$moe_out0"); TAG_M1=$(arm_tag_of "$moe_out1")
 if [ -n "$TAG_M0" ] && [ -n "$TAG_M1" ] && [ "$TAG_M0" != "$TAG_M1" ]; then
   ok "MoE-base arms produce distinct RUN_TAG: '$TAG_M0' vs '$TAG_M1'"
 else no "MoE-base arms COLLIDE on RUN_TAG='$TAG_M0' — same OUTPUT_DIR, resume would cross arms"; fi
-if [ -n "$TAG_M1" ] && printf '%s' "$TAG_M1" | grep -q '_L1_'; then
+if [ -n "$TAG_M1" ] && grep -q '_L1_' <<<"$TAG_M1"; then
   ok "MoE-base L1 arm keeps its historical tag spelling"
 else no "MoE-base L1 arm tag changed spelling ('$TAG_M1') — breaks continuity with existing MoE-base dirs"; fi
 
@@ -245,7 +245,7 @@ den_out0=$(run_lora_arm "$LORA" 0 0 False null)
 den_out1=$(run_lora_arm "$LORA" 1 0 False null)
 TAG_D0=$(arm_tag_of "$den_out0"); TAG_D1=$(arm_tag_of "$den_out1")
 if [ -n "$TAG_D0" ] && [ "$TAG_D0" = "$TAG_D1" ] \
-   && printf '%s' "$TAG_D1" | grep -q '_base4_' && ! printf '%s' "$TAG_D1" | grep -q '_L1_'; then
+   && grep -q '_base4_' <<<"$TAG_D1" && ! grep -q '_L1_' <<<"$TAG_D1"; then
   ok "dense-base arms collapse to one 'base4' tag ('$TAG_D0') — same run must wear one label"
 else no "dense-base arms did not collapse to base4 ('$TAG_D0' vs '$TAG_D1') — an expert-free run would wear the L1 name"; fi
 if dense_arm_warns "$LORA" "$FS_LORA_WARN_NEEDLE"; then
@@ -303,7 +303,7 @@ f43_extraction_ok() { # $1=launcher file -> rc 0 iff lora_arm_block's extraction
   x=$(lora_arm_block "$1")
   [ -n "$x" ] || return 1
   [ "$(printf '%s\n' "$x" | grep -c '^fi$' || true)" -eq 1 ] \
-    && printf '%s\n' "$x" | grep -qF 'if [[ "$MOE" != "1" ]]; then' \
+    && grep -qF 'if [[ "$MOE" != "1" ]]; then' <<<"$x" \
     && [ "$(printf '%s\n' "$x" | grep -cE '^[[:space:]]+LORA_ARM=' || true)" -eq 3 ]
 }
 if f43_extraction_ok "$LORA"; then
@@ -329,8 +329,8 @@ f43_xcopy=""
 [ "$f43_xs" -eq 0 ] && f43_xcopy=$(lora_arm_block "$f43_xt")
 f43_xfired=1
 if [ "$f43_xs" -eq 0 ] \
-   && printf '%s\n' "$f43_xcopy" | grep -qF 'if :; then' \
-   && ! printf '%s\n' "$f43_xcopy" | grep -qF 'LORA_ARM=L1' \
+   && grep -qF 'if :; then' <<<"$f43_xcopy" \
+   && ! grep -qF 'LORA_ARM=L1' <<<"$f43_xcopy" \
    && ! f43_extraction_ok "$f43_xt" \
    && f43_extraction_ok "$LORA"; then
   f43_xfired=0
@@ -449,7 +449,7 @@ SH
   fs_qs=$(env -i PATH="$SANDBOX:/usr/bin:/bin" stat -c %s "$SANDBOX/stat-probe" 2>&1); fs_qs_rc=$?
   fs_qm=$(env -i PATH="$SANDBOX:/usr/bin:/bin" stat -c %Y "$SANDBOX/stat-probe" 2>&1); fs_qm_rc=$?
   if [ "$fs_qs_rc" -eq 0 ] && [ "$fs_qs" = "5" ] \
-     && [ "$fs_qm_rc" -eq 0 ] && printf '%s' "$fs_qm" | grep -qE '^[0-9]+$'; then
+     && [ "$fs_qm_rc" -eq 0 ] && grep -qE '^[0-9]+$' <<<"$fs_qm"; then
     ok "stat wiring verified ($FS_STAT_WIRING): 2 of 2 backend stat queries answered [5 bytes, mtime epoch]"
   else
     no "stat under the scenario PATH cannot answer the backend's two queries (size rc=$fs_qs_rc out='$fs_qs'; mtime rc=$fs_qm_rc out='$fs_qm') — every scenario control below would be a sweep over zero units; BLOCK"
@@ -525,7 +525,7 @@ SC
   # (or nothing), this would pass and the control would be vacuous. It must
   # refuse BEFORE any SLURM_* value exists.
   out=$(scenario test-node-b fs-g4e4b-nemo-demo 0 0 match 2>&1); rc=$?
-  if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "STANDING RULE VIOLATION"; then
+  if [ $rc -ne 0 ] && grep -q "STANDING RULE VIOLATION" <<<"$out"; then
     ok "MUST_FIRE off-Slurm guard refuses hostname -s = test-node-b (forbidden node)"
   else no "MUST_FIRE off-Slurm guard accepted test-node-b (rc=$rc): $out"; fi
 
@@ -536,7 +536,7 @@ SC
         FS_ALLOWED_NODE=test-node-a FS_FORBIDDEN_NODES=test-node-b \
         FS_BACKEND=enroot SLURM_JOB_ID=12345 \
         bash -c 'source "'"$BE"'"; fs_backend_init /tmp' 2>&1); rc=$?
-  if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "pre-set"; then
+  if [ $rc -ne 0 ] && grep -q "pre-set" <<<"$out"; then
     ok "MUST_FIRE pre-set SLURM_JOB_ID refused on the enroot arm"
   else no "MUST_FIRE pre-set SLURM_JOB_ID not refused (rc=$rc): $out"; fi
 
@@ -554,7 +554,7 @@ SC
   # disables the standing rule.
   out=$(env -i PATH="$SANDBOX:/usr/bin:/bin" HOME="$SANDBOX/h3" STUB_HOST=test-node-a \
         bash -c 'source "'"$BE"'"; fs_backend_init /tmp' 2>&1); rc=$?
-  if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "FS_ALLOWED_NODE"; then
+  if [ $rc -ne 0 ] && grep -q "FS_ALLOWED_NODE" <<<"$out"; then
     ok "MUST_FIRE unset FS_ALLOWED_NODE refuses (fail-closed; message names the variable)"
   else no "MUST_FIRE unset FS_ALLOWED_NODE did not refuse (rc=$rc): $out"; fi
 
@@ -565,7 +565,7 @@ SC
   out=$(env -i PATH="$SANDBOX:/usr/bin:/bin" HOME="$SANDBOX/h4" STUB_HOST=test-node-a \
         FS_ALLOWED_NODE= \
         bash -c 'source "'"$BE"'"; fs_backend_init /tmp' 2>&1); rc=$?
-  if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "FS_ALLOWED_NODE"; then
+  if [ $rc -ne 0 ] && grep -q "FS_ALLOWED_NODE" <<<"$out"; then
     ok "MUST_FIRE empty FS_ALLOWED_NODE refuses (empty is not 'configured')"
   else no "MUST_FIRE empty FS_ALLOWED_NODE did not refuse (rc=$rc): $out"; fi
 
@@ -577,7 +577,7 @@ SC
   out=$(env -i PATH="$SANDBOX:/usr/bin:/bin" HOME="$SANDBOX/h5" STUB_HOST=test-node-b \
         FS_ALLOWED_NODE=test-node FS_FORBIDDEN_NODES=test-node-b \
         bash -c 'source "'"$BE"'"; fs_backend_init /tmp' 2>&1); rc=$?
-  if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "FS_FORBIDDEN_NODES entry"; then
+  if [ $rc -ne 0 ] && grep -q "FS_FORBIDDEN_NODES entry" <<<"$out"; then
     ok "MUST_FIRE deny-before-allow: denylisted host refused though the allow-prefix matches it"
   else no "MUST_FIRE deny-before-allow failed — allow-prefix admitted a denylisted host (rc=$rc): $out"; fi
 
@@ -589,7 +589,7 @@ SC
   out=$(env -i PATH="$SANDBOX:/usr/bin:/bin" HOME="$SANDBOX/h6" STUB_HOST=test-node-a \
         FS_ALLOWED_NODE=test-node-a FS_FORBIDDEN_NODES=test-node-b \
         bash -c 'source "'"$BE"'"; fs_backend_init /tmp' 2>&1); rc=$?
-  if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "enroot arm on test-node-a"; then
+  if [ $rc -eq 0 ] && grep -q "enroot arm on test-node-a" <<<"$out"; then
     ok "MUST_PASS configured FS_ALLOWED_NODE admits the allowed host and reaches the enroot arm"
   else no "MUST_PASS configured FS_ALLOWED_NODE did not admit the allowed host (rc=$rc): $out"; fi
 
@@ -597,14 +597,14 @@ SC
   # Broken to see red: the provenance record claims a size/mtime the (stubbed)
   # image does not have — the g4export-in-reverse case.
   out=$(scenario test-node-a fs-g4e4b-nemo-demo 0 0 mismatch 2>&1); rc=$?
-  if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "provenance mismatch"; then
+  if [ $rc -ne 0 ] && grep -q "provenance mismatch" <<<"$out"; then
     ok "MUST_FIRE container-provenance mismatch refuses reuse"
   else no "MUST_FIRE provenance mismatch NOT refused (rc=$rc): $out"; fi
 
   # MUST_FIRE: existing container with NO record at all — the actual g4export
   # class (s3): name matches, origin unknown. Must refuse, must not auto-rm.
   out=$(scenario test-node-a fs-g4e4b-nemo-demo 0 0 absent 2>&1); rc=$?
-  if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "NO provenance record"; then
+  if [ $rc -ne 0 ] && grep -q "NO provenance record" <<<"$out"; then
     ok "MUST_FIRE orphan container (no provenance record) refuses"
   else no "MUST_FIRE orphan container NOT refused (rc=$rc): $out"; fi
 
@@ -621,8 +621,8 @@ SC
   scenario test-node-a fs-g4e4b-nemo-demo 0 0 mismatch >/dev/null 2>&1 || true
   out=$(scenario test-node-a fs-g4e4b-nemo-demo 0 0 absent 2>&1); rc=$?
   if [ $rc -ne 0 ] \
-     && printf '%s' "$out" | grep -q "NO provenance record" \
-     && ! printf '%s' "$out" | grep -q "provenance mismatch"; then
+     && grep -q "NO provenance record" <<<"$out" \
+     && ! grep -q "provenance mismatch" <<<"$out"; then
     ok "self-check: mismatch-then-absent sees NO record and no mismatch text (scenario isolation holds)"
   else no "self-check FAIL: absent-after-mismatch did not see a clean orphan (rc=$rc) — scenario isolation is broken, so the orphan control above is again certifying an unknown condition: $out"; fi
 
@@ -630,7 +630,7 @@ SC
   # Broken to see red: every stubbed GPU reports 60000 MiB and the timeout
   # budget is 0 s, so the first undrained reading must die immediately.
   out=$(scenario test-node-a fs-g4e4b-nemo-demo 60000 0 match 2>&1); rc=$?
-  if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "timed out"; then
+  if [ $rc -ne 0 ] && grep -q "timed out" <<<"$out"; then
     ok "MUST_FIRE drain-poll timeout refuses to launch"
   else no "MUST_FIRE drain timeout did not refuse (rc=$rc): $out"; fi
 
@@ -639,9 +639,9 @@ SC
   # with the tray's real denominator.
   out=$(scenario test-node-a fs-g4e4b-nemo-demo 0 0 match 2>&1); rc=$?
   if [ $rc -eq 0 ] \
-     && printf '%s' "$out" | grep -q "provenance matches" \
-     && printf '%s' "$out" | grep -q "drain gate: examined 4 GPUs" \
-     && printf '%s' "$out" | grep -q "LAUNCH:torchrun --nproc_per_node=4"; then
+     && grep -q "provenance matches" <<<"$out" \
+     && grep -q "drain gate: examined 4 GPUs" <<<"$out" \
+     && grep -q "LAUNCH:torchrun --nproc_per_node=4" <<<"$out"; then
     ok "MUST_PASS happy path: guard+provenance+drain pass; command carries 'torchrun --nproc_per_node=4'"
   else no "MUST_PASS happy path broke (rc=$rc): $out"; fi
 fi
@@ -787,7 +787,7 @@ f45_full_executor_ok() { # $1=launcher file -> rc 0 iff the full-FT census is
   gate_span=$(sed -n '/^fs_live_save_gate() {/,/^}/p' "$f" | strip_shell_comments)
   [ "$(pos_count run_in_container "$f")" = "4" ] \
     || f45_failed_conjuncts="$f45_failed_conjuncts c1-census-total(run_in_container count != 4)"
-  printf '%s\n' "$gate_span" | grep -qF 'run_in_container --slurm-ntasks 1 --workdir "$REPO"' \
+  grep -qF 'run_in_container --slurm-ntasks 1 --workdir "$REPO"' <<<"$gate_span" \
     || f45_failed_conjuncts="$f45_failed_conjuncts c2-gate-routing(artifact-gate call not on the --slurm-ntasks 1 executor within fs_live_save_gate)"
   strip_shell_comments < "$f" | grep -qF "bash -lc 'python3 \"\$1\"' _ \"\$COT_PROBE_PY\"" \
     || f45_failed_conjuncts="$f45_failed_conjuncts c3a-probe-safe-argv-spelling-absent(probe path not passed as data under its post-#81 name)"
@@ -991,7 +991,7 @@ f81_live=$(f81_probe_pair_report "$LORA" "$FULL"); f81_live_rc=$?
 # insufficient — an early return also yields 0 — so the PASS REQUIRES the
 # instrument's own computed '2/2 launchers' denominator text, and that
 # measured line is quoted into the record verbatim (doctrine 2 at the site).
-if [ "$f81_live_rc" -eq 0 ] && printf '%s\n' "$f81_live" | grep -qF '2/2 launchers'; then
+if [ "$f81_live_rc" -eq 0 ] && grep -qF '2/2 launchers' <<<"$f81_live"; then
   ok "PROBE pair-contract: $f81_live — LoRA AND full-FT each document the idiom in the header, gate it behind a wired \${PROBE:-0} branch, suffix the output directory with _probe — either inside that branch or via the branch's RUN_SUFFIX=_probe folded into the output dir on its OWN birth line (the load-bearing full-FT shape; no column-zero ^PROBE= clobber tolerated anywhere) — and echo the resolved PROBE value in the banner; the #81 shape (a mode present on one launcher while the other collides the flag away with a path assignment) is now red on BOTH files, and the f45 conjunct above keeps the preflight path itself named \$COT_PROBE_PY"
 else
   no "PROBE pair-contract broken — instrument printed '$f81_live' (rc=$f81_live_rc); the NAMED offender lost one of the four parts (header PROBE documentation / wired \${PROBE:-0} branch / output dir suffixed with _probe in-branch, or in-branch RUN_SUFFIX=_probe consumed on the output dir's own birth line / banner echo of the resolved PROBE value), or a reborn column-zero ^PROBE= path clobber (the #81 collision shape), or a launcher file under \$LDIR was unreadable — which this instrument fails CLOSED on, never reads as absent-evidence (doctrine 4)"
@@ -1027,9 +1027,9 @@ if [ "$f81_mfa_sed" -eq 0 ] && [ "$f81_mfa_col" -ge 1 ] && [ "$f81_mfa_cot" -eq 
   # doctrine 5 prices that like a false green), and the live pair must still
   # be 2/2, so the doctored copy — not a broken instrument — caused the red.
   if [ "$f81_mfa_rc" -ne 0 ] \
-     && printf '%s\n' "$f81_mfa_out" | grep -qF '1/2 launchers' \
-     && printf '%s\n' "$f81_mfa_out" | grep -qF 'offenders: full-FT' \
-     && ! printf '%s\n' "$f81_mfa_out" | grep -qF 'LoRA' \
+     && grep -qF '1/2 launchers' <<<"$f81_mfa_out" \
+     && grep -qF 'offenders: full-FT' <<<"$f81_mfa_out" \
+     && ! grep -qF 'LoRA' <<<"$f81_mfa_out" \
      && f81_probe_pair_report "$LORA" "$FULL" >/dev/null; then
     f81_mfa_fired=0
   fi
@@ -1064,9 +1064,9 @@ f81_mfb_fired=1
 if [ "$f81_mfb_sed" -eq 0 ] && [ "$f81_mfb_br" -eq 0 ]; then
   f81_mfb_out=$(f81_probe_pair_report "$f81_mfb" "$FULL"); f81_mfb_rc=$?
   if [ "$f81_mfb_rc" -ne 0 ] \
-     && printf '%s\n' "$f81_mfb_out" | grep -qF '1/2 launchers' \
-     && printf '%s\n' "$f81_mfb_out" | grep -qF 'offenders: LoRA' \
-     && ! printf '%s\n' "$f81_mfb_out" | grep -qF 'full-FT' \
+     && grep -qF '1/2 launchers' <<<"$f81_mfb_out" \
+     && grep -qF 'offenders: LoRA' <<<"$f81_mfb_out" \
+     && ! grep -qF 'full-FT' <<<"$f81_mfb_out" \
      && f81_probe_pair_report "$LORA" "$FULL" >/dev/null; then
     f81_mfb_fired=0
   fi
@@ -1624,7 +1624,7 @@ else no "full-FT passes no --fqn-map producer — on estate DCP saves the gate t
 f78_ns_py=$(sed -n '/<<.PYNS./,/^PYNS$/p' "$FULL" | sed '1d;$d')
 f78_ns_sim=$(mktemp -d "${TMPDIR:-/tmp}/fs-f78-ns.XXXXXX" 2>/dev/null) || f78_ns_sim=""
 [ -n "$f78_ns_sim" ] || { f78_ns_sim="${TMPDIR:-/tmp}/fs-f78-ns.$$"; mkdir -p "$f78_ns_sim" 2>/dev/null || f78_ns_sim=""; }
-if [ -n "$f78_ns_py" ] && printf '%s\n' "$f78_ns_py" | grep -qF '__metadata__' && [ -n "$f78_ns_sim" ]; then
+if [ -n "$f78_ns_py" ] && grep -qF '__metadata__' <<<"$f78_ns_py" && [ -n "$f78_ns_sim" ]; then
   printf '%s\n' "$f78_ns_py" > "$f78_ns_sim/ns_gate.py"
   python3 - "$f78_ns_sim" <<'PYFIX'
 import json
@@ -1676,12 +1676,12 @@ PYFIX
   f78_hold=$(python3 "$f78_ns_sim/ns_gate.py" "$f78_ns_sim/hold/hf" "$f78_ns_sim/hold/ckpt" 2>&1); f78_hold_rc=$?
   f78_amb=$(python3 "$f78_ns_sim/ns_gate.py" "$f78_ns_sim/amb/hf" "$f78_ns_sim/amb/ckpt" 2>&1); f78_amb_rc=$?
   if [ "$f78_fire_rc" -ne 0 ] \
-    && printf '%s\n' "$f78_fire" | grep -qF 'FQN-MAP NAMESPACE REFUSED' \
+    && grep -qF 'FQN-MAP NAMESPACE REFUSED' <<<"$f78_fire" \
     && [ "$f78_hold_rc" -eq 0 ] \
-    && printf '%s\n' "$f78_hold" | grep -qF 'fqn-map namespace measured: 0/4 declared FQNs' \
+    && grep -qF 'fqn-map namespace measured: 0/4 declared FQNs' <<<"$f78_hold" \
     && [ "$f78_amb_rc" -ne 0 ] \
-    && printf '%s\n' "$f78_amb" | grep -qF 'FQN-MAP NAMESPACE ABSTENTION' \
-    && ! printf '%s\n' "$f78_amb" | grep -qF 'fqn-map namespace measured:'; then
+    && grep -qF 'FQN-MAP NAMESPACE ABSTENTION' <<<"$f78_amb" \
+    && ! grep -qF 'fqn-map namespace measured:' <<<"$f78_amb"; then
     ok "fqn-map namespace gate RUNS and discriminates namespace at constant presence (doctrine 3): MUST_FIRE refused the doctored HF-namespace census (rc=$f78_fire_rc, named REFUSAL — the C1 shape, 4/4 overlap with the fixture HF header, caught before one GPU-second), MUST_PASS passed the estate DCP shape printing the measured denominator (0/4 overlap against the fixture's 4-key HF header set), and the mixed census ABSTAINED BY NAME (rc=$f78_amb_rc) with the confident line provably absent — all three fixtures carry 4 FQN strings in the same record shape, identical at the presence layer, so no token-presence leg can produce this red/green/red row"
   else
     no "fqn-map namespace gate failed its control run: wrong-namespace rc=$f78_fire_rc (want nonzero + named REFUSAL), artifact rc=$f78_hold_rc (want 0 + a printed 'fqn-map namespace measured: 0/4 declared FQNs' denominator), ambiguous rc=$f78_amb_rc (want nonzero + named ABSTENTION and NO confident line) — a detector never observed firing is not a control (doctrine 3)"
@@ -1757,28 +1757,28 @@ F45CAP
   printf '{}\n' > "$f45_msim/rep-ok.json"
 
   out=$(f45_map 1 /dev/null /dev/null)
-  if printf '%s' "$out" | grep -q 'JOBRC=44' && printf '%s' "$out" | grep -q 'BLOCKED'; then
+  if grep -q 'JOBRC=44' <<<"$out" && grep -q 'BLOCKED' <<<"$out"; then
     ok "MUST_FIRE full-FT e0: a constructed BLOCKED verdict marks the run 44, loudly (the pre-fix45 demand, kept verbatim in force)"
   else no "MUST_FIRE full-FT e0: blocking verdict did not stop the run (output: $out)"; fi
 
   out=$(f45_map 3 "$f45_msim/rep-refusal.json" "$f45_msim/cap-unreadable")
-  if printf '%s' "$out" | grep -q 'JOBRC=45' && printf '%s' "$out" | grep -q 'UNMEASURED' \
-     && printf '%s' "$out" | grep -q 'refusal_class=checkpoint_unreadable'; then
+  if grep -q 'JOBRC=45' <<<"$out" && grep -q 'UNMEASURED' <<<"$out" \
+     && grep -q 'refusal_class=checkpoint_unreadable' <<<"$out"; then
     ok "MUST_FIRE full-FT e1: a constructed UNMEASURED with the tool's OWN refusal record marks 45-not-clear WITH the cause named from the record (never narrated) — the pre-fix45 intent, evidence-keyed; on this path NO exit-3 member is an rc-0 abstention (no chosen open knob exists)"
   else no "MUST_FIRE full-FT e1: the evidence-keyed 3→45 decode broke (output: $out)"; fi
 
   out=$(f45_map 3 "$f45_msim/rep-ABSENT.json" "$f45_msim/cap-unreadable")
-  if printf '%s' "$out" | grep -q 'JOBRC=46' && printf '%s' "$out" | grep -q 'claim-vs-disk'; then
+  if grep -q 'JOBRC=46' <<<"$out" && grep -q 'claim-vs-disk' <<<"$out"; then
     ok "MUST_FIRE full-FT e2: an exit 3 whose refusal record is ABSENT marks 46 — indicted as the #77-B3 claim-vs-disk gap (measured live on the <compute-node> run: two adjudications, rc 3, report ABSENT both times), never laundered into a plain 45: a 3 with no evidence is infrastructure, not a measurement of the tool's own inability"
   else no "MUST_FIRE full-FT e2: a recordless 3 was not indicted at 46 (output: $out)"; fi
 
   out=$(f45_map 0 "$f45_msim/rep-ok.json" "$f45_msim/cap-clear")
-  if printf '%s' "$out" | grep -q 'JOBRC=0' && printf '%s' "$out" | grep -q 'corroborated'; then
+  if grep -q 'JOBRC=0' <<<"$out" && grep -q 'corroborated' <<<"$out"; then
     ok "MUST_PASS full-FT e3: a CLEAR corroborated by the gate's own printed verdict AND its on-disk report stays 0 (the pre-fix45 'no laundering in either direction' demand, now with fix44's corroboration on this side too)"
   else no "MUST_PASS full-FT e3: a corroborated CLEAR did not stay 0 (output: $out)"; fi
 
   out=$(f45_map 0 /dev/null /dev/null)
-  if printf '%s' "$out" | grep -q 'JOBRC=46' && printf '%s' "$out" | grep -q 'OVERCLAIM'; then
+  if grep -q 'JOBRC=46' <<<"$out" && grep -q 'OVERCLAIM' <<<"$out"; then
     ok "MUST_FIRE full-FT e4: a bare rc 0 with neither printed verdict nor report marks 46 OVERCLAIM — the founding bug's shape, refused on this path exactly as on the LoRA sibling"
   else no "MUST_FIRE full-FT e4: an uncorroborated 0 was not refused (output: $out) — rc 0 alone is again minting a pass"; fi
   [ -n "$f45_msim" ] && rm -rf "$f45_msim" || true
@@ -1851,7 +1851,7 @@ F44CAP
   printf '{}\n' > "$f44_msim/rep-ok.json"
 
   out=$(f44_map 1 "$f44_msim/rep-blocked.json" "$f44_msim/cap-unknown")
-  if printf '%s' "$out" | grep -q 'ARTRC=91' && printf '%s' "$out" | grep -q 'BLOCKED'; then
+  if grep -q 'ARTRC=91' <<<"$out" && grep -q 'BLOCKED' <<<"$out"; then
     ok "MUST_FIRE LoRA m1: a constructed BLOCKED verdict stops the run/chain on 91, loudly (the pre-fix44 demand, kept verbatim in force)"
   else no "MUST_FIRE LoRA m1: blocking verdict did not stop the run (output: $out)"; fi
 
@@ -1873,30 +1873,30 @@ F44CAP
   # with its denominator stated — 0 of 3 gates and 0 of 3 controls ran
   # (doctrine 2, the retired leg's needle widened to both halves).
   out=$(f44_map 3 "$f44_msim/rep-prefix.json" "$f44_msim/cap-prefix")
-  if printf '%s' "$out" | grep -q 'ARTRC=92' && printf '%s' "$out" | grep -q 'UNMEASURED-INFRA' \
-     && printf '%s' "$out" | grep -q 'CONFIRMED' \
-     && printf '%s' "$out" | grep -q '0 of 3 gates and 0 of 3 controls ran'; then
+  if grep -q 'ARTRC=92' <<<"$out" && grep -q 'UNMEASURED-INFRA' <<<"$out" \
+     && grep -q 'CONFIRMED' <<<"$out" \
+     && grep -q '0 of 3 gates and 0 of 3 controls ran' <<<"$out"; then
     ok "MUST_PASS LoRA m2: the CORROBORATED adapter-prefix refusal — CONFIRMED off the tool's own record, never a bare 3 — lands rc 92 as UNMEASURED-INFRA, stated, with its 0-of-3-gates and 0-of-3-controls denominator (the calibrated post-#78 state, re-pointed from the rc-0 abstention retired in the #78 wiring window per src/foundationscale/gates/adjudication.py:315-327; rc 0 stays FORBIDDEN here)"
   else no "MUST_PASS LoRA m2: the corroborated adapter-prefix refusal lost its rc-92 mapping, its UNMEASURED-INFRA statement, its CONFIRMED corroboration, or its 0-of-3 denominator (output: $out) — restoring rc 0 here is FORBIDDEN (the one-sided edit src/foundationscale/gates/adjudication.py:315-327 names)"; fi
 
   out=$(f44_map 3 "$f44_msim/rep-missing.json" "$f44_msim/cap-unreadable")
-  if printf '%s' "$out" | grep -q 'ARTRC=92' && printf '%s' "$out" | grep -q 'torch.distributed.checkpoint is unavailable' \
-     && printf '%s' "$out" | grep -q 'rc-92'; then
+  if grep -q 'ARTRC=92' <<<"$out" && grep -q 'torch.distributed.checkpoint is unavailable' <<<"$out" \
+     && grep -q 'rc-92' <<<"$out"; then
     ok "MUST_FIRE LoRA m3: the MEASURED unreadable-DCP cause (torch-less host python, both PROBE runs) decodes to rc-92 with the gate's own words quoted — the multiplexed 'expected abstention' decode is dead"
   else no "MUST_FIRE LoRA m3: an unreadable-artifact 3 was not rc-92 with the real cause quoted (output: $out) — the multiplexed decode persists (#77-B2)"; fi
 
   out=$(f44_map 3 "$f44_msim/rep-missing.json" "$f44_msim/cap-unknown")
-  if printf '%s' "$out" | grep -q 'ARTRC=92' && printf '%s' "$out" | grep -q -- '--train-config not found'; then
+  if grep -q 'ARTRC=92' <<<"$out" && grep -q -- '--train-config not found' <<<"$out"; then
     ok "MUST_FIRE LoRA m4: an exit-3 cause the calibration does NOT name (a missing train config) rides the rc-92 class with the cause quoted — unknown members of the class never inherit the calibrated arm"
   else no "MUST_FIRE LoRA m4: an unnamed exit-3 cause was not rc-92 (output: $out) — the calibrated abstention would absorb causes it was never calibrated for"; fi
 
   out=$(f44_map 3 "$f44_msim/rep-ABSENT.json" "$f44_msim/cap-prefix")
-  if printf '%s' "$out" | grep -q 'ARTRC=92' && printf '%s' "$out" | grep -q 'must have written'; then
+  if grep -q 'ARTRC=92' <<<"$out" && grep -q 'must have written' <<<"$out"; then
     ok "MUST_FIRE LoRA m5: the gate claims the prefix abstention but the refusal record it must have written is ABSENT -> rc-92 (#77-B3 indicted, not narrated — the claim never again outruns the disk)"
   else no "MUST_FIRE LoRA m5: a claimed-but-absent refusal record was not indicted at rc-92 (output: $out) — the #77-B3 claim-vs-disk gap persists"; fi
 
   out=$(f44_map 0 "$f44_msim/rep-ok.json" "$f44_msim/cap-clear")
-  if printf '%s' "$out" | grep -q 'ARTRC=0$' && printf '%s' "$out" | grep -q 'corroborated'; then
+  if grep -q 'ARTRC=0$' <<<"$out" && grep -q 'corroborated' <<<"$out"; then
     ok "MUST_PASS LoRA m6: a CLEAR corroborated by the gate's own printed verdict AND its on-disk report stays rc 0 — corroboration taxes a healthy run nothing"
   else no "MUST_PASS LoRA m6: a corroborated CLEAR did not stay rc 0 (output: $out) — the corroboration demand broke the happy path"; fi
   [ -n "$f44_msim" ] && rm -rf "$f44_msim" || true
@@ -1935,13 +1935,13 @@ f39_r5_ok() { # $1=launcher -> rc 0 iff the step-(5) region invokes the real-ora
               # probe with the probe's REAL flags and the laundered census is gone.
   local f39_r5
   f39_r5=$(sed -n '/^# (5) /,/^# (6) /p' "$1" | strip_shell_comments)
-  printf '%s\n' "$f39_r5" | grep -qF 'lora_target_census.py' \
-    && printf '%s\n' "$f39_r5" | grep -qF 'torchrun --nnodes=1' \
-    && printf '%s\n' "$f39_r5" | grep -qF -- '--hf_model_path' \
-    && printf '%s\n' "$f39_r5" | grep -qF -- '--targets' \
-    && ! printf '%s\n' "$f39_r5" | grep -qF -- '--hf_path ' \
-    && ! printf '%s\n' "$f39_r5" | grep -qF -- '--recipe' \
-    && ! printf '%s\n' "$f39_r5" | grep -qF 'grep -cF'
+  grep -qF 'lora_target_census.py' <<<"$f39_r5" \
+    && grep -qF 'torchrun --nnodes=1' <<<"$f39_r5" \
+    && grep -qF -- '--hf_model_path' <<<"$f39_r5" \
+    && grep -qF -- '--targets' <<<"$f39_r5" \
+    && ! grep -qF -- '--hf_path ' <<<"$f39_r5" \
+    && ! grep -qF -- '--recipe' <<<"$f39_r5" \
+    && ! grep -qF 'grep -cF' <<<"$f39_r5"
 }
 
 f39_rows=$(f39_target_rows "$F39_LORA")
@@ -1964,7 +1964,7 @@ f39_s=$?
 f39_mf_out=""
 [ "$f39_s" -eq 0 ] && f39_mf_out=$(f39_unmatchable "$f39_t")
 [ -n "${f39_t:-}" ] && rm -f "$f39_t" || true
-if [ "$f39_s" -eq 0 ] && printf '%s\n' "$f39_mf_out" | grep -qF 'BASE mlp.linear_fc1'; then
+if [ "$f39_s" -eq 0 ] && grep -qF 'BASE mlp.linear_fc1' <<<"$f39_mf_out"; then
   ok "MUST_FIRE fix39-shape: re-inserting the measured-broken 'mlp.linear_fc1' on a copy turns the shape leg red on exactly the row it must (construction verified: the row exists in the firing input)"
 else
   no "MUST_FIRE UNREACHABLE (fix39-shape): the pre-fix spelling could not be re-constructed on a copy (sed rc=$f39_s; predicate output: '${f39_mf_out:-<empty>}') — the shape leg above is an unproven detector"
@@ -2016,7 +2016,7 @@ f39_region_fired=1
 # pins, exactly like the #81 probe-spelling pin two blocks down, not a repair to
 # revert: an alternation over quoted/unquoted would green through a revert to
 # the bare splice checks/bash_lc_sweep.py exists to forbid.
-if [ "$f39_s" -eq 0 ] && printf '%s\n' "$f39_r5_copy" | grep -qF -- "--hf_path '\$HF_MODEL_PATH'" && ! f39_r5_ok "$f39_t"; then
+if [ "$f39_s" -eq 0 ] && grep -qF -- "--hf_path '\$HF_MODEL_PATH'" <<<"$f39_r5_copy" && ! f39_r5_ok "$f39_t"; then
   f39_region_fired=0
 fi
 [ -n "${f39_t:-}" ] && rm -f "$f39_t" || true
@@ -2052,12 +2052,12 @@ f40_triage_ok() { # $1=launcher file (real or constructed copy) -> rc 0 iff the
                   # below runs THIS predicate, never a paraphrase of it.
   local f40_lc
   f40_lc=$(strip_shell_comments < "$1")
-  printf '%s\n' "$f40_lc" | grep -qF 'LoRA target census BLOCKED' \
-    && printf '%s\n' "$f40_lc" | grep -qF 'LoRA target census UNMEASURED' \
-    && printf '%s\n' "$f40_lc" | grep -qF 'LoRA target census infrastructure failure' \
-    && printf '%s\n' "$f40_lc" | grep -qF 'case "$census_verdict" in' \
-    && printf '%s\n' "$f40_lc" | grep -qF 'census_verdicts_n=' \
-    && ! printf '%s\n' "$f40_lc" | grep -qF '3) cat "$CENSUS_OUT"'
+  grep -qF 'LoRA target census BLOCKED' <<<"$f40_lc" \
+    && grep -qF 'LoRA target census UNMEASURED' <<<"$f40_lc" \
+    && grep -qF 'LoRA target census infrastructure failure' <<<"$f40_lc" \
+    && grep -qF 'case "$census_verdict" in' <<<"$f40_lc" \
+    && grep -qF 'census_verdicts_n=' <<<"$f40_lc" \
+    && ! grep -qF '3) cat "$CENSUS_OUT"' <<<"$f40_lc"
 }
 f39_lc=$(strip_shell_comments < "$F39_LORA")
 if f40_triage_ok "$F39_LORA"; then
@@ -2099,9 +2099,9 @@ fi
 # Post-run G2 must read expected counts from the real-matcher census and must
 # no longer read the laundered dump artifact anywhere in code (comments may
 # narrate it; the comment-stripped view is what this leg reads).
-if printf '%s\n' "$f39_lc" | grep -qF 'target_census.txt' \
-   && printf '%s\n' "$f39_lc" | grep -qF 'CENSUS_TARGET' \
-   && ! printf '%s\n' "$f39_lc" | grep -qF 'module_dump.txt'; then
+if grep -qF 'target_census.txt' <<<"$f39_lc" \
+   && grep -qF 'CENSUS_TARGET' <<<"$f39_lc" \
+   && ! grep -qF 'module_dump.txt' <<<"$f39_lc"; then
   ok "fix39: post-run G2 reads expected counts from the real-matcher census (target_census.txt / CENSUS_TARGET rows); no code path still reads the grep-scored module dump"
 else
   no "fix39: post-run gates still read the laundered dump oracle (module_dump.txt present in code) or never read the census file — the drift check is gone or still self-certifying"
@@ -2112,7 +2112,7 @@ fi
 # with default EXPERT_TARGETS=1 the arm branch deliberately drops the expert
 # strings; demanding expert attachments of the raw request would be a
 # guaranteed false red on the first correct run (doctrine 5, symmetric).
-if printf '%s\n' "$f39_lc" | grep -qF 'if [[ "$LORA_ARM" == "L1" ]]'; then
+if grep -qF 'if [[ "$LORA_ARM" == "L1" ]]' <<<"$f39_lc"; then
   ok "fix39: G2's expert-attach expectation keys on LORA_ARM — the dense EXPERT_TARGETS=1->base4 relabel can no longer mint a false red demanding adapters the branch deliberately dropped"
 else
   no "fix39: G2's expert expectation keys on raw EXPERT_TARGETS — on the measured-dense base with the default =1 that is a guaranteed false red on a correct run"
@@ -2452,12 +2452,12 @@ f41_drill_ok() { # $1=launcher file -> rc 0 iff all six conjuncts hold over
                  # predicate on a doctored copy — never a paraphrase of it).
   local f41_v
   f41_v=$(strip_shell_comments < "$1")
-  printf '%s\n' "$f41_v" | grep -qF 'FS_CENSUS_DRILL_BUILD_FAILURE' \
-    && printf '%s\n' "$f41_v" | grep -qF 'DRILL: FS_CENSUS_DRILL_BUILD_FAILURE=1' \
-    && printf '%s\n' "$f41_v" | grep -qF '${census_cuda_prefix}torchrun --nnodes=1' \
-    && printf '%s\n' "$f41_v" | grep -qF 'CENSUS DRILL ARMED BUT THE LAUNCH PROCEEDED' \
-    && printf '%s\n' "$f41_v" | grep -qF 'DRILL FIRED' \
-    && printf '%s\n' "$f41_v" | grep -qF 'DRILL ANOMALY'
+  grep -qF 'FS_CENSUS_DRILL_BUILD_FAILURE' <<<"$f41_v" \
+    && grep -qF 'DRILL: FS_CENSUS_DRILL_BUILD_FAILURE=1' <<<"$f41_v" \
+    && grep -qF '${census_cuda_prefix}torchrun --nnodes=1' <<<"$f41_v" \
+    && grep -qF 'CENSUS DRILL ARMED BUT THE LAUNCH PROCEEDED' <<<"$f41_v" \
+    && grep -qF 'DRILL FIRED' <<<"$f41_v" \
+    && grep -qF 'DRILL ANOMALY' <<<"$f41_v"
 }
 
 # -- leg A (static composite): the drill exists, is audible, is scoped into
@@ -2506,9 +2506,9 @@ fi
 # path), and (iv) BLOCK with rc 1.
 out=$(f41_sim "$F41_LORA" 1 unmeasured 1 2>&1); rc=$?
 if [ $rc -eq 1 ] \
-   && printf '%s' "$out" | grep -q 'DRILL: FS_CENSUS_DRILL_BUILD_FAILURE=1' \
-   && printf '%s' "$out" | grep -q 'DRILL FIRED' \
-   && printf '%s' "$out" | grep -q 'census UNMEASURED'; then
+   && grep -q 'DRILL: FS_CENSUS_DRILL_BUILD_FAILURE=1' <<<"$out" \
+   && grep -q 'DRILL FIRED' <<<"$out" \
+   && grep -q 'census UNMEASURED' <<<"$out"; then
   ok "fix41 drill routing: armed drill + genuine UNMEASURED shape lands on the verdict-keyed UNMEASURED arm, names DRILL FIRED, and BLOCKS (rc=$rc) — the arm keys on exactly what the drill delivers (suite-internal fixture; the genuine hardware fire is owed to <compute-node>)"
 else
   no "fix41 drill routing broken: armed drill + UNMEASURED fixture gave rc=$rc (want 1 with DRILL FIRED) — '$out'"
@@ -2521,7 +2521,7 @@ fi
 # reads as coverage. rc 0 here would be the exact defect this section
 # refuses.
 out=$(f41_sim "$F41_LORA" 1 clear 0 2>&1); rc=$?
-if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q 'CENSUS DRILL ARMED BUT THE LAUNCH PROCEEDED'; then
+if [ $rc -eq 1 ] && grep -q 'CENSUS DRILL ARMED BUT THE LAUNCH PROCEEDED' <<<"$out"; then
   ok "fix41 drill anti-vacuity: armed drill + corroborated CLEAR is REFUSED by name (rc=$rc) — a drill that cannot fire can never again launder into a launch"
 else
   no "fix41 drill anti-vacuity FAILED: armed drill + CLEAR fixture rc=$rc (want 1 with the named refusal) — '$out'"
@@ -2562,7 +2562,7 @@ fi
 # anti-vacuity sibling, and what moved is only the fixture's simulated
 # child rc — never the predicate, never the launcher arm.
 out=$(f41_sim "$F41_LORA" 0 clear 0 2>&1); rc=$?
-if [ $rc -eq 0 ] && ! printf '%s' "$out" | grep -q 'DRILL'; then
+if [ $rc -eq 0 ] && ! grep -q 'DRILL' <<<"$out"; then
   ok "fix41 drill MUST_PASS: unarmed launch with a healthy census proceeds (rc=0, no DRILL output) — the control is inert off its trigger, never a tax on a healthy launch"
 else
   no "fix41 drill MUST_PASS broke: unarmed CLEAR fixture rc=$rc or DRILL text leaked off-trigger — '$out'"
@@ -2575,7 +2575,7 @@ fi
 # never DRILL FIRED — and still BLOCK. rc-shape alone must never mint the
 # MUST_FIRE receipt.
 out=$(f41_sim "$F41_LORA" 1 anomaly 1 2>&1); rc=$?
-if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q 'DRILL ANOMALY' && ! printf '%s' "$out" | grep -q 'DRILL FIRED'; then
+if [ $rc -eq 1 ] && grep -q 'DRILL ANOMALY' <<<"$out" && ! grep -q 'DRILL FIRED' <<<"$out"; then
   ok "fix41 drill positive-evidence: a wrong-path abstention under the armed drill names DRILL ANOMALY (never DRILL FIRED) and still BLOCKS — the drill cannot take credit for a fire it did not cause"
 else
   no "fix41 drill positive-evidence FAILED: wrong-path fixture rc=$rc — '$out'"
@@ -2697,16 +2697,16 @@ f42_drill_ok() { # $1=launcher file -> rc 0 iff the drill exists end-to-end:
                  # The MUST_FIRE below runs THIS predicate on a doctored copy.
   local v
   v=$(strip_shell_comments < "$1")
-  printf '%s\n' "$v" | grep -qF 'FS_PEFT_DRILL_RANK' \
-    && printf '%s\n' "$v" | grep -qF 'if [[ -n "${FS_PEFT_DRILL_RANK:-}" ]]; then' \
-    && printf '%s\n' "$v" | grep -qF '"$FS_PEFT_DRILL_RANK" =~ ^[1-9][0-9]*$' \
-    && printf '%s\n' "$v" | grep -qF '"$FS_PEFT_DRILL_RANK" != "32"' \
-    && printf '%s\n' "$v" | grep -qF 'LORA_RANK=$FS_PEFT_DRILL_RANK' \
-    && printf '%s\n' "$v" | grep -qF 'DRILL: FS_PEFT_DRILL_RANK=' \
-    && printf '%s\n' "$v" | grep -qF '"^REPLAY_PEFT dim=$FS_PEFT_DRILL_RANK "' \
-    && printf '%s\n' "$v" | grep -qF 'DRILL FIRED: FS_PEFT_DRILL_RANK=' \
-    && printf '%s\n' "$v" | grep -qF 'KNOB DRILL ARMED BUT RESOLVED dim !=' \
-    && printf '%s\n' "$v" | grep -qF 'FATAL-AND-DRILL-FIRED'
+  grep -qF 'FS_PEFT_DRILL_RANK' <<<"$v" \
+    && grep -qF 'if [[ -n "${FS_PEFT_DRILL_RANK:-}" ]]; then' <<<"$v" \
+    && grep -qF '"$FS_PEFT_DRILL_RANK" =~ ^[1-9][0-9]*$' <<<"$v" \
+    && grep -qF '"$FS_PEFT_DRILL_RANK" != "32"' <<<"$v" \
+    && grep -qF 'LORA_RANK=$FS_PEFT_DRILL_RANK' <<<"$v" \
+    && grep -qF 'DRILL: FS_PEFT_DRILL_RANK=' <<<"$v" \
+    && grep -qF '"^REPLAY_PEFT dim=$FS_PEFT_DRILL_RANK "' <<<"$v" \
+    && grep -qF 'DRILL FIRED: FS_PEFT_DRILL_RANK=' <<<"$v" \
+    && grep -qF 'KNOB DRILL ARMED BUT RESOLVED dim !=' <<<"$v" \
+    && grep -qF 'FATAL-AND-DRILL-FIRED' <<<"$v"
 }
 
 # -- leg G (static composite): the drill and its replay-step demand exist.
@@ -2745,35 +2745,35 @@ fi
 
 # -- legs I-L: the arming block's four behaviours, evaled from the REAL text.
 out=$(f42_drill_run "$F42_LORA" abc 2>&1); rc=$?
-if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'must be a positive integer rank'; then
+if [ $rc -ne 0 ] && grep -q 'must be a positive integer rank' <<<"$out"; then
   ok "fix42 drill refusal: non-integer FS_PEFT_DRILL_RANK is refused by name (rc=$rc) — a typo'd drill must die at arming, not downstream for unrelated reasons"
 else no "fix42 drill refusal broke (non-integer): rc=$rc — '$out'"; fi
 
 out=$(f42_drill_run "$F42_LORA" 32 2>&1); rc=$?
-if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'equals BOTH the recipe default'; then
+if [ $rc -ne 0 ] && grep -q 'equals BOTH the recipe default' <<<"$out"; then
   ok "fix42 drill refusal: FS_PEFT_DRILL_RANK=32 is refused by name (rc=$rc) — a drill equal to both defaults perturbs nothing and can prove nothing"
 else no "fix42 drill refusal broke (=32): rc=$rc — '$out'"; fi
 
 out=$(f42_drill_run "$F42_LORA" 96 2>&1); rc=$?
-if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'DRILL: FS_PEFT_DRILL_RANK=96' && printf '%s' "$out" | grep -q 'RESULT_RANK=96'; then
+if [ $rc -eq 0 ] && grep -q 'DRILL: FS_PEFT_DRILL_RANK=96' <<<"$out" && grep -q 'RESULT_RANK=96' <<<"$out"; then
   ok "fix42 drill arming: =96 lands LORA_RANK=96 with the DRILL banner (rc=$rc) — the single source of truth feeds tag, manifest, overrides and replay expectation downstream"
 else no "fix42 drill arming broke (=96): rc=$rc — '$out'"; fi
 
 out=$(f42_drill_run "$F42_LORA" "" 2>&1); rc=$?
-if [ $rc -eq 0 ] && ! printf '%s' "$out" | grep -q 'DRILL' && printf '%s' "$out" | grep -q 'RESULT_RANK=32'; then
+if [ $rc -eq 0 ] && ! grep -q 'DRILL' <<<"$out" && grep -q 'RESULT_RANK=32' <<<"$out"; then
   ok "fix42 drill MUST_PASS: knob absent -> block inert, LORA_RANK stays 32, zero DRILL output (rc=$rc) — the control taxes nothing off its trigger"
 else no "fix42 drill MUST_PASS broke (unarmed): rc=$rc — '$out'"; fi
 
 # -- leg M: armed drill + replay resolving the DRILL value names DRILL FIRED.
 out=$(f42_replay_sim "$F42_LORA" 96 drilled-clear 0 2>&1); rc=$?
-if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'DRILL FIRED: FS_PEFT_DRILL_RANK=96 resolved through the REAL composition path'; then
+if [ $rc -eq 0 ] && grep -q 'DRILL FIRED: FS_PEFT_DRILL_RANK=96 resolved through the REAL composition path' <<<"$out"; then
   ok "fix42 drill scoring: armed drill + resolved dim=96 prints DRILL FIRED and proceeds (rc=$rc) — positive evidence keyed on the resolved value, never on rc-shape (suite-internal fixture; the genuine hardware fire is owed to <compute-node>)"
 else no "fix42 drill scoring broke: armed drilled-clear rc=$rc — '$out'"; fi
 
 # -- leg N (anti-vacuity refusal): armed drill whose perturbation REVERTED to
 # the default in composition must be a named refusal, rc 1.
 out=$(f42_replay_sim "$F42_LORA" 96 default-clear 0 2>&1); rc=$?
-if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q 'KNOB DRILL ARMED BUT RESOLVED dim != 96'; then
+if [ $rc -eq 1 ] && grep -q 'KNOB DRILL ARMED BUT RESOLVED dim != 96' <<<"$out"; then
   ok "fix42 drill anti-vacuity: armed drill + resolved dim=32 is REFUSED by name (rc=$rc) — a drill whose perturbation silently reverts can never launder into a launch"
 else no "fix42 drill anti-vacuity FAILED: armed default-clear rc=$rc — '$out'"; fi
 
@@ -2782,7 +2782,7 @@ else no "fix42 drill anti-vacuity FAILED: armed default-clear rc=$rc — '$out'"
 # awk -F= over the payload line could never yield "0"). Fail-before red on
 # tonight's tree, green after launcher Edit 1 — declared, per section header.
 out=$(f42_replay_sim "$F42_LORA" "" default-clear 0 2>&1); rc=$?
-if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'replay note:' && ! printf '%s' "$out" | grep -q 'DRILL FIRED'; then
+if [ $rc -eq 0 ] && grep -q 'replay note:' <<<"$out" && ! grep -q 'DRILL FIRED' <<<"$out"; then
   ok "fix42 drill MUST_PASS: unarmed flat CLEAR proceeds untaxed (rc=0), names its indistinguishability note, and never claims DRILL FIRED — the control is inert off its trigger"
 else no "fix42 drill MUST_PASS broke: unarmed default-clear rc=$rc (on pre-fix43 trees this pins the replay_discrim '=0' dead parse) — '$out'"; fi
 
@@ -2790,32 +2790,32 @@ else no "fix42 drill MUST_PASS broke: unarmed default-clear rc=$rc (on pre-fix43
 # its named arm. Fixtures are suite-internal; each asserts rc AND the arm's
 # own message class, so a leg can never pass because the experiment never ran.
 out=$(f42_replay_sim "$F42_LORA" "" blocked 1 2>&1); rc=$?
-if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q 'override replay BLOCKED (verdict line' && ! printf '%s' "$out" | grep -q 'FATAL-AND-DRILL-FIRED'; then
+if [ $rc -eq 1 ] && grep -q 'override replay BLOCKED (verdict line' <<<"$out" && ! grep -q 'FATAL-AND-DRILL-FIRED' <<<"$out"; then
   ok "fix42 replay routing: BLOCKED verdict with corroborating nonzero rc lands on the named BLOCKED arm (rc=$rc; unarmed, so no drill conflation) — re-spell guidance delivered, launch stopped"
 else no "fix42 replay routing broke (BLOCKED): rc=$rc — '$out'"; fi
 
 out=$(f42_replay_sim "$F42_LORA" "" unmeasured 1 2>&1); rc=$?
-if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q 'override replay UNMEASURED (verdict line) — the probe ABSTAINED'; then
+if [ $rc -eq 1 ] && grep -q 'override replay UNMEASURED (verdict line) — the probe ABSTAINED' <<<"$out"; then
   ok "fix42 replay routing: UNMEASURED lands on the named abstention arm with its 0-of-4 denominator (rc=$rc) — a stated abstention BLOCKS, never bypassed"
 else no "fix42 replay routing broke (UNMEASURED): rc=$rc — '$out'"; fi
 
 out=$(f42_replay_sim "$F42_LORA" "" unknown 0 2>&1); rc=$?
-if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q "unknown verdict 'HALF-CLEAR'" && printf '%s' "$out" | grep -q 'CONTRADICTION'; then
+if [ $rc -eq 1 ] && grep -q "unknown verdict 'HALF-CLEAR'" <<<"$out" && grep -q 'CONTRADICTION' <<<"$out"; then
   ok "fix42 replay routing: an off-vocabulary verdict word is refused by name in the CONTRADICTION namespace (rc=$rc) — drift between probe and launcher is never guessed into a classification"
 else no "fix42 replay routing broke (unknown verdict): rc=$rc — '$out'"; fi
 
 out=$(f42_replay_sim "$F42_LORA" "" doubled 0 2>&1); rc=$?
-if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q 'REPLAY_VERDICT lines in one replay run' && printf '%s' "$out" | grep -q 'CONTRADICTION'; then
+if [ $rc -eq 1 ] && grep -q 'REPLAY_VERDICT lines in one replay run' <<<"$out" && grep -q 'CONTRADICTION' <<<"$out"; then
   ok "fix42 replay routing: two verdict lines in one run is a named carrier breach (rc=$rc) — evidence of ambiguous provenance is unreadable as evidence"
 else no "fix42 replay routing broke (doubled verdict): rc=$rc — '$out'"; fi
 
 out=$(f42_replay_sim "$F42_LORA" "" silent 0 2>&1); rc=$?
-if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q 'ZERO REPLAY_VERDICT lines yet rc=0' && printf '%s' "$out" | grep -q 'CONTRADICTION'; then
+if [ $rc -eq 1 ] && grep -q 'ZERO REPLAY_VERDICT lines yet rc=0' <<<"$out" && grep -q 'CONTRADICTION' <<<"$out"; then
   ok "fix42 replay routing: zero verdict lines with rc=0 is refused by name (rc=$rc) — the one shape that would otherwise read as a silent pass (doctrines 1/4)"
 else no "fix42 replay routing broke (silent+rc0): rc=$rc — '$out'"; fi
 
 out=$(f42_replay_sim "$F42_LORA" "" default-clear 1 2>&1); rc=$?
-if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q 'replay verdict CLEAR but rc=1' && printf '%s' "$out" | grep -q 'CONTRADICTION'; then
+if [ $rc -eq 1 ] && grep -q 'replay verdict CLEAR but rc=1' <<<"$out" && grep -q 'CONTRADICTION' <<<"$out"; then
   ok "fix42 replay routing: CLEAR with a nonzero rc is refused by name (rc=$rc) — a process that printed CLEAR and then failed certifies nothing"
 else no "fix42 replay routing broke (CLEAR+rc!=0): rc=$rc — '$out'"; fi
 
@@ -2928,43 +2928,43 @@ PEFT Statistics:
 F44G3
 
 out=$(f44_g3_run 32 "$f44_sim/g3-r32.log")
-if printf '%s' "$out" | grep -q 'G3_GATE=0' \
-   && printf '%s' "$out" | grep -qF 'trainable=63078400 (0.81%)' \
-   && printf '%s' "$out" | grep -qF 'realized rank == requested rank 32' \
-   && printf '%s' "$out" | grep -qF 'frozen-base identity'; then
+if grep -q 'G3_GATE=0' <<<"$out" \
+   && grep -qF 'trainable=63078400 (0.81%)' <<<"$out" \
+   && grep -qF 'realized rank == requested rank 32' <<<"$out" \
+   && grep -qF 'frozen-base identity' <<<"$out"; then
   ok "fix44/45-G3 MUST_PASS: the MEASURED r32 production bytes (now with the third measured line, Total parameters: 7,750,478,080) parse and clear with realized rank == requested rank 32 AND the rank-invariant frozen-base identity holding to the integer (2 measured logs examined when re-deriving the needle; this fixture is one of them, byte-faithful to the measured block)"
 else no "fix44/45-G3 MUST_PASS broke on the measured r32 bytes: $out"; fi
 
 out=$(f44_g3_run 96 "$f44_sim/g3-r96.log")
-if printf '%s' "$out" | grep -q 'G3_GATE=0' \
-   && printf '%s' "$out" | grep -qF 'trainable=189235200 (2.40%)' \
-   && printf '%s' "$out" | grep -qF 'realized rank == requested rank 96' \
-   && printf '%s' "$out" | grep -qF 'frozen-base identity'; then
+if grep -q 'G3_GATE=0' <<<"$out" \
+   && grep -qF 'trainable=189235200 (2.40%)' <<<"$out" \
+   && grep -qF 'realized rank == requested rank 96' <<<"$out" \
+   && grep -qF 'frozen-base identity' <<<"$out"; then
   ok "fix44/45-G3 MUST_PASS: the MEASURED r96 drill bytes (Total 7,876,634,880 - Trainable 189,235,200 = the same 7,687,399,680) clear with realized rank == requested rank 96 AND the frozen-base identity — the drill geometry stays green, so the two identities tax an honest drill run nothing"
 else no "fix44/45-G3 MUST_PASS broke on the measured r96 bytes: $out"; fi
 
 out=$(f44_g3_run 96 "$f44_sim/g3-r32.log")
-if printf '%s' "$out" | grep -q 'G3_GATE=1' && printf '%s' "$out" | grep -qF 'REALIZED RANK'; then
+if grep -q 'G3_GATE=1' <<<"$out" && grep -qF 'REALIZED RANK' <<<"$out"; then
   ok "fix44-G3 MUST_FIRE: r32's measured numbers under a REQUESTED rank of 96 fire REALIZED RANK != REQUESTED RANK — the silent-revert signature (config claims 96, optimizer got 32) is now caught at the artifact layer, which the (0.10,10.0) window alone can never see — both r32 and r96 sit comfortably inside it, which is precisely why rank needs its own integer identity"
 else no "fix44-G3 MUST_FIRE (rank) FAILED: the silent-revert fixture gave: $out"; fi
 
 out=$(f44_g3_run 32 "$f44_sim/g3-hf.log")
-if printf '%s' "$out" | grep -q 'G3_GATE=1' && printf '%s' "$out" | grep -qF 'HuggingFace PEFT single-line'; then
+if grep -q 'G3_GATE=1' <<<"$out" && grep -qF 'HuggingFace PEFT single-line' <<<"$out"; then
   ok "fix44-G3 MUST_FIRE: the pre-fix44 HF-format census line FAILS LOUDLY as a stack change to re-derive — the old needle's format is a named arm, never an accepted second format (this leg RED-proves #76's false alarm cannot silently come back)"
 else no "fix44-G3 MUST_FIRE (HF format) FAILED: the legacy needle fixture gave: $out"; fi
 
 out=$(f44_g3_run 32 "$f44_sim/g3-zero.log")
-if printf '%s' "$out" | grep -q 'G3_GATE=1' && printf '%s' "$out" | grep -qF 'ZERO trainable params'; then
+if grep -q 'G3_GATE=1' <<<"$out" && grep -qF 'ZERO trainable params' <<<"$out"; then
   ok "fix44-G3 MUST_FIRE: a zero-trainable census still fires the classic silent-LoRA arm (the zero-check survives the re-anchoring verbatim)"
 else no "fix44-G3 MUST_FIRE (zero) FAILED: $out"; fi
 
 out=$(f44_g3_run 32 "$f44_sim/g3-window.log")
-if printf '%s' "$out" | grep -q 'G3_GATE=1' && printf '%s' "$out" | grep -qF 'outside (0.10,10.0)'; then
+if grep -q 'G3_GATE=1' <<<"$out" && grep -qF 'outside (0.10,10.0)' <<<"$out"; then
   ok "fix44-G3 MUST_FIRE: an UNFROZEN-BASE fixture (pct=99.99 beside a rank-perfect count, so ONLY the window arm can fire) trips the (0.10,10.0) guard — the window stays load-bearing at the one job it claims, and the fixture is the real failure class (base not frozen prints ~100%), not a number picked to sit just outside an edge"
 else no "fix44-G3 MUST_FIRE (window) FAILED: $out"; fi
 
 out=$(f44_g3_run 32 "$f44_sim/g3-partial.log")
-if printf '%s' "$out" | grep -q 'G3_GATE=1' && printf '%s' "$out" | grep -qF 'ambiguous'; then
+if grep -q 'G3_GATE=1' <<<"$out" && grep -qF 'ambiguous' <<<"$out"; then
   ok "fix44/45-G3 MUST_FIRE: 1 of the 3 measured lines (a half-written log or one-line format drift) lands on the named ambiguous arm with all three distinct-value counts — never laundered into 'missing' or 'found'"
 else no "fix44/45-G3 MUST_FIRE (partial) FAILED: $out"; fi
 
@@ -2974,7 +2974,7 @@ else no "fix44/45-G3 MUST_FIRE (partial) FAILED: $out"; fi
 # (the zero-arm cannot fire — trainable is the rank-perfect 63,078,400 —
 # and the pct is interior, so ONLY the frozen-base arm can produce GATE=1).
 out=$(f44_g3_run 32 "$f44_sim/g3-basewalk.log")
-if printf '%s' "$out" | grep -q 'G3_GATE=1' && printf '%s' "$out" | grep -qF 'frozen-base identity'; then
+if grep -q 'G3_GATE=1' <<<"$out" && grep -qF 'frozen-base identity' <<<"$out"; then
   ok "fix45-G3 MUST_FIRE: a census whose Total no longer reconciles with its Trainable at the rank-invariant frozen base (Total - Trainable = 7,687,399,681 != 7,687,399,680; window AND rank identity both intact, so only the frozen-base arm can fire) trips the identity — the frozen base is now an exact integer identity with a two-measurement provenance, not a percentage hunch"
 else no "fix45-G3 MUST_FIRE (frozen-base) FAILED: $out"; fi
 
@@ -3058,11 +3058,11 @@ f44_python_census_ok() { # $1=launcher file (real or doctored copy). Every
   total=$(printf '%s\n' "$F44_PY_SITES" | grep -c .)
   missing=$(printf '%s\n' "$F44_PY_SITES" | while IFS= read -r entry; do
     needle=${entry#* ::: }
-    printf '%s\n' "$lc" | grep -qF "$needle" || printf 'UNMET[%s] ' "$entry"
+    grep -qF "$needle" <<<"$lc" || printf 'UNMET[%s] ' "$entry"
   done)
   f44_census_diag="observed $n site(s) vs $total enumerated;${missing:+ $missing}"
   [ "$n" -eq "$total" ] && [ -z "$missing" ] \
-    && ! printf '%s\n' "$lc" | grep -E "$(pos_pat python3)" | grep -qF 'live_save_gate'
+    && [ "$(grep -E "$(pos_pat python3)" <<<"$lc" | grep -cF 'live_save_gate')" -eq 0 ]
 }
 f44_py_n=$(strip_shell_comments < "$LORA" | grep -cE "$(pos_pat python3)" || true)
 if f44_python_census_ok "$LORA"; then
@@ -3131,7 +3131,7 @@ if [ "$f44_us" -eq 0 ]; then
   if [ -n "${F44_PY_SITES:-}" ]; then
     f44_umiss=$(printf '%s\n' "$F44_PY_SITES" | while IFS= read -r entry; do
       needle=${entry#* ::: }
-      printf '%s\n' "$f44_ulc" | grep -qF "$needle" || printf 'UNMET[%s] ' "$entry"
+      grep -qF "$needle" <<<"$f44_ulc" || printf 'UNMET[%s] ' "$entry"
     done)
   else
     # doctrine 1: a needle sweep over zero enumerated sites is UNMEASURED,
@@ -3180,12 +3180,12 @@ f44_gate_wired_ok() { # $1=launcher file (real or doctored copy). The
                       # to prove this predicate can see the loss.
   local fn
   fn=$(sed -n '/^fs_live_save_gate() {/,/^}/p' "$1" | strip_shell_comments)
-  printf '%s\n' "$fn" | grep -qF 'run_in_container --slurm-ntasks 1 --workdir "$REPO"' \
-    && printf '%s\n' "$fn" | grep -qF "PYTHONPATH='\$FS_ROOT/src'" \
-    && printf '%s\n' "$fn" | grep -qF 'PYTHONNOUSERSITE=1' \
-    && printf '%s\n' "$fn" | grep -qF -- '--adapter-modules' \
-    && printf '%s\n' "$fn" | grep -qF 'return "$fs_gate_rc"' \
-    && ! printf '%s\n' "$fn" | grep -qE "$(pos_pat python3)"
+  grep -qF 'run_in_container --slurm-ntasks 1 --workdir "$REPO"' <<<"$fn" \
+    && grep -qF "PYTHONPATH='\$FS_ROOT/src'" <<<"$fn" \
+    && grep -qF 'PYTHONNOUSERSITE=1' <<<"$fn" \
+    && grep -qF -- '--adapter-modules' <<<"$fn" \
+    && grep -qF 'return "$fs_gate_rc"' <<<"$fn" \
+    && ! grep -qE "$(pos_pat python3)" <<<"$fn"
 }
 if f44_gate_wired_ok "$LORA"; then
   ok "fs_live_save_gate routes through run_in_container (--slurm-ntasks 1 --workdir \$REPO idiom), prepends \$FS_ROOT/src to the CONTAINER's forwarded PYTHONPATH, restates PYTHONNOUSERSITE=1 in the payload, passes --adapter-modules (the launcher-declared LoRA attachment set) to the census writer on full-FT's --fqn-map footing (#78-B), returns the captured rc, and carries no command-position python3 — the torch-importing gate call rides the executor payload and stays INVISIBLE to the re-enumerated 8-site census, with the census wired through"
@@ -3360,7 +3360,7 @@ f78_estage=none
 [ "$f78_erc" -ne -1 ] && f78_estage=$(grep -m1 'F78_STAGE=' "$f78_elog" 2>/dev/null || true)
 f78_efired=1
 if [ "$f78_setup" -eq 0 ] && [ "$f78_probe_ok" -eq 1 ] && [ "$f78_erc" -eq 0 ] \
-   && printf '%s\n' "$f78_estage" | grep -q 'F78_STAGE=drove' \
+   && grep -q 'F78_STAGE=drove' <<<"$f78_estage" \
    && grep -q '^F78_EXTRACT_UNRESOLVED=none$' "$f78_elog" \
    && grep -q '^F78_SYNTH_MODE=kwargs$' "$f78_elog" \
    && grep -q '^F78_RAISED=_CensusRefusal: ' "$f78_elog" \
@@ -3482,8 +3482,8 @@ f78_vstage=none
 [ "$f78_vrc" -ne -1 ] && f78_vstage=$(grep -m1 'F78_STAGE=' "$f78_vlog" 2>/dev/null || true)
 f78_fpassed=1
 if [ "$f78_setup" -eq 0 ] && [ "$f78_probe_ok" -eq 1 ] && [ "$f78_frc" -eq 0 ] && [ "$f78_vrc" -eq 0 ] \
-   && printf '%s\n' "$f78_fstage" | grep -q 'F78_STAGE=drove' \
-   && printf '%s\n' "$f78_vstage" | grep -q 'F78_STAGE=verified' \
+   && grep -q 'F78_STAGE=drove' <<<"$f78_fstage" \
+   && grep -q 'F78_STAGE=verified' <<<"$f78_vstage" \
    && grep -q '^F78_EXTRACT_UNRESOLVED=none$' "$f78_flog" \
    && grep -q '^F78_SYNTH_MODE=kwargs$' "$f78_flog" \
    && grep -q '^F78_RAISED=none$' "$f78_flog" \
@@ -3615,10 +3615,10 @@ f44_rc_out=$( (
     [ -f "$f44_sim/cap-$stub" ] && echo "CAP_$stub=present"
   done
 ) 2>&1 )
-if printf '%s' "$f44_rc_out" | grep -q 'MAP_0=0' \
-   && printf '%s' "$f44_rc_out" | grep -q 'MAP_1=1' \
-   && printf '%s' "$f44_rc_out" | grep -q 'MAP_3=3' \
-   && printf '%s' "$f44_rc_out" | grep -q 'MAP_127=127' \
+if grep -q 'MAP_0=0' <<<"$f44_rc_out" \
+   && grep -q 'MAP_1=1' <<<"$f44_rc_out" \
+   && grep -q 'MAP_3=3' <<<"$f44_rc_out" \
+   && grep -q 'MAP_127=127' <<<"$f44_rc_out" \
    && [ "$(printf '%s' "$f44_rc_out" | grep -c 'CAP_.*=present' || true)" -eq 4 ]; then
   ok "fs_live_save_gate returns the gate's rc UNTOUCHED through the executor (4 of 4 sampled rcs survive: 0->0 1->1 3->3 127->127) and every call materializes its capture file — the 0/1/3/other contract the mapper decodes is the gate's own, measured through the REAL extracted function, never a paraphrase"
 else
@@ -3658,13 +3658,13 @@ f45_py_census_ok() { # $1=launcher file (real or doctored copy). The FOUR
   lc=$(strip_shell_comments < "$1")
   n=$(printf '%s\n' "$lc" | grep -cE "$(pos_pat python3)" || true)
   [ "$n" -eq 5 ] \
-    && printf '%s\n' "$lc" | grep -qF 'python3 - "$HF_MODEL/config.json" "$1"' \
-    && printf '%s\n' "$lc" | grep -qF 'python3 - "$f" <<' \
-    && printf '%s\n' "$lc" | grep -qF 'python3 - "$RESOLVED_CFG"' \
-    && printf '%s\n' "$lc" | grep -qF 'python3 - "$OUT_DIR/checkpoints" "$FQN_MAP"' \
-    && printf '%s\n' "$lc" | grep -qF 'python3 - "$HF_MODEL" "$OUT_DIR/checkpoints"' \
-    && ! printf '%s\n' "$lc" | grep -E "$(pos_pat python3)" | grep -qF 'live_save_gate' \
-    && ! printf '%s\n' "$lc" | grep -E "$(pos_pat python3)" | grep -qF 'emit_run_manifest'
+    && grep -qF 'python3 - "$HF_MODEL/config.json" "$1"' <<<"$lc" \
+    && grep -qF 'python3 - "$f" <<' <<<"$lc" \
+    && grep -qF 'python3 - "$RESOLVED_CFG"' <<<"$lc" \
+    && grep -qF 'python3 - "$OUT_DIR/checkpoints" "$FQN_MAP"' <<<"$lc" \
+    && grep -qF 'python3 - "$HF_MODEL" "$OUT_DIR/checkpoints"' <<<"$lc" \
+    && [ "$(grep -E "$(pos_pat python3)" <<<"$lc" | grep -cF 'live_save_gate')" -eq 0 ] \
+    && [ "$(grep -E "$(pos_pat python3)" <<<"$lc" | grep -cF 'emit_run_manifest')" -eq 0 ]
 }
 f45_py_n=$(strip_shell_comments < "$FULL" | grep -cE "$(pos_pat python3)" || true)
 if f45_py_census_ok "$FULL"; then
@@ -3717,13 +3717,13 @@ f45_gate_wired_ok() { # $1=launcher file (real or doctored copy). The
                       # assertion; none asserts host incapacity.
   local fn
   fn=$(sed -n '/^fs_live_save_gate() {/,/^}/p' "$1" | strip_shell_comments)
-  printf '%s\n' "$fn" | grep -qF 'run_in_container --slurm-ntasks 1 --workdir "$REPO"' \
-    && printf '%s\n' "$fn" | grep -qF "PYTHONPATH='\$FS_ROOT/src'" \
-    && printf '%s\n' "$fn" | grep -qF 'PYTHONNOUSERSITE=1' \
-    && printf '%s\n' "$fn" | grep -qF -- '--fqn-map' \
-    && printf '%s\n' "$fn" | grep -qF 'live_gate wall-clock budget exhausted' \
-    && printf '%s\n' "$fn" | grep -qF 'return "$fs_gate_rc"' \
-    && ! printf '%s\n' "$fn" | grep -qE "$(pos_pat python3)"
+  grep -qF 'run_in_container --slurm-ntasks 1 --workdir "$REPO"' <<<"$fn" \
+    && grep -qF "PYTHONPATH='\$FS_ROOT/src'" <<<"$fn" \
+    && grep -qF 'PYTHONNOUSERSITE=1' <<<"$fn" \
+    && grep -qF -- '--fqn-map' <<<"$fn" \
+    && grep -qF 'live_gate wall-clock budget exhausted' <<<"$fn" \
+    && grep -qF 'return "$fs_gate_rc"' <<<"$fn" \
+    && ! grep -qE "$(pos_pat python3)" <<<"$fn"
 }
 if f45_gate_wired_ok "$FULL"; then
   ok "fs_live_save_gate (full-FT) routes through run_in_container (--slurm-ntasks 1 --workdir \$REPO idiom), prepends \$FS_ROOT/src to the CONTAINER's forwarded PYTHONPATH, restates PYTHONNOUSERSITE=1 payload-scoped, passes --fqn-map, carries the wall-clock bound, returns the captured rc, and carries no command-position python3 — the gate adjudicates with the same torch stack that wrote the save, with the cheap host alternative (unset PYTHONNOUSERSITE, arm B's CPU-only 2.10.0) refused on record in the launcher comment"
@@ -3862,18 +3862,18 @@ if [ -n "$f45_gate_fn" ]; then
       && grep -qF 'live_gate wall-clock budget exhausted' "$f45_gate_sim/cap-timeout" \
       && echo "MARKER_TIMEOUT=present"
   ) 2>&1 )
-  if printf '%s' "$f45_rc_out" | grep -q 'MAP_0=0' \
-     && printf '%s' "$f45_rc_out" | grep -q 'MAP_1=1' \
-     && printf '%s' "$f45_rc_out" | grep -q 'MAP_3=3' \
-     && printf '%s' "$f45_rc_out" | grep -q 'MAP_127=127' \
+  if grep -q 'MAP_0=0' <<<"$f45_rc_out" \
+     && grep -q 'MAP_1=1' <<<"$f45_rc_out" \
+     && grep -q 'MAP_3=3' <<<"$f45_rc_out" \
+     && grep -q 'MAP_127=127' <<<"$f45_rc_out" \
      && [ "$(printf '%s' "$f45_rc_out" | grep -c 'CAP_.*=present' || true)" -eq 4 ] \
-     && ! printf '%s' "$f45_rc_out" | grep -q 'MARKER_.*=unexpected'; then
+     && ! grep -q 'MARKER_.*=unexpected' <<<"$f45_rc_out"; then
     ok "fs_live_save_gate (full-FT) returns the gate's rc UNTOUCHED through the executor (4 of 4 sampled rcs survive: 0->0 1->1 3->3 127->127), materializes every capture file, and its watchdog stays silent inside the budget — measured through the REAL extracted function, mirroring the fix44 LoRA-side leg; the 0->0 leg is the positive control"
   else
     no "fs_live_save_gate (full-FT) does not return the gate's rc untouched through the executor (observed: $(printf '%s' "$f45_rc_out" | tr '\n' ' ')) — a layer between gate and rc is failing the #72 lesson"
   fi
-  if printf '%s' "$f45_rc_out" | grep -q 'MAP_TIMEOUT=124' \
-     && printf '%s' "$f45_rc_out" | grep -q 'MARKER_TIMEOUT=present'; then
+  if grep -q 'MAP_TIMEOUT=124' <<<"$f45_rc_out" \
+     && grep -q 'MARKER_TIMEOUT=present' <<<"$f45_rc_out"; then
     ok "MUST_FIRE bounded wait: an executor that outlives FS_GATE_TIMEOUT_S=1 is TERM/KILL'ed, mints rc 124, and records the cause in the capture — a wedged live gate can never silently stall tripwires (a)-(c) (an arm never observed to fire is not a control, doctrine 3)"
   else
     no "MUST_FIRE UNREACHABLE (bounded wait): the over-budget stub did not mint 124 with the marker (observed: $(printf '%s' "$f45_rc_out" | tr '\n' ' ')) — the wall-clock bound is an unproven detector and the watcher-stall hole is theoretically open"
@@ -3889,11 +3889,11 @@ fi
 f45_watcher_ok() { # $1=launcher file (real or doctored copy)
   local lc
   lc=$(strip_shell_comments < "$1")
-  printf '%s\n' "$lc" | grep -qF 'fs_live_save_gate "$FS1_CKPT" first_save "$FS1_REPORT" "$FS1_CAPTURE"' \
-    && printf '%s\n' "$lc" | grep -qF 'fs_live_save_gate "$FINAL_CKPT" save "$FINAL_REPORT" "$FINAL_CAPTURE"' \
-    && printf '%s\n' "$lc" | grep -qF 'fs_gate_verdict_to_rc "$FS_GATE_RC" "final save (iter $LAST)" "$FINAL_REPORT" "$FINAL_CAPTURE"' \
-    && printf '%s\n' "$lc" | grep -qF 'fs_gate_refusal_class "$FS1_REPORT"' \
-    && printf '%s\n' "$lc" | grep -qF 'launcher-minted, NOT a tool refusal' \
+  grep -qF 'fs_live_save_gate "$FS1_CKPT" first_save "$FS1_REPORT" "$FS1_CAPTURE"' <<<"$lc" \
+    && grep -qF 'fs_live_save_gate "$FINAL_CKPT" save "$FINAL_REPORT" "$FINAL_CAPTURE"' <<<"$lc" \
+    && grep -qF 'fs_gate_verdict_to_rc "$FS_GATE_RC" "final save (iter $LAST)" "$FINAL_REPORT" "$FINAL_CAPTURE"' <<<"$lc" \
+    && grep -qF 'fs_gate_refusal_class "$FS1_REPORT"' <<<"$lc" \
+    && grep -qF 'launcher-minted, NOT a tool refusal' <<<"$lc" \
     && [ "$(printf '%s\n' "$lc" | grep -cF 'fs_gate_verdict_to_rc "' || true)" -eq 1 ]
 }
 if f45_watcher_ok "$FULL"; then
@@ -4096,10 +4096,10 @@ f45a2_emit_wired_ok() { # $1=launcher file (real or doctored copy). The
                         # command-position python3 names it.
   local f=$1 lc
   lc=$(strip_shell_comments < "$f")
-  printf '%s\n' "$lc" | grep -qF 'FS_EMIT_ARGS=(' \
-    && printf '%s\n' "$lc" | grep -qF "printf '%q ' \"\${FS_EMIT_ARGS[@]}\"" \
-    && printf '%s\n' "$lc" | grep -qF "python3 '\$FS_ROOT/tools/emit_run_manifest.py'" \
-    && printf '%s\n' "$lc" | grep -qF 'run-manifest emission FAILED' \
+  grep -qF 'FS_EMIT_ARGS=(' <<<"$lc" \
+    && grep -qF "printf '%q ' \"\${FS_EMIT_ARGS[@]}\"" <<<"$lc" \
+    && grep -qF "python3 '\$FS_ROOT/tools/emit_run_manifest.py'" <<<"$lc" \
+    && grep -qF 'run-manifest emission FAILED' <<<"$lc" \
     && awk '/run_in_container --slurm-ntasks 1/ && /\\$/ {getline nxt; if (nxt ~ /tools\/emit_run_manifest\.py/) found=1} END{exit !found}' "$f"
 }
 if f45a2_emit_wired_ok "$FULL"; then
@@ -4163,9 +4163,9 @@ f45a2_bind_static_ok() { # $1=launcher file (real or doctored copy)
   local f=$1 g gl el
   g=$(sed -n '/^for _bm in /,/^done$/p' "$f")
   [ -n "$g" ] || return 1
-  printf '%s\n' "$g" | grep -qF '"$OUT_DIR" "$FS_ROOT" "$REPO" "$HF_MODEL" "$BASE_CKPT"' \
-    && printf '%s\n' "$g" | grep -qF 'bind-mount invariant broken' \
-    && printf '%s\n' "$g" | grep -qF '"$HOME"/*' \
+  grep -qF '"$OUT_DIR" "$FS_ROOT" "$REPO" "$HF_MODEL" "$BASE_CKPT"' <<<"$g" \
+    && grep -qF 'bind-mount invariant broken' <<<"$g" \
+    && grep -qF '"$HOME"/*' <<<"$g" \
     && gl=$(grep -nF 'for _bm in ' "$f" | head -n1 | cut -d: -f1) \
     && el=$(grep -nF "python3 '\$FS_ROOT/tools/emit_run_manifest.py'" "$f" | head -n1 | cut -d: -f1) \
     && [ -n "$gl" ] && [ -n "$el" ] && [ "$gl" -lt "$el" ]
@@ -4194,10 +4194,10 @@ if [ -n "$f45a2_bind_guard" ]; then
   else
     no "fix45-A2 (b) bind-mount invariant: guard missing/mispositioned or it false-fires on an all-in-tree path set (row1 die count=$f45a2_row1_dies) — a guard that taxes the <compute-node>-proven layout is doctrine-5 noise"
   fi
-  if printf '%s' "$f45a2_row2_text" | grep -q 'DIE:bind-mount invariant broken' \
-     && printf '%s' "$f45a2_row2_text" | grep -qF '/f45a2/elsewhere' \
-     && printf '%s' "$f45a2_row3_text" | grep -q 'DIE:bind-mount invariant broken' \
-     && printf '%s' "$f45a2_row3_text" | grep -qF '/opt/not-home'; then
+  if grep -q 'DIE:bind-mount invariant broken' <<<"$f45a2_row2_text" \
+     && grep -qF '/f45a2/elsewhere' <<<"$f45a2_row2_text" \
+     && grep -q 'DIE:bind-mount invariant broken' <<<"$f45a2_row3_text" \
+     && grep -qF '/opt/not-home' <<<"$f45a2_row3_text"; then
     ok "MUST_FIRE bind-mount invariant: an \$OUT_DIR outside \$HOME AND an FS_ROOT outside \$HOME each fire the REAL extracted loop's refusal, each naming the offending path (2 of 2 doctored inputs rejected; the arm is observed firing — the <compute-node> run succeeded BECAUSE of this precondition, which was unwritten until now)"
   else
     no "MUST_FIRE UNREACHABLE (bind-mount invariant): outside-tree rows did not fire the named refusal (row2: $(printf '%s' "$f45a2_row2_text" | tr '\n' ' ') ; row3: $(printf '%s' "$f45a2_row3_text" | tr '\n' ' ')) — the guard cannot see the override class it exists to refuse"
@@ -4236,8 +4236,8 @@ f45a2_env_census_ok() { # $1=launcher file (real or doctored copy)
   vars=$(printf '%s\n' "$lc" | grep -oE 'os\.environ\["[A-Z0-9_]+"\]' | sort -u | sed -E 's/os\.environ\["([A-Z0-9_]+)"\]/\1/' | tr '\n' ' ' | sed 's/ $//' || true)
   [ "$n" -eq 2 ] \
     && [ "$vars" = "FOXBRAIN_SFT_JSONLS HF_MODEL" ] \
-    && printf '%s\n' "$lc" | grep -qE '^export FOXBRAIN_SFT_JSONLS=' \
-    && printf '%s\n' "$lc" | grep -qE '^export HF_MODEL='
+    && grep -qE '^export FOXBRAIN_SFT_JSONLS=' <<<"$lc" \
+    && grep -qE '^export HF_MODEL=' <<<"$lc"
 }
 if f45a2_env_census_ok "$FULL"; then
   ok "fix45-A2 / #82 env census: 2 of 2 variables read from os.environ by container-side python are exported by the launcher — FOXBRAIN_SFT_JSONLS (standing MUST_PASS member, exported in the Paths block) and HF_MODEL (the measured #82 hard block: KeyError in the preflight probe on every launch until now). Population pinned at 2 by a file-wide sweep: a THIRD os.environ read appearing turns this leg red until its export AND this census are updated together"
@@ -4271,7 +4271,7 @@ fi
 f45a2_zero_counter_ok() { # $1=launcher file (real or doctored copy)
   local lc
   lc=$(strip_shell_comments < "$1")
-  ! printf '%s\n' "$lc" | grep -qF '|| echo 0' \
+  ! grep -qF '|| echo 0' <<<"$lc" \
     && [ "$(printf '%s\n' "$lc" | grep -cF 'ZC=$(grep -c "ZERO supervised tokens" "$LOG_OUT" 2>/dev/null || true); ZC=${ZC:-0}' || true)" -eq 2 ]
 }
 if f45a2_zero_counter_ok "$FULL"; then
@@ -4396,6 +4396,75 @@ echo "== fix252-gatewiring: coverage_floor + ci_suite_extras real legs =="
 # pinned with `-S`. As with the #238 wiring, `-S` is load-bearing rather than
 # hygiene: it prevents ambient site-packages from changing a verdict from one
 # runner to another.
+
+echo "== fs402: no launcher feeds a printf pipe into an early-exiting grep =="
+
+# --- finding #402: both control suites run under `set -uo pipefail`, and under
+# pipefail the idiom "printf into a grep that exits on first match" returns 141,
+# NOT 0, whenever the match is early and the bytes after it exceed the 64 KB pipe
+# buffer: the grep exits, printf takes SIGPIPE, and pipefail surfaces the signal
+# as the pipeline's status. Measured on the build host -- 348,897 bytes / 20,001
+# lines with the match on line 1 gave rc 141; the same text under 64 KB gave rc 0.
+# Every such site is therefore a LATENT false verdict that appears only once the
+# captured output grows, and at a NEGATED site it inverts into a silent PASS: the
+# control reports "absent" at exactly the moment the forbidden thing is present.
+# 233 sites across the two suites were carrying this. The two-stage form (printf
+# into grep -E into grep -q) fails identically because the MIDDLE grep takes the
+# signal; measured on 508,933 bytes, a herestring on the printf alone does NOT
+# cure that one (still 141). So there are two cures, by shape: a herestring for
+# the one-stage form, and a final stage that reads to EOF -- grep -c with the
+# verdict taken arithmetically -- for the two-stage form.
+#
+# DENOMINATOR, stated because it is narrower than "no early-exiting grep in any
+# pipeline": this leg measures only PRINTF-FED pipelines, the shape that carries
+# captured command output and therefore grows without bound. Sites fed by a
+# bounded file read (strip_shell_comments < "$f" into grep -q) share the
+# mechanism but not the risk, and are NOT in this count -- 25 of those exist and
+# are deliberately out of scope, named here so the zero below is not misread as
+# covering them.
+#
+# This leg is a SELF-SCAN, so the instrument would otherwise sit inside its own
+# denominator. Two guards. (1) The pattern is assembled through f402_bar, so no
+# executable line of this block contains a literal pipe adjacent to a grep flag.
+# (2) The comment above DOES spell the shape in prose, and is removed by
+# strip_shell_comments before matching -- a mention in a comment is not an
+# executed site. A scan that passes by being blind proves nothing, so the
+# MUST_FIRE leg plants the exact idiom in a scratch file OUTSIDE launchers/ and
+# requires this same matcher to find it.
+f402_bar='|'
+f402_pat="printf .*\\${f402_bar} *grep( +-[A-Za-z-]+)* +(-[A-Za-z]*q${f402_bar}-m[0-9])"
+f402_hits=''
+f402_files=0
+for f402_f in launchers/*.sh; do
+  f402_files=$((f402_files + 1))
+  f402_h=$(strip_shell_comments < "$f402_f" | grep -nE "$f402_pat" || true)
+  if [ -n "$f402_h" ]; then
+    f402_hits="${f402_hits}$(sed "s|^|${f402_f}:|" <<<"$f402_h")
+"
+  fi
+done
+f402_n=$(grep -c . <<<"$f402_hits" || true)
+if [ "$f402_files" -lt 5 ]; then
+  no "fs402 denominator collapsed: the launchers/*.sh glob yielded $f402_files file(s), so a zero would be vacuous rather than clean"
+elif [ "$f402_n" -eq 0 ]; then
+  ok "fs402 zero printf-fed early-exiting greps across $f402_files launcher files -- no control's verdict can flip to 141 as its captured output grows past the pipe buffer (denominator excludes the 25 bounded file-read sites named above)"
+else
+  no "fs402 $f402_n printf-fed early-exiting grep site(s) survive -- each is a size-dependent false verdict, and a negated one is a silent PASS: $(tr '\n' ' ' <<<"$f402_hits")"
+fi
+
+f402_plant=$(mktemp "${TMPDIR:-/tmp}/fs-f402-plant.XXXXXX") || f402_plant=''
+if [ -z "$f402_plant" ]; then
+  no "fs402 MUST_FIRE UNMEASURED: mktemp refused a scratch file, so the scanner above was never shown a known-positive and its zero is unattributed"
+else
+  printf '%s\n' "out=\$(printf '%s' \"\$v\" ${f402_bar} grep -q needle)" > "$f402_plant"
+  f402_fire=$(strip_shell_comments < "$f402_plant" | grep -cE "$f402_pat" || true)
+  rm -f "$f402_plant"
+  if [ "$f402_fire" -ge 1 ]; then
+    ok "fs402 MUST_FIRE: the same matcher finds the planted idiom in a scratch file outside launchers/ ($f402_fire hit) -- the zero above is a measurement, not a scanner that cannot see"
+  else
+    no "fs402 MUST_FIRE UNREACHABLE: the matcher did not find the idiom it was handed verbatim, so the zero above is unattributable and this suite's fs402 verdict means nothing"
+  fi
+fi
 
 # fs377: the last two controls are about this suite's own published size. They
 # run last because assert_documented_control_total counts the controls that

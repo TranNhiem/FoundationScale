@@ -66,3 +66,8 @@ artifacts/mutation-battery-report.json
 # resolves its cache as <scan-root>/<GRAPHIFY_OUT>/cache/, so a run that forgets
 # the env var writes ~8.5 MB / 210 files straight into this public repo.
 graphify-out/
+
+# #404: the mutation battery writes this while mutants are applied, so an
+# interrupted run leaves it behind on purpose -- the next run reads it and
+# refuses. It is transient recovery state, never a tracked artifact.
+.mutate_in_flight.json

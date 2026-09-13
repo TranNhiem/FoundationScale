@@ -239,9 +239,12 @@
       "run_arm": "4 arms, same seed",
       "control_arm": "identical curves across optimizers = the knob did nothing",
       "cost": "~15 min x4",
-      "status": "UNBLOCKED by #373 (T0-1 shipped): needs a GPU tray, never run",
+      "status": "MEASURED GREEN (#405/#406) on a GB200 tray: 4 optimizer arms (adamw, adamw_torch_fused, sgd, adafactor), 40 STEP-LABELLED loss points read from each arm's run_manifest.json; max abs delta 5.046e-01 > tol 1.0e-06, so the declared optimizer demonstrably moves the trajectory. Earned only after the #406 telemetry widening put a per-step train_loss_curve in the manifest and the reader was made step-keyed -- the pre-fix reader compared ONE aggregate per arm, so the same GREEN was unearned.",
       "blocked_by": [],
-      "findings": []
+      "findings": [
+        "#405",
+        "#406"
+      ]
     },
     {
       "id": "T1-10",
@@ -251,9 +254,12 @@
       "run_arm": "both arms",
       "control_arm": "if they differ beyond tolerance, accumulation is wrong",
       "cost": "~15 min x2",
-      "status": "UNBLOCKED by #373 (T0-2 shipped): needs a GPU tray, never run",
+      "status": "MEASURED GREEN (#405/#406) on a GB200 tray: accum4_bs1 vs accum1_bs4 agree over the 40-step INTERSECTION of the two arms' step labels; worst gap 0.0133574 at accum1_bs4 step 7 (2.9078900814056396 vs 2.9212474822998047). Keyed on step, not on list position -- two arms logging at different cadences hold different steps at the same index, and a positional zip would have compared step-against-wrong-step and called it a verdict.",
       "blocked_by": [],
-      "findings": []
+      "findings": [
+        "#405",
+        "#406"
+      ]
     },
     {
       "id": "T1-11",
@@ -275,9 +281,12 @@
       "run_arm": "3 arms",
       "control_arm": "identical step times = the impl never changed",
       "cost": "~10 min x3",
-      "status": "UNBLOCKED by #373 (T0-5 shipped): needs a GPU tray, never run",
+      "status": "UNMEASURED 95 (#405/#406) on a GB200 tray: eager and sdpa each returned a real 40-point step-labelled loss series, but flash_attention_2 is UNMEASURED -- ModuleNotFoundError: No module named 'flash_attn'. Deciding metrics exist for 2/3 arms, so the control rule cannot be evaluated and the row correctly refuses rather than reporting a 2-arm result as the 3-arm claim.",
       "blocked_by": [],
-      "findings": []
+      "findings": [
+        "#405",
+        "#406"
+      ]
     },
     {
       "id": "T1-13",

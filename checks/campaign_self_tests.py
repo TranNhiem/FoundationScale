@@ -138,6 +138,58 @@ RUNNABLE: dict[str, str] = {
         "multi-shard checkpoint is a separate run of the same module with a checkpoint "
         "directory as argv."
     ),
+    "validation_campaigns/verification_matrix/t1_9_optimizer_arms.py": (
+        "Thirteen controls over the T1-9 adjudicator -- the four-optimizer loss-curve "
+        "comparison -- and every one is measured here because the ADJUDICATION is pure "
+        "arithmetic over planted RunManifest fixtures, not a training run. Two are the "
+        "shared interpreter-floor controls (#403), and the remaining eleven plant both "
+        "polarities: diverging curves GREEN, identical curves RED via the matrix's own "
+        "control rule, an unmeasured deciding metric 95 with its reason carried verbatim "
+        "into the JSON, noise just inside and just outside the tolerance band so the band "
+        "fires both ways, a single-axis assertion that accepts the shipped arm plan and "
+        "refuses a second varying axis, and an argparse usage error exiting 96 rather than "
+        "2 (#387). What is NOT measured here is the claim itself: the four arms need a GPU "
+        "tray, and that run is a separate invocation with --profile-path."
+    ),
+    "validation_campaigns/verification_matrix/t1_10_accumulation_equivalence.py": (
+        "Fourteen controls over the T1-10 adjudicator, which asks whether accum=4/bs=1 and "
+        "accum=1/bs=4 produce the SAME loss curve. The self-test never trains: it plants "
+        "curve pairs and checks the verdict, so it is stdlib-only and identical on a laptop "
+        "and on the estate. Beyond the two interpreter-floor controls it plants equal "
+        "curves (GREEN), a beyond-tolerance step (RED), a within-tolerance wiggle (GREEN), "
+        "an abstaining arm (95 with its reason verbatim), and a TRUNCATED curve as RED -- "
+        "that last one matters because a short curve would otherwise compare equal over the "
+        "steps it has. Three more guard the experimental design rather than the arithmetic: "
+        "the shipped pair varies only the split axis, an extra differing axis is caught, and "
+        "an unequal EFFECTIVE batch is caught, which is the one way this row can be silently "
+        "misconfigured while both arms still look legal. The tray run is separate."
+    ),
+    "validation_campaigns/verification_matrix/t1_11_grad_checkpointing.py": (
+        "Fourteen controls over the T1-11 adjudicator -- peak memory must DROP and step time "
+        "must RISE, jointly. The pair is the whole point, so the controls plant each half "
+        "alone: memory moving with time flat is RED, and memory moving the WRONG way is RED, "
+        "which is what stops a one-sided improvement from reading as the claim. The rest "
+        "cover the no-op shape (the silent-fallback RED), an unmeasured deciding metric (95), "
+        "a refused arm refusing the whole row (96), the single-axis assertion in both "
+        "polarities, a usage error exiting 96 not 2, a missing manifest read as a reason "
+        "rather than a crash, and the canonical manifest name being found. One control "
+        "compares CONTROL_RULE against the matrix SPEC sentence verbatim, so the code and "
+        "the declared rule cannot drift apart. All of it runs over TemporaryDirectory "
+        "fixtures; the two-arm measurement needs a tray and is invoked separately."
+    ),
+    "validation_campaigns/verification_matrix/t1_12_attention_impl.py": (
+        "Twelve controls over the T1-12 adjudicator -- eager, sdpa and flash_attention_2 must "
+        "AGREE on logits within tolerance while DIFFERING in step time. Identical step times "
+        "are the silent-fallback signature (the impl never changed), so three controls pin "
+        "the 5% identity band from both sides: a 47% spread clears it, a 0.6% spread is "
+        "refuted as RED, and a 6% spread clears it, which proves the band's edge is a "
+        "measurement and not a threshold that only ever fires one way. Diverging loss curves "
+        "are RED; an arm whose module is absent is 95 with its ModuleNotFoundError carried "
+        "verbatim AND the denominator held at 3, so an unavailable impl cannot shrink the "
+        "comparison it was meant to join. Two controls exercise the manifest readers over "
+        "measured, unmeasured and absent entries. The self-test imports no torch and needs "
+        "no GPU; the three-arm run does, and is separate."
+    ),
 }
 
 NOT_RUNNABLE_HERE: dict[str, str] = {
