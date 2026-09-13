@@ -2227,6 +2227,13 @@ def _train(cfg: TrainConfig) -> int:
 
     # --- 5. Model + tokenizer + dataset -----------------------------------
     torch.manual_seed(cfg.seed)
+    # #410: images enter this plane through a DECLARED column name, carried on
+    # an environment variable with NO default -- this is a public repo and
+    # ships no estate paths. Absent means text-only, and text-only must stay
+    # byte-identical to the pre-#410 plane.
+    import os as _os  # noqa: PLC0415 -- function-local, keeps module import light
+
+    IMAGE_COLUMN = _os.environ.get("FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN") or None
     # attn_implementation binds at MODEL CONSTRUCTION, not on TrainingArguments
     # -- no such knob exists there, so it rides from_pretrained. The contract is
     # the same one the TrainingArguments introspection below enforces (#342: a
@@ -2265,7 +2272,26 @@ def _train(cfg: TrainConfig) -> int:
     if cfg.precision in _PRECISION_TORCH_DTYPES:
         model_kwargs["dtype"] = getattr(torch, _PRECISION_TORCH_DTYPES[cfg.precision])
     try:
-        tokenizer = AutoTokenizer.from_pretrained(cfg.model)
+        # #410: REUSE the RL plane's surface for IMAGES -- do not rebuild an
+        # image path here. But route the TEXT arm the way it has always been
+        # routed, because the two differ on the FAILURE path, not the happy
+        # one: resolve_prompt_surface refuses by raising SystemExit, which the
+        # `except Exception` below cannot catch, so an unconstructible model
+        # dir would leave through the process instead of through _mark() --
+        # no RED, no manifest, no return value. C7 says the text arm stays
+        # byte-identical to the pre-#410 plane, and that covers how it FAILS.
+        # Pinned by test_train_returns_red_when_model_dir_is_unconstructible.
+        prompt_surface: Any = None
+        if IMAGE_COLUMN is None:
+            tokenizer = AutoTokenizer.from_pretrained(cfg.model)
+        else:
+            # Declared images: AutoProcessor is REQUIRED and its absence
+            # refuses (96) inside the surface -- the right verdict here,
+            # because a declared axis that cannot be executed is a refusal.
+            from foundationscale.rl.prompt_surface import resolve_prompt_surface
+
+            prompt_surface = resolve_prompt_surface(cfg.model, needs_images=True)
+            tokenizer = getattr(prompt_surface.surface, "tokenizer", prompt_surface.surface)
         try:
             model = AutoModelForCausalLM.from_pretrained(cfg.model, **model_kwargs)
         except (ValueError, TypeError, ImportError) as exc:
@@ -2373,11 +2399,38 @@ def _train(cfg: TrainConfig) -> int:
                 "the thin path requires a 'text' column",
             )
             return EXIT_REFUSE
-        tokenized = raw[split].map(
-            lambda batch: tokenizer(batch["text"], truncation=True, max_length=TOKENIZE_MAX_LENGTH),
-            batched=True,
-            remove_columns=columns,
-        )
+        if IMAGE_COLUMN is None:
+            # TEXT-ONLY ARM -- byte-identical to the pre-#410 plane. Same
+            # lambda, same remove_columns, and the historical collator
+            # downstream. Do not "simplify" this into the shared arm.
+            tokenized = raw[split].map(
+                lambda batch: tokenizer(
+                    batch["text"], truncation=True, max_length=TOKENIZE_MAX_LENGTH
+                ),
+                batched=True,
+                remove_columns=columns,
+            )
+        else:
+            if IMAGE_COLUMN not in columns:
+                # A declared axis that is not in the data is a REFUSAL, never
+                # a quiet text-only train (#410 follows #422's rule).
+                _mark(
+                    Step.REFUSE,
+                    f"image column {IMAGE_COLUMN!r} is declared but dataset "
+                    f"{cfg.dataset!r} split {split!r} has columns {columns}. "
+                    "Training anyway would run text-only under a multimodal "
+                    "label -- the silent-drop defect this plane now refuses",
+                )
+                _emit_manifest(
+                    cfg,
+                    stage="refused",
+                    extra={"exit": EXIT_REFUSE, "image_column": IMAGE_COLUMN},
+                )
+                return EXIT_REFUSE
+            # IMAGE ARM: rows stay RAW ({text, image paths}). Encoding --
+            # text ids AND pixel_values -- happens per batch in the surface's
+            # collator.
+            tokenized = raw[split]
     except Exception as exc:  # noqa: BLE001 -- classified into RED vs REFUSE below
         environment = _environment_failure_reason(exc)
         if environment is not None:
@@ -2674,13 +2727,38 @@ def _train(cfg: TrainConfig) -> int:
     # name. Verified in both directions, not one: mypy is clean here with
     # transformers importable, and clean again with transformers forced to Any.
     _TrainingArguments: Any = TrainingArguments
+    # #410: the collator defaults to EXACTLY the historical one. Only the
+    # declared-image arm replaces it, with the (widened) prompt surface's
+    # collator -- see train_image_collator_or_refuse for why the pixel
+    # loading lives in the surface and not here.
+    data_collator: Any = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    if IMAGE_COLUMN is not None:
+        from foundationscale.rl.prompt_surface import (
+            refuse_if_pixel_column_dropped,
+            train_image_collator_or_refuse,
+        )
+
+        data_collator = train_image_collator_or_refuse(
+            prompt_surface,
+            image_column=IMAGE_COLUMN,
+            max_length=TOKENIZE_MAX_LENGTH,
+        )
+        # POSITIVE survival proof, before a single step is paid for: run the
+        # collator on real rows and refuse (96) -- naming the dropped column
+        # -- if pixel_values is not in the batch the model would receive.
+        probe_rows = [tokenized[i] for i in range(min(2, len(tokenized)))]
+        refuse_if_pixel_column_dropped(data_collator(probe_rows).keys(), IMAGE_COLUMN)
+        # Trainer's default strips dataset columns its model signature does
+        # not name -- with this collator the raw image column must SURVIVE to
+        # collate time, so the stripping is disabled for the image arm only.
+        kwargs["remove_unused_columns"] = False
     try:
         args = _TrainingArguments(**kwargs)
         trainer = Trainer(
             model=model,
             args=args,
             train_dataset=tokenized,
-            data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
+            data_collator=data_collator,
             callbacks=callbacks,
         )
     except ImportError as exc:

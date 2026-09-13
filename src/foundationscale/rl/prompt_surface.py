@@ -9,6 +9,9 @@ __all__ = [
     "resolve_prompt_surface",
     "encode_prompts",
     "chat_template_or_refuse",
+    "train_image_collator_or_refuse",
+    "refuse_if_pixel_column_dropped",
+    "PIXEL_KEY",
 ]
 
 
@@ -275,3 +278,71 @@ def encode_prompts(
     import torch  # noqa: F401 -- presence check; .to calls below are on tensors
 
     return {key: value.to(device) for key, value in encoded.items()}
+
+
+PIXEL_KEY = "pixel_values"
+# The key the vision tower consumes. Declared ONCE here because the train
+# plane's survival probe, the collator and the verification adjudicator must
+# agree on the spelling, and the agreement must be imported, not re-typed.
+
+
+def refuse_if_pixel_column_dropped(
+    batch_keys: Any,
+    image_column: str,
+    pixel_key: str = PIXEL_KEY,
+) -> None:
+    """REFUSE (96) when a collator's output batch lost the pixel column."""
+    keys = {str(k) for k in batch_keys}
+    if pixel_key not in keys:
+        _refuse_exit_96(
+            f"image column {image_column!r} is DECLARED, but the batch the "
+            f"model would actually receive has keys {sorted(keys)}: the pixel "
+            f"column {pixel_key!r} was DROPPED between the dataset and the "
+            "forward. That is the silent-drop defect (#371/#410, and #422's "
+            "class -- a declared axis that is not executed is a refusal, not "
+            "a pass). The run is refused; it never trains text-only under a "
+            "multimodal label."
+        )
+
+
+def train_image_collator_or_refuse(
+    surface: PromptSurface,
+    *,
+    image_column: str,
+    max_length: int,
+    text_column: str = "text",
+) -> Any:
+    """WIDENED FOR #410: the surface now also emits the TRAIN plane's collator."""
+    if surface.kind != "processor" or not surface.supports_images:
+        _refuse_exit_96(
+            f"a train-time image collator was requested for column "
+            f"{image_column!r} but the resolved surface is {surface.kind!r}: "
+            "encoding images through a tokenizer is the silent-drop defect "
+            "one layer up, so this refuses rather than collates"
+        )
+
+    def collate(features: Sequence[Any]) -> Any:
+        texts: list[str] = []
+        flat_images: list[Any] = []
+        for i, feature in enumerate(features):
+            row = feature if isinstance(feature, dict) else vars(feature)
+            paths = row.get(image_column) or []
+            if isinstance(paths, (str, Path)):
+                paths = [paths]
+            for p in paths:
+                flat_images.append(_load_image_or_refuse(f"train-row[{i}]", str(p)))
+            texts.append(str(row.get(text_column, "")))
+        batch = surface.surface(
+            text=texts,
+            images=flat_images,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=max_length,
+            add_special_tokens=False,
+        )
+        if "labels" not in batch and "input_ids" in batch:
+            batch["labels"] = batch["input_ids"].clone()
+        return batch
+
+    return collate
