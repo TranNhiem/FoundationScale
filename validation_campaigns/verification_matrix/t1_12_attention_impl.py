@@ -63,6 +63,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, NoReturn
 
+import arm_diagnosis
 from t1_interpreter_floor import (
     DEFAULT_ROUNDS,
     capability_floor_reasons,
@@ -538,11 +539,29 @@ def _base_record(spec: _ArmSpec) -> dict[str, Any]:
     }
 
 
-def _unmeasured_arm_record(spec: _ArmSpec, reason: str) -> dict[str, Any]:
+def _unmeasured_arm_record(
+    spec: _ArmSpec, reason: str, excerpts: dict[str, str] | None = None
+) -> dict[str, Any]:
     record = _base_record(spec)
     record["status"] = "unmeasured"
     record["reason"] = reason
+    # Always written, even empty: an absent key reads as "this row does not
+    # collect stream tails", a present-and-empty one as "there were none". Only
+    # the second is true, and #441 is what the difference costs.
+    record["excerpts"] = excerpts or {}
     return record
+
+
+def _stream_text(value: object) -> str:
+    """Coerce a captured stream to text.
+
+    TimeoutExpired's stdout/stderr follow the parent call's text mode, but the
+    row must not lose the one diagnosis a timed-out arm leaves behind if that
+    ever changes -- decode rather than discard.
+    """
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return value if isinstance(value, str) else ""
 
 
 def _write_record(out_dir: Path, arm: str, record: dict[str, Any]) -> Path:
@@ -624,21 +643,39 @@ def _run_arm(
         argv.extend([flag, value])
     try:
         proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=ARM_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        return _unmeasured_arm_record(spec, f"trainer did not finish within {ARM_TIMEOUT_S}s")
+    except subprocess.TimeoutExpired as exc:
+        # A timed-out arm still said something before it hung, and how far it
+        # got IS the diagnosis -- whether it died in dataset tokenization or on
+        # step 900 of 1000 are different problems (#441).
+        stdout, stderr = _stream_text(exc.stdout), _stream_text(exc.stderr)
+        return _unmeasured_arm_record(
+            spec,
+            f"trainer did not finish within {ARM_TIMEOUT_S}s",
+            {
+                "stdout_tail": arm_diagnosis.excerpt(stdout),
+                "stderr_tail": arm_diagnosis.excerpt(stderr),
+            },
+        )
     if proc.returncode != 0:
-        tail = [ln for ln in proc.stderr.strip().splitlines() if ln.strip()][-3:]
         # torchrun flattens the child's exit code (#171): proc.returncode is the
         # LAUNCHER's code -- a 95 refusal and a crash both arrive as 1 -- so a
         # non-zero code is UNMEASURED, never RED; they cannot be told apart.
-        reason = (
-            f"launcher (torch.distributed.run) exited {proc.returncode}; the "
-            "trainer's declared exit code is not observable through torchrun "
-            "(#171), so a refusal and a crash are indistinguishable"
+        #
+        # This used to keep the last 3 non-blank lines of STDERR. The torchrun
+        # banner is ~20 lines, so those 3 were always banner, and the trainer's
+        # own [fs:train:*] markers go to STDOUT, which was not read at all
+        # (#441). Both streams now, markers first.
+        reason, excerpts = arm_diagnosis.diagnose(
+            proc.returncode,
+            proc.stdout,
+            proc.stderr,
+            prefix=(
+                f"launcher (torch.distributed.run) exited {proc.returncode}; the "
+                "trainer's declared exit code is not observable through torchrun "
+                "(#171), so a refusal and a crash are indistinguishable"
+            ),
         )
-        if tail:
-            reason += f": {' | '.join(tail)}"
-        return _unmeasured_arm_record(spec, reason)
+        return _unmeasured_arm_record(spec, reason, excerpts)
     manifest, why = _find_manifest(spec.work_dir)
     if manifest is None:
         return _unmeasured_arm_record(spec, why or "no manifest")

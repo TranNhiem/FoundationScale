@@ -84,6 +84,7 @@ import traceback
 from pathlib import Path
 from typing import NoReturn
 
+import arm_diagnosis
 from t1_interpreter_floor import (
     DEFAULT_ROUNDS,
     capability_floor_reasons,
@@ -482,8 +483,17 @@ def _find_manifest(trainer_dir: Path) -> Path | str:
     return f"ambiguous RunManifests under {trainer_dir}: {names}"
 
 
-def _stderr_tail(stderr: str, lines: int = 8) -> str:
-    return "\n".join(stderr.strip().splitlines()[-lines:])
+def _diagnose(proc: subprocess.CompletedProcess[str], prefix: str) -> tuple[str, dict[str, str]]:
+    """Build this row's failure reason from BOTH of the arm's streams.
+
+    This replaced an 8-line tail of stderr ALONE. Under torchrun stderr ends in
+    the ChildFailedError banner -- which is ~20 lines, so an 8-line tail saw
+    nothing but banner -- and every [fs:train:*] marker the trainer emits is
+    printed to STDOUT, so the one stream carrying the refusal was never read
+    (#441). The excerpts go on the record so the next failure this helper's
+    marker vocabulary cannot name is still diagnosable without another tray.
+    """
+    return arm_diagnosis.diagnose(proc.returncode, proc.stdout, proc.stderr, prefix=prefix)
 
 
 def _run_arm(
@@ -530,6 +540,10 @@ def _run_arm(
         "loss_series": {},
         "run_failure": None,
         "refused": False,
+        # Bounded tails of both arm streams, populated only on a failure path.
+        # Empty on a clean arm -- an empty mapping reads as "nothing to
+        # collect", which is the truth (#441).
+        "excerpts": {},
     }
     proc = subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
     # torchrun FLATTENS the child's exit code: any non-zero arrives here as 1
@@ -538,11 +552,14 @@ def _run_arm(
     record["launcher_exit_code"] = proc.returncode
     found = _find_manifest(trainer_dir)
     if isinstance(found, str):
-        record["run_failure"] = (
+        why, excerpts = _diagnose(
+            proc,
             f"launcher (torchrun) exited {proc.returncode} -- the trainer's own "
             "declared code is not observable through torchrun (#171) -- "
-            f"and {found}; stderr tail:\n{_stderr_tail(proc.stderr)}"
+            f"and {found}",
         )
+        record["run_failure"] = why
+        record["excerpts"] = excerpts
         # A genuine trainer REFUSE (96) would be flattened to 1 like any other
         # failure (#171); it can no longer be told apart, so this row never
         # marks a launcher code as refused: every non-zero adjudicates 95,
@@ -572,12 +589,14 @@ def _run_arm(
         # indistinguishable from a crash through torchrun, so this adjudicates
         # UNMEASURED (95) via run_failure -- never RED on a code that cannot
         # say what failed.
-        record["run_failure"] = (
+        why, excerpts = _diagnose(
+            proc,
             f"launcher (torchrun) exited {proc.returncode} despite a readable "
             "manifest; the trainer's declared exit code is not observable "
-            "through torchrun (#171). stderr tail:\n"
-            f"{_stderr_tail(proc.stderr)}"
+            "through torchrun (#171)",
         )
+        record["run_failure"] = why
+        record["excerpts"] = excerpts
     return record
 
 

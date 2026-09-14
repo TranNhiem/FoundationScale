@@ -72,7 +72,21 @@ HELP_TIMEOUT_SECONDS = 120
 # The scalar fields lifted out of each <row>_<arm>.json payload into the
 # receipt's arms mapping. The axis key (optimizer, accumulation, ...) is
 # deliberately NOT here: it is per-row and must not be hard-coded.
-ARM_SCALAR_KEYS = ("status", "reason", "launcher_exit_code", "telemetry", "loss_curve")
+#
+# `excerpts` carries bounded tails of the arm subprocess's two streams. It is
+# lifted into the receipt on purpose: pass p439's receipts said only "torchrun
+# exited 1" for every arm, and the cause had to be recovered by re-running an
+# arm on a tray. A receipt that cannot explain its own failure is not a receipt
+# (#441). Rows that do not emit the key are unaffected -- the lift is `if key
+# in payload`, so this widens what CAN be carried, not what MUST be.
+ARM_SCALAR_KEYS = (
+    "status",
+    "reason",
+    "launcher_exit_code",
+    "excerpts",
+    "telemetry",
+    "loss_curve",
+)
 
 _LONG_FLAG_RE = re.compile(r"--([A-Za-z0-9][A-Za-z0-9-]*)")
 

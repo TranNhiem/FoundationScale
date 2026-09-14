@@ -69,6 +69,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import arm_diagnosis
 from t1_interpreter_floor import (
     classify_boundary_exception,
     floor_controls,
@@ -162,6 +163,10 @@ class ArmRecord:
     launcher_exit_code: int | None = None
     loss_curve: list[float] = field(default_factory=list)
     telemetry: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Bounded tails of the arm subprocess's two streams. Empty on a measured
+    # arm; populated on every failure so the receipt can be diagnosed without
+    # re-running the arm on an allocation, which is what p439 cost (#441).
+    excerpts: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -547,6 +552,10 @@ def _write_records(out_dir: Path, records: list[ArmRecord], verdict: int, detail
             "status": record.status,
             "reason": record.reason,
             "launcher_exit_code": record.launcher_exit_code,
+            # Written even when empty: an absent key reads as "the row does not
+            # collect this", a present-and-empty one reads as "nothing to
+            # collect", and only the second is true of a measured arm (#441).
+            "excerpts": record.excerpts,
             "telemetry": record.telemetry,
             "loss_curve": record.loss_curve,
             "verdict": VERDICT_NAMES[verdict],
@@ -597,34 +606,51 @@ def _run_arm(
         cmd.extend([flag, value])
     proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if proc.returncode != 0:
-        lines = (proc.stderr or "").strip().splitlines()
-        if not lines:
-            lines = (proc.stdout or "").strip().splitlines()
         # torchrun flattens the child's exit code (#171): this is the
         # LAUNCHER's code, so a trainer refusal and a crash are
         # indistinguishable -- a non-zero code adjudicates UNMEASURED,
         # never RED.
-        reason = (
-            f"torchrun launcher exited {proc.returncode} (the launcher's code; "
-            "the trainer's declared code is not observable through torchrun, #171)"
+        #
+        # What the code cannot say, the trainer's own output can. This used to
+        # keep stderr's last line, which under torchrun is always the closing
+        # ==== of the ChildFailedError banner, and it fell back to stdout only
+        # when stderr was EMPTY -- which never happens under torchrun. Since
+        # every [fs:train:*] marker is printed to STDOUT, the refusal reason was
+        # discarded on every arm of every pass, and p439's cause had to be
+        # recovered by re-running an arm by hand on a tray (#441).
+        reason, excerpts = arm_diagnosis.diagnose(
+            proc.returncode,
+            proc.stdout,
+            proc.stderr,
+            prefix=(
+                f"torchrun launcher exited {proc.returncode} (the launcher's code; "
+                "the trainer's declared code is not observable through torchrun, #171)"
+            ),
         )
-        if lines:
-            reason = f"{reason}; last line: {lines[-1][:160]}"
         return ArmRecord(
             arm=arm,
             optimizer=optimizer,
             status="unmeasured",
             reason=reason,
             launcher_exit_code=proc.returncode,
+            excerpts=excerpts,
         )
     manifest, miss = _find_manifest(arm_dir)
     if manifest is None:
+        # rc 0 and no manifest is the OTHER undiagnosable shape: the launcher
+        # is happy and the artifact the row reads is absent, so the record
+        # would otherwise say only "no manifest" and name no cause. Same fix,
+        # same reason (#441) -- keep both tails.
         return ArmRecord(
             arm=arm,
             optimizer=optimizer,
             status="unmeasured",
             reason=miss,
             launcher_exit_code=proc.returncode,
+            excerpts={
+                "stdout_tail": arm_diagnosis.excerpt(proc.stdout),
+                "stderr_tail": arm_diagnosis.excerpt(proc.stderr),
+            },
         )
     scalars, curve, reason = _extract_telemetry(manifest)
     if reason is not None:

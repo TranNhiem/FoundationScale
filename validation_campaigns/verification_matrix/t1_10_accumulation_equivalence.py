@@ -61,6 +61,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
+import arm_diagnosis
 from t1_interpreter_floor import (
     classify_boundary_exception,
     floor_controls,
@@ -507,6 +508,20 @@ def _write_record(out_dir: Path, arm: str, record: dict[str, Any]) -> Path:
     return path
 
 
+def _read_log(path: Path) -> str:
+    """Read back one captured stream, tolerating an unreadable file.
+
+    A log that cannot be read is not a verdict about the arm, so this never
+    raises: the diagnosis simply proceeds with one stream missing, and an arm
+    whose streams are BOTH unreadable is named as such by arm_diagnosis rather
+    than crashing the row that was trying to explain it.
+    """
+    try:
+        return path.read_text(errors="replace")
+    except OSError as exc:  # pragma: no cover -- exercised only by a broken FS
+        return f"<log {path} unreadable: {exc}>"
+
+
 def _run_arm(
     spec: ArmSpec, args: argparse.Namespace, arm_index: int
 ) -> tuple[dict[str, Any], ArmCurve]:
@@ -562,17 +577,41 @@ def _run_arm(
     env["PYTHONPATH"] = os.pathsep.join(
         [os.fspath(package_parent), env.get("PYTHONPATH", "")]
     ).rstrip(os.pathsep)
-    completed = subprocess.run(cmd, env=env, check=False)
+    # #441: the arm's streams go to FILES, not to this process's console.
+    # Inheriting them left the trainer's own [fs:train:*] vocabulary nowhere but
+    # the pass log, unattributed to an arm and absent from the record, so a
+    # failed arm could not be diagnosed from its own receipt. The logs sit
+    # BESIDE arm_out, never inside it: the "output dir was never created" branch
+    # below is a real diagnostic and writing into that dir would silence it.
+    # Live progress is not lost, only relocated -- the paths are printed first,
+    # so `tail -f` works, and unlike an inherited stream the bytes survive the
+    # run and stay attributed to one arm.
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    stdout_log = args.out_dir / f"{ROW}_{spec.name}_stdout.log"
+    stderr_log = args.out_dir / f"{ROW}_{spec.name}_stderr.log"
+    record["console_logs"] = {
+        "stdout": os.fspath(stdout_log),
+        "stderr": os.fspath(stderr_log),
+    }
+    print(f"ARM {spec.name}: console -> {stdout_log} / {stderr_log}", flush=True)
+    with stdout_log.open("w") as out_fh, stderr_log.open("w") as err_fh:
+        completed = subprocess.run(cmd, env=env, check=False, stdout=out_fh, stderr=err_fh)
     # #171: torchrun FLATTENS the child's exit code -- this is the LAUNCHER's
     # code, and the trainer's declared code (95 unmeasured, 96 refused) is not
     # observable through it. A non-zero here can be a refusal OR a crash, so
     # it must read UNMEASURED, never RED.
     record["launcher_exit"] = completed.returncode
     if completed.returncode != GREEN:
-        why = (
-            f"launcher exited {completed.returncode}; the trainer's declared "
-            "code is not observable through torchrun (#171)"
+        why, excerpts = arm_diagnosis.diagnose(
+            completed.returncode,
+            _read_log(stdout_log),
+            _read_log(stderr_log),
+            prefix=(
+                f"launcher exited {completed.returncode}; the trainer's declared "
+                "code is not observable through torchrun (#171)"
+            ),
         )
+        record["excerpts"] = excerpts
         record["loss_curve"] = _unmeasured_curve(why)
         return record, ArmCurve(spec.name, None, None, why)
     found = _find_manifest(arm_out)
@@ -582,6 +621,13 @@ def _run_arm(
             if not arm_out.is_dir()
             else f"no JSON file with a telemetry mapping under {arm_out}"
         )
+        # rc=0 and nothing to read is the HARDEST case to explain after the
+        # fact -- the launcher says it succeeded -- so the streams go on the
+        # record here too (#441), not only on the non-zero path.
+        record["excerpts"] = {
+            "stdout_tail": arm_diagnosis.excerpt(_read_log(stdout_log)),
+            "stderr_tail": arm_diagnosis.excerpt(_read_log(stderr_log)),
+        }
         record["loss_curve"] = _unmeasured_curve(why)
         return record, ArmCurve(spec.name, None, None, why)
     manifest_path, manifest = found

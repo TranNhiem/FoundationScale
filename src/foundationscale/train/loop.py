@@ -879,6 +879,70 @@ def check_precision_agreement(
     )
 
 
+def _wrote_this_checkpoint(args: Any, state: Any) -> bool | None:
+    """Did THIS rank write the checkpoint it is about to adjudicate? (#444)
+
+    ``None`` means the question cannot be answered from what was handed in --
+    a bare test double, or a plain single-process run -- and the caller must
+    then adjudicate, because refusing to look at the only checkpoint there is
+    would be worse than the risk this guard exists to remove.
+
+    ``args.should_save`` is preferred because it is the SAME predicate the
+    Trainer itself consults before writing::
+
+        save_on_each_node  ->  local_process_index == 0
+        otherwise          ->  process_index == 0
+
+    Deriving our own rank test instead would be a second oracle for one
+    question, and the two would drift the first time ``save_on_each_node``
+    changed. ``state.is_world_process_zero`` is the fallback for a Trainer old
+    enough not to expose the property.
+    """
+    for holder, name in ((args, "should_save"), (state, "is_world_process_zero")):
+        value = getattr(holder, name, None)
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def _agree_on_stop(stop: bool) -> bool:
+    """Make one stop decision hold on every rank, or pass ``stop`` through (#444).
+
+    Scoping adjudication to the writing rank is only half a fix. HF's
+    ``TrainerControl`` is per-process and ``should_training_stop`` is not
+    broadcast, so a writer that stops alone leaves every other rank training
+    into the next collective with no partner -- a hang, which is strictly
+    worse than the false RED this change removes. The stop must therefore be
+    agreed, not merely computed.
+
+    MAX, not ``broadcast(src=0)``: under ``save_on_each_node`` the writer is
+    the LOCAL process zero of each node, so there is no single source rank to
+    broadcast from. MAX also fails closed -- any rank that saw a reason to
+    stop stops all of them -- which is the direction a gate should err in.
+
+    A raised collective is deliberately NOT swallowed. A rank that cannot
+    reach its peers has not produced a verdict about the model, and quietly
+    returning the local answer would leave the ranks disagreeing about whether
+    to stop, which is the exact failure this function exists to prevent. It
+    propagates and is adjudicated by ``train()``'s own handler.
+    """
+    try:
+        import torch
+        import torch.distributed as dist
+    except ImportError:  # pragma: no cover -- torch-free hosts run single-process
+        return stop
+    if not (dist.is_available() and dist.is_initialized()):
+        return stop
+    device = None
+    if dist.get_backend() == "nccl" and torch.cuda.is_available():
+        # NCCL cannot reduce a CPU tensor. current_device() is what torchrun
+        # already pinned via LOCAL_RANK, so this lands on the rank's own GPU.
+        device = torch.device("cuda", torch.cuda.current_device())
+    flag = torch.tensor([1 if stop else 0], dtype=torch.int32, device=device)
+    dist.all_reduce(flag, op=dist.ReduceOp.MAX)
+    return bool(flag.item())
+
+
 class FoundationScaleSaveGate(_CallbackBase):
     """``TrainerCallback`` wiring the registered checkpoint gates into ``on_save``.
 
@@ -931,6 +995,62 @@ class FoundationScaleSaveGate(_CallbackBase):
         event = Lifecycle.FIRST_SAVE if self._saves == 0 else Lifecycle.SAVE
         self._saves += 1
         ckpt_dir = Path(getattr(args, "output_dir", ".")) / f"checkpoint-{step}"
+
+        # #444: only the rank that WROTE this checkpoint may adjudicate it.
+        # HF fires on_save on every rank, but under DDP only the writer emits
+        # the model shards -- every other rank's view of the directory holds
+        # its own rng_state_<rank>.pth and nothing else. Adjudicating that
+        # view refuses the precision check as vacuous (correctly: a comparison
+        # over nothing must not pass) and REDs the run, so on a 2-GPU tray
+        # every arm died at the first save while rank 0 printed PASS. The
+        # artifact was never absent; it was never this rank's to inspect.
+        #
+        # Measured on a GB200 tray: 4 of 4 arms, rank 0 "PASS 4/4 gates",
+        # rank 1 exit 5, launcher rc 1 -- the whole T1 GPU plane, blocked by
+        # a rank the gate should never have questioned.
+        writer = _wrote_this_checkpoint(args, state)
+        if writer is False:
+            # A declared abstention, never a silent skip and never a PASS: the
+            # record has to be able to say WHY a rank established nothing, or
+            # the next reader cannot tell abstention from a gate that ran and
+            # liked what it saw.
+            self.records.append(
+                {
+                    "event": f"{event.value}.abstain",
+                    "checkpoint": str(ckpt_dir),
+                    "verdicts": {},
+                    "reason": "not the writing rank",
+                }
+            )
+            _mark(
+                Step.SAVE_GATE,
+                f"ABSTAIN over {ckpt_dir}: this rank did not write the checkpoint, "
+                "so it holds no artifact to adjudicate; the writing rank's verdict "
+                "is adopted below (#444)",
+            )
+            stop = False
+        else:
+            stop = self._adjudicate(event, ckpt_dir)
+
+        # UNCONDITIONAL, and on every rank: _agree_on_stop is a collective, so
+        # a rank that reached it while another returned early would deadlock.
+        # That is why the adjudication above is a helper with a return value
+        # instead of the early `return control` this method used to carry.
+        stop = _agree_on_stop(stop)
+        if stop:
+            self.blocked = True
+            control.should_training_stop = True
+        return control
+
+    def _adjudicate(self, event: Lifecycle, ckpt_dir: Path) -> bool:
+        """Run the checks over a checkpoint THIS rank wrote; True means stop.
+
+        Split out of ``on_save`` so that every rank -- adjudicating or
+        abstaining -- reaches the collective in ``on_save`` exactly once. The
+        verdict is returned rather than written straight to ``control``,
+        because on a multi-rank run it is not final until it has been agreed.
+        """
+        stop = False
         # Observed-vs-declared precision at the FIRST save, through this
         # callback's blocked/records/should_training_stop state -- the existing
         # save-gate machinery, not a side channel. It runs BEFORE the context
@@ -977,8 +1097,7 @@ class FoundationScaleSaveGate(_CallbackBase):
                 f"precision {agreement.status.upper()}: {agreement.message}",
             )
             if agreement.status in ("red", "refuse"):
-                self.blocked = True
-                control.should_training_stop = True
+                stop = True
         try:
             ctx = self.context_builder(ckpt_dir)
         except Exception as exc:  # noqa: BLE001 -- expected on undecodable saves
@@ -986,7 +1105,9 @@ class FoundationScaleSaveGate(_CallbackBase):
                 Step.SAVE_GATE,
                 f"UNMEASURED 0/0 gates: cannot build checkpoint context for {ckpt_dir}: {exc}",
             )
-            return control
+            # `stop`, not False: an unbuildable context does not retract a
+            # precision verdict already reached above it.
+            return stop
         # Typed dispatch, not GateRegistry.run. `run` broadcasts one context to every
         # gate registered for the event, so a gate from another context family
         # (parity, objective) is handed a CheckpointGateContext and dies inside
@@ -1024,8 +1145,7 @@ class FoundationScaleSaveGate(_CallbackBase):
         denominator = f"{len(report.results)}/{registered} gates"
         blockers = report.blocking
         if blockers:
-            self.blocked = True
-            control.should_training_stop = True
+            stop = True
             _mark(
                 Step.SAVE_GATE,
                 f"RED {denominator}, {len(blockers)} blocking "
@@ -1034,7 +1154,7 @@ class FoundationScaleSaveGate(_CallbackBase):
             )
         else:
             _mark(Step.SAVE_GATE, f"PASS {denominator} over {ckpt_dir}")
-        return control
+        return stop
 
 
 # The gates whose blocking verdict on the BACKSTOP arm means "the loss was never

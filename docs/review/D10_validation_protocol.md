@@ -6,8 +6,8 @@ the state is **UNMEASURED**. "Validated" is used only where a job id or a named 
 backs it.
 
 Scope note on size, so denominators in this document are anchored: the repository holds
-209115 git-tracked .py/.sh/.md lines repo-wide; the validation harness, `validation_campaigns/h100_validation/`
-(34169 .py LOC, 66 files); the package, `src/foundationscale/` measures 41026 lines; the
+210050 git-tracked .py/.sh/.md lines repo-wide; the validation harness, `validation_campaigns/h100_validation/`
+(34169 .py LOC, 66 files); the package, `src/foundationscale/` measures 41146 lines; the
 GB200-side launch path, `launchers/*.sh` (12985 LOC, 7 files). No other countables appear
 in this document.
 
