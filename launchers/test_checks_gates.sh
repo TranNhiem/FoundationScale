@@ -3265,6 +3265,178 @@ else
   rm -rf "$f381_tmp"
 fi
 
+# =============================================================================
+# fs439: every T1 GPU row declared a topology it could not construct.
+#
+# The four GPU rows compose a trainer argv containing --nodes and
+# --gpus-per-node and no --dp. The trainer's Topology requires
+# dp x tp x pp x ep x cp == nodes x gpus_per_node, and cli.py gives --dp a
+# default of 1, so every arm at a width above 1 refused before a model was
+# loaded -- which torchrun then reported as launcher rc 1 (#171), a refusal
+# and a crash wearing one face.
+#
+# The defect was invisible for a reason worth stating, because it is what the
+# two legs below are shaped against: 1x1x1x1x1 == 1x1, so at width 1 the
+# broken declaration is indistinguishable from a correct one -- and width 1 is
+# the only width local runs, CI legs and the rows' own --self-tests ever use.
+# A control that ran at the rows' default width would have been green
+# throughout the entire life of the defect.
+#
+# Two legs. The self-test proves the instrument's own machinery, including
+# that its judge can return False; the discrimination leg re-plants the defect
+# INTO A COPY of the shipped rows, because a self-test built from synthetic
+# ArmSpecs can stay green while the real composers have drifted.
+
+# --- MUST_PASS: t1_topology_declaration self-test ----------------------------
+# MEASURED on the commit that introduces the gate: `python3 -S
+# checks/t1_topology_declaration.py --self-test` exits 0 and its last line
+# reads `SELF-TEST DENOMINATOR: 13 of 13 controls behaved`. The floor is a
+# floor: controls may be ADDED, never silently dropped. C1 is the one that
+# matters most here -- it asserts WIDTH > 1, so a future edit lowering the
+# gate's width back to 1 fails loudly instead of quietly re-admitting the
+# defect.
+f439_floor=13
+if [ ! -r "checks/t1_topology_declaration.py" ]; then
+  f439_msg="MUST_PASS FAILED (t1_topology_declaration self-test) UNMEASURED:"
+  f439_msg="$f439_msg checks/t1_topology_declaration.py is not readable -- unreadable is not"
+  f439_msg="$f439_msg empty and it is not clean (doctrine 4); 0 of 1 self-tests measured"
+  no "$f439_msg"
+else
+  f439_rc=0
+  f439_out=$(python3 -S checks/t1_topology_declaration.py --self-test 2>&1) || f439_rc=$?
+  f439_have=$(printf '%s\n' "$f439_out" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved.*/\1/p')
+  f439_tot=$(printf '%s\n' "$f439_out" |
+    sed -n 's/^SELF-TEST DENOMINATOR: \([0-9][0-9]*\) of \([0-9][0-9]*\) controls behaved.*/\2/p')
+  if [ "$f439_rc" -ne 0 ]; then
+    f439_msg="MUST_PASS FAILED (t1_topology_declaration self-test): rc=$f439_rc under"
+    f439_msg="$f439_msg python3 -S. A red self-test means the instrument no longer"
+    f439_msg="$f439_msg discriminates, so its verdict on the four T1 rows is worth nothing."
+    f439_msg="$f439_msg Output: $(printf '%s\n' "$f439_out" | tr '\n' ' ')"
+    no "$f439_msg"
+  elif [ -z "$f439_have" ] || [ -z "$f439_tot" ]; then
+    f439_msg="MUST_PASS FAILED (t1_topology_declaration self-test) UNMEASURED: rc=0 but no"
+    f439_msg="$f439_msg 'SELF-TEST DENOMINATOR: N of M controls behaved' line was found -- a"
+    f439_msg="$f439_msg control suite that reports no denominator has not reported (doctrine 2)."
+    f439_msg="$f439_msg Output: $(printf '%s\n' "$f439_out" | tr '\n' ' ')"
+    no "$f439_msg"
+  elif [ "$f439_have" != "$f439_tot" ]; then
+    f439_msg="MUST_PASS FAILED (t1_topology_declaration self-test): $f439_have of $f439_tot"
+    f439_msg="$f439_msg controls behaved but rc=0 -- the exit code and the summary disagree,"
+    f439_msg="$f439_msg and one side of the contract is lying (doctrine 6)"
+    no "$f439_msg"
+  elif [ "$f439_tot" -lt "$f439_floor" ]; then
+    f439_msg="MUST_PASS FAILED (t1_topology_declaration self-test): control set shrank to"
+    f439_msg="$f439_msg $f439_tot, below the $f439_floor measured when the gate landed --"
+    f439_msg="$f439_msg controls may be added, never dropped, and a green run over a shrunken"
+    f439_msg="$f439_msg set is doctrine 1"
+    no "$f439_msg"
+  else
+    f439_msg="MUST_PASS t1_topology_declaration self-test: rc=0 under python3 -S,"
+    f439_msg="$f439_msg $f439_have of $f439_tot controls behaved, at or above the"
+    f439_msg="$f439_msg $f439_floor-control floor, and C4 is a MUST_FIRE leg proving the judge"
+    f439_msg="$f439_msg rejects the pre-#439 shape rather than passing by construction"
+    ok "$f439_msg"
+  fi
+fi
+
+# --- MUST_FIRE: the gate discriminates a row that stopped declaring --dp -----
+# A discrimination PAIR over a scratch copy of the SHIPPED rows: the same
+# corpus, differing only in whether one row still emits --dp, must produce 0
+# (CLEAR) and then 5 (RED). The CLEAR arm runs FIRST and on the untouched
+# copy, so it also proves the scratch harness itself is sound -- if the copy
+# could not run at all, the RED arm would "fire" for the wrong reason and the
+# leg would certify nothing.
+#
+# The assertion is rc=5 exactly, not merely nonzero: collapsing it to nonzero
+# would accept a crash (rc=1/2) or the gate's own REFUSE (96, which is what an
+# unimportable row produces) as the control firing, and a crashed detector is
+# not a discriminating one. The RED arm additionally asserts that the finding
+# NAMES t1_11_grad_checkpointing -- an aggregate 3/4 alone would be satisfied
+# by the gate reddening some other row for some other reason.
+#
+# src/ is symlinked rather than copied, deliberately. The scratch tree exists
+# to vary the ROWS; the Topology must stay the shipped one, because a gate
+# that judged a copied Topology would answer a question about the copy.
+#
+# __pycache__ is removed from the scratch copy for the #328 reason: a stale
+# .pyc carried alongside a rewritten source is exactly how a mutation harness
+# poisons the next run, and the plant below rewrites a source.
+if [ ! -r "checks/t1_topology_declaration.py" ]; then
+  f439b_msg="MUST_FIRE FAILED (t1_topology_declaration --dp discrimination) UNMEASURED:"
+  f439b_msg="$f439b_msg checks/t1_topology_declaration.py is not readable -- unreadable is not"
+  f439b_msg="$f439b_msg empty (doctrine 4); 0 of 2 discrimination arms were measured"
+  no "$f439b_msg"
+elif [ ! -d "validation_campaigns/verification_matrix" ] || [ ! -d "src" ]; then
+  f439b_msg="MUST_FIRE FAILED (t1_topology_declaration --dp discrimination) UNMEASURED: the"
+  f439b_msg="$f439b_msg scratch tree needs both validation_campaigns/verification_matrix (the"
+  f439b_msg="$f439b_msg rows under test) and src (the shipped Topology they are judged"
+  f439b_msg="$f439b_msg against); at least one is absent, so 0 of 2 arms ran"
+  no "$f439b_msg"
+else
+  f439b_tmp=$(mktemp -d)
+  f439b_row="$f439b_tmp/validation_campaigns/verification_matrix/t1_11_grad_checkpointing.py"
+  mkdir -p "$f439b_tmp/checks" "$f439b_tmp/validation_campaigns"
+  cp checks/t1_topology_declaration.py "$f439b_tmp/checks/"
+  cp -R validation_campaigns/verification_matrix "$f439b_tmp/validation_campaigns/"
+  rm -rf "$f439b_tmp/validation_campaigns/verification_matrix/__pycache__"
+  ln -s "$(pwd)/src" "$f439b_tmp/src"
+  f439b_clear_rc=0
+  f439b_clear_out=$(python3 -S "$f439b_tmp/checks/t1_topology_declaration.py" 2>&1) ||
+    f439b_clear_rc=$?
+  # The plant: delete the row's `"--dp",` argv element and the value line that
+  # follows it, restoring the exact pre-#439 shape. Nothing else is touched.
+  f439b_before=$(wc -l < "$f439b_row")
+  awk '/^        "--dp",$/ {skip = 2} skip > 0 {skip -= 1; next} {print}' \
+    "$f439b_row" > "$f439b_row.planted"
+  mv "$f439b_row.planted" "$f439b_row"
+  f439b_after=$(wc -l < "$f439b_row")
+  f439b_removed=$((f439b_before - f439b_after))
+  f439b_red_rc=0
+  f439b_red_out=$(python3 -S "$f439b_tmp/checks/t1_topology_declaration.py" 2>&1) ||
+    f439b_red_rc=$?
+  rm -rf "$f439b_tmp"
+  if [ "$f439b_clear_rc" -ne 0 ]; then
+    f439b_msg="MUST_FIRE FAILED (t1_topology_declaration --dp discrimination): the UNTOUCHED"
+    f439b_msg="$f439b_msg copy of the shipped rows scored rc=$f439b_clear_rc, expected 0."
+    f439b_msg="$f439b_msg This arm runs before the plant precisely so a broken scratch harness"
+    f439b_msg="$f439b_msg cannot masquerade as the control firing; 0 of 2 arms are"
+    f439b_msg="$f439b_msg interpretable. Output:"
+    f439b_msg="$f439b_msg $(printf '%s\n' "$f439b_clear_out" | tr '\n' ' ')"
+    no "$f439b_msg"
+  elif [ "$f439b_removed" -ne 2 ]; then
+    f439b_msg="MUST_FIRE FAILED (t1_topology_declaration --dp discrimination) UNMEASURED: the"
+    f439b_msg="$f439b_msg plant removed $f439b_removed lines from t1_11_grad_checkpointing.py,"
+    f439b_msg="$f439b_msg expected exactly 2 (the '--dp' flag and its value). A positive"
+    f439b_msg="$f439b_msg control that did not plant proves nothing, so this is an unmet"
+    f439b_msg="$f439b_msg precondition and not a verdict -- the anchor has drifted and the leg"
+    f439b_msg="$f439b_msg must be re-aimed, not believed"
+    no "$f439b_msg"
+  elif [ "$f439b_red_rc" -ne 5 ]; then
+    f439b_msg="MUST_FIRE FAILED (t1_topology_declaration --dp discrimination): with --dp"
+    f439b_msg="$f439b_msg stripped from t1_11_grad_checkpointing the gate gave"
+    f439b_msg="$f439b_msg rc=$f439b_red_rc, expected exactly 5 (RED). rc=0 would launder the"
+    f439b_msg="$f439b_msg #439 defect itself into CLEAR; rc=96 means a row could not be driven"
+    f439b_msg="$f439b_msg at all, which is a broken instrument and not a finding."
+    f439b_msg="$f439b_msg Output: $(printf '%s\n' "$f439b_red_out" | tr '\n' ' ')"
+    no "$f439b_msg"
+  elif ! grep -q '^\[BAD\] t1_11_grad_checkpointing:' <<<"$f439b_red_out"; then
+    f439b_msg="MUST_FIRE FAILED (t1_topology_declaration --dp discrimination): rc=5 fired but"
+    f439b_msg="$f439b_msg no '[BAD] t1_11_grad_checkpointing:' line was emitted -- the gate"
+    f439b_msg="$f439b_msg reddened for some reason other than the planted row, so the rc"
+    f439b_msg="$f439b_msg is not attributable to the plant (doctrine 3)."
+    f439b_msg="$f439b_msg Output: $(printf '%s\n' "$f439b_red_out" | tr '\n' ' ')"
+    no "$f439b_msg"
+  else
+    f439b_msg="MUST_FIRE t1_topology_declaration --dp discrimination: a scratch copy of the"
+    f439b_msg="$f439b_msg four SHIPPED rows, judged against the symlinked shipped Topology,"
+    f439b_msg="$f439b_msg scored rc=0 untouched and rc=5 naming t1_11_grad_checkpointing once"
+    f439b_msg="$f439b_msg its 2 '--dp' lines were deleted -- the pre-#439 shape. The plant is"
+    f439b_msg="$f439b_msg the only variable and the live tree was never touched"
+    ok "$f439b_msg"
+  fi
+fi
+
 # fs377: the last two controls are about this suite's own published size. They
 # run last because assert_documented_control_total counts the controls that
 # preceded it, plus itself -- see launchers/_suite_prelude.sh for why this
