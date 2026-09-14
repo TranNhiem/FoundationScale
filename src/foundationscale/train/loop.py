@@ -1039,6 +1039,127 @@ def _agree_on_exit(code: int | None) -> int:
     return EXIT_RED
 
 
+def _gib(num_bytes: int) -> str:
+    """Bytes as GiB, because the operator acting on this reads GiB, not digits."""
+    return f"{num_bytes / (1024**3):.2f} GiB"
+
+
+def _device_memory_preempted(model: Any, device: Any) -> bool:
+    """Refuse (96) when another process already holds the device memory (#447).
+
+    Measured on a GB200 tray during a two-rank retake: two ``VLLM::EngineCore``
+    processes belonging to the same SHARED account held 153.9 GiB of GPU 0 and
+    186.2 GiB of GPU 1 out of 189.5 GiB each. Rank 1 died inside
+    ``Trainer.__init__`` -> ``_move_model_to_device`` with "15.69 MiB is free",
+    torchrun SIGTERM'd rank 0, and ``train()``'s boundary handler (#380)
+    adjudicated the run RED -- a defect claim against this framework for memory
+    it never allocated and could not release. An environment that will not let
+    a rank measure is REFUSE (96). RED is for a failure this code owns.
+
+    The test is a FLOOR, not a forecast: it asks only whether the PARAMETERS
+    fit in free memory. Predicting the true footprint would mean guessing at
+    gradients, optimizer state and activations, and a gate resting on a guess
+    is worse than no gate. A device that cannot hold the weights alone holds
+    the run under no guess either, so the floor is decidable from facts only.
+
+    The verdict is AGREED, not local, and that is the load-bearing part. In the
+    measured incident the ranks disagreed: rank 0 had ~34.7 GiB free and would
+    have sailed past a per-rank check while rank 1 refused -- one rank exiting
+    early while its peers train into a collective with no partner, which is the
+    hang #444 and #445 exist to prevent. ``_agree_on_stop`` makes any rank's
+    refusal every rank's refusal, and it is called on every rank unconditionally
+    so the collective itself can never be the thing that goes unmatched.
+
+    That agreement is only real because of WHERE the caller stands: it needs an
+    initialized process group, and nothing in this framework initializes one --
+    accelerate does, from inside ``TrainingArguments``. Called any earlier,
+    ``_agree_on_stop`` finds ``dist.is_initialized()`` False and hands back the
+    local answer with no collective and no error, which looks identical in the
+    log to a genuine unanimous verdict. The caller's comment carries the rest.
+
+    ``device`` is the Trainer's OWN device -- ``args.device``, the one
+    ``_move_model_to_device`` is about to move onto -- and not
+    ``current_device()``. The two are equal only after accelerate has pinned the
+    rank, so reading the global would measure GPU 0 from every rank and answer a
+    question nobody asked. Taking the device as an argument means the thing
+    measured and the thing allocated cannot drift apart.
+
+    Returns ``True`` when the ranks agree to refuse. The caller owns the exit
+    code, so the contract's constants stay stated at the return site (#445).
+    """
+    free_bytes = total_bytes = ours = floor = 0
+    measured = False
+    try:
+        import torch
+    except ImportError:  # pragma: no cover -- a torch-free host never reaches _train
+        pass
+    else:
+        # Probe the probe before using it. A torch that does not expose the
+        # whole CUDA memory API is a STUB, not a device -- the in-repo fakes
+        # put ``SimpleNamespace(manual_seed=...)`` in ``sys.modules`` so the
+        # train path runs on a torch-free host, and a bare
+        # ``torch.cuda.is_available()`` raises AttributeError straight into
+        # train()'s boundary handler, which adjudicates it RED (#380). That is
+        # the exact mis-severity this gate exists to REMOVE, manufactured by
+        # the gate itself. Named attributes rather than a blanket
+        # ``except AttributeError`` because the two cases are different: a
+        # missing API is a host that cannot be measured, while an AttributeError
+        # from inside a real ``mem_get_info`` is a defect that must still surface.
+        cuda = getattr(torch, "cuda", None)
+        probes = ("is_available", "current_device", "mem_get_info", "memory_reserved")
+        on_cuda = getattr(device, "type", None) == "cuda"
+        if (
+            cuda is not None
+            and on_cuda
+            and all(hasattr(cuda, p) for p in probes)
+            and cuda.is_available()
+        ):
+            # A bare ``torch.device("cuda")`` carries no index. That is the
+            # single-visible-device case, where current_device() IS this rank's
+            # own GPU -- the reading only goes wrong when an index EXISTS and is
+            # ignored, so fall back to the global exactly when there is none.
+            index = getattr(device, "index", None)
+            if index is None:
+                index = cuda.current_device()
+            free_bytes, total_bytes = cuda.mem_get_info(index)
+            # Attribute the occupied bytes to an OWNER rather than reporting a
+            # bare shortfall: "the device is full" and "WE filled the device"
+            # call for opposite responses, and only the second one is ours.
+            ours = cuda.memory_reserved(index)
+            floor = sum(p.numel() * p.element_size() for p in model.parameters())
+            measured = True
+
+    local_refuse = measured and free_bytes < floor
+    if measured:
+        foreign = max(0, total_bytes - free_bytes - ours)
+        # Emitted on the clean result too. A measurement that speaks only when
+        # it fails is indistinguishable from one that never ran -- the same
+        # reason topology.validate_summary always prints its summary.
+        _mark(
+            Step.VALIDATED,
+            f"[{'REFUSE' if local_refuse else '   ok'}] memory.weights_fit: "
+            f"{_gib(free_bytes)} free of {_gib(total_bytes)}; this process reserves "
+            f"{_gib(ours)}, another process holds {_gib(foreign)}; the weights alone "
+            f"need {_gib(floor)}",
+        )
+    if not _agree_on_stop(local_refuse):
+        return False
+    _mark(
+        Step.REFUSE,
+        (
+            f"free device memory ({_gib(free_bytes)}) is below the model's weights "
+            f"({_gib(floor)}) before training starts"
+            if local_refuse
+            else "a peer rank could not fit the model weights in its free device memory"
+        )
+        + f"; refused ({EXIT_REFUSE}) here rather than left to die as an out-of-memory "
+        "error inside the Trainer, which this framework would then be blamed for. "
+        "Memory taken by another process is an environment fact, not a defect in "
+        "this code, so it is CANNOT-MEASURE and never RED (#447)",
+    )
+    return True
+
+
 class FoundationScaleSaveGate(_CallbackBase):
     """``TrainerCallback`` wiring the registered checkpoint gates into ``on_save``.
 
@@ -2970,6 +3091,33 @@ def _train(cfg: TrainConfig) -> int:
         kwargs["remove_unused_columns"] = False
     try:
         args = _TrainingArguments(**kwargs)
+        # #447: measure the device BEFORE the Trainer moves the model onto it.
+        # The move is where a preempted GPU raises OutOfMemoryError, two minutes
+        # into a run, and train()'s boundary handler adjudicates that RED against
+        # this framework. Caught here instead, on the same principle the topology
+        # block states one screen up: "a gap is the Duplicate-GPU crash, caught
+        # here, not 2m10s in".
+        #
+        # The position is pinned from BOTH sides and neither side is cosmetic.
+        # AFTER _TrainingArguments because its __post_init__ reads ``self.device``
+        # ("must come before self.device", in its own comment), and that is what
+        # builds accelerate's PartialState -- which is what calls
+        # init_process_group and set_device. Run one line earlier and
+        # torch.distributed is not initialized, so _agree_on_stop returns the
+        # LOCAL answer and the agreement silently becomes a per-rank guess, while
+        # current_device() is still 0 on every rank so all of them measure GPU 0.
+        # On the incident this gate was written for that combination is not
+        # merely weaker, it is INERT: GPU 0 had ~34.7 GiB free against a ~3 GiB
+        # weight floor, so every rank would have passed and rank 1 would have
+        # died on GPU 1 exactly as before. BEFORE Trainer(...) because
+        # Trainer.__init__ -> _move_model_to_device is the allocation itself.
+        # getattr, not ``args.device``: a TrainingArguments that resolves no
+        # device has nothing for this gate to measure, and reading straight
+        # through would raise AttributeError into train()'s RED handler -- the
+        # same manufacture-your-own-mis-severity trap the torch stub sets one
+        # function down. Absent device means unmeasurable, which means no gate.
+        if _device_memory_preempted(model, getattr(args, "device", None)):
+            return EXIT_REFUSE
         trainer = Trainer(
             model=model,
             args=args,
