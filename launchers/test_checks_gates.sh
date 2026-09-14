@@ -3037,11 +3037,18 @@ echo "== fix381-exit-contract: checks/exit_contract_scope.py real legs =="
 # --- MUST_PASS: exit_contract_scope self-test --------------------------------
 # MEASURED on the commit that introduces the gate: `python3 -S
 # checks/exit_contract_scope.py --self-test` exits 0 and its last line reads
-# `SELF-TEST DENOMINATOR: 15 of 15 controls behaved; 11 MUST_FIRE, 2
-# MUST_PASS, 2 MUST_BE_UNMEASURED`. The floor is a floor: controls may be
+# `SELF-TEST DENOMINATOR: 18 of 18 controls behaved; 12 MUST_FIRE, 3
+# MUST_PASS, 3 MUST_BE_UNMEASURED`. The floor is a floor: controls may be
 # ADDED, never silently dropped, and a shrinking control set is how a
 # detector quietly stops discriminating.
-f381_floor=15
+#
+# The floor is RAISED whenever controls land, not left where it was. A floor
+# that lags the measured count is #430's defect: it keeps reading GREEN while
+# the set it guards shrinks back toward the old number, so the three #445
+# controls could be deleted tomorrow and this leg would never say so. Landed
+# at 15 (11/2/2) with the gate; raised to 18 by #445's CONTRACT_HELPERS pair
+# plus the out-of-contract-return control that anchors on the helper's own line.
+f381_floor=18
 if [ ! -r "checks/exit_contract_scope.py" ]; then
   f381_msg="MUST_PASS FAILED (exit_contract_scope self-test) UNMEASURED:"
   f381_msg="$f381_msg checks/exit_contract_scope.py is not readable -- unreadable is not empty"

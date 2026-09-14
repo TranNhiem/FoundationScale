@@ -21,6 +21,13 @@ WHAT IS MEASURED
     functions of the same file at ONE hop. A duplicate function name is dropped from the
     callee table and its calls resolve to None.
 
+    Axis RETURN also covers each function declared in CONTRACT_HELPERS -- a helper that is
+    not an entry point but whose whole job is to produce an exit code for one. Its returns
+    are measured exactly as an entry point's are, and its computed set is then available to
+    the resolver at ANY depth, which is what makes a tail that routes THROUGH it resolvable
+    at all (loop.py's `train` -> `_train` -> `_agree_on_exit`, #445). Reach is the only
+    thing declaring a helper buys: an out-of-contract code inside it is its own finding.
+
     Axis MODULE-EXIT: in each file of MODULE_EXIT_FILES, every `raise SystemExit(<expr>)`,
     `sys.exit(<expr>)` and `os._exit(<expr>)` ANYWHERE in the file. `<expr>` is resolved
     by the same resolver; a call to a declared entry point resolves to that entry point's
@@ -72,13 +79,19 @@ WHAT IS NOT MEASURED (declared blind spots -- printed in the banner on every ver
        an open 2".
     2. `except Exception` does not catch BaseException: KeyboardInterrupt (status 130) and
        a SystemExit raised by a library pass through a PROTECTED entry point by design.
-    3. Resolution is ONE call hop. A two-hop return is UNRESOLVED, never assumed good.
+    3. Resolution is ONE call hop. A two-hop return is UNRESOLVED, never assumed good. The
+       single exception is a DECLARED name -- an ENTRY_POINTS or CONTRACT_HELPERS function
+       resolves to the set THIS RUN computed for it, at any depth. That is not an
+       assumption: the set was measured, and the same run reports any finding inside it.
     4. The denominator is DECLARED, not discovered: a new entry point added to the package
-       joins no axis until it is added to ENTRY_POINTS. The declared count is printed so
-       the omission is visible.
+       joins no axis until it is added to ENTRY_POINTS, and a contract-closing helper joins
+       axis RETURN only via CONTRACT_HELPERS. Both declared counts are printed, along with
+       how many declared helpers were actually found, so an omission and a stale
+       declaration are both visible.
 
 DENOMINATOR
-    The `ast.Return` nodes of the declared entry functions (axis RETURN), the
+    The `ast.Return` nodes of the declared entry functions and of the declared contract
+    helpers (axis RETURN), the
     SystemExit/sys.exit/os._exit sites of the declared module files (axis MODULE-EXIT),
     and the declared entry points themselves (axis ESCAPE). If the measured denominator is
     zero across axes 1 and 2, the verdict is UNMEASURED, never CLEAR: again the vacuous
@@ -125,7 +138,9 @@ CONTRACT_SET = frozenset(CONTRACT)
 
 @dataclass(frozen=True)
 class EntryPoint:
-    """One entry point the package ships, declared by hand -- never discovered (#381)."""
+    """One function whose exit codes are measured, declared by hand -- never discovered
+    (#381). Used for both ENTRY_POINTS (all three axes) and CONTRACT_HELPERS (axis RETURN
+    only); the two tuples differ in what is measured, not in what is declared."""
 
     path: str  # repository-relative, POSIX separators
     func: str  # module-level function whose returns and exception surface are measured
@@ -135,6 +150,26 @@ ENTRY_POINTS = (
     EntryPoint("src/foundationscale/train/loop.py", "train"),
     EntryPoint("src/foundationscale/train/cli.py", "main"),
 )
+
+# Functions that are not entry points but that CLOSE the contract for one: a helper whose
+# whole job is to produce an exit code, called from an entry point's tail. Declared by hand
+# for the same reason ENTRY_POINTS is, and two things follow from declaring one.
+#
+#   * Its own returns join axis RETURN, so an out-of-contract code inside the helper is a
+#     finding in its own right rather than something the caller is blamed for.
+#   * Its computed exit set becomes available to the resolver at ANY depth, which is what
+#     lets `train` -> `_train` -> `_agree_on_exit` resolve at all: the resolver's budget is
+#     ONE hop (blind spot 3), and #445 made the trainer's whole tail two hops deep by
+#     routing every final-save return through a cross-rank agreement.
+#
+# A declared helper ABSENT from its file contributes nothing and is counted as such in the
+# banner. That is not a silent hole: the callers that made it worth declaring go UNRESOLVED
+# the moment it is renamed, and an UNRESOLVED unit sinks the verdict to 95.
+#
+# Axis ESCAPE deliberately does NOT extend here. `_agree_on_exit` and `_train` are
+# unguarded by design -- #380's boundary handler lives in `train()`, one frame out, and
+# duplicating it inward would report a training failure twice and hide which frame raised.
+CONTRACT_HELPERS = (EntryPoint("src/foundationscale/train/loop.py", "_agree_on_exit"),)
 
 MODULE_EXIT_FILES = (
     "src/foundationscale/train/cli.py",
@@ -189,6 +224,7 @@ class Assessment:
     findings: list[Item]
     unmeasured: list[Item]
     notes: list[str]
+    helpers_measured: int = 0  # declared CONTRACT_HELPERS actually found in their file
 
 
 def _const_int(node: ast.expr) -> int | None:
@@ -888,7 +924,11 @@ def assess(root: Path) -> Assessment:
     _TREES.clear()
     modules: dict[str, Module] = {}
     notes: list[str] = []
-    declared_files = sorted({ep.path for ep in ENTRY_POINTS} | set(MODULE_EXIT_FILES))
+    declared_files = sorted(
+        {ep.path for ep in ENTRY_POINTS}
+        | {h.path for h in CONTRACT_HELPERS}
+        | set(MODULE_EXIT_FILES)
+    )
     for rel in declared_files:
         p = (root / rel).resolve()
         mod = _load(p, cache)
@@ -915,6 +955,19 @@ def assess(root: Path) -> Assessment:
     if notes:
         return Assessment(
             EXIT_UNMEASURED, a1, a2, escape, escape_detail, findings, unmeasured, notes
+        )
+
+    # Contract helpers before entry points, because an entry point's tail may route
+    # THROUGH one and the resolver's one-hop budget cannot see past it unless the helper's
+    # exit set is already in `entries` -- a DECLARED name resolves at any depth.
+    helpers_measured = 0
+    for helper in CONTRACT_HELPERS:
+        hmod = modules[helper.path]
+        if hmod.funcs.get(helper.func) is None:
+            continue  # absent: the callers go UNRESOLVED, which is the alarm
+        helpers_measured += 1
+        entries[(hmod.path, helper.func)] = _assess_entry(
+            helper, hmod, root, cache, entries, a1, findings, unmeasured
         )
 
     # Axis RETURN first, because axes MODULE-EXIT and resolver cross-module hops both
@@ -954,7 +1007,9 @@ def assess(root: Path) -> Assessment:
         rc = EXIT_UNMEASURED
     else:
         rc = EXIT_CLEAR
-    return Assessment(rc, a1, a2, escape, escape_detail, findings, unmeasured, notes)
+    return Assessment(
+        rc, a1, a2, escape, escape_detail, findings, unmeasured, notes, helpers_measured
+    )
 
 
 def _render(a: Assessment, root: Path) -> list[str]:
@@ -968,7 +1023,9 @@ def _render(a: Assessment, root: Path) -> list[str]:
         f"{word} {GATE}: {len(a.findings)} finding(s) across 3 axes; root={root}",
         f"  declared denominator: {len(ENTRY_POINTS)} entry points "
         f"({', '.join(ep.func for ep in ENTRY_POINTS)}), {len(MODULE_EXIT_FILES)} "
-        f"module-exit files -- DECLARED, never discovered (blind spot 4)",
+        f"module-exit files, {len(CONTRACT_HELPERS)} contract helpers "
+        f"({', '.join(h.func for h in CONTRACT_HELPERS)}) of which "
+        f"{a.helpers_measured} present -- DECLARED, never discovered (blind spot 4)",
         f"  axis RETURN:      {a.axis1.good} in-contract, {a.axis1.bad} out-of-contract, "
         f"{a.axis1.unresolved} unresolved over {a.axis1.total} return(s)",
         f"  axis MODULE-EXIT: {a.axis2.good} in-contract, {a.axis2.bad} out-of-contract, "
@@ -997,10 +1054,19 @@ def _render(a: Assessment, root: Path) -> list[str]:
             "    2. except Exception does not catch BaseException: KeyboardInterrupt (130)",
             "       and a library SystemExit pass through a PROTECTED entry point by design.",
             "    3. resolution is ONE call hop; a two-hop return is UNRESOLVED, not assumed",
-            "       good.",
+            "       good. A DECLARED name is the exception and the only one: a function in",
+            "       ENTRY_POINTS or CONTRACT_HELPERS resolves to its own computed set at any",
+            "       depth, because that set was measured by this same run rather than",
+            "       assumed. Declaring a helper buys reach through it and nothing else -- an",
+            "       out-of-contract code inside it is still a finding.",
             "    4. the denominator is DECLARED, not discovered: a new entry point joins",
             f"       no axis until it is added to ENTRY_POINTS (currently "
-            f"{len(ENTRY_POINTS)} declared).",
+            f"{len(ENTRY_POINTS)} declared),",
+            "       and a helper that closes an entry point's tail joins axis RETURN",
+            f"       only via CONTRACT_HELPERS (currently {len(CONTRACT_HELPERS)} declared, "
+            f"{a.helpers_measured} present). A",
+            "       declared helper that is absent contributes nothing -- but its",
+            "       callers go UNRESOLVED, and that sinks the verdict to 95.",
         ]
     )
     return lines
@@ -1096,6 +1162,34 @@ _NARROW_CLI = (
     "    except ValueError:\n"
     "        return 5\n"
 )
+
+
+# #445's shape: the entry point's tail routes THROUGH a helper, so `train` -> `_train` ->
+# `_agree_on_exit` is two hops and the resolver's budget is one. Declaring the helper in
+# CONTRACT_HELPERS is what makes the chain resolvable -- and what puts the helper's OWN
+# returns into axis RETURN's denominator. The three controls below pin both halves of that
+# and the boundary between them.
+_HELPER_LOOP = _loop(
+    "def _agree_on_exit(code):\n"
+    "    if code is None:\n"
+    "        return EXIT_UNMEASURED\n"
+    "    return EXIT_RED\n"
+    "\n\n"
+    "def _train(cfg):\n"
+    "    return _agree_on_exit(cfg)\n"
+    "\n\n"
+    "def train(cfg):\n"
+    "    try:\n"
+    "        return _train(cfg)\n"
+    "    except Exception:\n"
+    "        return EXIT_RED\n"
+)
+
+_BAD_HELPER_LOOP = _HELPER_LOOP.replace("        return EXIT_UNMEASURED\n", "        return 1\n")
+_BAD_HELPER_LINE = _BAD_HELPER_LOOP.splitlines().index("        return 1") + 1
+
+# The identical shape with the helper named something CONTRACT_HELPERS does not declare.
+_UNDECLARED_HELPER_LOOP = _HELPER_LOOP.replace("_agree_on_exit", "_settle_exit")
 
 
 def _assess_pack(
@@ -1282,6 +1376,49 @@ def c_escape_axis_is_not_vacuous() -> bool:
     return protected.escape.get(key) == "PROTECTED" and narrowed.escape.get(key) == "UNPROTECTED"
 
 
+def c_declared_helper_out_of_contract_return_fires() -> bool:
+    # Declaring a helper buys REACH, not amnesty. The finding is anchored at the helper's
+    # own physical line, not at the caller's, which would blame `_train` for a code it
+    # never wrote.
+    a = _assess_pack(_BAD_HELPER_LOOP, _GOOD_CLI)
+    return (
+        a.rc == EXIT_RED
+        and a.helpers_measured == 1
+        and any(f.axis == "RETURN" and f.line == _BAD_HELPER_LINE for f in a.findings)
+    )
+
+
+def c_declared_helper_resolves_the_two_hop_tail() -> bool:
+    # The rescue itself: two hops resolve because the middle name is DECLARED. The total is
+    # asserted, not just the unresolved count, because declaring a helper has to WIDEN the
+    # denominator rather than merely quiet it: 6 = train's 2 + cli.main's 2 + the helper's
+    # own 2. Read this against the undeclared control below, which measures 4 over the same
+    # source text -- the +2 IS the helper's returns entering axis RETURN.
+    a = _assess_pack(_HELPER_LOOP, _GOOD_CLI)
+    return (
+        a.rc == EXIT_CLEAR
+        and a.helpers_measured == 1
+        and a.axis1.unresolved == 0
+        and a.axis1.total == 6
+    )
+
+
+def c_undeclared_two_hop_helper_is_unmeasured() -> bool:
+    # The SAME source shape with the helper undeclared: blind spot 3 still holds, the chain
+    # does not resolve, and 95 is the honest verdict. Declaration is the only difference
+    # between this control and the one above -- which is what makes the pair evidence that
+    # the exception is scoped to what was declared. The denominator drops to 4 and BOTH
+    # callers of the undeclared helper go unresolved, so a quiet 95 cannot be mistaken for
+    # a narrower one.
+    a = _assess_pack(_UNDECLARED_HELPER_LOOP, _GOOD_CLI)
+    return (
+        a.rc == EXIT_UNMEASURED
+        and a.helpers_measured == 0
+        and a.axis1.total == 4
+        and a.axis1.unresolved == 2
+    )
+
+
 CONTROLS: list[tuple[str, str, Callable[[], bool]]] = [
     ("return of a literal 1", "MUST_FIRE", c_literal_one),
     ("return of a Name bound to 1 at module level", "MUST_FIRE", c_name_bound_to_one),
@@ -1311,9 +1448,19 @@ CONTROLS: list[tuple[str, str, Callable[[], bool]]] = [
     ),
     ("guard carrying a finally: clause", "MUST_FIRE", c_finally_clause_runs_outside_the_guard),
     (
+        "declared contract helper returning 1",
+        "MUST_FIRE",
+        c_declared_helper_out_of_contract_return_fires,
+    ),
+    (
         "in-contract literals, names, IfExp, protected pack",
         "MUST_PASS",
         c_correct_pack_stays_silent,
+    ),
+    (
+        "declared helper resolves a two-hop tail",
+        "MUST_PASS",
+        c_declared_helper_resolves_the_two_hop_tail,
     ),
     (
         "bare handoff to a PROTECTED entry point",
@@ -1329,6 +1476,11 @@ CONTROLS: list[tuple[str, str, Callable[[], bool]]] = [
         "missing declared entry file -> 95",
         "MUST_BE_UNMEASURED",
         c_missing_declared_file_is_unmeasured,
+    ),
+    (
+        "UNdeclared two-hop helper stays unresolved",
+        "MUST_BE_UNMEASURED",
+        c_undeclared_two_hop_helper_is_unmeasured,
     ),
 ]
 

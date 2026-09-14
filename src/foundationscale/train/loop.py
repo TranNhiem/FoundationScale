@@ -943,6 +943,102 @@ def _agree_on_stop(stop: bool) -> bool:
     return bool(flag.item())
 
 
+# Severity, not numeric order: the exit codes are 0/5/95/96, so a bare MAX over
+# the CODES would rank REFUSE(96) above RED(5) and UNMEASURED(95) above a real
+# defect. Ranked here instead, worst-wins, so the agreement fails closed:
+#   RED       a measured failure -- outranks everything, including a peer's PASS
+#   REFUSE    the machine would not let this rank measure
+#   UNMEASURED nothing was measured
+#   PASS      only when no rank had anything worse to say
+_EXIT_SEVERITY: dict[int, int] = {
+    EXIT_PASS: 0,
+    EXIT_UNMEASURED: 1,
+    EXIT_REFUSE: 2,
+    EXIT_RED: 3,
+}
+_ABSTAIN_SEVERITY = -1
+
+
+def _agree_on_exit(code: int | None) -> int:
+    """Make one exit code hold on every rank (#445), ``None`` meaning abstain.
+
+    The twin of :func:`_agree_on_stop`, at the other site that adjudicates a
+    checkpoint. ``train()``'s final save is written by ONE rank, but before
+    this every rank globbed the directory, counted shards and ran the save
+    gates over it. On the rank that never wrote, ``final_dir`` either does not
+    exist -- ``FileNotFoundError`` out of ``iterdir()``, which torchrun
+    flattens to a bare 1 (#171) -- or exists empty, and the run is adjudicated
+    UNMEASURED for an artifact that was never that rank's to hold.
+
+    Measured on a GB200 tray (p444, 2 ranks): every T1-9 arm died with
+    ``[Errno 2] ... '<out>/final'`` at ``local_rank: 1`` while rank 0 saved
+    cleanly, and T1-12's eager_r1 arm reported "0 safetensors shards ...
+    (contents: [])" for the same reason.
+
+    ``None`` is the abstention and is NOT a vote for PASS: a rank with no
+    artifact has established nothing, and the agreed code is whatever the
+    writing rank(s) actually measured. If every rank abstained then nobody
+    wrote a final checkpoint anywhere, which is UNMEASURED -- there is no
+    artifact to be RED about, and it is certainly not a PASS.
+
+    MAX for the same reason as ``_agree_on_stop``: under ``save_on_each_node``
+    the writer is the LOCAL process zero of each node, so there is no single
+    source rank a broadcast could name. A raised collective is likewise not
+    swallowed -- a rank that cannot reach its peers has not agreed on
+    anything, and returning its local answer is the disagreement this exists
+    to prevent.
+    """
+    agreed = (
+        _ABSTAIN_SEVERITY if code is None else _EXIT_SEVERITY.get(code, _EXIT_SEVERITY[EXIT_RED])
+    )
+    try:
+        import torch
+        import torch.distributed as dist
+    except ImportError:  # pragma: no cover -- torch-free hosts run single-process
+        pass
+    else:
+        if dist.is_available() and dist.is_initialized():
+            device = None
+            if dist.get_backend() == "nccl" and torch.cuda.is_available():
+                device = torch.device("cuda", torch.cuda.current_device())
+            worst = torch.tensor([agreed], dtype=torch.int32, device=device)
+            dist.all_reduce(worst, op=dist.ReduceOp.MAX)
+            agreed = int(worst.item())
+    if agreed == _ABSTAIN_SEVERITY:
+        # Every rank abstained: no rank claims to have written the final
+        # checkpoint, so there is no artifact anywhere and no verdict to adopt.
+        # Reached single-process too: one rank that abstained also wrote nothing.
+        _mark(
+            Step.UNMEASURED,
+            "no rank wrote the final checkpoint, so every rank abstained from "
+            "adjudicating it; there is no artifact to score and an unwritten "
+            "checkpoint is not a PASS (#445)",
+        )
+        return EXIT_UNMEASURED
+    # Every return below is a NAMED contract constant rather than a lookup back
+    # through the severity map. Two reasons, and neither is cosmetic. First, the
+    # single-process path used to `return code` verbatim, so `_agree_on_exit(7)`
+    # handed 7 to `_train`, `train`, and finally `SystemExit` -- an out-of-contract
+    # code escaping the one function whose job is to close the contract, while the
+    # distributed path next to it already mapped an unknown code to RED. Second,
+    # checks/exit_contract_scope.py can only read what the source text states: a
+    # reverse-severity-map subscript and a bare parameter are both UNRESOLVED to
+    # it, so the trainer's whole return axis went unmeasured the moment the tail
+    # started routing through here. Stating the four codes makes the closure true
+    # by construction and measurable by reading.
+    if agreed == _EXIT_SEVERITY[EXIT_RED]:
+        return EXIT_RED
+    if agreed == _EXIT_SEVERITY[EXIT_REFUSE]:
+        return EXIT_REFUSE
+    if agreed == _EXIT_SEVERITY[EXIT_UNMEASURED]:
+        return EXIT_UNMEASURED
+    if agreed == _EXIT_SEVERITY[EXIT_PASS]:
+        return EXIT_PASS
+    # Unreachable while _EXIT_SEVERITY covers the contract; an unmapped severity
+    # is a defect in this module, and a defect fails closed rather than passes.
+    return EXIT_RED
+
+
 class FoundationScaleSaveGate(_CallbackBase):
     """``TrainerCallback`` wiring the registered checkpoint gates into ``on_save``.
 
@@ -3102,8 +3198,21 @@ def _train(cfg: TrainConfig) -> int:
     }
 
     # --- 8. Final save ------------------------------------------------------
+    #
+    # Every `return` from here to the end of train() is a COLLECTIVE decision
+    # and goes through _agree_on_exit exactly once (#445). The ranks must leave
+    # with the SAME code: torchrun flattens a rank-0 PASS and a rank-1 anything
+    # into a bare 1 (#171), so a disagreement here is indistinguishable from a
+    # crash. A new `return EXIT_*` added below that skips the agreement is a
+    # rank-disagreement bug -- tests/train/test_final_save_rank_scope.py walks
+    # the AST of this region and fails on one.
     final_dir = Path(cfg.output_dir) / "final"
     try:
+        # On EVERY rank, and before the writer test below: under FSDP and
+        # DeepSpeed save_model is itself a collective that gathers the shards
+        # from the ranks that hold them. Scoping the CALL to the writing rank
+        # would hang the peers it is waiting on. Only the INSPECTION that
+        # follows is the writing rank's business.
         trainer.save_model(str(final_dir))
     except Exception as exc:  # noqa: BLE001 -- classified into RED vs REFUSE below
         environment = _environment_failure_reason(exc)
@@ -3118,9 +3227,40 @@ def _train(cfg: TrainConfig) -> int:
                 "machine, not of the training plane, so the run is unscored rather "
                 f"than failed. Underlying: {exc!r}",
             )
-            return EXIT_REFUSE
+            return _agree_on_exit(EXIT_REFUSE)
         _mark(Step.RED, f"final save failed: {exc!r}")
-        return EXIT_RED
+        return _agree_on_exit(EXIT_RED)
+
+    # The checkpoint belongs to the rank that WROTE it (#445). A rank that did
+    # not write has no artifact to glob, no shards to count and no gates to
+    # run: final_dir either does not exist on it at all, or exists empty
+    # because the writer has not finished. Both readings were being taken as
+    # verdicts about the MODEL, and both were wrong. Measured on a GB200 tray
+    # (p444): the first became `FileNotFoundError ... '<out>/final'` out of the
+    # iterdir() below -- adjudicated RED by #380's handler -- and the second
+    # became "0 safetensors shards ... (contents: [])", UNMEASURED.
+    #
+    # Abstain, declared and never silent, exactly as the save-gate callback
+    # does at the per-checkpoint site. None is NOT a vote for PASS: the code
+    # this rank exits with is the one the WRITING rank measured, adopted
+    # through the collective.
+    # getattr, not attribute access: _wrote_this_checkpoint's whole contract is
+    # that an UNANSWERABLE question returns None and the caller then adjudicates
+    # -- "a bare test double, or a plain single-process run". Reaching through
+    # `trainer.args` directly would raise AttributeError on exactly the doubles
+    # that contract exists to admit, turning an abstention into a crash.
+    if (
+        _wrote_this_checkpoint(getattr(trainer, "args", None), getattr(trainer, "state", None))
+        is False
+    ):
+        _mark(
+            Step.SAVED,
+            f"ABSTAIN over {final_dir}: this rank did not write the final "
+            "checkpoint, so it holds no artifact to adjudicate; the writing "
+            "rank's verdict is adopted (#445)",
+        )
+        return _agree_on_exit(None)
+
     # The format the save gate reads is asserted on the ARTIFACT, not inferred
     # from the TrainingArguments knob bound in step 6. Two different releases
     # reach this line by two different routes -- 4.x because the knob was
@@ -3138,7 +3278,7 @@ def _train(cfg: TrainConfig) -> int:
             f"safetensors shard(s) under transformers {_tf_version()}; the save "
             "gate reads safetensors and would examine nothing",
         )
-        return EXIT_RED
+        return _agree_on_exit(EXIT_RED)
     if not shards:
         _mark(
             Step.UNMEASURED,
@@ -3154,7 +3294,7 @@ def _train(cfg: TrainConfig) -> int:
             notes=manifest_notes,
             telemetry=telemetry,
         )
-        return EXIT_UNMEASURED
+        return _agree_on_exit(EXIT_UNMEASURED)
     _mark(Step.SAVED, f"final checkpoint -> {final_dir} ({len(shards)} safetensors shard(s))")
 
     # --- 9. Adjudicate. UNMEASURED is not PASS. -----------------------------
@@ -3172,7 +3312,7 @@ def _train(cfg: TrainConfig) -> int:
             notes=manifest_notes,
             telemetry=telemetry,
         )
-        return EXIT_UNMEASURED
+        return _agree_on_exit(EXIT_UNMEASURED)
     _mark(Step.ADJUDICATE, report.render())
     if report.is_vacuous:
         _mark(Step.ADJUDICATE, "0 gates executed: UNMEASURED")
@@ -3184,7 +3324,7 @@ def _train(cfg: TrainConfig) -> int:
             notes=manifest_notes,
             telemetry=telemetry,
         )
-        return EXIT_UNMEASURED
+        return _agree_on_exit(EXIT_UNMEASURED)
     rc = EXIT_RED if report.blocking else EXIT_PASS
     done = "PASS" if rc == EXIT_PASS else "RED: blocking save-gate verdict on the final checkpoint"
     # The objective gate's backstop arm is folded in HERE rather than returned
@@ -3225,4 +3365,4 @@ def _train(cfg: TrainConfig) -> int:
         telemetry=telemetry,
     )
     _mark(Step.DONE, done)
-    return rc
+    return _agree_on_exit(rc)
