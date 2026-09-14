@@ -452,6 +452,14 @@ def _trainer_argv(
         str(args.nodes),
         "--gpus-per-node",
         str(args.gpus_per_node),
+        # #439: the trainer's Topology requires dp x tp x pp x ep x cp ==
+        # nodes x gpus_per_node. This row emits no other degree, so all four take
+        # the default of 1 (and are REFUSED above 1 -- #375) and dp IS the world
+        # size. Omitting it left dp=1 against a width of 2, and every arm of pass
+        # p414 refused "topology is not constructible (nothing touched)" before a
+        # model was loaded -- which torchrun then reported as launcher rc 1 (#171).
+        "--dp",
+        str(args.nodes * args.gpus_per_node),
     ]
     if args.profile_name is not None:
         argv += ["--profile-name", args.profile_name]

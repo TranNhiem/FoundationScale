@@ -128,6 +128,10 @@ REQUIRED_TRAINER_FLAGS: tuple[str, ...] = (
     "--optimizer",
     "--nodes",
     "--gpus-per-node",
+    # #439: dp is not optional at a width above 1 -- see _arm_flags. It is
+    # listed here so the row verifies the flag against the REAL parser before
+    # any arm runs, rather than discovering it is absent one refusal at a time.
+    "--dp",
     # Dense loss sampling: at the trainer's derived cadence a 20-step run
     # yields ~2 curve points and the equivalence claim rests on nothing.
     "--logging-steps",
@@ -264,6 +268,13 @@ def _arm_flags(args: argparse.Namespace, arm_dir: Path, optimizer: str) -> dict[
         "--optimizer": optimizer,
         "--nodes": str(args.nodes),
         "--gpus-per-node": str(args.gpus_per_node),
+        # #439: the trainer's Topology requires dp x tp x pp x ep x cp ==
+        # nodes x gpus_per_node. This row emits no other degree, so all four take
+        # the default of 1 (and are REFUSED above 1 -- #375) and dp IS the world
+        # size. Omitting it left dp=1 against a width of 2, and every arm of pass
+        # p414 refused "topology is not constructible (nothing touched)" before a
+        # model was loaded -- which torchrun then reported as launcher rc 1 (#171).
+        "--dp": str(args.nodes * args.gpus_per_node),
         "--logging-steps": "1",
     }
     if args.profile_name is not None:
