@@ -86,6 +86,10 @@ MODEL = "Qwen/Qwen2.5-1.5B"
 DATASET = "fancyzhx/ag_news"
 PRECISION = "bf16"
 IMPLS = ("eager", "sdpa", "flash_attention_2")
+# Not an arm, and deliberately not a member of IMPLS: the #413 warmup exists
+# to be DISCARDED, and a name that cannot be mistaken for an arm is how the
+# evidence tree says so to a reader who only has the directory.
+_WARMUP_ARM = "warmup_discarded"
 SCALAR_KEYS = ("train_runtime_s", "steps_per_second", "peak_memory_allocated_bytes", "total_flos")
 
 CLAIM = "eager / sdpa / flash_attention_2 agree on logits, differ in step time"
@@ -1360,6 +1364,25 @@ def _self_test() -> int:
         f"default={default_rounds}",
     )
 
+    # C29: the #413 warmup is DISCARDED, and disjointness is what makes that
+    # true rather than merely claimed. Its work dir and its rendezvous port must
+    # miss every (round, arm) pair the plan can emit -- a warmup at
+    # round_index=0 would overwrite round 0's eager directory and hand
+    # _find_manifest the warmup's manifest, which is the C26 failure wearing a
+    # different hat. The port formula and the 29612 base are the ones _run_arm
+    # and the parser use.
+    warm = _round_spec(_spec("eager"), 3)
+    plan_dirs = {str(_round_spec(_spec(impl), r).work_dir) for impl in IMPLS for r in range(3)}
+    plan_ports = {29612 + r * len(IMPLS) + i for r in range(3) for i in range(len(IMPLS))}
+    warm_port = 29612 + 3 * len(IMPLS)
+    record(
+        "C29 the #413 warmup is disjoint from every round and feeds no verdict",
+        str(warm.work_dir) not in plan_dirs
+        and warm_port not in plan_ports
+        and _WARMUP_ARM not in IMPLS,
+        f"dir={warm.work_dir.name} port={warm_port} vs {len(plan_ports)} plan ports",
+    )
+
     width = max(len(name) for name, _, _ in checks)
     for name, ok, detail in checks:
         print(f"  [{'PASS' if ok else 'FAIL'}] {name:<{width}}  {detail}")
@@ -1513,6 +1536,37 @@ def _run(args: argparse.Namespace) -> int:
     flash_reason = _flash_import_error(env)
     spec_by_name = {spec.name: spec for spec in specs}
     arm_position = {spec.name: index for index, spec in enumerate(specs)}
+
+    # #413 -- the ONE global warmup, run BEFORE the plan is consumed. This is
+    # interleaved_round_plan's own stated contract ("the ONE global warmup the
+    # budget allows is the row's to run before consuming this plan"), and t1_11
+    # honours it with its sensitivity probe, whose step time already carries no
+    # meaning. This row had no such free arm, so round 0 paid the cold-cache
+    # cost alone -- and that cost is not noise: t1_11 measured a cache-cold pass
+    # at -20.1% against +21.7..+30.2% warm, a SIGN FLIP on the same metric.
+    # Under _reduce_rounds a single disagreeing round is 95, so a cold round 0
+    # does not merely widen the spread, it decides the row.
+    #
+    # It runs the first arm at round_index=args.rounds, arm_index=0 -- one past
+    # every index the plan can emit -- so its work dir and its rendezvous port
+    # are disjoint from all of them (C29). The expensive cold state is the
+    # shared filesystem cache, not anything per-arm, so WHICH arm warms it does
+    # not matter; specs[0] is chosen because eager is the one arm no import can
+    # gate. The record IS written, under a name that is not an arm, and it never
+    # enters per_round: "discarded" has to be something the evidence tree can
+    # show, not something that happens silently.
+    warmup_spec = _round_spec(specs[0], args.rounds)
+    warmup_record = _run_arm(warmup_spec, 0, args.master_port_base, env, round_index=args.rounds)
+    warmup_record["arm"] = _WARMUP_ARM
+    warmup_record["discarded"] = (
+        "#413 global warmup: run to pull the model and dataset shards through the "
+        "shared filesystem cache every later round reads. Its measurement feeds NO "
+        "verdict and is in NO round's sample."
+    )
+    warmup_path = _write_record(args.out_dir, _WARMUP_ARM, warmup_record)
+    print(f"WARMUP (discarded, #413)   {_arm_line(warmup_record)}", flush=True)
+    print(f"{'':<26} [record: {warmup_path}]", flush=True)
+
     per_round: list[list[dict[str, Any]]] = [[] for _ in range(args.rounds)]
     for round_index, name in interleaved_round_plan(list(spec_by_name), rounds=args.rounds):
         spec = _round_spec(spec_by_name[name], round_index)
