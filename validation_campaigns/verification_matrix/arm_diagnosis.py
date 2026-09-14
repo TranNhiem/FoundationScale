@@ -54,8 +54,16 @@ import signal
 # are the literal Step values from src/foundationscale/train/loop.py. They are
 # duplicated rather than imported on purpose: this helper must work when the
 # package cannot be imported at all, which is one of the failure modes it
-# exists to explain. The gate in checks/ pins the two lists together so the
-# duplication cannot drift silently.
+# exists to explain. tests/train/test_arm_diagnosis.py pins the two lists
+# together so the duplication cannot drift silently -- in BOTH directions: no
+# marker here that the trainer does not emit, and no Step in the trainer that
+# is left unclassified. The second direction is the load-bearing one, because a
+# new refusal Step that never reached this tuple would make an arm fail in a
+# way the module whose whole job is naming failures could not name.
+#
+# Progress markers are deliberately absent. This tuple is scanned for the LAST
+# matching line in a failed arm's output, so admitting [fs:train:done] would
+# let a run that printed "done" and then died be "diagnosed" as done.
 DIAGNOSTIC_MARKERS: tuple[str, ...] = (
     "[fs:train:refuse]",
     "[fs:train:red]",

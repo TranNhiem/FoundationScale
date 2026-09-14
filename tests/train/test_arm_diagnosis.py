@@ -222,8 +222,74 @@ def test_marker_vocabulary_matches_the_trainer() -> None:
     package will not import). That duplication is only safe if something pins
     it, and this is that pin.
     """
-    from foundationscale.train.loop import Step
+    from foundationscale.train.loop import MARKERS
 
-    declared = {f"[{value}]" for value in vars(Step).values() if isinstance(value, str)}
+    # MARKERS, not vars(Step): loop.py derives it as THE marker denominator and
+    # excludes dunders. Re-deriving here with a bare vars() scan admits __doc__
+    # and __module__ -- both strings -- which a one-directional check cannot
+    # feel, but which made the exhaustive test below fail on junk until this
+    # was pointed at the denominator the trainer already publishes.
+    declared = {f"[{value}]" for value in MARKERS}
     for marker in ad.DIAGNOSTIC_MARKERS:
         assert marker in declared, f"{marker} is not a Step the trainer emits"
+
+
+# Every Step the trainer declares, that is NOT part of the refusal/abort
+# vocabulary. Spelled out rather than derived, because the split is a judgment
+# about meaning that no rule over the strings can make for us.
+_PROGRESS_ONLY_MARKERS = frozenset(
+    {
+        "[fs:train:start]",
+        "[fs:train:topology]",
+        "[fs:train:profile]",
+        "[fs:train:consistency]",
+        "[fs:train:partition]",
+        "[fs:train:validated]",
+        "[fs:train:deps]",
+        "[fs:train:data]",
+        "[fs:train:trainer]",
+        "[fs:train:adapter]",
+        "[fs:train:run]",
+        "[fs:train:saved]",
+        "[fs:train:save_gate]",
+        "[fs:train:objective_gate]",
+        "[fs:train:manifest]",
+        "[fs:train:adjudicate]",
+        "[fs:train:done]",
+    }
+)
+
+
+def test_every_trainer_step_is_classified() -> None:
+    """The partition over Step must be exhaustive, so a NEW step cannot hide.
+
+    The test above pins one direction only -- every marker is a real Step. The
+    direction it cannot see is the dangerous one: a refusal Step added to the
+    trainer and never added to DIAGNOSTIC_MARKERS. Nothing would fail, and an
+    arm dying that way would reach the operator with no diagnosis at all, from
+    the one module that exists to supply it. The same one-sided-detector shape
+    that made the mutation instrument report 46 false hits until it was made to
+    test both directions.
+
+    Asserting the two buckets EXACTLY cover Step turns that silence into a
+    failure here: a new step lands in neither set and this test names it. The
+    fix is never to delete the line -- it is to decide which bucket the new
+    step belongs to, which is the decision that was being skipped.
+    """
+    from foundationscale.train.loop import MARKERS
+
+    declared = {f"[{value}]" for value in MARKERS}
+    classified = set(ad.DIAGNOSTIC_MARKERS) | _PROGRESS_ONLY_MARKERS
+
+    unclassified = declared - classified
+    assert not unclassified, (
+        f"{sorted(unclassified)} is emitted by the trainer but classified neither as a "
+        "refusal marker (arm_diagnosis.DIAGNOSTIC_MARKERS) nor as progress "
+        "(_PROGRESS_ONLY_MARKERS). Decide which it is: if an arm can DIE at this step, "
+        "it belongs in DIAGNOSTIC_MARKERS or arm_diagnosis cannot name that death."
+    )
+    stale = classified - declared
+    assert not stale, f"{sorted(stale)} is classified here but the trainer no longer emits it"
+    assert not (set(ad.DIAGNOSTIC_MARKERS) & _PROGRESS_ONLY_MARKERS), (
+        "a marker cannot be both a refusal and progress"
+    )
