@@ -436,9 +436,11 @@
       "run_arm": "text arm, lr>0",
       "control_arm": "an `lr=0` arm through the same path: weight parity must show ZERO movement",
       "cost": "~15 min x2",
-      "status": "done (#162/#176, #366), control arm never run",
+      "status": "MEASURED and GREEN on a GB200 tray with a control that is EXACT rather than tolerance-based. Two arms differing in ONE axis -- the learning rate -- over the same script, model, corpus, step count and seed 42: Qwen2.5-1.5B on ag_news, 20 steps, LoRA rank 8 targeting q_proj and v_proj, run arm lr=5e-5 and null arm lr=0. lora_B is zero-initialised and every AdamW update term is scaled by the learning rate, so the null arm admits NO epsilon. Measured: the run arm moved 56 of 56 lora_B tensors (Frobenius norms 0.0080 to 0.0204) and the lr=0 arm left every one of the same 56 at precisely 0.0. The null arm ALONE cannot tell 'lr=0 froze the weights' apart from 'saving always writes zeros'; the run arm is what excludes that, being the identical code path with one axis changed and a nonzero save. The shipped adjudicator carrying its own self-test is NOT yet in the repo, so this row is measured but not yet self-testing (#470). Prior history: #162/#176, #366 established the run arm only.",
       "blocked_by": [],
-      "findings": [],
+      "findings": [
+        "#470"
+      ],
       "adjudicator": null
     },
     {
