@@ -204,11 +204,12 @@
       "run_arm": "resume arm",
       "control_arm": "straight-through arm; final weights must match within tolerance",
       "cost": "~40 min",
-      "status": "THE gap — No optimizer/RNG/dataloader restore is proven",
+      "status": "ABSENT, not merely unproven — `train/loop.py` calls `trainer.train()` with no arguments and `resume_from_checkpoint` appears nowhere in `src/`, so no code path restores optimizer, RNG or dataloader state and the CLI declares no flag that could ask for one. The launch plane's `FS_RESUME_CKPT`/`FS_RESUME_STEP` vocabulary is real but stops at the container boundary (#122). Both arms have nothing to point at: the gap is in the framework, not in the measurement (#461)",
       "blocked_by": [],
       "findings": [
         "#177",
-        "#192"
+        "#192",
+        "#461"
       ],
       "adjudicator": null
     },

@@ -247,8 +247,8 @@ exist when the `class` statement runs — and `transformers` imports torch. The 
 around that import is what keeps the module importable on a host with no torch at all,
 as described in the refusal section above; it is not a deferral. Measured on a laptop
 with a warm page cache, the import costs about a second and a few hundred megabytes of
-resident memory; on a shared network filesystem it is materially worse, which is the
-case the claim was written for. What `--dry-run` genuinely avoids is unchanged and is
+resident memory; on the shared network filesystem of a GB200 estate the same import was
+timed at 8.62 s against 1.69 s for torch alone, which is the case the claim was written for. What `--dry-run` genuinely avoids is unchanged and is
 the reason to use it: no model is constructed, no GPU is touched, no allocation is
 held. Making the import lazy means moving both callback classes out of module scope —
 a code change, deliberately not made as part of a documentation correction.
