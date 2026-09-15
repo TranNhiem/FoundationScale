@@ -355,12 +355,13 @@
       "run_arm": "Qwen dense, lr>0",
       "control_arm": "an `lr=0` arm through the same path: weight parity must show ZERO movement",
       "cost": "~15 min x2",
-      "status": "done (#162/#176, #366) — re-take under new manifest, control arm never run",
+      "status": "done (#162/#176, #366) — control arm RUN on a GB200 tray: the lr>0 arm moved 323/338 tensors against an `lr=0` arm at step 20, and that same `lr=0` arm moved 0/338 between its own step 10 and step 20, so the movement is attributable to training; the 15 unmoved tensors are 1-D norm weights whose 20-step update falls below half a bf16 ULP, not a frozen submodule (#462)",
       "blocked_by": [],
       "findings": [
         "#162",
         "#176",
-        "#366"
+        "#366",
+        "#462"
       ],
       "adjudicator": null
     },

@@ -261,3 +261,38 @@ dataset half outright when the dataset is a local file such as
 `examples/data/toy_text.jsonl`; a model given as an HF id still needs the Hub on the
 first run and is served from the local cache afterwards. Point `--model` at a local
 directory to remove the Hub entirely.
+
+## 12. `--precision bf16` trains with bf16 master weights, and 1-D norms barely move
+
+`--precision bf16` passes `dtype=torch.bfloat16` to `from_pretrained`, so the parameters
+themselves are bf16 and the optimizer updates them in place: there is no fp32 master
+copy. Any update smaller than half a bf16 ULP is therefore rounded away and lost, rather
+than accumulated for a later step.
+
+This was measured rather than assumed, with precision as the only axis -- same model
+(Qwen2.5-1.5B), same data, same seed, same 20 steps, same learning rate, on one GB200:
+
+| arm | tensors moved | `input_layernorm` elements moved | one 2-D `q_proj` |
+| --- | --- | --- | --- |
+| `bf16` | 323 of 338 | 28 of 43,008 (0.065%) | 50.3% |
+| `fp32` | 338 of 338 | 43,001 of 43,008 (99.98%) | 100% |
+
+The 1-D norm weights are the extreme case: at bf16 the same 28 elements have moved after
+twenty steps as after ten, so the update is being discarded every step, not accumulated
+slowly. The boundary is a rounding boundary and nothing else -- every element that moved
+has magnitude below 0.0153, and every tensor that did not move has no element below
+0.0167, which is exactly where the bf16 ULP crosses from 6.1e-05 to 1.22e-04 against a
+per-element 20-step update of roughly 3e-05 to 6e-05.
+
+A checkpoint that shows a 1-D norm tensor bitwise unchanged after a short bf16 run is
+therefore reporting storage precision, not a frozen submodule. Do not read it as one.
+
+If norm parameters must train, use `--precision fp32`. Note that with no `--precision`
+flag nothing is declared, `from_pretrained` inherits `torch_dtype` from the model's own
+config -- bf16 for most published checkpoints -- and the declared-vs-observed dtype check
+is skipped because there is no declaration to check, which is deliberate (a run that
+declared nothing has made no claim to falsify) but does mean the common invocation gets
+no precision accountability and records none in the manifest. Inspecting serialized
+dtypes cannot distinguish these cases, as `train/loop.py` says of itself; separating
+compute precision from master-weight storage takes a two-arm differential like the one
+above (#462).
