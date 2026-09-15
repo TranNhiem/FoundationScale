@@ -143,11 +143,12 @@
       "run_arm": "fp32 masters",
       "control_arm": "bf16 masters, same seed/lr/steps",
       "cost": "~15 min x2",
-      "status": "MEASURED (#367/#368: bf16 discards ~99.99%) — re-take under the new manifest",
+      "status": "MEASURED (#367/#368: bf16 discards ~99.99%) — re-take DONE under the new manifest on a GB200 tray and it REPRODUCES: with precision the only axis changed, the fp32 arm moved 43,001 of 43,008 `input_layernorm` elements (99.98%) against 28 of 43,008 (0.065%) at bf16, and 100% against 50.3% of one 2-D `q_proj`. Cause: `--precision bf16` loads parameters AS bf16, so AdamW has no fp32 master copy and a sub-ULP update is discarded rather than accumulated — 29 norm elements had moved at step 10 and 28 at step 20 (#462)",
       "blocked_by": [],
       "findings": [
         "#367",
-        "#368"
+        "#368",
+        "#462"
       ],
       "adjudicator": null
     },

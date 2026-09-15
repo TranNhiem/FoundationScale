@@ -269,8 +269,11 @@ themselves are bf16 and the optimizer updates them in place: there is no fp32 ma
 copy. Any update smaller than half a bf16 ULP is therefore rounded away and lost, rather
 than accumulated for a later step.
 
-This was measured rather than assumed, with precision as the only axis -- same model
-(Qwen2.5-1.5B), same data, same seed, same 20 steps, same learning rate, on one GB200:
+This is not a new discovery: it is matrix row T1-1, recorded as `bf16 discards ~99.99%`
+under #367/#368. What follows is the re-take that row asks for, taken under the current
+manifest, which reproduces the earlier reading independently and adds the tensor-level
+cause. Precision is the only axis changed -- same model (Qwen2.5-1.5B), same data, same
+seed, same 20 steps, same learning rate, on one GB200:
 
 | arm | tensors moved | `input_layernorm` elements moved | one 2-D `q_proj` |
 | --- | --- | --- | --- |
