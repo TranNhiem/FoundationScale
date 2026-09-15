@@ -221,6 +221,25 @@ RUNNABLE: dict[str, str] = {
         "measured, unmeasured and absent entries. The self-test imports no torch and needs "
         "no GPU; the three-arm run does, and is separate."
     ),
+    "validation_campaigns/verification_matrix/t1_21_vision_tower_arms.py": (
+        "Fifteen controls over the vision-tower movement verdict, all measured here: which "
+        "payload shapes make a moved-module count a measurement and which make it an "
+        "absence. lora_B is zero-initialised, so norm(B) > 0 is an exact movement probe and "
+        "the verdict needs no epsilon to defend; a still tower with no language anchor is "
+        "95, not 0, because an arm that trained nothing cannot report a null. The self-test "
+        "drives that pure function over synthetic payloads and imports no torch and no "
+        "peft; the two-arm run needs a GPU and a real image batch, and is separate."
+    ),
+    "validation_campaigns/verification_matrix/t1_4_save_load_parity.py": (
+        "Eight controls over the save-then-load parity verdict, all measured here, with a "
+        "MUST-FIRE for both RED branches, both 96 branches and the 95 branch, plus two that "
+        "pin the ORDER so a key-set mismatch cannot be reported as a bit difference. An "
+        "identity arm that compared ZERO elements is 96 rather than a pass, which is the "
+        "all-of-an-empty-set shape this file exists to refuse. The self-test drives the "
+        "pure verdict function over synthetic payloads with no torch, no safetensors, no "
+        "filesystem and no GPU; the two-arm run copies and re-saves a real checkpoint on a "
+        "tray, and is separate."
+    ),
 }
 
 NOT_RUNNABLE_HERE: dict[str, str] = {

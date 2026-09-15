@@ -278,6 +278,14 @@ _UNSUPPLIED = object()
 # matches nothing fails there rather than silently losing its provenance.
 _DEST_TO_FIELD: dict[str, str] = {"adapter_target": "adapter_targets"}
 
+# The dests whose flag is REPEATABLE (action="append"). They are listed rather
+# than discovered because the discovery would have to read argparse's private
+# ``_actions``; tests/train/test_manifest_records_declared_axes.py walks the real
+# parser and asserts this set is exactly the append actions, so a future
+# repeatable flag that forgets to register here fails there -- the same
+# hardcoded-map-plus-drift-test shape _DEST_TO_FIELD already uses.
+_APPEND_DESTS: frozenset[str] = frozenset({"adapter_target"})
+
 
 def _declared_fields(
     argv: Sequence[str] | None,
@@ -297,15 +305,24 @@ def _declared_fields(
     actions themselves, so the sentinel replaces the per-argument defaults
     rather than sitting behind them. The real parse runs first so that a
     malformed command line produces the real parser's error message.
+
+    One family is exempt, and has to be. argparse's ``append`` action reads the
+    dest's CURRENT value and calls ``.append`` on a copy of it, so a non-list
+    sentinel makes any use of a repeatable flag raise AttributeError inside
+    argparse itself -- measured on hardware: ``--adapter-target <m>`` died with
+    ``'object' object has no attribute 'append'`` before the parse finished, so
+    the one repeatable flag the CLI ships could not be used at all. Those flags
+    need no sentinel anyway: argparse only builds a list when the flag is
+    actually written, so ``None`` is already an unambiguous "nobody said".
     """
     probe = build_parser()
-    probe.set_defaults(**dict.fromkeys(vars(parsed), _UNSUPPLIED))
+    probe.set_defaults(**{dest: _UNSUPPLIED for dest in vars(parsed) if dest not in _APPEND_DESTS})
     supplied = vars(probe.parse_args(argv))
     return tuple(
         sorted(
             _DEST_TO_FIELD.get(dest, dest)
             for dest, value in supplied.items()
-            if value is not _UNSUPPLIED
+            if value is not _UNSUPPLIED and not (dest in _APPEND_DESTS and value is None)
         )
     )
 

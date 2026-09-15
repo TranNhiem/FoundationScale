@@ -14,6 +14,7 @@ These tests pin the distinction the run manifest exists to preserve:
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import json
 import sys
@@ -506,6 +507,83 @@ def test_every_parser_dest_resolves_to_a_trainconfig_field() -> None:
     # green result above is the mapping working rather than the lookup being
     # unable to fail.
     assert train_cli._DEST_TO_FIELD.get("no_such_dest", "no_such_dest") not in field_names
+
+
+def test_append_dests_names_exactly_the_parsers_repeatable_flags() -> None:
+    """``_APPEND_DESTS`` must stay equal to the parser's real ``append`` actions.
+
+    The set is hardcoded rather than discovered because discovering it means
+    reading argparse's private ``_actions``; this test does that reading once,
+    in the test, so the shipped path keeps to public API and the list still
+    cannot drift. The drift is not cosmetic: a repeatable flag missing from the
+    set gets a non-list sentinel default in the declared-fields probe, and
+    argparse's append action then calls ``.append`` on a copy of that sentinel.
+    The flag does not degrade -- it raises AttributeError from inside argparse,
+    so the flag cannot be used at all.
+    """
+    parser = train_cli.build_parser()
+
+    # REACHED-SITE: the parser really does expose append actions, so the
+    # comparison below is over something rather than two empty sets.
+    real = {a.dest for a in parser._actions if isinstance(a, argparse._AppendAction)}
+    assert real, "the parser exposes no repeatable flags; this check is vacuous"
+
+    # OUTCOME: the hardcoded set is the real set.
+    assert real == train_cli._APPEND_DESTS, (
+        "_APPEND_DESTS has drifted from the parser. A repeatable flag that is "
+        "not listed raises AttributeError inside argparse the first time an "
+        f"operator uses it. parser={sorted(real)} "
+        f"listed={sorted(train_cli._APPEND_DESTS)}"
+    )
+
+    # MUST-FIRE: a non-repeatable flag is genuinely absent from the real set,
+    # so equality above is a match and not a set that swallows everything.
+    assert "adapter" not in real
+
+
+def test_a_repeatable_flag_parses_and_is_recorded_as_declared() -> None:
+    """``--adapter-target`` can be used, and its use reaches ``cli_declared``.
+
+    Regression for a defect measured on hardware: every use of the CLI's one
+    repeatable flag died with ``'object' object has no attribute 'append'``
+    raised inside argparse, adjudicated RED at the main() boundary. The flag
+    parsed fine in the real parser -- it was the second, sentinel-defaulted
+    parse in ``_declared_fields`` that could not survive an append action.
+
+    So this asserts both halves: the values arrive in order, and the field is
+    reported as operator-declared rather than lost to ``default`` provenance.
+    """
+    base = [
+        "--model",
+        "synthetic/model",
+        "--dataset",
+        "synthetic/data",
+        "--output-dir",
+        "/tmp/does-not-need-to-exist",
+        "--nodes",
+        "1",
+        "--gpus-per-node",
+        "1",
+        "--profile-name",
+        "synthetic-profile",
+    ]
+    argv = [*base, "--adapter-target", "vision.mlp", "--adapter-target", "vision.attn"]
+    parser = train_cli.build_parser()
+
+    # REACHED-SITE: the real parse collects repeats, in the order written.
+    parsed = parser.parse_args(argv)
+    assert parsed.adapter_target == ["vision.mlp", "vision.attn"]
+
+    # OUTCOME: the declared-fields probe survives the append action and reports
+    # the TrainConfig field name, not the dest.
+    declared = train_cli._declared_fields(argv, parsed)
+    assert "adapter_targets" in declared
+
+    # MUST-FIRE: the same probe over a command line that omits the flag does
+    # NOT report it, so the assertion above is the flag being seen rather than
+    # the field being reported unconditionally.
+    omitted = parser.parse_args(base)
+    assert "adapter_targets" not in train_cli._declared_fields(base, omitted)
 
 
 def test_undeclared_axes_are_recorded_as_default_absences_and_round_trip(
