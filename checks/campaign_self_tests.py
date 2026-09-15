@@ -253,6 +253,20 @@ RUNNABLE: dict[str, str] = {
         "inside the measurement functions, never at module scope, which is what keeps this "
         "runnable on the bare CI interpreter; the three-arm run needs a GPU and is separate."
     ),
+    "validation_campaigns/verification_matrix/t1_23_audio_declaration_arms.py": (
+        "Twenty-two controls over the declared-audio verdict, all measured here, with a "
+        "MUST-FIRE for every branch and six that pin the ORDER -- among them that a dirty "
+        "argv outranks the RED, because a scan whose own corpus filename carries the needle "
+        "would score the arm green for the harness's words instead of the framework's, and "
+        "that an arm which exited 0 having tokenized nothing is a refusal rather than a "
+        "pass, since the silence of an empty set is not the silence of a dropped field. The "
+        "positive-control arm is load-bearing and is checked twice: it must exit 96 and its "
+        "output must name the column it itself declared, otherwise the file refuses rather "
+        "than read a verdict out of a silence it cannot interpret. The self-test drives the "
+        "pure verdict function over synthetic payloads with no trainer, no model, no "
+        "subprocess and no filesystem; the three-arm run invokes the real training entry "
+        "point three times and is separate."
+    ),
 }
 
 NOT_RUNNABLE_HERE: dict[str, str] = {
