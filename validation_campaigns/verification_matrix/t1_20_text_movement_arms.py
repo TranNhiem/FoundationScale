@@ -207,6 +207,66 @@ def _run_arm(label: str, args: argparse.Namespace, learning_rate: float, out_dir
     return subprocess.run(cmd, check=False).returncode
 
 
+ROW = "t1_20"
+CLAIM = "a text corpus trains end-to-end and the adapter bytes move; at lr=0 they do not"
+
+
+def _write_arm_payload(
+    out_root: Path,
+    label: str,
+    *,
+    status: str,
+    reason: str,
+    launcher_exit_code: int,
+    telemetry: dict[str, object],
+) -> Path:
+    """WHY (#474): the shipped runner reads its observations from
+    ``<out-dir>/t1_20_<arm>.json`` and NEVER from stdout -- a number that
+    existed only in a scrollback is the defect run_row.py was built to end.
+    This file used to print its payload and write nothing readable, so a real
+    GREEN taken on a tray came back through the harness as REFUSE 96 with the
+    reason 'exited 0 but wrote no arm files': the measurement happened and was
+    then thrown away at the seam. The per-arm TRAINING output already lands in
+    the sibling directory ``t1_20_<arm>/``; this is the per-arm OBSERVATION,
+    which is a different artifact with a different job.
+
+    The payload is written for a failed arm too. An arm that exited nonzero is
+    evidence about the instrument, and an absent file cannot be told apart from
+    an arm that never ran."""
+    payload = {
+        "row": "T1-20",
+        "arm": label,
+        "claim": CLAIM,
+        "status": status,
+        "reason": reason,
+        "launcher_exit_code": launcher_exit_code,
+        # Written even when empty on purpose: an absent key reads as "this row
+        # does not collect this", a present-and-empty one as "there was nothing
+        # to collect", and only the second is true here (#441). This row's
+        # evidence is adapter norms, not a loss curve, so loss_curve is
+        # legitimately empty and says so rather than going missing.
+        "excerpts": [],
+        "telemetry": telemetry,
+        "loss_curve": [],
+    }
+    path = out_root / f"{ROW}_{label}.json"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return path
+
+
+def _norm_telemetry(norms: Mapping[str, float]) -> dict[str, object]:
+    """The numbers the verdict rests on, per arm, so the receipt carries the
+    measurement and not merely its conclusion."""
+    values = sorted(norms.values())
+    moved = [v for v in values if v != 0.0]
+    return {
+        "lora_b_tensors_declared": len(values),
+        "lora_b_tensors_moved": len(moved),
+        "frobenius_norm_min": values[0] if values else None,
+        "frobenius_norm_max": values[-1] if values else None,
+    }
+
+
 def _measure(args: argparse.Namespace) -> int:
     out_root = Path(args.out_dir)
     # The run arm's rate is configurable; the null arm's rate is hardcoded to 0 on purpose.
@@ -218,17 +278,49 @@ def _measure(args: argparse.Namespace) -> int:
         arm_dir = out_root / f"t1_20_{label}"
         rc = _run_arm(label, args, learning_rate, arm_dir)
         if rc != 0:
-            print(
-                f"[t1-20:unmeasured] the {label} arm exited {rc}, so it did not complete. "
+            reason = (
+                f"the {label} arm exited {rc}, so it did not complete. "
                 "An incomplete arm refutes nothing."
+            )
+            print(f"[t1-20:unmeasured] {reason}")
+            _write_arm_payload(
+                out_root,
+                label,
+                status="unmeasured",
+                reason=reason,
+                launcher_exit_code=rc,
+                telemetry={"learning_rate": learning_rate},
             )
             return UNMEASURED
         adapter = arm_dir / "final" / "adapter_model.safetensors"
         try:
             norms[label] = _read_b_norms(adapter)
         except Exception as exc:  # noqa: BLE001 -- any read failure is an absent measurement
-            print(f"[t1-20:unmeasured] could not read the {label} arm's adapter: {exc}")
+            reason = f"could not read the {label} arm's adapter: {exc}"
+            print(f"[t1-20:unmeasured] {reason}")
+            _write_arm_payload(
+                out_root,
+                label,
+                status="unmeasured",
+                reason=reason,
+                launcher_exit_code=0,
+                telemetry={"learning_rate": learning_rate, "adapter_path": str(adapter)},
+            )
             return UNMEASURED
+        telemetry = _norm_telemetry(norms[label])
+        telemetry["learning_rate"] = learning_rate
+        _write_arm_payload(
+            out_root,
+            label,
+            status="measured",
+            reason=(
+                f"the {label} arm completed at learning_rate={learning_rate!r} and its "
+                f"{telemetry['lora_b_tensors_declared']} lora_B tensors were read from the "
+                "saved adapter"
+            ),
+            launcher_exit_code=0,
+            telemetry=telemetry,
+        )
 
     rc, payload = adjudicate(norms["run"], norms["null"])
     print(json.dumps(payload, indent=1, sort_keys=True))
@@ -307,6 +399,67 @@ def _self_test() -> int:
         and payload["run_norm_min"] == 0.008
     )
     checks.append(("C8 the payload carries the counts the verdict rests on", numbers_ok, ""))
+
+    # C9 MUST-FIRE (#474): the seam that lost a real GREEN. This control does not
+    # re-implement the runner's discovery rule and then assert against its own
+    # copy -- that would pass while the two drifted apart, which is exactly what
+    # happened. It loads the SHIPPED run_row.py and calls the SHIPPED
+    # collect_arms() over a directory this file wrote, so the only way it passes
+    # is if the runner can really read what this adjudicator really writes.
+    # run_row.py is stdlib-only at import time, so this costs no torch.
+    import importlib.util
+    import tempfile
+
+    runner_path = Path(__file__).resolve().parent / "run_row.py"
+    with tempfile.TemporaryDirectory(prefix="t1_20_arms_") as tmp:
+        root = Path(tmp)
+        _write_arm_payload(
+            root,
+            "run",
+            status="measured",
+            reason="synthetic",
+            launcher_exit_code=0,
+            telemetry=_norm_telemetry(green_run),
+        )
+        _write_arm_payload(
+            root,
+            "null",
+            status="measured",
+            reason="synthetic",
+            launcher_exit_code=0,
+            telemetry=_norm_telemetry(green_null),
+        )
+        spec = importlib.util.spec_from_file_location("_t1_20_runner_probe", runner_path)
+        if spec is None or spec.loader is None:
+            discovered, keys_ok, detail = {}, False, "run_row.py could not be loaded"
+        else:
+            runner = importlib.util.module_from_spec(spec)
+            # Registering before exec: a module that imports itself by name
+            # otherwise re-executes and the probe measures a second copy.
+            sys.modules[spec.name] = runner
+            try:
+                spec.loader.exec_module(runner)
+                discovered = runner.collect_arms(root, row_id="T1-20")
+                # Every ARM_SCALAR_KEY the runner harvests must survive the trip.
+                # `bool(discovered) and` is load-bearing: all() over nothing is
+                # True, and a keys_ok that reads True beside discovered=[] is
+                # the all([]) trap reproduced inside the control meant to catch
+                # it. The composite below would still fail, but the detail line
+                # printed beside it would be a lie.
+                keys_ok = bool(discovered) and all(
+                    set(runner.ARM_SCALAR_KEYS) <= set(arm) for arm in discovered.values()
+                )
+                detail = ""
+            finally:
+                sys.modules.pop(spec.name, None)
+    arms_ok = sorted(discovered) == ["null", "run"] and keys_ok
+    checks.append(
+        (
+            "C9 MUST-FIRE: the SHIPPED runner discovers both arm payloads this file writes",
+            arms_ok,
+            f"discovered={sorted(discovered)} all_scalar_keys_present={keys_ok}",
+        )
+    )
 
     failed = 0
     for name, ok, detail in checks:
