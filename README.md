@@ -424,8 +424,11 @@ itself, from the Makefile's own accounting:
   metadata indexing; `src/foundationscale/gates/checkpoint_gates.py` and
   `src/foundationscale/verify/parity.py` are where checkpoints are *judged* — the expert-alias
   reference case encodes the estate's defining incident.
-* Recovery knobs exist in the harness (`FS_RESUME_CKPT`, `FS_RESUME_STEP` appear in the
-  launch-plane environment surface), wired to the launchers rather than the package.
+* Two recovery knobs are *named* in the launch-plane environment surface
+  (`FS_RESUME_CKPT`, `FS_RESUME_STEP`): the h100 launcher exports them and the container
+  backend forwards them. **Nothing reads them** -- not the package, not the launch plane.
+  Measured over every tracked file: the only occurrences export, allowlist, or gate the
+  forwarding. Setting them changes nothing on any arm. [-> docs/CHECKPOINTING.md]
 * **Stated limit from §4, repeated where it bites:** the suite writes real checkpoints to
   disk and reads them back single-process. Multi-rank save/reload shapes are reproduced
   from the audit record, not re-observed — so multi-rank recovery is *specified*, not
@@ -466,7 +469,7 @@ itself, from the Makefile's own accounting:
 
 `src/` = 41621 LOC across 52 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 34169 Python LOC and 6706 shell LOC on top of the
-package. `tools/` contains 9904 Python LOC. 215702 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 9904 Python LOC. 215724 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,

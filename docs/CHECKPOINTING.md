@@ -323,14 +323,33 @@ physical-byte pricing fires.
 
 ## Recovery knobs
 
-The launch-plane environment surface includes `FS_RESUME_CKPT` and
-`FS_RESUME_STEP`, wired to the launchers rather than the package.
+The launch-plane environment surface names `FS_RESUME_CKPT` and
+`FS_RESUME_STEP`. The h100 launcher exports them and the container backend forwards them,
+but no reader exists on either plane: measured over every tracked file, each occurrence is
+an export, an allowlist entry, or a gate on the forwarding itself. The gate that guards
+them checks *allowlist membership*, so it stays green whether or not a consumer is ever
+written. Setting these variables changes nothing today.
 
 **What is not here:** beyond the presence of those two variables in the
 launch-plane environment surface, no resume implementation, validation of
 resume behaviour, or CLI command for checkpoint recovery exists in the
 package source material. The current behaviour is that checkpoint *judgment*
 lives in the gates above; recovery itself is a harness concern.
+
+## Checkpoint retention is unbounded
+
+There is no `save_total_limit`: the name appears nowhere in the package, the tests, or this
+documentation. Every checkpoint is kept until something outside FoundationScale deletes it.
+
+Measured on a GB200 tray: a 200-step gpt2 (124M parameters) run at `--save-interval 5` wrote
+**40 checkpoints totalling 57 GB**. Each checkpoint carries `optimizer.pt`, `scheduler.pt`,
+`rng_state.pth` and `trainer_state.json` alongside the weights, which is why a checkpoint
+costs roughly eleven times the parameter count in bytes rather than two. A run that saves
+often, on a model of production size, on a shared filesystem, will exhaust the filesystem
+before it exhausts its step budget -- and that is the failure a long run actually hits.
+
+Choose `--save-interval` against the space you have, and prune outside the trainer. This is
+a stated limitation, not a setting.
 
 ## The stated limit
 
