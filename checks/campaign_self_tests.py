@@ -240,6 +240,19 @@ RUNNABLE: dict[str, str] = {
         "filesystem and no GPU; the two-arm run copies and re-saves a real checkpoint on a "
         "tray, and is separate."
     ),
+    "validation_campaigns/verification_matrix/t1_2_fp16_scaler_arms.py": (
+        "Seventeen controls over the fp16 grad-scaler verdict, all measured here, with a "
+        "MUST-FIRE for every branch and four that pin the ORDER -- among them that an "
+        "unlocatable framework outranks an unresolvable scaler, and that a dropped fp16 "
+        "declaration is reported as the declaration failure rather than as the control "
+        "failure it also causes. Both directions of the control are required: a scaler "
+        "that skips an overflowing step but also skips a finite one is scored RED, because "
+        "skipping everything would satisfy the row's control while being useless. The "
+        "self-test drives the pure verdict function over synthetic payloads with no torch, "
+        "no transformers, no GPU and no filesystem -- torch and transformers are imported "
+        "inside the measurement functions, never at module scope, which is what keeps this "
+        "runnable on the bare CI interpreter; the three-arm run needs a GPU and is separate."
+    ),
 }
 
 NOT_RUNNABLE_HERE: dict[str, str] = {
