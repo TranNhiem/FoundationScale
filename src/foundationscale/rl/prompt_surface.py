@@ -205,12 +205,22 @@ def encode_prompts(
         )
 
     prompts: list[Any] = []
-    flat_images: list[Any] = []  # processor order: sample-major, then per-sample order
+    # ONE sub-list per sample, EMPTY when that sample carries no images -- never
+    # a flat list. MEASURED on two real processor families, same two rows:
+    #     gemma-4-E4B-it  flat    -> ValueError: Received inconsistently sized
+    #                                batches of images (1) and text (2)
+    #     gemma-4-E4B-it  nested  -> ok, input_ids [2, 282]
+    #     qwen2.5-vl      flat    -> ok, input_ids [2, 2362]
+    #     qwen2.5-vl      nested  -> ok, input_ids [2, 2362]  (byte-identical)
+    # A family that normalises a flat list collapses it to ONE image-batch and
+    # then compares N images against M texts. Nesting fixes that family and is
+    # a strict no-regression for the one that already worked.
+    nested_images: list[list[Any]] = []
     for sample in samples:
         images = getattr(sample, "images", ()) or ()
-        if images:
-            loaded = [_load_image_or_refuse(sample.sample_id, p) for p in images]
-            flat_images.extend(loaded)
+        loaded = [_load_image_or_refuse(sample.sample_id, p) for p in images]
+        nested_images.append(loaded)
+        if loaded:
             conversation = [
                 {
                     "role": role,
@@ -226,8 +236,9 @@ def encode_prompts(
 
     if any_images:
         # One apply_chat_template per conversation: block content is a
-        # per-conversation structure, and the processor then consumes the
-        # flattened image list in the same order the blocks appeared.
+        # per-conversation structure, and the processor then consumes that
+        # conversation's own image sub-list, positionally, in the same order
+        # the blocks appeared.
         texts = [
             surface.surface.apply_chat_template(
                 conversation, tokenize=False, add_generation_prompt=True
@@ -236,7 +247,7 @@ def encode_prompts(
         ]
         encoded = surface.surface(
             text=texts,
-            images=flat_images,
+            images=nested_images,
             return_tensors="pt",
             padding=True,
             add_special_tokens=False,
@@ -305,6 +316,49 @@ def refuse_if_pixel_column_dropped(
         )
 
 
+# transformers writes int(1e30) into model_max_length to mean "this family
+# never declared one". MEASURED: qwen2.5-vl reports a real 131072, while
+# gemma-4-E4B-it reports exactly 1000000000000000019884624838656. Anything at
+# or above this threshold is the sentinel, not a bound.
+_UNSET_MODEL_MAX_LENGTH = 10**15
+
+
+def _refuse_if_image_batch_exceeds_declared_window(
+    surface: PromptSurface, batch: Any, image_column: str
+) -> None:
+    """Refuse 96 when an untruncated image batch overruns the model's own window.
+
+    The image path deliberately does not truncate, because truncating a batch
+    that carries image placeholders drops pixels on the floor -- the silent
+    defect this module exists to refuse. That leaves one honest failure mode:
+    the encoded batch is simply wider than the model can accept. This refuses
+    it, naming both numbers, rather than handing the forward a batch that will
+    fail somewhere less legible.
+
+    The bound is read from the family's OWN tokenizer, never hardcoded. When
+    the family declares no window, the width is UNMEASURABLE against a bound
+    that does not exist, so this returns without refusing -- it does not invent
+    a threshold, and it does not pretend the check ran.
+    """
+    tokenizer = getattr(surface.surface, "tokenizer", None)
+    declared = getattr(tokenizer, "model_max_length", None)
+    if not isinstance(declared, int) or declared >= _UNSET_MODEL_MAX_LENGTH:
+        return
+    input_ids = batch.get("input_ids") if hasattr(batch, "get") else None
+    if input_ids is None:
+        return
+    width = int(input_ids.shape[-1])
+    if width > declared:
+        _refuse_exit_96(
+            f"image column {image_column!r} encoded to {width} tokens per row, "
+            f"wider than the {declared} this model declares. The image path "
+            "does not truncate on purpose -- truncating a batch that carries "
+            "image placeholders drops pixels between the dataset and the "
+            "forward, which is the silent-drop defect. Reduce the images per "
+            "row or the text length; this refuses rather than corrupts."
+        )
+
+
 def train_image_collator_or_refuse(
     surface: PromptSurface,
     *,
@@ -322,25 +376,74 @@ def train_image_collator_or_refuse(
         )
 
     def collate(features: Sequence[Any]) -> Any:
+        # Images nest ONE SUB-LIST PER FEATURE, including an EMPTY sub-list for
+        # a row that carries none. MEASURED, same two rows, both families:
+        #     shape                         gemma-4-E4B-it     qwen2.5-vl
+        #     flat  [img]     / 2 texts     ValueError 1 vs 2  ok
+        #     nested [[img]]  / 2 texts     ValueError 1 vs 2  ok
+        #     nested [[img],[]] / 2 texts   ok  [2, 277]       ok  [2, 2358]
+        # Dropping the empty sub-list reproduces the original defect: the
+        # processor normalises the short outer list to one image-batch and then
+        # reads N images against M texts. The empty sub-list is what keeps the
+        # images list and the texts list the same length.
         texts: list[str] = []
-        flat_images: list[Any] = []
+        nested_images: list[list[Any]] = []
+        any_images = False
         for i, feature in enumerate(features):
             row = feature if isinstance(feature, dict) else vars(feature)
             paths = row.get(image_column) or []
             if isinstance(paths, (str, Path)):
                 paths = [paths]
-            for p in paths:
-                flat_images.append(_load_image_or_refuse(f"train-row[{i}]", str(p)))
-            texts.append(str(row.get(text_column, "")))
-        batch = surface.surface(
-            text=texts,
-            images=flat_images,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=max_length,
-            add_special_tokens=False,
-        )
+            loaded = [_load_image_or_refuse(f"train-row[{i}]", str(p)) for p in paths]
+            nested_images.append(loaded)
+            any_images = any_images or bool(loaded)
+            # The placeholder comes from the processor's OWN chat template, so
+            # it is whatever token that family uses and nothing is hardcoded.
+            # add_generation_prompt=False: this is the TRAIN plane and labels
+            # are the input_ids, so an assistant-turn opener would be trained on.
+            conversation = [
+                {
+                    "role": "user",
+                    "content": (
+                        [{"type": "image"} for _ in loaded]
+                        + [{"type": "text", "text": str(row.get(text_column, ""))}]
+                    ),
+                }
+            ]
+            texts.append(
+                surface.surface.apply_chat_template(
+                    conversation, tokenize=False, add_generation_prompt=False
+                )
+            )
+
+        if any_images:
+            # NO truncation on the image path. truncation=True at any constant
+            # max_length desynchronises the placeholders from the pixels, and no
+            # constant can be right: MEASURED, the same two corpus images expand
+            # to 2337 and 1026 tokens through one family's processor and ~258
+            # through another's. Raising 128 to 1024 fixes one and breaks the
+            # other. The bound is per-image, per-family AND per-row, so it
+            # cannot be a literal; an overrun is refused below, never truncated.
+            batch = surface.surface(
+                text=texts,
+                images=nested_images,
+                return_tensors="pt",
+                padding=True,
+                add_special_tokens=False,
+            )
+            _refuse_if_image_batch_exceeds_declared_window(surface, batch, image_column)
+        else:
+            # Zero pixels across every row, so there are no placeholders to
+            # desynchronise and truncation is safe. max_length keeps its
+            # original meaning on exactly this path.
+            batch = surface.surface(
+                text=texts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_length,
+                add_special_tokens=False,
+            )
         if "labels" not in batch and "input_ids" in batch:
             batch["labels"] = batch["input_ids"].clone()
         return batch

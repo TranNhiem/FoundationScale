@@ -332,12 +332,16 @@ def test_an_undecodable_image_is_refused_not_substituted(
 def test_images_are_loaded_sample_major_and_matched_to_content_blocks(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
-    # FAILING INPUT: a multi-sample, multi-image chunk. If images were
-    # flattened in any order other than sample-major-then-per-sample, the
-    # processor would pair sample B's pixels with sample A's <image> blocks --
-    # wrong supervision with zero error signal. This is the happy path that
-    # makes the orderings above legible: blocks per conversation must match
-    # the flat image list the processor receives, pairwise.
+    # FAILING INPUT: a multi-sample, multi-image chunk. If the images reached
+    # the processor in any grouping other than one sub-list per sample in
+    # sample order, it would pair sample B's pixels with sample A's <image>
+    # blocks -- wrong supervision with zero error signal. This is the happy
+    # path that makes the orderings above legible: blocks per conversation
+    # must match the image sub-list the processor receives for that same
+    # conversation, positionally. The text-only sample contributes an EMPTY
+    # sub-list rather than being skipped: skipping it shifts every later
+    # sample's pixels onto the wrong conversation, which is the same
+    # mispairing this test exists to catch.
     paths = [str(tmp_path / f"{n}.png") for n in "abc"]
     for p in paths:
         (tmp_path / p.rsplit("/", 1)[-1]).write_bytes(b"\x00")
@@ -359,8 +363,12 @@ def test_images_are_loaded_sample_major_and_matched_to_content_blocks(
     batch = encode_prompts(surface, samples, device="cpu")
 
     assert opened == paths  # load order is the pairing contract
-    flat = rec.calls[0]["images"]
-    assert [img.path for img in flat] == paths  # sample-major, then per-sample order
+    per_sample = rec.calls[0]["images"]
+    assert [[img.path for img in sub] for sub in per_sample] == [
+        [paths[0], paths[1]],
+        [paths[2]],
+        [],
+    ]  # sample-major, then per-sample order, empty sub-list for the text-only row
     body = rec.templated[0][0]["content"]  # s0, user turn
     assert body == [
         {"type": "image"},
