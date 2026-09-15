@@ -296,6 +296,32 @@ jobs:
       - name: Per-module coverage floors (a total can be subsidised)
         run: python3 checks/coverage_floor.py
 
+      # #466. The boundary control also runs in the `controls` job, and that is
+      # not duplication -- the two jobs install DIFFERENT dependency sets, so
+      # they measure different amounts of the same claim, and each says which.
+      #
+      # The `controls` job installs [checkpoint,dev]: no transformers, so t1_2
+      # answers 95 at `import transformers` before the injection is reached and
+      # its four legs ABSTAIN. That is the honest reading on a minimal machine,
+      # and the reachability probe added in #466 is what makes it honest instead
+      # of three FAILs for a defect that is not there. But an abstention is not
+      # a measurement: t1_2 is one of the five rows #463 found violating the
+      # #417 rule, and leaving it abstained everywhere would mean CI never
+      # checks the row most recently known to have been wrong.
+      #
+      # This job installs [checkpoint,train,dev], which includes transformers,
+      # on all three interpreters -- so here all 36 legs are MEASURED. Cost is
+      # seconds: every leg patches the measurement delegate out before calling
+      # main(), so nothing loads a model and no GPU is touched.
+      - name: Boundary control self-test (MUST_FIRE before any row reading counts)
+        run: |
+          cd validation_campaigns/verification_matrix
+          python3 control_boundary_classification.py --self-test
+      - name: Boundary control over every shipped row (36 legs measured, not 32)
+        run: |
+          cd validation_campaigns/verification_matrix
+          python3 control_boundary_classification.py --expect postfix
+
   controls:
     name: gate controls (MUST_FIRE fixtures)
     runs-on: ubuntu-latest
@@ -739,11 +765,23 @@ jobs:
       # Controls first and their rc gates the real run, as in every pair above.
       # No hardware: each leg patches the measurement delegate out before calling
       # main(), so 36 legs finish in seconds on a runner with no GPU.
+      #
+      # #466: this job installs [checkpoint,dev], so transformers is ABSENT and
+      # t1_2 returns 95 before the injection is reached -- its four legs abstain
+      # here and the step prints "32 passed + 0 failed + 4 abstained". Measured,
+      # by blocking the import locally and re-running: 32/0/4 with the import
+      # blocked, 36/0/0 with it present. The `check` job above installs
+      # [checkpoint,train,dev] and measures all 36, so the row is not left
+      # unchecked -- it is checked where the dependency exists, and the
+      # abstention is named where it does not. Before #466 this same runner
+      # reported t1_2/ENV as a PASS (its precondition 95 happened to equal the
+      # wanted 95) and the other three as FAILs, which is what turned main red:
+      # a finding manufactured by staging, not by the subject.
       - name: Boundary control self-test (MUST_FIRE before any row reading counts)
         run: |
           cd validation_campaigns/verification_matrix
           python3 control_boundary_classification.py --self-test
-      - name: Boundary control over every shipped row (36 legs, 9 rows)
+      - name: Boundary control over every shipped row (36 legs, 9 rows; 32 measured here)
         run: |
           cd validation_campaigns/verification_matrix
           python3 control_boundary_classification.py --expect postfix

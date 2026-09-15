@@ -138,12 +138,27 @@ def _package_imports(root: Path) -> int:
     constantly. Relative imports are excluded and that is stated, because the
     drafts' figures may or may not include them -- naming the method is the
     point.
+
+    #465. A file that does not parse is REFUSED, not skipped. `except
+    SyntaxError: continue` made an unparseable file cost the count whatever it
+    held and say nothing -- and this census is the oracle `countables_drift
+    --fix` writes into eight documents, so the smaller number would have been
+    published as measured fact. Worse, parseability is interpreter-dependent:
+    the same tree under 3.10 and under 3.14 would then anchor two different
+    numbers under one word, which is the drift this whole file exists to stop.
+    Measured before changing it: 327 tracked .py files, 0 unparseable under
+    python3.10 (the oldest interpreter CI runs) -- so this refusal is latent
+    today, not a behaviour change. It follows the refusal already established
+    at _mutation_corpus: a count that could not be taken is UNMEASURED, and
+    substituting a smaller one is the failure, not the fallback.
     """
     n = 0
+    unparsed: list[str] = []
     for p in _py_files(root):
         try:
             tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
-        except SyntaxError:
+        except SyntaxError as exc:
+            unparsed.append(f"{p}: {exc}")
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -156,6 +171,12 @@ def _package_imports(root: Path) -> int:
                 # level == 0 excludes relative imports: `from . import x` inside
                 # the package is not a dependency ON the package.
                 n += 1
+    if unparsed:
+        raise SystemExit(
+            f"{len(unparsed)} tracked .py file(s) under {root} did not parse, so the "
+            "import count is a FLOOR and not a measurement; the census refuses to "
+            "publish it (#465). " + "; ".join(unparsed)
+        )
     return n
 
 
@@ -412,6 +433,53 @@ def self_test() -> int:
                 "an INDEXED build/ path is still refused by NOISE",
                 "MUST_PASS",
                 _loc(_files(root, ".py")) == base_py,
+            )
+        )
+
+        # --- #465: an unparseable file must REFUSE, not shrink the count ------
+        # Two legs, and again the MUST_PASS is what makes the MUST_FIRE mean
+        # something: a counter that always raises also "refuses on a broken
+        # file", and that would be a control satisfied by a gate that never
+        # counts anything. So first prove the counter CAN see an import and
+        # return a number, then break exactly one file and require the refusal.
+        (root / "pkg/imp.py").write_text(
+            "import foundationscale\nfrom foundationscale.train import loop\n", encoding="utf-8"
+        )
+        _TRACKED = set(real) | {root / "pkg/imp.py"}
+        counted = -1
+        try:
+            counted = _package_imports(root)
+        except SystemExit:
+            counted = -1
+        legs.append(
+            (
+                "a parseable tracked file yields its 2 package imports",
+                "MUST_PASS",
+                counted == 2,
+            )
+        )
+
+        (root / "pkg/broken.py").write_text("def f(:\n", encoding="utf-8")
+        _TRACKED = set(real) | {root / "pkg/imp.py", root / "pkg/broken.py"}
+        refused, said_which = False, False
+        try:
+            _package_imports(root)
+        except SystemExit as exc:
+            refused, said_which = True, "broken.py" in str(exc)
+        legs.append(
+            (
+                "one unparseable tracked file REFUSES instead of counting 2",
+                "MUST_FIRE",
+                refused,
+            )
+        )
+        # rc alone cannot tell "refused for this reason" from "refused at all",
+        # which is #233's attribution lesson: the message must name the file.
+        legs.append(
+            (
+                "the refusal names the file that did not parse",
+                "MUST_FIRE",
+                said_which,
             )
         )
 

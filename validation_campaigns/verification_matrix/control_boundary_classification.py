@@ -225,8 +225,44 @@ def main(argv=None):
 """
 
 
+UNREACHABLE_SUBJECT_SRC = """\
+# Synthetic UNREACHABLE subject (#466): returns on an ABSENT PRECONDITION before
+# it ever calls the delegate the control patches. It is not wrong -- 95 for a
+# missing precondition is exactly right -- so the control must neither pass nor
+# fail its legs. This is the shape t1_2 takes on a runner with no transformers.
+import argparse
+
+
+def _run(args):
+    raise AssertionError("the control patches _run; this body must never execute")
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out-dir")
+    args, _extra = ap.parse_known_args(argv)
+    print("VERDICT UNMEASURED: a precondition for the measurement is ABSENT here")
+    return 95
+    return _run(args)  # unreachable on purpose
+"""
+
+
 class HarnessFault(Exception):
     """The control itself could not run a leg -- exit 96, never 5."""
+
+
+def _why(stdout: str) -> str:
+    """The subject's own closing line, so an abstention names its cause.
+
+    An abstention that says only "unreachable" is a subtraction from the
+    denominator that nobody can audit. Quoting the row's own last verdict line
+    makes the reason attributable to the subject rather than to this control.
+    """
+    lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
+    for ln in reversed(lines):
+        if ln.startswith(("VERDICT ", "CANNOT-MEASURE")):
+            return f"The row said: {ln[:200]}"
+    return f"The row said: {lines[-1][:200]}" if lines else "The row printed nothing."
 
 
 def load(path: Path):
@@ -239,17 +275,28 @@ def load(path: Path):
     return mod
 
 
-def run_leg(mod, target: str, argv: list[str], exc: BaseException) -> tuple[int, str]:
-    """Patch `target` to raise `exc`, call main(argv), return (rc, captured stdout).
+def run_leg(mod, target: str, argv: list[str], exc: BaseException) -> tuple[int, str, bool]:
+    """Patch `target` to raise `exc`, call main(argv); return (rc, stdout, reached).
 
     The signature is ``*_a, **_k`` because the delegates differ across rows --
     ``_run(args)`` in most, ``run_measurement(device, requested)`` in t1_2, and
     ``_run_arms(real, out)`` in t1_6. A one-argument stub would raise TypeError
     before the injected exception ever reached the boundary, which would score
     the row on the probe's own fault.
+
+    `reached` is #466. A row may return on an ABSENT PRECONDITION before it ever
+    calls the delegate -- t1_2 answers 95 at `import transformers` -- and then
+    the injected exception never happened, so the leg measured staging rather
+    than the boundary. Measured, not assumed: the stub records its own call, the
+    same self-match discipline the f381 plant uses. Without it the ENV leg
+    PASSES vacuously (the row's precondition 95 is coincidentally the wanted 95)
+    while HARN and both PASSTHRU legs FAIL for a defect that is not there.
     """
+    reached = False
 
     def boom(*_a, **_k):
+        nonlocal reached
+        reached = True
         raise exc
 
     original = getattr(mod, target)
@@ -268,28 +315,47 @@ def run_leg(mod, target: str, argv: list[str], exc: BaseException) -> tuple[int,
                 rc = 1
     finally:
         setattr(mod, target, original)
-    return rc, out.getvalue() + err.getvalue()
+    return rc, out.getvalue() + err.getvalue(), reached
 
 
-def run_passthrough(mod, patches: list[tuple[str, object]], argv: list[str]) -> int:
+def run_passthrough(
+    mod, patches: list[tuple[str, object]], argv: list[str]
+) -> tuple[int, str, bool]:
     """The row REACHES a verdict (nothing raises); main() must pass it through.
 
     `patches` is a list because a row that adjudicates a payload needs two stubs,
     not one: the measurement must be neutralised as well as the adjudication, or
     the leg runs the real measurement against a fixture checkpoint and scores the
     row on the fixture rather than on the boundary.
+
+    Returns (rc, stdout, reached); `reached` is #466, as in run_leg. ANY stub
+    being called counts as reached: a row that calls the measurement and then
+    drops the verdict on the floor HAS reached the boundary and its disagreement
+    is a real finding, not an abstention.
     """
     originals = [(attr, getattr(mod, attr)) for attr, _ in patches]
+    reached = False
+
+    def stub_for(v):
+        def stub(*_a, **_k):
+            nonlocal reached
+            reached = True
+            return v
+
+        return stub
+
     for attr, value in patches:
-        setattr(mod, attr, (lambda v: (lambda *_a, **_k: v))(value))
+        setattr(mod, attr, stub_for(value))
+    out, err = io.StringIO(), io.StringIO()
     try:
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
-                return mod.main(argv)
+                rc = mod.main(argv)
             except SystemExit as se:
-                return se.code if isinstance(se.code, int) else 96
+                rc = se.code if isinstance(se.code, int) else 96
             except Exception:  # noqa: BLE001 -- an escape here is also out of contract
-                return 1
+                rc = 1
+        return rc, out.getvalue() + err.getvalue(), reached
     finally:
         for attr, original in originals:
             setattr(mod, attr, original)
@@ -305,11 +371,16 @@ def run_four_legs(
     raise_target: str = "_run",
     argv_of=_outdir(),
     passthru=lambda rc: [("_run", rc)],
-) -> int:
+) -> tuple[int, int]:
     """Run ENV / HARN / PASSTHRU-RED / PASSTHRU-GREEN against `mod`.
 
-    Returns the number of failing legs. A harness-level raise inside a leg is a
-    HarnessFault (exit 96), never a verdict.
+    Returns (failing legs, abstained legs). A harness-level raise inside a leg is
+    a HarnessFault (exit 96), never a verdict.
+
+    #466: a leg whose injection was never reached is ABSTAINED, not passed and
+    not failed. It is named at its site with the row's own closing line, so an
+    abstention is a declared state that a reader can audit -- never a quiet
+    subtraction from the denominator.
 
     `fail_tag` names the token a DISAGREEING leg prints. It is "FAIL" everywhere a
     disagreement is bad news, and "FIRED" on the MUST_FIRE leg, where disagreement
@@ -321,23 +392,35 @@ def run_four_legs(
     want = {"ENV": 5, "HARN": 5} if expect == "prefix" else {"ENV": 95, "HARN": 96}
 
     failures = 0
+    abstained = 0
     for leg, exc in (("ENV", ENV_EXC), ("HARN", HARN_EXC)):
         with tempfile.TemporaryDirectory() as td:
             argv = argv_of(td)
             try:
-                rc, stdout = run_leg(mod, raise_target, argv, exc)
+                rc, stdout, reached = run_leg(mod, raise_target, argv, exc)
             except Exception as e:  # noqa: BLE001 -- a harness fault is 96, never a verdict
                 print(f"[96] {label}/{leg}: harness raised {type(e).__name__}: {e}")
                 raise HarnessFault(f"{label}/{leg}: {e}") from e
-        ok = rc == want[leg]
         # Anchor on the verdict token, NOT bare "RED": UNMEASURED *contains*
         # the substring RED, so a bare scan self-hits on the correct output.
         said_red = "VERDICT RED" in stdout
-        if not ok:
-            failures += 1
-        tag = "PASS" if ok else fail_tag
-        print(f"[{tag}] {label}/{leg}: rc={rc} (want {want[leg]})  prints_RED={said_red}{note}")
-        # A correct post-fix boundary must not print RED for either leg.
+        if not reached:
+            abstained += 1
+            print(
+                f"[ABSTAIN] {label}/{leg}: rc={rc}, but {raise_target}() was never called, "
+                f"so the injected {type(exc).__name__} never happened and this leg measured "
+                f"an absent precondition, not the boundary. {_why(stdout)}{note}"
+            )
+        else:
+            ok = rc == want[leg]
+            if not ok:
+                failures += 1
+            tag = "PASS" if ok else fail_tag
+            print(f"[{tag}] {label}/{leg}: rc={rc} (want {want[leg]})  prints_RED={said_red}{note}")
+        # A correct post-fix boundary must not print RED for either leg. This is
+        # checked even on an abstained leg: a row that answers RED to a
+        # precondition it could not meet is the #417 defect regardless of
+        # whether the injection landed.
         if expect == "postfix" and said_red:
             failures += 1
             print(f"[{fail_tag}] {label}/{leg}: stdout asserts RED over an unmeasured claim{note}")
@@ -346,16 +429,23 @@ def run_four_legs(
     for name, rc_in in (("PASSTHRU-RED", 5), ("PASSTHRU-GREEN", 0)):
         with tempfile.TemporaryDirectory() as td:
             try:
-                got = run_passthrough(mod, passthru(rc_in), argv_of(td))
+                got, stdout, reached = run_passthrough(mod, passthru(rc_in), argv_of(td))
             except Exception as e:  # noqa: BLE001 -- a harness fault is 96, never a verdict
                 print(f"[96] {label}/{name}: harness raised {type(e).__name__}: {e}")
                 raise HarnessFault(f"{label}/{name}: {e}") from e
+        if not reached:
+            abstained += 1
+            print(
+                f"[ABSTAIN] {label}/{name}: rc={got}, but no stub was called, so the row "
+                f"never reached a verdict to pass through. {_why(stdout)}{note}"
+            )
+            continue
         ok = got == rc_in
         if not ok:
             failures += 1
         print(f"[{'PASS' if ok else fail_tag}] {label}/{name}: rc={got} (want {rc_in}){note}")
 
-    return failures
+    return failures, abstained
 
 
 def run_self_test() -> int:
@@ -374,6 +464,7 @@ def run_self_test() -> int:
         for stem, src in (
             ("synthetic_prefix_subject", PREFIX_SUBJECT_SRC),
             ("synthetic_postfix_subject", POSTFIX_SUBJECT_SRC),
+            ("synthetic_unreachable_subject", UNREACHABLE_SUBJECT_SRC),
         ):
             path = tdir / f"{stem}.py"
             path.write_text(src, encoding="utf-8")
@@ -384,13 +475,20 @@ def run_self_test() -> int:
                 raise HarnessFault(f"self-test import: {exc}") from exc
 
         print("LEG MUST_FIRE: pre-fix synthetic subject must be refuted")
-        pre_fail = run_four_legs(
+        pre_fail, pre_abs = run_four_legs(
             mods["synthetic_prefix_subject"],
             "synthetic_prefix",
             "postfix",
             note="  (expected: control MUST fire here)",
             fail_tag="FIRED",
         )
+        if pre_abs:
+            failures += 1
+            print(
+                f"[FAIL] MUST_FIRE: {pre_abs} leg(s) ABSTAINED on a subject that reaches "
+                "its delegate every time -- the #466 reachability probe is over-firing "
+                "and would mask real refutations"
+            )
         if pre_fail > 0:
             print(f"[PASS] MUST_FIRE: control refuted the pre-fix subject ({pre_fail} leg(s))")
         else:
@@ -401,20 +499,41 @@ def run_self_test() -> int:
             )
 
         print("LEG MUST_NOT_FIRE: post-fix synthetic subject must be cleared")
-        post_fail = run_four_legs(
+        post_fail, post_abs = run_four_legs(
             mods["synthetic_postfix_subject"], "synthetic_postfix", "postfix"
         )
-        if post_fail == 0:
+        if post_fail == 0 and post_abs == 0:
             print("[PASS] MUST_NOT_FIRE: control cleared the post-fix subject")
         else:
             failures += 1
             print(
                 f"[FAIL] MUST_NOT_FIRE: control refuted a correct post-fix subject "
-                f"({post_fail} leg(s)) -- it over-fires and cannot be trusted"
+                f"({post_fail} leg(s), {post_abs} abstained) -- it over-fires and "
+                "cannot be trusted"
+            )
+
+        # #466. The abstention channel needs its own control, or it is an
+        # untested escape hatch that could swallow every real finding: a probe
+        # that always reports "unreachable" would turn this whole control green
+        # while measuring nothing. The subject below returns 95 on an absent
+        # precondition WITHOUT calling the delegate, which is correct behaviour.
+        # All four legs must ABSTAIN -- not pass (the ENV leg's 95 would agree by
+        # coincidence) and not fail (there is no defect to find).
+        print("LEG MUST_ABSTAIN: a row that never reaches the delegate is not judged")
+        unr_fail, unr_abs = run_four_legs(
+            mods["synthetic_unreachable_subject"], "synthetic_unreachable", "postfix"
+        )
+        if unr_abs == 4 and unr_fail == 0:
+            print("[PASS] MUST_ABSTAIN: all 4 legs abstained, 0 passed, 0 failed")
+        else:
+            failures += 1
+            print(
+                f"[FAIL] MUST_ABSTAIN: {unr_abs} of 4 legs abstained and {unr_fail} failed "
+                "-- a leg that never reached the injection was scored as evidence"
             )
 
     print()
-    print(f"SELF-TEST LEG COUNT: 2 run, {failures} failed")
+    print(f"SELF-TEST LEG COUNT: 3 run, {failures} failed")
     verdict = "CLEAR" if failures == 0 else "REFUTED"
     print(f"{verdict}: self-test {'shows the control can fail' if failures == 0 else 'FAILED'}")
     return 0 if failures == 0 else 5
@@ -423,6 +542,7 @@ def run_self_test() -> int:
 def run_real_rows(expect: str) -> int:
     """SECONDARY/DEBUG ENTRY: run the four legs against every real row."""
     failures = 0
+    abstained = 0
     legs = 0
     for row, (fn, raise_target, argv_of, passthru) in ROWS.items():
         path = ROWDIR / fn
@@ -440,7 +560,7 @@ def run_real_rows(expect: str) -> int:
             # A renamed delegate would silently make the legs measure nothing.
             print(f"[96] {row}: no attribute(s) {missing} to patch -- the spec is stale")
             return 96
-        failures += run_four_legs(
+        row_fail, row_abs = run_four_legs(
             mod,
             row,
             expect,
@@ -448,13 +568,30 @@ def run_real_rows(expect: str) -> int:
             argv_of=argv_of,
             passthru=passthru,
         )
+        failures += row_fail
+        abstained += row_abs
         legs += 4
 
     print()
-    print(f"ROW LEG COUNT: {legs} run, {failures} failed")
-    verdict = "CLEAR" if failures == 0 else "REFUTED"
-    print(f"{verdict}: {failures} failing leg(s), expect={expect}")
-    return 0 if failures == 0 else 5
+    # The identity is printed, not implied: every leg is in exactly one column,
+    # so an abstention can be seen to have been subtracted from neither.
+    passed = legs - failures - abstained
+    print(f"ROW LEG COUNT: {legs} run = {passed} passed + {failures} failed + "
+          f"{abstained} abstained (each named at its site above)")
+    if failures:
+        print(f"REFUTED: {failures} failing leg(s), expect={expect}")
+        return 5
+    if passed == 0:
+        # #466. Every leg abstaining is not a pass. This control would then have
+        # certified the boundary rule while exercising it zero times, which is
+        # the "unmeasured axis wearing a verdict" this whole file argues against.
+        print(
+            f"UNMEASURED: 0 of {legs} legs reached a boundary, so nothing about "
+            f"the #417 rule was measured here; expect={expect}"
+        )
+        return 95
+    print(f"CLEAR: 0 failing leg(s) over {passed} measured, expect={expect}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
