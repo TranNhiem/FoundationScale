@@ -9,9 +9,13 @@ training loop:
     train -> final save -> adjudicate -> exit code.
 
 Exit-code contract (house doctrine): 0 PASS, 5 RED, 95 UNMEASURED, 96 REFUSE.
-``import foundationscale.train.loop`` is torch-free; torch/transformers/
-datasets are imported INSIDE :func:`train`, and their absence is a REFUSE
-(96) naming the extra -- never a bare ImportError traceback.
+``import foundationscale.train.loop`` SUCCEEDS on a host with no torch, but it
+is not torch-free when transformers is installed: the module-scope
+``_CallbackBase`` binding below imports transformers, which imports torch,
+because the two gate callbacks subclass it. torch and datasets are imported
+INSIDE :func:`train`, and their absence is a REFUSE (96) naming the extra --
+never a bare ImportError traceback. Do not restate this as "torch-free";
+six shipped documents did and all six were wrong (#460).
 """
 
 from __future__ import annotations

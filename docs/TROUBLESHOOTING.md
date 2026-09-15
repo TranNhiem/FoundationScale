@@ -50,10 +50,12 @@ that `[dev]` alone leaves torch absent and the skips follow from it.
 
 **Cause:** the `train` extra is absent.
 
-This is a designed refusal, not a crash. `import foundationscale.train.loop` is
-torch-free by contract; torch, transformers and datasets are imported *inside*
-`train()`, and their absence is a `96 REFUSE` naming the remedy — never a bare
-`ImportError` traceback three minutes into a half-started run. The message names:
+This is a designed refusal, not a crash. `foundationscale.train.loop` still *imports*
+on a host where torch was never installed: its one module-scope `transformers` import
+is wrapped in a `try` that degrades the callback base class to `object`, and torch and
+datasets are imported *inside* `train()`. So a missing extra is a `96 REFUSE` naming
+the remedy — never a bare `ImportError` traceback three minutes into a half-started
+run. The message names:
 
 ```bash
 pip install 'foundationscale[train]'
@@ -232,9 +234,24 @@ If the whole prologue is what you doubt, re-run it without training:
 python3 -m foundationscale.train.cli ... --dry-run
 ```
 
-`--dry-run` runs profile resolution, topology arithmetic and validation, and stops
-before importing torch — the coherent-request check that does not hold an allocation
+`--dry-run` runs profile resolution, topology arithmetic and validation without
+constructing a model — the coherent-request check that does not hold an allocation
 while it finds out.
+
+**Limitation: `--dry-run` is not a torch-free path.** Six documents in this repository
+used to say it stopped before importing torch. It does not. `import
+foundationscale.train.cli` puts `torch` in `sys.modules` before a single argument is
+parsed, because `foundationscale.train.loop` binds `transformers.TrainerCallback` at
+module scope — it is the base class of the two gate callbacks, and a base class has to
+exist when the `class` statement runs — and `transformers` imports torch. The `try`
+around that import is what keeps the module importable on a host with no torch at all,
+as described in the refusal section above; it is not a deferral. Measured on a laptop
+with a warm page cache, the import costs about a second and a few hundred megabytes of
+resident memory; on a shared network filesystem it is materially worse, which is the
+case the claim was written for. What `--dry-run` genuinely avoids is unchanged and is
+the reason to use it: no model is constructed, no GPU is touched, no allocation is
+held. Making the import lazy means moving both callback classes out of module scope —
+a code change, deliberately not made as part of a documentation correction.
 
 ## 11. Offline and repeat-run notes
 

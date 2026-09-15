@@ -299,9 +299,10 @@ The exit 5 is the loop behaving correctly, but it is not a first-run recipe, whi
 why the offline flag is documented as the *second* step and not the first.
 
 Without the `train` extra the loop refuses (96) and prints the install remedy rather than
-half-starting. `--dry-run` runs the whole validation prologue and stops before importing
-torch — put that in front of a scheduler submission, so an incoherent request is rejected
-without holding an allocation while it finds out. The loop reads `FS_RUN_ID` and
+half-starting. `--dry-run` runs the whole validation prologue without constructing a model,
+touching a GPU or holding an allocation — put that in front of a scheduler submission,
+so an incoherent request is rejected before it queues. It does *not* avoid importing
+torch; see the limitation in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md). The loop reads `FS_RUN_ID` and
 `FS_ATTEMPT` from the environment. The full recipe — transcripts, the run manifest's
 fields, the save gates, and a symptom→cause table — is
 [-> docs/TRAINING.md].
@@ -467,9 +468,9 @@ itself, from the Makefile's own accounting:
 
 ## 23. Project structure
 
-`src/` = 41621 LOC across 52 files. `launchers/` contains 10231 shell LOC plus 1615 Python
+`src/` = 41625 LOC across 52 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 34169 Python LOC and 6706 shell LOC on top of the
-package. `tools/` contains 9904 Python LOC. 215724 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 9904 Python LOC. 215746 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,

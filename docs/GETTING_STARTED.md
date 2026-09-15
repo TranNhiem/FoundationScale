@@ -244,7 +244,7 @@ HF_HUB_OFFLINE=1 python3 -m foundationscale.train.cli \
 Three operational details from the loop:
 
 - **Without the `train` extra, the loop refuses.** It exits 96 and prints the install remedy — `pip install 'foundationscale[train]'` — rather than half-starting. A refusal with a remedy is a red build; a half-started run is an unaudited export.
-- **`--dry-run` runs the whole validation prologue and stops before importing torch.** Put it in front of a scheduler submission, so an incoherent request is rejected without holding an allocation while it finds out.
+- **`--dry-run` runs the whole validation prologue without constructing a model or holding an allocation.** Put it in front of a scheduler submission, so an incoherent request is rejected before it queues. It still imports torch — the CLI cannot avoid that, and [TROUBLESHOOTING.md](TROUBLESHOOTING.md) says why.
 - **The loop reads `FS_RUN_ID` and `FS_ATTEMPT` from the environment.**
 
 The full recipe — transcripts, the run manifest's fields, the save gates, and a symptom→cause table — is in [docs/TRAINING.md](TRAINING.md).

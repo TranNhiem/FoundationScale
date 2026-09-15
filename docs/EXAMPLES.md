@@ -114,7 +114,7 @@ python3 -m foundationscale.train.cli ... --dry-run
 ```
 
 `--dry-run` runs the full validation prologue — profile resolution, topology arithmetic,
-validation — and stops before importing torch. Put it in front of a scheduler
+validation — without constructing a model. Put it in front of a scheduler
 submission, so an incoherent request is rejected without holding an allocation while it
 finds out.
 

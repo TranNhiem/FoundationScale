@@ -181,8 +181,8 @@ named error — but it catches it at *your* first run, so it is worth knowing.
 python3 -m foundationscale.train.cli ... --dry-run
 ```
 
-Runs the whole prologue — profile resolution, topology arithmetic, validation — and stops
-before importing torch. This is the thing to put in front of a scheduler submission: it
+Runs the whole prologue — profile resolution, topology arithmetic, validation — without
+constructing a model. This is the thing to put in front of a scheduler submission: it
 answers "is this request coherent?" without holding an allocation while it finds out.
 
 ---

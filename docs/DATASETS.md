@@ -184,7 +184,7 @@ cannot be satisfied as typed.
 
 You do not need to start training to find out whether a request is coherent. The same
 CLI with `--dry-run` runs the whole prologue — profile resolution, topology arithmetic,
-validation — and stops before importing torch. Dataset loading happens after that
+validation — without constructing a model. Dataset loading happens after that
 prologue, so `--dry-run` will *not* prove your `text` column exists; it proves the
 launch request is coherent without holding an allocation. Validating the data column
 itself costs one actual run, which is cheap against `examples/data/toy_text.jsonl` and
