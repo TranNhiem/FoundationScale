@@ -163,6 +163,23 @@ def _normalize_flag(name):
     return str(name).lstrip("-").replace("_", "-").lower()
 
 
+def parse_requested_flags(items):
+    """WHY: this is a named function and not four lines inline in main() because
+    it carries #473, and a defect that lived inline is a defect no control could
+    reach. It was `requested_flags[name] = value` -- a plain assignment keyed by
+    NAME -- so `--flag adapter-target=q_proj --flag adapter-target=v_proj` kept
+    only `v_proj`. Nothing warned and nothing refused: the harness quietly ran a
+    narrower experiment than the operator asked for and wrote a receipt that
+    looked clean. Accumulating instead means a list of ONE for the ordinary case,
+    which compose_argv emits byte-identically to the old scalar, so a flag that
+    is not append-typed behaves exactly as it always did."""
+    requested = {}
+    for item in items or ():
+        name, eq, value = item.partition("=")
+        requested.setdefault(name.strip(), []).append(value if eq else None)
+    return requested
+
+
 def compose_argv(*, interpreter, adjudicator_path, out_dir, declared_flags, requested_flags=None):
     """WHY: this is the single place where operator intent meets the program's
     declared interface, and the declared interface wins. A requested flag that
@@ -184,10 +201,24 @@ def compose_argv(*, interpreter, adjudicator_path, out_dir, declared_flags, requ
             continue  # out-dir is already placed; --help mid-run is not a run.
         if name not in declared:
             continue  # the point of the module: undeclared flags never reach the argv.
-        if value is None:
-            argv.append(f"--{name}")
-        else:
-            argv += [f"--{name}", str(value)]
+        # #473: a value may be a LIST, and then the flag is emitted once per
+        # element. Before that, requested flags were keyed by name in a plain
+        # dict, so `--flag adapter-target=q_proj --flag adapter-target=v_proj`
+        # composed `--adapter-target v_proj` alone -- the first value dropped
+        # with no warning and no refusal. An adjudicator flag declared
+        # action="append" could therefore never receive more than one value
+        # through the harness, and the harness narrowed the experiment instead
+        # of saying it could not carry it. T1-20 would have adapted half the
+        # modules the operator asked for and the receipt would have looked
+        # clean. Order is the order requested. For a flag that is NOT
+        # append-typed this composes an argv argparse resolves to the last
+        # value anyway, so the change is strictly wider and cannot alter a
+        # composition that already worked.
+        for item in value if isinstance(value, (list, tuple)) else [value]:
+            if item is None:
+                argv.append(f"--{name}")
+            else:
+                argv += [f"--{name}", str(item)]
     return argv
 
 
@@ -623,6 +654,64 @@ def self_test():
             argv2,
         )
 
+        # C2b/C2c -- #473, the repeatable flag, controlled at BOTH halves of the
+        # path that lost it: the parse that used to overwrite, and the compose
+        # that used to emit once. Either half regressing alone must fire.
+        parsed = parse_requested_flags(
+            ["adapter-target=q_proj", "adapter-target=v_proj", "seed=42", "verbose"]
+        )
+        record(
+            "C2b MUST-FIRE: a repeated --flag accumulates in order and does not overwrite",
+            parsed.get("adapter-target") == ["q_proj", "v_proj"]
+            and parsed.get("seed") == ["42"]
+            and parsed.get("verbose") == [None],
+            parsed,
+        )
+
+        declared_rep = help_flags(
+            "usage: c2b [-h] [--out-dir OUT_DIR] [--adapter-target ADAPTER_TARGET] [--verbose]\n"
+        )
+        argv2b = compose_argv(
+            interpreter=sys.executable,
+            adjudicator_path="c2b_adjudicator.py",
+            out_dir="c2b_out",
+            declared_flags=declared_rep,
+            requested_flags=parse_requested_flags(
+                ["adapter-target=q_proj", "adapter-target=v_proj", "verbose"]
+            ),
+        )
+        pairs = [
+            argv2b[i + 1] for i, tok in enumerate(argv2b[:-1]) if tok == "--adapter-target"
+        ]
+        record(
+            "C2c MUST-FIRE: the composed argv carries BOTH values, in order, one flag each",
+            pairs == ["q_proj", "v_proj"] and argv2b.count("--verbose") == 1,
+            argv2b,
+        )
+
+        # C2d -- the single-value case must be byte-identical to the pre-#473
+        # composition, or the fix bought repeatability by changing every other
+        # row's argv underneath it.
+        argv2d_list = compose_argv(
+            interpreter=sys.executable,
+            adjudicator_path="c2d_adjudicator.py",
+            out_dir="c2d_out",
+            declared_flags=help_flags("usage: c2d [-h] [--out-dir OUT_DIR] [--seed SEED]\n"),
+            requested_flags=parse_requested_flags(["seed=42"]),
+        )
+        argv2d_scalar = compose_argv(
+            interpreter=sys.executable,
+            adjudicator_path="c2d_adjudicator.py",
+            out_dir="c2d_out",
+            declared_flags=help_flags("usage: c2d [-h] [--out-dir OUT_DIR] [--seed SEED]\n"),
+            requested_flags={"seed": "42"},
+        )
+        record(
+            "C2d: one value composes exactly as a bare scalar did -- the fix is strictly wider",
+            argv2d_list == argv2d_scalar,
+            {"list_form": argv2d_list, "scalar_form": argv2d_scalar},
+        )
+
         # C3 -- absent FS_T1_MODEL reads 95 naming the variable.
         c3_adj = fake(
             "c3_adjudicator.py",
@@ -769,7 +858,9 @@ def main(argv=None):
         metavar="NAME=VALUE",
         help=(
             "a flag to forward to the adjudicator; it is sent ONLY if the adjudicator's "
-            "--help declares it, and reported otherwise"
+            "--help declares it, and reported otherwise. Repeat the same NAME to send "
+            "the flag more than once (an adjudicator flag declared action=append), and "
+            "every value is forwarded in the order given (#473)"
         ),
     )
     parser.add_argument(
@@ -805,10 +896,7 @@ def main(argv=None):
         return 96
     rows = [r for r in rows if isinstance(r, Mapping)]
 
-    requested_flags = {}
-    for item in args.flag:
-        name, eq, value = item.partition("=")
-        requested_flags[name.strip()] = value if eq else None
+    requested_flags = parse_requested_flags(args.flag)
 
     if args.all:
         selected = [r for r in rows if isinstance(r.get("adjudicator"), str) and r["adjudicator"].strip()]
