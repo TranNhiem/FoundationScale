@@ -266,7 +266,7 @@
       "run_arm": "4 arms, same seed",
       "control_arm": "identical curves across optimizers = the knob did nothing",
       "cost": "~15 min x4",
-      "status": "MEASURED GREEN (#405/#406) on a GB200 tray: 4 optimizer arms (adamw, adamw_torch_fused, sgd, adafactor), 40 STEP-LABELLED loss points read from each arm's run_manifest.json; max abs delta 5.046e-01 > tol 1.0e-06, so the declared optimizer demonstrably moves the trajectory. Earned only after the #406 telemetry widening put a per-step train_loss_curve in the manifest and the reader was made step-keyed -- the pre-fix reader compared ONE aggregate per arm, so the same GREEN was unearned. RE-TAKEN at HEAD 8130ffb (#448 pass) and GREEN again: worst absolute delta 4.474e-01 against a 1.0e-06 tolerance, so the optimizer knob demonstrably moves the training at the commit that ships, not only at the ancestor it was first measured on.",
+      "status": "MEASURED GREEN (#405/#406) on a GB200 tray: 4 optimizer arms (adamw, adamw_torch_fused, sgd, adafactor), 40 STEP-LABELLED loss points read from each arm's run_manifest.json; max abs delta 5.046e-01 > tol 1.0e-06, so the declared optimizer demonstrably moves the trajectory. Earned only after the #406 telemetry widening put a per-step train_loss_curve in the manifest and the reader was made step-keyed -- the pre-fix reader compared ONE aggregate per arm, so the same GREEN was unearned. RE-TAKEN at HEAD 8130ffb (#448 pass) and GREEN again: worst absolute delta 4.474e-01 against a 1.0e-06 tolerance, so the optimizer knob demonstrably moves the training at the commit that ships, not only at the ancestor it was first measured on. RE-TAKEN A THIRD TIME at HEAD 4a41e4d, and this one differs in kind: it was driven end-to-end by the shipped harness run_row.py rather than by hand, so the evidence is a receipt carrying the adjudicator's own sha256 (0243463941884c7c) and the claim's (f20aa9f4b2c3bb9e) beside the four arm files. GREEN again over adafactor, adamw, adamw_torch_fused and sgd, every arm departing from the identical first loss 4.050723075866699 and diverging after it. The same pass recorded telemetry the row had never stated: peak allocated memory separates the four optimizers monotonically and in the order optimizer state predicts -- sgd 7.18 GB, adafactor 9.99 GB, adamw_torch_fused 13.36 GB, adamw 15.51 GB -- so the fused arm is not merely different bookkeeping, it holds 2.15 GB less than plain adamw on the same model over the same steps. That is telemetry recorded under the claim, not a second claim adjudicated: the row's verdict still rests on the loss-curve differential.",
       "blocked_by": [],
       "findings": [
         "#405",
@@ -283,7 +283,7 @@
       "run_arm": "both arms",
       "control_arm": "if they differ beyond tolerance, accumulation is wrong",
       "cost": "~15 min x2",
-      "status": "MEASURED GREEN (#405/#406) on a GB200 tray: accum4_bs1 vs accum1_bs4 agree over the 40-step INTERSECTION of the two arms' step labels; worst gap 0.0133574 at accum1_bs4 step 7 (2.9078900814056396 vs 2.9212474822998047). Keyed on step, not on list position -- two arms logging at different cadences hold different steps at the same index, and a positional zip would have compared step-against-wrong-step and called it a verdict. RE-TAKEN at HEAD 8130ffb (#448 pass) and GREEN again: the two arms' curves agree within tolerance at the commit that ships, not only at the ancestor it was first measured on.",
+      "status": "MEASURED GREEN (#405/#406) on a GB200 tray: accum4_bs1 vs accum1_bs4 agree over the 40-step INTERSECTION of the two arms' step labels; worst gap 0.0133574 at accum1_bs4 step 7 (2.9078900814056396 vs 2.9212474822998047). Keyed on step, not on list position -- two arms logging at different cadences hold different steps at the same index, and a positional zip would have compared step-against-wrong-step and called it a verdict. RE-TAKEN at HEAD 8130ffb (#448 pass) and GREEN again: the two arms' curves agree within tolerance at the commit that ships, not only at the ancestor it was first measured on. RE-TAKEN A THIRD TIME at HEAD 4a41e4d through the shipped run_row.py harness rather than by hand, GREEN again over the same two arms, with a receipt carrying the adjudicator's sha256 (d6ea718a89da) and the claim's. The two curves agree to within roughly a hundredth across the pass (accum1_bs4 2.8327841758728027 against accum4_bs1 2.8310916423797607 at the first shared step), which is float non-determinism between two different batch shapes and not a disagreement about the update.",
       "blocked_by": [],
       "findings": [
         "#405",
@@ -443,7 +443,7 @@
       "findings": [
         "#470"
       ],
-      "adjudicator": null
+      "adjudicator": "validation_campaigns/verification_matrix/t1_20_text_movement_arms.py"
     },
     {
       "id": "T1-21",

@@ -233,6 +233,18 @@ RUNNABLE: dict[str, str] = {
         "drives that pure function over synthetic payloads and imports no torch and no "
         "peft; the two-arm run needs a GPU and a real image batch, and is separate."
     ),
+    "validation_campaigns/verification_matrix/t1_20_text_movement_arms.py": (
+        "Eight controls over the text-movement verdict, all measured here, with a MUST-FIRE "
+        "for every branch the verdict can take. lora_B is zero-initialised and every AdamW "
+        "update term is scaled by the learning rate, so the lr=0 arm's expected norm is not "
+        "small but exactly 0.0 -- which is why one control moves a null tensor by 1e-12 and "
+        "must still read RED: it is the control that proves no epsilon crept into the "
+        "comparison, and it fails if anyone ever adds a tolerance. Mismatched key sets and "
+        "an empty run arm are 95 rather than 5, because arms that cannot be compared refute "
+        "nothing. The self-test drives the real adjudicate() over synthetic norm dictionaries "
+        "and imports neither torch nor safetensors; the two-arm run needs a GPU and is "
+        "separate."
+    ),
     "validation_campaigns/verification_matrix/t1_4_save_load_parity.py": (
         "Eight controls over the save-then-load parity verdict, all measured here, with a "
         "MUST-FIRE for both RED branches, both 96 branches and the 95 branch, plus two that "
