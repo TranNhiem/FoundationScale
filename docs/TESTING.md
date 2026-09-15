@@ -213,6 +213,8 @@ Two ordering rules are load-bearing:
 
 The gate scripts publish 0/5/95/96; 95 is UNMEASURED. A gate that cannot start states no verdict — a bare exit 1 from an import failure is outside the namespace the gates claim to publish, which is why `checks/` is linted, formatted, and typechecked like everything else.
 
+Stating that claim is not measuring it. Until #464 nothing held `checks/` to it: [`checks/exit_contract_scope.py`](../checks/exit_contract_scope.py) declared only the trainer's two entry points, and two of the eighteen tracked gates — `bash_lc_sweep.py` and `wf_yaml_audit.py` — published 0/1 with no 5, no 95 and no 96 anywhere. Because CPython answers 1 for an uncaught exception, those two gave a crash and a finding the same answer, and CI's MUST_FIRE probes for them accepted any nonzero with output discarded: a copy of `wf_yaml_audit.py` that raised on entry, never opening the file, satisfied the leg and printed *proven able to refuse*. Both gates now answer 5/95/96, both MUST_FIRE probes demand exactly 5, and both are declared in `exit_contract_scope.py` so the drift cannot return unseen.
+
 ### The countables census
 
 `make countables` measures the census fresh every run — it is never committed (`clean` removes `.countables_census.json`; `.gitignore` keeps it out of commits), because a frozen oracle drifts silently while a measured one cannot. The scan set is `docs README.md Makefile .github/workflows/ci.yml`:

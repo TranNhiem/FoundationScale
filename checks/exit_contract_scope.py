@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gate: the package's SHIPPED trainers exit only with 0, 5, 95 or 96 -- never 1.
+"""Gate: the shipped trainers AND this repo's own gates exit only 0, 5, 95 or 96.
 
 WHAT IS MEASURED
     Three axes, each reported separately with its own count, because one collapsed number
@@ -146,9 +146,20 @@ class EntryPoint:
     func: str  # module-level function whose returns and exception surface are measured
 
 
+# #464 widened this past the trainers. docs/TESTING.md states the contract for "the
+# gate scripts" -- "a bare exit 1 from an import failure is outside the namespace the
+# gates claim to publish" -- but no denominator held them to it, and two of the
+# eighteen tracked gates published 0/1 with no 5, no 95 and no 96 anywhere. Because
+# CPython answers 1 for an uncaught exception, those two could not distinguish a
+# finding from a crash, and CI's MUST_FIRE probes for them read only "nonzero": a
+# copy of wf_yaml_audit that raised on entry, never opening the file, satisfied the
+# leg and printed "proven able to refuse". The two are declared here so the drift
+# cannot come back silently.
 ENTRY_POINTS = (
     EntryPoint("src/foundationscale/train/loop.py", "train"),
     EntryPoint("src/foundationscale/train/cli.py", "main"),
+    EntryPoint("checks/bash_lc_sweep.py", "main"),
+    EntryPoint("checks/wf_yaml_audit.py", "main"),
 )
 
 # Functions that are not entry points but that CLOSE the contract for one: a helper whose
@@ -169,11 +180,23 @@ ENTRY_POINTS = (
 # Axis ESCAPE deliberately does NOT extend here. `_agree_on_exit` and `_train` are
 # unguarded by design -- #380's boundary handler lives in `train()`, one frame out, and
 # duplicating it inward would report a training failure twice and hide which frame raised.
-CONTRACT_HELPERS = (EntryPoint("src/foundationscale/train/loop.py", "_agree_on_exit"),)
+CONTRACT_HELPERS = (
+    EntryPoint("src/foundationscale/train/loop.py", "_agree_on_exit"),
+    # #464. Each of these IS the verdict for its gate -- `main` is a dispatcher that
+    # returns one of them -- so without declaring them every gate return is a two-hop
+    # resolution, which this gate correctly calls UNRESOLVED rather than assuming good.
+    EntryPoint("checks/bash_lc_sweep.py", "classify"),
+    EntryPoint("checks/bash_lc_sweep.py", "reinstate"),
+    EntryPoint("checks/bash_lc_sweep.py", "self_test"),
+    EntryPoint("checks/wf_yaml_audit.py", "audit"),
+    EntryPoint("checks/wf_yaml_audit.py", "doctor"),
+)
 
 MODULE_EXIT_FILES = (
     "src/foundationscale/train/cli.py",
     "src/foundationscale/train/__main__.py",
+    "checks/bash_lc_sweep.py",
+    "checks/wf_yaml_audit.py",
 )
 
 
@@ -1192,6 +1215,40 @@ _BAD_HELPER_LINE = _BAD_HELPER_LOOP.splitlines().index("        return 1") + 1
 _UNDECLARED_HELPER_LOOP = _HELPER_LOOP.replace("_agree_on_exit", "_settle_exit")
 
 
+# #464 widened the declared sets past the trainer package, so the fixture tree has to
+# carry the gate files too: a DECLARED file that is missing makes the whole run
+# UNMEASURED, which would have silently emptied every control below rather than
+# failing one. These stubs are deliberately in-contract and deliberately boring --
+# they are not the subject of any control here, they are the floor the trainer
+# controls stand on.
+_GOOD_SWEEP = (
+    "import sys\n\n"
+    "EXIT_CLEAR = 0\nEXIT_RED = 5\nEXIT_UNMEASURED = 95\nEXIT_REFUSE = 96\n\n\n"
+    "def classify(files):\n    return EXIT_CLEAR\n\n\n"
+    "def reinstate(src, dst):\n    return EXIT_CLEAR\n\n\n"
+    "def self_test():\n    return EXIT_CLEAR\n\n\n"
+    "def main(argv):\n"
+    "    try:\n"
+    "        return classify(argv)\n"
+    "    except Exception:\n"
+    "        return EXIT_REFUSE\n\n\n"
+    'if __name__ == "__main__":\n    sys.exit(main(sys.argv[1:]))\n'
+)
+
+_GOOD_AUDIT = (
+    "import sys\n\n"
+    "EXIT_CLEAR = 0\nEXIT_RED = 5\nEXIT_UNMEASURED = 95\nEXIT_REFUSE = 96\n\n\n"
+    "def audit(paths):\n    return EXIT_CLEAR\n\n\n"
+    "def doctor(path):\n    return EXIT_CLEAR\n\n\n"
+    "def main(argv):\n"
+    "    try:\n"
+    "        return audit(argv)\n"
+    "    except Exception:\n"
+    "        return EXIT_REFUSE\n\n\n"
+    'if __name__ == "__main__":\n    sys.exit(main(sys.argv[1:]))\n'
+)
+
+
 def _assess_pack(
     loop: str | None,
     cli: str | None,
@@ -1208,6 +1265,10 @@ def _assess_pack(
             (pkg / "cli.py").write_text(cli, encoding="utf-8")
         if mainmod is not None:
             (pkg / "__main__.py").write_text(mainmod, encoding="utf-8")
+        gates = root / "checks"
+        gates.mkdir(parents=True)
+        (gates / "bash_lc_sweep.py").write_text(_GOOD_SWEEP, encoding="utf-8")
+        (gates / "wf_yaml_audit.py").write_text(_GOOD_AUDIT, encoding="utf-8")
         return assess(root)
 
 
@@ -1376,6 +1437,16 @@ def c_escape_axis_is_not_vacuous() -> bool:
     return protected.escape.get(key) == "PROTECTED" and narrowed.escape.get(key) == "UNPROTECTED"
 
 
+# #464. The fixture floor the two in-contract gate stubs contribute to every pack, so
+# the controls below can keep stating their own arithmetic instead of a magic total.
+# Measured, not assumed: 5 declared helpers present (classify, reinstate, self_test,
+# audit, doctor) and 9 returns (3 + main's 2 in the sweep stub, 2 + main's 2 in the
+# audit stub). If a stub changes and these drift, the three controls fail loudly --
+# which is the point of asserting a total rather than just "no findings".
+_STUB_HELPERS = 5
+_STUB_RETURNS = 9
+
+
 def c_declared_helper_out_of_contract_return_fires() -> bool:
     # Declaring a helper buys REACH, not amnesty. The finding is anchored at the helper's
     # own physical line, not at the caller's, which would blame `_train` for a code it
@@ -1383,7 +1454,7 @@ def c_declared_helper_out_of_contract_return_fires() -> bool:
     a = _assess_pack(_BAD_HELPER_LOOP, _GOOD_CLI)
     return (
         a.rc == EXIT_RED
-        and a.helpers_measured == 1
+        and a.helpers_measured == 1 + _STUB_HELPERS
         and any(f.axis == "RETURN" and f.line == _BAD_HELPER_LINE for f in a.findings)
     )
 
@@ -1397,9 +1468,9 @@ def c_declared_helper_resolves_the_two_hop_tail() -> bool:
     a = _assess_pack(_HELPER_LOOP, _GOOD_CLI)
     return (
         a.rc == EXIT_CLEAR
-        and a.helpers_measured == 1
+        and a.helpers_measured == 1 + _STUB_HELPERS
         and a.axis1.unresolved == 0
-        and a.axis1.total == 6
+        and a.axis1.total == 6 + _STUB_RETURNS
     )
 
 
@@ -1413,8 +1484,8 @@ def c_undeclared_two_hop_helper_is_unmeasured() -> bool:
     a = _assess_pack(_UNDECLARED_HELPER_LOOP, _GOOD_CLI)
     return (
         a.rc == EXIT_UNMEASURED
-        and a.helpers_measured == 0
-        and a.axis1.total == 4
+        and a.helpers_measured == 0 + _STUB_HELPERS
+        and a.axis1.total == 4 + _STUB_RETURNS
         and a.axis1.unresolved == 2
     )
 

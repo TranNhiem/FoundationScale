@@ -3169,13 +3169,23 @@ fi
 # edits the tree it guards can leave the repository dirty on any early
 # exit.
 #
-# Two arms, and the CLEAR arm is the load-bearing one. Copying three files
-# into a scratch root could redden the gate for reasons that have nothing
-# to do with the plant (a cross-module import that no longer resolves, a
-# file the copy missed), and a fire leg that fires for the wrong reason is
-# a pass waiting to happen. So the unmodified copy must read rc=0 FIRST;
-# only then does the same copy with one statement planted have to read
-# rc=5.
+# Two arms, and the CLEAR arm is the load-bearing one. Copying the declared
+# files into a scratch root could redden the gate for reasons that have
+# nothing to do with the plant (a cross-module import that no longer
+# resolves, a file the copy missed), and a fire leg that fires for the wrong
+# reason is a pass waiting to happen. So the unmodified copy must read rc=0
+# FIRST; only then does the same copy with one statement planted have to
+# read rc=5.
+#
+# #464. The staging list is the gate's DECLARATION, not a fixed three files.
+# When #464 declared checks/bash_lc_sweep.py and checks/wf_yaml_audit.py as
+# entry points, this leg -- unchanged -- went from PASS to FAIL, because the
+# control arm scored 95 ("declared file unreadable or unparseable") over the
+# two files the staging did not know to copy. That is the control working:
+# it refused to attribute a fire arm while its own control arm was red. The
+# remedy is to stage what the gate declares, so the plant stays the only
+# variable. Any future widening of ENTRY_POINTS/MODULE_EXIT_FILES must add
+# the file here too, and this leg will say so loudly if it does not.
 #
 # The plant is a source construction, not a data splice: one statement is
 # inserted immediately before main's `try:`, which is precisely the shape
@@ -3194,19 +3204,23 @@ if [ ! -r "checks/exit_contract_scope.py" ] || [ -z "$f381_tmp" ] || [ ! -d "$f3
   f381_msg="$f381_msg (doctrine 5)"
   no "$f381_msg"
 else
-  mkdir -p "$f381_dst"
+  mkdir -p "$f381_dst" "$f381_tmp/checks"
   f381_staged=1
   for f381_f in src/foundationscale/train/cli.py \
                 src/foundationscale/train/loop.py \
                 src/foundationscale/train/__main__.py; do
     cp "$f381_f" "$f381_dst/" 2>/dev/null || f381_staged=0
   done
+  for f381_f in checks/bash_lc_sweep.py \
+                checks/wf_yaml_audit.py; do
+    cp "$f381_f" "$f381_tmp/checks/" 2>/dev/null || f381_staged=0
+  done
   f381_cli="$f381_dst/cli.py"
   if [ "$f381_staged" -ne 1 ] || [ ! -r "$f381_cli" ]; then
     f381_msg="MUST_FIRE UNREACHABLE (exit_contract_scope unguarded pre-handoff statement)"
-    f381_msg="$f381_msg UNMEASURED: could not copy the three declared files (cli.py, loop.py,"
-    f381_msg="$f381_msg __main__.py) into the scratch root -- the leg would have measured"
-    f381_msg="$f381_msg staging, not the gate (doctrine 5)"
+    f381_msg="$f381_msg UNMEASURED: could not copy the five declared files (cli.py, loop.py,"
+    f381_msg="$f381_msg __main__.py, bash_lc_sweep.py, wf_yaml_audit.py) into the scratch root"
+    f381_msg="$f381_msg -- the leg would have measured staging, not the gate (doctrine 5)"
     no "$f381_msg"
   else
     f381_clean_rc=0
@@ -3223,7 +3237,7 @@ else
     f381_line=$(grep -n '_fs381_plant' "$f381_cli" | head -1 | cut -d: -f1)
     if [ "$f381_clean_rc" -ne 0 ]; then
       f381_msg="MUST_FIRE UNREACHABLE (exit_contract_scope unguarded pre-handoff statement):"
-      f381_msg="$f381_msg the UNMODIFIED copy of the three shipped files scored"
+      f381_msg="$f381_msg the UNMODIFIED copy of the five declared files scored"
       f381_msg="$f381_msg rc=$f381_clean_rc in the scratch root, not 0. The fire arm cannot be"
       f381_msg="$f381_msg attributed to the plant while the control arm is already red -- this"
       f381_msg="$f381_msg is the harness manufacturing a finding, and it measures staging"
@@ -3259,7 +3273,7 @@ else
         no "$f381_msg"
       else
         f381_msg="MUST_FIRE exit_contract_scope unguarded pre-handoff statement: an unmodified"
-        f381_msg="$f381_msg copy of the three SHIPPED declared files scored rc=0 in a scratch"
+        f381_msg="$f381_msg copy of the five DECLARED files scored rc=0 in a scratch"
         f381_msg="$f381_msg root, and the same copy with one statement planted at line"
         f381_msg="$f381_msg $f381_line -- immediately before main()'s guard, the pre-#381 shape"
         f381_msg="$f381_msg -- scored rc=5 with the ESCAPE finding naming cli.py::main at that"

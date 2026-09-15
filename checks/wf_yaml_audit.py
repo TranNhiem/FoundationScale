@@ -28,8 +28,18 @@ from __future__ import annotations
 
 import re
 import sys
+import traceback
 from collections.abc import Sequence
 from pathlib import Path
+
+# The four-state contract (#464). 1 is absent on purpose: CPython uses 1 for an
+# uncaught exception, so a gate that answers 1 gives a crash and a finding the
+# same answer -- and CI's MUST_FIRE probes for this gate read only "nonzero",
+# so a gate that merely raised would satisfy them.
+EXIT_CLEAR = 0
+EXIT_RED = 5
+EXIT_UNMEASURED = 95
+EXIT_REFUSE = 96
 
 BLOCKER1_FIXED = (
     "          mustfire_1=$'launchers: 8/8 watchdog checks green\\ncontracts: 126/126 green'\n"
@@ -85,8 +95,10 @@ def structural_check(text: str) -> str | None:
 
 def audit(paths: Sequence[str]) -> int:
     if not paths:
-        print("WF-YAML RED: argv carried 0 files -- the caller measured nothing (doctrine 1)")
-        return 1
+        print(
+            "WF-YAML UNMEASURED: argv carried 0 files -- the caller measured nothing (doctrine 1)"
+        )
+        return EXIT_UNMEASURED
     try:
         import yaml
 
@@ -128,12 +140,12 @@ def audit(paths: Sequence[str]) -> int:
                 bad += 1
     if bad:
         print(f"WF-YAML RED: {bad} of {len(paths)} workflow file(s) refused under {mode}")
-        return 1
+        return EXIT_RED
     print(
         f"WF-YAML ok: examined {len(paths)} workflow file(s);"
         f" {len(paths)}/{len(paths)} accepted by {mode}"
     )
-    return 0
+    return EXIT_CLEAR
 
 
 def doctor(path: str) -> int:
@@ -141,27 +153,30 @@ def doctor(path: str) -> int:
         with Path(path).open(encoding="utf-8") as f:
             t = f.read()
     except OSError as e:
-        print(f"WF-YAML DOCTOR RED: unreadable {path}: {e} -- unreadable is not empty (doctrine 4)")
-        return 1
+        print(
+            f"WF-YAML DOCTOR REFUSE: unreadable {path}: {e}"
+            " -- the MUST_FIRE subject cannot be built (doctrine 4)"
+        )
+        return EXIT_REFUSE
     if BLOCKER1_FIXED not in t:
         print(
             f"WF-YAML DOCTOR RED: the fixed mustfire_1 needle is not in {path}"
             " -- cannot rebuild BLOCKER 1; has the fix landed,"
             " or has it been reverted?"
         )
-        return 1
+        return EXIT_REFUSE
     t = t.replace(BLOCKER1_FIXED, BLOCKER1_BROKEN, 1)
     try:
         with Path(path).open("w", encoding="utf-8") as f:
             f.write(t)
     except OSError as e:
-        print(f"WF-YAML DOCTOR RED: cannot write {path}: {e}")
-        return 1
+        print(f"WF-YAML DOCTOR REFUSE: cannot write {path}: {e}")
+        return EXIT_REFUSE
     print(
         "WF-YAML DOCTOR ok: copy now carries BLOCKER 1's original two-line"
         " column-zero form verbatim"
     )
-    return 0
+    return EXIT_CLEAR
 
 
 def main(argv: Sequence[str]) -> int:
@@ -173,13 +188,32 @@ def main(argv: Sequence[str]) -> int:
     # would silently demote the flag to "audit a file by that name" and report
     # a verdict about a nonexistent file instead of rebuilding BLOCKER 1.
     # Widening the declared input without widening the parse is how that lands.
-    if argv and argv[0] == "--doctor-blocker1":
-        if len(argv) != 2:
-            print("WF-YAML DOCTOR RED: --doctor-blocker1 takes exactly one file")
-            return 1
-        return doctor(argv[1])
-    return audit(argv)
+    #
+    # #464. The boundary lives HERE, not only under `if __name__`, because main()
+    # is callable as a function and a guard one frame out would leave the contract
+    # unheld for any caller that does (the #463 lesson, same shape).
+    try:
+        if argv and argv[0] == "--doctor-blocker1":
+            if len(argv) != 2:
+                print("WF-YAML DOCTOR REFUSE: --doctor-blocker1 takes exactly one file")
+                return EXIT_REFUSE
+            return doctor(argv[1])
+        return audit(argv)
+    except Exception as exc:  # noqa: BLE001 - classified, never adjudicated (#464)
+        traceback.print_exc()
+        print(f"WF-YAML REFUSE: {type(exc).__name__} escaped the audit: {exc}")
+        return EXIT_REFUSE
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    # #464. An escaping exception is a harness fault, not a verdict about a
+    # workflow file; without this guard CPython answers 1, which is inside this
+    # gate's old vocabulary and indistinguishable from a real refusal.
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - classified, never adjudicated
+        traceback.print_exc()
+        print(f"WF-YAML REFUSE: {type(exc).__name__} escaped main(): {exc}")
+        sys.exit(EXIT_REFUSE)

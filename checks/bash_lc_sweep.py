@@ -90,10 +90,20 @@ import io
 import re
 import sys
 import tempfile
+import traceback
 from collections.abc import Sequence
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import TypedDict
+
+# The four-state contract (#464). 1 is absent on purpose: CPython uses 1 for an
+# uncaught exception, so a gate that answers 1 gives a crash and a finding the
+# same answer -- and CI's MUST_FIRE probes for this gate read only "nonzero",
+# so a gate that merely raised would satisfy them.
+EXIT_CLEAR = 0
+EXIT_RED = 5
+EXIT_UNMEASURED = 95
+EXIT_REFUSE = 96
 
 BLOCKER2_FIXED = 'bash -lc \'python3 "$1"\' _ "$COT_PROBE_PY"'
 BLOCKER2_BROKEN = 'bash -lc "python3 $COT_PROBE_PY"'
@@ -295,7 +305,7 @@ def classify(files: Sequence[str], declarations: Sequence[Declaration] = DECLARE
             f"BASH-LC RED: the sweep requires both launchers on argv; got"
             f" {len(files)} -- a partial sweep is UNMEASURED (doctrine 1)"
         )
-        return 1
+        return EXIT_UNMEASURED
     decls: list[DeclarationTally] = [{"d": d, "hits": 0} for d in declarations]
     total = 0
     mentions = 0
@@ -309,7 +319,7 @@ def classify(files: Sequence[str], declarations: Sequence[Declaration] = DECLARE
                 lines = f.read().splitlines()
         except OSError as e:
             print(f"BASH-LC RED: unreadable {fn}: {e} -- unreadable is not empty (doctrine 4)")
-            return 1
+            return EXIT_RED
         for n, line in enumerate(lines, 1):
             cs = _comment_start(line)
             pos = 0
@@ -394,7 +404,7 @@ def classify(files: Sequence[str], declarations: Sequence[Declaration] = DECLARE
             "BASH-LC RED: 0 sites found, but both launchers visibly use 'bash -lc'"
             " -- zero means the sweep broke, i.e. UNMEASURED (doctrine 1)"
         )
-        return 1
+        return EXIT_UNMEASURED
     part = len(audited) + len(declared) + len(unsafe)
     if part != total:
         print(
@@ -402,8 +412,8 @@ def classify(files: Sequence[str], declarations: Sequence[Declaration] = DECLARE
             " -- some site fell through every branch, so the verdict describes"
             " fewer sites than it counted (doctrine 2)"
         )
-        return 1
-    rc = 0
+        return EXIT_RED
+    rc = EXIT_CLEAR
     stale = [entry["d"] for entry in decls if entry["hits"] == 0]
     if stale:
         print(
@@ -414,7 +424,7 @@ def classify(files: Sequence[str], declarations: Sequence[Declaration] = DECLARE
         )
         for d in stale:
             print(f"  RED: stale declaration {d['file']} :: {d['token']} @ '{d['anchor']}'")
-        rc = 1
+        rc = EXIT_RED
     dupes = [entry for entry in decls if entry["hits"] > 1]
     if dupes:
         print(
@@ -432,7 +442,7 @@ def classify(files: Sequence[str], declarations: Sequence[Declaration] = DECLARE
                 f"  RED: ambiguous declaration {entry['d']['file']} ::"
                 f" {entry['d']['token']} matched {entry['hits']} sites"
             )
-        rc = 1
+        rc = EXIT_RED
     if unsafe:
         print(
             f"BASH-LC RED: {len(unsafe)} unsafe site(s) splice outer-shell"
@@ -441,7 +451,7 @@ def classify(files: Sequence[str], declarations: Sequence[Declaration] = DECLARE
         for u in unsafe:
             print(f"  RED: {u}")
         print('  pass paths as data instead:  bash -lc \'python3 "$1"\' _ "$VAR"')
-        rc = 1
+        rc = EXIT_RED
     if rc:
         return rc
     print(
@@ -457,10 +467,10 @@ def reinstate(src: str, dst: str) -> int:
             t = f.read()
     except OSError as e:
         print(
-            f"BASH-LC MUST_FIRE SETUP RED: unreadable {src}: {e}"
-            " -- unreadable is not empty (doctrine 4)"
+            f"BASH-LC MUST_FIRE SETUP REFUSE: unreadable {src}: {e}"
+            " -- the MUST_FIRE subject cannot be built (doctrine 4)"
         )
-        return 1
+        return EXIT_REFUSE
     if t.count(BLOCKER2_FIXED) != 1:
         print(
             f"BASH-LC MUST_FIRE SETUP RED: fixed probe line occurs"
@@ -468,16 +478,16 @@ def reinstate(src: str, dst: str) -> int:
             " -- cannot isolate the reinstatement; has the fix landed,"
             " or has it been reverted?"
         )
-        return 1
+        return EXIT_REFUSE
     t = t.replace(BLOCKER2_FIXED, BLOCKER2_BROKEN, 1)
     try:
         with Path(dst).open("w", encoding="utf-8") as f:
             f.write(t)
     except OSError as e:
-        print(f"BASH-LC MUST_FIRE SETUP RED: cannot write {dst}: {e}")
-        return 1
+        print(f"BASH-LC MUST_FIRE SETUP REFUSE: cannot write {dst}: {e}")
+        return EXIT_REFUSE
     print(f"BASH-LC MUST_FIRE SETUP ok: unsafe splice reinstated on the copy at {dst}")
-    return 0
+    return EXIT_CLEAR
 
 
 # ---------------------------------------------------------------------------
@@ -557,22 +567,24 @@ def self_test() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         # ---- MUST_FIRE -----------------------------------------------------
         rc, out = _run_fixture(tmp, "bare", 'bash -lc "python3 $VAR"\n')
-        must_fire("bare-splice", 1, "$VAR expanded bare", rc, out)
+        must_fire("bare-splice", EXIT_RED, "$VAR expanded bare", rc, out)
 
         rc, out = _run_fixture(tmp, "evalx", 'bash -lc "$CMD --extra"\n')
-        must_fire("eval-shaped-plus-one-word-is-still-a-splice", 1, "$CMD expanded bare", rc, out)
+        must_fire(
+            "eval-shaped-plus-one-word-is-still-a-splice", EXIT_RED, "$CMD expanded bare", rc, out
+        )
 
         rc, out = _run_fixture(tmp, "sub", 'bash -lc "python3 $(cat f)"\n')
-        must_fire("plain-substitution", 1, "$(...) executes in the OUTER shell", rc, out)
+        must_fire("plain-substitution", EXIT_RED, "$(...) executes in the OUTER shell", rc, out)
 
         rc, out = _run_fixture(tmp, "hashq", 'bash -lc "python3 x # $VAR"\n')
-        must_fire("hash-inside-quotes-is-not-a-comment", 1, "$VAR expanded bare", rc, out)
+        must_fire("hash-inside-quotes-is-not-a-comment", EXIT_RED, "$VAR expanded bare", rc, out)
 
         rc, out = _run_fixture(tmp, "notq", 'bash -lc "p $(printf \'%s \' "${A[@]}")"\n')
-        must_fire("printf-without-%q-is-not-a-render", 1, "$(...) executes", rc, out)
+        must_fire("printf-without-%q-is-not-a-render", EXIT_RED, "$(...) executes", rc, out)
 
         rc, out = _run_fixture(tmp, "stale", _CLEAN_PARTNER, declarations=bogus)
-        must_fire("stale-declaration", 1, "stale declaration", rc, out)
+        must_fire("stale-declaration", EXIT_RED, "stale declaration", rc, out)
 
         # Doctrine 5 is two clauses -- stale is RED and ambiguous is RED -- and
         # only the first had a control, so the loop that reports the second was
@@ -593,22 +605,28 @@ def self_test() -> int:
             'bash -lc "p --overrides $SPLICED"\nbash -lc "q --overrides $SPLICED"\n',
             declarations=ambiguous,
         )
-        must_fire("ambiguous-declaration", 1, "$SPLICED matched 2 sites", rc, out)
+        must_fire("ambiguous-declaration", EXIT_RED, "$SPLICED matched 2 sites", rc, out)
 
         rc, out = _run_fixture(tmp, "zero", "echo no sites here\n", "echo none here either\n")
-        must_fire("zero-sites-is-unmeasured", 1, "0 sites found", rc, out)
+        must_fire("zero-sites-is-unmeasured", EXIT_UNMEASURED, "0 sites found", rc, out)
 
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = classify([str(Path(tmp) / "bare_a.sh")])
         must_fire(
-            "single-file-is-a-partial-sweep", 1, "a partial sweep is UNMEASURED", rc, buf.getvalue()
+            "single-file-is-a-partial-sweep",
+            EXIT_UNMEASURED,
+            "a partial sweep is UNMEASURED",
+            rc,
+            buf.getvalue(),
         )
 
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = classify([str(Path(tmp) / "does_not_exist.sh"), str(Path(tmp) / "bare_b.sh")])
-        must_fire("unreadable-is-not-empty", 1, "unreadable is not empty", rc, buf.getvalue())
+        must_fire(
+            "unreadable-is-not-empty", EXIT_RED, "unreadable is not empty", rc, buf.getvalue()
+        )
 
         # ---- MUST_PASS -----------------------------------------------------
         rc, out = _run_fixture(tmp, "data", 'bash -lc \'python3 "$1"\' _ "$V"\n')
@@ -650,14 +668,14 @@ def self_test() -> int:
         print(f"BASH-LC SELF-TEST RED: {len(failures)} control(s) misbehaved:")
         for f in failures:
             print(f"  RED: {f}")
-        return 1
+        return EXIT_RED
     if not fired or not held:
         print(
             f"BASH-LC SELF-TEST RED: {len(fired)} MUST_FIRE and {len(held)} MUST_PASS"
             " control(s) ran -- a self-test with an empty arm is all([]), which is"
             " True and means nothing (doctrine 1)"
         )
-        return 1
+        return EXIT_UNMEASURED
     print(
         f"BASH-LC SELF-TEST ok: {len(fired)} MUST_FIRE control(s) fired and"
         f" {len(held)} MUST_PASS control(s) held"
@@ -666,22 +684,40 @@ def self_test() -> int:
         print(f"  fired: {n}")
     for n in held:
         print(f"  held:  {n}")
-    return 0
+    return EXIT_CLEAR
 
 
 def main(argv: list[str]) -> int:
-    if argv[:1] == ["--self-test"]:
-        if len(argv) != 1:
-            print("BASH-LC SELF-TEST RED: --self-test takes no further arguments")
-            return 1
-        return self_test()
-    if argv[:1] == ["--reinstate-blocker2"]:
-        if len(argv) != 3:
-            print("BASH-LC MUST_FIRE SETUP RED: --reinstate-blocker2 takes SRC and DST")
-            return 1
-        return reinstate(argv[1], argv[2])
-    return classify(argv)
+    # #464. The boundary lives HERE, not only under `if __name__`, because main()
+    # is callable as a function and a guard one frame out would leave the contract
+    # unheld for any caller that does (the #463 lesson, same shape).
+    try:
+        if argv[:1] == ["--self-test"]:
+            if len(argv) != 1:
+                print("BASH-LC SELF-TEST REFUSE: --self-test takes no further arguments")
+                return EXIT_REFUSE
+            return self_test()
+        if argv[:1] == ["--reinstate-blocker2"]:
+            if len(argv) != 3:
+                print("BASH-LC MUST_FIRE SETUP REFUSE: --reinstate-blocker2 takes SRC and DST")
+                return EXIT_REFUSE
+            return reinstate(argv[1], argv[2])
+        return classify(argv)
+    except Exception as exc:  # noqa: BLE001 - classified, never adjudicated (#464)
+        traceback.print_exc()
+        print(f"BASH-LC REFUSE: {type(exc).__name__} escaped the sweep: {exc}")
+        return EXIT_REFUSE
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    # #464. An escaping exception is a harness fault, not a verdict about a
+    # launcher; without this guard CPython answers 1, which is inside this
+    # gate's old vocabulary and indistinguishable from a real refusal.
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - classified, never adjudicated
+        traceback.print_exc()
+        print(f"BASH-LC REFUSE: {type(exc).__name__} escaped main(): {exc}")
+        sys.exit(EXIT_REFUSE)

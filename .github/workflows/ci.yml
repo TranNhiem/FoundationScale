@@ -1246,12 +1246,23 @@ jobs:
             echo "::error::WF-YAML MUST_FIRE setup failed -- could not rebuild BLOCKER 1 on a copy; the control cannot prove itself (doctrine 3)."
             exit 1
           fi
-          if python3 "$repo_root/checks/wf_yaml_audit.py" "$mustfire_wf_dir/ci-doctored.yml" >/dev/null 2>&1; then
-            echo "::error::WF-YAML MUST_FIRE leg failed: the audit ACCEPTED a copy doctored with BLOCKER 1's exact column-zero shape."
-            echo "::error::A checker that accepts what killed CI is a stamp, not a control (doctrine 3)."
+          # #464. The exact contract code, not "nonzero". This probe used to read
+          # `if <cmd>; then fail` with output discarded, so ANY nonzero satisfied it --
+          # and while this audit's vocabulary was 0/1, an uncaught exception exits 1 and
+          # passed the leg identically to a real refusal. Measured: a copy of the audit
+          # with `raise RuntimeError` on entry, which never opened the file, satisfied
+          # this leg and printed "proven able to refuse". Demanding 5 means only a
+          # verdict passes; 96 (crash) and 95 (could not measure) now fail it.
+          set +e
+          python3 "$repo_root/checks/wf_yaml_audit.py" "$mustfire_wf_dir/ci-doctored.yml" >/dev/null 2>&1
+          mustfire_rc=$?
+          set -e
+          if [ "$mustfire_rc" -ne 5 ]; then
+            echo "::error::WF-YAML MUST_FIRE leg failed: expected RED (5) on a copy doctored with BLOCKER 1's exact column-zero shape; got $mustfire_rc."
+            echo "::error::0 means it ACCEPTED what killed CI; 96 means it crashed and never judged; either way it is a stamp, not a control (doctrine 3)."
             exit 1
           fi
-          echo "WF-YAML MUST_FIRE ok: doctored copy went red -- the checker is proven able to refuse."
+          echo "WF-YAML MUST_FIRE ok: doctored copy answered RED (5) -- the checker is proven able to refuse, and proven to have judged."
           rm -rf "$mustfire_wf_dir"
           # ------------------------------------------------------------------
           # Leg BASH-LC (control for the BLOCKER-2 class). Splicing a path
@@ -1297,9 +1308,15 @@ jobs:
             echo "::error::BASH-LC MUST_FIRE setup failed -- the fixed probe line is missing or not unique; the sweep cannot prove itself (doctrine 3)."
             exit 1
           fi
-          if python3 "$repo_root/checks/bash_lc_sweep.py" "$LORA_LP" "$mustfire_lp" >/dev/null 2>&1; then
-            echo "::error::BASH-LC MUST_FIRE leg failed: the sweep ACCEPTED the reinstated BLOCKER-2 line."
-            echo "::error::A sweep that cannot see its namesake defect is decoration -- trust no green from it (doctrine 3)."
+          # #464, same shape as the WF-YAML leg above: demand the contract code, not
+          # "nonzero". A sweep that raised on entry exits 96 and used to pass this leg.
+          set +e
+          python3 "$repo_root/checks/bash_lc_sweep.py" "$LORA_LP" "$mustfire_lp" >/dev/null 2>&1
+          mustfire_rc=$?
+          set -e
+          if [ "$mustfire_rc" -ne 5 ]; then
+            echo "::error::BASH-LC MUST_FIRE leg failed: expected RED (5) on the reinstated BLOCKER-2 line; got $mustfire_rc."
+            echo "::error::0 means the sweep ACCEPTED its namesake defect; 96 means it never ran the sweep at all -- decoration either way (doctrine 3)."
             exit 1
           fi
           echo "BASH-LC MUST_FIRE ok: reinstated unsafe splice on the copy went red."
