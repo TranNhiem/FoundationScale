@@ -66,6 +66,12 @@ import traceback
 from pathlib import Path
 from typing import Any, NoReturn
 
+# The row directory is a sibling import root, exactly as `python3 t1_4_...py`
+# gives it. The boundary classifier lives there; four other rows already share
+# it, and this row used to carry a local copy that adjudicated every escape RED.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from t1_interpreter_floor import classify_boundary_exception  # noqa: E402
+
 EXIT_GREEN = 0
 EXIT_RED = 5
 EXIT_UNMEASURED = 95
@@ -624,24 +630,30 @@ def main(argv: list[str] | None = None) -> int:
     try:
         payload = run_measurement(checkpoint, work_dir)
         rc, adjudicated = verdict(payload)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - classified, never adjudicated (#417)
+        # An escape means the measurement did not happen, so there is nothing to
+        # refute. classify_boundary_exception sorts environment faults (import,
+        # link, ABI, CUDA-init) to 95 and harness faults to 96. This used to
+        # return 5, which turned a missing libcudart into a refutation.
         traceback.print_exc()
+        code, reason = classify_boundary_exception(exc)
+        name = "UNMEASURED" if code == EXIT_UNMEASURED else "CANNOT_MEASURE"
         emergency = {
             "row": ROW_ID,
             "error": traceback.format_exc(),
             "verdict": {
                 "row": ROW_ID,
-                "rc": EXIT_RED,
-                "name": "RED",
+                "rc": code,
+                "name": name,
                 "reason": (
-                    "an exception escaped the measurement; an instrument that cannot "
-                    "account for itself is adjudicated RED (never exited as 1)"
+                    f"unexpected {type(exc).__name__} escaped the measurement: {exc}; "
+                    f"classified {name} ({code}): {reason}"
                 ),
             },
         }
         _emit(emergency)
-        sys.stderr.write(f"{ROW_ID} verdict: RED rc={EXIT_RED} (escaping exception)\n")
-        return EXIT_RED
+        sys.stderr.write(f"{ROW_ID} verdict: {name} rc={code} (escaping exception)\n")
+        return code
 
     _emit(adjudicated)
     sys.stderr.write(
@@ -656,6 +668,7 @@ if __name__ == "__main__":
         sys.exit(main())
     except SystemExit:
         raise
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - never 1, never 2, never 5
         traceback.print_exc()
-        sys.exit(EXIT_RED)
+        code, _reason = classify_boundary_exception(exc)
+        sys.exit(code)

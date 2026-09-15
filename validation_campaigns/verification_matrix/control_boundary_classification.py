@@ -2,8 +2,8 @@
 """#417 boundary control: an ENVIRONMENT fault must not be adjudicated as RED.
 
 WHAT IS CLAIMED
-  For each row under test (t1_9, t1_10, t1_11, t1_12), per row four dynamic
-  legs (not text tripwires -- see #101):
+  For EVERY shipped row with a main() -- t1_2, t1_4, t1_6, t1_9, t1_10, t1_11,
+  t1_12, t1_21, t1_23 -- per row four dynamic legs (not text tripwires, #101):
     ENV           : _run raises a dyld/CUDA linker fault -> MUST return 95 (UNMEASURED)
     HARN          : _run raises a harness bug            -> MUST return 96 (CANNOT_MEASURE)
     PASSTHRU-RED  : _run RETURNS 5  (a reached verdict)  -> MUST return 5
@@ -24,6 +24,18 @@ WHAT IS NOT CLAIMED
   subject (everything -> 5 RED) plus a synthetic POST-fix subject, runs this
   control's own leg logic against both, and only then is a CLEAR reading on
   the real rows worth anything.
+
+  #463 -- WHY THE DENOMINATOR IS NOW NINE AND THE ENTRY IS NOW WIRED. This
+  control used to name four rows, and they were exactly the four #417 had
+  already fixed, so it read green by construction and could not catch a
+  regression. Worse, --expect postfix was invoked by no make target and no CI
+  step, so even that reading was never taken. Both are closed: the denominator
+  is every row with a main(), and `make boundary-control` runs the pair. Against
+  the tree before #463 the widened control reports 9 failing legs of 36 -- t1_2
+  and t1_4 answering 5 to an environment fault, t1_6 and t1_21 escaping main()
+  to CPython's 1, t1_23 collapsing environment into harness at 96. Against this
+  tree it reports 0 of 36, with every PASSTHRU leg green in both, so the fix did
+  not launder a single verdict a row had actually reached.
 
 PRIMARY ENTRY:  python3 control_boundary_classification.py --self-test
 DEBUG ENTRY:    python3 control_boundary_classification.py --expect prefix|postfix
@@ -58,11 +70,110 @@ ENV_EXC = OSError(
 )
 HARN_EXC = RuntimeError("harness bug: arm table was never populated")
 
+def _outdir(*extra: str):
+    """argv builder for a row whose only required argument is --out-dir."""
+
+    def build(td: str) -> list[str]:
+        return ["--out-dir", td, *extra]
+
+    return build
+
+
+def _fixture_checkpoint(td: str) -> Path:
+    """A minimal sharded checkpoint, enough to get past a row's existence checks."""
+    ckpt = Path(td) / "ckpt"
+    ckpt.mkdir(parents=True, exist_ok=True)
+    (ckpt / "model.safetensors.index.json").write_text(
+        '{"weight_map": {"a": "model-00001-of-00001.safetensors"}}', encoding="utf-8"
+    )
+    (ckpt / "model-00001-of-00001.safetensors").write_bytes(b"\x00" * 16)
+    return ckpt
+
+
+def _t1_2_argv(td: str) -> list[str]:
+    return ["--out", str(Path(td) / "t1_2.json")]
+
+
+def _t1_4_argv(td: str) -> list[str]:
+    return ["--checkpoint", str(_fixture_checkpoint(td)), "--work-dir", str(Path(td) / "work")]
+
+
+def _t1_6_argv(td: str) -> list[str]:
+    # t1_6 takes the checkpoint as a bare positional, not a flag.
+    return [str(_fixture_checkpoint(td))]
+
+
+def _t1_21_argv(td: str) -> list[str]:
+    rows = Path(td) / "rows.jsonl"
+    rows.write_text('{"text": "x", "image": "y"}\n', encoding="utf-8")
+    return [
+        "--model", str(_fixture_checkpoint(td)),
+        "--image-dataset", str(rows),
+        "--text-dataset", str(rows),
+        "--out-dir", str(Path(td) / "out"),
+        "--vision-target", "vision",
+        "--language-target", "language",
+    ]
+
+
+def _t1_23_argv(td: str) -> list[str]:
+    return [
+        "--model", str(_fixture_checkpoint(td)),
+        "--work-dir", str(Path(td) / "work"),
+        "--profile-name", "single-node",
+    ]
+
+
+def _payload(rc_in: int) -> dict:
+    """A verdict payload shaped for the rows whose main() reads it back."""
+    name = {0: "GREEN", 5: "RED"}[rc_in]
+    return {
+        "row": "control",
+        "claim": "control passthrough",
+        "verdict": {
+            "row": "control",
+            "rc": rc_in,
+            "name": name,
+            "reason": "passthrough leg: a verdict the row REACHED",
+            "adjudicated_from_payload_fields_only": True,
+        },
+    }
+
+
+# Each row: (file, raise_target, argv_builder, passthru_patches).
+#
+# WHY THIS IS NOT JUST A FILE LIST. Before this was widened, ROWS named four
+# rows -- and those four were exactly the four that had already been fixed under
+# #417. A control whose denominator is the set of subjects that already answer
+# correctly reads green by construction; it cannot catch a regression and it
+# never saw t1_2, t1_4, t1_6, t1_21 or t1_23, all five of which were wrong
+# (two adjudicated an environment fault RED, two escaped main() and exited 1,
+# one collapsed environment and harness faults into a single 96). The denominator
+# is now every row with a main(), which is what the claim was always about.
+#
+# `raise_target` is the delegate whose raise must reach the boundary.
+# `passthru_patches(rc)` returns the (attribute, return-value) stubs that make the
+# row REACH the verdict `rc` without raising. It is a list, not one name, because
+# the rows that adjudicate a payload need both the measurement and the
+# adjudication neutralised -- stub only the adjudication and the leg runs the
+# real measurement against a fixture checkpoint, which scores the fixture rather
+# than the boundary. One hardcoded `_run` could express neither.
+_ONLY_RUN = (lambda rc: [("_run", rc)])
 ROWS = {
-    "t1_9": ("t1_9_optimizer_arms.py", []),
-    "t1_10": ("t1_10_accumulation_equivalence.py", []),
-    "t1_11": ("t1_11_grad_checkpointing.py", []),
-    "t1_12": ("t1_12_attention_impl.py", ["--profile-name", "single-node"]),
+    "t1_2": ("t1_2_fp16_scaler_arms.py", "run_measurement", _t1_2_argv,
+             lambda rc: [("run_measurement", {}), ("verdict", (rc, _payload(rc)))]),
+    "t1_4": ("t1_4_save_load_parity.py", "run_measurement", _t1_4_argv,
+             lambda rc: [("run_measurement", {}), ("verdict", (rc, _payload(rc)))]),
+    "t1_6": ("t1_6_symlinked_shard.py", "_run_arms", _t1_6_argv,
+             lambda rc: [("_run_arms", ["one arm disagreed"] if rc == 5 else [])]),
+    "t1_9": ("t1_9_optimizer_arms.py", "_run", _outdir(), _ONLY_RUN),
+    "t1_10": ("t1_10_accumulation_equivalence.py", "_run", _outdir(), _ONLY_RUN),
+    "t1_11": ("t1_11_grad_checkpointing.py", "_run", _outdir(), _ONLY_RUN),
+    "t1_12": ("t1_12_attention_impl.py", "_run", _outdir("--profile-name", "single-node"),
+              _ONLY_RUN),
+    "t1_21": ("t1_21_vision_tower_arms.py", "_measure", _t1_21_argv,
+              lambda rc: [("_measure", rc)]),
+    "t1_23": ("t1_23_audio_declaration_arms.py", "_run", _t1_23_argv, _ONLY_RUN),
 }
 
 # Synthetic subjects for --self-test. STANDALONE BY DESIGN: they must not
@@ -128,14 +239,21 @@ def load(path: Path):
     return mod
 
 
-def run_leg(mod, argv: list[str], exc: BaseException) -> tuple[int, str]:
-    """Patch _run to raise `exc`, call main(argv), return (rc, captured stdout)."""
+def run_leg(mod, target: str, argv: list[str], exc: BaseException) -> tuple[int, str]:
+    """Patch `target` to raise `exc`, call main(argv), return (rc, captured stdout).
 
-    def boom(_args):
+    The signature is ``*_a, **_k`` because the delegates differ across rows --
+    ``_run(args)`` in most, ``run_measurement(device, requested)`` in t1_2, and
+    ``_run_arms(real, out)`` in t1_6. A one-argument stub would raise TypeError
+    before the injected exception ever reached the boundary, which would score
+    the row on the probe's own fault.
+    """
+
+    def boom(*_a, **_k):
         raise exc
 
-    original = mod._run
-    mod._run = boom
+    original = getattr(mod, target)
+    setattr(mod, target, boom)
     out, err = io.StringIO(), io.StringIO()
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -143,31 +261,50 @@ def run_leg(mod, argv: list[str], exc: BaseException) -> tuple[int, str]:
                 rc = mod.main(argv)
             except SystemExit as se:  # argparse or an un-caught exit
                 rc = se.code if isinstance(se.code, int) else 96
+            except Exception as esc:  # noqa: BLE001 -- an ESCAPE is the finding, not a fault
+                # CPython would print this traceback and exit 1, which is outside
+                # the row's declared contract. Report it as 1 so the leg fails.
+                print(f"escaped main(): {type(esc).__name__}: {esc}")
+                rc = 1
     finally:
-        mod._run = original
-    return rc, out.getvalue()
+        setattr(mod, target, original)
+    return rc, out.getvalue() + err.getvalue()
 
 
-def run_passthrough(mod, argv: list[str], rc_in: int) -> int:
-    """_run RETURNS a verdict (does not raise). main() must pass it through."""
+def run_passthrough(mod, patches: list[tuple[str, object]], argv: list[str]) -> int:
+    """The row REACHES a verdict (nothing raises); main() must pass it through.
 
-    def quiet(_args):
-        return rc_in
-
-    original = mod._run
-    mod._run = quiet
+    `patches` is a list because a row that adjudicates a payload needs two stubs,
+    not one: the measurement must be neutralised as well as the adjudication, or
+    the leg runs the real measurement against a fixture checkpoint and scores the
+    row on the fixture rather than on the boundary.
+    """
+    originals = [(attr, getattr(mod, attr)) for attr, _ in patches]
+    for attr, value in patches:
+        setattr(mod, attr, (lambda v: (lambda *_a, **_k: v))(value))
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             try:
                 return mod.main(argv)
             except SystemExit as se:
                 return se.code if isinstance(se.code, int) else 96
+            except Exception:  # noqa: BLE001 -- an escape here is also out of contract
+                return 1
     finally:
-        mod._run = original
+        for attr, original in originals:
+            setattr(mod, attr, original)
 
 
 def run_four_legs(
-    mod, label: str, extra: list[str], expect: str, note: str = "", fail_tag: str = "FAIL"
+    mod,
+    label: str,
+    expect: str,
+    note: str = "",
+    fail_tag: str = "FAIL",
+    *,
+    raise_target: str = "_run",
+    argv_of=_outdir(),
+    passthru=lambda rc: [("_run", rc)],
 ) -> int:
     """Run ENV / HARN / PASSTHRU-RED / PASSTHRU-GREEN against `mod`.
 
@@ -186,9 +323,9 @@ def run_four_legs(
     failures = 0
     for leg, exc in (("ENV", ENV_EXC), ("HARN", HARN_EXC)):
         with tempfile.TemporaryDirectory() as td:
-            argv = ["--out-dir", td, *extra]
+            argv = argv_of(td)
             try:
-                rc, stdout = run_leg(mod, argv, exc)
+                rc, stdout = run_leg(mod, raise_target, argv, exc)
             except Exception as e:  # noqa: BLE001 -- a harness fault is 96, never a verdict
                 print(f"[96] {label}/{leg}: harness raised {type(e).__name__}: {e}")
                 raise HarnessFault(f"{label}/{leg}: {e}") from e
@@ -209,7 +346,7 @@ def run_four_legs(
     for name, rc_in in (("PASSTHRU-RED", 5), ("PASSTHRU-GREEN", 0)):
         with tempfile.TemporaryDirectory() as td:
             try:
-                got = run_passthrough(mod, ["--out-dir", td, *extra], rc_in)
+                got = run_passthrough(mod, passthru(rc_in), argv_of(td))
             except Exception as e:  # noqa: BLE001 -- a harness fault is 96, never a verdict
                 print(f"[96] {label}/{name}: harness raised {type(e).__name__}: {e}")
                 raise HarnessFault(f"{label}/{name}: {e}") from e
@@ -250,7 +387,6 @@ def run_self_test() -> int:
         pre_fail = run_four_legs(
             mods["synthetic_prefix_subject"],
             "synthetic_prefix",
-            [],
             "postfix",
             note="  (expected: control MUST fire here)",
             fail_tag="FIRED",
@@ -266,7 +402,7 @@ def run_self_test() -> int:
 
         print("LEG MUST_NOT_FIRE: post-fix synthetic subject must be cleared")
         post_fail = run_four_legs(
-            mods["synthetic_postfix_subject"], "synthetic_postfix", [], "postfix"
+            mods["synthetic_postfix_subject"], "synthetic_postfix", "postfix"
         )
         if post_fail == 0:
             print("[PASS] MUST_NOT_FIRE: control cleared the post-fix subject")
@@ -285,10 +421,10 @@ def run_self_test() -> int:
 
 
 def run_real_rows(expect: str) -> int:
-    """SECONDARY/DEBUG ENTRY: run the four legs against the real rows."""
+    """SECONDARY/DEBUG ENTRY: run the four legs against every real row."""
     failures = 0
     legs = 0
-    for row, (fn, extra) in ROWS.items():
+    for row, (fn, raise_target, argv_of, passthru) in ROWS.items():
         path = ROWDIR / fn
         if not path.exists():
             print(f"[96] {row}: subject missing at {path}")
@@ -298,7 +434,20 @@ def run_real_rows(expect: str) -> int:
         except Exception as exc:  # noqa: BLE001 -- cannot measure a module it cannot load
             print(f"[96] {row}: could not import subject: {type(exc).__name__}: {exc}")
             return 96
-        failures += run_four_legs(mod, row, extra, expect)
+        wanted = {raise_target, *(attr for attr, _ in passthru(5))}
+        missing = sorted(a for a in wanted if not hasattr(mod, a))
+        if missing:
+            # A renamed delegate would silently make the legs measure nothing.
+            print(f"[96] {row}: no attribute(s) {missing} to patch -- the spec is stale")
+            return 96
+        failures += run_four_legs(
+            mod,
+            row,
+            expect,
+            raise_target=raise_target,
+            argv_of=argv_of,
+            passthru=passthru,
+        )
         legs += 4
 
     print()

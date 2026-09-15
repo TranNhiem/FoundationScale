@@ -126,10 +126,13 @@ RUNNABLE: dict[str, str] = {
         "control that cannot fail proves nothing -- and its four disagreeing legs print "
         "[FIRED] rather than [FAIL] so an audit grepping the token does not self-hit on "
         "correct output. The synthetic subjects import neither t1_interpreter_floor nor "
-        "any real row, and every leg patches _run out before calling main(), so no arm "
-        "reaches torch or a GPU: a laptop and the estate see the same 2. Adjudicating "
-        "the four SHIPPED rows is the separate --expect postfix entry, which needs those "
-        "rows importable but still no hardware."
+        "any real row, and every leg patches the measurement delegate out before calling "
+        "main(), so no arm reaches torch or a GPU: a laptop and the estate see the same 2. "
+        "Adjudicating the SHIPPED rows is the separate --expect postfix entry, which needs "
+        "those rows importable but still no hardware -- #463 widened it from the four rows "
+        "#417 had already fixed to all nine with a main(), and wired it into `make check` "
+        "and CI, because until then it ran nowhere and five of the nine were violating the "
+        "rule it certifies."
     ),
     "validation_campaigns/verification_matrix/t1_6_symlinked_shard.py": (
         "Eleven controls over the #343 symlinked-shard detector, split three detector / "

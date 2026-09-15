@@ -580,6 +580,19 @@ control-scratch-restore:
 campaign-self-tests:
 	$(PY) checks/campaign_self_tests.py --self-test && $(PY) checks/campaign_self_tests.py
 
+# Finding #463. `campaign-self-tests` runs control_boundary_classification's
+# --self-test, which exercises the #417 boundary rule against SYNTHETIC subjects.
+# The entry that runs it against the REAL rows is --expect postfix, and until now
+# no make target and no CI step invoked it -- so the rule was certified in the
+# abstract and never checked on the shipped code. Measured: the real-row mode
+# needs the rows importable and nothing else (every leg patches the measurement
+# delegate out before calling main), so it runs on a laptop in seconds. Against
+# the tree before #463 it reports 9 failing legs of 36; against this one, 0.
+boundary-control:
+	cd validation_campaigns/verification_matrix && \
+		$(PY) control_boundary_classification.py --self-test && \
+		$(PY) control_boundary_classification.py --expect postfix
+
 mutation:
 	FS_FORBID_SKIPS=1 $(PY) tools/mutate.py
 
@@ -628,7 +641,7 @@ skip-guard-probe:
 # to mirror -- #230's shape, in the file that states the mirror as its purpose.
 # A gate reachable only by typing its name is reachable by nobody: #238's
 # orphan class, one layer up from the gate files it was written about.
-check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling mirror countables doc-pointers citation-lines mutation-scope rl-static-subtypes verification-matrix exit-contract-scope launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests mutation
+check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling mirror countables doc-pointers citation-lines mutation-scope rl-static-subtypes verification-matrix exit-contract-scope launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests boundary-control mutation
 
 clean:
 	rm -rf build dist .eggs src/*.egg-info *.egg-info \

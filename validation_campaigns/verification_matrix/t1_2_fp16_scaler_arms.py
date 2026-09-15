@@ -99,6 +99,12 @@ import traceback
 from pathlib import Path
 from typing import Any, NoReturn
 
+# The row directory is a sibling import root, exactly as `python3 t1_2_...py`
+# gives it. The boundary classifier lives there because four other rows already
+# share it; this row used to carry its own -- see _ESCAPE_REASON below.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from t1_interpreter_floor import classify_boundary_exception  # noqa: E402
+
 EXIT_GREEN = 0
 EXIT_RED = 5
 EXIT_UNMEASURED = 95
@@ -119,9 +125,13 @@ CLAIM_TEXT = "fp16 grad scaler skips an overflowing step"
 P_INIT = 1.0
 RUN_GRAD = 0.5
 
-_ESCAPE_REASON = (
-    "escaping exception; an instrument that cannot account for itself is adjudicated RED"
-)
+# #417: an escaping exception is CLASSIFIED, not adjudicated. This row used to
+# read "an instrument that cannot account for itself is adjudicated RED", which
+# means a missing libcudart published a refutation of a claim the arms never
+# reached. classify_boundary_exception sorts environment faults (import, link,
+# ABI, CUDA-init) to 95 and harness faults to 96; neither is 5, because a crash
+# refutes nothing.
+_ESCAPE_REASON_PREFIX = "escaping exception classified at the main() boundary"
 
 
 # ---------------------------------------------------------------------------
@@ -1017,18 +1027,22 @@ def main(argv: list[str] | None = None) -> int:
     try:
         payload = run_measurement(device_used, device_requested)
         rc, adjudicated = verdict(payload)
-    except Exception:  # noqa: BLE001 - the exit contract demands RED here, never 1
+    except Exception as exc:  # noqa: BLE001 - classified, never adjudicated (#417)
         traceback.print_exc()
-        rc = EXIT_RED
+        rc, reason = classify_boundary_exception(exc)
+        name = "UNMEASURED" if rc == EXIT_UNMEASURED else "CANNOT_MEASURE"
         adjudicated = {
             "row": ROW_ID,
             "claim": CLAIM_TEXT,
             "error": traceback.format_exc(),
             "verdict": {
                 "row": ROW_ID,
-                "rc": EXIT_RED,
-                "name": "RED",
-                "reason": _ESCAPE_REASON,
+                "rc": rc,
+                "name": name,
+                "reason": (
+                    f"{_ESCAPE_REASON_PREFIX}: unexpected {type(exc).__name__} "
+                    f"escaped the run body: {exc}; classified {name} ({rc}): {reason}"
+                ),
                 "adjudicated_from_payload_fields_only": False,
             },
         }
@@ -1044,6 +1058,7 @@ if __name__ == "__main__":
         sys.exit(main())
     except SystemExit:
         raise
-    except Exception:  # noqa: BLE001 - last-resort guard: still never exit 1 or 2
+    except Exception as exc:  # noqa: BLE001 - last-resort guard: never 1, never 2, never 5
         traceback.print_exc()
-        sys.exit(EXIT_RED)
+        code, _reason = classify_boundary_exception(exc)
+        sys.exit(code)

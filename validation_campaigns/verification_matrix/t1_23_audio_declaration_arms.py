@@ -114,6 +114,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NoReturn
 
+# The row directory is a sibling import root, exactly as `python3 t1_23_...py`
+# gives it. This row already abstained on an escape, but collapsed every escape
+# to 96 -- so a dead CUDA link read as a harness bug. The shared classifier
+# keeps the environment/harness split the #417 rule is built on.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from t1_interpreter_floor import classify_boundary_exception  # noqa: E402
+
 GREEN = 0
 RED = 5
 UNMEASURED = 95
@@ -898,12 +905,14 @@ def main(argv: list[str] | None = None) -> int:
         import traceback
 
         traceback.print_exc()
+        code, why = classify_boundary_exception(exc)
+        name = "UNMEASURED" if code == UNMEASURED else "CANNOT_MEASURE"
         sys.stderr.write(
-            f"{ROW_ID} VERDICT REFUSE: unexpected {type(exc).__name__} escaped the "
-            f"run body: {exc}; refusing to adjudicate a measurement that cannot "
-            "account for itself\n"
+            f"{ROW_ID} VERDICT {name}: unexpected {type(exc).__name__} escaped the "
+            f"run body: {exc}; classified {name} ({code}): {why}; refusing to "
+            "adjudicate a measurement that cannot account for itself\n"
         )
-        return REFUSE
+        return code
 
 
 if __name__ == "__main__":
@@ -911,8 +920,9 @@ if __name__ == "__main__":
         sys.exit(main())
     except SystemExit:
         raise
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - never 1, never 2, never 5
         import traceback
 
         traceback.print_exc()
-        sys.exit(REFUSE)
+        _code, _why = classify_boundary_exception(exc)
+        sys.exit(_code)

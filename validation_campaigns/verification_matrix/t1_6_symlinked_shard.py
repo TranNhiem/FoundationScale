@@ -54,6 +54,13 @@ import sys
 import tempfile
 from pathlib import Path
 
+# The row directory is a sibling import root, exactly as `python3 t1_6_...py`
+# gives it. This row had NO boundary handler at all, so an escaping exception
+# left main() and CPython exited 1 -- outside the four-state contract the
+# docstring declares.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from t1_interpreter_floor import classify_boundary_exception  # noqa: E402
+
 GREEN = 0
 RED = 5
 UNMEASURED = 95
@@ -415,7 +422,21 @@ def main(argv: list[str]) -> int:
         return UNMEASURED
 
     out: list[str] = []
-    failures = _run_arms(real, out)
+    try:
+        failures = _run_arms(real, out)
+    except Exception as exc:  # noqa: BLE001 - classified, never adjudicated (#417)
+        import traceback
+
+        traceback.print_exc()
+        code, why = classify_boundary_exception(exc)
+        name = "UNMEASURED" if code == UNMEASURED else "CANNOT_MEASURE"
+        for line in out:
+            print(line)
+        print(
+            f"T1-6 VERDICT {name}: unexpected {type(exc).__name__} escaped the arms: "
+            f"{exc}; classified {name} ({code}): {why}"
+        )
+        return code
     for line in out:
         print(line)
     print("=" * 72)
@@ -429,4 +450,22 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    # #417: an escaped exception is classified, never adjudicated -- and never
+    # allowed to become CPython's exit 1, which is outside this row's declared
+    # {0, 5, 95, 96}.
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+
+        traceback.print_exc()
+        code, reason = classify_boundary_exception(exc)
+        name = "UNMEASURED" if code == UNMEASURED else "CANNOT_MEASURE"
+        print(
+            f"T1-6 VERDICT {name}: unexpected {type(exc).__name__} escaped the run "
+            f"body: {exc}; classified {name} ({code}): {reason}",
+            file=sys.stderr,
+        )
+        sys.exit(code)

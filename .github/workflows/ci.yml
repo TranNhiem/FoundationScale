@@ -722,6 +722,32 @@ jobs:
       - name: Campaign self-tests (six declared campaign --self-test modules)
         run: python3 checks/campaign_self_tests.py
 
+      # Finding #463, and the mirror of the `boundary-control` Makefile target in
+      # the SAME commit (#286 pairing, held by hand, stated in both places).
+      #
+      # The step above runs control_boundary_classification's --self-test, which
+      # exercises the #417 boundary rule against SYNTHETIC subjects it builds in a
+      # temp dir. The entry that runs it against the REAL rows is --expect postfix,
+      # and until #463 nothing invoked it -- so the rule was certified in the
+      # abstract while five of the nine shipped rows violated it: t1_2 and t1_4
+      # adjudicated an environment fault RED (a refutation of a claim whose arms
+      # never ran), t1_6 and t1_21 let the exception escape main() and exited 1
+      # (outside their declared {0,5,95,96}), and t1_23 collapsed environment and
+      # harness faults into one 96. The control could not see them because its
+      # ROWS denominator named exactly the four rows #417 had already fixed.
+      #
+      # Controls first and their rc gates the real run, as in every pair above.
+      # No hardware: each leg patches the measurement delegate out before calling
+      # main(), so 36 legs finish in seconds on a runner with no GPU.
+      - name: Boundary control self-test (MUST_FIRE before any row reading counts)
+        run: |
+          cd validation_campaigns/verification_matrix
+          python3 control_boundary_classification.py --self-test
+      - name: Boundary control over every shipped row (36 legs, 9 rows)
+        run: |
+          cd validation_campaigns/verification_matrix
+          python3 control_boundary_classification.py --expect postfix
+
       # Finding #294, and the mirror of the `control-scratch-restore` Makefile
       # target in the SAME commit (#286: held by hand, so it is stated in both
       # places on purpose).

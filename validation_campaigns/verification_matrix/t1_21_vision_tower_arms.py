@@ -47,6 +47,12 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+# The row directory is a sibling import root, exactly as `python3 t1_21_...py`
+# gives it. This row had NO boundary handler at all, so an escaping exception
+# left main() and CPython exited 1 -- outside the four-state contract.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from t1_interpreter_floor import classify_boundary_exception  # noqa: E402
+
 GREEN = 0
 RED = 5
 UNMEASURED = 95
@@ -472,8 +478,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             "facts, so this file takes them as arguments rather than assuming them."
         )
         return REFUSE
-    return _measure(args)
+    try:
+        return _measure(args)
+    except Exception as exc:  # noqa: BLE001 - classified, never adjudicated (#417)
+        import traceback
+
+        traceback.print_exc()
+        code, why = classify_boundary_exception(exc)
+        name = "UNMEASURED" if code == UNMEASURED else "CANNOT_MEASURE"
+        print(
+            f"[t1-21:{name.lower()}] unexpected {type(exc).__name__} escaped the "
+            f"measurement: {exc}; classified {name} ({code}): {why}"
+        )
+        return code
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - never 1, never 2, never 5
+        import traceback
+
+        traceback.print_exc()
+        _code, _why = classify_boundary_exception(exc)
+        raise SystemExit(_code) from None
