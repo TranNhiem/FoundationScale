@@ -22,6 +22,15 @@ loader is monkeypatched to a sentinel everywhere EXCEPT the missing-path
 leg, which uses a real nonexistent path: that refusal fires on the
 Path.exists() check BEFORE PIL is ever imported, so it is genuinely
 exercised on a torch-free, PIL-free host.
+
+#450 ADDENDUM. The collator's label construction is no longer a bare clone:
+placeholder positions are masked to -100, and the placeholder id is read
+from the processor object itself, exactly where BOTH real families expose
+it (gemma-4-E4B-it: 258880, qwen2.5-vl: 151655). The fakes below therefore
+declare image_token_id too -- an id that can never appear in their
+synthetic input_ids, because those ids are the templated STRINGS, so the
+mask is genuinely built and genuinely matches nothing, and every pre-#450
+label assertion keeps its exact meaning.
 """
 
 from __future__ import annotations
@@ -41,12 +50,29 @@ from foundationscale.rl.prompt_surface import (
 )
 
 
+class _FakeIdsMask:
+    """Elementwise-equality result: the subscript key for masked assignment.
+
+    Under #450 the collator does ``labels[labels == image_token_id] = -100``
+    (and ``labels[attention_mask == 0] = -100`` when an attention_mask is
+    present), so __eq__ must return something __setitem__ can interpret
+    position-by-position. A plain bool would mask either every position or
+    none, which is never the right answer -- and a no-op __setitem__ would
+    let the masking tests pass without masking anything.
+    """
+
+    def __init__(self, bits: list[bool]) -> None:
+        self.bits = list(bits)
+
+
 class _FakeIds:
     """The smallest object that satisfies the collator's labels injection.
 
-    The collator does ``batch["labels"] = batch["input_ids"].clone()``, so
-    input_ids needs ``.clone()`` and nothing else. This -- not a torch stub
-    -- is what keeps the module runnable on the torch-free CI legs.
+    The collator does ``batch["labels"] = batch["input_ids"].clone()`` and
+    then, under #450, masks positions out of that clone, so input_ids needs
+    ``.clone()``, an elementwise ``__eq__`` producing a mask, and a masked
+    ``__setitem__`` -- and nothing else. This -- not a torch stub -- is what
+    keeps the module runnable on the torch-free CI legs.
     """
 
     def __init__(self, rows: list[str]) -> None:
@@ -56,6 +82,14 @@ class _FakeIds:
     def clone(self) -> _FakeIds:
         self.clone_calls += 1
         return _FakeIds(self.rows)
+
+    def __eq__(self, other: Any) -> _FakeIdsMask:
+        return _FakeIdsMask([value == other for value in self.rows])
+
+    def __setitem__(self, mask: _FakeIdsMask, value: Any) -> None:
+        for index, bit in enumerate(mask.bits):
+            if bit:
+                self.rows[index] = value
 
 
 class _SentinelImage:
@@ -90,6 +124,14 @@ class _RecordingProcessor:
         self.template_calls: list[dict[str, Any]] = []
         self.include_labels = False
         self.labels_sentinel = _FakeIds(["gold"])
+        # #450: BOTH real families expose the placeholder id on the PROCESSOR
+        # object (gemma-4-E4B-it: 258880, qwen2.5-vl: 151655), so this fake
+        # must too -- without it the collator's label guard refuses (96) on
+        # every imaged batch. 258880 can never appear in this fake's
+        # synthetic input_ids, because those ids are the templated STRINGS:
+        # the mask is built for real and matches nothing, so the label
+        # assertions below keep their exact pre-#450 meaning.
+        self.image_token_id = 258880
 
     def apply_chat_template(
         self,
@@ -391,7 +433,10 @@ def test_labels_are_injected_as_a_clone_of_input_ids_when_absent(
     image_loader: list[tuple[str, str]],
 ) -> None:
     # The injection must be a CLONE: aliasing input_ids would let a later
-    # in-place shift for causal LM corrupt the inputs themselves.
+    # in-place shift for causal LM corrupt the inputs themselves. Under #450
+    # the clone is additionally masked, but the placeholder id (258880) is an
+    # int and these rows are strings, so no position matches and the rows
+    # survive byte-identical -- the clone contract is unchanged.
     surface, _rec = processor
     collate = train_image_collator_or_refuse(surface, image_column="image", max_length=8)
     batch = collate([{"text": "a", "image": "/corpus/a.png"}])
@@ -474,13 +519,16 @@ def test_a_declared_image_path_that_does_not_exist_is_refused(
     assert "train-row[0]" in err
     assert "/no/such/dir/ghost-410.png" in err
 
+
 class _ShapedIds(_FakeIds):
     """_FakeIds plus the one attribute the width guard reads.
 
     The guard measures the batch with ``int(input_ids.shape[-1])``, so the
     stub must carry a shape whose last dim is the encoded width the leg
     wants. A width-less stub would make the guard crash mid-measurement,
-    masking the very refusal the window legs exist to observe.
+    masking the very refusal the window legs exist to observe. The #450
+    mask support (__eq__ / __setitem__) is inherited from _FakeIds and
+    operates on the rows, leaving shape untouched.
     """
 
     def __init__(self, rows: list[str], width: int) -> None:
@@ -517,6 +565,13 @@ class _TemplatedProcessor:
         self.tokenizer: Any = None
         self.include_labels = False
         self.labels_sentinel = _ShapedIds(["gold"], 1)
+        # #450: the placeholder id lives on the PROCESSOR object in both real
+        # families, so it lives here too. 151655 can never appear in this
+        # fake's synthetic input_ids -- the rows are the templated STRINGS,
+        # never ints -- so the label mask is genuinely built and genuinely
+        # matches nothing, and every label assertion below keeps its exact
+        # pre-#450 meaning.
+        self.image_token_id = 151655
 
     def apply_chat_template(
         self,
@@ -832,7 +887,9 @@ def test_labels_are_cloned_from_input_ids_on_the_templated_path(
 ) -> None:
     # The injection survives the rewrite: a CLONE, carrying the templated
     # rows and the measured width, never an alias an in-place shift could
-    # use to corrupt the inputs.
+    # use to corrupt the inputs. Under #450 the clone is also masked, but
+    # the placeholder id (151655) is an int and these rows are strings, so
+    # no position matches and rows AND shape survive identical.
     surface, _rec = templated_processor
     collate = train_image_collator_or_refuse(surface, image_column="image", max_length=8)
     batch = collate([{"text": "a", "image": "/corpus/a.png"}])
@@ -841,3 +898,268 @@ def test_labels_are_cloned_from_input_ids_on_the_templated_path(
     assert batch["labels"] is not ids
     assert batch["labels"].rows == ids.rows
     assert batch["labels"].shape == ids.shape
+
+
+# ---------------------------------------------------------------------------
+# #450: labels must name a target the model can actually emit.
+#
+# MEASURED on gemma-4-E4B-it, 4 rows of the estate corpus: of 1408 label
+# positions, 1036 (73.6%) were the image placeholder id and 56 (4.0%) were
+# padding, leaving 316 (22.4%) real text -- train_loss 19.16 against the
+# 12.477 that uniform-random guessing scores on this 262144-token vocabulary.
+# The legs below pin the two halves of the fix: the placeholder id is read
+# from the FAMILY (processor first -- qwen2.5-vl exposes it nowhere else),
+# and the label mask is built from attention_mask plus that resolved id,
+# never from a pad-id equality (gemma-4's pad id is 0, a legal content id).
+# All fakes are prefixed _L450 so nothing here shadows the #410 fixtures.
+# ---------------------------------------------------------------------------
+
+
+class _L450Mask:
+    """Elementwise-equality result: the subscript key for masked assignment."""
+
+    def __init__(self, bits: list[bool]) -> None:
+        self.bits = list(bits)
+
+
+class _L450Ids:
+    """The smallest tensor-shaped object _labels_or_refuse exercises.
+
+    Supports exactly the three operations the helper performs: .clone(),
+    __eq__ producing an elementwise mask, and masked __setitem__. Values
+    stay a plain list so a leg reads back EXACTLY which positions were
+    masked and which survived -- a richer fake would only hide the
+    contract, and torch would cost the torch-free CI legs.
+    """
+
+    def __init__(self, values: list[Any]) -> None:
+        self.values = list(values)
+        self.clone_calls = 0
+
+    def clone(self) -> _L450Ids:
+        self.clone_calls += 1
+        return _L450Ids(self.values)
+
+    def __eq__(self, other: Any) -> _L450Mask:
+        return _L450Mask([value == other for value in self.values])
+
+    def __setitem__(self, mask: _L450Mask, value: Any) -> None:
+        for index, bit in enumerate(mask.bits):
+            if bit:
+                self.values[index] = value
+
+
+class _L450Tokenizer:
+    """Tokenizer-shaped stub for the resolution legs.
+
+    convert_tokens_to_ids is the string round-trip fallback; its calls are
+    recorded so a leg can prove the round-trip actually RAN, with the
+    family's own token string, rather than some id being guessed.
+    """
+
+    def __init__(
+        self,
+        image_token_id: Any = None,
+        unk_token_id: int = 0,
+        resolved_id: Any = None,
+    ) -> None:
+        self.image_token_id = image_token_id
+        self.unk_token_id = unk_token_id
+        self._resolved_id = resolved_id
+        self.convert_calls: list[str] = []
+
+    def convert_tokens_to_ids(self, token: str) -> Any:
+        self.convert_calls.append(token)
+        return self._resolved_id
+
+
+class _L450Processor:
+    """Processor-shaped stub where every placeholder attribute is opt-in.
+
+    "The processor lacks image_token_id" must be literally true -- an
+    attribute set to None would also pass the isinstance check's failure
+    branch, but only a genuinely ABSENT attribute proves the getattr
+    fallback chain is what runs. Ellipsis is the not-provided sentinel.
+    """
+
+    def __init__(
+        self,
+        tokenizer: Any = None,
+        image_token_id: Any = ...,
+        image_token: Any = ...,
+    ) -> None:
+        self.tokenizer = tokenizer
+        if image_token_id is not ...:
+            self.image_token_id = image_token_id
+        if image_token is not ...:
+            self.image_token = image_token
+
+
+class _L450LabelEmittingProcessor:
+    """Processor stub that emits its OWN labels (e.g. prompt already masked).
+
+    The collator's guard is `if "labels" not in batch`: when the surface
+    already produced labels, the clone-and-mask path must not run at all.
+    """
+
+    def __init__(self) -> None:
+        self.labels_sentinel = _L450Ids([42])
+
+    def apply_chat_template(
+        self,
+        conversation: list[dict[str, Any]],
+        tokenize: bool,
+        add_generation_prompt: bool,
+    ) -> str:
+        return "templated"
+
+    def __call__(self, **kwargs: Any) -> dict[str, Any]:
+        return {"input_ids": _L450Ids([1, 2, 3]), "labels": self.labels_sentinel}
+
+
+def _l450_processor_surface(processor: Any) -> PromptSurface:
+    return PromptSurface(
+        kind="processor", surface=processor, reason="test fixture", supports_images=True
+    )
+
+
+def test_image_token_id_resolves_from_the_processor_before_the_tokenizer() -> None:
+    # THE QWEN LESSON as a positive pin. Measured: qwen2.5-vl exposes
+    # image_token_id on the PROCESSOR only, so a tokenizer-first order
+    # silently resolves None there. Here BOTH owners declare an id and they
+    # DISAGREE -- only a genuinely processor-first order returns 258880.
+    tokenizer = _L450Tokenizer(image_token_id=151655)
+    processor = _L450Processor(tokenizer=tokenizer, image_token_id=258880)
+    resolved = prompt_surface._resolve_image_token_id(_l450_processor_surface(processor))
+    assert resolved == 258880
+    assert resolved != 151655
+
+
+def test_image_token_id_falls_back_to_the_tokenizer_when_the_processor_lacks_it() -> None:
+    # The processor genuinely has no image_token_id attribute, so the
+    # tokenizer's value is the first measurable one in the chain.
+    tokenizer = _L450Tokenizer(image_token_id=151655)
+    processor = _L450Processor(tokenizer=tokenizer)
+    assert not hasattr(processor, "image_token_id")
+    resolved = prompt_surface._resolve_image_token_id(_l450_processor_surface(processor))
+    assert resolved == 151655
+
+
+def test_image_token_id_falls_back_to_a_string_round_trip() -> None:
+    # Neither owner declares the id, but the processor names the token
+    # STRING. The round-trip must run through the family's own tokenizer
+    # and return what that tokenizer says the string is worth.
+    tokenizer = _L450Tokenizer(unk_token_id=0, resolved_id=151655)
+    processor = _L450Processor(tokenizer=tokenizer, image_token="<|image_pad|>")
+    assert not hasattr(processor, "image_token_id")
+    resolved = prompt_surface._resolve_image_token_id(_l450_processor_surface(processor))
+    assert resolved == 151655
+    assert tokenizer.convert_calls == ["<|image_pad|>"]
+
+
+def test_an_unk_round_trip_is_rejected_as_unmeasurable() -> None:
+    # convert_tokens_to_ids answering with the unk id means the string is
+    # NOT in this family's vocabulary -- returning it would mask positions
+    # by an id that never appears, which is a silently wrong number.
+    tokenizer = _L450Tokenizer(unk_token_id=0, resolved_id=0)
+    processor = _L450Processor(tokenizer=tokenizer, image_token="<|no_such_token|>")
+    resolved = prompt_surface._resolve_image_token_id(_l450_processor_surface(processor))
+    assert resolved is None
+    assert tokenizer.convert_calls == ["<|no_such_token|>"]
+
+
+def test_no_placeholder_declared_anywhere_resolves_to_none() -> None:
+    # No id on the processor, no tokenizer at all, no token string: the
+    # family declares nothing, and None -- not a guess -- is the answer.
+    processor = _L450Processor(tokenizer=None)
+    assert not hasattr(processor, "image_token_id")
+    assert not hasattr(processor, "image_token")
+    resolved = prompt_surface._resolve_image_token_id(_l450_processor_surface(processor))
+    assert resolved is None
+
+
+def test_image_placeholder_positions_become_minus_100_in_the_labels() -> None:
+    # THE #450 DEFECT, closed: the placeholder id is a valid INPUT slot for
+    # vision-encoder output but never a valid generation target, so every
+    # position holding it must leave the objective. The surrounding text
+    # positions and the input_ids themselves must survive untouched.
+    processor = _L450Processor(image_token_id=258880)
+    batch = {
+        "input_ids": _L450Ids([10, 258880, 258880, 20]),
+        "attention_mask": _L450Ids([1, 1, 1, 1]),
+    }
+    labels = prompt_surface._labels_or_refuse(
+        _l450_processor_surface(processor), batch, "image", True
+    )
+    assert labels is not batch["input_ids"]
+    assert labels.values == [10, -100, -100, 20]
+    assert batch["input_ids"].values == [10, 258880, 258880, 20]
+    assert batch["input_ids"].clone_calls == 1
+
+
+def test_padding_is_masked_by_attention_mask_not_by_pad_id_equality() -> None:
+    # gemma-4's pad id is 0, and 0 is also a legal CONTENT id. The leading
+    # 0 here is ATTENDED content and must survive; the trailing 0 is
+    # unattended pad and must be masked. An implementation comparing
+    # against pad_token_id would mask BOTH -- the exact wrong number this
+    # leg exists to catch.
+    processor = _L450Processor(image_token_id=258880)
+    batch = {
+        "input_ids": _L450Ids([0, 5, 0]),
+        "attention_mask": _L450Ids([1, 1, 0]),
+    }
+    labels = prompt_surface._labels_or_refuse(
+        _l450_processor_surface(processor), batch, "image", True
+    )
+    assert labels.values == [0, 5, -100]
+
+
+def test_an_all_text_batch_masks_padding_without_needing_a_placeholder_id() -> None:
+    # any_images is False, so the placeholder is irrelevant: the helper
+    # must return after the attention-mask step WITHOUT resolving an id and
+    # WITHOUT refusing. The processor below declares no placeholder on any
+    # axis, so a refusal here would prove the resolution ran when it had
+    # no business running.
+    processor = _L450Processor(tokenizer=None)
+    assert not hasattr(processor, "image_token_id")
+    batch = {
+        "input_ids": _L450Ids([11, 12, 0]),
+        "attention_mask": _L450Ids([1, 1, 0]),
+    }
+    labels = prompt_surface._labels_or_refuse(
+        _l450_processor_surface(processor), batch, "image", False
+    )
+    assert labels.values == [11, 12, -100]
+
+
+def test_images_with_an_unresolvable_placeholder_refuse_and_name_the_column(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # FAILING INPUT: images in the batch but the family declares no
+    # placeholder on the processor, on its tokenizer, or as a resolvable
+    # string. Training on would optimise the model to emit placeholder
+    # tokens as text -- measured at 73.6% of label positions on one family,
+    # worse than uniform random -- so this refuses, naming the column.
+    processor = _L450Processor(tokenizer=None)
+    batch = {
+        "input_ids": _L450Ids([1, 2]),
+        "attention_mask": _L450Ids([1, 1]),
+    }
+    with pytest.raises(SystemExit) as excinfo:
+        prompt_surface._labels_or_refuse(_l450_processor_surface(processor), batch, "image", True)
+    assert excinfo.value.code == 96
+    assert "'image'" in capsys.readouterr().err
+
+
+def test_labels_emitted_by_the_processor_are_kept_verbatim() -> None:
+    # A processor that emits its own labels (e.g. with the prompt already
+    # masked) must keep them; overwriting would silently retrain on the
+    # prompt too. clone_calls staying at ZERO is the substantive pin: it
+    # proves the clone-and-mask path never ran, not merely that its output
+    # happened to be discarded afterwards.
+    rec = _L450LabelEmittingProcessor()
+    surface = _l450_processor_surface(rec)
+    collate = train_image_collator_or_refuse(surface, image_column="image", max_length=8)
+    batch = collate([{"text": "a"}])
+    assert batch["labels"] is rec.labels_sentinel
+    assert batch["input_ids"].clone_calls == 0

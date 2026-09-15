@@ -359,6 +359,73 @@ def _refuse_if_image_batch_exceeds_declared_window(
         )
 
 
+def _resolve_image_token_id(surface: PromptSurface) -> int | None:
+    """The placeholder id, read from the family itself -- never hardcoded.
+
+    MEASURED: gemma-4-E4B-it exposes image_token_id on BOTH the processor and
+    its tokenizer (258880), but qwen2.5-vl exposes it on the PROCESSOR ONLY
+    (151655). A tokenizer-first order silently returns None on qwen, so the
+    processor is asked first and the string form is the last resort.
+
+    Returns None when the family declares no placeholder, which the caller
+    treats as unmeasurable rather than guessing an id.
+    """
+    processor = surface.surface
+    tokenizer = getattr(processor, "tokenizer", None)
+    for owner in (processor, tokenizer):
+        if owner is None:
+            continue
+        value = getattr(owner, "image_token_id", None)
+        if isinstance(value, int):
+            return value
+    token = getattr(processor, "image_token", None) or getattr(tokenizer, "image_token", None)
+    if isinstance(token, str) and tokenizer is not None:
+        resolved = tokenizer.convert_tokens_to_ids(token)
+        if isinstance(resolved, int) and resolved != getattr(tokenizer, "unk_token_id", None):
+            return resolved
+    return None
+
+
+def _labels_or_refuse(
+    surface: PromptSurface, batch: Any, image_column: str, any_images: bool
+) -> Any:
+    """Build labels that name a target the model can actually emit.
+
+    `labels = input_ids.clone()` is correct for a text-only batch and WRONG for
+    a batch carrying images. MEASURED on gemma-4-E4B-it, 4 rows of the estate
+    corpus: of 1408 label positions, 1036 (73.6%) are the image placeholder and
+    56 (4.0%) are padding, leaving 316 (22.4%) real text. Training against that
+    scores 19.16, above the 12.477 that uniform-random guessing scores on this
+    262144-token vocabulary -- the model is confidently wrong because it is
+    being asked to emit a token that only ever appears as an INPUT slot for
+    vision-encoder output.
+
+    Padding is masked via attention_mask rather than by comparing against
+    pad_token_id, because gemma-4's pad id is 0 and an id comparison cannot
+    distinguish a pad slot from a content token that happens to be id 0.
+    """
+    labels = batch["input_ids"].clone()
+    attention_mask = batch.get("attention_mask") if hasattr(batch, "get") else None
+    if attention_mask is not None:
+        labels[attention_mask == 0] = -100
+    if not any_images:
+        return labels
+    image_token_id = _resolve_image_token_id(surface)
+    if image_token_id is None:
+        _refuse_exit_96(
+            f"image column {image_column!r} put images in the batch, but this "
+            "processor declares no image placeholder id on the processor, on "
+            "its tokenizer, or as a resolvable token string. Without it the "
+            "placeholder positions cannot be masked out of the labels, and "
+            "training would optimise the model to emit placeholder tokens as "
+            "text -- measured at 73.6% of label positions on one family, which "
+            "scores worse than uniform random. Refusing rather than training "
+            "against an objective that is mostly not the task."
+        )
+    labels[labels == image_token_id] = -100
+    return labels
+
+
 def train_image_collator_or_refuse(
     surface: PromptSurface,
     *,
@@ -445,7 +512,7 @@ def train_image_collator_or_refuse(
                 add_special_tokens=False,
             )
         if "labels" not in batch and "input_ids" in batch:
-            batch["labels"] = batch["input_ids"].clone()
+            batch["labels"] = _labels_or_refuse(surface, batch, image_column, any_images)
         return batch
 
     return collate
