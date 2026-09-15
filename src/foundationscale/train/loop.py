@@ -1863,6 +1863,54 @@ def _declare_checkpoint(model: Any) -> tuple[Any, dict[str, str]]:
     against the saved header where the shipped filter scored 0 of 112, and
     the two sources are cross-checked on their shared axis, the count.
 
+    #471 IS OPEN AND IS RECORDED HERE RATHER THAN FIXED, because the obvious fix
+    was MEASURED and is worse than the defect. Two facts, both measured on a
+    GB200 tray against a real 26B-A4B MoE (128 experts over 30 layers, LoRA rank
+    8 on thirty language layers, ag_news, 10 steps).
+
+    FIRST, the config source is blind. ``found`` below reads
+    ``getattr(config, key)`` at the TOP LEVEL only, and no MoE checkpoint on
+    this estate names an expert there. Measured: ``Gemma4Config`` carries NONE
+    of the five keys at top level while ``text_config.num_experts`` is 128, and
+    ``Qwen3_5MoeConfig`` -- a TEXT-ONLY MoE, so this is not a multimodal quirk
+    but the transformers 5.x convention -- carries none at top level while
+    ``text_config.num_experts`` is 256, on both of the 35B-A3B checkpoints
+    tested. ``provenance/manifest.py`` ALREADY searches ``text_config`` first
+    and its docstring documents this exact 26B-A4B case; the fix landed in the
+    producer that does not run during training.
+
+    SECOND, and this is what makes the first one silent rather than loud: under
+    peft the ``mentioned`` census runs over ``declared``, the ADAPTER subset,
+    which cannot contain a base-model expert name whatever the base
+    architecture is. So #59's two-source contract was satisfied by two lookups
+    each structurally incapable of seeing an expert, and the code minted the
+    POSITIVE dense declaration. Measured, unpatched: ``dense: config declares
+    none of [...], and 0 of 120 declared tensors carry an expert path segment``,
+    then ``PASS 4/4 gates -- all clear`` with ``checkpoint.expert_distinctness``
+    and ``checkpoint.expert_bytes`` both skipping as ``0 units ... (dense
+    model)``. A 128-expert MoE trained green with both MoE gates disarmed.
+
+    WHY THE OBVIOUS FIX IS NOT APPLIED. Searching ``text_config`` first was
+    implemented and RUN: the config then declares 128, the adapter census still
+    says 0, the two sources now DISAGREE, ``num_experts`` goes None, and the
+    gates fail closed exactly as designed -- ``RED 4/4 gates, 3 blocking
+    (checkpoint.expert_distinctness, checkpoint.expert_bytes,
+    checkpoint.first_save); should_training_stop=True``, rc 5. That converts a
+    silent wrong answer into a false RED that HALTS every LoRA run on an MoE,
+    which is the mainstream way anyone fine-tunes one of these on a single GPU.
+    Neither verdict is right, because neither is the true one: an adapter-only
+    checkpoint contains no base experts, so the expert gates have no SUBJECT and
+    the honest outcome is an explicit abstention naming adapter scope as the
+    reason. That is a change to gate adjudication, it is not being made on the
+    eve of a release, and it is filed and measured rather than half-done.
+
+    DERIVED BUT NOT MEASURED, so read it as a code path and not as a result: on
+    a FULL (non-adapter) save of an MoE the tensor census WOULD see expert names
+    while the config source stays blind, so the sources disagree, ``num_experts``
+    goes None and the gates fail closed -- a full finetune of an MoE would RED
+    today. It was not measured because a 26B full finetune does not fit the
+    single-GPU arm these numbers came from.
+
     Returns the declaration and a dict of audit notes for the manifest's config
     block, so the basis of every number here survives into the artifact.
     """

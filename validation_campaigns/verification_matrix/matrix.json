@@ -377,9 +377,11 @@
       "run_arm": "MoE arm",
       "control_arm": "a router that never routes = zero grad on some experts; must be detected",
       "cost": "~40 min",
-      "status": "classification SHIPPED, runtime ABSENT",
+      "status": "RUNTIME ARM RUN for the first time; the row is NOT green and the reason is named. MEASURED on a GB200 tray: a real 26B-A4B MoE (128 experts over 30 layers) trains end-to-end through the shipped CLI -- LoRA rank 8 on thirty language layers, ag_news, 10 steps, rc 0, checkpoint written and the save gates ran. So \"an MoE model trains\" is established. \"experts receive gradient\" is NOT, and cannot be adjudicated yet: the framework declared the model DENSE, so checkpoint.expert_distinctness and checkpoint.expert_bytes both skipped as \"0 units ... (dense model)\" on a model with 128 of them. That is #471, measured in both directions -- the config source reads expert keys top-level-only while every MoE on this estate nests them under text_config (Gemma4Config 128; Qwen3_5MoeConfig 256 on both 35B-A3B checkpoints, so it is the transformers 5.x convention and not a multimodal quirk), and under peft the second \"independent\" source is the adapter subset, which cannot carry a base-model expert name at all. Searching text_config first WAS implemented and run: the sources then disagree, the gates fail closed, and the run goes RED and halts -- a false RED on every LoRA run over an MoE. The true answer is an explicit abstention naming adapter scope, which is a gate-adjudication change deliberately not made on release eve. Also measured on the way in: the bare suffix q_proj reaches the VISION tower on this family, where it is a Gemma4ClippableLinear that peft refuses, so the first attempt died before step 1 and adapter targets must be spelled language-scoped. The control arm (a router that never routes) is still unrun and is blocked behind #471, since a gate that cannot see experts cannot detect an expert receiving no gradient.",
       "blocked_by": [],
-      "findings": [],
+      "findings": [
+        "#471"
+      ],
       "adjudicator": null
     },
     {
