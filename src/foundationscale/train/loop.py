@@ -1392,8 +1392,43 @@ class FoundationScaleObjectiveGate(_CallbackBase):
     objective, the live objective hyperparameters, the step-0 record snapshotted
     at ``on_train_begin``, and the observed loss. A blocking verdict BOTH sets
     ``control.should_training_stop = True`` AND is recorded on the instance
-    (``.blocked`` / ``.unmeasured`` / ``.reports``), exactly as the save gate
-    does: a gate that fires and lets the run continue cannot fail.
+    (``.blocked`` / ``.unmeasured`` / ``.reports``), as the save gate does:
+    a gate that fires and lets the run continue cannot fail.
+
+    IT IS NOT "EXACTLY" THE SAVE GATE, AND THE DIFFERENCE IS #468. Since #444
+    ``FoundationScaleSaveGate.on_save`` runs its stop through ``_agree_on_stop``
+    so one rank cannot stop alone; this gate writes ``should_training_stop``
+    unagreed, and a rank that stops alone leaves its peers training into a
+    collective with no partner -- a hang.
+
+    NO REACHABLE DIVERGENCE IS CLAIMED HERE, and the checking is worth recording
+    because the first reading of this got it wrong. Every input to a STEP_ZERO
+    gate on THIS path is rank-invariant today: the objective provenance is built
+    a few lines below from a ``TrainConfig`` field with ``source="config"`` and
+    no ``env_var``, so the env-shadowing refusal at ``objective_gates.py``:728
+    cannot fire from here (``shadowed_by_env=True`` appears only in that
+    module's own control fixtures); the loss is HF's already-all-reduced scalar;
+    the registry is identical. So the gate is SAFE BY COINCIDENCE OF ITS INPUTS,
+    not by construction -- the property #444 established for the save gate is
+    simply absent here, and nothing fails if a later change feeds this gate a
+    rank-varying input. The env-shadowing gate is already written to block on
+    exactly such an input the day someone wires the resolver's provenance
+    through. That is what makes this worth a finding rather than a shrug.
+
+    DO NOT "FIX" THIS BY DROPPING ``_agree_on_stop`` INTO ``_dispatch``. That
+    deadlocks, and it is the trap #444 had to design around in ``on_save``.
+    ``_dispatch`` is reached from TWO callbacks -- ``on_log`` mid-training and
+    ``on_train_end`` as the backstop -- and ``_fired`` makes each rank take
+    whichever comes first for it. A rank collectiving at step 10 against a peer
+    collectiving at train-end is not a stop disagreement, it is a mismatched
+    collective in the middle of the gradient all-reduce stream, which is
+    strictly worse than what it set out to repair. A correct fix has to reach
+    the collective unconditionally at a point EVERY rank reaches together --
+    ``on_log`` itself, outside the ``"loss" in logs`` guard -- which buys the
+    agreement at the cost of one collective per logging step. That trade is a
+    change to the training loop's collective schedule and is deliberately NOT
+    being made here on the eve of a release; it is filed, measured and named
+    rather than half-done.
 
     WHEN it fires is the load-bearing decision, and it was measured rather than
     assumed. The dispatch happens at the first step for which a loss has been

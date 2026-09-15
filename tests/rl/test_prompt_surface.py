@@ -73,6 +73,41 @@ def test_image_batch_resolves_a_processor(monkeypatch: pytest.MonkeyPatch) -> No
     assert surface.supports_images is True
 
 
+def test_the_258_token_figure_is_not_claimed_of_every_family(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #469. resolve_prompt_surface PRINTS its reason, so every number in it is a
+    # claim to the operator about the run they just launched. It used to assert
+    # "cost is EXACTLY 258.0 tokens per image (linear, zero variance)" and a
+    # 131072 window for ANY model_id -- two gemma-4-E4B measurements presented as
+    # properties of the code path. encode_prompts in the same module records the
+    # same two corpus images expanding to 2337 and 1026 tokens through one
+    # family's processor and ~258 through another's, which is why it refuses to
+    # truncate at any literal. An operator sizing sequence length off 258.0 on a
+    # qwen2.5-vl run is wrong by an order of magnitude.
+    #
+    # TWO ARMS, because "the string changed" is not the claim -- "the figure is
+    # attributed to the family it was measured on" is. The foreign-family arm
+    # must not assert the number; the gemma arm must still carry it, so the fix
+    # is not just deletion of a real measurement.
+    fake = SimpleNamespace(
+        AutoTokenizer=SimpleNamespace(from_pretrained=lambda *a, **k: SimpleNamespace(x=1)),
+        AutoProcessor=SimpleNamespace(from_pretrained=lambda *a, **k: SimpleNamespace(y=2)),
+    )
+    monkeypatch.setitem(sys.modules, "transformers", fake)
+
+    foreign = resolve_prompt_surface("Qwen/Qwen2.5-VL-7B-Instruct", needs_images=True)
+    assert "EXACTLY 258.0" not in foreign.reason
+    assert "NOT claimed of this model" in foreign.reason
+    # The per-family spread is stated positively, so the operator is told the
+    # bound is variable rather than merely not told it is 258.
+    assert "2337" in foreign.reason and "per-row" in foreign.reason
+
+    native = resolve_prompt_surface("google/gemma-4-E4B-it", needs_images=True)
+    assert "258.0" in native.reason
+    assert "131072" in native.reason
+
+
 def test_a_processor_that_will_not_load_is_REFUSED_not_downgraded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

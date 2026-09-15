@@ -51,8 +51,10 @@ def resolve_prompt_surface(model_id: str, needs_images: bool) -> PromptSurface:
     layer: the record keeps its images, the pixels still never reach the
     model. So a processor that fails to load is a refusal (96), never a
     downgrade. If not needs_images, AutoTokenizer is sufficient -- a text
-    corpus pays no multimodal cost (measured: bare prompt is 10 tokens; ONE
-    image costs EXACTLY 258.0 more, linear at n=1,2,4,8).
+    corpus pays no multimodal cost (measured ON gemma-4-E4B: bare prompt is
+    10 tokens; ONE image costs 258.0 more, linear at n=1,2,4,8. That figure
+    is this one family's, not the function's -- see #469 and the per-family
+    2337/1026/258 spread recorded in ``encode_prompts``).
 
     transformers is imported FUNCTION-LOCALLY: this module must import on a
     torch-free host.
@@ -79,12 +81,37 @@ def resolve_prompt_surface(model_id: str, needs_images: bool) -> PromptSurface:
                 "text-only keys (input_ids, attention_mask, "
                 "mm_token_type_ids) and silently drop the pixels"
             )
+        # #469: this string is PRINTED, so every number in it is a claim made to
+        # the operator about the run they just launched. It used to assert, for
+        # whatever model_id was passed, that the cost is "EXACTLY 258.0 tokens
+        # per image (linear, zero variance)" and the window is 131072 -- two
+        # gemma-4-E4B measurements presented as properties of the function. This
+        # very module already knows better: encode_prompts records that the same
+        # two corpus images expand to 2337 and 1026 tokens through one family's
+        # processor and ~258 through another's, and refuses to truncate BECAUSE
+        # the bound is per-image, per-family and per-row. An operator budgeting
+        # sequence length off "EXACTLY 258.0" on a qwen2.5-vl run is being
+        # misled by an order of magnitude. The measurement is kept -- it is real
+        # -- but it is now attributed to the family it was taken on, and it is
+        # no longer asserted of the family that was actually loaded.
+        measured_here = "gemma-4-E4B" in model_id or "gemma-4-e4b" in model_id.lower()
         reason = (
             f"processor path: corpus carries images; AutoProcessor loaded "
-            f"for {model_id!r}. Measured on gemma-4-E4B: with-image keys add "
-            "pixel_values and image_position_ids; cost is EXACTLY 258.0 "
-            "tokens per image (linear, zero variance at n=1,2,4,8); context "
-            "window is 131072 (text_config.max_position_embeddings)."
+            f"for {model_id!r} ({type(processor).__name__}); with-image keys "
+            "add the family's own pixel/position entries. Per-image token cost "
+            "is NOT a constant of this code path: measured, the same two corpus "
+            "images expand to 2337 and 1026 tokens through one family's "
+            "processor and ~258 through another's, so it is per-image, "
+            "per-family AND per-row, and no sequence-length budget should be "
+            "derived from a literal here."
+            + (
+                " On THIS family (gemma-4-E4B) it was measured at exactly 258.0 "
+                "tokens per image, linear with zero variance at n=1,2,4,8, with "
+                "a 131072 context window (text_config.max_position_embeddings)."
+                if measured_here
+                else " The 258.0/131072 figures recorded elsewhere in this module "
+                "are gemma-4-E4B numbers and are NOT claimed of this model."
+            )
         )
         print(reason)
         return PromptSurface(

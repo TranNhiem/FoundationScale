@@ -366,10 +366,23 @@ def _local_map(
     mod: Module,
     root: Path,
     cache: dict[Path, Module | None],
+    depth: int,
     stack: frozenset[tuple[Path, str]],
     entries: dict[tuple[Path, str], set[int] | None],
 ) -> dict[str, set[int] | None]:
     """Resolve each function-local simple name to the union of everything assigned to it.
+
+    `depth` is the hop budget INHERITED from the caller, and passing it is the whole of
+    #467. It used to be hardcoded 0 here, so a local inside a depth-1 helper was resolved
+    with a FRESH budget while that same helper's returns were resolved with the spent one.
+    The gate then answered differently for two spellings of one call chain:
+    `return deeper()` was UNRESOLVED (correct, the hop was already spent) but
+    `x = deeper(); return x` resolved to {5}. Measured, not argued -- that exact pair is
+    the #467 MUST_FIRE fixture in run_self_test. Whether an author used an intermediate
+    variable is not a property of the exit contract, so a gate whose verdict turns on it
+    is reading its own shape, and it could manufacture a CLEAR or a RED in either
+    direction. The one-hop rule the module docstring DECLARES is now the rule the
+    resolver obeys on both paths.
 
     loop.py's `rc` is bound by conditional expressions on several statements; unioning all
     of them is a sound over-approximation that never reads an execution order. Names
@@ -417,7 +430,7 @@ def _local_map(
             values: set[int] = set()
             pending = False
             for expr in exprs:
-                s = _resolve(expr, mod, root, cache, 0, stack, resolved, entries)
+                s = _resolve(expr, mod, root, cache, depth, stack, resolved, entries)
                 if s is None:
                     pending = True
                 else:
@@ -522,7 +535,7 @@ def _func_exit_set(
         # exit path is more likely a half-measured helper, so it is UNRESOLVED, not {0}.
         return None
     inner = stack | {key}
-    lmap = _local_map(fn, mod, root, cache, inner, entries)
+    lmap = _local_map(fn, mod, root, cache, depth, inner, entries)
     out: set[int] = set()
     for ret in returns:
         if ret.value is None:
@@ -563,7 +576,7 @@ def _assess_entry(
         return None
     returns = _own_returns(fn)
     stack = frozenset({(mod.path, ep.func)})
-    lmap = _local_map(fn, mod, root, cache, stack, entries)
+    lmap = _local_map(fn, mod, root, cache, 0, stack, entries)
     combined: set[int] = set()
     all_resolved = True
     for ret in returns:
@@ -702,7 +715,7 @@ def _guard_status(
             "can escape as interpreter exit 1",
         )
     stack = frozenset({(mod.path, ep.func)})
-    lmap = _local_map(fn, mod, root, cache, stack, entries)
+    lmap = _local_map(fn, mod, root, cache, 0, stack, entries)
     for ret in _own_returns(guard):
         s = (
             {0}
@@ -1490,6 +1503,65 @@ def c_undeclared_two_hop_helper_is_unmeasured() -> bool:
     )
 
 
+_TWO_SPELLINGS = """
+EXIT_RED = 5
+
+
+def deeper():
+    return EXIT_RED
+
+
+def helper_direct():
+    return deeper()
+
+
+def helper_temp():
+    x = deeper()
+    return x
+
+
+def main_direct():
+    rc = helper_direct()
+    return rc
+
+
+def main_temp():
+    rc = helper_temp()
+    return rc
+"""
+
+
+def c_hop_budget_is_spelling_independent() -> bool:
+    # #467. One call chain, two spellings, and the ONLY difference is whether the
+    # second hop lands in a `return` or in a local that a `return` then names.
+    # `depth` used to be hardcoded 0 inside _local_map, which handed every local a
+    # fresh hop budget no matter how deep its function already was, so:
+    #     main_direct -> helper_direct -> `return deeper()`        was None
+    #     main_temp   -> helper_temp   -> `x = deeper(); return x` was {5}
+    # A gate that answers UNRESOLVED for one and {5} for the other is reading the
+    # author's choice of temporary variable, not the exit contract, and it can
+    # manufacture either a CLEAR or a RED depending on which way the second hop
+    # happens to be written. This control fires if the two ever disagree again --
+    # it does NOT assert which answer they share, because the value is the module
+    # docstring's one-hop rule to declare, not this control's. It asserts only that
+    # the resolver gives the same answer to the same chain.
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        path = root / "two_spellings.py"
+        path.write_text(_TWO_SPELLINGS, encoding="utf-8")
+        cache: dict[Path, Module | None] = {}
+        mod = _load(path, cache)
+        if mod is None:
+            return False
+        got = {}
+        for name in ("main_direct", "main_temp"):
+            fn = mod.funcs.get(name)
+            if fn is None:
+                return False
+            got[name] = _func_exit_set(mod, fn, root, cache, 0, frozenset(), {})
+    return got["main_direct"] == got["main_temp"]
+
+
 CONTROLS: list[tuple[str, str, Callable[[], bool]]] = [
     ("return of a literal 1", "MUST_FIRE", c_literal_one),
     ("return of a Name bound to 1 at module level", "MUST_FIRE", c_name_bound_to_one),
@@ -1552,6 +1624,11 @@ CONTROLS: list[tuple[str, str, Callable[[], bool]]] = [
         "UNdeclared two-hop helper stays unresolved",
         "MUST_BE_UNMEASURED",
         c_undeclared_two_hop_helper_is_unmeasured,
+    ),
+    (
+        "the hop budget is the same for a local and for a return (#467)",
+        "MUST_PASS",
+        c_hop_budget_is_spelling_independent,
     ),
 ]
 
