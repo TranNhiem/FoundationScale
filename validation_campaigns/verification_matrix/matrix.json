@@ -164,7 +164,8 @@
       "blocked_by": [],
       "findings": [
         "#453",
-        "#463"
+        "#463",
+        "#476"
       ],
       "adjudicator": "validation_campaigns/verification_matrix/t1_2_fp16_scaler_arms.py"
     },
@@ -195,7 +196,8 @@
       "blocked_by": [],
       "findings": [
         "#452",
-        "#463"
+        "#463",
+        "#476"
       ],
       "adjudicator": "validation_campaigns/verification_matrix/t1_4_save_load_parity.py"
     },
@@ -228,7 +230,8 @@
       "blocked_by": [],
       "findings": [
         "#343",
-        "#463"
+        "#463",
+        "#476"
       ],
       "adjudicator": "validation_campaigns/verification_matrix/t1_6_symlinked_shard.py"
     },
@@ -283,12 +286,14 @@
       "run_arm": "both arms",
       "control_arm": "if they differ beyond tolerance, accumulation is wrong",
       "cost": "~15 min x2",
-      "status": "MEASURED GREEN (#405/#406) on a GB200 tray: accum4_bs1 vs accum1_bs4 agree over the 40-step INTERSECTION of the two arms' step labels; worst gap 0.0133574 at accum1_bs4 step 7 (2.9078900814056396 vs 2.9212474822998047). Keyed on step, not on list position -- two arms logging at different cadences hold different steps at the same index, and a positional zip would have compared step-against-wrong-step and called it a verdict. RE-TAKEN at HEAD 8130ffb (#448 pass) and GREEN again: the two arms' curves agree within tolerance at the commit that ships, not only at the ancestor it was first measured on. RE-TAKEN A THIRD TIME at HEAD 4a41e4d through the shipped run_row.py harness rather than by hand, GREEN again over the same two arms, with a receipt carrying the adjudicator's sha256 (d6ea718a89da) and the claim's. The two curves agree to within roughly a hundredth across the pass (accum1_bs4 2.8327841758728027 against accum4_bs1 2.8310916423797607 at the first shared step), which is float non-determinism between two different batch shapes and not a disagreement about the update.",
+      "status": "MEASURED GREEN (#405/#406) on a GB200 tray: accum4_bs1 vs accum1_bs4 agree over the 40-step INTERSECTION of the two arms' step labels; worst gap 0.0133574 at accum1_bs4 step 7 (2.9078900814056396 vs 2.9212474822998047). Keyed on step, not on list position -- two arms logging at different cadences hold different steps at the same index, and a positional zip would have compared step-against-wrong-step and called it a verdict. RE-TAKEN at HEAD 8130ffb (#448 pass) and GREEN again: the two arms' curves agree within tolerance at the commit that ships, not only at the ancestor it was first measured on. RE-TAKEN A THIRD TIME at HEAD 4a41e4d through the shipped run_row.py harness rather than by hand, GREEN again over the same two arms, with a receipt carrying the adjudicator's sha256 (d6ea718a89da) and the claim's. The two curves agree to within roughly a hundredth across the pass (accum1_bs4 2.8327841758728027 against accum4_bs1 2.8310916423797607 at the first shared step), which is float non-determinism between two different batch shapes and not a disagreement about the update. HOLLOW AT THE SEAM (#475/#476): that harness pass wrote two arm files and neither carries a `status` key, so the receipt recorded two arms and no statement that either had ever been measured. The green was the all([]) trap one level down, and the same input REFUSES 96 under the fixed runner. The hand-taken readings above are unaffected and remain this row's evidence; what no longer stands is the claim that the harness reproduced them. Re-taking it through the harness needs the adjudicator to write an identity key -- it writes `launcher_exit` where the runner lifts `launcher_exit_code`, which is the #474 undeclared-convention defect in a second place.",
       "blocked_by": [],
       "findings": [
         "#405",
         "#406",
-        "#448"
+        "#448",
+        "#475",
+        "#476"
       ],
       "adjudicator": "validation_campaigns/verification_matrix/t1_10_accumulation_equivalence.py"
     },
@@ -300,12 +305,14 @@
       "run_arm": "on vs off",
       "control_arm": "neither moving = the flag is a no-op (the silent-fallback shape)",
       "cost": "~15 min x2",
-      "status": "MEASURED GREEN on a GB200 tray at HEAD 8130ffb (#448 pass): 3 interleaved rounds, arm order rotated every round so a warm filesystem cache cannot be confounded with arm identity (#418). Peak memory DROPPED 30.8% in every round (18.008 GiB off to 12.457 GiB on, identical to three decimals across all three rounds) and step time ROSE in every round (throughput 2.397 to 1.841, 2.572 to 1.791, 2.512 to 1.877 steps/s -- +23.2%, +30.4%, +25.3%), each beyond the row's declared 5.00% tolerance with signs agreeing. The sensitivity probe is what makes the memory figure a measurement and not a constant: halving the batch peaked at 13.350 GiB, distinct from 18.008, so the instrument demonstrably sees the quantity it is being asked about. The #408 false RED does not reproduce. Adjudicator self-test 43/43.",
+      "status": "MEASURED GREEN on a GB200 tray at HEAD 8130ffb (#448 pass): 3 interleaved rounds, arm order rotated every round so a warm filesystem cache cannot be confounded with arm identity (#418). Peak memory DROPPED 30.8% in every round (18.008 GiB off to 12.457 GiB on, identical to three decimals across all three rounds) and step time ROSE in every round (throughput 2.397 to 1.841, 2.572 to 1.791, 2.512 to 1.877 steps/s -- +23.2%, +30.4%, +25.3%), each beyond the row's declared 5.00% tolerance with signs agreeing. The sensitivity probe is what makes the memory figure a measurement and not a constant: halving the batch peaked at 13.350 GiB, distinct from 18.008, so the instrument demonstrably sees the quantity it is being asked about. The #408 false RED does not reproduce. Adjudicator self-test 43/43. DRIVEN THROUGH THE HARNESS for the first time at 1460560, and HOLLOW AT THE SEAM in the same way (#475/#476): it exited 0 having written nine arm files, but every one of them carries `refused` where the runner lifts `status`, so the receipt would have recorded nine arms and no statement that any of them was measured. The arms are not empty -- they lift telemetry, excerpts and `launcher_exit_code` -- and that is what makes this hollow receipt hard to see: the evidence is present and only the identity is missing. The same input REFUSES 96 under the fixed runner. The #448 tray pass above was taken by hand, is unaffected, and remains this row's evidence until the adjudicator writes an identity key the runner knows.",
       "blocked_by": [],
       "findings": [
         "#408",
         "#418",
-        "#448"
+        "#448",
+        "#475",
+        "#476"
       ],
       "adjudicator": "validation_campaigns/verification_matrix/t1_11_grad_checkpointing.py"
     },
@@ -492,7 +499,8 @@
       "blocked_by": [],
       "findings": [
         "#454",
-        "#463"
+        "#463",
+        "#476"
       ],
       "adjudicator": "validation_campaigns/verification_matrix/t1_23_audio_declaration_arms.py"
     }

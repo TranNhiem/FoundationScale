@@ -32,7 +32,9 @@ down as a fact about the CLAIM. The rules here follow from that:
      runner takes the clock and passes written_at_utc in.
   5. Arms are MEASURED, not narrated: the receipt's `arms` mapping is built
      from the <out-dir>/<row>_<arm>.json files the adjudicator wrote. An exit
-     of 0 or 5 with zero arm files is the all([]) trap and REFUSES 96.
+     of 0 or 5 with zero arm files is the all([]) trap and REFUSES 96, and so
+     is an arm file that carries no `status` -- an empty MEMBER is the same
+     trap as an empty SET, one level down (#475).
   6. Four-state exit contract everywhere: 0 CLEAR, 5 RED, 95 UNMEASURED,
      96 REFUSE. Never 1, never 2 -- argparse usage errors included. An
      adjudicator exit code outside receipts.VERDICTS is a REFUSAL naming the
@@ -254,7 +256,33 @@ def collect_arms(out_dir, *, row_id):
         arm = path.stem[len(prefix) + 1 :]
         if not arm:
             raise ValueError(f"{path}: filename carries no arm name after the row prefix")
-        arms[arm] = {key: payload[key] for key in ARM_SCALAR_KEYS if key in payload}
+        observed = {key: payload[key] for key in ARM_SCALAR_KEYS if key in payload}
+        # #475: refusing the empty arm SET (rule 5) but accepting an empty arm
+        # MEMBER leaves the same trap standing one level down. A payload the
+        # adjudicator wrote but filled with keys this runner does not lift
+        # collapses to {}, and a receipt whose arms read {"run": {}, "null": {}}
+        # beside verdict "green" records a conclusion with no observation behind
+        # it -- which is precisely what rule 5 exists to prevent. Found by
+        # reviewing a second, not-yet-shipped adjudicator whose payloads carry no
+        # "status" at all, misname launcher_exit_code as "launcher_exit", and
+        # never write "loss_curve": wiring it up would have produced exactly that
+        # receipt, and nothing in the runner would have said so.
+        #
+        # Only `status` is required, and the other five stay optional on purpose.
+        # The three evidence keys are genuinely per-row -- a row whose evidence is
+        # adapter norms has no loss curve, and the lift is documented above as
+        # widening what CAN be carried, not what MUST be. `status` is not
+        # evidence, it is the arm's identity: without it the entry does not say
+        # whether the arm was measured, and that is the one thing a receipt
+        # cannot be silent about.
+        if "status" not in observed:
+            raise ValueError(
+                f"{path}: arm payload carries no 'status'; the arm would be recorded "
+                "as an empty observation beside a verdict, which is the all([]) trap "
+                "one level down -- an arm that cannot say whether it was measured is "
+                "not an observation"
+            )
+        arms[arm] = observed
     return arms
 
 
@@ -747,6 +775,28 @@ def self_test():
         record(
             "C4: exit 0 with zero arm files REFUSES 96 (the all([]) trap)",
             res["exit_code"] == 96 and "arm" in reason.lower() and "all([])" in reason,
+            {"exit_code": res["exit_code"], "reason": reason},
+        )
+
+        # C4b -- exit 0 with an arm file that carries no `status` refuses 96.
+        # The arm is not absent and the file is not unreadable: it parses, it is
+        # an object, and it even carries evidence. What it cannot say is whether
+        # the arm was measured, so lifting it would put {} beside a green verdict
+        # (#475). The payload deliberately includes telemetry, so a fix that
+        # merely required the dict to be non-empty would NOT satisfy this control.
+        c4b_adj = fake(
+            "c4b_adjudicator.py",
+            help_text="usage: c4b [-h] [--out-dir OUT_DIR]\n",
+            run_exit=0,
+            prefix="c4b_2",
+            arms={"run": {"telemetry": {"steps": 40}, "launcher_exit": 0}},
+        )
+        res = go("C4b-2", "c4b", c4b_adj, "c4b_out", "2029-01-01T00:00:02+00:00", env_ok)
+        reason = res["reason"] or ""
+        record(
+            "C4b MUST-FIRE: exit 0 with an arm file lacking 'status' REFUSES 96 "
+            "(the empty MEMBER, not the empty SET)",
+            res["exit_code"] == 96 and "status" in reason and "all([])" in reason,
             {"exit_code": res["exit_code"], "reason": reason},
         )
 
