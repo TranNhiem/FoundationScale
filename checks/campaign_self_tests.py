@@ -224,6 +224,20 @@ RUNNABLE: dict[str, str] = {
         "measured, unmeasured and absent entries. The self-test imports no torch and needs "
         "no GPU; the three-arm run does, and is separate."
     ),
+    "validation_campaigns/verification_matrix/t1_22_video_declaration_arms.py": (
+        "Fourteen controls over the two-plane video-declaration verdict, all measured here, "
+        "with a MUST-FIRE for each of the three controls the verdict depends on. The decision "
+        "order is the claim: controls are judged BEFORE the arm, so a broken control outranks "
+        "a red-looking deciding arm and yields 96 rather than a RED nobody can read. Exit "
+        "codes alone decide nothing on the RL plane -- the video check precedes the tokenizer "
+        "load, which also refuses 96, so both the positive leg and its control exit 96 and the "
+        "legs are separated by the SUBJECT of the refusal instead. One control therefore "
+        "requires the attribution leg to have REACHED the model load, proving it got past the "
+        "video check rather than stopping earlier for an unrelated reason. The suite also "
+        "asserts that all four verdicts are exercised, because a control set whose members "
+        "never disagree is not a control set. The self-test drives the pure verdict over "
+        "synthetic payloads and imports no torch; the six-arm run needs a tray and is separate."
+    ),
     "validation_campaigns/verification_matrix/t1_21_vision_tower_arms.py": (
         "Fifteen controls over the vision-tower movement verdict, all measured here: which "
         "payload shapes make a moved-module count a measurement and which make it an "

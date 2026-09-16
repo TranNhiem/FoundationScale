@@ -242,9 +242,13 @@ def check_schema(rows: list[JsonRow]) -> CheckResult:
         for key in ("blocked_by", "findings"):
             if not isinstance(row.get(key), list):
                 findings.append(f"{label}: {key} must be a list")
-        # null is legal and means "no adjudicator bound yet" -- 28 of the 33
-        # rows are honestly in that state. Anything else must be a usable
-        # path. isinstance(True, str) is False, so a bare bool is caught.
+        # null is legal and means "no adjudicator bound yet", which most rows
+        # honestly are. The count is deliberately NOT written here: it was
+        # stated as "28 of the 33" and had drifted to 22 unnoticed, because a
+        # hand-written number in a comment is invalidated by every row that
+        # binds an adjudicator and is checked by nothing. Anything other than
+        # null must be a usable path. isinstance(True, str) is False, so a bare
+        # bool is caught.
         adjudicator = row.get("adjudicator")
         if adjudicator is not None and not (isinstance(adjudicator, str) and adjudicator.strip()):
             findings.append(
