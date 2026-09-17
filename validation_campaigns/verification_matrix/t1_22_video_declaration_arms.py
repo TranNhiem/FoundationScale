@@ -4,7 +4,23 @@ WHAT THIS ROW ASSERTED, AND WHY IT WAS NEVER TRUE. matrix.json carried
 `status: "refuses by design"` with an empty findings list and
 `adjudicator: None` -- an assertion, never a measurement. Its own control_arm
 field spelled out the failure mode to guard against: "must be 96, not a silent
-text-only train". That is exactly what happens.
+text-only train". Before fix #490 that is exactly what happened: the deciding
+corpus trained and the word "video" appeared nowhere.
+
+WHAT FIX #490 CHANGED, AND WHAT THIS ADJUDICATOR NOW MEASURES. `train()` gained
+a declaration boundary. Four module-level names -- UNTRAINABLE_MODALITIES,
+_declared_untrainable_modality, _untrainable_modality_refusal,
+_dropped_column_notice -- make the boundary concrete: an audio or video column
+DECLARED through its env var (FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN here) is
+refused 96 immediately after the image column is read, before the model,
+tokenizer or dataset are touched, with a [fs:train:refuse] line naming the
+modality, the env var, the declared column, and the word "text" for what the
+plane CAN do. A corpus that merely CONTAINS such a column with nothing declared
+still trains -- it must -- but the drop is now NAMED on the console via
+[fs:train:data] instead of being silent. This adjudicator therefore scores the
+boundary itself: refusal keyed on the DECLARATION, never on the DATA. A run
+that refuses a corpus for having a column NAMED "video" is name-sniffing and
+breaks legitimate text corpora; that over-correction is RED here, not a pass.
 
 WHY THIS ADJUDICATOR IS NOT A COPY OF THE T1-23 AUDIO ONE. Audio has zero
 occurrences in shipped source, so there is one plane to measure and the finding
@@ -13,25 +29,28 @@ is a flat absence. Video has fifteen, all in `src/foundationscale/rl/`, and
 frame budgets. So video is not an unsupported modality handled badly -- it is a
 modality this repository has already decided to refuse, where the refusal lives
 in a plane most operators never reach. Measuring only the training plane would
-report "video is dropped" and miss the actionable part; measuring only the RL
-plane would report "video is refused" and be, in the way that matters most,
-false. The claim is therefore adjudicated over BOTH planes and the verdict turns
-on the CONTRAST between them.
+miss the actionable part; measuring only the RL plane would report a refusal on
+a plane nobody trains with. The claim is adjudicated over BOTH planes.
 
-THE DECIDING ARM. Arm A (a corpus of bare `video` keys and no text) refuses --
-but it refuses because there is no `text` column, which a corpus of bare
-timestamps would earn just as well. A refusal about a missing text column is not
-a refusal about video. Arm B therefore carries BOTH a usable `text` column and a
-`video` key, so the only term that differs from an ordinary accepted corpus is
-the declaration under test.
+THE DECIDING ARM. The old deciding arm (a bare-`video` corpus) refused for a
+missing `text` column, which a corpus of bare timestamps would earn just as
+well; a refusal about a missing text column is not a refusal about video. Its
+successor, text_video_declared, carries a usable `text` column AND declares the
+modality through FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN, so the only term that
+differs from an ordinary accepted corpus is the DECLARATION under test. The
+corpus that merely carries an undeclared `video` key alongside `text`
+(text_video) is kept as the second leg: it must train -- refusal would be
+name-sniffing -- and the dropped-column notice must name "video" on the
+console. Right code with the wrong reason (96 about 'text') is the original
+defect in a new outfit and scores RED, as does training through a declaration,
+as does the silent drop returning, as does refusing on the column name.
 
-WHY THE SFT PLANE'S SILENCE IS READABLE AT ALL. A plane that never refuses any
-declaration would be silent on video for reasons having nothing to do with
-video. Arm C declares an image column that the dataset does not contain, and the
-trainer refuses 96 naming that column. So the SFT plane demonstrably CAN refuse
-a declared-but-unsatisfiable modality, and its silence on video is a choice
-about video rather than a general incapacity. Without arm C there is no finding
-here, only an absence of evidence.
+WHY THE SFT PLANE'S REFUSALS ARE READABLE AT ALL. A plane that never refuses
+any declaration would be silent on video for reasons having nothing to do with
+video. The image_control arm declares an image column the dataset does not
+contain, and the trainer refuses 96 naming that column. So the SFT plane
+demonstrably CAN refuse a declared-but-unsatisfiable modality, and its
+behaviour on video is a choice about video rather than a general incapacity.
 
 WHY EXIT CODES ALONE DECIDE NOTHING ON THE RL PLANE. The video check sits before
 the tokenizer load, and that later load ALSO refuses 96 when the model path is
@@ -41,21 +60,25 @@ every RL leg is classified by the SUBJECT of its refusal and the control must
 demonstrably have reached the model load -- i.e. got PAST the video check.
 
 VERDICT ORDER (load-bearing; pinned by --self-test controls, not by comments):
-  1. any arm not measured                      -> UNMEASURED 95
-  2. SFT refusal-capability control silent     -> REFUSE 96
-  3. RL attribution control claims video       -> REFUSE 96
-  4. RL attribution control never passed 331   -> REFUSE 96
-  5. RL key-is-read control silent             -> REFUSE 96
-  6. deciding SFT arm trained and stayed quiet -> RED 5
-  7. deciding SFT arm refused, naming video    -> GREEN 0
+  1. any arm not measured                                  -> UNMEASURED 95
+  2. SFT refusal-capability control silent                  -> REFUSE 96
+  3. RL attribution control claims video                    -> REFUSE 96
+  4. RL attribution control never passed 331                -> REFUSE 96
+  5. RL key-is-read control silent                          -> REFUSE 96
+  6. deciding arm refused 96 on a MISSING 'text' column     -> RED 5
+  7. deciding arm TRAINED despite the declaration           -> RED 5
+  8. undeclared-corpus arm REFUSED (name-sniffing)          -> RED 5
+  9. undeclared-corpus arm trained and stayed quiet         -> RED 5
+ 10. declaration refused by name; undeclared corpus trained -> GREEN 0
+     with the drop named on the console
 
 The verdict function is PURE -- no I/O, no torch, no datasets -- and --self-test
 drives it over synthetic payloads under `python3 -S`.
 
-MEASURED 2026-09-16 on one GB200 tray, against 1460560. Arm B exited 0 having
-tokenized 2 examples with the word absent from its output and from 30,671
-characters of run manifest; the RL positive leg exited 96 naming both the
-modality and the offending sample before any model was consulted.
+MEASURED 2026-09-16, pre-#490: the undeclared arm exited 0 having tokenized 2
+examples with the word absent from its output and from 30,671 characters of run
+manifest, and scored RED. The baseline payload in --self-test encodes the shape
+#490 is designed to produce; re-running the emitted SFT plan regenerates it.
 """
 
 from __future__ import annotations
@@ -78,7 +101,10 @@ REFUSE = 96
 ROW_ID = "T1-22"
 PROG = "t1_22_video_declaration_arms"
 CLAIM = "declaring video REFUSES cleanly today"
-CONTROL = "must be 96, not a silent text-only train"
+CONTROL = (
+    "declared video: 96 naming the modality; undeclared video: trains, "
+    "with the drop named on the console -- never a silent text-only train"
+)
 
 VERDICT_NAMES = {GREEN: "GREEN", RED: "RED", UNMEASURED: "UNMEASURED", REFUSE: "REFUSE"}
 
@@ -88,10 +114,68 @@ MANIFEST_GLOB = "*manifest*.json"
 
 IMAGE_COLUMN_ENV = "FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN"
 DECLARED_IMAGE_COLUMN = "t22_img_probe"
+# The env var fix #490 added. The refusal is keyed on THIS declaration, never
+# on the data: the adversarial arm carries both so the declaration is the only
+# term that varies.
+VIDEO_COLUMN_ENV = "FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN"
+DECLARED_VIDEO_COLUMN = "video"
 
-SFT_ARMS = ("video_only", "text_video", "image_control")
-SFT_DECIDING_ARM = "text_video"
+SFT_ARMS = ("video_only", "text_video", "text_video_declared", "image_control")
+# The deciding arm DECLARES the modality through its env var on an otherwise
+# trainable corpus; refusal must be keyed on that declaration and name it.
+SFT_DECIDING_ARM = "text_video_declared"
+# The pre-#490 deciding arm, kept as the boundary's other leg: nothing is
+# declared, so it must TRAIN -- and the drop must be NAMED, not silent.
+SFT_UNDECLARED_ARM = "text_video"
 SFT_REFUSAL_CONTROL = "image_control"
+
+SFT_TEXT_EXAMPLE = "A short, ordinary training example with nothing to refuse."
+# The run plan for the SFT plane: this adjudicator cannot drive a tray, so it
+# EMITS the plan (corpus columns + env per arm) and a tray-side measurer
+# executes it, handing the arms back through --sft-payload. Each "why" is the
+# reason that arm exists; removing an arm without answering its "why" breaks
+# the measurement it guards.
+SFT_ARM_SPECS: dict[str, dict[str, Any]] = {
+    "video_only": {
+        "columns": {"video": "clip0.mp4"},
+        "env": {},
+        "why": (
+            "no text column at all: any refusal here is about 'text' and never about "
+            "video, so a missing-'text' refusal can never be mistaken for a modality "
+            "refusal; under #490 the [fs:train:data] notice names the dropped video "
+            "column first, then the textless corpus earns its own refusal"
+        ),
+    },
+    "text_video": {
+        "columns": {"text": SFT_TEXT_EXAMPLE, "video": "clip0.mp4"},
+        "env": {},
+        "why": (
+            "nothing declared: the corpus merely CONTAINS a video key. It must TRAIN "
+            "-- refusing on the column name is name-sniffing and breaks legitimate "
+            "text corpora -- and the [fs:train:data] notice must name 'video' among "
+            "the dropped columns instead of dropping it silently"
+        ),
+    },
+    "text_video_declared": {
+        "columns": {"text": SFT_TEXT_EXAMPLE, "video": "clip0.mp4"},
+        "env": {VIDEO_COLUMN_ENV: DECLARED_VIDEO_COLUMN},
+        "why": (
+            "the deciding arm: identical corpus to text_video except the modality is "
+            "DECLARED through its env var. It must exit 96 via [fs:train:refuse] "
+            "naming the modality, the env var and the declared column -- the refusal "
+            "is keyed on the declaration, which is the whole design"
+        ),
+    },
+    "image_control": {
+        "columns": {"text": SFT_TEXT_EXAMPLE},
+        "env": {IMAGE_COLUMN_ENV: DECLARED_IMAGE_COLUMN},
+        "why": (
+            "the refusal-capability control: a declared-but-unsatisfiable image "
+            "column earns a named 96, proving the SFT plane CAN refuse a declaration "
+            "at all; without it, silence about video is an absence of evidence"
+        ),
+    },
+}
 
 RL_ARMS = ("video_declared", "no_video_control", "non_string_video")
 RL_POSITIVE = "video_declared"
@@ -196,7 +280,7 @@ def video_declaration_verdict(payload: Mapping[str, Any]) -> tuple[int, str]:
             f"{cap.get('launcher_exit_code')} and "
             f"{'named' if cap.get('names_own_declaration') else 'did NOT name'} the column it "
             "declared. Until that plane is shown to refuse a declared-but-unsatisfiable "
-            "modality, its silence about video measures nothing; 96"
+            "modality, its behaviour about video measures nothing; 96"
         )
 
     # -- control 2: is the RL refusal attributable to the KEY? --------------
@@ -223,49 +307,92 @@ def video_declaration_verdict(payload: Mapping[str, Any]) -> tuple[int, str]:
             "type, so there is no evidence the key is read rather than incidentally present; 96"
         )
 
-    # -- the claim ----------------------------------------------------------
+    # -- the claim, plane by plane -------------------------------------------
     pos = rl[RL_POSITIVE]
     rl_refuses = (
         pos.get("code_chose_exit") == REFUSE
         and pos.get("refusal_subject") == "video"
         and pos.get("names_offending_sample")
     )
-    dec = sft[SFT_DECIDING_ARM]
-    sft_silent = (
-        dec.get("launcher_exit_code") == 0
-        and not dec.get("output_names_needle")
-        and not dec.get("manifests_naming_needle")
-    )
 
-    if sft_silent:
-        contrast = (
-            "Meanwhile the RL plane REFUSES the same declaration 96, naming both the modality "
-            "and the offending sample, before any model is consulted -- so this repository has "
-            "already decided video is not decodable, and the training entry point cannot reach "
-            "that decision."
-            if rl_refuses
-            else "The RL plane did not refuse it either."
-        )
+    # Leg 1: the DECLARATION must be refused, for the right reason. Exit 96
+    # alone proves nothing: refusing on a missing 'text' column is the original
+    # defect -- right code, wrong reason -- wearing the fix's clothes.
+    declared = sft[SFT_DECIDING_ARM]
+    dec_exit = declared.get("launcher_exit_code")
+    if dec_exit == 0:
         return RED, (
-            f"{CLAIM!r} is FALSE on the plane operators train with. The deciding arm "
-            f"({SFT_DECIDING_ARM}) carries a usable text column AND a video key, exited "
-            f"{dec.get('launcher_exit_code')}, tokenized {dec.get('examples_tokenized')} "
-            f"example(s), and the word {NEEDLE!r} appears neither in its output nor in "
-            f"{dec.get('manifest_chars')} characters of run manifest. The declaration was "
-            f"dropped in silence and the run looked healthy. {contrast} The same plane refuses "
-            f"a bad image column by name, so this is a gap about video, not an inability to "
-            f"refuse; 5"
+            f"{CLAIM!r} is FALSE: the deciding arm ({SFT_DECIDING_ARM}) declared {NEEDLE!r} "
+            f"through {VIDEO_COLUMN_ENV} on an otherwise trainable corpus and the run trained "
+            f"anyway -- exit 0, {declared.get('examples_tokenized')} example(s) tokenized. The "
+            "declaration, the only signal a user has that the modality is wanted, is still "
+            "ignored; 5"
+        )
+    if dec_exit != REFUSE:
+        return REFUSE, (
+            f"the deciding arm ({SFT_DECIDING_ARM}) exited {dec_exit}, a shape this "
+            "adjudicator does not classify; refusing rather than forcing it into GREEN "
+            "or RED; 96"
+        )
+    if declared.get("refusal_names_missing_text") and not declared.get("output_names_needle"):
+        return RED, (
+            f"the RIGHT code for the WRONG reason is the original defect in a new outfit: the "
+            f"deciding arm ({SFT_DECIDING_ARM}) declared {NEEDLE!r} via {VIDEO_COLUMN_ENV} and "
+            "the run refused 96 on a missing 'text' column -- a refusal any textless corpus "
+            "would earn just as well -- instead of naming the modality it cannot train. The "
+            "declaration is still not the thing refused on; 5"
+        )
+    if not declared.get("output_names_needle"):
+        return REFUSE, (
+            f"the deciding arm ({SFT_DECIDING_ARM}) refused {REFUSE} but named neither the "
+            f"modality {NEEDLE!r} nor a missing 'text' column -- a refusal this adjudicator "
+            "cannot attribute; refusing rather than forcing it into GREEN or RED; 96"
         )
 
-    if dec.get("launcher_exit_code") == REFUSE and dec.get("output_names_needle"):
-        return GREEN, (
-            f"{CLAIM!r} holds: the deciding arm refused 96 and named {NEEDLE!r}, with the "
-            "refusal-capability control firing on its own declaration; 0"
+    # Leg 2: with NOTHING declared, the corpus must TRAIN -- the boundary is
+    # the declaration, never the data -- and the drop must be NAMED on the
+    # console. Refusing here is name-sniffing; silence here is the old drop.
+    undeclared = sft[SFT_UNDECLARED_ARM]
+    und_exit = undeclared.get("launcher_exit_code")
+    if und_exit == REFUSE:
+        return RED, (
+            f"over-correction, not a fix: the undeclared arm ({SFT_UNDECLARED_ARM}) carries a "
+            f"usable text column AND a {NEEDLE!r} key with NOTHING declared, and the run "
+            f"refused {und_exit}. A refusal keyed on the column NAME breaks legitimate text "
+            f"corpora that happen to carry such a column -- the boundary #490 drew is the "
+            "DECLARATION, never the data; 5"
         )
-    return REFUSE, (
-        f"the deciding arm exited {dec.get('launcher_exit_code')} in a shape this adjudicator "
-        f"does not classify (names_needle={dec.get('output_names_needle')}); refusing rather "
-        "than forcing it into GREEN or RED; 96"
+    if und_exit == 0:
+        if not undeclared.get("output_names_needle"):
+            contrast = (
+                "Meanwhile the RL plane REFUSES the same modality 96, naming both the modality "
+                "and the offending sample, before any model is consulted."
+                if rl_refuses
+                else "The RL plane did not refuse it either."
+            )
+            return RED, (
+                f"the silent drop is back: the undeclared arm ({SFT_UNDECLARED_ARM}) trained "
+                f"(exit 0, {undeclared.get('examples_tokenized')} example(s) tokenized) and "
+                f"the word {NEEDLE!r} never reached the console. Training an undeclared column "
+                f"is intended; saying nothing about dropping it is the defect this row exists "
+                f"to catch. {contrast}; 5"
+            )
+    else:
+        return REFUSE, (
+            f"the undeclared arm ({SFT_UNDECLARED_ARM}) exited {und_exit}, a shape this "
+            "adjudicator does not classify; refusing rather than forcing it into GREEN "
+            "or RED; 96"
+        )
+
+    return GREEN, (
+        f"{CLAIM!r} holds on the plane operators train with, for the right reason: the "
+        f"deciding arm ({SFT_DECIDING_ARM}) declared {NEEDLE!r} through {VIDEO_COLUMN_ENV} "
+        f"and refused {REFUSE} naming the modality, while the undeclared arm "
+        f"({SFT_UNDECLARED_ARM}) carried a mere {NEEDLE!r} key, trained "
+        f"({undeclared.get('examples_tokenized')} example(s) tokenized), and the "
+        "[fs:train:data] notice named the dropped column on the console. The refusal is "
+        "keyed on the DECLARATION and the data-only case trains with its drop NAMED -- "
+        "exactly the boundary #490 drew; 0"
     )
 
 
@@ -345,6 +472,22 @@ def _run_rl_leg(leg: str, src_root: Path, out_dir: Path) -> dict[str, Any]:
     }
 
 
+def _sft_plan() -> dict[str, Any]:
+    """The run plan for the SFT plane, emitted for the tray-side measurer."""
+    return {
+        "row": ROW_ID,
+        "arms": SFT_ARM_SPECS,
+        "hyperparameters": {
+            "max_steps": MAX_STEPS,
+            "per_device_batch_size": PER_DEVICE_BATCH_SIZE,
+            "nodes": NODES,
+            "gpus_per_node": GPUS_PER_NODE,
+            "seed": SEED,
+            "timeout_s": ARM_TIMEOUT_S,
+        },
+    }
+
+
 # --------------------------------------------------------------------------
 # --self-test: drive the PURE verdict over synthetic payloads
 # --------------------------------------------------------------------------
@@ -353,6 +496,7 @@ def _sft_arm(**over: Any) -> dict[str, Any]:
         "status": "measured",
         "launcher_exit_code": 0,
         "output_names_needle": False,
+        "refusal_names_missing_text": False,
         "manifests_naming_needle": [],
         "manifest_chars": 30671,
         "examples_tokenized": 2,
@@ -378,11 +522,24 @@ def _rl_arm(**over: Any) -> dict[str, Any]:
 
 
 def _measured_payload() -> dict[str, Any]:
-    """The shape actually measured on 2026-09-16, used as the self-test baseline."""
+    """The shape fix #490 is designed to produce, used as the self-test baseline.
+
+    The deciding arm refuses 96 naming the modality; the undeclared arm trains
+    and its [fs:train:data] notice names the dropped column; the bare-video
+    arm's notice names the drop before its textless corpus earns the ordinary
+    missing-'text' refusal; the RL plane is unchanged.
+    """
     return {
         "sft": {
-            "video_only": _sft_arm(launcher_exit_code=REFUSE, output_names_needle=True),
-            "text_video": _sft_arm(),
+            "video_only": _sft_arm(
+                launcher_exit_code=REFUSE,
+                output_names_needle=True,
+                refusal_names_missing_text=True,
+            ),
+            "text_video": _sft_arm(output_names_needle=True),
+            "text_video_declared": _sft_arm(
+                launcher_exit_code=REFUSE, output_names_needle=True
+            ),
             "image_control": _sft_arm(launcher_exit_code=REFUSE, names_own_declaration=True),
         },
         "rl": {
@@ -412,17 +569,103 @@ def _mutate(payload: dict[str, Any], plane: str, arm: str, **over: Any) -> dict[
 def _self_test() -> int:
     base = _measured_payload()
     controls: list[tuple[str, str, dict[str, Any], int]] = [
-        # -- MUST_FIRE: the real measured shape, and each control's own failure --
-        ("MUST_FIRE", "the measured two-plane shape is RED", base, RED),
+        # -- MUST_PASS: the post-fix shape, leg by leg -------------------------
+        (
+            "MUST_PASS",
+            "the deciding arm refuses 96 AND names the modality -- the GREEN leg #490 added",
+            base,
+            GREEN,
+        ),
+        (
+            "MUST_PASS",
+            "the undeclared-corpus arm trains AND names the dropped column on the console -- "
+            "the second GREEN leg (training is intended; naming the drop is the fix)",
+            base,
+            GREEN,
+        ),
+        (
+            "MUST_PASS",
+            "controls are judged BEFORE the claim: a broken control outranks a red-looking arm",
+            _mutate(
+                _mutate(base, "sft", "image_control", names_own_declaration=False),
+                "sft",
+                "text_video",
+                output_names_needle=False,
+            ),
+            REFUSE,
+        ),
+        # -- MUST_FIRE: each way the boundary can be broken --------------------
         (
             "MUST_FIRE",
-            "a silent SFT drop with NO RL refusal is still RED (the drop is the defect)",
-            _mutate(base, "rl", "video_declared", refusal_subject="other", code_chose_exit=0),
+            "the RIGHT code for the WRONG reason is the original defect: 96 about a "
+            "missing 'text' column instead of about the modality",
+            _mutate(
+                base,
+                "sft",
+                "text_video_declared",
+                output_names_needle=False,
+                refusal_names_missing_text=True,
+            ),
             RED,
         ),
         (
             "MUST_FIRE",
-            "an SFT plane that cannot refuse ANY declaration makes video silence unreadable",
+            "a declaration that TRAINS anyway is a declaration ignored, which is the "
+            "failure this row measures",
+            _mutate(
+                base,
+                "sft",
+                "text_video_declared",
+                launcher_exit_code=0,
+                output_names_needle=False,
+            ),
+            RED,
+        ),
+        (
+            "MUST_FIRE",
+            "an undeclared corpus that TRAINS without the drop named on the console is "
+            "the silent drop returning",
+            _mutate(base, "sft", "text_video", output_names_needle=False),
+            RED,
+        ),
+        (
+            "MUST_FIRE",
+            "a manifest mention is not the console notice: naming the drop only in files "
+            "operators never read changes nothing",
+            _mutate(
+                base,
+                "sft",
+                "text_video",
+                output_names_needle=False,
+                manifests_naming_needle=["run_manifest.json"],
+            ),
+            RED,
+        ),
+        (
+            "MUST_FIRE",
+            "refusing an UNDECLARED corpus is name-sniffing: refusal keyed on the column "
+            "name breaks legitimate text corpora -- the opposite over-correction",
+            _mutate(
+                base, "sft", "text_video", launcher_exit_code=REFUSE, output_names_needle=True
+            ),
+            RED,
+        ),
+        (
+            "MUST_FIRE",
+            "a silent console drop with NO RL refusal to contrast it is still RED -- the "
+            "contrast is context, not the defect",
+            _mutate(
+                _mutate(base, "rl", "video_declared", refusal_subject="other", code_chose_exit=0),
+                "sft",
+                "text_video",
+                output_names_needle=False,
+            ),
+            RED,
+        ),
+        # -- MUST_FIRE: controls that never fired make the claim unreadable ----
+        (
+            "MUST_FIRE",
+            "an SFT plane that cannot refuse ANY declaration makes video unreadable",
             _mutate(base, "sft", "image_control", names_own_declaration=False),
             REFUSE,
         ),
@@ -466,38 +709,22 @@ def _self_test() -> int:
         ),
         (
             "MUST_FIRE",
-            "an unclassifiable deciding arm refuses rather than being forced to a verdict",
-            _mutate(base, "sft", "text_video", launcher_exit_code=REFUSE),
-            REFUSE,
-        ),
-        # -- MUST_PASS: the shapes that must NOT be called RED -----------------
-        (
-            "MUST_PASS",
-            "a deciding arm that refuses AND names video is GREEN",
-            _mutate(base, "sft", "text_video", launcher_exit_code=REFUSE, output_names_needle=True),
-            GREEN,
-        ),
-        (
-            "MUST_PASS",
-            "a manifest naming video is NOT a silent drop even at exit 0",
-            _mutate(base, "sft", "text_video", manifests_naming_needle=["run_manifest.json"]),
-            REFUSE,
-        ),
-        (
-            "MUST_PASS",
-            "stdout naming video is NOT a silent drop even at exit 0",
-            _mutate(base, "sft", "text_video", output_names_needle=True),
-            REFUSE,
-        ),
-        (
-            "MUST_PASS",
-            "controls are judged BEFORE the claim: a broken control outranks a red-looking arm",
+            "a deciding arm that refuses 96 naming NEITHER the modality nor 'text' is "
+            "unattributable -- refused rather than forced to a verdict",
             _mutate(
-                _mutate(base, "sft", "image_control", names_own_declaration=False),
+                base,
                 "sft",
-                "text_video",
-                launcher_exit_code=0,
+                "text_video_declared",
+                output_names_needle=False,
+                refusal_names_missing_text=False,
             ),
+            REFUSE,
+        ),
+        (
+            "MUST_FIRE",
+            "an undeclared arm exiting outside the 0/96 boundary is unclassifiable, not "
+            "GREEN or RED",
+            _mutate(base, "sft", "text_video", launcher_exit_code=1),
             REFUSE,
         ),
     ]
@@ -509,7 +736,8 @@ def _self_test() -> int:
         passed += ok
         mark = "PASS" if ok else "FAIL"
         print(
-            f"  [{mark}] {kind} {name}: want {VERDICT_NAMES[want]}, got {VERDICT_NAMES.get(got, got)}"
+            f"  [{mark}] {kind} {name}: want {VERDICT_NAMES[want]}, "
+            f"got {VERDICT_NAMES.get(got, got)}"
         )
         if not ok:
             print(f"         reason: {reason}")
@@ -532,7 +760,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--sft-payload",
         help="JSON file holding the already-measured SFT arms; the SFT plane needs a model "
-        "and a tray, so it is measured separately and joined here",
+        "and a tray, so it is emitted as a plan, measured separately and joined here",
     )
     return ap
 
@@ -547,6 +775,14 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    # The SFT plane needs a model and a tray this process does not have. Emit
+    # the plan -- corpus columns and env per arm, including the new
+    # FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN declaration on the deciding arm -- so
+    # the tray-side measurer runs exactly the boundary this verdict scores.
+    (out_dir / "t1_22_sft_plan.json").write_text(
+        json.dumps(_sft_plan(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
     rl = {leg: _run_rl_leg(leg, Path(args.src_root).resolve(), out_dir) for leg in RL_ARMS}
     sft: dict[str, Any] = {}
     if args.sft_payload:
@@ -560,7 +796,8 @@ def main(argv: list[str] | None = None) -> int:
             sft = json.loads(Path(args.sft_payload).read_text(encoding="utf-8"))
         except OSError as exc:
             print(
-                f"UNMEASURED: --sft-payload {args.sft_payload!r} is unreadable ({exc.__class__.__name__}: "
+                f"UNMEASURED: --sft-payload {args.sft_payload!r} is unreadable "
+                f"({exc.__class__.__name__}: "
                 f"{exc}); the SFT arms were never joined, so nothing was adjudicated; 95",
                 file=sys.stderr,
             )

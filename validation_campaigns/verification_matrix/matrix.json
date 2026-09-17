@@ -113,27 +113,30 @@
       "run_arm": "run from a git checkout",
       "control_arm": "#346: a COPY must record status=not_a_repository AND the run must say so loudly, not proceed silently",
       "cost": "0 GPU",
-      "status": "RED (#346)",
+      "status": "SHIPPED (#488, #487, #346): found RED by this matrix's own harness and FIXED, not published as a defect. The recording half was never wrong -- an unversioned tree is recorded as status not_a_repository with commit null in the written run_manifest.json, while a real checkout records the commit an independently read HEAD reports -- so nothing was ever misattributed. The loudness half was: nothing outside the provenance module read code.status, so a run unpacked from a tarball exited 0 over 11 lines without one of them saying it was unattributable. _emit_manifest now says so whenever the recorded commit is absent, and the control run from a real checkout stays silent, which is what keeps the line worth reading",
       "blocked_by": [],
       "findings": [
-        "#346"
+        "#346",
+        "#487",
+        "#488"
       ],
-      "adjudicator": null
+      "adjudicator": "validation_campaigns/verification_matrix/t0_9_code_status_arms.py"
     },
     {
       "id": "T0-10",
       "tier": 0,
       "group": "declaration and recording",
       "claim": "the effective topology is read from runtime evidence, never echoed from the config",
-      "run_arm": "WORLD_SIZE=8 LOCAL_WORLD_SIZE=8 against a config declaring tp=pp=ep=cp=4 and gpus_per_node=4",
-      "control_arm": "#375: the pre-fix _effective_topology, which sourced 5 of the 7 fields from cfg -- 11 of the 14 legs in tests/train/test_effective_topology.py go RED against it and 14 of 14 pass after",
-      "cost": "0 GPU",
-      "status": "SHIPPED (#375): 14 of 14 legs green, 11 RED on the pre-fix tree",
+      "run_arm": "WORLD_SIZE=8 LOCAL_WORLD_SIZE=8 against a config declaring tp=pp=ep=cp=4 and gpus_per_node=4; and on hardware, four real srun/torchrun arms inside one allocation: 4 declared/4 launched, 16/16, and the deciding 16 declared/8 launched",
+      "control_arm": "#375: the pre-fix _effective_topology, which sourced 5 of the 7 fields from cfg -- 11 of the 14 legs in tests/train/test_effective_topology.py go RED against it and 14 of 14 pass after; on hardware the two truthful arms must disagree with each other (equal worlds score RED as a constant, not green) and a no-torchrun arm must announce the comparison skipped and report no world at all",
+      "cost": "0 GPU for the unit legs; ~4 min on 4 nodes x 4 GPUs for the hardware arms",
+      "status": "SHIPPED (#489, #375): 14 of 14 unit legs green with 11 RED on the pre-fix tree, and since #489 the claim is also measured end to end on four trays and sixteen GPUs through the shipped CLI. Handed a declaration of dp=16 against 8 launched ranks the run reported 8 -- the launch -- blocked on topology.effective_overrides_dp and topology.effective_overrides_nodes before importing torch, and wrote both the stage and the codes into its manifest. Two truthful arms answered 4 and 16, so the reading is not a constant. Adjudicated by a pure verdict whose 20 controls include a GREEN one for an uninformative exit code, because torchrun collapses worker exit codes and the arm is scored on what it said and wrote rather than on what srun returned",
       "blocked_by": [],
       "findings": [
-        "#375"
+        "#375",
+        "#489"
       ],
-      "adjudicator": null
+      "adjudicator": "validation_campaigns/verification_matrix/t0_10_effective_topology_arms.py"
     },
     {
       "id": "T1-1",
@@ -493,13 +496,15 @@
       "tier": 1,
       "group": "modality",
       "claim": "declaring video REFUSES cleanly today",
-      "run_arm": "video corpus",
-      "control_arm": "must be 96, not a silent text-only train",
-      "cost": "~5 min",
-      "status": "MEASURED RED on a tray at 1460560 (#477), adjudicated over BOTH planes by t1_22_video_declaration_arms.py, whose fourteen self-test controls pin the verdict order. This row previously asserted a refusal with no evidence and no adjudicator, and its own control arm named the failure mode that actually occurs. The deciding arm carries a usable text column AND a video key, so the only term differing from an ordinary accepted corpus is the declaration under test -- it exited 0, tokenized 2 examples, and the word appears neither in its output nor in 30,671 characters of run manifest. The declaration is dropped in silence and the run looks healthy. That silence is readable only because the positive control declares an image column the dataset lacks and the SAME plane refuses 96 naming that column, so this is a gap about video specifically, not an inability to refuse a declaration. This is sharper than the declared-audio row: audio has no occurrences in shipped source, so there is nothing to reach, whereas the RL plane refuses video deliberately and by name, before any model is consulted, with a written rationale about frame budgets -- measured here at exit 96 naming both the modality and the offending sample, against an otherwise identical control with the key removed that reaches the model load instead, and a wrong-type control that refuses on the key's type. So the refusal EXISTS, is specific and is correct, and the training entry point cannot reach it.",
+      "run_arm": "video corpus; and after #490, seven arms on a tray -- three RL (declared, absent, wrong-type) and four SFT (video-only, an undeclared text+video key, declared video, image control)",
+      "control_arm": "must be 96, not a silent text-only train; the undeclared arm must TRAIN with its drop NAMED and scores RED if it refuses, because refusing a corpus for carrying a key called video is name-sniffing; and #477 stands as the pre-fix must-fire, where the same deciding corpus exited 0 and named the modality in neither its output nor 30,671 characters of manifest",
+      "cost": "~2 min on 1 GPU for the seven arms; each arm must see exactly ONE device -- with two visible, this single-process run wraps in DataParallel and wedges silently (observed at 25 min with 0% GPU and one pegged core, #492)",
+      "status": "MEASURED GREEN on a tray (#491) after the #490 fix, over BOTH planes, adjudicated by t1_22_video_declaration_arms.py whose eighteen self-test controls pin the verdict order and exercise all four verdicts. Seven arms ran: three on the RL plane and four on the SFT plane operators actually train with. The deciding arm declares 'video' through FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN and refuses 96 naming the modality, the variable that declared it and the way out; and its refusal is NOT the missing-text message a corpus with no text column earns. That distinction is the whole row: both refusals exit 96, so the measurer discriminates them with a regex anchored on the real wording in src/foundationscale/train/loop.py rather than on the fixture, and a self-test control plants each wording and requires the flag to set for one and not the other. The undeclared control carries a mere 'video' key alongside a usable text column, TRAINS (2 examples tokenized) and prints a [fs:train:data] notice naming the dropped column -- refusing that one would be name-sniffing, so a control scores it RED if it refuses, and that is what keeps opting out free. An image control declaring a column the corpus lacks still refuses 96, so the plane's ability to refuse a declaration at all is measured rather than assumed. Before #490 this row was MEASURED RED (#477): the same deciding corpus exited 0, tokenized 2 examples, and the word appeared neither in its output nor in 30,671 characters of run manifest -- the declaration was dropped in silence and the run looked healthy. The RL plane refused video by name throughout, before any model is consulted, with a written rationale about frame budgets; what #490 changed is that the training entry point can now reach a refusal of its own.",
       "blocked_by": [],
       "findings": [
-        "#477"
+        "#477",
+        "#490",
+        "#491"
       ],
       "adjudicator": "validation_campaigns/verification_matrix/t1_22_video_declaration_arms.py"
     },
@@ -508,15 +513,17 @@
       "tier": 1,
       "group": "modality",
       "claim": "declaring audio REFUSES cleanly today",
-      "run_arm": "audio corpus",
-      "control_arm": "must be 96, not a silent drop of the audio field",
-      "cost": "~5 min",
-      "status": "MEASURED RED on a tray under the manifest that records it, three arms of the real training entry point on a small text model, adjudicator `t1_23_audio_declaration_arms.py`, 22 of 22 self-test controls passing under a bare interpreter. The row claimed that declaring audio REFUSES cleanly today. It does not. Arm A, a corpus whose only field is `audio`, does exit 96 -- but the refusal reads \"the thin path requires a 'text' column\" and names the column list it saw, so it is a refusal about the missing text, not about the declared sound; a corpus carrying nothing but a timestamp earns the identical 96. Arm B, the deciding arm, puts `text` and `audio` in the same record: exit 0, 2 examples tokenized, and the word never appears again -- not in a log line, not in the 20353 characters of the run manifest, which records the corpus path and the full argv but no column list. The field is deleted by the `remove_columns` argument of the tokenizing map, which drops every original column, and nothing upstream of it ever reads the key. Arm C is the positive control and is the reason this row can conclude anything at all: with the image-column environment variable declaring a column the corpus does not contain, the same trainer, same model, same corpus shape, exits 96 and says \"image column 't23_img_probe' is declared but dataset ... has columns ['text']. Training anyway would run text-only under a multimodal label -- the silent-drop defect this plane now refuses.\" So the framework has a name for this exact defect class, refuses it for a declared image column, and commits it for a declared audio one. Without arm C the silence in arm B has two readings that cannot be told apart -- a framework that drops a declared modality without a word, and an instrument that could not see a refusal if there were one -- and the adjudicator REFUSES with 96 rather than report a verdict if arm C fails to fire or refuses without naming its own column. The instrument's fingerprint was ruled out rather than assumed: the manifest records the corpus path and the argv, so a corpus named corpus_audio.jsonl would make the scan match itself and score the arm green for the harness's words instead of the framework's; every arm asserts that no element of its argv and no path it writes carries the substring, and the assertion is recorded per arm in the payload. Verdict order is pinned by controls, not by comments: an arm that did not run is 95 and outranks everything, a dirty argv is 96 and outranks the RED, a control that did not fire is 96, an arm that exited 0 having tokenized nothing is 96 and not a pass, and a run that drops the field but SAYS so in its output or its manifest is 0, not 5. What this does not measure: whether any other entry point in the package handles audio -- none does, the string appears zero times in the shipped source -- and whether the framework ought to support audio at all. The row is about the honesty of the declaration surface, and the honest reading today is that a user who hands this trainer a multimodal corpus gets a text-only run under a multimodal label, which is precisely what the image plane already refuses. #454",
+      "run_arm": "audio corpus; and after #490, four arms on a tray -- audio-only, an undeclared text+audio record, an image control, and the deciding declared-audio arm",
+      "control_arm": "must be 96, not a silent drop of the audio field, and the 96 must name the MODALITY rather than the missing text -- a corpus holding nothing but a timestamp earns the latter identically; the undeclared arm must TRAIN with its drop NAMED and scores RED if it refuses; and #454/#463/#476 stand as the pre-fix must-fire, where the deciding arm exited 0 and the audio-only arm's 96 was about the absent text column",
+      "cost": "~2 min on 1 GPU for the four arms; each arm must see exactly ONE device -- with two visible, this single-process run wraps in DataParallel and wedges silently (#492)",
+      "status": "MEASURED GREEN on a tray (#491) after the #490 fix, four arms of the real training entry point on a small text model, adjudicator t1_23_audio_declaration_arms.py, 29 of 29 self-test controls passing under a bare interpreter. The deciding arm declares 'audio' through FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN and exits 96 saying \"audio column 'audio' is declared via FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN, but this training plane has no audio arm: it encodes text, and pixels when an image column is declared\", and the manifest it writes records stage=refused together with the declared audio column -- the word now appears in the manifest that previously carried zero occurrences of it. The undeclared control puts text and audio in the same record and TRAINS: exit 0, 2 examples tokenized, with \"[fs:train:data] text-only arm: tokenizing 'text'; columns ['audio'] are dropped and contribute nothing to the loss\". The drop stays and the silence goes, which is the narrow change this row needed -- refusing a corpus for merely carrying a key named audio would be name-sniffing, and a control scores that RED. A corpus whose only field is audio still exits 96 for the missing text column, correctly, and an image control declaring a column the corpus lacks exits 96 naming that column, so the instrument is shown able to see a refusal rather than assumed to be. Before #490 this row was MEASURED RED (#454, #463, #476): the deciding arm exited 0 with the word appearing nowhere in 20,353 characters of run manifest, and the audio-only arm's 96 read \"the thin path requires a 'text' column\" -- a refusal about the absent text that a corpus carrying nothing but a timestamp earns identically, so the right exit code stood for the wrong reason. The instrument's own fingerprint is still ruled out rather than assumed: every arm asserts that no element of its argv and no path it writes carries the substring, so a scan cannot match the harness's words in place of the framework's.",
       "blocked_by": [],
       "findings": [
         "#454",
         "#463",
-        "#476"
+        "#476",
+        "#490",
+        "#491"
       ],
       "adjudicator": "validation_campaigns/verification_matrix/t1_23_audio_declaration_arms.py"
     }

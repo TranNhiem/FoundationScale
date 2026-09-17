@@ -225,6 +225,81 @@ MARKERS: tuple[str, ...] = tuple(
 )
 
 
+# #490: the modalities this training plane can be TOLD about but cannot TRAIN.
+# Ordered, and the order is the reporting order when someone declares both --
+# an arbitrary but FIXED choice, so the refusal text is reproducible.
+UNTRAINABLE_MODALITIES: tuple[tuple[str, str], ...] = (
+    ("audio", "FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN"),
+    ("video", "FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN"),
+)
+
+
+def _declared_untrainable_modality(
+    environ: Mapping[str, str],
+) -> tuple[str, str, str] | None:
+    """(modality, env var, declared column) if one is declared, else None.
+
+    Keyed on the DECLARATION, never on the data. Refusing any dataset that
+    happens to carry a column named "video" would be name-sniffing, and wrong:
+    dropping `label` from a text corpus is correct and ordinary, and a text
+    field literally named "video" is a legitimate corpus. Declaring the axis is
+    the user saying "this run is about sound/frames", and that is a promise
+    this plane cannot keep. Opting out is therefore free -- do not declare it --
+    which is why no "train anyway" flag exists to be tested and mis-set.
+
+    An empty value reads as UNDECLARED, matching the image column's rule, so an
+    exported-but-blank variable does not refuse a run that meant nothing by it.
+    """
+    for modality, var in UNTRAINABLE_MODALITIES:
+        declared = environ.get(var) or None
+        if declared is not None:
+            return modality, var, declared
+    return None
+
+
+def _untrainable_modality_refusal(modality: str, var: str, declared: str) -> str:
+    """The refusal text, which has to do more than carry the right exit code.
+
+    T1-23's original RED was an exit 96 whose MESSAGE was about a missing
+    'text' column -- a corpus holding nothing but a timestamp earned the
+    identical words. So the wording is part of the claim, and therefore part of
+    what gets tested: it names the modality, the variable that declared it, and
+    the way out.
+    """
+    # "a audio label" was what the first tray run actually printed. The article
+    # is chosen from the word rather than hard-coded because this sentence is the
+    # product surface of the refusal -- the row's evidence quotes it verbatim --
+    # and a modality added later must not reintroduce the same blemish silently.
+    article = "an" if modality[:1].lower() in "aeiou" else "a"
+    return (
+        f"{modality} column {declared!r} is declared via {var}, but this training "
+        f"plane has no {modality} arm: it encodes text, and pixels when an image "
+        f"column is declared -- nothing else. Training anyway would drop the "
+        f"{modality} silently and report success under {article} {modality} label, "
+        f"which is the defect this refuses. Unset {var} to train text-only on the "
+        "same corpus"
+    )
+
+
+def _dropped_column_notice(columns: list[str], kept: str = "text") -> str | None:
+    """Name the columns the text-only arm discards, or None if it discards none.
+
+    The drop is correct -- `label` is not training signal -- and it is not what
+    T1-22 found. What it found was that a `video` field went the same way with
+    nothing in the console and nothing in 30,671 characters of run manifest
+    naming it. A true thing nobody says is not a warning.
+    """
+    dropped = [c for c in columns if c != kept]
+    if not dropped:
+        return None
+    return (
+        f"text-only arm: tokenizing {kept!r}; columns {dropped} are dropped and "
+        "contribute nothing to the loss. If one of them was meant to be trained "
+        "on, declare it -- an undeclared column is dropped by design, not by "
+        "accident"
+    )
+
+
 def _mark(step: str, msg: str = "") -> None:
     print(f"[{step}]".ljust(24) + f" {msg}".rstrip(), flush=True)
 
@@ -2346,6 +2421,30 @@ def _emit_manifest(
         return path
     path.write_text(manifest.to_json() + "\n", encoding="utf-8")
     _mark(Step.MANIFEST, f"run manifest ({stage}) -> {path}")
+    # #487: the manifest records an unattributable run HONESTLY, and for a long
+    # time that was the whole of it. Nothing outside provenance/manifest.py read
+    # code.status, so a run started from an unpacked tarball exited 0 without one
+    # line of its output saying it could not be tied to a revision of the source.
+    # That is a quiet truth rather than a lie -- the record was right, and only a
+    # reader who opened the file learned it. The console is what a user reads.
+    #
+    # Keyed on the ABSENT COMMIT rather than on NOT_A_REPOSITORY. "Cannot be
+    # attributed" is the property being warned about, and it is also reachable
+    # from a real repository with an unborn HEAD, which a status test would miss.
+    # The converse matters more: a repository that merely declined to capture a
+    # diff still has its commit, and must stay silent here, or this fires on
+    # ordinary runs -- and a warning that fires on every run is not read.
+    code = getattr(manifest, "code", None)
+    if code is not None and getattr(code, "commit", None) is None:
+        status = getattr(code.status, "value", code.status)
+        _mark(
+            Step.MANIFEST,
+            f"UNATTRIBUTABLE RUN: code.status={status} and no commit was captured, "
+            f"so nothing this run produces -- including {path.name} -- can be tied "
+            "back to a revision of the source. The manifest says so honestly rather "
+            "than inventing a commit; it is repeated here because a truth recorded "
+            "only in a file nobody opens is not a warning.",
+        )
     return path
 
 
@@ -2658,6 +2757,24 @@ def _train(cfg: TrainConfig) -> int:
     import os as _os  # noqa: PLC0415 -- function-local, keeps module import light
 
     IMAGE_COLUMN = _os.environ.get("FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN") or None
+    # #490: audio and video are DECLARABLE here and immediately REFUSED, which
+    # is the honest shape for an axis this plane has no arm for. Before this
+    # they were not declarable at all, and that absence is what let T1-22 and
+    # T1-23 assert "declaring it refuses cleanly" for two releases while a
+    # corpus carrying a video field trained on its text and never said so.
+    # Fires before the model, the tokenizer and the dataset, so the refusal
+    # costs nothing and cannot be confounded by an unloadable corpus -- that
+    # confound is what made T1-23's original exit 96 unreadable.
+    _untrainable = _declared_untrainable_modality(_os.environ)
+    if _untrainable is not None:
+        _modality, _var, _declared = _untrainable
+        _mark(Step.REFUSE, _untrainable_modality_refusal(_modality, _var, _declared))
+        _emit_manifest(
+            cfg,
+            stage="refused",
+            extra={"exit": EXIT_REFUSE, f"{_modality}_column": _declared},
+        )
+        return EXIT_REFUSE
     # attn_implementation binds at MODEL CONSTRUCTION, not on TrainingArguments
     # -- no such knob exists there, so it rides from_pretrained. The contract is
     # the same one the TrainingArguments introspection below enforces (#342: a
@@ -2824,6 +2941,12 @@ def _train(cfg: TrainConfig) -> int:
             )
             return EXIT_REFUSE
         if IMAGE_COLUMN is None:
+            # #490: say what is being dropped. A console line only -- the arm
+            # below stays byte-identical, which is what makes it safe to add
+            # here rather than folding it into the map().
+            _notice = _dropped_column_notice(columns)
+            if _notice is not None:
+                _mark(Step.DATA, _notice)
             # TEXT-ONLY ARM -- byte-identical to the pre-#410 plane. Same
             # lambda, same remove_columns, and the historical collator
             # downstream. Do not "simplify" this into the shared arm.

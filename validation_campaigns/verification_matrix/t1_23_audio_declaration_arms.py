@@ -1,105 +1,146 @@
 #!/usr/bin/env python3
-"""T1-23: "declaring audio REFUSES cleanly today" -- or is the field silently dropped?
+"""T1-23: declaring audio must refuse by name; merely carrying it must not.
 
 Row claim
-    declaring audio REFUSES cleanly today
+    declaring audio REFUSES cleanly and NAMES the modality
 Run arm
-    audio corpus
+    a text+audio corpus with FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN set
 Control arm
-    "must be 96, not a silent drop of the audio field"
+    the same corpus with nothing declared must TRAIN, and the console must name
+    the dropped audio column; refusing it would be name-sniffing
 
-What is actually true of the shipped source, measured and not re-derived: the
-string "audio" appears ZERO times in src/foundationscale/ -- there is no audio
-surface. The text path tokenizes only ``batch["text"]`` and then calls
-`` .map(..., remove_columns=columns)`` -- there is no audio surface. The text
-path tokenizes only ``batch["text"]`` and then calls
-``.map(..., remove_columns=columns)``, which deletes EVERY original column, so
-an extra field -- audio included -- vanishes with no log line and no manifest
-entry. A corpus with no "text" column at all is refused with exit 96 ("the
-thin path requires a 'text' column", interpolating the columns it saw). The one
-guarded non-text surface is an IMAGE column declared through
-FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN: if that declared column is absent from the
-dataset, the trainer refuses with exit 96 and a message that NAMES the column.
-The run manifest records cfg.dataset (the corpus PATH) and the full argv; it
-does not record a column list.
+Subject change measured here: fix #490 gave src/foundationscale/train/loop.py a
+real undeclared-modality surface. FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN and
+FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN are module-level declarations. An EMPTY env
+value reads as undeclared. Immediately after the image declaration is read, and
+before the model, tokenizer, or dataset are touched, a non-empty declaration
+refuses with exit 96, emits [fs:train:refuse], and writes a refused run
+manifest carrying extra.exit and extra.<modality>_column. The refusal text
+names the modality, the environment variable, the declared column, and "text"
+as what this plane can train. It is deliberately NOT the old "requires a 'text'
+column" failure.
 
-So the interesting question is not "does it refuse when there is nothing to
-train on" -- it does, for the missing text, not for the audio. The interesting
-question is what happens when a corpus carries BOTH text and audio.
+In the text-only arm -- no image column declared -- tokenization still trains on
+batch["text"] exactly as before. What changed is that a non-text dataset column
+is now named before tokenization: a [fs:train:data] line says text is being
+tokenized and that columns such as ['audio'] are dropped and contribute nothing
+to the loss.
 
-The three arms -- each an independent subprocess of the REAL entry point,
+The load-bearing distinction is DECLARATION, not DATA:
+
+  * a corpus whose rows contain a key called "audio", with no declaration, is a
+    legitimate text corpus with an extra field. It must train. The drop must be
+    announced.
+  * the same corpus with FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN=audio is an
+    operator declaration that audio was meant to be trained. This plane cannot
+    train audio, so it must refuse by name with 96.
+
+Refusing merely because a column is named "audio" would break ordinary text
+corpora that happen to carry such a field. Training it silently would return
+the original defect. Either direction of over-correction is RED here.
+
+The four arms -- each an independent subprocess of the REAL entry point,
 ``python -m foundationscale.train.cli``, the thing under test being the thing
 that ships, not an in-process reimplementation -- differ only in corpus and
 environment; every trainer flag is held constant across arms:
 
-    A audio_only     2 rows of {"audio": "clip0.wav"} -- no text column at all.
-                     Today: exit 96 naming the columns it saw.
-    B text_audio     2 rows of {"text": <sentence>, "audio": "clip0.wav"}.
-                     Today: it trains. The question is whether ANYTHING tells
-                     the user the audio field was discarded.
-    C image_control  2 rows of {"text": <sentence>}, run with
-                     FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN set to a column name
-                     that is NOT in the corpus. Today: exit 96 naming it.
+    audio_only      2 rows of {"audio": "clip0.wav"} -- no text column and no
+                    declaration. It should still be refused by the old missing
+                    text requirement.
+    text_audio      2 rows of {"text": <sentence>, "audio": "clip0.wav"}, with
+                    every modality declaration explicitly removed. Today: train,
+                    and the [fs:train:data] notice must name the dropped field.
+    image_control   2 rows of {"text": <sentence>}, run with
+                    FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN set to a column absent
+                    from the corpus. Today: exit 96 naming it.
+    declared_audio  the same corpus as text_audio, but with
+                    FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN=audio. Today: exit 96
+                    whose refusal names audio. This is the deciding arm.
 
-WHY ARM C EXISTS
-    Arm C is the POSITIVE CONTROL and the reason this file can conclude
-    anything at all. Without it, arm B's silence has two explanations that
-    cannot be told apart: the framework is silently dropping a declared
-    modality, or this instrument simply cannot see a refusal. Arm C forces the
-    framework to refuse over a declared non-text column and forces the
-    instrument to observe it. If arm C does not refuse with a 96 naming its
-    declared column, this file REFUSES with 96 rather than report a verdict on
-    arm B: a control that does not fire, or fires for the wrong cause, cannot
-    acquit a silence.
+WHY IMAGE_CONTROL STILL EXISTS
+    Declared_audio is now the deciding arm, but that does not make the image
+    control redundant. It checks that the pre-existing declared non-text
+    surface still refuses for its own declared column and gives this instrument
+    an independent observation that a 96 naming a declaration can be seen
+    through the same subprocess and scanner. If image_control instead exits 0,
+    or refuses for an unrelated reason, the row cannot acquit or convict the
+    declaration machinery on this checkout and the adjudicator refuses rather
+    than pretend a control survived. The new arm then decides the claim; the
+    old control keeps the measurement honest.
+
+WHY AUDIO_ONLY STILL EXISTS
+    A corpus with no usable text must not start training just because the
+    harness is now paying attention to modality declarations. With no
+    FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN exported there is no declared modality
+    to refuse, so the ordinary missing 'text' refusal remains the expected
+    surface. If that arm exits 0, the framework trained a corpus it has no
+    training field for, which is RED. If it exits 96 naming neither the text
+    requirement nor the corpus's audio field, the refusal cannot be tied to
+    this corpus and the row refuses to adjudicate it.
 
 THE SELF-HIT TRAP
-    Arm B's verdict turns on a substring scan for "audio" over the arm's
-    combined output and its run manifest -- but the manifest records the corpus
-    PATH and the full argv. Were the corpus file called corpus_audio.jsonl, or
-    an output directory t23_text_audio/, the scanner would find its own needle
-    and score the arm GREEN for the wrong reason: the framework said nothing,
-    the harness said it. Therefore every path this file creates is arm_a /
-    arm_b / arm_c and corpus.jsonl -- no case-insensitive "audio" anywhere --
-    argv cleanliness is ASSERTED before the first arm runs and again when the
-    payload is built, a dirty argv is 96 CANNOT-MEASURE (the measurement would
-    be reading its own fingerprint, not a warning), and the record VALUE is
-    clip0.wav so that only the record KEY ("audio") carries the word and only
-    the framework can put it in a log line. The image-column environment
-    variable is set for arm C from a COPY of os.environ and explicitly REMOVED
-    for arms A and B, so an operator who happens to have it exported cannot
-    change what the row measures.
+    text_audio's verdict turns on whether the child process's console output
+    contains the [fs:train:data] marker and the word "audio". The manifest can
+    record the corpus PATH and full argv. Were the corpus named
+    corpus_audio.jsonl, or an output directory t23_text_audio/, the scanner
+    would find its own needle and score a framework silence GREEN because the
+    harness said the word. Therefore every path placed on the child's argv is
+    arm_a / arm_b / arm_c / arm_d and corpus.jsonl -- no case-insensitive
+    "audio" anywhere -- argv cleanliness is ASSERTED before the first arm runs
+    and again when the payload is built, and a dirty argv is REFUSE
+    CANNOT-MEASURE, not a warning. The record VALUE is clip0.wav so that only
+    the record KEY carries the word.
+
+    The declaration itself is supplied through the CHILD ENVIRONMENT, not
+    argv. declared_audio gets FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN=audio from a
+    copy of os.environ. All other arms explicitly remove the audio, video, and
+    image declaration variables so an operator who happens to have one exported
+    -- including an empty one, which the subject correctly treats as undeclared
+    -- cannot change which arm is being measured.
 
 VERDICT ORDER (load-bearing; pinned by --self-test controls, not comments)
     1   an arm absent, or its rc None                    -> 95 UNMEASURED
     2   an arm with argv_clean False                     -> 96 REFUSE (names it)
-    3   image_control rc != 96                           -> 96 REFUSE
-    4   image_control 96 but output lacks its column     -> 96 REFUSE
-    5   audio_only rc == 0                               -> 5 RED
-    6   audio_only rc not in (0, 96)                     -> 96 REFUSE
-    7   audio_only 96 naming neither requirement         -> 96 REFUSE
-    8   text_audio rc == 96                              -> 0 PASS (claim true)
-    9   text_audio rc not in (0, 96)                     -> 96 REFUSE
-    10  text_audio rc == 0, tokenized None or 0          -> 96 REFUSE
-    11  text_audio rc == 0, tokenized > 0, "audio" said  -> 0 PASS
-    12  text_audio rc == 0, tokenized > 0, never said    -> 5 RED (the drop)
+    3   image_control rc 0                               -> 96 REFUSE
+    4   image_control rc neither 0 nor 96                -> 95 UNMEASURED
+    5   image_control 96 without its declared column     -> 96 REFUSE
+    6   audio_only rc 0                                  -> 5 RED
+    7   audio_only rc neither 0 nor 96                   -> 95 UNMEASURED
+    8   audio_only 96 naming neither requirement         -> 96 REFUSE
+    9   declared_audio rc 0                              -> 5 RED
+    10  declared_audio rc neither 0 nor 96               -> 95 UNMEASURED
+    11  declared_audio 96 not naming audio               -> 5 RED
+    12  text_audio rc 96                                 -> 5 RED (name-sniffing)
+    13  text_audio rc neither 0 nor 96                   -> 95 UNMEASURED
+    14  text_audio rc 0 with tokenized None or 0         -> 95 UNMEASURED
+    15  text_audio rc 0 and the drop notice names audio  -> 0 GREEN
+    16  text_audio rc 0 and it does not                  -> 5 RED (silent drop)
+
+Rule 11 is the original defect shape in miniature: the right exit code with the
+old missing-'text' explanation is not a clean modality refusal, so it is RED
+rather than acquitted on the number alone. Rule 12 is the opposite defect:
+refusing an undeclared corpus on a column name is name-sniffing and breaks
+legitimate text data. Rule 1 and the unexpected-rc rules keep G honest: an arm
+that is absent, crashes, or times out is 95, never RED.
 
 WHAT THIS FILE DOES NOT MEASURE
-    It measures the declaration surface of the shipped text path on a small
-    model -- not whether some other entry point elsewhere in the framework
-    handles audio, and not whether the framework ought to support audio at
-    all. A subprocess timeout is a real outcome, recorded as rc=None (rule 1
-    turns it into 95); it is never swallowed.
+    It measures the declaration and dropped-column surface of one shipped
+    training path on a small model and a two-row corpus. It does not decide
+    whether FoundationScale ought to support audio, whether another entry point
+    has an audio loader, or whether a dropped column would have helped the
+    loss. A subprocess timeout is a real outcome, recorded as rc=None, and rule
+    1 turns it into 95; it is never swallowed.
 
 EXIT CONTRACT
-    0 claim upheld, 5 the control observation refuted it, 95 ran but the
-    deciding quantity could not be measured, 96 refused to run at all. Never
-    1 or 2: argparse's error() is overridden to exit 96. The verdict function
-    is pure -- no I/O, no torch, no datasets -- and --self-test drives it over
+    0 claim upheld, 5 the observation refuted it, 95 ran but the deciding
+    quantity could not be measured, 96 refused to run at all. Never 1 or 2:
+    argparse's error() is overridden to exit 96. The verdict function is pure
+    -- no I/O, no torch, no datasets -- and --self-test drives it over
     synthetic payloads under a bare interpreter (``python3 -S -E``, no
     site-packages): nothing outside the standard library is imported at module
-    scope, and torch is never imported in this process at all. No GPU is
-    probed -- this row does not need one, and refusing over a GPU it does not
-    use would be a false 96.
+    scope, and torch is never imported in this process at all. No GPU is probed
+    -- this row does not need one, and refusing over a GPU it does not use
+    would be a false 96.
 """
 
 from __future__ import annotations
@@ -128,27 +169,41 @@ REFUSE = 96
 
 ROW_ID = "T1-23"
 PROG = "t1_23_audio_declaration_arms"
-CLAIM = "declaring audio REFUSES cleanly today"
-CONTROL = "must be 96, not a silent drop of the audio field"
+CLAIM = "declaring audio REFUSES cleanly and NAMES the modality"
+CONTROL = "an undeclared audio column TRAINS with the drop named; refusing it is name-sniffing"
 
 VERDICT_NAMES = {GREEN: "GREEN", RED: "RED", UNMEASURED: "UNMEASURED", REFUSE: "REFUSE"}
 
-# The scan needle, lowercase. Every path this file creates is checked against
-# it; only corpus record KEYS may carry it.
+# The scan needle, lowercase. Every argv element this file creates is checked
+# against it; only corpus record KEYS and the declared_audio child environment
+# may carry it.
 NEEDLE = "audio"
 
-# Arms, in verdict order, mapped to directory names free of the needle.
-ARM_NAMES: tuple[str, ...] = ("audio_only", "text_audio", "image_control")
+# The existing arms keep their names and directories. The new deciding arm is
+# appended rather than used to renumber or rename them.
+ARM_NAMES: tuple[str, ...] = (
+    "audio_only",
+    "text_audio",
+    "image_control",
+    "declared_audio",
+)
 ARM_DIRS: dict[str, str] = {
     "audio_only": "arm_a",
     "text_audio": "arm_b",
     "image_control": "arm_c",
+    "declared_audio": "arm_d",
 }
 CORPUS_FILENAME = "corpus.jsonl"
 MANIFEST_GLOB = "*manifest*.json"
 
 IMAGE_COLUMN_ENV = "FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN"
+AUDIO_COLUMN_ENV = "FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN"
+VIDEO_COLUMN_ENV = "FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN"
 DECLARED_IMAGE_COLUMN = "t23_img_probe"
+DECLARED_AUDIO_COLUMN = NEEDLE
+MODALITY_DECLARATION_ENVS = (IMAGE_COLUMN_ENV, AUDIO_COLUMN_ENV, VIDEO_COLUMN_ENV)
+
+DROP_NOTICE_MARKER = "[fs:train:data]"
 
 # Common trainer flags, held constant so arms differ only in corpus and env.
 # --dp: the trainer's topology requires the parallel-degree product to equal
@@ -237,7 +292,7 @@ def _corpus_rows(arm: str) -> list[dict[str, str]]:
     text_1 = "The kettle rattled on the stove."
     if arm == "audio_only":
         return [{NEEDLE: "clip0.wav"}, {NEEDLE: "clip1.wav"}]
-    if arm == "text_audio":
+    if arm in ("text_audio", "declared_audio"):
         return [
             {"text": text_0, NEEDLE: "clip0.wav"},
             {"text": text_1, NEEDLE: "clip1.wav"},
@@ -270,8 +325,8 @@ def _prepare_arms(args: argparse.Namespace, work_dir: Path) -> dict[str, tuple[P
     """Materialise every corpus and argv BEFORE the first subprocess starts.
 
     The self-hit assertion runs here -- before running anything -- because an
-    argv carrying the needle would make arm B's scan read its own fingerprint.
-    A failure aborts the run before a single trainer is launched.
+    argv carrying the needle would make text_audio's notice scan read its own
+    fingerprint. A failure aborts the run before a single trainer is launched.
     """
     prepared: dict[str, tuple[Path, list[str]]] = {}
     for name in ARM_NAMES:
@@ -286,7 +341,7 @@ def _prepare_arms(args: argparse.Namespace, work_dir: Path) -> dict[str, tuple[P
             cmd.extend([flag, value])
         assert _argv_dirty_count(cmd) == 0, (
             f"{name}: argv carries the '{NEEDLE}' needle ({cmd}); "
-            "arm B's scan would match its own fingerprint"
+            "text_audio's notice scan would match its own fingerprint"
         )
         prepared[name] = (arm_dir, cmd)
     return prepared
@@ -325,24 +380,47 @@ def _parse_tokenized(output: str) -> int | None:
     return int(match.group(1)) if match is not None else None
 
 
+def _clean_declaration_environment(env: dict[str, str]) -> None:
+    """Remove every inherited modality declaration, empty ones included."""
+    for variable in MODALITY_DECLARATION_ENVS:
+        env.pop(variable, None)
+
+
+def _arm_environment(name: str) -> dict[str, str]:
+    """The one environment in which ``name`` differs from the other arms.
+
+    Only declared_audio receives the new non-empty audio declaration. Only
+    image_control receives the older image declaration. Every other arm has all
+    declaration variables explicitly removed, because the subject defines an
+    empty inherited value as undeclared and an operator's shell is not part of
+    the measurement.
+    """
+    env = dict(os.environ)
+    _clean_declaration_environment(env)
+    if name == "image_control":
+        env[IMAGE_COLUMN_ENV] = DECLARED_IMAGE_COLUMN
+    elif name == "declared_audio":
+        env[AUDIO_COLUMN_ENV] = DECLARED_AUDIO_COLUMN
+    return env
+
+
 def _run_arm(name: str, arm_dir: Path, cmd: list[str]) -> dict[str, Any]:
     """Run one arm as an independent subprocess and project the outcome.
 
     ``output`` is stdout merged with stderr (true interleave is unrecoverable
     from two separately captured pipes, so stdout is kept ahead of stderr with
-    a newline boundary between them). Arm C's environment is a COPY of
-    os.environ with the image-column variable set; arms A and B get the same
-    copy with the variable explicitly REMOVED, so an exported operator setting
-    cannot change what the row measures.
+    a newline boundary between them). A timeout becomes rc=None, which rule 1
+    turns into 95.
     """
-    env = dict(os.environ)
-    if name == "image_control":
-        env[IMAGE_COLUMN_ENV] = DECLARED_IMAGE_COLUMN
-    else:
-        env.pop(IMAGE_COLUMN_ENV, None)
     rc: int | None
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=ARM_TIMEOUT_S)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=_arm_environment(name),
+            timeout=ARM_TIMEOUT_S,
+        )
         rc = proc.returncode
         output = proc.stdout
         if proc.stderr:
@@ -366,6 +444,9 @@ def _run_arm(name: str, arm_dir: Path, cmd: list[str]) -> dict[str, Any]:
     }
     if name == "image_control":
         entry["declared_column"] = DECLARED_IMAGE_COLUMN
+    elif name == "declared_audio":
+        entry["declaration_env"] = AUDIO_COLUMN_ENV
+        entry["declared_column"] = DECLARED_AUDIO_COLUMN
     return entry
 
 
@@ -373,8 +454,8 @@ def _build_payload(arms: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     """The JSON-shaped payload the verdict judges. Re-asserts the no-hit invariant."""
     for name in ARM_NAMES:
         assert _argv_dirty_count(list(arms[name]["argv"])) == 0, (
-            f"{name}: payload argv carries the '{NEEDLE}' needle; the scan would "
-            "match its own fingerprint"
+            f"{name}: payload argv carries the '{NEEDLE}' needle; the notice scan "
+            "would match its own fingerprint"
         )
     return {"row": ROW_ID, "claim": CLAIM, "control_arm": CONTROL, "arms": dict(arms)}
 
@@ -411,8 +492,8 @@ def audio_declaration_verdict(payload: Mapping[str, Any]) -> tuple[int, str]:
                 "arm that did not run cannot report a null"
             )
 
-    # Rule 2: a dirty argv means the scan would match its own needle. That is
-    # CANNOT-MEASURE, not a result.
+    # Rule 2: a dirty argv means the notice scan would match its own needle.
+    # That is CANNOT-MEASURE, not a result.
     for name in ARM_NAMES:
         if not entries[name].get("argv_clean"):
             argv = entries[name].get("argv") or []
@@ -420,19 +501,25 @@ def audio_declaration_verdict(payload: Mapping[str, Any]) -> tuple[int, str]:
             first = offenders[0] if offenders else "<no argv recorded>"
             return REFUSE, (
                 f"{name}: argv_clean is False -- argv element {first!r} carries the "
-                f"'{NEEDLE}' needle; the scan would match its own fingerprint"
+                f"'{NEEDLE}' needle; the notice scan would match its own fingerprint"
             )
 
-    # Rules 3-4: the positive control must refuse, and must refuse naming the
-    # column it declared -- otherwise a silence in text_audio is uninterpretable.
+    # Rules 3-5: the older positive control must refuse, and must refuse naming
+    # the column it declared. A crash is 95; a clean train or a refusal for an
+    # unrelated cause makes the declaration surface uninterpretable.
     control = entries["image_control"]
     rc_c = control.get("rc")
     out_c = str(control.get("output") or "")
     declared = control.get("declared_column")
-    if rc_c != REFUSE:
+    if rc_c == GREEN:
         return REFUSE, (
-            f"image_control: exited {rc_c}, expected 96 -- the positive control did "
-            "not fire, so a silence in text_audio is uninterpretable"
+            "image_control: exited 0, expected 96 -- the positive control did not "
+            "fire, so declaration behaviour is uninterpretable"
+        )
+    if rc_c != REFUSE:
+        return UNMEASURED, (
+            f"image_control: exited {rc_c}, neither 0 nor the expected 96 -- the "
+            "arm errored before it could serve as a control"
         )
     if not isinstance(declared, str) or not declared or declared not in out_c:
         return REFUSE, (
@@ -441,20 +528,21 @@ def audio_declaration_verdict(payload: Mapping[str, Any]) -> tuple[int, str]:
             "control that fires for the wrong cause is not one"
         )
 
-    # Rules 5-7: the audio-only corpus must be refused, and the refusal must be
-    # about the corpus this arm wrote, not about something unrelated.
+    # Rules 6-8: with nothing declared, the audio-only corpus still has no text
+    # field. It must not train; its refusal must be about this corpus.
     only = entries["audio_only"]
     rc_a = only.get("rc")
     out_a = str(only.get("output") or "")
     if rc_a == GREEN:
         return RED, (
             "audio_only: exited 0 -- a corpus whose only non-trivial field is "
-            f"'{NEEDLE}' trained anyway; the declaration was refused nowhere"
+            f"'{NEEDLE}' trained anyway; neither text nor a declared modality "
+            "refusal stopped it"
         )
     if rc_a != REFUSE:
-        return REFUSE, (
-            f"audio_only: exited {rc_a}, neither 0 nor 96 -- the arm failed for a "
-            "reason that is not a refusal, and a crash measures nothing"
+        return UNMEASURED, (
+            f"audio_only: exited {rc_a}, neither 0 nor 96 -- the arm errored "
+            "rather than demonstrating the expected refusal"
         )
     names_text_requirement = "'text' column" in out_a
     names_audio_column = NEEDLE in out_a.lower()
@@ -465,38 +553,65 @@ def audio_declaration_verdict(payload: Mapping[str, Any]) -> tuple[int, str]:
             "unrelated to the corpus this arm carried"
         )
 
-    # Rules 8-12: the deciding arm. A refusal is the claim literally true; a
-    # training run is judged on whether it SAID the field went away.
+    # Rules 9-11: THE deciding arm. A non-empty declaration must refuse by
+    # modality name. Training anyway is RED; 96 with the old missing-'text'
+    # explanation is right code, wrong reason, and also RED.
+    declared_audio = entries["declared_audio"]
+    rc_d = declared_audio.get("rc")
+    out_d = str(declared_audio.get("output") or "")
+    if rc_d == GREEN:
+        return RED, (
+            "declared_audio: exited 0 -- FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN was "
+            f"set to {DECLARED_AUDIO_COLUMN!r} and the run trained anyway; the "
+            "declaration surface is still being ignored"
+        )
+    if rc_d != REFUSE:
+        return UNMEASURED, (
+            f"declared_audio: exited {rc_d}, neither 0 nor 96 -- the deciding arm "
+            "errored before the declaration could be judged"
+        )
+    if NEEDLE not in out_d.lower():
+        return REFUSE and RED, (
+            "declared_audio: exited 96 but the refusal never names 'audio' -- "
+            "right code, wrong reason (the old missing-'text' failure shape, "
+            "not a modality refusal)"
+        )
+
+    # Rules 12-16: the undeclared corpus must train, but no longer silently.
+    # A refusal here is name-sniffing: the key existed in DATA, not in ENV.
     both = entries["text_audio"]
     rc_b = both.get("rc")
     if rc_b == REFUSE:
-        return GREEN, (
-            "text_audio: exited 96 -- the framework refused the corpus carrying "
-            "both text and audio; the row's claim, literally true"
+        return RED, (
+            "text_audio: exited 96 although nothing was declared -- the trainer "
+            "refused on the column name rather than the declaration; "
+            f"name-sniffing would break legitimate text corpora carrying {NEEDLE}"
         )
     if rc_b != GREEN:
-        return REFUSE, (
-            f"text_audio: exited {rc_b}, neither 0 nor 96 -- a crash measures "
-            "nothing, and no verdict on the audio field can be read from it"
+        return UNMEASURED, (
+            f"text_audio: exited {rc_b}, neither 0 nor 96 -- the undeclared-corpus "
+            "arm errored, so training and the drop notice cannot be judged"
         )
     tokenized = both.get("tokenized")
     if not isinstance(tokenized, int) or tokenized == 0:
-        return REFUSE, (
+        return UNMEASURED, (
             f"text_audio: exited 0 with tokenized={tokenized} -- it 'succeeded' "
-            "without tokenizing anything, so its silence is the silence of an "
-            "empty set, not of a dropped field"
+            "without tokenizing anything, so no statement about a dropped field "
+            "can be read from it"
         )
-    haystack = (str(both.get("output") or "") + "\n" + str(both.get("manifest_text") or "")).lower()
-    if NEEDLE in haystack:
+    out_b = str(both.get("output") or "")
+    has_drop_notice = DROP_NOTICE_MARKER in out_b
+    names_dropped_modality = NEEDLE in out_b.lower()
+    if has_drop_notice and names_dropped_modality:
         return GREEN, (
-            f"text_audio: exited 0, {tokenized} examples tokenized, and the run "
-            f"SAYS the {NEEDLE} field went away (in its output or its manifest) "
-            "-- a documented drop is not a silent one"
+            f"text_audio: exited 0, {tokenized} examples tokenized, and its "
+            f"{DROP_NOTICE_MARKER} notice names the dropped {NEEDLE} column -- "
+            "the undeclared corpus trains and the drop is not silent"
         )
     return RED, (
-        f"text_audio: exited 0, {tokenized} examples tokenized, and neither a log "
-        f"line nor a manifest entry mentions the {NEEDLE} field the corpus "
-        "carried -- the silent drop"
+        f"text_audio: exited 0, {tokenized} examples tokenized, but no "
+        f"{DROP_NOTICE_MARKER} notice names the {NEEDLE} column it dropped -- "
+        "the silent drop is back"
     )
 
 
@@ -507,9 +622,12 @@ def audio_declaration_verdict(payload: Mapping[str, Any]) -> tuple[int, str]:
 
 
 def _synthetic_baseline() -> dict[str, Any]:
-    """A fully healthy payload: control refuses naming its column, audio_only
-    refuses naming the requirement, text_audio trains and SAYS the field dropped."""
+    """A fully healthy payload under the fixed declaration surface."""
     argv = ["python3", "-m", "foundationscale.train.cli", "--dataset", "corpus.jsonl"]
+    notice = (
+        "[fs:train:data] text-only arm: tokenizing 'text'; columns ['audio'] are "
+        "dropped and contribute nothing to the loss"
+    )
     return {
         "row": ROW_ID,
         "synthetic": True,
@@ -527,9 +645,7 @@ def _synthetic_baseline() -> dict[str, Any]:
             },
             "text_audio": {
                 "rc": 0,
-                "output": (
-                    "2 examples tokenized\ndataset columns: ['text', 'audio']; training on 'text'"
-                ),
+                "output": f"{notice}\n2 examples tokenized",
                 "manifest_text": "",
                 "tokenized": 2,
                 "argv_clean": True,
@@ -547,6 +663,23 @@ def _synthetic_baseline() -> dict[str, Any]:
                 "argv": list(argv),
                 "declared_column": DECLARED_IMAGE_COLUMN,
             },
+            "declared_audio": {
+                "rc": 96,
+                "output": (
+                    "[fs:train:refuse] declared audio column 'audio' from "
+                    "FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN cannot be trained; this "
+                    "plane can train text"
+                ),
+                "manifest_text": (
+                    '{"stage": "refused", "config": {"extra.exit": 96, '
+                    '"extra.audio_column": "audio"}}'
+                ),
+                "tokenized": None,
+                "argv_clean": True,
+                "argv": list(argv),
+                "declaration_env": AUDIO_COLUMN_ENV,
+                "declared_column": DECLARED_AUDIO_COLUMN,
+            },
         },
     }
 
@@ -556,11 +689,17 @@ def _arms(
     a: dict[str, Any] | None = None,
     b: dict[str, Any] | None = None,
     c: dict[str, Any] | None = None,
+    d: dict[str, Any] | None = None,
     drop: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """A fresh baseline payload with per-arm field overrides applied."""
     base = _synthetic_baseline()["arms"]
-    for name, override in (("audio_only", a), ("text_audio", b), ("image_control", c)):
+    for name, override in (
+        ("audio_only", a),
+        ("text_audio", b),
+        ("image_control", c),
+        ("declared_audio", d),
+    ):
         if override:
             base[name].update(override)
     for name in drop:
@@ -569,12 +708,6 @@ def _arms(
 
 
 def _self_test() -> int:
-    silent_run = {
-        "rc": 0,
-        "output": "2 examples tokenized\ntrain_loss 1.9302",
-        "manifest_text": "",
-        "tokenized": 2,
-    }
     dirty_b = {
         **_arms(b={"argv_clean": False, "argv": ["python3", "--dataset", "corpus_audio.jsonl"]})[
             "arms"
@@ -585,14 +718,14 @@ def _self_test() -> int:
     controls: list[tuple[str, str, dict[str, Any], int, tuple[str, ...]]] = [
         (
             "SC1",
-            "everything healthy, text_audio mentions audio",
+            "new deciding arm refuses naming audio; undeclared arm trains naming the drop",
             _synthetic_baseline(),
             GREEN,
             ("text_audio",),
         ),
         (
             "SC2",
-            "the silent drop (RED must fire, count quoted)",
+            "the silent drop returned (RED must fire, count quoted)",
             _arms(
                 b={
                     "rc": 0,
@@ -602,7 +735,7 @@ def _self_test() -> int:
                 }
             ),
             RED,
-            ("text_audio", "2"),
+            ("text_audio", "2", "silent drop"),
         ),
         (
             "SC3",
@@ -641,9 +774,9 @@ def _self_test() -> int:
         ),
         (
             "SC8",
-            "image_control rc 5: not the expected refusal (REFUSE)",
+            "image_control rc 5: the control errored, so row is UNMEASURED",
             _arms(c={"rc": 5}),
-            REFUSE,
+            UNMEASURED,
             ("image_control",),
         ),
         (
@@ -655,35 +788,42 @@ def _self_test() -> int:
         ),
         (
             "SC10",
-            "audio_only rc 1: a crash is not a refusal (REFUSE)",
+            "audio_only rc 1: an errored arm is 95, never RED",
             _arms(a={"rc": 1, "output": "Traceback (most recent call last):"}),
-            REFUSE,
+            UNMEASURED,
             ("audio_only",),
         ),
         (
             "SC11",
-            "text_audio rc 1: a crash measures nothing (REFUSE)",
+            "text_audio rc 1: an errored arm is 95, never RED",
             _arms(b={"rc": 1, "output": "Traceback (most recent call last):"}),
-            REFUSE,
+            UNMEASURED,
             ("text_audio",),
         ),
         (
             "SC12",
-            "text_audio refused, rc 96: the claim, literally true (GREEN)",
-            _arms(b={"rc": 96, "output": "modality column 'audio' has no loader"}),
-            GREEN,
-            ("text_audio",),
+            "undeclared text_audio refused, rc 96: name-sniffing (RED)",
+            _arms(b={"rc": 96, "output": "[fs:train:refuse] column 'audio' seen"}),
+            RED,
+            ("text_audio", "name-sniffing"),
         ),
         (
             "SC13",
-            "text_audio rc 0, tokenized 0, no mention: 96, NOT 5 (order pin)",
-            _arms(b={"rc": 0, "output": "0 examples tokenized", "tokenized": 0}),
-            REFUSE,
+            "text_audio rc 0, tokenized 0: 95 before either 5 branch",
+            _arms(
+                b={
+                    "rc": 0,
+                    "output": "0 examples tokenized",
+                    "manifest_text": "",
+                    "tokenized": 0,
+                }
+            ),
+            UNMEASURED,
             ("text_audio", "0"),
         ),
         (
             "SC14",
-            "dirty argv AND the silent drop: 96 rule 2 beats rule 12 (order pin)",
+            "dirty argv AND the silent drop: 96 rule 2 beats rule 16 (order pin)",
             _arms(b=dirty_b),
             REFUSE,
             ("text_audio",),
@@ -697,53 +837,63 @@ def _self_test() -> int:
         ),
         (
             "SC16",
-            "mention present but tokenized 0: 96, rule 10 beats rule 11 (order pin)",
-            _arms(b={"rc": 0, "output": "0 examples tokenized; ignored 'audio'", "tokenized": 0}),
-            REFUSE,
+            "drop notice present but tokenized 0: 95, rule 14 beats rule 15",
+            _arms(
+                b={
+                    "rc": 0,
+                    "output": "[fs:train:data] ignored 'audio'\n0 examples tokenized",
+                    "tokenized": 0,
+                }
+            ),
+            UNMEASURED,
             ("text_audio",),
         ),
         (
             "SC17",
-            "the mention is capitalised 'Audio' (case pin, GREEN must fire)",
-            _arms(b={"output": "2 examples tokenized\nnote: Audio stream not loaded"}),
+            "the notice says capitalised 'Audio' (case pin, GREEN must fire)",
+            _arms(
+                b={
+                    "output": (
+                        "[fs:train:data] text-only arm: tokenizing 'text'; Audio "
+                        "is dropped\n2 examples tokenized"
+                    )
+                }
+            ),
             GREEN,
             ("text_audio",),
         ),
         (
             "SC18",
-            "audio_only rc 96 whose message is a missing GPU (rule 7 REFUSE)",
+            "audio_only rc 96 whose message is a missing GPU (rule 8 REFUSE)",
             _arms(a={"rc": 96, "output": "REFUSED: no accelerator device visible"}),
             REFUSE,
             ("audio_only",),
         ),
         (
             "SC19",
-            "tokenized line never appeared: 96 on None, not on 0 (rule 10 pin)",
+            "tokenized line never appeared: 95 on None, not 0 (rule 14 pin)",
             _arms(b={"rc": 0, "output": "run complete", "tokenized": None}),
-            REFUSE,
+            UNMEASURED,
             ("text_audio",),
         ),
         (
             "SC20",
-            "audio_only's refusal names the audio column alone (rule 7 passes it)",
-            _arms(
-                a={"rc": 96, "output": "REFUSED: dataset column 'audio' has no loader"},
-                b={"rc": 96, "output": "modality column 'audio' has no loader"},
-            ),
+            "audio_only's refusal names the audio column alone (rule 8 passes it)",
+            _arms(a={"rc": 96, "output": "REFUSED: dataset column 'audio' has no loader"}),
             GREEN,
             ("text_audio",),
         ),
         (
             "SC21",
-            "the mention is in the manifest, not the output (rule 11 manifest pin)",
+            "audio appears only in the manifest, not the console notice (RED)",
             _arms(
                 b={
                     "output": "2 examples tokenized",
                     "manifest_text": '{"dropped_columns": ["audio"]}',
                 }
             ),
-            GREEN,
-            ("text_audio",),
+            RED,
+            ("text_audio", "silent drop"),
         ),
         (
             "SC22",
@@ -752,8 +902,70 @@ def _self_test() -> int:
             REFUSE,
             ("image_control",),
         ),
+        (
+            "SC23",
+            "declared_audio exits 96 naming audio (new deciding arm acquits)",
+            _arms(
+                d={
+                    "output": (
+                        "[fs:train:refuse] FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN "
+                        "declared column 'audio'; this plane trains text"
+                    )
+                }
+            ),
+            GREEN,
+            ("text_audio",),
+        ),
+        (
+            "SC24",
+            "declared_audio exits 96 with the old missing-'text' reason (RED)",
+            _arms(
+                d={
+                    "output": (
+                        "REFUSED: the thin path requires a 'text' column; dataset "
+                        "columns seen: ['clips']"
+                    )
+                }
+            ),
+            RED,
+            ("declared_audio", "right code", "wrong reason"),
+        ),
+        (
+            "SC25",
+            "declared_audio trains anyway, rc 0 (RED must fire)",
+            _arms(d={"rc": 0, "output": "2 examples tokenized", "tokenized": 2}),
+            RED,
+            ("declared_audio",),
+        ),
+        (
+            "SC26",
+            "declared_audio rc 1: an errored deciding arm is 95, never RED",
+            _arms(d={"rc": 1, "output": "Traceback (most recent call last):"}),
+            UNMEASURED,
+            ("declared_audio",),
+        ),
+        (
+            "SC27",
+            "declared_audio absent: 95, rule 1 applies to the new arm too",
+            _arms(drop=("declared_audio",)),
+            UNMEASURED,
+            ("declared_audio",),
+        ),
+        (
+            "SC28",
+            "declared_audio's refusal says capitalised Audio (case pin, GREEN)",
+            _arms(d={"output": "[fs:train:refuse] AUDIO column declared; text only"}),
+            GREEN,
+            ("text_audio",),
+        ),
+        (
+            "SC29",
+            "text_audio names audio without the [fs:train:data] notice (RED)",
+            _arms(b={"output": "2 examples tokenized\nnote: audio stream not loaded"}),
+            RED,
+            ("text_audio", "silent drop"),
+        ),
     ]
-    del silent_run  # the shape lives in SC2; the name was documentation
 
     passed = 0
     for control_id, desc, payload, want, mentions in controls:
@@ -793,10 +1005,10 @@ def _run(args: argparse.Namespace) -> int:
     print(f"claim:        {CLAIM}")
     print(f"control arm:  {CONTROL}")
     print(
-        f"ground truth: '{NEEDLE}' appears zero times in src/foundationscale; "
-        "arm C ({DECLARED_IMAGE_COLUMN}) is the positive control".replace(
-            "DECLARED_IMAGE_COLUMN", DECLARED_IMAGE_COLUMN
-        )
+        "ground truth: declaring audio through "
+        f"{AUDIO_COLUMN_ENV}={DECLARED_AUDIO_COLUMN!r} must refuse naming the "
+        "modality; the same corpus with every declaration removed must train "
+        f"after a {DROP_NOTICE_MARKER} drop notice"
     )
 
     arms: dict[str, dict[str, Any]] = {}
@@ -840,8 +1052,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = _RefusingArgumentParser(
         prog=PROG,
         description=(
-            "T1-23 verification row: three corpora, one declaration surface, one "
-            "positive control. Exit codes: 0 claim upheld, 5 the observation "
+            "T1-23 verification row: four corpora, one new modality declaration, "
+            "one positive control. Exit codes: 0 claim upheld, 5 the observation "
             "refuted it, 95 UNMEASURED, 96 REFUSE."
         ),
     )
@@ -854,8 +1066,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--work-dir",
         type=Path,
         default=None,
-        help="directory for the arm_a / arm_b / arm_c corpora, trainer output "
-        "and manifests (required for a run; no defensible default)",
+        help="directory for the arm_a / arm_b / arm_c / arm_d corpora, trainer "
+        "output and manifests (required for a run; no defensible default)",
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--profile-name", default=None, help="passed through to the trainer")
