@@ -233,23 +233,41 @@ def _write_arm_payload(
     The payload is written for a failed arm too. An arm that exited nonzero is
     evidence about the instrument, and an absent file cannot be told apart from
     an arm that never ran."""
-    payload = {
-        "row": "T1-20",
-        "arm": label,
-        "claim": CLAIM,
-        "status": status,
-        "reason": reason,
-        "launcher_exit_code": launcher_exit_code,
-        # Written even when empty on purpose: an absent key reads as "this row
-        # does not collect this", a present-and-empty one as "there was nothing
-        # to collect", and only the second is true here (#441). This row's
-        # evidence is adapter norms, not a loss curve, so loss_curve is
-        # legitimately empty and says so rather than going missing.
-        "excerpts": [],
-        "telemetry": telemetry,
-        "loss_curve": [],
-    }
-    path = out_root / f"{ROW}_{label}.json"
+    # The scalar payload is written through run_row.write_arm_payload now:
+    # that function pins the keyword names to ARM_SCALAR_KEYS at the call site
+    # (#493 -- a misspelled key is a TypeError here, not a silently dropped
+    # measurement at the lift) and refuses an empty status before a byte lands
+    # (#475 mirrored onto the write side). This module is that function's
+    # regression control, so delegation must not alter a single written byte:
+    # row_id is "T1-20", which _arm_prefix derives to exactly the t1_20_
+    # prefix this file used to compose by hand, and excerpts / loss_curve are
+    # passed as [] -- present-and-empty, "there was nothing to collect",
+    # rather than absent, "this row does not collect this" (#441: this row's
+    # evidence is adapter norms, not a loss curve, and it says so on the wire
+    # instead of going missing). The import sits at the point of use so that
+    # --help and the refusal paths above never touch the runner's machinery.
+    from run_row import write_arm_payload
+
+    path = write_arm_payload(
+        out_root,
+        "T1-20",
+        label,
+        status=status,
+        reason=reason,
+        launcher_exit_code=launcher_exit_code,
+        excerpts=[],
+        telemetry=telemetry,
+        loss_curve=[],
+    )
+    # `claim` is this adjudicator's own context field, not a member of
+    # ARM_SCALAR_KEYS, so the shared writer cannot carry it -- and must not:
+    # the parameter list there is deliberately closed. It is layered onto the
+    # file after delegation (read back, amend, rewrite with the identical
+    # serialization) so the bytes on disk stay identical to the
+    # pre-delegation writer's, claim included. That identity is what makes
+    # this module a regression control rather than a silent format change.
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["claim"] = CLAIM
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     return path
 

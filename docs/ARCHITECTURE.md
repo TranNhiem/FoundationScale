@@ -465,7 +465,7 @@ conftest carries the skip guard). Beside the package:
 | `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 223249 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 224287 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 

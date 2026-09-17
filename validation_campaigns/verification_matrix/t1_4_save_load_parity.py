@@ -48,20 +48,38 @@ VERDICT ORDER (load-bearing)
 EXIT CONTRACT
     GREEN=0  RED=5  UNMEASURED=95  REFUSE=96.  Never 1 or 2.
     Unmet preconditions are 95/96, never 5. UNMEASURED is not PASS.
-    Required args with no defensible default REFUSE(96) naming them.
-    An escaping exception is adjudicated RED(5) with the traceback; the process
-    never exits 1.
+    Required args with no defensible default (--checkpoint, --work-dir or
+    --out-dir) REFUSE(96) naming them, rather than letting argparse mint 2.
+    An escaping exception is classified 95 or 96, with the traceback; the process
+    never exits 1 or 2.
+
+REPORTING SEAM
+    A completed measurement writes one payload for each declared arm through
+    run_row.write_arm_payload. The destination filename is derived inside that
+    runner helper, never chosen here. A boundary abort writes the same two arm
+    files with UNMEASURED or CANNOT_MEASURE status, because an absent file is
+    indistinguishable from an arm that never attempted to report.
+
+    The wrapper's status is the source arm's own PASS or FAIL, not the row's
+    differential verdict. In particular, the perturbed arm reporting FAIL is the
+    expected control shape and can underpin a GREEN row verdict while remaining
+    truthful about what that arm observed.
+
     torch / safetensors are imported lazily inside the functions that need them,
-    so --self-test runs on a bare laptop with no GPU, model, network or filesystem.
+    so --self-test runs on a bare laptop with no GPU, model, network or durable
+    filesystem. Its reporting controls use only a TemporaryDirectory.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import math
 import shutil
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 from typing import Any, NoReturn
@@ -69,7 +87,11 @@ from typing import Any, NoReturn
 # The row directory is a sibling import root, exactly as `python3 t1_4_...py`
 # gives it. The boundary classifier lives there; four other rows already share
 # it, and this row used to carry a local copy that adjudicated every escape RED.
+# The runner-side payload writer must use the identical direct-file bootstrap:
+# a package-relative import would work only when this row is launched a certain
+# way, which silently makes reporting depend on operator choice.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from run_row import write_arm_payload  # noqa: E402
 from t1_interpreter_floor import classify_boundary_exception  # noqa: E402
 
 EXIT_GREEN = 0
@@ -124,6 +146,12 @@ def _build_parser() -> _RefusingArgumentParser:
         metavar="PATH",
         default=None,
         help="directory where the perturbed copy is written (required; no defensible default)",
+    )
+    parser.add_argument(
+        "--out-dir",
+        metavar="PATH",
+        default=None,
+        help=("directory receiving one runner payload per arm (required; no defensible default)"),
     )
     parser.add_argument(
         "--self-test",
@@ -422,7 +450,82 @@ def verdict(data: dict[str, Any]) -> tuple[int, dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Self-test: synthetic controls driving the pure verdict. No torch, no files.
+# Runner reporting: one payload for each declared arm, independent of verdict
+# ---------------------------------------------------------------------------
+
+
+def _reported_arm_status_reason(arm: str, report: dict[str, Any]) -> tuple[str, str]:
+    """Project the source arm's own outcome before the row's differential verdict.
+
+    A comparator disagreement is FAIL at the source-arm seam even when it is the
+    perturbed control and therefore expected by the row. RED is an adjudication
+    over both arms, not a synonym for a single arm's observation; keeping these
+    levels separate preserves the evidence without changing the measurement.
+    """
+    if not report:
+        return (
+            "UNMEASURED",
+            f"the {arm} source arm report is absent; no arm outcome was observed",
+        )
+    if arm == "perturbed" and not report.get("perturbation_applied"):
+        note = report.get("perturbation_note") or "no reason recorded"
+        return (
+            "UNMEASURED",
+            "the control perturbation could not be applied "
+            f"({note}), so this arm was never a live control",
+        )
+    if bool(report.get("ok")):
+        status, outcome = "PASS", "compared bit-exact"
+    else:
+        status, outcome = "FAIL", "reported a difference"
+    return (
+        status,
+        f"the {arm} source arm {outcome} under the strict bit-parity policy",
+    )
+
+
+def _write_arm_payloads(out_dir: Path, payload: dict[str, Any]) -> dict[str, Path]:
+    """Write the two source arms; the row verdict must never suppress a file."""
+    arms = payload.get("arms") or {}
+    written: dict[str, Path] = {}
+    for arm in ("identity", "perturbed"):
+        raw_report = arms.get(arm) if isinstance(arms, dict) else None
+        report = dict(raw_report) if isinstance(raw_report, dict) else {}
+        status, reason = _reported_arm_status_reason(arm, report)
+        # An absent source report is supplied as an explicit empty dict rather than
+        # None. Present-and-empty therefore means "there was nothing reportable",
+        # while None would mean only "this row does not collect telemetry". Only
+        # the first preserves that this arm failed to leave evidence.
+        telemetry = _json_safe(report)
+        # These arms execute in this Python process, so launcher_exit_code is left
+        # absent rather than inventing a zero for a child process that never existed.
+        written[arm] = write_arm_payload(
+            out_dir,
+            ROW_ID,
+            arm,
+            status=status,
+            reason=reason,
+            telemetry=telemetry,
+        )
+    return written
+
+
+def _write_boundary_payloads(out_dir: Path, code: int, reason: str, error_trace: str) -> None:
+    """Leave both arm files after a boundary abort, with classification as status."""
+    status = "UNMEASURED" if code == EXIT_UNMEASURED else "CANNOT_MEASURE"
+    for arm in ("identity", "perturbed"):
+        write_arm_payload(
+            out_dir,
+            ROW_ID,
+            arm,
+            status=status,
+            reason=(f"{reason}; no adjudicated source report reached the runner for the {arm} arm"),
+            telemetry={"exception": _json_safe(error_trace)},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Self-test: synthetic verdict and reporting controls. No torch or model files.
 # ---------------------------------------------------------------------------
 
 
@@ -548,18 +651,103 @@ def _controls() -> list[tuple[str, str, dict[str, Any], int]]:
     ]
 
 
+def _write_and_load_report(payload: dict[str, Any]) -> tuple[int, dict[str, dict[str, Any]]]:
+    """Write through the public seam, then prove what actually landed on disk."""
+    with tempfile.TemporaryDirectory(prefix="t1-4-report-") as temporary:
+        out_dir = Path(temporary)
+        _write_arm_payloads(out_dir, payload)
+        paths = sorted(out_dir.glob("*.json"))
+        loaded: dict[str, dict[str, Any]] = {}
+        for path in paths:
+            envelope = json.loads(path.read_text(encoding="utf-8"))
+            loaded[str(envelope.get("arm"))] = envelope
+    return len(paths), loaded
+
+
+def _control_every_arm_writes_a_file() -> bool:
+    file_count, reported = _write_and_load_report(_synthetic_payload())
+    return (
+        file_count == 2
+        and set(reported) == {"identity", "perturbed"}
+        and all(envelope.get("row") == ROW_ID for envelope in reported.values())
+    )
+
+
+def _control_failing_arm_still_writes_a_file() -> bool:
+    file_count, reported = _write_and_load_report(_synthetic_payload(identity_ok=False))
+    return file_count == 2 and set(reported) == {"identity", "perturbed"}
+
+
+def _control_missing_out_dir_refuses() -> bool:
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        rc = main(["--checkpoint", "nowhere", "--work-dir", "nowhere"])
+    return rc == EXIT_REFUSE and "--out-dir" in stderr.getvalue()
+
+
+def _control_real_status_reaches_disk() -> bool:
+    # MUST FIRE: a hard-coded PASS or UNMEASURED would make this control fail, as
+    # would writing a synthetic status without the source payload that minted it.
+    file_count, reported = _write_and_load_report(_synthetic_payload(identity_ok=False))
+    identity = reported.get("identity")
+    telemetry = identity.get("telemetry") if isinstance(identity, dict) else None
+    return (
+        file_count == 2
+        and isinstance(identity, dict)
+        and identity.get("status") == "FAIL"
+        and isinstance(telemetry, dict)
+        and telemetry.get("ok") is False
+    )
+
+
 def run_self_test() -> int:
     controls = _controls()
-    passed = 0
+    verdict_passed = 0
     for control_id, desc, payload, want in controls:
         got, adjudicated = verdict(payload)
         verdict_rc = adjudicated["verdict"]["rc"]
         ok = got == want and verdict_rc == want
         if ok:
-            passed += 1
+            verdict_passed += 1
         print(f"[{'PASS' if ok else 'FAIL'}] {control_id} {desc} rc={got} want={want}")
-    print(f"  {ROW_ID} self-test: {passed}/{len(controls)} controls PASS")
-    return EXIT_GREEN if passed == len(controls) else EXIT_RED
+
+    reporting_controls = [
+        (
+            "R1-every-arm-writes",
+            "both declared arms leave exactly one runner-readable payload",
+            _control_every_arm_writes_a_file,
+        ),
+        (
+            "R2-failing-arm-writes",
+            "a nonzero-evidence arm is still represented by a payload file",
+            _control_failing_arm_still_writes_a_file,
+        ),
+        (
+            "R3-out-dir-required",
+            "--out-dir absent without --self-test REFUSES and names the flag",
+            _control_missing_out_dir_refuses,
+        ),
+        (
+            "R4-real-status-must-fire",
+            "the FAIL source status, not a reporting default, reaches disk",
+            _control_real_status_reaches_disk,
+        ),
+    ]
+    reporting_passed = 0
+    for control_id, desc, control in reporting_controls:
+        try:
+            ok = control()
+        except Exception:  # noqa: BLE001 - a failed self-test must not escape
+            traceback.print_exc()
+            ok = False
+        if ok:
+            reporting_passed += 1
+        print(f"[{'PASS' if ok else 'FAIL'}] {control_id} {desc}")
+
+    total = len(controls) + len(reporting_controls)
+    passed = verdict_passed + reporting_passed
+    print(f"  {ROW_ID} self-test: {passed}/{total} controls PASS")
+    return EXIT_GREEN if passed == total else EXIT_RED
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +786,11 @@ def main(argv: list[str] | None = None) -> int:
 
     missing = [
         flag
-        for flag, value in (("--checkpoint", args.checkpoint), ("--work-dir", args.work_dir))
+        for flag, value in (
+            ("--checkpoint", args.checkpoint),
+            ("--work-dir", args.work_dir),
+            ("--out-dir", args.out_dir),
+        )
         if value is None
     ]
     if missing:
@@ -610,6 +802,7 @@ def main(argv: list[str] | None = None) -> int:
 
     checkpoint = Path(args.checkpoint)
     work_dir = Path(args.work_dir)
+    out_dir = Path(args.out_dir)
 
     if not checkpoint.is_dir():
         sys.stderr.write(
@@ -628,19 +821,30 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_UNMEASURED
 
     try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        sys.stderr.write(
+            f"UNMEASURED({EXIT_UNMEASURED}): --out-dir precondition unmet — cannot "
+            f"create {out_dir} for runner payloads: {exc}; absence, not failure\n"
+        )
+        return EXIT_UNMEASURED
+
+    try:
         payload = run_measurement(checkpoint, work_dir)
         rc, adjudicated = verdict(payload)
+        _write_arm_payloads(out_dir, payload)
     except Exception as exc:  # noqa: BLE001 - classified, never adjudicated (#417)
         # An escape means the measurement did not happen, so there is nothing to
         # refute. classify_boundary_exception sorts environment faults (import,
         # link, ABI, CUDA-init) to 95 and harness faults to 96. This used to
         # return 5, which turned a missing libcudart into a refutation.
         traceback.print_exc()
+        error_trace = traceback.format_exc()
         code, reason = classify_boundary_exception(exc)
         name = "UNMEASURED" if code == EXIT_UNMEASURED else "CANNOT_MEASURE"
         emergency = {
             "row": ROW_ID,
-            "error": traceback.format_exc(),
+            "error": error_trace,
             "verdict": {
                 "row": ROW_ID,
                 "rc": code,
@@ -651,6 +855,18 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             },
         }
+        try:
+            _write_boundary_payloads(
+                out_dir,
+                code,
+                str(emergency["verdict"]["reason"]),
+                error_trace,
+            )
+        except Exception as write_exc:  # noqa: BLE001 - never mask the original
+            sys.stderr.write(
+                f"{ROW_ID}: runner reporting also failed while recording a "
+                f"boundary abort: {type(write_exc).__name__}: {write_exc}\n"
+            )
         _emit(emergency)
         sys.stderr.write(f"{ROW_ID} verdict: {name} rc={code} (escaping exception)\n")
         return code

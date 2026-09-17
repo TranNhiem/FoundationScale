@@ -102,7 +102,15 @@ from typing import Any, NoReturn
 # The row directory is a sibling import root, exactly as `python3 t1_2_...py`
 # gives it. The boundary classifier lives there because four other rows already
 # share it; this row used to carry its own -- see _ESCAPE_REASON below.
+# run_row owns the per-arm write seam. Routing every arm file through
+# write_arm_payload keeps the filename DERIVED in one place -- a caller-typed
+# name is exactly how a measurement gets silently dropped -- and its
+# keyword-only signature makes the #493 class of key-typo bug ("launcher_exit"
+# for "launcher_exit_code", "loss_series" for "loss_curve", silently dropped by
+# an `if key in payload` lift) unrepresentable, because Python itself raises
+# TypeError on a wrong keyword.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from run_row import write_arm_payload  # noqa: E402
 from t1_interpreter_floor import classify_boundary_exception  # noqa: E402
 
 EXIT_GREEN = 0
@@ -168,6 +176,17 @@ def _build_parser() -> _RefusingArgumentParser:
         metavar="PATH",
         default=None,
         help="also write the full JSON payload (including the verdict) to PATH",
+    )
+    parser.add_argument(
+        "--out-dir",
+        metavar="DIR",
+        default=None,
+        help=(
+            "write ONE payload file per arm (D, W, R, C) under DIR via "
+            "run_row.write_arm_payload; required unless --self-test is given. "
+            "Enforced in main, not argparse, so a missing flag REFUSES 96 "
+            "naming the flag instead of argparse's exit 2"
+        ),
     )
     parser.add_argument(
         "--device",
@@ -906,6 +925,107 @@ def _controls() -> list[tuple[str, str, dict[str, Any], int]]:
     ]
 
 
+def _out_dir_controls() -> list[tuple[str, str, bool]]:
+    """Filesystem controls for the per-arm reporting seam. No torch, no GPU.
+
+    These drive _write_arm_payloads against synthetic payloads inside a
+    TemporaryDirectory and read the files BACK from disk: a write seam that is
+    never re-read proves nothing. The read-back is also what makes C20
+    MUST-FIRE -- if the seam stamped one constant status on every arm file, the
+    'real status' control could not pass, because it demands two DIFFERENT
+    statuses from one payload.
+    """
+    controls: list[tuple[str, str, bool]] = []
+
+    try:
+        with tempfile.TemporaryDirectory() as out_dir:
+            paths = _write_arm_payloads(Path(out_dir), _synthetic_payload())
+            ok = set(paths) == set(_ARM_IDS) and all(path.is_file() for path in paths.values())
+    except Exception:  # noqa: BLE001 - a raising control is a FAILING control
+        ok = False
+    controls.append(
+        (
+            "C18-outdir-every-arm-writes",
+            "an --out-dir run writes exactly one file per arm (D, W, R, C)",
+            ok,
+        )
+    )
+
+    try:
+        with tempfile.TemporaryDirectory() as out_dir:
+            paths = _write_arm_payloads(
+                Path(out_dir),
+                _synthetic_payload(
+                    scaler_resolved=False,
+                    scaler_enabled=None,
+                    arms_present=False,
+                    wiring_error="RuntimeError: synthetic wiring blowup",
+                ),
+            )
+            statuses = {
+                arm: json.loads(path.read_text(encoding="utf-8"))["status"]
+                for arm, path in paths.items()
+            }
+            ok = (
+                set(paths) == set(_ARM_IDS)
+                and all(path.is_file() for path in paths.values())
+                and statuses["W"] == "REFUSE"
+                and statuses["R"] == "UNMEASURED"
+                and statuses["C"] == "UNMEASURED"
+            )
+    except Exception:  # noqa: BLE001 - a raising control is a FAILING control
+        ok = False
+    controls.append(
+        (
+            "C19-outdir-failed-arm-still-writes",
+            "a FAILED arm (wiring blew up before any scaler resolved) still writes its "
+            "file for every arm, with an honest CANNOT-MEASURE/UNMEASURED status "
+            "rather than vanishing into an absent file",
+            ok,
+        )
+    )
+
+    try:
+        with tempfile.TemporaryDirectory() as out_dir:
+            paths = _write_arm_payloads(
+                Path(out_dir),
+                _synthetic_payload(control_p_end=0.75),  # control STEPPED: arm C is RED
+            )
+            statuses = {
+                arm: json.loads(path.read_text(encoding="utf-8"))["status"]
+                for arm, path in paths.items()
+            }
+            ok = statuses["C"] == "RED" and statuses["R"] == "GREEN"
+    except Exception:  # noqa: BLE001 - a raising control is a FAILING control
+        ok = False
+    controls.append(
+        (
+            "C20-outdir-real-status-must-fire",
+            "MUST-FIRE: the on-disk status is each arm's REAL status -- the stepped "
+            "control arm lands RED while the stepping run arm lands GREEN from the "
+            "SAME payload; any default stamped uniformly on all four files fails "
+            "this control",
+            ok,
+        )
+    )
+
+    try:
+        rc = main([])
+        ok = rc == EXIT_REFUSE
+    except Exception:  # noqa: BLE001 - a raising control is a FAILING control
+        ok = False
+    controls.append(
+        (
+            "C21-outdir-missing-refuses-96",
+            "--out-dir absent without --self-test refuses 96 (naming the flag on "
+            "stderr), never argparse's exit 2 and never a RED adjudication",
+            ok,
+        )
+    )
+
+    return controls
+
+
 def run_self_test() -> int:
     controls = _controls()
     passed = 0
@@ -916,8 +1036,14 @@ def run_self_test() -> int:
         if ok:
             passed += 1
         print(f"[{'PASS' if ok else 'FAIL'}] {control_id} {desc} rc={got} want={want}")
-    print(f"  {ROW_ID} self-test: {passed}/{len(controls)} controls PASS")
-    return EXIT_GREEN if passed == len(controls) else EXIT_RED
+    out_dir_controls = _out_dir_controls()
+    for control_id, desc, ok in out_dir_controls:
+        if ok:
+            passed += 1
+        print(f"[{'PASS' if ok else 'FAIL'}] {control_id} {desc}")
+    total = len(controls) + len(out_dir_controls)
+    print(f"  {ROW_ID} self-test: {passed}/{total} controls PASS")
+    return EXIT_GREEN if passed == total else EXIT_RED
 
 
 # ---------------------------------------------------------------------------
@@ -959,12 +1085,191 @@ def _write_out(out_path: str | None, payload: dict[str, Any]) -> None:
         sys.stderr.write(f"warning: could not write --out {out_path}: {exc}\n")
 
 
+# ---------------------------------------------------------------------------
+# Per-arm reporting seam: ONE file per arm (D, W, R, C) via run_row
+# ---------------------------------------------------------------------------
+
+_ARM_IDS = ("D", "W", "R", "C")
+
+
+def _derive_arm_entries(
+    payload: dict[str, Any],
+) -> list[tuple[str, str, str, dict[str, Any], list[str] | None]]:
+    """Derive one (arm, status, reason, telemetry, excerpts) entry per arm.
+
+    Statuses are per-ARM, not the row verdict copied four times: a runner that
+    read the row rc from every arm file could never see WHICH arm carried the
+    evidence, and self-test control C20 pins exactly this -- from one payload
+    whose control arm stepped, arm C must land on disk RED while arm R lands
+    GREEN. An arm whose evidence is absent is still WRITTEN, with an EMPTY
+    telemetry dict rather than None: write_arm_payload omits None optionals and
+    omission means "this row does not collect this", while present-and-empty
+    means "there was nothing to collect" (the arms were correctly skipped, e.g.
+    because no scaler resolved). Only the second is a measurement, and for a
+    skipped arm it is the true one.
+    """
+    declaration = payload.get("declaration") or {}
+    wiring = payload.get("wiring") or {}
+    arms = payload.get("arms") or {}
+    run = arms.get("run") or {}
+    control = arms.get("control") or {}
+    cuda_available = bool(payload.get("cuda_available"))
+    device_used = str(payload.get("device_used") or "cpu")
+    arms_skipped_reason = payload.get("arms_skipped_reason")
+
+    # ARM D mirrors the verdict's two declaration branches: source not
+    # locatable is ABSENT (95), the mapping gone is RED (5), else the pin held.
+    if declaration.get("source_found") is not True:
+        d_status = _RC_NAMES[EXIT_UNMEASURED]
+        d_reason = (
+            "arm D: FoundationScale's loop source was not locatable "
+            f"({declaration.get('error') or 'no importable origin'}); the "
+            "declaration this row adjudicates is ABSENT in this environment"
+        )
+    elif declaration.get("declares_fp16") is not True:
+        d_status = _RC_NAMES[EXIT_RED]
+        d_reason = (
+            "arm D: no If testing cfg.precision == 'fp16' whose body assigns "
+            "kwargs['fp16'] = True anywhere in the _train subtree; the mapping "
+            "the row's claim depends on is gone at the declaration level"
+        )
+    else:
+        d_status = _RC_NAMES[EXIT_GREEN]
+        d_reason = (
+            "arm D: the precision='fp16' -> kwargs['fp16'] = True mapping is "
+            "present in the installed train/loop.py _train subtree"
+        )
+
+    # ARM W mirrors verdict rules 1, 3 and 4, in that order.
+    wiring_error = wiring.get("error")
+    if wiring_error or not wiring.get("scaler_resolved"):
+        w_status = _RC_NAMES[EXIT_REFUSE]
+        w_reason = (
+            "arm W: no scaler object resolved at any documented attribute "
+            "path; CANNOT-MEASURE, not a failure of the row"
+        )
+    elif wiring.get("scaler_enabled") is True:
+        w_status = _RC_NAMES[EXIT_GREEN]
+        w_reason = (
+            "arm W: accelerate's scaler resolved at "
+            f"{wiring.get('scaler_attribute') or '<unresolved>'} and reports "
+            "enabled under the fp16 declaration"
+        )
+    elif device_used == "cpu" or not cuda_available:
+        w_status = _RC_NAMES[EXIT_UNMEASURED]
+        w_reason = (
+            "arm W: the resolved scaler cannot be enabled on this device; an "
+            "absent capability is UNMEASURED, not a failure"
+        )
+    else:
+        w_status = _RC_NAMES[EXIT_RED]
+        w_reason = (
+            "arm W: fp16=True produced a DISABLED GradScaler on a CUDA-capable "
+            "device; the claim is false at the wiring level"
+        )
+    w_excerpts = wiring_error.strip().splitlines()[-5:] if isinstance(wiring_error, str) else None
+
+    # ARMS R and C: absent arms are REPORTED, not dropped -- the file exists so
+    # the runner can tell "correctly skipped" apart from "never ran".
+    if not run:
+        r_status = _RC_NAMES[EXIT_UNMEASURED]
+        r_reason = f"arm R: never ran -- {arms_skipped_reason or 'no run arm in the payload'}"
+    elif run.get("moved") is True and run.get("became_nan") is not True:
+        r_status = _RC_NAMES[EXIT_GREEN]
+        r_reason = (
+            "arm R: the finite-gradient arm stepped "
+            f"(p {run.get('p_start')!r} -> {run.get('p_end')!r})"
+        )
+    else:
+        r_status = _RC_NAMES[EXIT_RED]
+        r_reason = (
+            "arm R: the finite-gradient arm did NOT step "
+            f"(p {run.get('p_start')!r} -> {run.get('p_end')!r}, "
+            f"became_nan={run.get('became_nan')})"
+        )
+    if not control:
+        c_status = _RC_NAMES[EXIT_UNMEASURED]
+        c_reason = f"arm C: never ran -- {arms_skipped_reason or 'no control arm in the payload'}"
+    elif (
+        control.get("moved") is not True
+        and control.get("scale_reduced") is True
+        and control.get("became_nan") is not True
+    ):
+        c_status = _RC_NAMES[EXIT_GREEN]
+        c_reason = (
+            "arm C: the overflow arm skipped with the scale reduced "
+            f"({control.get('scale_before')!r} -> {control.get('scale_after')!r}) "
+            "and the parameter untouched"
+        )
+    else:
+        c_status = _RC_NAMES[EXIT_RED]
+        c_reason = (
+            "arm C: the overflow arm did NOT skip cleanly "
+            f"(moved={control.get('moved')}, "
+            f"scale_reduced={control.get('scale_reduced')}, "
+            f"became_nan={control.get('became_nan')})"
+        )
+
+    return [
+        ("D", d_status, d_reason, dict(declaration), None),
+        ("W", w_status, w_reason, dict(wiring), w_excerpts),
+        ("R", r_status, r_reason, dict(run), None),
+        ("C", c_status, c_reason, dict(control), None),
+    ]
+
+
+def _write_arm_payloads(out_dir: Path, payload: dict[str, Any]) -> dict[str, Path]:
+    """Write ONE payload file per arm (D, W, R, C), including arms that FAILED.
+
+    Every entry goes through run_row.write_arm_payload: the filename is DERIVED
+    there (a caller-typed name is how a measurement gets silently dropped) and
+    the keyword-only signature is exactly ARM_SCALAR_KEYS, so the #493 class of
+    bug -- adjudicators writing "launcher_exit" for "launcher_exit_code" or
+    "loss_series" for "loss_curve", silently dropped by an ``if key in payload``
+    lift -- is unrepresentable on this path: a wrong keyword is a TypeError
+    from Python itself. These arms are not launched subprocesses, so
+    launcher_exit_code stays None and is OMITTED ("this row does not collect
+    this"); an arm that never ran still writes its file, because an ABSENT
+    file cannot be told apart from an arm that never ran, and
+    write_arm_payload's non-empty-status check mirrors the #475 read-side
+    guard onto the write side so a missing status is loud here, not at the
+    runner. Returns the arm -> path mapping for the self-test controls.
+    """
+    # The runner hands a path that may not exist yet; the arm files ARE the
+    # evidence, so materialising the directory is part of writing them.
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written: dict[str, Path] = {}
+    for arm, status, reason, telemetry, excerpts in _derive_arm_entries(payload):
+        written[arm] = write_arm_payload(
+            out_dir,
+            ROW_ID,
+            arm,
+            status=status,
+            reason=reason,
+            excerpts=excerpts,
+            telemetry=telemetry,
+        )
+    return written
+
+
 def _print_verdict_line(name: str, rc: int, reason: str) -> None:
     sys.stdout.write(f"{ROW_ID} verdict: {name} rc={rc} - {reason}\n")
 
 
-def _conclude_early(rc: int, reason: str, out_path: str | None = None) -> int:
-    """Emit a minimal payload + verdict line for pre-measurement UNMEASURED exits."""
+def _conclude_early(
+    rc: int,
+    reason: str,
+    out_path: str | None = None,
+    out_dir: str | None = None,
+) -> int:
+    """Emit a minimal payload + verdict line for pre-measurement UNMEASURED exits.
+
+    The per-arm files are written too when out_dir is known: a runner that
+    finds NO file for an arm cannot tell "precondition absent" apart from "the
+    row never ran", and the second reading silently rescues a harness bug. All
+    four arms therefore report the same status with the shared reason -- the
+    #475 guard can only guard a file that exists.
+    """
     adjudicated: dict[str, Any] = {
         "row": ROW_ID,
         "claim": CLAIM_TEXT,
@@ -977,6 +1282,17 @@ def _conclude_early(rc: int, reason: str, out_path: str | None = None) -> int:
             "adjudicated_from_payload_fields_only": True,
         },
     }
+    if out_dir is not None:
+        precondition_out_dir = Path(out_dir)
+        precondition_out_dir.mkdir(parents=True, exist_ok=True)
+        for arm in _ARM_IDS:
+            write_arm_payload(
+                precondition_out_dir,
+                ROW_ID,
+                arm,
+                status=_RC_NAMES[rc],
+                reason=reason,
+            )
     _write_out(out_path, adjudicated)
     _emit(adjudicated)
     _print_verdict_line(_RC_NAMES[rc], rc, reason)
@@ -990,6 +1306,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.self_test:
         return run_self_test()
 
+    if args.out_dir is None:
+        # The runner consumes one file per arm from --out-dir; without the flag
+        # there is nowhere for the per-arm payloads to land, so refuse BEFORE
+        # importing torch or measuring anything. Checked here rather than via
+        # argparse's required= so the refusal names the flag in OUR words and
+        # exits 96 -- never argparse's exit 2, and never a RED adjudication of
+        # a row whose arms never ran.
+        sys.stderr.write(
+            f"REFUSE({EXIT_REFUSE}): --out-dir is required unless --self-test "
+            "is given; the runner reads one payload file per arm (D, W, R, C) "
+            "from that directory\n"
+        )
+        return EXIT_REFUSE
+
     try:
         import torch  # noqa: F401
     except ImportError:
@@ -999,6 +1329,7 @@ def main(argv: list[str] | None = None) -> int:
             "inside torch/transformers/accelerate, so a precondition for the "
             "measurement (module 'torch') is ABSENT -- UNMEASURED, not a failure",
             args.out,
+            args.out_dir,
         )
     try:
         import transformers  # noqa: F401
@@ -1010,6 +1341,7 @@ def main(argv: list[str] | None = None) -> int:
             "composed system (module 'transformers') is ABSENT -- UNMEASURED, "
             "not a failure",
             args.out,
+            args.out_dir,
         )
 
     device_requested = str(args.device)
@@ -1021,6 +1353,7 @@ def main(argv: list[str] | None = None) -> int:
             "the requested device is ABSENT on this machine -- UNMEASURED, not a "
             "failure",
             args.out,
+            args.out_dir,
         )
     device_used = "cuda" if (device_requested in ("auto", "cuda") and cuda_available) else "cpu"
 
@@ -1048,6 +1381,13 @@ def main(argv: list[str] | None = None) -> int:
         }
 
     _write_out(args.out, adjudicated)
+    try:
+        _write_arm_payloads(Path(args.out_dir), adjudicated)
+    except OSError as exc:
+        # A write failure downgrades nothing, exactly as with --out: the
+        # adjudication above already stands, and a runner that finds a missing
+        # arm file treats it as dropped evidence, not as GREEN.
+        sys.stderr.write(f"warning: could not write per-arm payloads under {args.out_dir}: {exc}\n")
     _emit(adjudicated)
     _print_verdict_line(adjudicated["verdict"]["name"], rc, adjudicated["verdict"]["reason"])
     return rc

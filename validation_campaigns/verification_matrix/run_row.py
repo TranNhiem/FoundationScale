@@ -286,6 +286,66 @@ def collect_arms(out_dir, *, row_id):
     return arms
 
 
+def write_arm_payload(out_dir, row_id, arm, *, status, reason,
+                      launcher_exit_code=None, excerpts=None,
+                      telemetry=None, loss_curve=None) -> Path:
+    """WHY: collect_arms reads its observations from disk and never from
+    stdout, so the <row>_<arm>.json payload is the ONLY channel an adjudicator
+    has into the receipt. The read side of that channel has two guards (rule 5
+    for the absent set, #475 for the empty member) and the write side had none
+    -- three adjudicators shipped misspelled keys that the `if key in payload`
+    lift then dropped without a word, so the measurement happened and was
+    thrown away at the seam (#493). This function is the write-side guard, and
+    it moves three failure classes from silent to loud:
+
+    - `status` must be a non-empty string or this raises ValueError at the
+      call site. That is #475 mirrored onto the write side: an arm that
+      cannot say whether it was measured is not an observation, and the file
+      that cannot say it should fail where it is being written, not one
+      receipt later in collect_arms.
+
+    - The keyword-only parameters are exactly the members of ARM_SCALAR_KEYS
+      and nothing else -- anything else is a TypeError from Python itself.
+      "launcher_exit" for "launcher_exit_code" and "loss_series" for
+      "loss_curve" become unrepresentable instead of undetectable.
+
+    - The filename is DERIVED from row_id through _arm_prefix, never typed by
+      the caller. The receipt globs <row>_<arm>.json, so a caller-typed name
+      that drifted would write a file no reader ever finds -- a measurement
+      silently dropped with the write returning success.
+
+    The payload carries exactly row / arm / status / reason plus the optionals
+    that were supplied. An optional left at None is OMITTED; an optional
+    passed as an empty list or dict is WRITTEN, empty. Absent means "this row
+    does not collect this"; present-and-empty means "there was nothing to
+    collect" -- and only the second is a measurement (#441: a receipt that
+    cannot explain itself is not a receipt).
+
+    The serialization -- indent=2, sort_keys=True, one trailing newline -- is
+    pinned by the regression control: t1_20's private writer emitted exactly
+    these bytes before it delegated here, and a formatting drift would be a
+    silent format change wearing a refactor's clothes.
+    """
+    if not isinstance(status, str) or not status.strip():
+        raise ValueError(
+            "write_arm_payload: `status` must be a non-empty string -- an arm that "
+            "cannot say whether it was measured is not an observation, and the write "
+            "side must say so before a byte lands on disk (#475 mirrored)"
+        )
+    payload = {"row": row_id, "arm": arm, "status": status, "reason": reason}
+    for key, value in (
+        ("launcher_exit_code", launcher_exit_code),
+        ("excerpts", excerpts),
+        ("telemetry", telemetry),
+        ("loss_curve", loss_curve),
+    ):
+        if value is not None:
+            payload[key] = value
+    path = Path(out_dir) / f"{_arm_prefix(row_id)}_{arm}.json"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return path
+
+
 def _output_tail(stdout, stderr):
     lines = [
         line.strip()
@@ -602,7 +662,9 @@ def self_test():
     case), a flag the program never accepted (C2), an estate path masquerading
     as an input (C3), a verdct with no observations (C4), a red without a
     reason (C5), a crash wearing a verdict (C6), arms that drift from the disk
-    (C7), and a clock borrowed from the writer (C8). Fixtures are tiny fake
+    (C7), and a clock borrowed from the writer (C8). C9-C12 guard the write
+    side of the arm payload, which had no controls at all until
+    write_arm_payload existed. Fixtures are tiny fake
     adjudicators in a TemporaryDirectory: no GPU, no torch, no estate path,
     and the real matrix.json is never read -- the rows are constructed inline.
     Exit code follows the same four-state contract: 0 if every control fires,
@@ -874,6 +936,82 @@ def self_test():
             {"receipt": rec.get("written_at_utc"), "passed_to_run_row": stamp},
         )
 
+        # C9-C12 -- the write side of the arm payload, where the campaign had
+        # no controls at all until write_arm_payload existed. These pin the
+        # failure classes the function exists to make loud, plus the
+        # load-bearing absent-vs-empty distinction.
+        try:
+            write_arm_payload(
+                root / "c9_out", "C9-1", "run", status="", reason="a blank status"
+            )
+            c9_raised = False
+        except ValueError:
+            c9_raised = True
+        record(
+            "C9 MUST-FIRE: an empty status makes write_arm_payload raise ValueError "
+            "(the #475 read-side guard, mirrored onto the write side)",
+            c9_raised,
+            {"raised_ValueError": c9_raised},
+        )
+
+        # C10 -- the #493 misspelling ("launcher_exit" for
+        # "launcher_exit_code") must be a TypeError from Python itself at the
+        # call site, not a key the lift later drops without a word.
+        try:
+            write_arm_payload(
+                root,
+                "C10-1",
+                "run",
+                status="upheld",
+                reason="fine",
+                launcher_exit=0,
+            )
+            c10_raised = False
+        except TypeError:
+            c10_raised = True
+        record(
+            "C10 MUST-FIRE: an unknown keyword -- the #493 'launcher_exit' "
+            "misspelling -- is a TypeError, never a silently dropped key",
+            c10_raised,
+            {"raised_TypeError": c10_raised},
+        )
+
+        # C11 + C12 -- the two remaining seams where a measurement used to die
+        # quietly: the filename must be DERIVED from row_id (a caller-typed
+        # name that drifted would write a file the receipt never globs), and
+        # None optionals must be OMITTED while [] optionals must be
+        # PRESENT-AND-EMPTY (#441: absent means "this row does not collect
+        # this"; only present-and-empty is a measurement).
+        c11_dir = root / "c11_out"
+        c11_dir.mkdir()
+        derived = write_arm_payload(
+            c11_dir,
+            "T1-20",
+            "run",
+            status="measured",
+            reason="control write",
+            excerpts=[],
+            loss_curve=[],
+        )
+        written = json.loads(derived.read_text(encoding="utf-8"))
+        record(
+            "C11 MUST-FIRE: the filename derives from row_id -- 'T1-20' writes "
+            "t1_20_run.json, never a caller-typed name",
+            derived.parent == c11_dir and derived.name == "t1_20_run.json",
+            str(derived),
+        )
+        record(
+            "C12 MUST-FIRE: None optionals are absent from the file while [] "
+            "optionals are present-and-empty",
+            set(written) == {"row", "arm", "status", "reason", "excerpts", "loss_curve"}
+            and written["row"] == "T1-20"
+            and written["arm"] == "run"
+            and written["status"] == "measured"
+            and written["excerpts"] == []
+            and written["loss_curve"] == [],
+            {"written_payload": written},
+        )
+
     passed = sum(checks)
     print(f"self-test: {passed}/{len(checks)} controls passed")
     return 0 if passed == len(checks) else 5
@@ -898,7 +1036,9 @@ def main(argv=None):
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--row", help="a single matrix row id, e.g. T1-9")
     mode.add_argument("--all", action="store_true", help="every row with an adjudicator")
-    mode.add_argument("--self-test", action="store_true", help="run controls C1-C8; no GPU, no matrix.json")
+    mode.add_argument(
+        "--self-test", action="store_true", help="run controls C1-C16; no GPU, no matrix.json"
+    )
     parser.add_argument("--out-dir", help="directory the adjudicator writes <row>_<arm>.json into")
     parser.add_argument("--pass-id", help="the id of this pass; receipts are addressed by it")
     parser.add_argument(
