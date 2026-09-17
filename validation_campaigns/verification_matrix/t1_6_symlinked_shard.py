@@ -28,13 +28,14 @@ Two ways to run it:
   --self-test   builds its own fixtures under TemporaryDirectory and proves each
                 instrument fires BOTH ways (see CONTROLS below). Stdlib fixtures,
                 no GPU, no cluster, no estate access -- a laptop and the estate
-                see the same fifteen controls, 12 of which also pass against a
+                see the same seventeen controls, 14 of which also pass against a
                 pre-fix tree. ``foundationscale`` itself is required and is
                 bootstrapped from the checkout's own ``src/`` when no
                 distribution is installed, because the suite that runs this file
                 supplies whatever interpreter it is running under.
 
-  --out-dir DIR <ckpt-dir>
+  --out-dir DIR <ckpt-dir>        (--ckpt-dir DIR is the same input as a flag,
+                                   because a runner can only forward flags)
                 runs the three arms against a REAL safetensors checkpoint. Only
                 shard HEADERS are read (8-byte length prefix + JSON), never tensor
                 data, so a 50 GB checkpoint costs the same as a 50 KB one. The
@@ -219,13 +220,35 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="directory receiving one JSON payload per arm; required without --self-test",
     )
     parser.add_argument(
+        "--ckpt-dir",
+        type=Path,
+        metavar="DIR",
+        help="real checkpoint directory, as a flag; the runner can only forward flags",
+    )
+    parser.add_argument(
         "checkpoint_dir",
         nargs="?",
         type=Path,
         metavar="ckpt-dir",
         help="real checkpoint directory; kept positional for existing runners",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+
+    # #494: run_row.py forwards only the flags this file declares in --help, so a
+    # checkpoint reachable ONLY as a positional made T1-6 unreproducible through the
+    # documented runner path even though the matrix reports it MEASURED. The
+    # positional stays for existing callers; --ckpt-dir is the spelling a runner can
+    # actually produce. Two DIFFERENT values refuse rather than resolve: picking one
+    # would guess which checkpoint the operator meant, which is the silent fallback
+    # this row refuses everywhere else.
+    if args.ckpt_dir is not None:
+        if args.checkpoint_dir is not None and args.checkpoint_dir != args.ckpt_dir:
+            raise _CliRefusal(
+                f"--ckpt-dir {args.ckpt_dir} and positional ckpt-dir "
+                f"{args.checkpoint_dir} name different directories"
+            )
+        args.checkpoint_dir = args.ckpt_dir
+    return args
 
 
 # ---------------------------------------------------------------------------
@@ -673,6 +696,56 @@ def _self_test() -> int:
             "C15 MUST-FIRE: the payload records the OBSERVED status, not a constant",
             bool(clean_status) and bool(failed_status) and clean_status != failed_status,
             f"arm_r clean={clean_status!r} vs faulting={failed_status!r}",
+        )
+
+        # C16/C17 close #494. C16 is an EQUIVALENCE control: the same checkpoint
+        # supplied as --ckpt-dir must reach the same code path as the positional.
+        # A flag that were declared but ignored would refuse for a missing
+        # ckpt-dir instead of matching the positional run, so this cannot pass
+        # vacuously -- and being declared is exactly what makes run_row forward it.
+        flag_report_dir = base / "arm_payloads_flag"
+        flag_report_dir.mkdir()
+        rc_flag, flag_call_error = call_main(
+            ["--out-dir", str(flag_report_dir), "--ckpt-dir", str(real)]
+        )
+        try:
+            flag_arms = {
+                json.loads(path.read_text()).get("arm") for path in flag_report_dir.glob("*.json")
+            }
+            flag_read_error = ""
+        except Exception as exc:  # noqa: BLE001
+            flag_arms = set()
+            flag_read_error = f"{type(exc).__name__}: {exc}"
+        flag_detail = (
+            f"flag rc={rc_flag} vs positional rc={rc_real}, "
+            f"arms={sorted(str(arm) for arm in flag_arms)}"
+        )
+        if flag_call_error:
+            flag_detail += f", call error={flag_call_error}"
+        if flag_read_error:
+            flag_detail += f", read error={flag_read_error}"
+        record(
+            "C16 --ckpt-dir reaches the same path as the positional",
+            rc_flag == rc_real and flag_arms == real_payload_arms == set(ARM_NAMES),
+            flag_detail,
+        )
+
+        # C17 MUST-FIRE: two DIFFERENT checkpoints, one per spelling, is an
+        # ambiguous declaration. Resolving it by preferring either spelling would
+        # measure a checkpoint the operator did not ask for and then report the
+        # answer as that operator's result.
+        conflict_dir = base / "arm_payloads_conflict"
+        conflict_dir.mkdir()
+        rc_conflict, conflict_call_error = call_main(
+            ["--out-dir", str(conflict_dir), "--ckpt-dir", str(real), str(absent)]
+        )
+        conflict_detail = f"rc={rc_conflict}"
+        if conflict_call_error:
+            conflict_detail += f", call error={conflict_call_error}"
+        record(
+            "C17 MUST-FIRE: conflicting --ckpt-dir and positional refuse",
+            rc_conflict == REFUSE,
+            conflict_detail,
         )
 
     width = max(len(name) for name, _, _ in checks)

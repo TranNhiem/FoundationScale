@@ -341,7 +341,16 @@ def write_arm_payload(out_dir, row_id, arm, *, status, reason,
     ):
         if value is not None:
             payload[key] = value
-    path = Path(out_dir) / f"{_arm_prefix(row_id)}_{arm}.json"
+    # #495: the directory is created here rather than assumed. An operator who
+    # names a fresh --out-dir used to get a bare FileNotFoundError out of the
+    # first arm, which the boundary classifier reports as "the adjudicator
+    # harness itself faulted" -- a 96 that reads as a defect in the measurement
+    # when the only thing missing was a directory. This stayed invisible because
+    # run_row's OWN fake adjudicator calls os.makedirs while the real writer did
+    # not: the fixture was more forgiving than the code it stands in for.
+    directory = Path(out_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{_arm_prefix(row_id)}_{arm}.json"
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     return path
 
@@ -1012,6 +1021,30 @@ def self_test():
             {"written_payload": written},
         )
 
+        # C13 MUST-FIRE (#495): a fresh out_dir is CREATED, not assumed. Before
+        # this, the first arm of a run into a new directory raised
+        # FileNotFoundError and the boundary classifier reported it as "the
+        # adjudicator harness itself faulted" -- a 96 that reads as a defect in
+        # the measurement when a directory was the only thing missing. The
+        # control writes into a path it first proves does not exist, so a writer
+        # that went back to assuming the directory cannot satisfy it.
+        c13_dir = root / "c13_absent" / "nested"
+        c13_existed = c13_dir.exists()
+        try:
+            c13_path = write_arm_payload(
+                c13_dir, "T1-20", "run", status="measured", reason="fresh out-dir"
+            )
+            c13_error = ""
+        except Exception as exc:  # noqa: BLE001
+            c13_path = None
+            c13_error = f"{type(exc).__name__}: {exc}"
+        record(
+            "C13 MUST-FIRE: a missing out_dir is created by the writer, not "
+            "raised as a harness fault (#495)",
+            not c13_existed and c13_path is not None and c13_path.is_file(),
+            {"pre_existed": c13_existed, "path": str(c13_path), "error": c13_error},
+        )
+
     passed = sum(checks)
     print(f"self-test: {passed}/{len(checks)} controls passed")
     return 0 if passed == len(checks) else 5
@@ -1037,7 +1070,7 @@ def main(argv=None):
     mode.add_argument("--row", help="a single matrix row id, e.g. T1-9")
     mode.add_argument("--all", action="store_true", help="every row with an adjudicator")
     mode.add_argument(
-        "--self-test", action="store_true", help="run controls C1-C16; no GPU, no matrix.json"
+        "--self-test", action="store_true", help="run controls C1-C17; no GPU, no matrix.json"
     )
     parser.add_argument("--out-dir", help="directory the adjudicator writes <row>_<arm>.json into")
     parser.add_argument("--pass-id", help="the id of this pass; receipts are addressed by it")
