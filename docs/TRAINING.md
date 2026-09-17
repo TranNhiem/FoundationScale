@@ -102,7 +102,7 @@ Mismatch is caught in the prologue, before a GPU is touched:
 [fs:train:validated]     [   ok] topology.validate_summary: validate_against ran 5 checks against profile 'example-single-node': 0 blocking, 0 warnings...
 [fs:train:deps]          importing torch/transformers/datasets (optional extra 'foundationscale[train]')
 [fs:train:data]          120000 examples tokenized (split=train, max_length=128)
-[fs:train:manifest]      declared checkpoint: dense: config declares none of ['num_experts', ...], and 0 of 28 declared tensors carry an expert path segment
+[fs:train:manifest]      declared checkpoint: dense: no key in ['num_experts', ...] appears anywhere in the config tree, and 0 of 28 declared tensors carry an expert path segment
 [fs:train:trainer]       transformers.Trainer constructed (single-node DDP is automatic under torchrun); FoundationScaleSaveGate attached
 [fs:train:manifest]      run manifest (train) -> out/train_tiny/run_manifest.json
 [fs:train:run]           training starts

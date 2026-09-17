@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never executed at runtime
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
 
     import torch
 
@@ -81,6 +81,41 @@ def _refuse_exit_96(message: str) -> NoReturn:
     # the unbound name, so the call sites need no silencing comments.
     print(f"REFUSE: {message}", file=sys.stderr)
     raise SystemExit(96)
+
+
+# How many groups the saturated-step line names individually before it stops and
+# counts the rest. The message exists to be READ, and a run with many prompts per
+# step would otherwise emit a line long enough that nobody reads any of it. The
+# remainder is stated rather than dropped: a truncated list that does not say it
+# was truncated is a different lie from the one this message was fixed to stop.
+_MAX_GROUPS_REPORTED: int = 8
+
+
+def _per_group_reward_summary(
+    kept_rows: Sequence[int],
+    prompt_ids: Sequence[str],
+    rewards: Sequence[float],
+) -> str:
+    """Distinct rewards per GROUP, for the saturated-step line.
+
+    Kept separate from the step so the shape of this evidence is testable
+    without a model, a tokenizer and a GPU -- which is why the pooled version it
+    replaces shipped unexamined.
+
+    The pooled version computed one set over all used rows, so a step whose
+    first group scored all 0.0 and whose second scored all 1.0 printed "no
+    within-group variance (distinct rewards: [0.0, 1.0])": evidence that appears
+    to refute the sentence attached to it, on a step where the sentence is true.
+    Variance is a per-group property and the report has to be too.
+    """
+    per_group: dict[str, set[float]] = {}
+    for row in kept_rows:
+        per_group.setdefault(prompt_ids[row], set()).add(float(rewards[row]))
+    shown = sorted(per_group.items())[:_MAX_GROUPS_REPORTED]
+    summary = "; ".join(f"{name}: {sorted(values)}" for name, values in shown)
+    if len(per_group) > len(shown):
+        summary += f"; (+{len(per_group) - len(shown)} more group(s))"
+    return summary
 
 
 def _refuse_vacuous_run(*, attempted: int, measured: int) -> None:
@@ -686,12 +721,22 @@ class RLTrainer:
         # That is this framework's founding failure wearing new clothes, so it
         # is named and skipped rather than counted.
         if not bool(advantage_tensor.abs().any()):
-            used_rewards = [float(rewards[row]) for row in kept_rows]
-            distinct = sorted(set(used_rewards))
+            # Reported PER GROUP, because the group is the axis the baseline is
+            # formed over and the claim is about variance WITHIN it. Pooling the
+            # rewards across groups printed evidence that contradicted the
+            # sentence carrying it: a step whose first group scored all 0.0 and
+            # whose second scored all 1.0 has no within-group variance anywhere,
+            # yet announced "no within-group variance (distinct rewards:
+            # [0.0, 1.0])". A reader is entitled to conclude from that line that
+            # the diagnosis is wrong, and a diagnostic nobody can trust is worse
+            # than no diagnostic. MEASURED on GB200, step 17 of a 20-step run.
+            summary = _per_group_reward_summary(
+                kept_rows, prompt_id_values, [float(value) for value in rewards.tolist()]
+            )
             print(
                 f"UNMEASURED step {step}: advantage is identically zero over "
-                f"{len(kept_rows)} of {len(rows)} used row(s); the reward has "
-                f"no within-group variance (distinct rewards: {distinct}). "
+                f"{len(kept_rows)} of {len(rows)} used row(s); no group's reward "
+                f"varies within that group (rewards per group -- {summary}). "
                 f"No gradient exists to take, so no step is claimed.",
                 file=sys.stderr,
             )

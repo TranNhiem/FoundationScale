@@ -1677,11 +1677,33 @@ disarms every expert gate.
 _EXPERT_COUNT_KEYS: tuple[str, ...] = ("num_local_experts", "n_routed_experts", "num_experts")
 """Routed-expert count keys this producer understands, in precedence order.
 
-This is THE single definition of the vocabulary: ``tools/real_checkpoint_probe.py``
+This is the single definition for the PROVENANCE side: ``tools/real_checkpoint_probe.py``
 imports it verbatim (a second, narrower copy in the probe drifted from this list,
 and a DeepSeek-family config stating ``n_routed_experts`` was MoE to the library
 and "dense" to the probe). Rename it and the probe's import failing loudly is the
 intended alarm.
+
+#499, FILED AND NOT FIXED. The wording here used to say THE single definition,
+full stop, and that overstated its reach: everything on the PROVENANCE side does
+share this one tuple -- ``gates/probe.py``, ``models/adapters.py`` and
+``tools/real_checkpoint_probe.py`` all import it, and ``models/adapters.py`` holds
+the relationship with an import-time ``raise`` backed by a test, which is the
+right pattern. ``train/loop.py`` is the exception. It declares its own
+``_EXPERT_COUNT_KEYS`` of five, adding ``moe_num_experts`` and
+``num_experts_per_layer``; nothing imports that copy and no guard ties it to this
+one.
+
+So the two halves of the dense/MoE question can disagree: a config declaring
+``moe_num_experts`` is MoE to the training loop and dense to this producer and to
+the probe. That is the DeepSeek incident above recurring through a different key,
+and the same shape as #498 -- a count that is present, unread, and therefore
+reported as a positive dense claim rather than as an unknown.
+
+Not fixed here deliberately. Widening this tuple changes what the probe declares
+for real checkpoints, which invalidates matrix rows measured against the narrow
+list; that re-measurement IS the fix, and it is a larger change than an
+announcement-week commit should carry. Written down rather than left for the next
+reader to rediscover from a docstring that denied it.
 """
 
 _ENABLE_MOE_BLOCK_KEY = "enable_moe_block"

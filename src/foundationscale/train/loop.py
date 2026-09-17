@@ -1855,6 +1855,94 @@ _EXPERT_COUNT_KEYS: tuple[str, ...] = (
     "moe_num_experts",
     "num_experts_per_layer",
 )
+# #499: this is a SECOND, wider definition of a vocabulary that is otherwise
+# shared. `provenance/manifest._EXPERT_COUNT_KEYS` holds the first three and is
+# imported by `gates/probe.py`, `models/adapters.py` and
+# `tools/real_checkpoint_probe.py`, with an import-time raise keeping them in
+# step. This copy is imported by nothing and guarded by nothing, so a config
+# declaring `moe_num_experts` is MoE here and dense to the manifest and the
+# probe -- the two halves of the same question answering differently. Filed, not
+# fixed: the union belongs in the shared constant, but widening it changes what
+# the probe declares for real checkpoints and invalidates rows measured against
+# the narrow list. Full note on `manifest._EXPERT_COUNT_KEYS`.
+
+
+# How far into a config's sub-configs an expert count is looked for. A composite
+# multimodal config nests exactly one level (``text_config.num_experts``); three
+# leaves room for a sub-config of a sub-config without letting the walk wander
+# out of the config and into whatever else the object graph reaches.
+_CONFIG_TREE_DEPTH: int = 3
+
+
+def _config_expert_counts(config: Any) -> dict[str, int]:
+    """Every expert-count key in the config TREE, keyed by the path it was found at.
+
+    This was a flat ``getattr`` over the top level, and a composite config
+    states the text tower's expert count on its ``text_config`` rather than on
+    itself. MEASURED on a 26B MoE VLM whose config carries
+    ``text_config.num_experts=128``: the manifest recorded ``dense``.
+
+    That is not a cosmetic miss, because of WHICH other source was also quiet.
+    The dense verdict is a two-source contract, and the comment defending it
+    names the hole it relies on the second source to cover -- "the first is
+    satisfied by a config we failed to parse". Against an adapter-only
+    checkpoint the second source is structurally blind too: no LoRA tensor sits
+    in the expert namespace, so 0 expert-named tensors is what a healthy MoE
+    adapter looks like. Both sources then go quiet for unrelated reasons, the
+    two-source contract degenerates to zero sources, and a 128-expert model is
+    POSITIVELY declared dense with ``num_experts=0`` -- after which the expert
+    gates do not run and report nothing missing. Every multimodal config is
+    composite, so the flat read failed on the whole class, not on one family.
+
+    The sibling reader in :mod:`foundationscale.gates.probe` searches
+    ``text_config`` before the top level and was never blind to this; the two
+    readers had drifted on SCOPE, which is the failure its own comment predicts
+    for a duplicated key list. The walk here is general rather than a second
+    copy of that scope rule because this function's contract is the stricter
+    one: it collects EVERY count so that disagreeing towers reach the UNKNOWN
+    branch below. Hardcoding ``text_config`` would silently miss a vision tower
+    that declares a different count -- exactly the disagreement the caller
+    exists to refuse to adjudicate.
+
+    The PATH travels with the value because "128 experts" and "128 experts
+    declared by the vision tower" are different claims.
+
+    ``to_dict()`` is preferred where the config offers it: it yields pure data,
+    so the walk cannot reach a live tokenizer or module. ``bool`` is excluded
+    though it is an ``int`` -- ``enable_moe_block=True`` is a flag, and reading
+    a flag as a count would declare a one-expert layer.
+    """
+    try:
+        root: Any = config.to_dict()
+    except Exception:  # noqa: BLE001 -- a config that cannot serialise is walked live
+        root = config
+    found: dict[str, int] = {}
+    seen: set[int] = set()
+
+    def visit(node: Any, prefix: str, depth: int) -> None:
+        if node is None or depth < 0 or id(node) in seen:
+            return
+        seen.add(id(node))
+        if isinstance(node, dict):
+            items = list(node.items())
+        else:
+            try:
+                items = list(vars(node).items())
+            except TypeError:  # no __dict__ means no sub-config to descend into
+                return
+        for name, value in items:
+            where = f"{prefix}{name}"
+            if (
+                name in _EXPERT_COUNT_KEYS
+                and isinstance(value, int)
+                and not isinstance(value, bool)
+            ):
+                found[where] = int(value)
+            elif isinstance(value, dict) or hasattr(value, "__dict__"):
+                visit(value, f"{where}.", depth - 1)
+
+    visit(root, "", _CONFIG_TREE_DEPTH)
+    return found
 
 
 def _tied_aliases(model: Any, names: set[str]) -> set[str]:
@@ -2060,11 +2148,7 @@ def _declare_checkpoint(model: Any) -> tuple[Any, dict[str, str]]:
     }
 
     config = getattr(model, "config", None)
-    found = {
-        key: int(getattr(config, key))
-        for key in _EXPERT_COUNT_KEYS
-        if isinstance(getattr(config, key, None), int)
-    }
+    found = _config_expert_counts(config)
     mentioned = sorted(n for n in declared if mentions_expert(n))
     notes["declaration.config_expert_keys"] = (
         ", ".join(f"{k}={v}" for k, v in sorted(found.items())) or "(none present)"
@@ -2079,8 +2163,9 @@ def _declare_checkpoint(model: Any) -> tuple[Any, dict[str, str]]:
         # a config we failed to parse and the second by a naming scheme we do
         # not recognise. Together they are a measurement.
         basis = (
-            f"dense: config declares none of {list(_EXPERT_COUNT_KEYS)}, and 0 of "
-            f"{len(declared)} declared tensors carry an expert path segment"
+            f"dense: no key in {list(_EXPERT_COUNT_KEYS)} appears anywhere in the "
+            f"config tree, and 0 of {len(declared)} declared tensors carry an "
+            "expert path segment"
         )
         notes["declaration.basis"] = basis
         return (

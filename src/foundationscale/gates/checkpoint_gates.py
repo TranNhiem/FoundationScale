@@ -399,6 +399,38 @@ def _expert_weights(ctx: CheckpointGateContext) -> list[TensorMeta]:
     return [t for t in ctx.tensors if _is_real_tensor(t) and _matches_expert_family(t.fqn)]
 
 
+# The adapter namespaces this tree can emit: HF peft's `.lora_` and
+# Megatron-Bridge's `.adapter.linear_`. The richer layout CLASSIFICATION
+# vocabulary lives in :mod:`foundationscale.gates.adjudication`, which imports
+# THIS module and so cannot be imported back; the narrow question asked here --
+# "is this name inside an adapter namespace at all" -- is the leaf-level one and
+# belongs in the leaf. Substrings rather than end-anchored patterns because peft
+# also emits `.lora_A.default.weight`, and the failure directions are not
+# symmetric: see _is_adapter_only_artifact.
+_ADAPTER_NAMESPACE_MARKERS: tuple[str, ...] = (".lora_", ".adapter.linear_")
+
+
+def _is_adapter_only_artifact(tensors: tuple[TensorMeta, ...]) -> bool:
+    """True when the artifact holds tensors and EVERY one is adapter-namespaced.
+
+    The ``all`` quantifier is what makes this safe, and it is why a generous
+    marker list is the right choice rather than a risky one. A gutted MoE
+    checkpoint -- the thing the UNKNOWN door exists to catch -- still contains
+    embeddings, norms and attention projections, none of which are
+    adapter-namespaced, so it can never satisfy ``all`` however wide the markers
+    are. Over-matching a single name therefore cannot smuggle a gutted
+    checkpoint past; under-matching one WOULD send a healthy adapter run to the
+    blocking VACUOUS door. The asymmetry points at breadth.
+
+    ``bool(tensors)`` is load-bearing for the same reason it is in the training
+    loop's twin: ``all([])`` is True, and an empty artifact is not adapter-only,
+    it is NOTHING.
+    """
+    return bool(tensors) and all(
+        any(marker in tensor.fqn for marker in _ADAPTER_NAMESPACE_MARKERS) for tensor in tensors
+    )
+
+
 def _expert_weight_candidates(tensors: Sequence[TensorMeta]) -> Sequence[TensorMeta]:
     """All real tensors that look expert-related, recognized layout or not.
 
@@ -898,6 +930,30 @@ class ExpertDistinctnessGate(Gate):
         shard_groups, stacked, unknown = _split_expert_layouts(candidates)
 
         if not candidates:
+            if c.num_experts is None and _is_adapter_only_artifact(c.tensors):
+                # An adapter-only artifact is SCOPED, not gutted and not dense.
+                # Reaching here means the run trained adapters that do not
+                # target expert modules: had they, the adapter tensors would sit
+                # on expert paths and `candidates` would not be empty. So the
+                # expert weights are genuinely outside this run's declared
+                # scope, which is what NOT_APPLICABLE means -- and it rests on a
+                # POSITIVE property of the artifact (every name adapter-
+                # namespaced), never on an absence of evidence. Without this
+                # door the honest UNKNOWN count that #498 restored would send
+                # every healthy LoRA-over-MoE save to the VACUOUS door and block
+                # it, trading a false dense claim for a broken workflow.
+                total = len(c.tensors)
+                return self.skip(
+                    f"adapter-only checkpoint: all {total} of {total} saved "
+                    f"tensor name(s) are adapter-namespaced, so 0 are base-model "
+                    f"weights -- the expert tensors this question is about are "
+                    f"not in the artifact. This is NOT a claim that the model is "
+                    f"dense: the declaration reports its expert count as UNKNOWN "
+                    f"and it stays unknown. The check becomes answerable when a "
+                    f"checkpoint serializes at least one tensor outside the "
+                    f"adapter namespace; until then UNMEASURED, never PASS",
+                    kind=AbstentionKind.NOT_APPLICABLE,
+                )
             if c.num_experts is None:
                 # None is not 0. This is exactly the context from_path builds
                 # when NO MANIFEST EXISTS, so nothing anywhere declares the
@@ -1413,6 +1469,30 @@ class ExpertByteVolumeGate(Gate):
         experts = _expert_weights(c)
 
         if not candidates:
+            if c.num_experts is None and _is_adapter_only_artifact(c.tensors):
+                # An adapter-only artifact is SCOPED, not gutted and not dense.
+                # Reaching here means the run trained adapters that do not
+                # target expert modules: had they, the adapter tensors would sit
+                # on expert paths and `candidates` would not be empty. So the
+                # expert weights are genuinely outside this run's declared
+                # scope, which is what NOT_APPLICABLE means -- and it rests on a
+                # POSITIVE property of the artifact (every name adapter-
+                # namespaced), never on an absence of evidence. Without this
+                # door the honest UNKNOWN count that #498 restored would send
+                # every healthy LoRA-over-MoE save to the VACUOUS door and block
+                # it, trading a false dense claim for a broken workflow.
+                total = len(c.tensors)
+                return self.skip(
+                    f"adapter-only checkpoint: all {total} of {total} saved "
+                    f"tensor name(s) are adapter-namespaced, so 0 are base-model "
+                    f"weights -- the expert tensors this question is about are "
+                    f"not in the artifact. This is NOT a claim that the model is "
+                    f"dense: the declaration reports its expert count as UNKNOWN "
+                    f"and it stays unknown. The check becomes answerable when a "
+                    f"checkpoint serializes at least one tensor outside the "
+                    f"adapter namespace; until then UNMEASURED, never PASS",
+                    kind=AbstentionKind.NOT_APPLICABLE,
+                )
             if c.num_experts is None:
                 # None is not 0: from_path yields exactly this shape when no
                 # manifest exists at all. A gutted MoE checkpoint and a true
