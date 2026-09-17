@@ -296,6 +296,80 @@ RUNNABLE: dict[str, str] = {
         "subprocess and no filesystem; the three-arm run invokes the real training entry "
         "point three times and is separate."
     ),
+    "validation_campaigns/verification_matrix/t1_3_nvfp4_refusal_arms.py": (
+        "Twenty-one controls over the nvfp4 refusal verdict. The plane reaches 96 from two "
+        "independent channels -- the config validator rejecting a precision outside PRECISIONS, "
+        "and the training loop refusing nvfp4 by name -- and nvfp4 clears the validator, so the "
+        "controls prove each arm is scored on WHICH channel spoke rather than on the exit code, "
+        "and that a parser usage error (also 96 on this CLI) is scored UNMEASURED rather than "
+        "read as a refusal. Pure dict arithmetic over synthetic payloads: no torch, no "
+        "datasets, no GPU, so a laptop and a tray see the same 21."
+    ),
+    "validation_campaigns/verification_matrix/axis_refusal_arms.py": (
+        "Thirty-eight controls over the declared-axis refusal verdict shared by the "
+        "optimizer-offload, sharded-execution and expert-parallel rows. The training loop holds "
+        "four refusal sites returning the same 96, so the controls prove an arm carrying "
+        "another axis's marker fails rather than passes, that a refusal absent from the "
+        "manifest is RED, and that a payload whose arms belong to a different axis is "
+        "UNMEASURED rather than a pass. Each control carries the axis it is scored under "
+        "instead of having it parsed back out of its own name. Pure dict arithmetic over "
+        "synthetic payloads, no GPU."
+    ),
+    "validation_campaigns/verification_matrix/t1_18_package_lora_arms.py": (
+        "Twenty-five controls over the package-API adapter verdict. A LoRA declaration can be "
+        "refused, honoured, or accepted and silently dropped, and the last two are both exit 0 "
+        "-- so the controls prove the verdict is taken from the artifacts and the manifest "
+        "rather than from the exit code, that a run which trains to completion while writing no "
+        "lora_B tensors is RED and not a pass, and that a base-movement detector which has not "
+        "been shown to fire on the full-fine-tune control cannot be used to witness a frozen "
+        "base. The null arm at lr=0 must leave every lora_B at exactly zero, which is checkable "
+        "without a threshold because lora_B is zero-initialised. Pure dict arithmetic over "
+        "synthetic payloads: no torch, no peft, no GPU."
+    ),
+    "validation_campaigns/verification_matrix/t1_19_tied_embed_arms.py": (
+        "Twenty-six controls over the tied-embedding save/load verdict. Equality is not tying: "
+        "a model that saved two copies of one tensor and reloaded them into two buffers is "
+        "byte-identical to a correctly tied one at rest and broken in motion, so the controls "
+        "prove the verdict turns on STORAGE IDENTITY after a round trip and that a byte-equal "
+        "but separately-stored head is scored RED rather than rescued by its equality. They "
+        "also prove an untied control that comes back tied is a defect rather than a curiosity, "
+        "that a control which was never untied in the first place cannot witness anything, and "
+        "that a redundantly saved head is NOT scored RED when the round trip still shares "
+        "storage -- gating on artifact shape there would manufacture a false failure. Pure dict "
+        "arithmetic over synthetic payloads: no torch, no transformers, no GPU."
+    ),
+    "validation_campaigns/verification_matrix/t1_7_dcp_hf_parity_arms.py": (
+        "Twenty-four controls over the DCP/safetensors parity verdict. `ok` on that report "
+        "means 'within the declared tolerance policy', not 'identical', so scoring the row on "
+        "`ok` alone would be scoring the tolerance rather than the comparator -- the controls "
+        "therefore prove the verdict turns on the three-level GRADE and on the "
+        "mismatched-element count: an untouched tensor must read EXACT, a one-ULP perturbation "
+        "must read CLOSE with exactly one mismatched element (zero would mean the data was "
+        "never read, and EXACT would mean a real bitwise difference is invisible to anyone "
+        "reading past `ok`), and a perturbation past the tolerance must block and name the key, "
+        "because a tolerance that has never been exceeded is indistinguishable from one that "
+        "acquits everything. They also prove a dropped tensor is scored as a one-sided key "
+        "rather than as a numeric finding, and that zero common keys is VACUOUS rather than "
+        "agreement -- the all([]) shape, inside the comparator built to hunt it. Pure dict "
+        "arithmetic over synthetic payloads: no torch, no checkpoint reader, no GPU."
+    ),
+    "validation_campaigns/verification_matrix/t1_5_t1_8_undeclarable_arms.py": (
+        "Twenty controls over the resume/reshard SAFE-ABSENCE verdict. This row measures the "
+        "shape of an absence rather than a capability: neither resume nor resharding exists, "
+        "and the question is whether a user can declare one anyway and be told nothing, which "
+        "is the failure mode that lets somebody believe they resumed while they trained from "
+        "scratch. The exit code cannot be the evidence, because this CLI maps argparse's usage "
+        "error onto the same 96 it uses for a designed refusal, so the controls prove the "
+        "verdict turns on the marker argparse prints and never on rc. They also prove the two "
+        "ways this probe can lie about the framework are caught rather than scored: a surface "
+        "that rejected its OWN real options would look like correct strictness without the "
+        "known-flag and known-field controls, and an arm whose diagnosis is identical to the "
+        "control's has measured nothing rather than caught a swallowed flag -- the first "
+        "version of this probe did exactly that and would have filed a false RED. A control "
+        "that parses cleanly prints no usage line, so reading that absence as "
+        "death-before-the-parser is its own trap and has its own control. Pure dict arithmetic "
+        "over synthetic payloads: no torch, no subprocess, no GPU."
+    ),
 }
 
 NOT_RUNNABLE_HERE: dict[str, str] = {

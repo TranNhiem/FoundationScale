@@ -177,12 +177,13 @@
       "run_arm": "precision=nvfp4",
       "control_arm": "assert rc==96 AND no checkpoint written",
       "cost": "~2 min",
-      "status": "REFUSES by design (#345)",
+      "status": "MEASURED GREEN on a tray at 1460560 (#478), adjudicated by t1_3_nvfp4_refusal_arms.py, whose twenty-one self-test controls pin the verdict order. Taken twice: once against the estate's working checkout and once against a pristine clone of main at 55a1bb6 with a clean worktree, because the working checkout carries an uncommitted local patch and a number published from a modified tree is not a number about this repository. Both takes agree arm for arm. This row previously asserted its refusal with no adjudicator and was the last one doing so. Exit codes alone could not have settled it: this plane reaches 96 from two independent channels -- the config validator rejecting a precision outside PRECISIONS, and the training loop refusing nvfp4 specifically -- and nvfp4 clears the validator, so a bare rc==96 is equally consistent with a rejected declaration, an argument-parser error and a real refusal. Each arm is therefore scored on WHICH channel spoke. The deciding arm exits 96 from the loop's own refusal site naming the absent backend, trains nothing, writes ZERO checkpoint artifacts and records stage=refused with precision=nvfp4, satisfying this row's declared control arm in full. The same fixtures at bf16 exit 0, train to completion, write 7 checkpoint artifacts and record an observed dtype histogram of 338 BF16 tensors against the declaration -- so the absence of weights beside the refusal is a measured emptiness, not an untested one. A third arm shows the refusal fires even when the model cannot resolve, and a fourth shows that an unresolvable model is otherwise fatal (exit 5), which is what makes the third evidence of ordering rather than indifference. Unlike the declared video and audio rows, the declaration surface here reaches the refusal that exists.",
       "blocked_by": [],
       "findings": [
-        "#345"
+        "#345",
+        "#478"
       ],
-      "adjudicator": null
+      "adjudicator": "validation_campaigns/verification_matrix/t1_3_nvfp4_refusal_arms.py"
     },
     {
       "id": "T1-4",
@@ -207,16 +208,17 @@
       "group": "checkpoint lifecycle",
       "claim": "10 steps + resume 10 == 20 steps straight (RESUME fidelity)",
       "run_arm": "resume arm",
-      "control_arm": "straight-through arm; final weights must match within tolerance",
+      "control_arm": "straight-through arm; final weights must match within tolerance -- NOT RUN and not runnable: the declared control presupposes the capability it is meant to control for. What ran instead is a declarability control pair: a flag and a field that DO exist must pass the same two checks the unimplemented spellings fail, or a surface that rejected everything would score as correct strictness",
       "cost": "~40 min",
-      "status": "ABSENT, not merely unproven — `train/loop.py` calls `trainer.train()` with no arguments and `resume_from_checkpoint` appears nowhere in `src/`, so no code path restores optimizer, RNG or dataloader state and the CLI declares no flag that could ask for one. The launch plane's `FS_RESUME_CKPT`/`FS_RESUME_STEP` vocabulary is real but stops at the container boundary (#122). Both arms have nothing to point at: the gap is in the framework, not in the measurement (#461)",
+      "status": "ABSENT, not merely unproven — `train/loop.py` calls `trainer.train()` with no arguments and `resume_from_checkpoint` appears nowhere in `src/`, so no code path restores optimizer, RNG or dataloader state and the CLI declares no flag that could ask for one. The launch plane's `FS_RESUME_CKPT`/`FS_RESUME_STEP` vocabulary is real but stops at the container boundary (#122). Both arms have nothing to point at: the gap is in the framework, not in the measurement (#461) The absence has now been given a shape by a run rather than left as a reading (#486): on both surfaces a user can reach, this capability is refused BY NAME. Every probed command-line spelling comes back from argparse as an unrecognised option, and every probed TrainConfig field raises TypeError at construction, while a flag and a field that DO exist pass both checks -- so the rejection is about this capability and not about everything, which a surface that rejected its own real options would also have produced. The exit code is deliberately not the evidence: this CLI maps argparse's usage error onto the same 96 the plane uses for a designed refusal, so rc alone cannot separate 'no such flag' from 'refused by design', and the scoring key is the marker argparse prints, with rc recorded and never deciding. This does not move the row: the capability is still absent and this row still carries no reading of the claim above. It establishes only that the absence cannot be mistaken for a presence -- nobody can declare this and be silently ignored.",
       "blocked_by": [],
       "findings": [
         "#177",
         "#192",
-        "#461"
+        "#461",
+        "#486"
       ],
-      "adjudicator": null
+      "adjudicator": "validation_campaigns/verification_matrix/t1_5_t1_8_undeclarable_arms.py"
     },
     {
       "id": "T1-6",
@@ -226,12 +228,13 @@
       "run_arm": "the #343 artifact",
       "control_arm": "a real shard must pass the same detector",
       "cost": "~5 min",
-      "status": "SHIPPED (#343): is_symlink() hoisted ahead of exists(), so a linked shard draws no link-following stat at all; GREEN on a real two-shard ~51.6 GB safetensors checkpoint on GB200 with zero byte credit; harness 11/11 here, 8/11 pre-fix (the 3 that flip are the detector arms; the 8 that hold include two proving the src-layout import bootstrap both finds this checkout and declines a tree with no package, added after the launcher-contracts job showed the self-test assumed an installed distribution)",
+      "status": "MEASURED GREEN (#479). Re-taken live rather than relabelled: the row read SHIPPED, which the measured countable skips, and the honest way out of that is a fresh reading, not a fresh adjective. Run from a pristine clone of main at 55a1bb6 with a clean worktree, against a real 12-shard 54,864,980,440-byte safetensors checkpoint -- deliberately a different artifact from the original two-shard ~51.6 GB one, so the verdict is not a property of a single index file. 1247 index entries read, the linked-shard arm RED as required, the dangling-shard arm RED as a LINK rather than as a missing file, zero link-following stats on shard paths, adjudicator self-test 11/11, exit 0 on both. The underlying fix (#343) is that is_symlink() is hoisted ahead of exists(), so a linked shard draws no link-following stat at all; the harness scores 8/11 pre-fix and the 3 that flip are the detector arms. The 8 that hold include two proving the src-layout import bootstrap both finds this checkout and declines a tree with no package, added after the launcher-contracts job showed the self-test assumed an installed distribution -- and that bootstrap is load-bearing: this row is two files, and shipping only the adjudicator leaves its sibling import to fail at module scope, before main() exists to classify anything into the contract.",
       "blocked_by": [],
       "findings": [
         "#343",
         "#463",
-        "#476"
+        "#476",
+        "#479"
       ],
       "adjudicator": "validation_campaigns/verification_matrix/t1_6_symlinked_shard.py"
     },
@@ -239,14 +242,16 @@
       "id": "T1-7",
       "tier": 1,
       "group": "checkpoint lifecycle",
-      "claim": "converted weights are parity-equal to source (DCP<->HF)",
-      "run_arm": "convert both ways",
-      "control_arm": "a truncated shard must be caught",
-      "cost": "~20 min",
-      "status": "ABSENT",
+      "claim": "DCP<->HF parity VERIFICATION: the framework can read a DCP checkpoint and a safetensors checkpoint through one interface and adjudicate truthfully whether they agree. The word 'converted' has been dropped from the original claim because no DCP->HF converter exists in this source; the verifier does, and only the verifier is claimed",
+      "run_arm": "compare a real FS-written safetensors checkpoint against a DCP checkpoint written from the same tensors -- NOT 'convert both ways', which cannot be run because there is no converter",
+      "control_arm": "four controls, not the one originally declared: one element moved by a single ULP (must be seen and graded CLOSE, not absorbed), the same element moved past the tolerance (must block and name the key, which is what makes the tolerance a ceiling rather than a rubber stamp), one tensor dropped (must fail as a one-sided key, a distinct mode from a numeric finding), and disjoint key sets (must be vacuous, never ok)",
+      "cost": "~40 s measured, CPU only, no GPU and no download (the ~20 min estimate was wrong)",
+      "status": "MEASURED GREEN (#485) on parity VERIFICATION, and it RETRACTS what this row used to say. The row read 'ABSENT', inferred from reading the source rather than from a run, and that is the third such inference this week to be withdrawn by measurement (after T1-18 and T1-19). The subject is not synthesised: the HF side is the safetensors checkpoint the training plane actually wrote during T1-19. The DCP side is written by torch's own writer, because this plane never emits DCP -- it refuses sharded execution (T1-14) -- and that asymmetry is the point, since the question is whether FoundationScale can read BOTH and tell the truth. It can. Identical inputs: 26 keys, 19743872 elements, every key graded bitwise-EXACT. One element moved by a single bf16 ULP: SEEN -- exactly one mismatched element, max absolute difference 0.0001220703125 -- and graded CLOSE, not EXACT, against the declared policy default-close (max_abs_diff<=0.01, cosine>=0.999, rel_frob<=0.01). That grade is the load-bearing detail: ok means 'within the declared tolerance', not 'identical', and because the grade is three-level rather than boolean, ok never hides a bitwise difference from a reader who looks. The same element moved by 1.0: graded DIFFER, blocks, names the key, so the tolerance is a ceiling that demonstrably can be exceeded rather than a policy that acquits everything. One tensor dropped: reported as a one-sided key, not as a numeric finding. Every key renamed: VACUOUS and not ok, so the all([]) guard this framework exists to hunt is live in the framework's own comparator rather than merely documented there. Adjudicated by t1_7_dcp_hf_parity_arms.py, 24 self-test controls, CLEAR on both the cluster's 3.11 interpreter and the laptop's 3.14. NOT established here: that FoundationScale can CONVERT between the formats -- it cannot, and the claim above was narrowed rather than left to be read as if it could; nor parity across a SHARDED DCP checkpoint with multiple write ranks, which no instrument can reach while the plane refuses sharded execution.",
       "blocked_by": [],
-      "findings": [],
-      "adjudicator": null
+      "findings": [
+        "#485"
+      ],
+      "adjudicator": "validation_campaigns/verification_matrix/t1_7_dcp_hf_parity_arms.py"
     },
     {
       "id": "T1-8",
@@ -254,12 +259,14 @@
       "group": "checkpoint lifecycle",
       "claim": "resharding: save on 4 GPUs, load on 2",
       "run_arm": "4->2",
-      "control_arm": "4->3 (non-divisor) must REFUSE, not silently drop experts",
+      "control_arm": "4->3 (non-divisor) must REFUSE, not silently drop experts -- NOT RUN and not runnable: the declared control presupposes the capability it is meant to control for. What ran instead is a declarability control pair: a flag and a field that DO exist must pass the same two checks the unimplemented spellings fail, or a surface that rejected everything would score as correct strictness",
       "cost": "~30 min",
-      "status": "ABSENT",
+      "status": "ABSENT, and confirmed absent by a run rather than inferred from one: `reshard` appears in `src/` only as an error string in topology.py and in RL weight-transport docstrings, and no TrainConfig field or CLI flag exists through which a load-time parallel layout could be requested at all. Both declared arms have nothing to point at -- there is no 4->2 to run, and the 4->3 non-divisor control cannot refuse a request that cannot be made. The absence has now been given a shape by a run rather than left as a reading (#486): on both surfaces a user can reach, this capability is refused BY NAME. Every probed command-line spelling comes back from argparse as an unrecognised option, and every probed TrainConfig field raises TypeError at construction, while a flag and a field that DO exist pass both checks -- so the rejection is about this capability and not about everything, which a surface that rejected its own real options would also have produced. The exit code is deliberately not the evidence: this CLI maps argparse's usage error onto the same 96 the plane uses for a designed refusal, so rc alone cannot separate 'no such flag' from 'refused by design', and the scoring key is the marker argparse prints, with rc recorded and never deciding. This does not move the row: the capability is still absent and this row still carries no reading of the claim above. It establishes only that the absence cannot be mistaken for a presence -- nobody can declare this and be silently ignored.",
       "blocked_by": [],
-      "findings": [],
-      "adjudicator": null
+      "findings": [
+        "#486"
+      ],
+      "adjudicator": "validation_campaigns/verification_matrix/t1_5_t1_8_undeclarable_arms.py"
     },
     {
       "id": "T1-9",
@@ -338,12 +345,14 @@
       "group": "optimizer / memory / kernels",
       "claim": "CPU offload: optimizer state leaves GPU memory",
       "run_arm": "offload on vs off",
-      "control_arm": "GPU memory must drop by ~optimizer-state size; if not, offload did nothing",
+      "control_arm": "the SAME flag at --cpu-optimizer-offload false must train to completion and write weights; if it also refuses, the flag's presence is the trigger and the refusal says nothing about the declared value",
       "cost": "~20 min x2",
-      "status": "REFUSED by the package plane (#373): offload=true refuses before load, so there is no offload arm to weigh against off",
+      "status": "MEASURED GREEN on the refusal, and the capability is ABSENT (#480/#373). This row's claim -- that optimizer state leaves GPU memory -- is NOT satisfied by this framework and nothing here shows that it is; the declared memory-differential control cannot fire, because there is no offload arm to weigh. What is proven is the narrower and previously unproven thing: declaring cpu_optimizer_offload=true is refused at the optimizer-offload site itself, the message echoes the declared value, the run trains nothing, writes ZERO checkpoint artifacts and records stage=refused, and it still refuses when the model cannot resolve -- so the refusal precedes model load. The same flag at false trains to completion and writes 7 artifacts on identical fixtures, which closes the explanation that the plane dies whenever this flag is present at all. Measured on a tray against a pristine clone of main at 55a1bb6, adjudicated by axis_refusal_arms.py, whose thirty-eight self-test controls pin the verdict order and are exercised across all three axes. Exit codes could not have settled this: the plane reaches 96 from an argument-parser error, from the config validator, and from four separate refusal sites inside the training loop, so each arm is scored on WHICH site spoke and an arm carrying another axis's marker is a failure rather than a pass. Eleven arms in total; the two shared controls are a no-axis baseline that trains and writes 7 checkpoint artifacts, and the same baseline against an unresolvable model, which exits 5 -- so an unresolvable model is otherwise fatal, which is what makes the ordering arm below evidence of sequence rather than of indifference.",
       "blocked_by": [],
-      "findings": [],
-      "adjudicator": null
+      "findings": [
+        "#480"
+      ],
+      "adjudicator": "validation_campaigns/verification_matrix/axis_refusal_arms.py"
     },
     {
       "id": "T1-14",
@@ -351,12 +360,14 @@
       "group": "optimizer / memory / kernels",
       "claim": "ZeRO-1/2/3 reduce per-rank memory monotonically",
       "run_arm": "3 arms + DDP baseline",
-      "control_arm": "flat memory across stages = no sharding happened",
+      "control_arm": "the SAME flag at --sharding-strategy ddp must train to completion and write weights; if it also refuses, the flag's presence is the trigger and the refusal says nothing about the declared value",
       "cost": "~30 min x4",
-      "status": "REFUSED by the package plane (#373): fsdp/zero3 refuse before load, so there are no ZeRO stages to compare",
+      "status": "MEASURED GREEN on the refusal, and the capability is ABSENT (#481/#373). This row's claim -- that ZeRO-1/2/3 reduce per-rank memory monotonically -- is NOT satisfied by this framework and nothing here shows that it is; the declared flat-memory control cannot fire, because there are no ZeRO stages to compare. What is proven is that declaring sharding_strategy='zero3' is refused at the sharded-execution site itself, the message echoes the declared value, the run trains nothing, writes ZERO checkpoint artifacts and records stage=refused, and it still refuses when the model cannot resolve. The same flag at 'ddp' -- the one strategy with execution behind it -- trains to completion and writes 7 artifacts on identical fixtures, so the refusal tracks the VALUE and not the presence of the declaration. Measured on a tray against a pristine clone of main at 55a1bb6, adjudicated by axis_refusal_arms.py, whose thirty-eight self-test controls pin the verdict order and are exercised across all three axes. Exit codes could not have settled this: the plane reaches 96 from an argument-parser error, from the config validator, and from four separate refusal sites inside the training loop, so each arm is scored on WHICH site spoke and an arm carrying another axis's marker is a failure rather than a pass. Eleven arms in total; the two shared controls are a no-axis baseline that trains and writes 7 checkpoint artifacts, and the same baseline against an unresolvable model, which exits 5 -- so an unresolvable model is otherwise fatal, which is what makes the ordering arm below evidence of sequence rather than of indifference.",
       "blocked_by": [],
-      "findings": [],
-      "adjudicator": null
+      "findings": [
+        "#481"
+      ],
+      "adjudicator": "validation_campaigns/verification_matrix/axis_refusal_arms.py"
     },
     {
       "id": "T1-15",
@@ -397,14 +408,15 @@
       "group": "architecture",
       "claim": "ep=2 shards experts across ranks",
       "run_arm": "ep=2 vs ep=1",
-      "control_arm": "identical per-rank memory = no expert sharding",
+      "control_arm": "the SAME flag at --ep 1 must train to completion and write weights; if it also refuses, the flag's presence is the trigger and the refusal says nothing about the declared degree",
       "cost": "~40 min",
-      "status": "REFUSED by the package plane (#375): ep>1 refuses before load",
+      "status": "MEASURED GREEN on the refusal, and the capability is ABSENT (#482/#375). This row's claim -- that ep=2 shards experts across ranks -- is NOT satisfied by this framework and nothing here shows that it is; the declared per-rank-memory control cannot fire, because there is no expert-sharded arm to weigh. What is proven is that declaring ep=2 is refused at the unwired-degree site itself, naming the degree it refused, training nothing, writing ZERO checkpoint artifacts and recording stage=refused, and that it still refuses when the model cannot resolve. The same flag at 1 trains to completion and writes 7 artifacts on identical fixtures. A topology confound was possible here and did not occur: ep=2 on a single GPU declares a parallel product larger than the world, and had a topology validator rejected it first the arm would have shown the validator's marker and reached no refusal site at all -- the adjudicator refuses to call that GREEN, and it did not have to. Measured on a tray against a pristine clone of main at 55a1bb6, adjudicated by axis_refusal_arms.py, whose thirty-eight self-test controls pin the verdict order and are exercised across all three axes. Exit codes could not have settled this: the plane reaches 96 from an argument-parser error, from the config validator, and from four separate refusal sites inside the training loop, so each arm is scored on WHICH site spoke and an arm carrying another axis's marker is a failure rather than a pass. Eleven arms in total; the two shared controls are a no-axis baseline that trains and writes 7 checkpoint artifacts, and the same baseline against an unresolvable model, which exits 5 -- so an unresolvable model is otherwise fatal, which is what makes the ordering arm below evidence of sequence rather than of indifference.",
       "blocked_by": [],
       "findings": [
-        "#375"
+        "#375",
+        "#482"
       ],
-      "adjudicator": null
+      "adjudicator": "validation_campaigns/verification_matrix/axis_refusal_arms.py"
     },
     {
       "id": "T1-18",
@@ -413,29 +425,31 @@
       "claim": "LoRA through the package: adapter weights train, base frozen",
       "run_arm": "LoRA arm",
       "control_arm": "base-weight parity must show ZERO movement; adapter parity must show movement",
-      "cost": "~20 min",
-      "status": "ABSENT from the package plane (#329)",
+      "cost": "~2 min measured (68 s for all three arms on one GPU; the ~20 min estimate was wrong)",
+      "status": "MEASURED GREEN (#483), and it RETRACTS what this row used to say. The row read 'ABSENT from the package plane (#329)', inferred from reading the source rather than from a run, and that is wrong: TrainConfig carries adapter, adapter_rank, adapter_alpha, adapter_targets and adapter_dropout, train is a public callable, and a config built by hand in Python -- no command line anywhere -- attaches peft and trains the adapter. Three arms on a tray against a pristine clone of main at 55a1bb6. The LoRA arm moved 112 of 112 lora_B tensors, max Frobenius norm 0.209401; the lr=0 null arm left all 112 at exactly 0.0, a control that cannot pass by chance because lora_B is zero-initialised and so needs no threshold to calibrate. The base is frozen, and that is shown twice by independent means: the saved artifact carries 0 base tensors, while the full-fine-tune control writes 676 of them and moves 12 of 12 sampled against the pretrained weights -- so the base-movement detector is demonstrably able to fire, and 'no movement' here is a reading rather than an untested emptiness -- and separately the manifest records 1089536 of 1544803840 parameters trainable, 0.0705%. The declaration is recorded, not merely honoured: the manifest carries adapter=lora, rank 8, alpha 16.0, targets declared q_proj,v_proj resolved to 56 real module paths, and declaration.adapter_count_cross_check='agree (112)', which is not a rubber stamp because the full-fine-tune arm records '(not applicable: no peft wrapper)' instead. So this is NOT the accepted-and-silently-dropped class of #375. Adjudicated by t1_18_package_lora_arms.py, 25 self-test controls, CLEAR on both the cluster's 3.11 interpreter and the laptop's 3.14; exit 0 on the self-test and on the real payload. The one thing NOT established: this is one adapter mode on one model family, and the CLI path (T1-20) remains the separately measured one.",
       "blocked_by": [],
       "findings": [
-        "#329"
+        "#329",
+        "#483"
       ],
-      "adjudicator": null
+      "adjudicator": "validation_campaigns/verification_matrix/t1_18_package_lora_arms.py"
     },
     {
       "id": "T1-19",
       "tier": 1,
       "group": "architecture",
-      "claim": "tied embeddings: tying survives save/load and sharding",
+      "claim": "tied embeddings: tying survives save/load. The 'and sharding' half of the original claim is unreachable on this plane, which refuses sharded execution (T1-14), and has been dropped from the claim rather than silently counted as passing",
       "run_arm": "a tied-embedding model",
-      "control_arm": "untied model as control",
-      "cost": "~20 min",
-      "status": "ABSENT (#172/#202 shape)",
+      "control_arm": "untied model as control -- synthesised, not borrowed: no untied model with real weights exists on this estate and downloading is not permitted, so both arms are built from one config differing in exactly one field, tie_word_embeddings",
+      "cost": "~68 s measured (33.6 s tied + 34.1 s untied on one GPU; the ~20 min estimate was wrong)",
+      "status": "MEASURED GREEN (#484) on the save/load conjunct, and it RETRACTS what this row used to say. The row read 'ABSENT (#172/#202 shape)', inferred from reading the source rather than from a run, and that is wrong. Two arms on a tray against a pristine clone of main at 55a1bb6, built from one config differing in exactly one field. The deciding check is STORAGE IDENTITY after a round trip, not equality: a model that saved two copies of one tensor and reloaded them into two buffers is byte-identical to a correctly tied one at rest and broken in motion, because the next update to the embedding would not reach the head. The tied arm reloaded with output and input embeddings sharing storage, lm_head absent from the artifact (26 tensors against the control's 27, the delta being exactly lm_head.weight), config recording tie_word_embeddings=true, after the embedding actually moved -- max absolute delta 0.003174, so this is a TRAINED tie and not an untouched one. The untied control wrote its own lm_head and reloaded with separate, unequal storage, which is what proves the detector can report a mismatch; without it, storage identity on the tied arm would be consistent with a detector that answers yes unconditionally. Parameter counts corroborate the arms really differed: 19743872 tied against 39191680 untied, a difference of 19447808, which is exactly one embedding matrix. Adjudicated by t1_19_tied_embed_arms.py, 26 self-test controls, CLEAR on both the cluster's 3.11 interpreter and the laptop's 3.14. NOT established here: the sharding conjunct, which no instrument can reach while the plane refuses sharded execution, and behaviour on a pretrained checkpoint at scale, since the subject was a small model built from config -- though the save path does not know the difference, and a real 1.5B tied checkpoint was separately observed to keep lm_head absent through the same path.",
       "blocked_by": [],
       "findings": [
         "#172",
-        "#202"
+        "#202",
+        "#484"
       ],
-      "adjudicator": null
+      "adjudicator": "validation_campaigns/verification_matrix/t1_19_tied_embed_arms.py"
     },
     {
       "id": "T1-20",

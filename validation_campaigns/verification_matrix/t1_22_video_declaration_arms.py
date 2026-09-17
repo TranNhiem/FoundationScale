@@ -542,7 +542,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.self_test:
         return _self_test()
     if not args.out_dir or not args.src_root:
-        print(f"REFUSE: --out-dir and --src-root are required without --self-test", file=sys.stderr)
+        print("REFUSE: --out-dir and --src-root are required without --self-test", file=sys.stderr)
         return REFUSE
 
     out_dir = Path(args.out_dir).resolve()
