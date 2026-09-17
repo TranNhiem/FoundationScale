@@ -83,6 +83,22 @@ def _refuse_exit_96(message: str) -> NoReturn:
     raise SystemExit(96)
 
 
+def _refuse_vacuous_run(*, attempted: int, measured: int) -> None:
+    # Every UNMEASURED step names itself on stderr as it is skipped, but a
+    # caller holding the returned list cannot tell a run that measured nothing
+    # from a run that was never asked to measure: both are []. max_steps < 1 is
+    # already refused at construction because "an empty run measures nothing";
+    # a run that attempts its steps and lands zero of them is empty by the same
+    # argument, discovered later. Refusing here is what keeps the emptiness from
+    # being read as a quiet success -- this framework's founding failure.
+    if attempted > 0 and measured == 0:
+        raise TrainerRefusal(
+            f"{attempted} step(s) attempted and 0 produced a measurable update; "
+            f"every step was UNMEASURED and said so above. A run that trained "
+            f"nothing measures nothing and is refused as vacuous"
+        )
+
+
 class MasterWeightOptimizer:
     """Host-fp32-master wrapper around torch.optim.AdamW.
 
@@ -478,6 +494,7 @@ class RLTrainer:
             )
             if report is not None:
                 reports.append(report)
+        _refuse_vacuous_run(attempted=self.config.max_steps, measured=len(reports))
         return reports
 
     def _one_step(
@@ -540,6 +557,12 @@ class RLTrainer:
                 rows.append((index, scored))
         if not rows:
             # offered > used == 0: an entirely abstaining step is UNMEASURED.
+            print(
+                f"UNMEASURED step {step}: 0 of {len(completions)} completion(s) "
+                f"earned a score; every rollout abstained, so the step carries no "
+                f"reward at all. No gradient exists to take, so no step is claimed.",
+                file=sys.stderr,
+            )
             return None
 
         kept_indices = torch.tensor([index for index, _ in rows], device=device)
@@ -640,6 +663,12 @@ class RLTrainer:
         # of what it dropped -- a group too small for a baseline leaves here.
         kept_rows = list(advantage.rows)
         if not kept_rows:
+            print(
+                f"UNMEASURED step {step}: the advantage estimator kept 0 of "
+                f"{len(rows)} scored row(s); no group was large enough to admit a "
+                f"baseline. No gradient exists to take, so no step is claimed.",
+                file=sys.stderr,
+            )
             return None
         keep = torch.tensor(kept_rows, device=device)
         advantage_tensor = torch.tensor(
