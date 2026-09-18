@@ -475,7 +475,8 @@
       "findings": [
         "#470",
         "#473",
-        "#474"
+        "#474",
+        "#505"
       ],
       "adjudicator": "validation_campaigns/verification_matrix/t1_20_text_movement_arms.py"
     },
@@ -495,7 +496,9 @@
         "#449",
         "#450",
         "#451",
-        "#463"
+        "#463",
+        "#504",
+        "#505"
       ],
       "adjudicator": "validation_campaigns/verification_matrix/t1_21_vision_tower_arms.py"
     },
@@ -533,7 +536,8 @@
         "#476",
         "#490",
         "#491",
-        "#502"
+        "#502",
+        "#504"
       ],
       "adjudicator": "validation_campaigns/verification_matrix/t1_23_audio_declaration_arms.py"
     }

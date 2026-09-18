@@ -38,6 +38,7 @@ from foundationscale.gates.core import (
     GateRegistry,
     GateReport,
     Lifecycle,
+    Verdict,
     run_event,
 )
 from foundationscale.topology import (
@@ -232,6 +233,50 @@ UNTRAINABLE_MODALITIES: tuple[tuple[str, str], ...] = (
     ("audio", "FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN"),
     ("video", "FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN"),
 )
+
+
+# #504: the modality towers a checkpoint can CARRY, paired with the declaration
+# that exercises each one. An OMNI checkpoint (measured: gemma-4-E4B-it exposes
+# text_config, vision_config AND audio_config) carries towers this plane states
+# it cannot train -- see UNTRAINABLE_MODALITIES directly above. Their parameters
+# therefore receive no gradient, and DDP treats that as a fatal desynchronisation
+# unless it is told to expect it. Those two facts cannot both stand silently: the
+# plane declared audio untrainable and then hardcoded the flag that makes an
+# untrainable tower fatal, so EVERY multi-rank run on an omni checkpoint aborted
+# on the first backward pass.
+_MODALITY_TOWERS: tuple[tuple[str, str], ...] = (
+    ("vision_tower", "image"),
+    ("audio_tower", "audio"),
+)
+
+
+def _dormant_modality_towers(model: Any, *, image_declared: bool) -> list[str]:
+    """Towers PRESENT on ``model`` that this run's declaration cannot exercise.
+
+    Keyed on the DECLARATION and on the loaded module tree -- never on the data,
+    which is the same rule ``_declared_untrainable_modality`` states above. That
+    is what keeps three cases apart that a hardcoded flag collapses into one: a
+    text-only run on a VLM (vision dormant), a multimodal run on an omni model
+    (audio dormant), and a plain LLM where nothing is dormant and a genuinely
+    unused parameter must still be reported by DDP rather than tolerated.
+
+    Returns the attribute names, in declaration order, so the announcement names
+    the towers rather than merely admitting that some exist.
+    """
+    exercised = {"image"} if image_declared else set()
+    dormant: list[str] = []
+    for attr, modality in _MODALITY_TOWERS:
+        if modality in exercised:
+            continue
+        tower = getattr(model, attr, None)
+        if tower is None:
+            # Composite VLMs nest the towers one level down under `.model`, the
+            # same shape that defeats a flat getattr on expert counts.
+            inner = getattr(model, "model", None)
+            tower = getattr(inner, attr, None) if inner is not None else None
+        if tower is not None:
+            dormant.append(attr)
+    return dormant
 
 
 def _declared_untrainable_modality(
@@ -1239,6 +1284,92 @@ def _device_memory_preempted(model: Any, device: Any) -> bool:
     return True
 
 
+def _execution_widens_beyond_declaration(cfg: TrainConfig, args: Any) -> bool:
+    """Refuse (96) when transformers will drive more accelerators than declared (#492).
+
+    ``_effective_topology`` reconciles declaration against runtime, but every
+    field it reads comes from torchrun's env, so it returns ``None`` on a plain
+    ``python -m foundationscale.train.cli`` -- the invocation the README puts on
+    its front page. On that path nothing compared the declaration to anything,
+    while ``transformers`` independently sized the run from the VISIBLE device
+    set and wrapped the model in ``nn.DataParallel``. The declared axis and the
+    executed one were free to disagree, silently, in the one configuration a
+    first-time reader is most likely to run.
+
+    Measured 2026-09-18 on a GB200 tray, both arms byte-identical apart from how
+    many GPUs the step exposed, both declaring ``--nodes 1 --gpus-per-node 1
+    --dp 1``. One visible device: exit 0, eight steps, PASS. Two visible
+    devices: ``[fs:train:run] training starts``, then a hang at step 0 of 8 that
+    did not die on SIGTERM, was SIGKILLed at the 600 s timeout, left a defunct
+    process holding a 682 MiB CUDA context, and put the node into ``draining``
+    with ``Kill task failed``. Silently widening the shape does not merely
+    mis-record the run; on this hardware it costs a cluster node.
+
+    The oracle is transformers' own published statement, not a guess from
+    ``device_count()``: ``args.n_gpu`` is the number of accelerators it will
+    drive, and ``args.parallel_mode`` names the mechanism -- measured as
+    ``NOT_PARALLEL`` at one visible device and ``NOT_DISTRIBUTED``, its own word
+    for DataParallel, at two. Asking the authority on its own behaviour is the
+    same rule the precision refusals above follow.
+
+    The comparison is deliberately one-sided. It fires only when a SINGLE
+    process would drive more accelerators than the ENTIRE declared job, which
+    cannot happen under torchrun (every rank reports ``n_gpu == 1``) and cannot
+    happen on a CPU host (``n_gpu == 0``). A narrower-or-absent device set is a
+    different question and is not answered here: refusing it would sink every
+    legitimate CPU run, ``examples/train_tiny.py`` among them. Widening is the
+    defect that was measured, so widening is the only thing refused.
+
+    Binding the process to the declared count instead -- rewriting
+    ``CUDA_VISIBLE_DEVICES`` on the operator's behalf -- was rejected. It would
+    substitute one silent reshaping for another, and the operator who typed the
+    declaration is the one who knows which of the two numbers is wrong.
+
+    Returns ``True`` when the ranks agree to refuse; the caller owns the exit
+    code, so the contract's constants stay stated at the return site (#445).
+    """
+    declared = cfg.nodes * cfg.gpus_per_node
+    raw = getattr(args, "n_gpu", None)
+    # bool is an int subclass, and ``True > 1`` is False, so a stubbed-out
+    # TrainingArguments carrying a flag here must read as UNMEASURABLE rather
+    # than as a quiet pass -- the same stub-vs-device distinction the memory
+    # floor above draws with its named-attribute probes. Unmeasurable is
+    # spelled ``None`` rather than a companion bool so that the absence
+    # narrows the value itself: a ``measured`` flag beside a still-optional
+    # count is exactly the pairing a type checker cannot follow, and a
+    # comparison it cannot follow is one a later edit can quietly break.
+    n_gpu = raw if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0 else None
+    local_refuse = n_gpu is not None and n_gpu > declared
+    if n_gpu is not None:
+        mode = getattr(args, "parallel_mode", None)
+        mode_name = getattr(mode, "name", None) or str(mode)
+        # Printed on the clean result too: a measurement that speaks only when
+        # it fails cannot be told apart from one that never ran.
+        _mark(
+            Step.VALIDATED,
+            f"[{'REFUSE' if local_refuse else '   ok'}] topology.declared_covers_execution: "
+            f"transformers will drive {n_gpu} accelerator(s) ({mode_name}); this run "
+            f"declares nodes({cfg.nodes}) x gpus_per_node({cfg.gpus_per_node}) = {declared}",
+        )
+    if not _agree_on_stop(local_refuse):
+        return False
+    _mark(
+        Step.REFUSE,
+        (
+            f"transformers will drive {n_gpu} accelerator(s) but this run declares {declared}"
+            if local_refuse
+            else "a peer rank measured an execution wider than the declared topology"
+        )
+        + "; a declaration is not a hint, so executing wider than declared is refused "
+        f"({EXIT_REFUSE}) rather than run. Measured on a GB200 tray (#492): the wider "
+        "shape hangs at step 0, survives SIGTERM, and leaves the node draining. Either "
+        "narrow the visible set (CUDA_VISIBLE_DEVICES=0) or declare the shape you meant "
+        "and launch it under torchrun, which is the only multi-accelerator path this "
+        "plane wires",
+    )
+    return True
+
+
 class FoundationScaleSaveGate(_CallbackBase):
     """``TrainerCallback`` wiring the registered checkpoint gates into ``on_save``.
 
@@ -1449,7 +1580,22 @@ class FoundationScaleSaveGate(_CallbackBase):
                 "should_training_stop=True -- the run stops NOW",
             )
         else:
-            _mark(Step.SAVE_GATE, f"PASS {denominator} over {ckpt_dir}")
+            # #505: the denominator counts gates RUN over gates REGISTERED, which
+            # says nothing about how many VERIFIED anything. Three abstentions
+            # inside a bare "PASS 4/4 gates" is the exact overstatement the
+            # comment at the top of this method forbids ("an abstention that is
+            # visible, and never a PASS") and that GateReport.summary already
+            # guards against one layer down -- the two summaries for the SAME
+            # gate set disagreed, and only the quieter one was honest. Mirror it
+            # here rather than restating the rule a third way.
+            skipped = sum(1 for r in report.results if r.verdict is Verdict.SKIP)
+            caveat = (
+                f" ({len(report.results) - skipped} of {len(report.results)} "
+                f"verified; {skipped} declared SKIP)"
+                if skipped
+                else ""
+            )
+            _mark(Step.SAVE_GATE, f"PASS {denominator} over {ckpt_dir}{caveat}")
         return stop
 
 
@@ -3257,8 +3403,28 @@ def _train(cfg: TrainConfig) -> int:
         # so the telemetry section records the cadence actually bound.
         "logging_steps": logging_steps_effective,
         "report_to": [],
+        # Stays False by DEFAULT and deliberately so -- on a single-tower model
+        # an unused parameter is a real defect and DDP should say so. It is
+        # raised ONLY for the towers measured dormant just below (#504).
         "ddp_find_unused_parameters": False,
     }
+    # #504: an omni checkpoint carries towers this plane declares untrainable, so
+    # their parameters cannot receive gradient and DDP aborts the run on the first
+    # backward -- measured on gemma-4-E4B-it, where the 271-parameter audio tower
+    # begins at exactly the index DDP named. Announce which towers are dormant and
+    # tell DDP to expect them. Announcing is half the fix: a run that carries
+    # untrained towers should say so, because "trained a multimodal model" and
+    # "carried two thirds of one unchanged" are different claims.
+    _dormant_towers = _dormant_modality_towers(model, image_declared=IMAGE_COLUMN is not None)
+    if _dormant_towers:
+        kwargs["ddp_find_unused_parameters"] = True
+        _mark(
+            Step.VALIDATED,
+            f"[   ok] modality.dormant_towers: {', '.join(_dormant_towers)} "
+            f"present on the checkpoint but not exercised by this run's "
+            f"declaration (image_column={IMAGE_COLUMN!r}); DDP told to expect "
+            "unused parameters. Their weights are CARRIED, not trained",
+        )
     # The declared precision is wired into the flags EXPLICITLY (1b). fp32 sets
     # both off rather than omitting them: an environment-leaning default behind
     # TrainingArguments must not move the run off its declaration. None adds
@@ -3412,6 +3578,17 @@ def _train(cfg: TrainConfig) -> int:
         # same manufacture-your-own-mis-severity trap the torch stub sets one
         # function down. Absent device means unmeasurable, which means no gate.
         if _device_memory_preempted(model, getattr(args, "device", None)):
+            return EXIT_REFUSE
+        # #492: same slot, same reason, a different axis. AFTER
+        # _TrainingArguments because n_gpu and parallel_mode are what it
+        # resolves; BEFORE Trainer(...) because Trainer.__init__ is where
+        # nn.DataParallel gets wrapped around the model. No _emit_manifest on
+        # this path deliberately: it sits inside the try below, whose
+        # (ValueError, TypeError) arm attributes anything raised here to
+        # "transformers rejected the declared config" -- manufacturing the
+        # mis-severity the sibling gate's docstring warns about. _mark carries
+        # the refusal, exactly as it does for #447 one line up.
+        if _execution_widens_beyond_declaration(cfg, args):
             return EXIT_REFUSE
         trainer = Trainer(
             model=model,

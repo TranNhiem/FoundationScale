@@ -289,6 +289,16 @@ python3 -m foundationscale.train.cli \
   --nodes 1 --gpus-per-node 1 --dp 1 --max-steps 8 --save-interval 4
 ```
 
+That command declares a single accelerator, and the declaration is enforced. On a host
+where more than one GPU is visible, `transformers` sizes the run from the visible set
+rather than from the declaration and wraps the model in `nn.DataParallel`: measured on a
+GB200 tray, the same command that exits `0 PASS` with one device visible instead hangs at
+step zero with two, does not die on `SIGTERM`, and leaves the node draining. So the run
+now refuses (`96`) before the Trainer is built, naming what it would have driven against
+what you declared (#492). Either narrow the visible set to match — `CUDA_VISIBLE_DEVICES=0
+python3 -m foundationscale.train.cli …` — or declare the shape you meant and launch it
+under `torchrun`, which is the only multi-accelerator path this plane wires.
+
 The *corpus* needs no network; the *model* still needs one fetch. `sshleifer/tiny-gpt2`
 is a hub id, so the first run downloads it (seconds). Once it is in the HF cache, the
 same command is airgapped and `HF_HUB_OFFLINE=1` in front of it succeeds. Measured on a
@@ -468,14 +478,14 @@ itself, from the Makefile's own accounting:
 
 ## 23. Project structure
 
-`src/` = 42119 LOC across 52 files. `launchers/` contains 10231 shell LOC plus 1615 Python
+`src/` = 42296 LOC across 52 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 34169 Python LOC and 6706 shell LOC on top of the
-package. `tools/` contains 9972 Python LOC. 225261 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 9972 Python LOC. 226059 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (63321 .py LOC); conftest carries the skip guard
+tests/                 the test suite (63932 .py LOC); conftest carries the skip guard
 tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
                        real_checkpoint_probe, preflight/, mutate, census)
 checks/                standalone repository gates: countables drift, packaging
