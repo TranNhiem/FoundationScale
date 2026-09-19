@@ -56,7 +56,12 @@ Doctrine wiring:
       so it would tally a row that explicitly refused for want of an arm as a
       row that measured something -- the one direction this countable must
       never fail in. Two synthetic rows differing only in the ``UN`` prefix
-      are the whole instrument. SC10 guards the #415 adjudicator binding:
+      cover that direction; #507 added two more, because containment also
+      cannot tell a row that STATES a verdict from one that MENTIONS the other
+      while discussing it, and a measuring row was struck from the tally for
+      reporting that an abstention branch did not fire. The verdict is now
+      resolved by position -- first token wins -- and all four rows are
+      required. SC10 guards the #415 adjudicator binding:
       C3 admits the key to its set, so C3 must READ it. A key admitted and
       never adjudicated is a quiet exclusion reading as coverage (#231),
       and the plant is the empty string -- the one value a truthiness test
@@ -288,13 +293,34 @@ def derive_countables(rows: list[JsonRow]) -> dict[str, int]:
         blocked_by = row.get("blocked_by")
         if isinstance(blocked_by, list) and blocked_by:
             blocked.add(i)
+
     # ANCHORED on purpose (the #199 class): a bare `"MEASURED" in s` also matches
     # "UNMEASURED", so a row that explicitly refuses for want of an arm would be
     # counted as a row that measured something -- the one direction this countable
-    # must never fail in. The negation is checked first because it is the superstring.
-    measured = sum(
-        1 for s in statuses if (("MEASURED" in s and "UNMEASURED" not in s) or s.startswith("done"))
-    )
+    # must never fail in. The lookbehind, not a substring test, is what enforces it.
+    #
+    # #507: the first cut wrote `"UNMEASURED" not in s`, which is containment, and
+    # containment cannot tell USE from MENTION. T1-22 measured on a tray and says so
+    # in its first word, then four thousand characters later reports that an
+    # UNMEASURED fallback branch did NOT fire -- evidence that it measured -- and was
+    # struck from the tally for saying so. The failure is not cosmetic: C4 then
+    # reports the doc and the matrix disagreeing, and the cheap way to agree is to
+    # edit the doc down to 19, publishing a false count in the honest-count section.
+    # A gate whose remedy is to write something untrue is pointed at the wrong file.
+    #
+    # So resolve by POSITION: a row's verdict is whichever token comes FIRST. Leading
+    # position alone would be wrong -- T1-16 states MEASURED 152 characters in -- and
+    # containment alone is what broke. Anything after the verdict is discussion.
+    def _is_measured(s: str) -> bool:
+        if s.startswith("done"):
+            return True
+        verdict = re.search(r"(?<!UN)MEASURED", s)
+        if verdict is None:
+            return False
+        abstention = s.find("UNMEASURED")
+        return abstention < 0 or verdict.start() < abstention
+
+    measured = sum(1 for s in statuses if _is_measured(s))
     # CASE-INSENSITIVE on purpose: the matrix carries both "REFUSES by design"
     # (T1-3) and "refuses by design" (T1-22), so a case-sensitive match here
     # silently undercounts the refusals.
@@ -703,12 +729,23 @@ def _sc9(_matrix_src: Path, _doc_src: Path) -> bool:
     ``"MEASURED" in status`` also matches ``"UNMEASURED"`` (the #199 class), so
     a row that explicitly refused for want of an arm would be added to the
     tally of rows that measured something, which is the one direction this
-    countable must never fail in. The two synthetic rows below differ in
-    exactly one character sequence -- the ``UN`` prefix -- so the assertion
-    cannot pass for any reason other than the anchoring.
+    countable must never fail in. The first two synthetic rows below differ in
+    exactly one character sequence -- the ``UN`` prefix -- so that pair cannot
+    pass for any reason other than the anchoring.
 
     It also asserts the OTHER direction (a real MEASURED row still counts), so
     a fix that simply stopped counting everything would not pass it.
+
+    #507 added the second pair, which is where the instrument had a hole. Both
+    rows above state their verdict and then say nothing further, so neither can
+    see a row that states one verdict and DISCUSSES the other -- and the fix for
+    #199 was containment (``"UNMEASURED" not in s``), which cannot separate use
+    from mention. T1-22 measured on a tray and later reported that an UNMEASURED
+    fallback did not fire; that sentence, which is evidence the row measured,
+    removed it from the measured tally. The third row reproduces exactly that,
+    and the fourth holds the #199 direction shut while it is repaired: a row
+    whose abstention comes FIRST stays an abstention however much it goes on to
+    discuss measurement. Four rows, two directions, two positions.
     """
 
     def _row(status: str) -> JsonRow:
@@ -716,9 +753,24 @@ def _sc9(_matrix_src: Path, _doc_src: Path) -> bool:
 
     measured = derive_countables([_row("MEASURED on 2xGB200, control arm differed")])["measured"]
     unmeasured = derive_countables([_row("UNMEASURED: no GPU arm was available")])["measured"]
-    # Both halves are required. measured==1 alone passes a gate that counts
-    # every row; unmeasured==0 alone passes a gate that counts none.
-    return measured == 1 and unmeasured == 0
+    # #507: the third row is the one the first two could not catch. It MEASURED,
+    # and it goes on to discuss an UNMEASURED branch -- the use/mention split. A
+    # containment test drops it, and the drop is invisible to both rows above
+    # because neither mentions the other's token. Without this case, the only
+    # thing standing between the honest count and a false number is a human
+    # noticing that C4's easiest remedy is a lie.
+    mention = derive_countables(
+        [_row("MEASURED on a tray; the UNMEASURED fallback did not fire, so the scan ran")]
+    )["measured"]
+    # A row whose abstention comes first is still an abstention, no matter what
+    # it discusses afterwards -- otherwise this fix would trade one direction of
+    # the error for the other, which is the failure #199 was filed about.
+    late_mention = derive_countables(
+        [_row("UNMEASURED 95: no arm. A MEASURED run would have compared both arms.")]
+    )["measured"]
+    # All four are required. measured==1 alone passes a gate that counts every
+    # row; unmeasured==0 alone passes a gate that counts none.
+    return measured == 1 and unmeasured == 0 and mention == 1 and late_mention == 0
 
 
 def _sc10(matrix_src: Path, doc_src: Path) -> bool:

@@ -121,7 +121,11 @@ stable API.
 **Unimplemented or incomplete, stated rather than implied:**
 
 * No gate has run against a real multi-rank distributed checkpoint in this repository's
-  CI — the suite writes checkpoints single-process and reads them back.
+  CI — the suite writes checkpoints single-process and reads them back. It has now been
+  measured *outside* CI, on a GB200 tray: a two-rank DDP full fine-tune fired the save
+  gates at four checkpoints, with a rank-scoped abstention on the non-writing rank. That
+  is hardware evidence, not a CI guarantee, and the distance between the two is exactly
+  why the bullet stays here.
 * Several modules sit below the aggregate coverage floor CI enforces and pass it anyway,
   carried across the line by the rest. `checks/coverage_floor.py` states each one with its
   own floor instead of averaging it away; its generated table separates ratchets from
@@ -172,6 +176,23 @@ docs/deliverables/B1_architecture.md]
 * **Via the package**: any workflow `transformers.Trainer` supports, run under the gate
   plane — the loop validates topology and profile first, and save gates fire on the
   result. Model-agnostic by construction.
+* **Modalities — measured, not asserted**: text and image corpora both train end-to-end
+  through the package, and the weights are measured moving on the saved tensors rather
+  than inferred from the loss. On `gemma-4-E4B-it`, full fine-tune, two GPUs of one GB200
+  tray, 600 steps: with an image column declared, 149 of 658 vision-tower tensors moved;
+  over the same rows with the image key removed, 0 of 658 moved while the language tower
+  still trained. The discriminator is bit-exact, so there is no tolerance to argue about.
+  Declaring **audio** or **video** REFUSES with exit 96 and names the modality — this
+  plane has no audio or video arm, and it says so rather than dropping the column in
+  silence. An omni checkpoint's untrainable towers are **carried, not trained**, and the
+  run announces which ones by name, because "trained a multimodal model" and "carried two
+  thirds of one unchanged" are different claims. *Not* declaring them is no longer silent
+  either: a corpus that folds its media reference into the text — the shape conversion
+  produces, since the text-only path requires a `text` column — has its dangling markers
+  named and counted, measured at 210 of 210 rows on a real assembly-video corpus. That
+  run still exits 0. The fold is legitimate and the marker can be ordinary prose, so what
+  was missing was the disclosure, not a refusal.
+  [-> validation_campaigns/verification_matrix, rows T1-20 through T1-23]
 * **Via the launchers as reference material**: one full fine-tune and one LoRA workflow
   (`launchers/launch_g4e4b_fullft_1tray.sh`, `launchers/launch_g4e4b_lora_1tray.sh`),
   estate-parameterized through environment variables rather than hard-coded paths.
@@ -478,14 +499,14 @@ itself, from the Makefile's own accounting:
 
 ## 23. Project structure
 
-`src/` = 42296 LOC across 52 files. `launchers/` contains 10231 shell LOC plus 1615 Python
+`src/` = 42442 LOC across 52 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 34169 Python LOC and 6706 shell LOC on top of the
-package. `tools/` contains 9972 Python LOC. 226059 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 9972 Python LOC. 226530 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (63932 .py LOC); conftest carries the skip guard
+tests/                 the test suite (64184 .py LOC); conftest carries the skip guard
 tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
                        real_checkpoint_probe, preflight/, mutate, census)
 checks/                standalone repository gates: countables drift, packaging

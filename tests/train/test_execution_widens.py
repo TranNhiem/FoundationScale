@@ -181,6 +181,8 @@ def test_cpu_host_reporting_zero_accelerators_stays_clean(
 
     Would break if the comparison were widened from ``>`` to ``!=`` -- the tempting
     "declaration must equal execution" form, which refuses every CPU run in the repo.
+    The VERDICT is what this pins; the marker text is asserted by the #503 control
+    below, which is the one that cares that zero accelerators does not read as a pass.
     """
     recorder = _capture_marks(monkeypatch)
     _record_agreement(monkeypatch, verdict=False)
@@ -191,7 +193,34 @@ def test_cpu_host_reporting_zero_accelerators_stays_clean(
 
     assert refused is False
     line = recorder.messages(Step.VALIDATED)
-    assert len(line) == 1 and "[   ok]" in line[0], line
+    assert len(line) == 1, line
+
+
+def test_zero_accelerators_against_a_gpu_declaration_is_not_reported_as_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#503: a CPU fallback must not render as ``[   ok]``, and must not refuse either.
+
+    A GPU job whose devices went away reports the SAME ``n_gpu == 0`` as a deliberate
+    CPU run, so the line cannot decide between them -- but it can decline to call one
+    of them a pass. Measured on a tray: a node with a GPU in reset state poisoned CUDA
+    for the whole node and the job trained on CPU, announced by nothing louder than a
+    ``pin_memory`` UserWarning. Both halves are asserted here, because a marker that
+    started blocking would take CI's own CPU path down with it.
+    """
+    recorder = _capture_marks(monkeypatch)
+    _record_agreement(monkeypatch, verdict=False)
+
+    refused = _execution_widens_beyond_declaration(
+        _cfg(tmp_path), _Args(n_gpu=0, parallel_mode=_Mode("NOT_PARALLEL"))
+    )
+
+    assert refused is False
+    (line,) = recorder.messages(Step.VALIDATED)
+    assert "[   ok]" not in line, line
+    assert "[ON CPU]" in line, line
+    assert "no throughput, timing or memory number" in line, line
+    assert "#503" in line, line
 
 
 def test_one_visible_device_matching_the_declaration_stays_clean(

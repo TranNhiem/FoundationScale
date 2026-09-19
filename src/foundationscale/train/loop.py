@@ -27,7 +27,7 @@ import os
 import struct
 import sys
 import traceback
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -342,6 +342,91 @@ def _dropped_column_notice(columns: list[str], kept: str = "text") -> str | None
         "contribute nothing to the loss. If one of them was meant to be trained "
         "on, declare it -- an undeclared column is dropped by design, not by "
         "accident"
+    )
+
+
+# #506: the markers a corpus uses to say "a modality belongs HERE", paired with
+# the declaration that resolves each one. Keyed on the SUPERVISED TEXT, never on
+# a column name -- name-sniffing a `video` column is the thing
+# _declared_untrainable_modality refuses to do, and for good reason.
+_MODALITY_PLACEHOLDERS: tuple[tuple[str, str], ...] = (
+    ("image", "<image>"),
+    ("video", "<video>"),
+    ("audio", "<audio>"),
+)
+
+
+def _text_column_or_none(split: Any) -> Sequence[str] | None:
+    """The split's 'text' column as a sequence, or None if it cannot be read.
+
+    Column indexing is not part of every dataset's contract. A streaming
+    ``IterableDataset`` offers ``map`` and ``column_names`` and raises on
+    ``split["text"]``, and the thin path accepts one -- so this returns None
+    instead of raising, and the caller announces an UNMEASURED rather than
+    letting a disclosure take the whole run down with it. Rejecting a
+    non-sequence result matters as much as catching the raise: a lazy column
+    object would otherwise be walked as rows and yield a confident 0/0.
+
+    Measured against the real library, not just a fixture: ``Dataset["text"]``
+    returns a ``datasets.Column``, NOT a list -- a lazy view that registers as
+    ``Sequence`` and answers ``len()``. So the isinstance test below must stay
+    on the ABC. Narrowing it to ``list`` -- the obvious tightening -- would turn
+    every production scan into the UNMEASURED branch while the unit tests, which
+    hand it a dict of lists, all kept passing.
+    """
+    try:
+        column = split["text"]
+    except (TypeError, KeyError, IndexError, AttributeError, NotImplementedError):
+        return None
+    if isinstance(column, str) or not isinstance(column, Sequence):
+        return None
+    return column
+
+
+def _unresolved_placeholder_notice(texts: Sequence[str], *, image_declared: bool) -> str | None:
+    """Name modality placeholders left dangling in the text, or None if clean.
+
+    _dropped_column_notice above catches the T1-22 defect only while the
+    modality still has a COLUMN to name. A corpus that KEEPS one still trips it
+    -- that is T1-22's own undeclared control. But an omni corpus is under no
+    obligation to keep one: the thin path REQUIRES a 'text' column, and the
+    conversion that satisfies that requirement folds the media reference in.
+    Once folded there is nothing left to drop, and the notice falls silent on
+    the shape that conversion produces.
+
+    Measured on the estate's 210-row assembly-video corpus: 210/210 rows kept a
+    '<video>' marker, that checkpoint's own tokenizer split it into three
+    ORDINARY tokens (no special id, so none of the unmasked-placeholder loss
+    signature that made #450 visible), the run trained to completion and exited
+    0, and no line named the marker. The model-side twin of this gap already
+    speaks -- modality.dormant_towers announces that the towers are carried and
+    not trained -- so the run said the towers went unexercised here and never
+    said the data assumed otherwise.
+
+    Returns a notice, never a refusal: the fold is legitimate, and a '<video>'
+    can be ordinary prose. The rule this plane keeps is that a true thing
+    nobody says is not a warning.
+    """
+    resolved = {"image"} if image_declared else set()
+    total = len(texts)
+    counted = [
+        (modality, token, hits)
+        for modality, token in _MODALITY_PLACEHOLDERS
+        if modality not in resolved and (hits := sum(1 for text in texts if token in text))
+    ]
+    if not counted:
+        return None
+    named = ", ".join(f"{token} in {hits}/{total} rows" for _, token, hits in counted)
+    modalities = ", ".join(modality for modality, _, _ in counted)
+    return (
+        f"text-only arm: supervision retains unresolved modality placeholders "
+        f"({named}). This run loaded no {modalities} for them, so those rows "
+        "train on a prompt referencing material the model never received, with "
+        "the answer beside it supervised as though it had. NOT refused -- "
+        "folding the reference into 'text' is how an omni corpus satisfies the "
+        "required 'text' column, and the marker may be ordinary prose. Not "
+        "silent either: no quality number from this run describes a model that "
+        f"can see {modalities} (#506)"
     )
 
 
@@ -1343,13 +1428,36 @@ def _execution_widens_beyond_declaration(cfg: TrainConfig, args: Any) -> bool:
     if n_gpu is not None:
         mode = getattr(args, "parallel_mode", None)
         mode_name = getattr(mode, "name", None) or str(mode)
+        # #503: ZERO accelerators against a GPU declaration is not narrowness, it is a
+        # different DEVICE CLASS, and it is the exact shape a lost-GPU fallback takes.
+        # Measured on a GB200 tray: one GPU sitting in [GPU requires reset] poisoned
+        # CUDA for the whole node, the job fell through to CPU and trained, and the
+        # only thing that said so was a pin_memory UserWarning buried in tqdm output.
+        # It stays NON-BLOCKING on purpose -- this repository's own CPU test path and
+        # examples/train_tiny.py run here on every push, and the comparison must stay
+        # `>` rather than `!=` or it refuses them (see the control that pins this) --
+        # but it must not render as "ok". A run that reports success is the failure
+        # this plane exists to catch, so the line names the gap instead of passing.
+        # `declared >= 1` states the intent rather than guarding a reachable zero:
+        # Topology enforces gpus_per_node >= 1 one layer down (topology.py:201).
+        on_cpu = n_gpu == 0 and declared >= 1
+        state = "REFUSE" if local_refuse else ("ON CPU" if on_cpu else "   ok")
         # Printed on the clean result too: a measurement that speaks only when
         # it fails cannot be told apart from one that never ran.
         _mark(
             Step.VALIDATED,
-            f"[{'REFUSE' if local_refuse else '   ok'}] topology.declared_covers_execution: "
+            f"[{state}] topology.declared_covers_execution: "
             f"transformers will drive {n_gpu} accelerator(s) ({mode_name}); this run "
-            f"declares nodes({cfg.nodes}) x gpus_per_node({cfg.gpus_per_node}) = {declared}",
+            f"declares nodes({cfg.nodes}) x gpus_per_node({cfg.gpus_per_node}) = {declared}"
+            + (
+                "; execution is on CPU while the declaration names accelerators. NOT "
+                "refused -- the repository's own CPU path runs here -- and not a pass "
+                "either: a GPU job that lost its devices reports this identical shape, "
+                "so no throughput, timing or memory number from this run describes the "
+                "declared hardware (#503)"
+                if on_cpu
+                else ""
+            ),
         )
     if not _agree_on_stop(local_refuse):
         return False
@@ -3178,6 +3286,32 @@ def _train(cfg: TrainConfig) -> int:
             _notice = _dropped_column_notice(columns)
             if _notice is not None:
                 _mark(Step.DATA, _notice)
+            # #506: the column-based notice above goes silent exactly when the
+            # modality reference is folded INTO the text, which is the only
+            # shape that reaches this arm (a corpus without 'text' is refused
+            # ten lines up). Scanning the text costs strictly less than the
+            # map() immediately below, which already reads every row.
+            _texts = _text_column_or_none(raw[split])
+            if _texts is None:
+                # Column access is not universal: a streaming IterableDataset
+                # exposes map() and column_names but cannot be indexed by
+                # column, and that is a legitimate production shape, not a
+                # broken one. It is still not a scan, so it does not get to
+                # look like one -- the run says the check did not happen
+                # rather than passing it by omission.
+                _mark(
+                    Step.DATA,
+                    "UNMEASURED: this split does not expose its 'text' column as an "
+                    "indexable sequence (the shape a streaming dataset takes), so it "
+                    "was NOT scanned for unresolved modality placeholders. A corpus "
+                    "that folds '<video>' or '<audio>' into its text would go "
+                    "unreported here; materialise the split to restore the check "
+                    "(#506)",
+                )
+            else:
+                _dangling = _unresolved_placeholder_notice(_texts, image_declared=False)
+                if _dangling is not None:
+                    _mark(Step.DATA, _dangling)
             # TEXT-ONLY ARM -- byte-identical to the pre-#410 plane. Same
             # lambda, same remove_columns, and the historical collator
             # downstream. Do not "simplify" this into the shared arm.
@@ -3208,6 +3342,18 @@ def _train(cfg: TrainConfig) -> int:
             # IMAGE ARM: rows stay RAW ({text, image paths}). Encoding --
             # text ids AND pixel_values -- happens per batch in the surface's
             # collator.
+            #
+            # #506 applies here too, and declaring images does not exempt this
+            # arm: an omni corpus can carry pixels AND a folded '<video>', and a
+            # disclosure that only covered the text-only arm would go quiet on
+            # the richer corpus of the two. image_declared=True is the whole
+            # difference -- '<image>' is RESOLVED here, because the collator
+            # below loads pixels for it, so reporting it would be false.
+            _img_texts = _text_column_or_none(raw[split])
+            if _img_texts is not None:
+                _dangling = _unresolved_placeholder_notice(_img_texts, image_declared=True)
+                if _dangling is not None:
+                    _mark(Step.DATA, _dangling)
             tokenized = raw[split]
     except Exception as exc:  # noqa: BLE001 -- classified into RED vs REFUSE below
         environment = _environment_failure_reason(exc)
