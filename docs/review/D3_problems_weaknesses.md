@@ -20,21 +20,29 @@ Ranked by blast radius: how much of the intended audience (dense + MoE, 4B–100
 
 ## Theme 1 — The shipped package is not the advertised product
 
-**What it is.** FoundationScale presents as a foundation-model training framework. Most of the measured content of `src/foundationscale` (42,442 LOC) is a verification plane: gates, checkpoint readers, a parity comparator, topology validation, provenance manifests. The training-primitive probe reads zero on every marker:
+**What it is.** FoundationScale presents as a foundation-model training framework. Most of the measured content of `src/foundationscale` (42,442 LOC) is a verification plane: gates, checkpoint readers, a parity comparator, topology validation, provenance manifests. The training-primitive probe is no longer zero: axis A is small but nonzero while delegation markers dominate.
 
-| Probe (across all 25 git-tracked `src/*.py`) | Match count |
-|---|---|
-| `nn.Module` | **0** |
-| optimizer step | **0** |
-| backward | **0** |
-| dataloader | **0** |
-| forward pass | **0** |
-| dist collective | **0** |
-| module-scope `torch` import | **0** |
-| any-scope `torch` import | 3 files: read-side `checkpoint/dcp.py` and `verify/parity.py` — plus `train/loop.py` |
-| **delegated trainer construction** | **1 file: `train/loop.py`** |
+| Probe (across all 52 git-tracked `src/*.py`) | Axis | Match count |
+|---|---|---|
+| `nn.Module` subclass | A | 0 |
+| `forward` definition | A | 0 |
+| `DataLoader` construction | A | 0 |
+| `backward()` call | A | **1** |
+| module-scope `torch` import | A | **2** |
+| `optimizer.step()` call | A | **3** |
+| trainer construction | B | **1** |
+| `DataCollator` construction | B | **1** |
+| `AutoModel.from_pretrained` | B | **3** |
+| `fit`/`train`/`save` call | B | **4** |
+| function-scope lazy import | B | **30** |
+| **totals** | A **6** / B **39** | **IMPLEMENTS-PRIMITIVES** |
 
-**The zero is real; the conclusion the first draft drew from it was not.** There *is* a `train/` package under `src/` — `loop.py` (1,168 lines), `cli.py` (108), `__init__.py` (29) — and it builds a `transformers.Trainer`, calls `trainer.train()` and `trainer.save_model()`, and gates every checkpoint it writes. It imports torch at function scope, so a marker set built from primitives cannot see it (#223, #245). The honest Theme-1 statement is therefore **narrower and still a problem**: the package trains by *delegation to one `transformers.Trainer` path*, while the estate the launchers actually drive is Megatron/NeMo in a container — so the shipped trainer is not the trainer that runs the H100 and GB200 workloads, and it is the least-tested module in the package (`train/loop.py` 62% vs ≥81% everywhere else, #228).
+Every row above is the output of `checks/training_plane_probe.py --json`, which is the
+source of truth for this claim; rerun it rather than trusting this table (#508). Both
+module-scope `torch` imports sit in `if TYPE_CHECKING:` blocks and never execute, so the
+executable primitive core is the RL `backward()`/`optimizer.step()` pair alone (#510).
+
+**Axis A is small but no longer zero, and the conclusion the first draft drew from a zero was never available.** There *is* a `train/` package under `src/` — `loop.py` (4,134 lines), `cli.py` (505), `__main__.py` (55), `__init__.py` (30) — and it builds a `transformers.Trainer`, calls `trainer.train()` and `trainer.save_model()`, and gates every checkpoint it writes. It imports torch at function scope, so a marker set built from primitives cannot see it (#223, #245). The honest Theme-1 statement is therefore **narrower and still a problem**: the package trains by *delegation to one `transformers.Trainer` path*, while the estate the launchers actually drive is Megatron/NeMo in a container — so the shipped trainer is not the trainer that runs the H100 and GB200 workloads, and it is the least-tested module in the package (`train/loop.py` 62% vs ≥81% everywhere else, #228).
 
 The README itself admits the trainer "is early", and its three-step Quickstart exercises only `pytest`, `foundationscale.gates.controls`, and `tools/mutate.py` — a quickstart that never reaches the trainer the package now ships (F1_docs#0, corrected: a Quickstart *does* exist; what is absent is one that trains). The top-level package ships a 3-line `__init__.py` that exports nothing (A_front_door#2), so even the `train` entry point is invisible from `import foundationscale`, and the front-door messaging claims a distributed-training product the packaged path does not deliver (A_front_door#1).
 
@@ -237,4 +245,4 @@ The readers exist. `open_weights`, `read_metadata`, `read_chunk`, and the self-v
 
 The damage ranking above is not a ranking of engineering quality. The inverse is closer to true: the highest-damage theme (1) coexists with the highest-quality internal code (the gates), and the inverse-quality themes (8, 9) concern material that is mostly sound. The structural problem is not that the wrong code was written, but that the *right* code — gates, controls, checkpoint readers, topology — was written and then packaged, documented, and bound into a lifecycle in a way that prevents any of it from being exercised by the audience the project says it is for. Fixing the top four themes (ship a training path, wire the engine in, promote `adjudicate_checkpoint` into the package, reflag the fictional docs) would already convert most of the existing investment into user-visible value without redesigning any working gate behaviour.
 
-> **Census correction (applied post-draft).** This document was written against a census of 13,667 lines in `src/foundationscale/`. The T2 library/script boundary move has since relocated the 2,546-line checkpoint-decision API from `tools/live_save_gate.py` into `src/foundationscale/gates/adjudication.py`, and the fixes landed since have added the rest; `src/foundationscale/` now measures **42,442 lines**. Re-measured after the move, the structural finding is UNCHANGED: 0 files define `nn.Module`, call `backward()`, construct a `DataLoader`, or define `forward`, and 0 files import torch at module scope. The three `optimizer` hits and three `broadcast`/`all_*` hits are gate vocabulary (checkpoint optimizer-state fields; the registry broadcasting a context to gates), not NCCL collectives, and the single `torch.distributed` reference is a read-only DCP reader. What changed is that `src/` now holds real decision logic where it previously held none.
+> **Census correction (applied post-draft).** This document was written against a census of 13,667 lines in `src/foundationscale/`. The T2 library/script boundary move has since relocated the 2,546-line checkpoint-decision API from `tools/live_save_gate.py` into `src/foundationscale/gates/adjudication.py`, and the fixes landed since have added the rest; `src/foundationscale/` now measures **42,442 lines**. Re-measured after the move over 52 git-tracked `src/*.py`, the structural finding is REFRAMED: axis A is nonzero (1 `backward()`, 3 `optimizer.step()`, 2 module-scope torch imports, 2 `dist.all_reduce` collectives; 0 `nn.Module`/`forward`/`DataLoader`), while delegation markers dominate (1 `Trainer`, 4 fit/train/save calls, 3 `AutoModel.from_pretrained`, 1 data collator, 30 function-scope lazy imports), so the verdict is IMPLEMENTS-PRIMITIVES. The zero went stale because the RL subpackage landed after that census and the exempted wording could not flag it (#508); `src/` still holds real decision logic where it previously held none.

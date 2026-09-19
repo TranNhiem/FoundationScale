@@ -2,7 +2,7 @@
 
 ## 1. Runtime path as it exists today
 
-The installed package implements **zero training primitives of its own** — which is not the same as containing no trainer. Measured across all 25 git-tracked `src/*.py` files:
+The installed package implements **a small number of training primitives of its own** — which is not the same as containing no trainer. Measured across all 52 git-tracked `src/*.py` files, axis A is nonzero (1 `backward()`, 3 `optimizer.step()`, 2 module-scope torch imports; 0 `nn.Module`/`forward`/`DataLoader`) while axis B delegation is larger (1 trainer, 4 fit/train/save calls, 3 `AutoModel.from_pretrained`, 1 collator, 30 lazy imports): IMPLEMENTS-PRIMITIVES.
 
 | Training construct searched in `src/` | Measured result |
 |---|---:|
@@ -16,7 +16,7 @@ The installed package implements **zero training primitives of its own** — whi
 | any-scope `torch` import | 3 files: `checkpoint/dcp.py`, `verify/parity.py`, `train/loop.py` |
 | **delegated trainer construction** | **1 file: `train/loop.py` — `Trainer(...)`, `trainer.train()`, `trainer.save_model()`, `AutoModelForCausalLM.from_pretrained`, `DataCollatorForLanguageModeling`** |
 
-The last two rows are the ones the original six-marker probe could not see, and the earlier draft of this document read its zero as an absence. `src/foundationscale/train/` (1,360 lines: `loop.py` 1,168, `cli.py` 108, `__main__.py` 55, `__init__.py` 29) is a real training entry point that delegates the step loop to `transformers.Trainer` and imports torch at *function* scope, so all six primitive markers read 0 over a module that trains (findings #223, #245). The correct reading is **delegation, not absence**: the package owns the run lifecycle, the manifest and the gate sweep, and rents the step loop.
+The last two rows are the ones the original six-marker probe could not see, and the earlier draft of this document read its zero as an absence. `src/foundationscale/train/` (4,724 lines: `loop.py` 4,134, `cli.py` 505, `__main__.py` 55, `__init__.py` 30) is a real training entry point that delegates the step loop to `transformers.Trainer` and imports torch at *function* scope, so all six primitive markers read 0 over the module that trains (findings #223, #245). The correct reading is **delegation, not absence**: the package owns the run lifecycle, the manifest and the gate sweep, and rents the step loop.
 
 The verification plane is real work and should be preserved: `gates/core.py`, checkpoint readers, `storage_id` identity, parity comparison, provenance capture, mutation controls, and fail-closed exit semantics all have Keep-classified findings. What is thin is not the trainer's existence but its coverage — `train/loop.py` is exercised at 62% against ≥81% for every other module (#228) — and its reach: it drives one `transformers.Trainer` path, not the Megatron/NeMo estate the launchers actually run.
 
@@ -44,7 +44,7 @@ flowchart TB
   OK["Operator or bash continues"]
   NO["Operator blocks or remediates"]
 
-  PKG["[installed foundationscale package]<br/>42,442 LOC / 52 files<br/>verification plane + delegating train/ (1,305 LOC)<br/>0 training primitives, step loop rented from transformers.Trainer"]
+  PKG["[installed foundationscale package]<br/>42,442 LOC / 52 files<br/>verification plane + delegating train/ (4,724 LOC)<br/>few owned primitives (RL backward/step, 2 collectives); main step loop rented from transformers.Trainer"]
 
   O --> PF
   O --> L
@@ -196,4 +196,4 @@ There is no verified end-to-end trace of a generated trainer run, so an unqualif
 
 The training payload has no measured in-process call into `Lifecycle.SAVE` or `run_event`. Consequently, the current architecture is **save-side verification around an estate training path**, not yet a model-agnostic FoundationScale trainer with verification built into its runtime.
 
-> **Census correction (applied post-draft).** This document was written against a census of 13,667 lines in `src/foundationscale/`. The T2 library/script boundary move has since relocated the 2,546-line checkpoint-decision API from `tools/live_save_gate.py` into `src/foundationscale/gates/adjudication.py`, and the fixes landed since have added the rest; `src/foundationscale/` now measures **42,442 lines**. Re-measured after the move, the structural finding is UNCHANGED: 0 files define `nn.Module`, call `backward()`, construct a `DataLoader`, or define `forward`, and 0 files import torch at module scope. The three `optimizer` hits and three `broadcast`/`all_*` hits are gate vocabulary (checkpoint optimizer-state fields; the registry broadcasting a context to gates), not NCCL collectives, and the single `torch.distributed` reference is a read-only DCP reader. What changed is that `src/` now holds real decision logic where it previously held none.
+> **Census correction (applied post-draft).** This document was written against a census of 13,667 lines in `src/foundationscale/`. The T2 library/script boundary move has since relocated the 2,546-line checkpoint-decision API from `tools/live_save_gate.py` into `src/foundationscale/gates/adjudication.py`, and the fixes landed since have added the rest; `src/foundationscale/` now measures **42,442 lines**. Re-measured after the move over 52 git-tracked `src/*.py`, the structural finding is REFRAMED: axis A is nonzero (1 `backward()`, 3 `optimizer.step()`, 2 module-scope torch imports, 2 `dist.all_reduce` collectives; 0 `nn.Module`/`forward`/`DataLoader`), while delegation markers dominate (1 `Trainer`, 4 fit/train/save calls, 3 `AutoModel.from_pretrained`, 1 data collator, 30 function-scope lazy imports), so the verdict is IMPLEMENTS-PRIMITIVES. The zero went stale because the RL subpackage landed after that census and the exempted wording could not flag it (#508); `src/` still holds real decision logic where it previously held none.

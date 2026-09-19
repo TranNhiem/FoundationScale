@@ -187,7 +187,7 @@ expectations) in the package, of the shape B2's "one data contract" promises.
 
 ## 11. Modify training logic — **Painful but honest**
 
-**Today.** Edit `src/foundationscale/train/loop.py` (1168 LOC) or the gates.
+**Today.** Edit `src/foundationscale/train/loop.py` (4134 LOC) or the gates.
 Then the gauntlet, which is this repository's pride and its toll booth:
 `make check` = lint, typecheck, skip-guard-probe, test (coverage floor 90),
 controls, packaging, countables, mutation. Frictions I hit:

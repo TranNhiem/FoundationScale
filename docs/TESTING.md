@@ -195,7 +195,7 @@ $(PY) -m pytest --cov=foundationscale --cov=tools --cov-report=term-missing --co
 | `ci-suite-extras` | `checks/ci_suite_extras.py --self-test`, then the real run | Parity of installed extras across pytest-executing CI jobs |
 | `controls` | `python3 -m foundationscale.gates.controls` | The gate fixtures |
 | `packaging` | `checks/packaging_reachability.py --self-test`, then the real run | Console scripts reachable, resolved against the interpreter's own script directory and install record |
-| `training-plane` | `checks/training_plane_probe.py --self-test`, then the real run | Reports "no training primitives" and "package delegates to `transformers.Trainer`" as separate axes, and scans every git-tracked `*.md` for retired phrasings |
+| `training-plane` | `checks/training_plane_probe.py --self-test`, then the real run | Reports the owned-primitive count and "package delegates to `transformers.Trainer`" as separate axes, currently `IMPLEMENTS-PRIMITIVES`, and scans every git-tracked `*.md` for retired phrasings |
 | `makefile-tooling` | `checks/makefile_tooling.py --self-test`, then the real run | No recipe invokes a bare tool name |
 | `mirror` | `checks/makefile_ci_mirror.py --self-test`, then the real run | The Makefile `check` tree and the CI workflow run the same check scripts; drift in either direction is RED |
 | `countables` | `checks/countables_drift.py --self-test`; `tools/countables_census.py`; drift check against the census | Fixed numbers in docs match the measured census |

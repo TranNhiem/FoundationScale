@@ -30,26 +30,24 @@ its own gate and controls rather than as a single refactor commit.
 
 ## The headline finding
 
-`src/foundationscale/` measures 42,442 lines and implements **no training primitives of its
-own**. Across all 25 git-tracked `src/*.py` files, an AST probe finds zero that define an
-`nn.Module`, call `backward()`, construct a `DataLoader`, define a `forward`, call
-`optimizer.step()`, or import torch at module scope.
+`src/foundationscale/` measures 42,442 lines and implements **a small number of training primitives** while its main training path delegates. Across all 52 git-tracked `src/*.py` files, an AST probe finds axis A nonzero: 1 `backward()` call, 3 `optimizer.step()` calls, 2 module-scope torch imports (both `if TYPE_CHECKING:`, never executed — #510), and 0 `nn.Module`/`forward`/`DataLoader` markers; axis B is larger: 1 trainer construction, 4 fit/train/save calls, 3 `AutoModel.from_pretrained`, 1 data collator, and 30 function-scope lazy imports. Verdict: IMPLEMENTS-PRIMITIVES.
 
-**That zero is literally true and, read alone, materially misleading** — and it was read alone
-when D2, D3 and D4 were first drafted. The package *does* ship a training entry point:
-`src/foundationscale/train/` (`loop.py` 1,168 lines, `cli.py` 108, `__main__.py` 55, `__init__.py` 29) builds a
+**Axis A read alone is materially misleading** — and it was read alone when D2, D3 and D4 were
+first drafted, at a point when it still measured zero (#508). The package *does* ship a training
+entry point:
+`src/foundationscale/train/` (`loop.py` 4,134 lines, `cli.py` 505, `__main__.py` 55, `__init__.py` 30) builds a
 `transformers.Trainer` and calls `trainer.train()`, `trainer.save_model()`,
 `AutoModelForCausalLM.from_pretrained` and `DataCollatorForLanguageModeling`. It imports torch
-and transformers at *function* scope, so every module-scope marker the probe looks for stays at
-zero. The package **delegates** training rather than implementing it, and six primitive markers
-cannot tell delegation apart from not training at all (finding #223).
+and transformers at *function* scope, so almost none of that work is visible to the module-scope
+markers the probe looks for. The main training path **delegates** rather than implements, and six
+primitive markers cannot tell delegation apart from not training at all (finding #223).
 
 The accurate statement has two axes, not one:
 
 | Axis | Measured |
 |---|---|
-| Training **primitives** implemented in `src/` | 0 of 25 files, on all six markers |
-| Training **entry point** delegating to a third-party trainer | present — `train/`, 1,360 lines across 4 files |
+| Training **primitives** implemented in `src/` | 6 marker hits over 52 files — 1 `backward()`, 3 `optimizer.step()`, 2 module-scope `torch` imports; 0 on the other three markers |
+| Training **entry point** delegating to a third-party trainer | present — `train/`, 4,724 lines across 4 files |
 | Gate seam into that trainer | present — `FoundationScaleSaveGate.on_save` runs the registry for `FIRST_SAVE`/`SAVE` and fails closed |
 | Tests exercising the entry point | `train/loop.py` 62%, `train/__init__.py` 50%; every other module ≥81% (#228) |
 

@@ -181,7 +181,7 @@ detector whose controls misbehave has no licence to report a verdict.
 | gate script | target | what it adjudicates |
 |---|---|---|
 | `checks/packaging_reachability.py` | `packaging` | both console scripts reachable, resolved against the interpreter's script directory and the install record — never against PATH, which is operator convenience and can never be red |
-| `checks/training_plane_probe.py` | `training-plane` | reports "no training primitives" and "delegates to `transformers.Trainer`" as two axes; scans every git-tracked `*.md` for the retired phrasings |
+| `checks/training_plane_probe.py` | `training-plane` | reports the owned-primitive count and "delegates to `transformers.Trainer`" as two axes, currently `IMPLEMENTS-PRIMITIVES`; scans every git-tracked `*.md` for the retired phrasings |
 | `checks/makefile_tooling.py` | `makefile-tooling` | no recipe line may invoke pip, pytest, ruff, mypy, coverage or a bare interpreter by name |
 | `checks/makefile_ci_mirror.py` | `mirror` | the `check` tree and `.github/workflows/ci.yml` run the same set of `checks/` scripts — it compares WHICH scripts, not their argv |
 | `checks/countables_drift.py` | `countables` | drift between the measured census and what the shipped documents claim |
