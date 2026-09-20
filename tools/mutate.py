@@ -206,6 +206,13 @@ MODULE_PATHS = {
     "adjudication": "src/foundationscale/gates/adjudication.py",
     # #85: the emission adjudicator becomes nameable by mutation rows.
     "emit_run_manifest": "tools/emit_run_manifest.py",
+    # #522: the family plane decides which modules an adapter may wrap. Every
+    # one of its defects is SILENT by construction -- a mis-scoped selector
+    # still produces a LoRA run, a loss curve and a checkpoint, all of them
+    # trained on the wrong tower -- so it is enrolled with rows from the day it
+    # lands rather than left PENDING.
+    "families_registry": "src/foundationscale/families/registry.py",
+    "families_adapters": "src/foundationscale/families/adapters.py",
 }
 
 _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")

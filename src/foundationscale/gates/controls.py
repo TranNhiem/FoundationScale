@@ -116,6 +116,18 @@ _KNOWN_GATELESS_PACKAGES: frozenset[str] = frozenset(
         # appear there anyway, the provenance reconciliation names it, because
         # its defining module would not be among the walk's attempted set.
         "foundationscale.perf",
+        # The family registry is DATA plus one pure selector: it answers "which
+        # family is this checkpoint, and which modules may an adapter wrap",
+        # and its refusals are returned to the caller as text rather than
+        # raised or registered. The training plane decides what to do with the
+        # answer; nothing here blocks anything. AST-verified over the package,
+        # not read: 3 files, zero ClassDef inherits a Gate base, zero call site
+        # is register/add_gate (the only near-match is a CALL to
+        # `unregistered_family_reason`, which merely contains the substring).
+        # Deliberately gateless: the moment a family could supply behaviour,
+        # adding a family would stop being a registration and become a code
+        # review, which is the coupling this package exists to remove.
+        "foundationscale.families",
     }
 )
 """First-party packages affirmatively classified — by a human, in review — as NOT

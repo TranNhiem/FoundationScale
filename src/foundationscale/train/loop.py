@@ -36,6 +36,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from foundationscale.families import plan_adapter_targets, torch_linear_predicate
 from foundationscale.gates.core import (
     REGISTRY,
     GateRegistry,
@@ -3778,8 +3779,57 @@ def _train(cfg: TrainConfig) -> int:
             lora_config: dict[str, Any] = {"r": cfg.adapter_rank}
             if cfg.adapter_alpha is not None:
                 lora_config["lora_alpha"] = cfg.adapter_alpha
-            if cfg.adapter_targets is not None:
-                lora_config["target_modules"] = list(cfg.adapter_targets)
+            # #522: target selection is resolved HERE, against a declared family,
+            # rather than left to peft. Two measured reasons, both on 2026-09-20:
+            #
+            #   peft 0.18.1 infers target_modules from its own table of 38
+            #   model_types. That table has gemma, gemma2, gemma3_text, qwen2,
+            #   qwen3 -- and none of gemma4, gemma4_unified, qwen3_5, qwen3_5_moe,
+            #   which is every family on this estate. Six LoRA runs across two
+            #   vendors and both densities died inside peft before step 1.
+            #
+            #   Declaring bare leaf names does not fix it: on gemma-4-31B the
+            #   instantiated graph carries q_proj 60 times under
+            #   model.language_model as nn.Linear AND 27 times under
+            #   model.vision_tower as Gemma4ClippableLinear, a subclass peft
+            #   refuses. A leaf-name target is TOWER-BLIND.
+            #
+            # peft matches a list target_modules with key.endswith(target), so
+            # handing it QUALIFIED names expresses the scope exactly, with stock
+            # peft and no regex. Every branch below announces, including the ones
+            # that change nothing.
+            #
+            # The policy itself lives in foundationscale.families, not here. That
+            # is the load-bearing part: registering a family must not require an
+            # edit to this function, or the loop is where families live.
+            family_config: Mapping[str, Any] = {}
+            config_to_dict = getattr(getattr(model, "config", None), "to_dict", None)
+            if callable(config_to_dict):
+                as_dict = config_to_dict()
+                if isinstance(as_dict, Mapping):
+                    family_config = as_dict
+            plan = plan_adapter_targets(
+                family_config,
+                cfg.adapter_targets,
+                model.named_modules(),
+                torch_linear_predicate(),
+            )
+            for line in plan.announcements:
+                _mark(Step.ADAPTER, line)
+            if plan.refusal is not None:
+                _mark(Step.REFUSE, f"adapter='lora': {plan.refusal}")
+                _emit_manifest(
+                    cfg,
+                    stage="refused",
+                    extra={
+                        "exit": EXIT_REFUSE,
+                        "adapter": "lora",
+                        "family": plan.family,
+                        "attached_modules": 0,
+                    },
+                )
+                return EXIT_REFUSE
+            lora_config["target_modules"] = list(plan.targets)
             if cfg.adapter_dropout is not None:
                 lora_config["lora_dropout"] = cfg.adapter_dropout
             try:

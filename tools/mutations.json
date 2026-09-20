@@ -459,5 +459,73 @@
       "must_survive": true,
       "why": "The module's own MUST-PASS half (doctrine 3). Anchor occurs once (the only re.compile(adapter_marker) in adjudicate_checkpoint)."
     }
+  ],
+  "families_registry": [
+    {
+      "name": "families_registry.overlap-check-disabled",
+      "what": "A language prefix that contains a tower prefix (or the reverse) makes scoping depend on which rule runs first rather than on the declaration, so a registration bug becomes an adapter silently attached to a vision tower. Disabling the check moves that from an import-time ValueError to a training run nobody can tell apart from a correct one.",
+      "anchor": "                if lang == tower or lang.startswith(tower + \".\") or tower.startswith(lang + \".\"):",
+      "replacement": "                if False:"
+    },
+    {
+      "name": "families_registry.duplicate-claim-accepted",
+      "what": "Two specs claiming one model_type makes resolve_family order-dependent: the same checkpoint resolves to a different family depending on tuple order, which is not a property anyone declared. The guard runs at import so a bad registration cannot reach a run; accepting duplicates lets it.",
+      "anchor": "            if model_type in seen:",
+      "replacement": "            if False:"
+    },
+    {
+      "name": "families_registry.nested-model-type-ignored",
+      "what": "A composite VLM config states model_type at the top level AND on text_config, and either may be the registered one. Reading only the top level makes every checkpoint whose family is named on the sub-config resolve to None, which turns a supported family into a refusal (or, with declared targets, into an unscoped run).",
+      "anchor": "    if isinstance(text_config, Mapping):",
+      "replacement": "    if False:"
+    },
+    {
+      "name": "families_registry.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is families_registry's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "            seen[model_type] = spec.name\n",
+      "replacement": "            seen[model_type] = spec.name  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/families/registry.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
+    }
+  ],
+  "families_adapters": [
+    {
+      "name": "families_adapters.prefix-match-by-bare-startswith",
+      "what": "Containment must mean equality or a dotted descendant. A bare startswith makes 'model.layers' swallow 'model.layers_extra' -- a scope silently wider than the one declared, and the wider it gets the more of another tower it adapts.",
+      "anchor": "        if name == prefix or name.startswith(prefix + \".\"):",
+      "replacement": "        if name.startswith(prefix):"
+    },
+    {
+      "name": "families_adapters.tower-scope-never-consulted",
+      "what": "Tower membership is what ATTRIBUTES an exclusion to a named tower and a module type. Without it a vision-tower module still fails to be selected (the language-prefix rule also excludes it, deliberate defence in depth) but is reported as sitting outside every declared prefix -- i.e. as a registration gap. The selection stays right and the DIAGNOSIS becomes wrong, which is the failure mode that cost a week.",
+      "anchor": "        tower = _under(name, spec.tower_prefixes)",
+      "replacement": "        tower = None"
+    },
+    {
+      "name": "families_adapters.out-of-scope-modules-selected-anyway",
+      "what": "A module carrying a declared leaf name but sitting under no declared language prefix must not be selected. Letting it through is exactly the measured gemma-4-31B defect: 'q_proj' selects 60 language-tower Linear AND 27 vision-tower modules, and the adapter trains a tower the declaration never asked for.",
+      "anchor": "        if language is None:",
+      "replacement": "        if False:"
+    },
+    {
+      "name": "families_adapters.predicate-admits-subclasses",
+      "what": "The predicate is `type(m) is Linear` on purpose. isinstance admits Gemma4ClippableLinear -- a Linear SUBCLASS that peft refuses to wrap -- which is the precise module that produced 'Target module ... is not supported'. This mutant reinstates the original defect while every count, shape and exit code stays identical.",
+      "anchor": "        return type(module) is linear",
+      "replacement": "        return isinstance(module, linear)"
+    },
+    {
+      "name": "families_adapters.empty-selection-not-refused",
+      "what": "An empty target set is handed straight back to peft's own inference -- the inference that failed on six of six real runs across two vendors. Worse, peft may then attach somewhere nobody declared, so the run goes green over an adapter on the wrong modules instead of refusing (96).",
+      "anchor": "    if not selected:\n        return AdapterPlan(",
+      "replacement": "    if False:\n        return AdapterPlan("
+    },
+    {
+      "name": "families_adapters.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is families_adapters's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "        matched_leaf_count += 1\n",
+      "replacement": "        matched_leaf_count += 1  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/families/adapters.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
+    }
   ]
 }

@@ -1,0 +1,292 @@
+"""Scoped adapter-target selection.
+
+The mechanism this module depends on, and the reason it can be this small: peft
+matches a LIST ``target_modules`` with ``key.endswith(target)``. So a
+fully-qualified module name matches exactly one module -- itself. Tower scoping
+therefore needs no regex, no ``exclude_modules``, and no peft version bump; it
+needs the selector to return qualified names instead of bare leaf names.
+
+What went wrong without it, measured 2026-09-20: ``--adapter-target q_proj`` on
+``gemma-4-31B`` selected 60 ``torch.nn.Linear`` under ``model.language_model``
+AND 27 ``Gemma4ClippableLinear`` under ``model.vision_tower``, and peft raised
+``Target module Gemma4ClippableLinear(...) is not supported``. The declaration
+was not wrong -- ``q_proj`` is a real and reasonable thing to adapt. The
+selector was wrong, because it had no way to say "the language tower's q_proj".
+
+Nothing here imports torch at module scope. Selection is duck-typed over an
+iterable of ``(qualified_name, module)`` pairs and an ``is_adaptable``
+predicate, which keeps it testable on a machine with no torch and, more
+usefully, keeps the scoping rule readable as a rule rather than as framework
+plumbing.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from typing import Any
+
+from foundationscale.families.registry import (
+    FamilySpec,
+    resolve_family,
+    unregistered_family_reason,
+)
+
+__all__ = [
+    "AdapterPlan",
+    "plan_adapter_targets",
+    "select_adapter_modules",
+    "torch_linear_predicate",
+]
+
+
+def _under(name: str, prefixes: tuple[str, ...]) -> str | None:
+    """Return the prefix that contains ``name``, or None.
+
+    Containment means equality or a dotted descendant. ``model.layers`` must not
+    match ``model.layers_extra``, which a bare ``startswith`` would.
+    """
+    for prefix in prefixes:
+        if name == prefix or name.startswith(prefix + "."):
+            return prefix
+    return None
+
+
+def select_adapter_modules(
+    named_modules: Iterable[tuple[str, object]],
+    spec: FamilySpec,
+    is_adaptable: Callable[[object], bool],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Choose the modules an adapter may wrap, and say what was left out.
+
+    Returns ``(selected_qualified_names, announcement_lines)``.
+
+    The announcements are not logging. They are the part of this function that
+    would have explained the ``Gemma4ClippableLinear`` failure at the moment it
+    happened instead of a week later: every exclusion is attributed to a tower
+    and a type, and the two distinguishable ways of selecting nothing -- no name
+    matched, versus names matched but nothing was adaptable -- are reported
+    differently, because they have different fixes.
+    """
+    selected: list[str] = []
+    # tower prefix -> type names excluded under it, and how many
+    excluded_by_tower: dict[str, dict[str, int]] = {}
+    # type names that matched by name and scope but failed is_adaptable
+    rejected_types: dict[str, int] = {}
+    matched_leaf_count = 0
+    selected_under: dict[str, int] = {}
+
+    for name, module in named_modules:
+        leaf = name.rsplit(".", 1)[-1]
+        if leaf not in spec.adapter_leaf_modules:
+            continue
+        matched_leaf_count += 1
+
+        tower = _under(name, spec.tower_prefixes)
+        if tower is not None:
+            bucket = excluded_by_tower.setdefault(tower, {})
+            type_name = type(module).__name__
+            bucket[type_name] = bucket.get(type_name, 0) + 1
+            continue
+
+        language = _under(name, spec.language_prefixes)
+        if language is None:
+            # Matched the leaf name but sits outside every declared scope. This
+            # is its own population: it means the family's prefixes are
+            # incomplete, which is a registration gap, not a model defect.
+            bucket = excluded_by_tower.setdefault("<outside every declared prefix>", {})
+            type_name = type(module).__name__
+            bucket[type_name] = bucket.get(type_name, 0) + 1
+            continue
+
+        if not is_adaptable(module):
+            type_name = type(module).__name__
+            rejected_types[type_name] = rejected_types.get(type_name, 0) + 1
+            continue
+
+        selected.append(name)
+        selected_under[language] = selected_under.get(language, 0) + 1
+
+    lines: list[str] = []
+    for tower in sorted(excluded_by_tower):
+        types = excluded_by_tower[tower]
+        total = sum(types.values())
+        detail = ", ".join(f"{n}x{c}" for n, c in sorted(types.items()))
+        lines.append(
+            f"adapter scope: EXCLUDED {total} module(s) under {tower!r} ({detail}). "
+            f"They carry a declared target leaf name but are not the language tower of "
+            f"family {spec.name!r}, so adapting them would train a tower the declaration "
+            "never asked for"
+        )
+    if rejected_types:
+        detail = ", ".join(f"{n}x{c}" for n, c in sorted(rejected_types.items()))
+        lines.append(
+            f"adapter scope: {sum(rejected_types.values())} module(s) matched by name and "
+            f"scope were NOT adaptable ({detail}). This is not the same as nothing "
+            "matching: the names and the scope are right and the module type is the "
+            "obstacle, so the fix is a wrapper for that type, not a different --adapter-target"
+        )
+    for language in sorted(selected_under):
+        lines.append(
+            f"adapter scope: selected {selected_under[language]} module(s) under "
+            f"{language!r} for family {spec.name!r}"
+        )
+    if not selected:
+        lines.append(
+            "adapter scope: SELECTED NOTHING. An adapter with no target modules trains "
+            "no parameters while reporting a successful configuration, which is the one "
+            f"outcome that must never be silent. {matched_leaf_count} module(s) matched a "
+            f"declared leaf name out of {tuple(spec.adapter_leaf_modules)}; the caller must "
+            "refuse rather than proceed"
+        )
+
+    return tuple(selected), tuple(lines)
+
+
+@dataclass(frozen=True)
+class AdapterPlan:
+    """What an adapter should target, or why it must not run.
+
+    Exactly one of ``targets`` and ``refusal`` is meaningful: a plan with a
+    refusal has empty targets and must not be handed to peft. ``announcements``
+    is populated in EVERY case, including the cases that change nothing --
+    "family scoping was not applied" is a fact about the run that has to reach
+    the log, because its absence is what made the measured failure confusing.
+    """
+
+    targets: tuple[str, ...]
+    announcements: tuple[str, ...]
+    refusal: str | None
+    family: str | None
+
+    @property
+    def refused(self) -> bool:
+        return self.refusal is not None
+
+
+def plan_adapter_targets(
+    config: Mapping[str, Any],
+    declared_targets: Sequence[str] | None,
+    named_modules: Iterable[tuple[str, object]],
+    is_adaptable: Callable[[object], bool],
+) -> AdapterPlan:
+    """Decide the adapter's target modules from a declaration and a family.
+
+    This is the whole policy, kept out of the training loop on purpose: adding a
+    model family must be a registration, and if a new family ever required an
+    edit to the loop then the loop, not the registry, would be where families
+    live. The four cases and why each is what it is:
+
+    * **Declared names are already qualified** -- passed through untouched.
+      Scoping a fully-specified declaration would be the framework overriding a
+      statement it was given.
+    * **No family and no declaration** -- REFUSE. There is nothing to derive
+      targets from, and peft's own inference is exactly the thing that failed on
+      six of six runs here.
+    * **No family but names were declared** -- pass them through, and say
+      plainly that no scoping was possible. This is runnable but is the shape
+      that selected a vision tower on ``gemma-4-31B``, so it does not get to be
+      quiet.
+    * **Family resolved** -- scope the declaration (or the family's own leaves)
+      to the language tower and return qualified names.
+    """
+    spec = resolve_family(config)
+    declared = list(declared_targets) if declared_targets is not None else None
+
+    if declared is not None and any("." in target for target in declared):
+        return AdapterPlan(
+            targets=tuple(declared),
+            announcements=(
+                f"adapter scope: {len(declared)} target(s) were declared as qualified "
+                "module names and are passed through verbatim, NOT family-scoped, "
+                "because a qualified declaration already states its own scope",
+            ),
+            refusal=None,
+            family=spec.name if spec is not None else None,
+        )
+
+    if spec is None:
+        if declared is None:
+            return AdapterPlan(
+                targets=(),
+                announcements=(),
+                refusal=(
+                    "an adapter is declared with no target modules, and "
+                    + unregistered_family_reason(config)
+                ),
+                family=None,
+            )
+        return AdapterPlan(
+            targets=tuple(declared),
+            announcements=(
+                f"adapter scope: targets {declared!r} are bare leaf names and "
+                + unregistered_family_reason(config)
+                + ". They are passed to the adapter UNSCOPED: if this model carries a "
+                "vision or audio tower that reuses those leaf names, the adapter will "
+                "attach to it",
+            ),
+            refusal=None,
+            family=None,
+        )
+
+    leaves = tuple(declared) if declared is not None else spec.adapter_leaf_modules
+    selected, lines = select_adapter_modules(
+        named_modules,
+        replace(spec, adapter_leaf_modules=leaves),
+        is_adaptable,
+    )
+    if not selected:
+        return AdapterPlan(
+            targets=(),
+            announcements=lines,
+            refusal=(
+                f"an adapter selected 0 modules in family {spec.name!r} for leaf names "
+                f"{list(leaves)!r}. Refusing rather than handing peft an empty target "
+                "set, which would send it back to the inference that failed here"
+            ),
+            family=spec.name,
+        )
+    return AdapterPlan(
+        targets=selected,
+        announcements=(
+            *lines,
+            f"adapter scope: family {spec.name!r} resolved from model_type; "
+            f"{len(selected)} qualified target module(s) will be handed to the adapter",
+        ),
+        refusal=None,
+        family=spec.name,
+    )
+
+
+def torch_linear_predicate() -> Callable[[object], bool]:
+    """A predicate that is True for ``torch.nn.Linear`` and False for subclasses.
+
+    Deliberately ``type(m) is Linear`` and not ``isinstance``. The measured
+    failure was a Linear SUBCLASS -- ``Gemma4ClippableLinear`` wraps a Linear and
+    peft refuses it -- so an ``isinstance`` test would admit exactly the module
+    that caused the defect this package exists to fix. When a subclass does
+    become adaptable, that is a change to this predicate made on purpose, with a
+    test, rather than a change that happens by inheritance.
+
+    torch is imported inside the function so that importing the family registry
+    does not require torch, and so that a missing torch raises here with a name
+    rather than returning a predicate that quietly answers False for everything
+    and reports "selected nothing" for a reason that has nothing to do with the
+    model.
+    """
+    try:
+        import torch
+    except ImportError as exc:  # pragma: no cover -- exercised by the negative control
+        raise RuntimeError(
+            "torch is required to decide which modules an adapter can wrap; refusing to "
+            "return a predicate that answers False for every module, because that would "
+            "report an empty selection as a property of the MODEL when it is a property "
+            f"of the machine. Underlying: {exc!r}"
+        ) from exc
+
+    linear = torch.nn.Linear
+
+    def _is_plain_linear(module: object) -> bool:
+        return type(module) is linear
+
+    return _is_plain_linear

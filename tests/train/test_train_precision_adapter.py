@@ -359,24 +359,64 @@ class _FakeParam:
         return 2
 
 
+class _FakeLinear:
+    """The stand-in for ``torch.nn.Linear``.
+
+    Defined once at module scope and installed as ``torch.nn.Linear`` by the
+    fake stack, so that a module tree a test builds out of these is the SAME
+    type the adapter selector's identity predicate resolves. Two separate
+    Linear stand-ins would make every scoping assertion vacuous.
+    """
+
+
 class _FakeModel:
     """A stand-in model: state_dict()/named_parameters() over a fixed list.
 
     Carries a config with tying off (so no aliases are declared away) and an
     optional ``peft_config`` attribute, which is exactly the probe
     ``_declare_checkpoint`` uses to scope the declaration to adapter tensors.
+
+    ``config_dict`` makes the config answer ``to_dict()``, which is how the
+    adapter plane resolves a model FAMILY (#522). Left None the config has no
+    ``to_dict`` at all -- the shape of a model whose family is unregistered,
+    which is the arm most of these tests run through.
     """
 
-    def __init__(self, params: list[tuple[str, _FakeParam]], peft_config: Any = None) -> None:
+    def __init__(
+        self,
+        params: list[tuple[str, _FakeParam]],
+        peft_config: Any = None,
+        config_dict: dict[str, Any] | None = None,
+        modules: list[tuple[str, Any]] | None = None,
+    ) -> None:
         self._params = list(params)
+        self._modules_override = modules
         self.peft_config = peft_config
         self.config = SimpleNamespace(tie_word_embeddings=False)
+        if config_dict is not None:
+            self.config.to_dict = lambda: dict(config_dict)
 
     def state_dict(self) -> dict[str, _FakeParam]:
         return dict(self._params)
 
     def named_parameters(self) -> list[tuple[str, _FakeParam]]:
         return list(self._params)
+
+    def named_modules(self) -> list[tuple[str, Any]]:
+        """The module tree the adapter selector walks.
+
+        Derived from the parameter names when not given explicitly -- a param
+        ``w.weight`` implies a module ``w`` -- so the tree has the same SHAPE as
+        the parameter list rather than being empty. An empty tree here would let
+        a selector that selects nothing look indistinguishable from one that
+        scoped correctly.
+        """
+        if self._modules_override is not None:
+            return list(self._modules_override)
+        seen: dict[str, Any] = {}
+        for name, _ in self._params:
+            seen.setdefault(name.rsplit(".", 1)[0], _FakeLinear())
+        return list(seen.items())
 
 
 class _FakeTokenizer:
@@ -433,6 +473,14 @@ def _install_fake_training_stack(
     # double, not the defect.
     for _dtype_name in sorted(set(_PRECISION_TORCH_DTYPES.values())):
         setattr(torch_module, _dtype_name, f"torch.{_dtype_name}")
+
+    # torch.nn.Linear: the adapter plane asks torch which module type it may
+    # wrap (#522), so a stand-in without it is narrower than the code it
+    # replaces -- the #252 failure this file's dtype comment already records.
+    nn_module = ModuleType("torch.nn")
+    nn_module.Linear = _FakeLinear
+    torch_module.nn = nn_module
+    monkeypatch.setitem(sys.modules, "torch.nn", nn_module)
 
     datasets_module = ModuleType("datasets")
 
@@ -727,6 +775,124 @@ def test_train_measures_lora_attachment_and_scopes_the_declaration(
     assert "declared 3 adapter tensor(s)" in manifest_text  # ...with its adapter count
 
 
+def test_train_scopes_a_registered_family_to_its_language_tower_before_peft(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # #522, end to end through the loop. The model declares model_type gemma4
+    # and carries `q_proj` in TWO towers, which is the measured shape of
+    # gemma-4-31B. What peft must receive is qualified language-tower names --
+    # bare 'q_proj' is what selected the vision tower and made peft raise.
+    lora_sink: list[dict[str, Any]] = []
+    tree = [
+        ("model.language_model.layers.0.self_attn.q_proj", _FakeLinear()),
+        ("model.language_model.layers.1.self_attn.q_proj", _FakeLinear()),
+        ("model.vision_tower.encoder.layers.0.self_attn.q_proj", _FakeLinear()),
+    ]
+    base = _FakeModel(
+        [("w.weight", _FakeParam(4, requires_grad=True))],
+        config_dict={"model_type": "gemma4", "text_config": {"model_type": "gemma4_text"}},
+        modules=tree,
+    )
+    wrapped = _FakeModel([("base.q_proj.lora_A.default.weight", _FakeParam(8, requires_grad=True))])
+    _install_fake_training_stack(monkeypatch, base_model=base, args_sink=[])
+    monkeypatch.setitem(sys.modules, "peft", _make_fake_peft(lora_sink, wrapped=wrapped))
+
+    train(_config(output_dir=tmp_path, adapter="lora", adapter_rank=8, adapter_targets=("q_proj",)))
+
+    assert lora_sink[0]["target_modules"] == [
+        "model.language_model.layers.0.self_attn.q_proj",
+        "model.language_model.layers.1.self_attn.q_proj",
+    ]
+    out = capsys.readouterr().out
+    # The exclusion is announced, with the tower named -- the line that would
+    # have explained the production failure at the moment it happened.
+    assert "model.vision_tower" in out
+    assert "gemma4" in out
+
+
+def test_train_passes_an_unregistered_family_through_but_says_it_could_not_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The pass-through arm must stay runnable -- refusing every unregistered
+    # family outright would make the framework useless the day a model ships --
+    # but it must not be quiet, because this is the configuration that attached
+    # an adapter to a vision tower.
+    lora_sink: list[dict[str, Any]] = []
+    base = _FakeModel(
+        [("w.weight", _FakeParam(4, requires_grad=True))],
+        config_dict={"model_type": "llama_9_ultra"},
+    )
+    wrapped = _FakeModel([("base.q_proj.lora_A.default.weight", _FakeParam(8, requires_grad=True))])
+    _install_fake_training_stack(monkeypatch, base_model=base, args_sink=[])
+    monkeypatch.setitem(sys.modules, "peft", _make_fake_peft(lora_sink, wrapped=wrapped))
+
+    train(_config(output_dir=tmp_path, adapter="lora", adapter_rank=8, adapter_targets=("q_proj",)))
+
+    assert lora_sink[0]["target_modules"] == ["q_proj"]
+    out = capsys.readouterr().out
+    assert "UNSCOPED" in out
+    assert "llama_9_ultra" in out
+
+
+def test_train_refuses_an_undeclared_adapter_on_an_unregistered_family(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Nothing to derive targets from: no family spec and no declaration. The
+    # old behaviour here was to hand peft the problem, and peft answered with
+    # `Please specify target_modules` on six of six real runs. REFUSE (96) --
+    # the framework has nothing measured to say, and says so.
+    lora_sink: list[dict[str, Any]] = []
+    base = _FakeModel(
+        [("w.weight", _FakeParam(4, requires_grad=True))],
+        config_dict={"model_type": "llama_9_ultra"},
+    )
+    _install_fake_training_stack(monkeypatch, base_model=base, args_sink=[])
+    monkeypatch.setitem(sys.modules, "peft", _make_fake_peft(lora_sink, wrapped=base))
+
+    rc = train(_config(output_dir=tmp_path, adapter="lora", adapter_rank=8))
+
+    assert rc == EXIT_REFUSE
+    assert lora_sink == [], "peft must not be constructed at all on this arm"
+    out = capsys.readouterr().out
+    assert "[fs:train:refuse]" in out
+    assert "llama_9_ultra" in out
+    assert "--adapter-target" in out  # a refusal that does not say how to proceed is a stop
+
+
+def test_train_refuses_when_a_registered_family_scopes_to_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The family resolves and every candidate lives in a tower nobody declared
+    # adaptable. Handing peft an empty target set would send it back to its own
+    # inference, so the loop refuses and keeps the diagnosis.
+    lora_sink: list[dict[str, Any]] = []
+    base = _FakeModel(
+        [("w.weight", _FakeParam(4, requires_grad=True))],
+        config_dict={"model_type": "gemma4"},
+        modules=[("model.vision_tower.encoder.layers.0.self_attn.q_proj", _FakeLinear())],
+    )
+    _install_fake_training_stack(monkeypatch, base_model=base, args_sink=[])
+    monkeypatch.setitem(sys.modules, "peft", _make_fake_peft(lora_sink, wrapped=base))
+
+    rc = train(
+        _config(output_dir=tmp_path, adapter="lora", adapter_rank=8, adapter_targets=("q_proj",))
+    )
+
+    assert rc == EXIT_REFUSE
+    assert lora_sink == []
+    out = capsys.readouterr().out
+    assert "selected 0 modules" in out
+    assert "model.vision_tower" in out  # the scope announcements survive the refusal
+
+
 def test_train_marks_lora_wrap_construction_failure_as_red_naming_the_cause(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -745,7 +911,13 @@ def test_train_marks_lora_wrap_construction_failure_as_red_naming_the_cause(
         sys.modules, "peft", _make_fake_peft(lora_sink, wrapped=wrapped, wrap_error="boom")
     )
 
-    rc = train(_config(output_dir=tmp_path, adapter="lora", adapter_rank=8))
+    # Targets are DECLARED so the run reaches the wrap at all: since #522 an
+    # undeclared adapter on an unregistered family refuses (96) before peft is
+    # constructed, which would make this leg measure that refusal instead of
+    # the construction failure it exists to pin.
+    rc = train(
+        _config(output_dir=tmp_path, adapter="lora", adapter_rank=8, adapter_targets=("q_proj",))
+    )
 
     assert rc == EXIT_RED
     out = capsys.readouterr().out
