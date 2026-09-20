@@ -112,3 +112,38 @@ def test_default_hit_and_miss_values_are_canonical() -> None:
     for reward, expected in zip(rewards, (1.0, 0.0, 1.0), strict=True):
         assert reward.correct in {1.0, 0.0} and reward.incorrect in {1.0, 0.0}
         assert reward.correct != reward.incorrect or expected is not None
+
+
+_ZH_ANSWER_PATTERN = r"答案[：:]\s*[（(]?\s*([A-Z])"
+_ZH_PROSE_COMPLETION = "答案：(C) 因其在統計上為非勞動人口，故其活動並不計入GDP"
+
+
+def test_undeclared_surface_abstains_on_a_correct_prose_answer() -> None:
+    """The defect, stated as a test: a right answer scores as unreadable."""
+    assert MCQLetterReward().score(response=_ZH_PROSE_COMPLETION, gold="C") is None
+
+
+def test_declared_answer_pattern_scores_the_same_prose_answer_correct() -> None:
+    reward = MCQLetterReward(answer_pattern=_ZH_ANSWER_PATTERN)
+
+    assert reward.score(response=_ZH_PROSE_COMPLETION, gold="C") == 1.0
+
+
+def test_declared_answer_pattern_still_marks_a_wrong_letter_incorrect() -> None:
+    """Narrowing the candidate set must not turn every read into a match."""
+    reward = MCQLetterReward(answer_pattern=_ZH_ANSWER_PATTERN)
+
+    assert reward.score(response=_ZH_PROSE_COMPLETION, gold="A") == 0.0
+
+
+def test_declared_answer_pattern_keeps_abstaining_on_two_different_letters() -> None:
+    """The ambiguity rule survives the pattern -- it removes noise, not disagreement."""
+    reward = MCQLetterReward(answer_pattern=_ZH_ANSWER_PATTERN)
+
+    assert reward.score(response="答案：(A) 起初\n答案：(B) 更正", gold="A") is None
+
+
+def test_declared_answer_pattern_abstains_when_the_surface_is_absent() -> None:
+    reward = MCQLetterReward(answer_pattern=_ZH_ANSWER_PATTERN)
+
+    assert reward.score(response="我認為是第三個選項。", gold="C") is None

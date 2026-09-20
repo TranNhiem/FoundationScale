@@ -82,6 +82,17 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/perf/telemetry.py": (
+        "the perf plane's only measuring surface: it decides, per metric, whether a "
+        "number was measured or is absent for a named reason, and MFU and TFLOP/s are "
+        "reported from arithmetic no other module repeats. A mutant that swaps a "
+        "warmup step into the steady-state window, or that returns 0.0 where the "
+        "contract says None-with-a-reason, changes a published throughput figure "
+        "while every shape, every unit and every exit code stays identical -- which "
+        "is exactly the failure a benchmark cannot self-detect. PENDING rather than "
+        "MODULE_PATHS because the battery has no rows for it yet, and enrolling a "
+        "file with zero rows would report a pass over nothing"
+    ),
     "src/foundationscale/rl/prompt_surface.py": (
         "#371 routing layer: 100% line-covered by 15 legs, but covered is not "
         "MUTATED -- no row yet proves that silently flipping the surface choice, "

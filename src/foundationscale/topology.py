@@ -59,7 +59,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from enum import Enum
 from pathlib import Path
@@ -71,6 +71,7 @@ __all__ = [
     "Finding",
     "ClusterProfile",
     "PROFILES",
+    "apply_fabric_declaration",
     "profile_by_name",
     "Topology",
     "declared_vs_effective",
@@ -343,6 +344,119 @@ def profile_by_name(name: str) -> ClusterProfile:
             f"unknown cluster profile {name!r}; known: {sorted(PROFILES)}. New clusters "
             f"are added as data: one dict in _PROFILE_DATA, no code changes."
         ) from None
+
+
+# The environment variables a fabric declaration can reach, and the profile field
+# each one is derived from. Kept as data beside the function that applies them so
+# that "which fields are applied" is one readable list rather than a sequence of
+# if-statements -- and so the field that is DECLARED BUT NOT APPLIED is visible
+# by its absence from this table rather than invisible by never being mentioned.
+_FABRIC_VARS: tuple[tuple[str, str], ...] = (
+    # One interface name, two consumers: NCCL carries the data plane and gloo
+    # carries rendezvous and any CPU collective. Setting only the NCCL one is a
+    # measured failure mode -- gloo then picks an interface by its own heuristic
+    # and the two planes can disagree about which network the job is on.
+    ("NCCL_SOCKET_IFNAME", "nccl_socket_ifname"),
+    ("GLOO_SOCKET_IFNAME", "nccl_socket_ifname"),
+)
+
+
+def apply_fabric_declaration(
+    profile: ClusterProfile, environ: MutableMapping[str, str]
+) -> tuple[str, ...]:
+    """Apply the profile's fabric declaration to ``environ``; report what happened.
+
+    WHY THIS EXISTS (#515). ``ClusterProfile`` has declared ``nccl_socket_ifname``,
+    ``ib_hca_pattern`` and ``mnnvl_available`` since the profile was introduced,
+    and until now exactly one of the three had a consumer: ``mnnvl_available``
+    softened the severity of one topology finding. None of them reached NCCL. A
+    declaration nothing reads is not a configuration, it is a comment -- and the
+    measured cost of that gap on a GB200 estate was a two-rank job pinned at 100%
+    GPU utilisation with a bare 1.7 GiB CUDA context, spinning forever in its
+    first collective, because NCCL selected multi-node NVLink on a tray whose
+    IMEX domain the site prolog never built. The operator could fix it in one
+    export. The framework that already KNEW the answer said nothing.
+
+    WHAT IS APPLIED, AND WHAT IS NOT:
+
+    * ``nccl_socket_ifname`` -> ``NCCL_SOCKET_IFNAME`` and ``GLOO_SOCKET_IFNAME``.
+    * ``mnnvl_available=False`` -> ``NCCL_MNNVL_ENABLE=0``. The True case sets
+      NOTHING: "MNNVL is available" is not the same claim as "MNNVL must be
+      used", and forcing it on is a decision the profile never made.
+    * ``ib_hca_pattern`` is deliberately NOT applied, and this is the honest part.
+      Its shipped value is a shell glob (``mlx5_*``); ``NCCL_IB_HCA`` takes a
+      comma-separated prefix list with an optional ``^`` for exclusion and does
+      no globbing, so exporting the field verbatim would match no device, and
+      stripping it to the bare prefix ``mlx5`` is a MEASURED regression -- it
+      over-matches devices that are not on the job's fabric. The field is
+      inventory, not configuration. Saying so in the return value is better than
+      either silently ignoring it or applying a value known to be wrong.
+
+    NEVER OVERRIDES THE OPERATOR. A variable already present in ``environ`` is
+    left exactly as it is, including when it is the empty string, and the return
+    value says whose value won. The profile is a default for an operator who did
+    not choose; an operator who exported something chose, possibly to work around
+    the very thing being defaulted here.
+
+    Args:
+        profile: The cluster profile whose fabric declaration to apply.
+        environ: The mapping to mutate -- ``os.environ`` in production, a plain
+            dict under test. Passed in rather than reached for so the function
+            has no hidden global input.
+
+    Returns:
+        One announcement line per variable considered, applied or not, in a
+        stable order. Empty is impossible: the fields exist, so there is always
+        something to report, and a caller that prints nothing has a bug rather
+        than a quiet success.
+    """
+    announcements: list[str] = []
+    for variable, field_name in _FABRIC_VARS:
+        declared = str(getattr(profile, field_name, "") or "").strip()
+        if not declared:
+            announcements.append(
+                f"{variable}: profile {profile.name!r} declares no {field_name}, "
+                f"so NCCL's own interface selection stands"
+            )
+            continue
+        existing = environ.get(variable)
+        if existing is not None:
+            announcements.append(
+                f"{variable}: already set to {existing!r} by the operator, "
+                f"left alone (profile would have said {declared!r})"
+            )
+            continue
+        environ[variable] = declared
+        announcements.append(f"{variable}={declared} applied from profile {profile.name!r}")
+
+    existing_mnnvl = environ.get("NCCL_MNNVL_ENABLE")
+    if existing_mnnvl is not None:
+        announcements.append(
+            f"NCCL_MNNVL_ENABLE: already set to {existing_mnnvl!r} by the operator, "
+            f"left alone (profile declares mnnvl_available={profile.mnnvl_available})"
+        )
+    elif profile.mnnvl_available:
+        announcements.append(
+            f"NCCL_MNNVL_ENABLE: profile {profile.name!r} declares MNNVL AVAILABLE, "
+            f"which is not the same as required -- nothing set, NCCL decides"
+        )
+    else:
+        environ["NCCL_MNNVL_ENABLE"] = "0"
+        announcements.append(
+            f"NCCL_MNNVL_ENABLE=0 applied from profile {profile.name!r} "
+            f"(mnnvl_available=False). Without this a multi-rank job on this "
+            f"fabric can select multi-node NVLink and spin in its first "
+            f"collective rather than fail"
+        )
+
+    announcements.append(
+        f"NCCL_IB_HCA: NOT set. Profile {profile.name!r} declares "
+        f"ib_hca_pattern={profile.ib_hca_pattern!r}, which is a glob; NCCL_IB_HCA "
+        f"is a prefix list and does not glob, and the bare prefix over-matches. "
+        f"The field is inventory, not configuration -- export NCCL_IB_HCA by hand "
+        f"if this fabric needs it"
+    )
+    return tuple(announcements)
 
 
 # --------------------------------------------------------------------------- #

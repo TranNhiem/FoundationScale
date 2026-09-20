@@ -76,6 +76,13 @@ _CONFIG_FIELDS_OUTSIDE_THE_NINE: frozenset[str] = frozenset(
         "adapter_dropout",
         "max_steps",
         "per_device_batch_size",
+        # Not one of the nine: it defaults to a real value (#514), so it has no
+        # "undeclared" state to carry provenance for. It is a run parameter of
+        # the same kind as per_device_batch_size and is emitted the same way --
+        # the exclusion here is from the PROVENANCE contract, not from the
+        # manifest, and the payload-side set below is what holds the emitter to
+        # writing it.
+        "max_sequence_length",
         "learning_rate",
         "save_interval",
         "seed",
@@ -110,6 +117,7 @@ _PAYLOAD_KEYS_OUTSIDE_THE_NINE: frozenset[str] = frozenset(
         "output_dir",
         "max_steps",
         "per_device_batch_size",
+        "max_sequence_length",
         "learning_rate",
         "save_interval",
         "seed",

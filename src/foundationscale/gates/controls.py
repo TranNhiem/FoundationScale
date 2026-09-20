@@ -105,6 +105,17 @@ _KNOWN_GATELESS_PACKAGES: frozenset[str] = frozenset(
         # gates; if one ever registers, the provenance reconciliation names it,
         # because its defining module is not among the walk's attempted set.
         "foundationscale.rl",
+        # The perf plane is an INSTRUMENT and says so in its own package
+        # docstring: it measures step time, throughput, FLOP/s and MFU, and it
+        # never turns a run RED, because a measurement that can fail a run is a
+        # gate and gates are adjudicated in this package. Its only consumer is
+        # loop.py, which merges its summary into the run manifest. AST-verified
+        # over the package, not read: 2 files, zero ClassDef inherits a Gate
+        # base, zero call site is register/add_gate. If a perf THRESHOLD ever
+        # becomes a gate it belongs here in gates/, not there; and were one to
+        # appear there anyway, the provenance reconciliation names it, because
+        # its defining module would not be among the walk's attempted set.
+        "foundationscale.perf",
     }
 )
 """First-party packages affirmatively classified — by a human, in review — as NOT

@@ -24,7 +24,14 @@ import traceback
 from collections.abc import Sequence
 from pathlib import Path
 
-from foundationscale.train.loop import EXIT_RED, EXIT_REFUSE, TrainConfig, fs_version, train
+from foundationscale.train.loop import (
+    EXIT_RED,
+    EXIT_REFUSE,
+    TOKENIZE_MAX_LENGTH,
+    TrainConfig,
+    fs_version,
+    train,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,6 +57,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--per-device-batch-size", type=int, default=1)
     p.add_argument("--learning-rate", type=float, default=5e-5)
     p.add_argument("--save-interval", type=int, default=50)
+    p.add_argument(
+        "--max-sequence-length",
+        type=int,
+        default=TOKENIZE_MAX_LENGTH,
+        help=(
+            "Maximum tokenised sequence length; longer samples are truncated "
+            "to this many tokens. Defaults to 128, the historical cap, so "
+            "omitting this flag reproduces existing runs exactly. The "
+            "default is not a performance recommendation."
+        ),
+    )
     # Defaulted here and NOT on TrainConfig, and the asymmetry is deliberate.
     # This entry implements exactly one objective -- supervised fine-tuning, via
     # DataCollatorForLanguageModeling(mlm=False) -- so "sft" is a statement about
@@ -464,6 +482,7 @@ def _build_config(argv: Sequence[str] | None, args: argparse.Namespace) -> Train
         per_device_batch_size=args.per_device_batch_size,
         learning_rate=args.learning_rate,
         save_interval=args.save_interval,
+        max_sequence_length=args.max_sequence_length,
         objective=args.objective,
         seed=args.seed,
         dp=args.dp,

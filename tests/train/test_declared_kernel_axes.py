@@ -49,9 +49,29 @@ import pytest
 # it at module scope here is not a convenience, it is part of the pinned
 # behaviour: the UNMEASURED arm below depends on this import NOT pulling torch
 # into the process, and asserts exactly that.
+from foundationscale.topology import ClusterProfile
 from foundationscale.train import loop
 
 _EXIT_REFUSE = loop.EXIT_REFUSE
+
+# See the `profile` key in make_config below for why this is a constructed
+# dataclass and not a namespace. nccl_socket_ifname is blank on purpose:
+# apply_fabric_declaration exports a declared interface into os.environ, and a
+# test-local profile naming one would leave NCCL_SOCKET_IFNAME set for every
+# module collected after this one.
+_SYNTHETIC_PROFILE = ClusterProfile(
+    name="synthetic-direct",
+    scheduler="none",
+    partitions=("synthetic-partition",),
+    node_pattern=r"^synthetic-node\d+$",
+    gpus_per_node=1,
+    nccl_socket_ifname="",
+    ib_hca_pattern="",
+    mnnvl_available=False,
+    container_runtime="none",
+    container_image="",
+    filesystem_roots=(),
+)
 
 # The heavy legs below, pinned as data because they are the run's own facts.
 _BASE_LR = 1e-3
@@ -226,11 +246,18 @@ def tiny_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
             # Fail-closed fields mirror the CLI: one machine, one GPU.
             "nodes": 1,
             "gpus_per_node": 1,
-            # A synthetic profile object, not profile_by_name: which built-in
-            # profiles the package ships is irrelevant to what this module
-            # measures, and depending on one would make these verdicts move
-            # when the profile registry changes.
-            "profile": SimpleNamespace(name="synthetic-direct", scheduler="none", gpus_per_node=1),
+            # A synthetic profile, not profile_by_name: which built-in profiles
+            # the package ships is irrelevant to what this module measures, and
+            # depending on one would make these verdicts move when the profile
+            # registry changes. It is a real ClusterProfile rather than a
+            # SimpleNamespace, though, and that part is not decoration -- the
+            # namespace form shipped here and broke the moment the declared
+            # fabric fields acquired a consumer (#515), because production's
+            # profile is a dataclass that has always carried them. A fake with
+            # a SUBSET of the real field set turns any read of a field it
+            # omitted into an AttributeError inside train(), adjudicated RED,
+            # in a module whose subject is attention kernels.
+            "profile": _SYNTHETIC_PROFILE,
             # "sft" is what the loop actually implements (CLM collator), so
             # declaring it is a true statement, not a plausible default --
             # the CLI's own reasoning, applied here.

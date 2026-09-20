@@ -42,6 +42,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from foundationscale.topology import ClusterProfile
 from foundationscale.train import loop
 
 # What our fake TrainingArguments accepts by NAME. Mirrors what real
@@ -222,11 +223,30 @@ def _install_fake_stack(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     # consistency result, so the run proceeds to Trainer construction. The
     # axis tests assert REACHED-SITE separately, so an over-strict stub cannot
     # pass them by stopping the run early.
+    # A real ClusterProfile, not a namespace with the three fields the prologue
+    # prints. The namespace form shipped here and broke the moment the declared
+    # fabric fields acquired a consumer (#515): production's profile is a
+    # dataclass that has always carried nccl_socket_ifname / ib_hca_pattern /
+    # mnnvl_available, so a run reading one is correct and a fake omitting it
+    # raises AttributeError inside train() -- adjudicated RED, in a module whose
+    # subject is optimizer axes. Constructed rather than looked up so it does
+    # not move when the profile registry does; blank interface so
+    # apply_fabric_declaration exports nothing into this process's environment.
     monkeypatch.setattr(
         loop,
         "_resolve_profile",
-        lambda cfg: SimpleNamespace(
-            name="synthetic", scheduler="none", gpus_per_node=cfg.gpus_per_node
+        lambda cfg: ClusterProfile(
+            name="synthetic",
+            scheduler="none",
+            partitions=("synthetic-partition",),
+            node_pattern=r"^synthetic-node\d+$",
+            gpus_per_node=cfg.gpus_per_node,
+            nccl_socket_ifname="",
+            ib_hca_pattern="",
+            mnnvl_available=False,
+            container_runtime="none",
+            container_image="",
+            filesystem_roots=(),
         ),
     )
     monkeypatch.setattr(loop.Topology, "validate_against", lambda self, profile: [])

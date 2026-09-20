@@ -20,12 +20,15 @@ six shipped documents did and all six were wrong (#460).
 
 from __future__ import annotations
 
+import contextlib
+import datetime
 import errno
 import inspect
 import json
 import os
 import struct
 import sys
+import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -41,11 +44,18 @@ from foundationscale.gates.core import (
     Verdict,
     run_event,
 )
+from foundationscale.perf.telemetry import (
+    PERF_TELEMETRY_UNITS,
+    DevicePeak,
+    FlopsModel,
+    StepTelemetry,
+)
 from foundationscale.topology import (
     ClusterProfile,
     Finding,
     Severity,
     Topology,
+    apply_fabric_declaration,
     blocking,
     declared_vs_effective,
     partition_consistency,
@@ -139,6 +149,10 @@ def _environment_failure_reason(exc: BaseException) -> str | None:
 EXTRA = "foundationscale[train]"
 EXTRA_HINT = f"pip install '{EXTRA}'"
 
+# The historical tokenisation cap, kept as the DEFAULT of
+# TrainConfig.max_sequence_length so existing importers and undeclared runs
+# are unaffected (#514). It is not a tuned value: no performance claim
+# attaches to 128, and the field that now carries it says so.
 TOKENIZE_MAX_LENGTH = 128
 # NOT a name of our choosing. checkpoint.dcp_meta.load_manifest -- the reader
 # every checkpoint gate goes through -- searches a fixed tuple of basenames, and
@@ -199,6 +213,22 @@ class Step:
     SAVED = "fs:train:saved"
     SAVE_GATE = "fs:train:save_gate"
     OBJECTIVE_GATE = "fs:train:objective_gate"
+    # The collective fabric, reported as its own step rather than folded into
+    # TRAINER. A run that stalls in its first all-reduce and a run that stalls
+    # building a Trainer fail at the same wall-clock second and for entirely
+    # different reasons, and a log that cannot separate them sends the operator
+    # to the wrong half of the stack. This marker always emits, including on the
+    # single-process path where it announces that there was nothing to warm --
+    # absence of a collective is a fact worth stating, not a gap.
+    FABRIC = "fs:train:fabric"
+    # The CPU side of the machine, reported once, before anything is timed. It is
+    # here because the most expensive slowdown measured on this estate was not in
+    # the model, the kernels or the fabric: it was the host. The same job, the same
+    # image and the same two trays ran 16.6x slower with its ranks bound to 2 cores
+    # than with them bound to 128, and while it was slow every GPU read 82% busy.
+    # Nothing in the log said how many cores the rank could see, so nothing in the
+    # log could be read to find it. One line, emitted always, closes that.
+    HOST = "fs:train:host"
     MANIFEST = "fs:train:manifest"
     ADJUDICATE = "fs:train:adjudicate"
     DONE = "fs:train:done"
@@ -550,6 +580,15 @@ class TrainConfig:
     per_device_batch_size: int = 1
     learning_rate: float = 5e-5
     save_interval: int = 50
+    # Declared tokenisation cap, applied at every tokenisation site. Defaults
+    # to TOKENIZE_MAX_LENGTH, the bare constant those sites already used, so
+    # an undeclared run is byte-identical to one from before this field
+    # existed -- this is a declaration fix (#514), not a behaviour change.
+    # The default is NOT a performance claim: measured on GB200 at constant
+    # tokens-per-step, 2048 tokens of context costs 19.4% throughput and
+    # improves training loss monotonically, so 128 is simply the historical
+    # value, now stated as data rather than imposed silently.
+    max_sequence_length: int = TOKENIZE_MAX_LENGTH
     seed: int = 42
     dp: int = 1
     tp: int = 1
@@ -604,6 +643,7 @@ class TrainConfig:
             "pp",
             "ep",
             "cp",
+            "max_sequence_length",
         ):
             if int(getattr(self, field_name)) < 1:
                 raise ValueError(f"{field_name} must be >= 1")
@@ -1112,6 +1152,302 @@ def _wrote_this_checkpoint(args: Any, state: Any) -> bool | None:
         if isinstance(value, bool):
             return value
     return None
+
+
+# Below this, a rank is sharing cores with its own dataloader and its peers. It is
+# a REPORTING threshold, not a refusal: a starved rank is slow, not wrong, and a
+# framework that refuses to run on a small machine is worse than one that says the
+# machine is small. The value is the measured knee on this estate rather than a
+# round number -- at 128 cores over 4 ranks (32/rank) the plane scaled at 95%, and
+# at 2 cores over 4 ranks (0.5/rank) the same job lost 3.4x.
+_HOST_CORES_PER_RANK_FLOOR = 4.0
+
+
+def _host_budget(environ: Mapping[str, str], dataloader_workers: int) -> tuple[str, ...]:
+    """Report the CPU budget this rank actually has, before anything is timed.
+
+    WHY THIS EXISTS. MEASURED 2026-09-20 on two GB200 trays: identical image,
+    identical model, identical fabric, 8 ranks over 2 nodes. With each rank's
+    affinity mask narrowed to 2 cores the run took 619 s; with the mask widened
+    to the 128 cores the cgroup already permitted, 37 s. That is 16.6x, and the
+    narrow run looked HEALTHIER by the metric an operator reaches for first --
+    82% mean GPU utilisation against 58% for the fast run, because
+    ``utilization.gpu`` counts a resident kernel and a blocked collective is a
+    resident kernel. The only signal that pointed at the host was one the plane
+    did not emit.
+
+    WHAT IT REPORTS, AND WHY EACH LINE EARNS ITS SPACE:
+
+    * The affinity mask, not the machine. ``os.cpu_count()`` answers "how many
+      cores exist" and ``sched_getaffinity`` answers "how many can this process
+      run on". Under a scheduler's cgroup those differ by two orders of
+      magnitude, and only the second one bounds throughput. Both are printed
+      when they disagree, because the gap IS the finding.
+    * Cores per LOCAL rank. The ranks on one node share that node's cores; the
+      ranks on the other node do not. Dividing by the global world size would
+      understate the budget by the node count.
+    * The dataloader's worker count, including the zero case, which is the
+      default and which means collation happens on the training thread with no
+      prefetch at all. A reader who sees ``workers=0`` next to ``0.5
+      cores/rank`` has the whole story on one screen.
+
+    This never blocks and never raises: it is an instrument. Everything it needs
+    is a local read, so it is safe to call before the fabric is proven.
+
+    Args:
+        environ: The process environment, for the launcher's rank topology.
+        dataloader_workers: The worker count the Trainer will be given.
+
+    Returns:
+        Announcement lines, never empty. Every rank emits; on a busy log the
+        per-rank lines are how a single starved rank becomes visible at all.
+    """
+    machine_cores = os.cpu_count()
+    affinity: int | None = None
+    getaffinity = getattr(os, "sched_getaffinity", None)
+    if getaffinity is not None:
+        try:
+            affinity = len(getaffinity(0))
+        except OSError:  # pragma: no cover -- platform refuses to answer
+            affinity = None
+
+    usable = affinity if affinity is not None else machine_cores
+    announcements: list[str] = []
+    if affinity is None:
+        announcements.append(
+            f"cores: {machine_cores} on this machine; this platform has no "
+            f"sched_getaffinity, so a narrowed CPU mask would be invisible here"
+        )
+    elif machine_cores is not None and affinity != machine_cores:
+        announcements.append(
+            f"cores: {affinity} usable of {machine_cores} on the machine -- the "
+            f"scheduler has narrowed this rank's affinity mask, and the smaller "
+            f"number is the one that bounds throughput"
+        )
+    else:
+        announcements.append(f"cores: {affinity} usable, the whole machine")
+
+    raw_local = environ.get("LOCAL_WORLD_SIZE") or environ.get("SLURM_NTASKS_PER_NODE") or "1"
+    try:
+        local_ranks = max(1, int(raw_local))
+    except ValueError:
+        local_ranks = 1
+        announcements.append(
+            f"local rank count: LOCAL_WORLD_SIZE={raw_local!r} is not an integer, "
+            f"so cores-per-rank is reported as if this rank were alone on the node "
+            f"-- the real figure is smaller"
+        )
+
+    if usable is not None:
+        per_rank = usable / local_ranks
+        line = (
+            f"cores per rank: {per_rank:.3g} ({usable} usable / {local_ranks} rank(s) on this node)"
+        )
+        if per_rank < _HOST_CORES_PER_RANK_FLOOR:
+            line += (
+                f" -- BELOW the {_HOST_CORES_PER_RANK_FLOOR:g} floor. This does not stop the "
+                f"run and is not a fault in the model, the kernels or the fabric. MEASURED on "
+                f"a comparable estate, the same job at 0.5 cores/rank ran 16.6x slower than at "
+                f"32, and read HIGHER GPU utilisation while doing it. If this run is slow, "
+                f"widen the CPU allocation before suspecting anything else"
+            )
+        announcements.append(line)
+    else:  # pragma: no cover -- os.cpu_count() returning None is undocumented in practice
+        announcements.append(
+            "cores per rank: UNMEASURED -- this platform reported no CPU count at all"
+        )
+
+    if dataloader_workers <= 0:
+        announcements.append(
+            f"dataloader workers: {dataloader_workers} -- batches are collated on the "
+            f"training thread with no prefetch, so every core spent on collation is a "
+            f"core the forward pass is waiting for. This is the framework default, "
+            f"stated rather than assumed"
+        )
+    else:
+        announcements.append(
+            f"dataloader workers: {dataloader_workers} per rank, prefetching alongside the step"
+        )
+    return tuple(announcements)
+
+
+# The fabric warm-up's two declarable knobs. They live in the ENVIRONMENT and not
+# in TrainConfig because they describe the estate rather than the training run:
+# one value is right for every job on a cluster and wrong for every job on the
+# next one, which is the shape of an operator setting, not a hyper-parameter.
+# The defaults are announced at runtime so a log reader never has to know them.
+_WARMUP_TIMEOUT_VAR = "FS_FABRIC_WARMUP_TIMEOUT_S"
+_WARMUP_ATTEMPTS_VAR = "FS_FABRIC_WARMUP_ATTEMPTS"
+_WARMUP_DEFAULT_TIMEOUT_S = 120.0
+_WARMUP_DEFAULT_ATTEMPTS = 1
+
+
+def _warm_up_fabric(environ: Mapping[str, str]) -> tuple[bool, tuple[str, ...]]:
+    """Prove the collective fabric works, under a bound, before training pays for it.
+
+    MEASURED 2026-09-20 on a GB200 estate with a probe that does not import
+    FoundationScale at all -- ``set_device``, ``init_process_group``, one
+    integer all-reduce, exit. Of 21 two-rank runs, 19 completed in ~2.0s and 2
+    stalled at ``WorkNCCL(SeqNum=1, OpType=ALLREDUCE, NumelIn=1)``: sequence
+    number one, the first collective the group ever issues. Both stalls were
+    the first touch of a cold GPU pair and both cured on the next attempt.
+    Delaying one rank by 30s and by 90s before init did not reproduce it (6
+    clean runs), so it is not an arrival race; it occurred at two ranks and not
+    at four, so it is not a rank count. It is a property of the machine, and no
+    framework change will make it go away.
+
+    What FoundationScale CAN stop doing is turning a 120-second fault into an
+    unbounded hang. accelerate builds the process group with a 1800-second
+    timeout, so on the measured incident the plane's first real collective spun
+    for 901 seconds at 100% GPU utilisation -- holding a bare 1.7 GiB CUDA
+    context, no model on the device, emitting nothing -- until an external
+    harness killed it. The identical fault under the probe's own ``timeout=``
+    named itself in 120 seconds with the op, the sequence number and the
+    elapsed milliseconds. The difference between those two outcomes is one
+    keyword argument, and this function is where it is paid.
+
+    HOW THE BOUND IS OBTAINED, AND WHY NOT THE OBVIOUS WAY. A SUBGROUP is
+    created carrying its own timeout and the probe runs inside it; the main
+    process group's timeout is left exactly as accelerate set it. Shortening
+    the real group would bound the probe and simultaneously convert a healthy
+    long training step into a timeout -- a step legitimately takes longer than
+    a one-integer all-reduce, so a bound tight enough to be useful here is a
+    bound certain to be wrong there.
+
+    THE RESULT IS CHECKED, NOT JUST THE RETURN. The reduced value must be the
+    one every rank contributed. A collective that returns the wrong answer has
+    not proved the fabric works, and "it did not raise" is the same vacuous
+    evidence this framework exists to refuse.
+
+    WHAT IS NOT CLAIMED. ``FS_FABRIC_WARMUP_ATTEMPTS`` defaults to 1, not 2,
+    and the default is the honest part. Retrying is what cured the fault at the
+    shell -- but that was a NEW PROCESS each time, and a NCCL collective that
+    trips the watchdog can leave the communicator aborted, so whether a second
+    attempt inside the SAME process can succeed has not been measured here.
+    Defaulting to 2 would ship a recovery this repository has not observed. The
+    knob exists so an operator can measure it on their own estate; the default
+    states only what is known.
+
+    Args:
+        environ: The mapping the knobs are read from -- ``os.environ`` in
+            production, a plain dict under test. Passed in rather than reached
+            for, so the function has no hidden input.
+
+    Returns:
+        ``(ok, announcements)``. ``ok`` False means the caller must REFUSE
+        (96): the machine would not let this rank reach its peers. That is a
+        precondition failure, never a RED verdict -- nothing was measured about
+        the model, so nothing about the model can be concluded.
+    """
+    try:
+        import torch
+        import torch.distributed as dist
+    except ImportError:  # pragma: no cover -- torch-free hosts run single-process
+        return True, ("torch is absent, so there is no collective to warm",)
+    if not (dist.is_available() and dist.is_initialized()):
+        return True, (
+            "torch.distributed is not initialized -- single-process run, nothing to warm",
+        )
+    world = int(dist.get_world_size())
+    if world < 2:
+        return True, (f"world size is {world}, so no collective crosses a device",)
+
+    raw_timeout = environ.get(_WARMUP_TIMEOUT_VAR)
+    timeout_s, timeout_source = _WARMUP_DEFAULT_TIMEOUT_S, "default"
+    if raw_timeout is not None:
+        try:
+            timeout_s = float(raw_timeout)
+        except ValueError:
+            return False, (f"{_WARMUP_TIMEOUT_VAR}={raw_timeout!r} is not a number of seconds",)
+        if not timeout_s > 0:
+            return False, (
+                f"{_WARMUP_TIMEOUT_VAR}={raw_timeout!r} must be greater than zero; "
+                f"a non-positive bound is not a bound",
+            )
+        timeout_source = "declared"
+
+    raw_attempts = environ.get(_WARMUP_ATTEMPTS_VAR)
+    attempts, attempts_source = _WARMUP_DEFAULT_ATTEMPTS, "default"
+    if raw_attempts is not None:
+        try:
+            attempts = int(raw_attempts)
+        except ValueError:
+            return False, (f"{_WARMUP_ATTEMPTS_VAR}={raw_attempts!r} is not an integer",)
+        if attempts < 1:
+            return False, (
+                f"{_WARMUP_ATTEMPTS_VAR}={raw_attempts!r} must be at least 1; "
+                f"zero attempts would report a fabric nobody probed",
+            )
+        attempts_source = "declared"
+
+    backend = str(dist.get_backend())
+    device = None
+    if backend == "nccl" and torch.cuda.is_available():
+        # Same rule as _agree_on_stop: NCCL cannot reduce a CPU tensor, and
+        # current_device() is what torchrun already pinned via LOCAL_RANK.
+        device = torch.device("cuda", torch.cuda.current_device())
+    announcements: list[str] = [
+        f"probing {world} rank(s) over {backend}: bound={timeout_s:g}s "
+        f"({timeout_source}), attempts={attempts} ({attempts_source})"
+    ]
+
+    for attempt in range(1, attempts + 1):
+        group = None
+        started = time.perf_counter()
+        try:
+            group = dist.new_group(timeout=datetime.timedelta(seconds=timeout_s))
+            if not isinstance(group, dist.ProcessGroup):
+                # new_group returns a non-member sentinel to ranks left out of
+                # the group. This group names no ranks, so it includes all of
+                # them and the sentinel is unreachable -- which is exactly why
+                # it is raised rather than ignored: an unreachable branch that
+                # silently continues is how a probe ends up measuring nothing.
+                raise RuntimeError(
+                    "new_group() returned the non-member sentinel for a group that "
+                    "includes every rank"
+                )
+            probe = torch.tensor([1], dtype=torch.int32, device=device)
+            dist.all_reduce(probe, op=dist.ReduceOp.MAX, group=group)
+            if device is not None:
+                torch.cuda.synchronize()
+            reduced = int(probe.item())
+            elapsed = time.perf_counter() - started
+        except Exception as exc:  # noqa: BLE001 -- any fabric failure is the finding
+            announcements.append(
+                f"attempt {attempt}/{attempts} FAILED after {time.perf_counter() - started:.1f}s: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            continue
+        finally:
+            if isinstance(group, dist.ProcessGroup):
+                # A subgroup that outlives its probe is a leaked communicator on
+                # every rank. suppress() because teardown failing tells us nothing
+                # new about a fabric we have just finished characterising.
+                with contextlib.suppress(Exception):
+                    dist.destroy_process_group(group)
+        if reduced != 1:
+            announcements.append(
+                f"attempt {attempt}/{attempts} returned {reduced} where every rank "
+                f"contributed 1 -- the collective completed with the WRONG value, "
+                f"which is worse than a stall because training would not notice"
+            )
+            return False, tuple(announcements)
+        announcements.append(
+            f"all-reduce over {world} rank(s) returned the agreed value in "
+            f"{elapsed:.3f}s on attempt {attempt}/{attempts}"
+        )
+        return True, tuple(announcements)
+
+    announcements.append(
+        f"no attempt reached the peers within {timeout_s:g}s. This is the machine, "
+        f"not the model: nothing about training has been measured, so this refuses "
+        f"(96) rather than reporting a failure. MEASURED on this estate, the same "
+        f"fault cleared on a fresh process -- resubmitting the job is the first "
+        f"thing to try. Raise {_WARMUP_TIMEOUT_VAR} if the fabric is merely slow, "
+        f"and {_WARMUP_ATTEMPTS_VAR} to retry in-process (unverified: a watchdog "
+        f"abort may make a second attempt impossible)"
+    )
+    return False, tuple(announcements)
 
 
 def _agree_on_stop(stop: bool) -> bool:
@@ -2017,6 +2353,18 @@ def _manifest_payload(
             "output_dir": str(cfg.output_dir),
             "max_steps": cfg.max_steps,
             "per_device_batch_size": cfg.per_device_batch_size,
+            # Recorded as a plain value alongside batch size and step count, not
+            # as one of the nine provenance-shaped axes, because it has a real
+            # default (128) rather than a None abstention -- there is no
+            # "the run did not say" state for it, only a value it ran at.
+            # It is here at all because every performance number in this
+            # manifest is computed FROM it: tokens/step is
+            # per_device_batch_size x max_sequence_length x world_size, and
+            # perf_model_tflops_per_second and perf_mfu are both proportional
+            # to the token count. A manifest carrying an MFU without the
+            # sequence length that produced it cannot be compared against
+            # another one, and comparison is the only thing an MFU is for.
+            "max_sequence_length": cfg.max_sequence_length,
             "learning_rate": cfg.learning_rate,
             "save_interval": cfg.save_interval,
             "seed": cfg.seed,
@@ -2489,6 +2837,14 @@ _TELEMETRY_UNITS: dict[str, str] = {
     "peak_memory_allocated_bytes": "bytes",
     "peak_memory_reserved_bytes": "bytes",
     "logging_steps_effective": "steps",
+    # The perf plane's units are MERGED rather than restated. The rule above
+    # is that the table's key set must not be wider than the emitted key set,
+    # and the only way to guarantee that across two modules is for the units
+    # to travel with the emitter that produces them -- a copy here would be
+    # free to drift exactly the way total_flos did. Keys the perf table omits
+    # (the three fractions) are unitless by the rule above, which is the
+    # correct unit for a ratio, not an oversight.
+    **PERF_TELEMETRY_UNITS,
 }
 # total_flos is deliberately ABSENT. It was declared here with no producer: this
 # loop counts no FLOPs, so the key could never be recorded and the table stated a
@@ -3005,6 +3361,19 @@ def _train(cfg: TrainConfig) -> int:
         Step.PROFILE,
         f"{profile.name}: scheduler={profile.scheduler} gpus_per_node={profile.gpus_per_node}",
     )
+    # #515: the profile has just been resolved, so apply what it DECLARES about
+    # the fabric now -- here, and not later. NCCL reads its environment when the
+    # communicator is constructed, and that happens inside
+    # `args = _TrainingArguments(**kwargs)` far below, where accelerate's
+    # PartialState calls init_process_group. Anything exported after that line
+    # is read by nothing. Every line is announced, including the ones that
+    # applied NOTHING, because "the framework left NCCL_SOCKET_IFNAME alone
+    # because you had already set it" and "the framework has no opinion" are
+    # different facts and an operator debugging a fabric needs to tell them
+    # apart. The announcements are the whole product: this used to be three
+    # fields no code read (#515), and the failure mode was a silent one.
+    for _fabric_line in apply_fabric_declaration(profile, os.environ):
+        _mark(Step.PROFILE, f"fabric: {_fabric_line}")
 
     # --- 3. Consistency findings, BEFORE a single GPU is touched ----------
     findings: list[Finding] = list(declared.validate_against(profile))
@@ -3317,7 +3686,7 @@ def _train(cfg: TrainConfig) -> int:
             # downstream. Do not "simplify" this into the shared arm.
             tokenized = raw[split].map(
                 lambda batch: tokenizer(
-                    batch["text"], truncation=True, max_length=TOKENIZE_MAX_LENGTH
+                    batch["text"], truncation=True, max_length=cfg.max_sequence_length
                 ),
                 batched=True,
                 remove_columns=columns,
@@ -3375,7 +3744,8 @@ def _train(cfg: TrainConfig) -> int:
         tokenizer.pad_token = tokenizer.eos_token
     _mark(
         Step.DATA,
-        f"{len(tokenized)} examples tokenized (split={split}, max_length={TOKENIZE_MAX_LENGTH})",
+        f"{len(tokenized)} examples tokenized "
+        f"(split={split}, max_length={cfg.max_sequence_length})",
     )
 
     # --- Adapters (LoRA), wrapped HERE -- upstream of the declaration -------
@@ -3549,6 +3919,8 @@ def _train(cfg: TrainConfig) -> int:
         # so the telemetry section records the cadence actually bound.
         "logging_steps": logging_steps_effective,
         "report_to": [],
+        # include_num_input_tokens_seen is NOT here, and the omission is the
+        # point -- see the introspected binding below the `accepted` set (#519).
         # Stays False by DEFAULT and deliberately so -- on a single-tower model
         # an unused parameter is a real defect and DDP should say so. It is
         # raised ONLY for the towers measured dormant just below (#504).
@@ -3613,6 +3985,41 @@ def _train(cfg: TrainConfig) -> int:
     accepted = set(inspect.signature(TrainingArguments.__init__).parameters)
     if "save_safetensors" in accepted:
         kwargs["save_safetensors"] = True
+    # Asks the trainer to count input tokens. It does NOT do this by default:
+    # state.num_input_tokens_seen stays at 0, and the perf plane reads a zero
+    # counter as UNREAD rather than as a measurement, so leaving it off makes
+    # every token-rate and MFU entry unmeasured rather than wrong. The gap
+    # costs one numel() per batch to close, which is why it is asked for.
+    #
+    # It is bound by INTROSPECTION and not by the mandatory dict above (#519).
+    # It sat in that dict for exactly one build, and that was a defect of the
+    # kind this module keeps re-learning: a measurement had been given the
+    # power to refuse the thing it measures. The `dropped` check below is a
+    # promise that every key it guards is load-bearing -- "required for the
+    # thin path to mean anything", in its own words -- and a token counter is
+    # not. On a transformers without the knob, the mandatory spelling turned
+    # every run on that version into REFUSE (96): not a slower run, not a run
+    # with a blank throughput column, no run at all, because the instrument
+    # was missing. The perf plane's whole contract is that an absent input is
+    # reported and survivable (#518 is the same lesson from the other end), so
+    # the axis that reports absence must not be the axis that forbids it.
+    #
+    # The absence is ANNOUNCED rather than passed over. A run whose token
+    # entries are unmeasured because the installed transformers has no counter
+    # and a run whose token entries are unmeasured because the counter was
+    # never asked for read identically in the manifest, and only one of them
+    # is a wiring bug on our side.
+    if "include_num_input_tokens_seen" in accepted:
+        kwargs["include_num_input_tokens_seen"] = True
+    else:
+        _mark(
+            Step.VALIDATED,
+            f"[   ok] perf.token_counter: transformers {_tf_version()} "
+            "TrainingArguments has no include_num_input_tokens_seen, so "
+            "state.num_input_tokens_seen stays 0 and every token-rate and MFU "
+            "entry in this run's manifest will be UNMEASURED. Training is "
+            "unaffected -- the counter is an instrument, not a dependency",
+        )
     # Every other key above is required for the thin path to mean anything. If a
     # future release drops one, refuse loudly rather than train something that
     # is not what was asked for -- a silently ignored max_steps is a run whose
@@ -3655,6 +4062,44 @@ def _train(cfg: TrainConfig) -> int:
         max_steps=cfg.max_steps,
     )
     callbacks: list[Any] = [gate_callback, objective_callback]
+    # The perf plane is a THIRD callback rather than a branch inside the two
+    # above, because it measures and never blocks: sharing a class with gates
+    # that can set should_training_stop would put an instrument on the same
+    # code path as a verdict. Its hooks perform no I/O and no torch access, so
+    # they cannot turn a run RED; everything that can fail lives in summary(),
+    # which runs once after training and returns reasons instead of raising.
+    #
+    # warmup_steps is DECLARED, not tuned. The first steps measure the CUDA
+    # allocator and the autotuner rather than the model, so averaging them in
+    # understates throughput -- they are still timed and still counted, in
+    # their own bucket. The min() keeps at least one steady-state step on a
+    # short run: a 2-step smoke test should report a slow number, not no
+    # number, and 3 warmup steps out of 2 would report no number at all.
+    #
+    # Both inputs are optional and both refuse rather than guess. A model
+    # whose config does not state layers and hidden_size yields no FlopsModel,
+    # and no FlopsModel means the TFLOP/s entries are UNMEASURED with that
+    # reason -- never a FLOP count derived from an assumed architecture. The
+    # device peak is not discoverable at all: it is a vendor number for a
+    # specific silicon and precision, so it is read from the operator's
+    # declaration or left unmeasured, and MFU without it stays unmeasured too.
+    perf_flops_model = FlopsModel.from_model(model, sequence_length=cfg.max_sequence_length)
+    try:
+        perf_device_peak = DevicePeak.from_env()
+    except ValueError as exc:
+        # The operator DID declare a peak and declared it unusably. That is a
+        # corrected-by-the-operator condition, not a failed training run, so
+        # it is REFUSE with the field named rather than RED -- and not a
+        # silent demotion to "unmeasured", which would hide the mistake
+        # inside an honest-looking gap.
+        _mark(Step.REFUSE, f"device-peak declaration rejected: {exc}")
+        return EXIT_REFUSE
+    step_telemetry = StepTelemetry(
+        warmup_steps=min(3, max(0, int(cfg.max_steps) - 1)),
+        flops_model=perf_flops_model,
+        device_peak=perf_device_peak,
+    )
+    callbacks.append(step_telemetry)
     # And the third time, on the same axis. `# type: ignore[arg-type]` here was
     # NEEDED with transformers installed (**kwargs is dict[str, Any] against a
     # long typed signature) and UNUSED without it (TrainingArguments resolves to
@@ -3685,7 +4130,7 @@ def _train(cfg: TrainConfig) -> int:
         data_collator = train_image_collator_or_refuse(
             prompt_surface,
             image_column=IMAGE_COLUMN,
-            max_length=TOKENIZE_MAX_LENGTH,
+            max_length=cfg.max_sequence_length,
         )
         # POSITIVE survival proof, before a single step is paid for: run the
         # collator on real rows and refuse (96) -- naming the dropped column
@@ -3698,6 +4143,41 @@ def _train(cfg: TrainConfig) -> int:
         kwargs["remove_unused_columns"] = False
     try:
         args = _TrainingArguments(**kwargs)
+        # #517: the host budget, before the fabric and before the device. Read from
+        # `args` rather than from `kwargs` so the number announced is the one the
+        # Trainer will actually use, including any default TrainingArguments filled
+        # in. Nothing here can fail the run; it is the one line that made a 16.6x
+        # slowdown legible after the fact, so it is emitted before anything is timed.
+        for _host_line in _host_budget(
+            os.environ, int(getattr(args, "dataloader_num_workers", 0) or 0)
+        ):
+            _mark(Step.HOST, _host_line)
+        # #516: the process group exists as of the line above -- TrainingArguments'
+        # __post_init__ reads self.device, which builds accelerate's PartialState,
+        # which calls init_process_group. So this is the FIRST line at which a
+        # collective is possible, and therefore the first line at which one can be
+        # bounded. Placed before every other gate below because those gates are
+        # per-rank reads: if the fabric is dead, they all pass and the run still
+        # hangs, three minutes later, in the first real all-reduce.
+        _fabric_ok, _fabric_lines = _warm_up_fabric(os.environ)
+        for _line in _fabric_lines:
+            _mark(Step.FABRIC, _line)
+        if not _fabric_ok:
+            # The FABRIC lines above carry the diagnosis; this line carries the
+            # VERDICT, and they are separate on purpose. arm_diagnosis reads a
+            # fixed four-marker vocabulary to name why a subprocess arm died, and
+            # a refusal announced only under a step marker of its own is a death
+            # that module cannot name -- the campaign records "exit 96" and
+            # nothing else. Every other refusal in this function goes through
+            # Step.REFUSE; this one now does too, rather than the vocabulary
+            # growing a fifth entry per step that learns how to refuse.
+            _mark(
+                Step.REFUSE,
+                f"the collective fabric did not come up: {_fabric_lines[-1]}. "
+                "Refusing (96) before the run is paid for -- see the "
+                f"[{Step.FABRIC}] lines above for every attempt",
+            )
+            return EXIT_REFUSE
         # #447: measure the device BEFORE the Trainer moves the model onto it.
         # The move is where a preempted GPU raises OutOfMemoryError, two minutes
         # into a run, and train()'s boundary handler adjudicates that RED against
@@ -3961,6 +4441,14 @@ def _train(cfg: TrainConfig) -> int:
         "peak_memory_allocated_bytes": peak_allocated,
         "peak_memory_reserved_bytes": peak_reserved,
         "logging_steps_effective": (logging_steps_effective, "derived"),
+        # Merged flat, not nested. The manifest's telemetry section maps one
+        # key to one TelemetryEntry and has no slot for a sub-dict, so the
+        # perf keys are namespaced by their perf_ prefix instead. summary()
+        # returns the same (value, source) pairs this dict is built from and
+        # can raise nothing: every failure path inside it returns a reason
+        # string paired with None, which is why it is called here rather than
+        # inside the telemetry try/except above.
+        **step_telemetry.summary(),
     }
 
     # --- 8. Final save ------------------------------------------------------

@@ -39,7 +39,43 @@ from types import SimpleNamespace
 
 import pytest
 
+from foundationscale.topology import ClusterProfile
 from foundationscale.train import loop
+
+# A REAL ClusterProfile, not a SimpleNamespace carrying the three fields the
+# prologue happens to print today. The namespace form shipped here first and
+# broke the moment the fabric fields acquired a consumer (#515): production's
+# profile is a dataclass and has carried nccl_socket_ifname / ib_hca_pattern /
+# mnnvl_available since it was introduced, so a run reading one of them is
+# correct and a fake omitting it raises AttributeError from inside train() --
+# adjudicated RED, in a module whose subject is parallel-degree refusal and
+# which has nothing to say about fabric.
+#
+# Constructed rather than looked up in PROFILES for the reason the sibling
+# kernel-axes module states: which profiles the package ships is irrelevant
+# here, and a registry lookup would make these tests move when the registry
+# does. Construction gets the field-completeness anyway, and more strictly --
+# a new REQUIRED field on ClusterProfile fails this call at collection time
+# rather than somewhere inside a run.
+#
+# nccl_socket_ifname is deliberately BLANK. apply_fabric_declaration exports
+# the declared interface into os.environ, and a test-local profile naming one
+# would leave NCCL_SOCKET_IFNAME set for every module collected after this
+# one. The blank takes the "declares no interface" branch, which still emits
+# its fabric line and mutates nothing.
+_SYNTHETIC_PROFILE = ClusterProfile(
+    name="synthetic",
+    scheduler="none",
+    partitions=("synthetic-partition",),
+    node_pattern=r"^synthetic-node\d+$",
+    gpus_per_node=1,
+    nccl_socket_ifname="",
+    ib_hca_pattern="",
+    mnnvl_available=False,
+    container_runtime="none",
+    container_image="",
+    filesystem_roots=(),
+)
 
 
 def _base_kwargs(tmp_path) -> dict:
@@ -80,11 +116,7 @@ def _install_fake_runtime(monkeypatch) -> list:
             return []
 
     monkeypatch.setattr(loop, "Topology", _FakeTopology)
-    monkeypatch.setattr(
-        loop,
-        "_resolve_profile",
-        lambda cfg: SimpleNamespace(name="synthetic", scheduler="none", gpus_per_node=1),
-    )
+    monkeypatch.setattr(loop, "_resolve_profile", lambda cfg: _SYNTHETIC_PROFILE)
 
     class _FakeSplit:
         column_names = ["text"]

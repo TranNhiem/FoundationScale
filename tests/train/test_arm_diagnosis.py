@@ -247,6 +247,14 @@ _PROGRESS_ONLY_MARKERS = frozenset(
         "[fs:train:validated]",
         "[fs:train:deps]",
         "[fs:train:data]",
+        # Both are REPORTS, not verdicts, and each is here for a stated reason
+        # rather than by default. host cannot fail a run at all -- it prints the
+        # CPU budget and returns. fabric CAN end a run, but when it does the
+        # trainer emits [fs:train:refuse] alongside it, so the death is named in
+        # the vocabulary arm_diagnosis already reads; the fabric lines themselves
+        # are the per-attempt evidence under that verdict.
+        "[fs:train:host]",
+        "[fs:train:fabric]",
         "[fs:train:trainer]",
         "[fs:train:adapter]",
         "[fs:train:run]",

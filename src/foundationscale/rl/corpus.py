@@ -15,7 +15,9 @@ consume (``license``, ``width``, ``height_list``, ``_meta``, ``category``,
 
 Multiple-choice-question datasets put the verifiable answer in the final
 assistant turn: an optional ``<think>...</think>`` block followed by a single
-letter A--Z. :func:`extract_mcq_gold` recovers it.
+letter A--Z. :func:`extract_mcq_gold` recovers it. A corpus that instead DECLARES
+its answer in a record key is read from that declaration -- pass ``gold_key`` to
+:func:`load_sharegpt` -- because reading a stated answer cannot misparse it.
 
 WHAT IS CLAIMED: a record shaped as declared above is parsed into a Sample;
 the MCQ gold letter is returned only when it is unambiguous.
@@ -79,6 +81,42 @@ def extract_mcq_gold(question: str, answer: str) -> str | None:
     return unique[0]
 
 
+def _declared_gold(
+    record: dict[str, object], sample_id: str, index: int, gold_key: str
+) -> str | None:
+    """Read the gold a record DECLARES under ``gold_key``, or abstain.
+
+    A corpus that states its own answer is a better source than a scan of the
+    assistant's prose, and the difference is not stylistic. :func:`extract_mcq_gold`
+    infers the letter by finding the one standalone A--Z in the reply; that
+    inference holds only while the reply is a bare letter. #512, measured on the
+    estate exam corpus, 299 of 3,414 replies restate the chosen option in prose, and the
+    Latin letters inside it ("GDP", "U型曲線") read as rival candidates -- so the
+    scan abstains on a record whose answer is not ambiguous at all. The declaration
+    has no such failure mode because nothing is being inferred.
+
+    A declared gold is used VERBATIM or not at all. A value that is not exactly one
+    A--Z letter -- empty, or a multi-select "AC" -- is an ABSTENTION, never a repair:
+    truncating "AC" to "A" would train the policy toward an answer the corpus
+    explicitly says is wrong, while reporting a clean extraction rate. An absent key
+    abstains for the same reason, and does NOT fall back to the prose scan: mixing
+    two gold sources in one corpus makes the provenance of any single row
+    unknowable, and a gold whose origin cannot be named cannot be audited.
+    """
+    if gold_key not in record:
+        return None
+    raw = record[gold_key]
+    if not isinstance(raw, str):
+        raise BatchRefusal(
+            f"record {index} ({sample_id!r}) declares gold under {gold_key!r} as a "
+            f"{type(raw).__name__}; a declared gold must be text"
+        )
+    text = raw.strip().upper()
+    if len(text) == 1 and "A" <= text <= "Z":
+        return text
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class Sample:
     """One parsed corpus record: prompt turns, the final reply, an optional gold.
@@ -111,7 +149,7 @@ class Sample:
                 )
 
 
-def _parse_record(record: object, index: int) -> Sample:
+def _parse_record(record: object, index: int, gold_key: str | None = None) -> Sample:
     if not isinstance(record, dict):
         raise BatchRefusal(
             f"record {index} is {type(record).__name__}; every corpus record "
@@ -182,7 +220,11 @@ def _parse_record(record: object, index: int) -> Sample:
         sample_id=str(sample_id),
         prompt_turns=tuple(prompt_turns),
         response=response,
-        gold=extract_mcq_gold(question, response),
+        gold=(
+            _declared_gold(record, str(sample_id), index, gold_key)
+            if gold_key is not None
+            else extract_mcq_gold(question, response)
+        ),
         images=images,
         video=video,
     )
@@ -223,7 +265,9 @@ def _read_records(file_path: Path) -> list[object]:
     return list(payload)
 
 
-def load_sharegpt(path: str | Path, *, limit: int | None = None) -> tuple[Sample, ...]:
+def load_sharegpt(
+    path: str | Path, *, limit: int | None = None, gold_key: str | None = None
+) -> tuple[Sample, ...]:
     """Load a ShareGPT-shaped JSON corpus into typed Samples.
 
     ``path`` may name a single ``.json`` file holding a list of records, a
@@ -235,6 +279,15 @@ def load_sharegpt(path: str | Path, *, limit: int | None = None) -> tuple[Sample
     BOTH suffixes are supported because the measured corpus is JSON Lines:
     a directory scan that admitted only ``.json`` found zero files in every
     dataset directory and refused a corpus that was present and readable.
+
+    ``gold_key`` names the record key holding the verifiable answer, and is the
+    caller's POSITIVE declaration of where gold lives. Default ``None`` keeps the
+    historical behaviour exactly: gold is inferred by :func:`extract_mcq_gold` from
+    the assistant turn. Naming a key switches the corpus to declared gold and
+    disables the inference -- see :func:`_declared_gold` for why the two are never
+    mixed. The default is inference and not a guessed key name because a key that
+    happens to exist under a different meaning ("answer" as free text) would be
+    silently adopted as gold, and a wrong gold is worse than no gold.
 
     Refuses (BatchRefusal) on: a missing path, a top-level shape that is
     neither list nor directory of lists, or any malformed record -- the
@@ -263,7 +316,7 @@ def load_sharegpt(path: str | Path, *, limit: int | None = None) -> tuple[Sample
             f"corpus {str(path)!r} yielded 0 of at least 1 required record(s); "
             f"an empty corpus supervises nothing"
         )
-    samples = tuple(_parse_record(record, i) for i, record in enumerate(records))
+    samples = tuple(_parse_record(record, i, gold_key) for i, record in enumerate(records))
     if limit is not None:
         if limit < 1:
             raise BatchRefusal(

@@ -231,6 +231,17 @@ class RLTrainConfig:
     # named, which is the honest outcome -- it just is not what an operator
     # gets by typing nothing.
     algorithm: str = "dr_grpo"
+    # The answer surface the prompt asked the policy for, as a regex with one
+    # capture group, or None to treat every A--Z in the completion as a candidate.
+    # Paired with gold_key: gold_key says where the TRUTH is, answer_pattern says
+    # where the model's CLAIM is, and scoring needs both to be locatable.
+    answer_pattern: str | None = None
+    # Which record key holds the verifiable answer, or None to infer it from the
+    # assistant turn. This is a property OF THE CORPUS, so it belongs in the run
+    # declaration and not in the loader: #512, measured 2026-09-19, zero of 5,098
+    # corpus files carry the English prompt marker the inference path requires, so
+    # a plane that cannot be told where gold lives cannot score real data at all.
+    gold_key: str | None = None
     group_size: int = 4
     learning_rate: float = 1e-6
     # None means "decide by measurement": use host-fp32 master weights whenever
@@ -316,6 +327,28 @@ class RLTrainer:
                 f"instances expose the declared axes; the tensor kernel reads the "
                 f"objective's declarations rather than a per-algorithm branch"
             )
+        # Exposing an objective is NOT the same as exposing the axes this loop
+        # reads, and the gap is the majority case. The preference family
+        # (DPO/CPO/IPO/KTO/ORPO/SimPO) prices a PAIR and the online family
+        # (RAFT/best-of-n/online-DPO/iterative-DPO) prices a RANKED set; neither
+        # centres a reward against its group, so neither declares an
+        # ``advantage_fn`` -- absent by design, not missing by oversight.
+        # #513, measured 2026-09-19: 10 of the 14 registry entries that expose
+        # objective have none, while ``_one_step`` reads
+        # ``objective.advantage_fn.compute(...)`` unconditionally. Naming one of
+        # them therefore raised AttributeError several frames deeper, after the
+        # model was loaded and a full group had been generated -- a crash where
+        # the contract owes a refusal that names the missing input, and one that
+        # arrives only after the expensive part of the step has been paid for.
+        if not hasattr(objective, "advantage_fn"):
+            raise TrainerRefusal(
+                f"algorithm {self.config.algorithm!r}: 0 of 1 required advantage "
+                f"estimators are declared by its objective "
+                f"({type(objective).__name__}); this loop prices group-centred "
+                f"rewards, so a pairwise or rank-based objective has no estimator "
+                f"for it to read. The group-relative family runs today; the "
+                f"preference and online families are not wired to this loop."
+            )
         # A NAMED, DELIBERATE LIMITATION, not an oversight. An active KL term
         # needs reference log-probabilities, which need a frozen copy of the
         # initial policy held alongside the trained one. This loop holds ONE
@@ -351,7 +384,7 @@ class RLTrainer:
                 "to take. Raise the temperature or set group_size=1."
             )
 
-        samples = load_sharegpt(self.config.dataset)
+        samples = load_sharegpt(self.config.dataset, gold_key=self.config.gold_key)
         # #371: corpus.py PARSES `image` and `video` into Sample.images/.video,
         # and its docstring advertises "text-only, image-text, multi-image, and
         # video" records. This trainer references neither field: it builds every
@@ -468,7 +501,7 @@ class RLTrainer:
             tokenizer.pad_token = tokenizer.eos_token
 
         objective = self._resolve_objective()
-        reward = MCQLetterReward()
+        reward = MCQLetterReward(answer_pattern=self.config.answer_pattern)
         loss_fn = TensorPolicyLoss(objective=objective)
         # #369: bf16 params stepped directly by AdamW at lr=1e-6 discard every
         # sub-ulp update, so the loop trains ~nothing while loss, grad-norm,

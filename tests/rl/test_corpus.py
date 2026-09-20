@@ -217,3 +217,71 @@ def test_image_str_and_list_populate_images_and_bad_video_refuses(tmp_path: Path
     bad = _write_jsonl(tmp_path / "bad-video.jsonl", [_record(video=12)])
     with pytest.raises(BatchRefusal, match="non-string video key"):
         load_sharegpt(bad)
+
+
+_ZH_PROSE_ANSWER = "答案：(C) 因其在統計上為非勞動人口，故其活動並不計入GDP"
+
+
+def test_declared_gold_is_read_where_the_prose_scan_abstains(tmp_path: Path) -> None:
+    """The measured case: a correct answer the letter-scan cannot read.
+
+    Asserts BOTH halves so the test cannot pass vacuously -- the scan must
+    genuinely abstain (rival letters G, D, P leak out of "GDP"), and the
+    declaration must genuinely recover the same record.
+    """
+    assert extract_mcq_gold(_MCQ_QUESTION, _ZH_PROSE_ANSWER) is None
+
+    corpus = _write_jsonl(
+        tmp_path / "corpus.jsonl",
+        [_record(human=_MCQ_QUESTION, gpt=_ZH_PROSE_ANSWER, answer="C")],
+    )
+
+    assert load_sharegpt(corpus, gold_key="answer")[0].gold == "C"
+
+
+def test_declared_multi_select_gold_abstains_rather_than_truncating(tmp_path: Path) -> None:
+    corpus = _write_jsonl(
+        tmp_path / "corpus.jsonl",
+        [_record(human=_MCQ_QUESTION, gpt="答案：(A)(C)", answer="AC")],
+    )
+
+    assert load_sharegpt(corpus, gold_key="answer")[0].gold is None
+
+
+def test_absent_declared_key_abstains_and_never_falls_back_to_the_scan(tmp_path: Path) -> None:
+    """Naming a gold key disables inference -- including where inference would work.
+
+    This record is exactly the one the scan handles best: the English marker and
+    a bare-letter reply. Declaring a key the record does not carry must still
+    abstain, or the corpus would silently carry gold from two different sources.
+    """
+    record = _record(human=_MCQ_QUESTION, gpt="B")
+    assert extract_mcq_gold(_MCQ_QUESTION, "B") == "B"
+
+    corpus = _write_jsonl(tmp_path / "corpus.jsonl", [record])
+
+    assert load_sharegpt(corpus, gold_key="answer")[0].gold is None
+    assert load_sharegpt(corpus)[0].gold == "B"
+
+
+def test_non_string_declared_gold_refuses_naming_the_key(tmp_path: Path) -> None:
+    corpus = _write_jsonl(
+        tmp_path / "corpus.jsonl",
+        [_record(sample_id="rec-9", human=_MCQ_QUESTION, gpt="B", answer=3)],
+    )
+
+    with pytest.raises(BatchRefusal, match="'rec-9'.*'answer'.*int"):
+        load_sharegpt(corpus, gold_key="answer")
+
+
+def test_default_gold_key_leaves_inference_byte_identical(tmp_path: Path) -> None:
+    """MUST_PASS regression guard: an undeclared key changes nothing at all."""
+    corpus = _write_jsonl(
+        tmp_path / "corpus.jsonl",
+        [
+            _record(sample_id="a", human=_MCQ_QUESTION, gpt="B", answer="C"),
+            _record(sample_id="b", human="Open question?", gpt="Some prose."),
+        ],
+    )
+
+    assert [s.gold for s in load_sharegpt(corpus)] == ["B", None]
