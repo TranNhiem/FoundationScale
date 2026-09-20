@@ -13,6 +13,16 @@ AND 27 ``Gemma4ClippableLinear`` under ``model.vision_tower``, and peft raised
 was not wrong -- ``q_proj`` is a real and reasonable thing to adapt. The
 selector was wrong, because it had no way to say "the language tower's q_proj".
 
+The second measured defect, same date, is why selection also announces
+LAYER-POSITION COVERAGE. On Qwen3.5 -- a 3:1 hybrid where only one layer in
+four carries ``self_attn.{q,k,v,o}_proj`` -- the conventional declaration
+selected exactly ``full_attention * 4`` modules on three model sizes, printed a
+plausible module count, and silently adapted one quarter of the network. A
+module count cannot distinguish 64 modules spread over 16 layers from 64 spread
+over 64; a layer-position coverage line can, and it is computed from data this
+function already holds. Coverage is announced, never enforced: partial-depth
+LoRA is a legitimate choice, and an unannounced one is not.
+
 Nothing here imports torch at module scope. Selection is duck-typed over an
 iterable of ``(qualified_name, module)`` pairs and an ``is_adaptable``
 predicate, which keeps it testable on a machine with no torch and, more
@@ -52,6 +62,26 @@ def _under(name: str, prefixes: tuple[str, ...]) -> str | None:
     return None
 
 
+def _layer_key(name: str) -> str | None:
+    """Return the layer-position key of a qualified module name, or None.
+
+    The key is the prefix up to and INCLUDING the first integer path segment:
+    ``model.layers.3.mlp.experts.7.gate_proj`` belongs to position
+    ``model.layers.3``, not 7. First-integer-wins because the first integer is
+    the depth coordinate the coverage statement is about; integers deeper in
+    the path index experts, heads, or shards within a single layer, and
+    charging a declaration for reaching layer 3 "seven times" would measure
+    width as depth. A name with no integer segment -- embeddings, final norms
+    -- has no layer position and returns None rather than being forced into a
+    bucket where it would corrupt the count.
+    """
+    segments = name.split(".")
+    for index, segment in enumerate(segments):
+        if segment.isdigit():
+            return ".".join(segments[: index + 1])
+    return None
+
+
 def select_adapter_modules(
     named_modules: Iterable[tuple[str, object]],
     spec: FamilySpec,
@@ -67,6 +97,18 @@ def select_adapter_modules(
     and a type, and the two distinguishable ways of selecting nothing -- no name
     matched, versus names matched but nothing was adaptable -- are reported
     differently, because they have different fixes.
+
+    Layer-position coverage is announced for every language prefix, every time,
+    including when it is complete. The measured Qwen3.5 defect was not a wrong
+    selection, it was a complete-in-module-count selection over one quarter of
+    the depth, and only a coverage line states that. A full-coverage case that
+    said nothing would be indistinguishable from a run where coverage was never
+    measured, which in this repository is the difference between PASS and
+    VACUOUS. Coverage is derived over ALL modules the iterable yields -- not
+    only leaf-name matches -- because the whole defect is that layers whose
+    adaptable modules never match a declared leaf are invisible to the
+    selection loop and must be counted anyway. The iterable is consumed exactly
+    once; callers may hand a generator.
     """
     selected: list[str] = []
     # tower prefix -> type names excluded under it, and how many
@@ -75,10 +117,30 @@ def select_adapter_modules(
     rejected_types: dict[str, int] = {}
     matched_leaf_count = 0
     selected_under: dict[str, int] = {}
+    # language prefix -> layer positions holding at least one adaptable module
+    # (the coverage denominator; computed over every module, leaf match or not)
+    adaptable_positions: dict[str, set[str]] = {}
+    # language prefix -> layer positions holding at least one selected module
+    selected_positions: dict[str, set[str]] = {}
 
     for name, module in named_modules:
         leaf = name.rsplit(".", 1)[-1]
         if leaf not in spec.adapter_leaf_modules:
+            # Never a selection candidate, but it still witnesses that its layer
+            # position holds something an adapter COULD have wrapped. This is the
+            # population the Qwen3.5 defect lived in: linear-attention layers
+            # match no declared leaf, so the selection loop above them is blind
+            # to their existence unless the denominator is computed here.
+            # No tower test here, unlike the selection path below, and that
+            # asymmetry is safe only because FamilySpec refuses a language prefix
+            # and a tower prefix where one contains the other. Without that
+            # invariant a nested tower would be excluded from the numerator and
+            # counted in the denominator, i.e. a gap no declaration could close.
+            language = _under(name, spec.language_prefixes)
+            if language is not None:
+                key = _layer_key(name)
+                if key is not None and is_adaptable(module):
+                    adaptable_positions.setdefault(language, set()).add(key)
             continue
         matched_leaf_count += 1
 
@@ -106,6 +168,12 @@ def select_adapter_modules(
 
         selected.append(name)
         selected_under[language] = selected_under.get(language, 0) + 1
+        key = _layer_key(name)
+        if key is not None:
+            # Already known adaptable, so it belongs in the denominator without
+            # asking the predicate a second time.
+            adaptable_positions.setdefault(language, set()).add(key)
+            selected_positions.setdefault(language, set()).add(key)
 
     lines: list[str] = []
     for tower in sorted(excluded_by_tower):
@@ -131,6 +199,33 @@ def select_adapter_modules(
             f"adapter scope: selected {selected_under[language]} module(s) under "
             f"{language!r} for family {spec.name!r}"
         )
+    for language in sorted(spec.language_prefixes):
+        positions = adaptable_positions.get(language, set())
+        if not positions:
+            # "0 of 0" would print a vacuous completeness claim; an unindexed
+            # stack is UNMEASURED coverage, and unmeasured must look different
+            # from measured-and-complete or nobody will ever notice the swap.
+            lines.append(
+                f"adapter scope: layer-position coverage is UNMEASURABLE under "
+                f"{language!r}: the model exposes no integer-indexed layer positions "
+                "there, so there is no denominator to measure the declaration "
+                "against. This is absence of a measurement, not evidence of coverage"
+            )
+            continue
+        reached = selected_positions.get(language, set()) & positions
+        if len(reached) == len(positions):
+            lines.append(
+                f"adapter scope: declared target leaves reached all {len(positions)} "
+                f"indexed layer position(s) under {language!r}"
+            )
+        else:
+            gap = len(positions) - len(reached)
+            lines.append(
+                f"adapter scope: declared target leaves reached {len(reached)} of "
+                f"{len(positions)} indexed layer position(s) under {language!r}; "
+                f"{gap} position(s) hold adaptable modules that no declared leaf "
+                "name matched, so those layers train no adapter"
+            )
     if not selected:
         lines.append(
             "adapter scope: SELECTED NOTHING. An adapter with no target modules trains "

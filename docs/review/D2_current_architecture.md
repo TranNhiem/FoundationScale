@@ -44,7 +44,7 @@ flowchart TB
   OK["Operator or bash continues"]
   NO["Operator blocks or remediates"]
 
-  PKG["[installed foundationscale package]<br/>44,876 LOC / 57 files<br/>verification plane + delegating train/ (4,724 LOC)<br/>few owned primitives (RL backward/step, 2 collectives); main step loop rented from transformers.Trainer"]
+  PKG["[installed foundationscale package]<br/>44,971 LOC / 57 files<br/>verification plane + delegating train/ (4,724 LOC)<br/>few owned primitives (RL backward/step, 2 collectives); main step loop rented from transformers.Trainer"]
 
   O --> PF
   O --> L
@@ -96,11 +96,11 @@ The census reports counts per importing area, not unique dependencies or a file-
 
 ```mermaid
 flowchart TB
-  TESTS["tests/<br/>157 Python files / 67,839 LOC"]
+  TESTS["tests/<br/>158 Python files / 68,068 LOC"]
   TOOLS["tools/<br/>31 Python files / 9,979 LOC"]
-  SRC["src/ as importer<br/>57 Python files / 44,876 LOC"]
+  SRC["src/ as importer<br/>57 Python files / 44,971 LOC"]
 
-  FS["src/foundationscale<br/>57 Python files / 44,876 LOC<br/>root __init__.py exports nothing"]
+  FS["src/foundationscale<br/>57 Python files / 44,971 LOC<br/>root __init__.py exports nothing"]
 
   GATES["gates/<br/>9 files / 10,059 LOC"]
   CKPT["checkpoint/<br/>3 files / 2,199 LOC"]
@@ -110,7 +110,7 @@ flowchart TB
   INTEG["integrate.py<br/>1 file / 54 LOC"]
   ROOT["root __init__.py<br/>1 file / 3 LOC"]
 
-  TESTS -->|"325 Python import statements"| FS
+  TESTS -->|"327 Python import statements"| FS
   TOOLS -->|"14 Python import statements"| FS
   SRC -->|"150 Python import statements, source not disaggregated"| FS
 
@@ -196,4 +196,4 @@ There is no verified end-to-end trace of a generated trainer run, so an unqualif
 
 The training payload has no measured in-process call into `Lifecycle.SAVE` or `run_event`. Consequently, the current architecture is **save-side verification around an estate training path**, not yet a model-agnostic FoundationScale trainer with verification built into its runtime.
 
-> **Census correction (applied post-draft).** This document was written against a census of 13,667 lines in `src/foundationscale/`. The T2 library/script boundary move has since relocated the 2,546-line checkpoint-decision API from `tools/live_save_gate.py` into `src/foundationscale/gates/adjudication.py`, and the fixes landed since have added the rest; `src/foundationscale/` now measures **44,876 lines**. Re-measured after the move over 52 git-tracked `src/*.py`, the structural finding is REFRAMED: axis A is nonzero (1 `backward()`, 3 `optimizer.step()`, 2 module-scope torch imports, 2 `dist.all_reduce` collectives; 0 `nn.Module`/`forward`/`DataLoader`), while delegation markers dominate (1 `Trainer`, 4 fit/train/save calls, 3 `AutoModel.from_pretrained`, 1 data collator, 30 function-scope lazy imports), so the verdict is IMPLEMENTS-PRIMITIVES. The zero went stale because the RL subpackage landed after that census and the exempted wording could not flag it (#508); `src/` still holds real decision logic where it previously held none.
+> **Census correction (applied post-draft).** This document was written against a census of 13,667 lines in `src/foundationscale/`. The T2 library/script boundary move has since relocated the 2,546-line checkpoint-decision API from `tools/live_save_gate.py` into `src/foundationscale/gates/adjudication.py`, and the fixes landed since have added the rest; `src/foundationscale/` now measures **44,971 lines**. Re-measured after the move over 52 git-tracked `src/*.py`, the structural finding is REFRAMED: axis A is nonzero (1 `backward()`, 3 `optimizer.step()`, 2 module-scope torch imports, 2 `dist.all_reduce` collectives; 0 `nn.Module`/`forward`/`DataLoader`), while delegation markers dominate (1 `Trainer`, 4 fit/train/save calls, 3 `AutoModel.from_pretrained`, 1 data collator, 30 function-scope lazy imports), so the verdict is IMPLEMENTS-PRIMITIVES. The zero went stale because the RL subpackage landed after that census and the exempted wording could not flag it (#508); `src/` still holds real decision logic where it previously held none.
