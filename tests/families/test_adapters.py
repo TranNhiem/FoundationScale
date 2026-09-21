@@ -172,7 +172,7 @@ def test_prefix_matching_does_not_match_a_sibling_by_string_prefix() -> None:
         name="sibling",
         model_types=("x",),
         language_prefixes=("model.layers",),
-        tower_prefixes=(),
+        towers=(),
         adapter_leaf_modules=("q_proj",),
         expert_count_path=(),
     )

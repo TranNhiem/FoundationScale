@@ -136,7 +136,7 @@ def test_duplicate_claim_is_rejected_at_registration() -> None:
         name="a",
         model_types=("shared_type",),
         language_prefixes=("model.layers",),
-        tower_prefixes=(),
+        towers=(),
         adapter_leaf_modules=("q_proj",),
         expert_count_path=(),
     )
@@ -144,7 +144,7 @@ def test_duplicate_claim_is_rejected_at_registration() -> None:
         name="b",
         model_types=("shared_type",),
         language_prefixes=("model.layers",),
-        tower_prefixes=(),
+        towers=(),
         adapter_leaf_modules=("q_proj",),
         expert_count_path=(),
     )
@@ -158,7 +158,7 @@ def test_overlapping_language_and_tower_prefixes_are_rejected() -> None:
             name="overlapping",
             model_types=("x",),
             language_prefixes=("model",),
-            tower_prefixes=("model.vision_tower",),
+            towers=(("model.vision_tower", "image"),),
             adapter_leaf_modules=("q_proj",),
             expert_count_path=(),
         )
@@ -170,7 +170,7 @@ def test_reversed_overlap_is_also_rejected() -> None:
             name="reversed",
             model_types=("x",),
             language_prefixes=("model.language_model.layers",),
-            tower_prefixes=("model.language_model",),
+            towers=(("model.language_model", None),),
             adapter_leaf_modules=("q_proj",),
             expert_count_path=(),
         )
@@ -182,7 +182,7 @@ def test_load_bearing_fields_may_not_be_empty(field: str) -> None:
         "name": "empty",
         "model_types": ("x",),
         "language_prefixes": ("model.layers",),
-        "tower_prefixes": (),
+        "towers": (),
         "adapter_leaf_modules": ("q_proj",),
         "expert_count_path": (),
     }
@@ -196,7 +196,7 @@ def test_tower_prefixes_may_be_empty_because_some_families_have_no_towers() -> N
         name="text_only_family",
         model_types=("x",),
         language_prefixes=("model.layers",),
-        tower_prefixes=(),
+        towers=(),
         adapter_leaf_modules=("q_proj",),
         expert_count_path=(),
     )

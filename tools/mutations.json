@@ -527,5 +527,77 @@
       "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/families/adapters.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
       "must_survive": true
     }
+  ],
+  "families_corpus": [
+    {
+      "name": "families_corpus.existence-never-checked",
+      "what": "Media resolution counts how many referenced paths EXIST, and announces that count precisely because existence is not decodability -- 120 of 559 measured estate images pass the existence check and fail PIL decode. Replacing the check with a constant makes the count always full, so the one number that tells an operator the corpus is thinner than it looks becomes a decoration. Nothing fails: the rows convert, the run trains, the announcement lies.",
+      "anchor": "        if candidate.exists():\n",
+      "replacement": "        if True:\n"
+    },
+    {
+      "name": "families_corpus.drop-threshold-never-enforced",
+      "what": "A declared max_drop_fraction is the caller saying how much silent loss is tolerable. Never enforcing it returns rc 0 on a corpus that dropped most of itself -- the exact vacuous success the house rules exist to forbid, and the measured #521 shape where an 8-key-set corpus trains on a subset unannounced.",
+      "anchor": "        if fraction > max_drop_fraction:\n",
+      "replacement": "        if False:\n"
+    },
+    {
+      "name": "families_corpus.media-existence-never-counted",
+      "what": "Zeroing the tally detaches the exists-only announcement from the data it summarises, so a corpus whose media is entirely missing announces the same thing as one whose media is entirely present.",
+      "anchor": "            media_exists += n_img + n_vid\n",
+      "replacement": "            media_exists += 0\n"
+    },
+    {
+      "name": "families_corpus.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is families_corpus's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "    inspected = 0\n",
+      "replacement": "    inspected = 0  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/families/corpus.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
+    }
+  ],
+  "families_towers": [
+    {
+      "name": "families_towers.unregistered-family-silently-answered",
+      "what": "Dormancy for a family nobody declared is unknowable. Guessing it -- in either direction -- is what made every multi-rank qwen3.5 run abort on first backward (#523). Disabling the refusal returns a confident answer for a family that was never measured, which is indistinguishable from a measured one at the call site.",
+      "anchor": "    if family is None:\n",
+      "replacement": "    if False:\n"
+    },
+    {
+      "name": "families_towers.every-tower-counts-as-exercised",
+      "what": "The predicate is true iff some declared modality tower is NOT exercised by this run. Inverting the membership test makes an exercised tower read as dormant and a dormant one as exercised, so DDP is told to tolerate unused parameters on runs that have none and to be strict on the runs that do -- the second of which is the abort this module exists to prevent.",
+      "anchor": "    return any(modality not in declared for _, modality in family.tower_modalities)\n",
+      "replacement": "    return any(modality in declared for _, modality in family.tower_modalities)\n"
+    },
+    {
+      "name": "families_towers.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is families_towers's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "    declared = set(declared_modalities)\n",
+      "replacement": "    declared = set(declared_modalities)  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/families/towers.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
+    }
+  ],
+  "train_sdp_backend": [
+    {
+      "name": "train_sdp_backend.pin-leaves-every-backend-enabled",
+      "what": "The four SDPA toggles are a permissive mask: torch still chooses per shape among everything left enabled. Enabling the declared backend without disabling the other three is therefore not a pin at all, and the run proceeds looking pinned while the dispatcher keeps choosing -- which is precisely the unrecorded backend selection #526 measured as worth up to 94% of the loss.",
+      "anchor": "        getattr(cuda_backends, toggle)(name == backend)\n",
+      "replacement": "        getattr(cuda_backends, toggle)(True)\n"
+    },
+    {
+      "name": "train_sdp_backend.unpinned-recorded-as-measured",
+      "what": "When no backend is declared the manifest must record the axis as unmeasured, carrying the reason as its value. Recording it as 'measured' asserts that this process established which backend ran when it established nothing -- turning the one field that makes two runs comparable into a fabrication.",
+      "anchor": "    return UNPINNED_REASON, \"unmeasured\"\n",
+      "replacement": "    return UNPINNED_REASON, \"measured\"\n"
+    },
+    {
+      "name": "train_sdp_backend.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is train_sdp_backend's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "    others = \", \".join(sorted(SDP_BACKEND_TOGGLES.keys() - {backend}))\n",
+      "replacement": "    others = \", \".join(sorted(SDP_BACKEND_TOGGLES.keys() - {backend}))  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/train/sdp_backend.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
+    }
   ]
 }

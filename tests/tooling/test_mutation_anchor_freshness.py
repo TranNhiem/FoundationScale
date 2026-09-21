@@ -70,15 +70,15 @@ ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml"
 MUTATE_PY = ROOT / "tools" / "mutate.py"
 MUTATIONS_JSON = ROOT / "tools" / "mutations.json"
 
-JSON_ROWS, JSON_MODS = 79, 10
+JSON_ROWS, JSON_MODS = 89, 13
 EMBEDDED_ROWS, EMBEDDED_MODS = 9, 1
-TOTAL_ROWS, TOTAL_MODS = 88, 11
+TOTAL_ROWS, TOTAL_MODS = 98, 14
 # Rows are the corpus denominator; distinct (module, anchor) pairs are the
 # DISTINGUISHABILITY denominator. They differ because `core` publishes 9 rows
 # over 6 anchors, so a green verdict there resolves the anchor set and cannot
 # say which of the aliased rows a state carries. Pinned so neither figure can
 # be quoted as the other.
-DISTINCT_ANCHORS = 85
+DISTINCT_ANCHORS = 95
 # Row-shape counts are pins, not prose trivia. They are the reason the
 # insertion composition control and deletion exactly-once control exercise
 # real shipped shapes. Do not set either pin to 0 merely to pass after a

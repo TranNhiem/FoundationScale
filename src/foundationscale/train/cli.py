@@ -229,6 +229,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--sdp-backend",
+        choices=("flash", "mem_efficient", "cudnn", "math"),
+        default=None,
+        help=(
+            "SDPA backend pinned process-globally at model load. Same "
+            "family as --attn-implementation: binds at load, not on "
+            "TrainingArguments. Measured on GB200 (#526/#527): the "
+            "backend torch picked silently was load-bearing -- DP=4 "
+            "train_loss differed run-to-run by up to 94%% -- and was "
+            "neither pinned nor recorded. Refused (96) if this torch "
+            "build lacks the toggle. Omit: torch decides per shape "
+            "(legitimate, today's default) and the manifest records "
+            "the axis UNMEASURED with the reason, never silently"
+        ),
+    )
+    p.add_argument(
         "--lr-scheduler-type",
         default=None,
         help=(
@@ -513,6 +529,7 @@ def _build_config(argv: Sequence[str] | None, args: argparse.Namespace) -> Train
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         max_grad_norm=args.max_grad_norm,
         attn_implementation=args.attn_implementation,
+        sdp_backend=args.sdp_backend,
         lr_scheduler_type=args.lr_scheduler_type,
         warmup_steps=args.warmup_steps,
         logging_steps=args.logging_steps,

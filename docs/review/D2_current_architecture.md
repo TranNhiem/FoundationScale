@@ -44,7 +44,7 @@ flowchart TB
   OK["Operator or bash continues"]
   NO["Operator blocks or remediates"]
 
-  PKG["[installed foundationscale package]<br/>44,971 LOC / 57 files<br/>verification plane + delegating train/ (4,724 LOC)<br/>few owned primitives (RL backward/step, 2 collectives); main step loop rented from transformers.Trainer"]
+  PKG["[installed foundationscale package]<br/>46,119 LOC / 60 files<br/>verification plane + delegating train/ (4,724 LOC)<br/>few owned primitives (RL backward/step, 2 collectives); main step loop rented from transformers.Trainer"]
 
   O --> PF
   O --> L
@@ -84,7 +84,7 @@ flowchart TB
 
 ### What the diagram establishes — and what it deliberately does not
 
-- The operational plane is shell and tool-heavy: `launchers/` contains 13,008 shell LOC plus 1,615 Python LOC, while `tools/` contains 9,979 Python LOC. `validation_campaigns/h100_validation/` adds another 34,169 Python LOC and 6,706 shell LOC.
+- The operational plane is shell and tool-heavy: `launchers/` contains 13,008 shell LOC plus 1,615 Python LOC, while `tools/` contains 9,988 Python LOC. `validation_campaigns/h100_validation/` adds another 34,169 Python LOC and 6,706 shell LOC.
 - The installed package is consumed by tools, but the measured `run_event` call-site count is **0 in both `tools/` and `validation_campaigns/h100_validation/`**. No evidence shows an actual trainer firing the lifecycle engine.
 - The package's three-line `__init__.py` exports nothing, so there is still no top-level public surface. The production save-gate decision function `adjudicate_checkpoint` **is now importable** from `foundationscale.gates.adjudication` (moved during this review, T2#0), but it is reachable only by its fully-qualified submodule path, and 60 private names still cross the boundary through the `tools/live_save_gate.py` compatibility shim.
 - There is **no load-side path after saving**: the `Lifecycle` enum has no `RESUME`, `LOAD`, `BEFORE_LOAD`, or `RESTORE` member.
@@ -96,11 +96,11 @@ The census reports counts per importing area, not unique dependencies or a file-
 
 ```mermaid
 flowchart TB
-  TESTS["tests/<br/>158 Python files / 68,068 LOC"]
-  TOOLS["tools/<br/>31 Python files / 9,979 LOC"]
-  SRC["src/ as importer<br/>57 Python files / 44,971 LOC"]
+  TESTS["tests/<br/>166 Python files / 69,628 LOC"]
+  TOOLS["tools/<br/>31 Python files / 9,988 LOC"]
+  SRC["src/ as importer<br/>60 Python files / 46,119 LOC"]
 
-  FS["src/foundationscale<br/>57 Python files / 44,971 LOC<br/>root __init__.py exports nothing"]
+  FS["src/foundationscale<br/>60 Python files / 46,119 LOC<br/>root __init__.py exports nothing"]
 
   GATES["gates/<br/>9 files / 10,059 LOC"]
   CKPT["checkpoint/<br/>3 files / 2,199 LOC"]
@@ -110,9 +110,9 @@ flowchart TB
   INTEG["integrate.py<br/>1 file / 54 LOC"]
   ROOT["root __init__.py<br/>1 file / 3 LOC"]
 
-  TESTS -->|"327 Python import statements"| FS
+  TESTS -->|"345 Python import statements"| FS
   TOOLS -->|"14 Python import statements"| FS
-  SRC -->|"150 Python import statements, source not disaggregated"| FS
+  SRC -->|"156 Python import statements, source not disaggregated"| FS
 
   FS -->|"contains"| GATES
   FS -->|"contains"| CKPT
@@ -196,4 +196,4 @@ There is no verified end-to-end trace of a generated trainer run, so an unqualif
 
 The training payload has no measured in-process call into `Lifecycle.SAVE` or `run_event`. Consequently, the current architecture is **save-side verification around an estate training path**, not yet a model-agnostic FoundationScale trainer with verification built into its runtime.
 
-> **Census correction (applied post-draft).** This document was written against a census of 13,667 lines in `src/foundationscale/`. The T2 library/script boundary move has since relocated the 2,546-line checkpoint-decision API from `tools/live_save_gate.py` into `src/foundationscale/gates/adjudication.py`, and the fixes landed since have added the rest; `src/foundationscale/` now measures **44,971 lines**. Re-measured after the move over 52 git-tracked `src/*.py`, the structural finding is REFRAMED: axis A is nonzero (1 `backward()`, 3 `optimizer.step()`, 2 module-scope torch imports, 2 `dist.all_reduce` collectives; 0 `nn.Module`/`forward`/`DataLoader`), while delegation markers dominate (1 `Trainer`, 4 fit/train/save calls, 3 `AutoModel.from_pretrained`, 1 data collator, 30 function-scope lazy imports), so the verdict is IMPLEMENTS-PRIMITIVES. The zero went stale because the RL subpackage landed after that census and the exempted wording could not flag it (#508); `src/` still holds real decision logic where it previously held none.
+> **Census correction (applied post-draft).** This document was written against a census of 13,667 lines in `src/foundationscale/`. The T2 library/script boundary move has since relocated the 2,546-line checkpoint-decision API from `tools/live_save_gate.py` into `src/foundationscale/gates/adjudication.py`, and the fixes landed since have added the rest; `src/foundationscale/` now measures **46,119 lines**. Re-measured after the move over 52 git-tracked `src/*.py`, the structural finding is REFRAMED: axis A is nonzero (1 `backward()`, 3 `optimizer.step()`, 2 module-scope torch imports, 2 `dist.all_reduce` collectives; 0 `nn.Module`/`forward`/`DataLoader`), while delegation markers dominate (1 `Trainer`, 4 fit/train/save calls, 3 `AutoModel.from_pretrained`, 1 data collator, 30 function-scope lazy imports), so the verdict is IMPLEMENTS-PRIMITIVES. The zero went stale because the RL subpackage landed after that census and the exempted wording could not flag it (#508); `src/` still holds real decision logic where it previously held none.

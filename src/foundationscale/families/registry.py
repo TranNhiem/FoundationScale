@@ -39,11 +39,21 @@ from dataclasses import dataclass
 from typing import Any
 
 __all__ = [
+    "KNOWN_MODALITIES",
     "REGISTRY",
     "FamilySpec",
     "resolve_family",
     "unregistered_family_reason",
 ]
+
+
+# The modality vocabulary lives HERE, not in the training loop: the families
+# package must validate its own registrations without importing from train.
+# The loop passes its declared modality set in when it asks about dormancy, so
+# a wider loop vocabulary is a caller concern, not a registration error --
+# but a tower paired with a modality string nobody anywhere can produce is a
+# typo ("img") that would silently mark a tower dormant forever.
+KNOWN_MODALITIES: frozenset[str] = frozenset({"image", "audio"})
 
 
 @dataclass(frozen=True)
@@ -67,9 +77,14 @@ class FamilySpec:
     language_prefixes: tuple[str, ...]
     """Qualified-name prefixes under which the language tower lives."""
 
-    tower_prefixes: tuple[str, ...]
-    """Qualified-name prefixes of every NON-language tower. May be empty, which
-    means the family declares none -- not that none was looked for."""
+    towers: tuple[tuple[str, str | None], ...]
+    """Each non-language tower as ``(dotted_prefix, modality)``. ``modality`` is
+    the input modality that exercises the tower, or ``None`` when the submodule
+    is merely out of adapter scope (qwen3.5's ``mtp`` head) and no declaration
+    can ever exercise it. Pairing prefix-with-modality in ONE structure is the
+    single source of truth: two parallel tuples can silently disagree when one
+    is edited and the other is not. May be empty -- which means the family
+    declares no non-language towers, not that none was looked for."""
 
     adapter_leaf_modules: tuple[str, ...]
     """Leaf module names an adapter may wrap, scoped by the prefixes above."""
@@ -82,15 +97,33 @@ class FamilySpec:
     empty for a family that never declares experts."""
 
     def __post_init__(self) -> None:
-        for field in ("name",):
-            if not getattr(self, field):
-                raise ValueError(f"FamilySpec.{field} must be non-empty")
+        if not self.name:
+            raise ValueError("FamilySpec.name must be non-empty")
         for field in ("model_types", "language_prefixes", "adapter_leaf_modules"):
             if not getattr(self, field):
                 raise ValueError(
                     f"FamilySpec.{field} must be non-empty: a family that declares no "
                     f"{field} cannot be resolved or scoped, and an empty tuple would "
                     "make every lookup silently miss rather than loudly refuse"
+                )
+        seen: set[str] = set()
+        for prefix, modality in self.towers:
+            if not prefix:
+                raise ValueError(f"FamilySpec {self.name!r} declares a tower with an empty prefix")
+            # A duplicated prefix makes dormancy and scoping answers depend on
+            # which registration entry happened to be read first.
+            if prefix in seen:
+                raise ValueError(
+                    f"FamilySpec {self.name!r} declares tower prefix {prefix!r} twice; "
+                    "each prefix may appear in exactly one (prefix, modality) pair"
+                )
+            seen.add(prefix)
+            if modality is not None and modality not in KNOWN_MODALITIES:
+                raise ValueError(
+                    f"FamilySpec {self.name!r} pairs tower {prefix!r} with unknown "
+                    f"modality {modality!r}; known modalities are "
+                    f"{sorted(KNOWN_MODALITIES)}. Use None for a submodule that is "
+                    "merely out of adapter scope rather than exercised by a modality"
                 )
         # A language prefix that is a prefix of a tower prefix (or the reverse)
         # makes scoping ambiguous: a module could be simultaneously in and out of
@@ -106,6 +139,25 @@ class FamilySpec:
                         "evaluation order rather than on the declaration"
                     )
 
+    @property
+    def tower_prefixes(self) -> tuple[str, ...]:
+        """Every non-language tower prefix, including out-of-scope-only ones.
+
+        Derived, not stored, so adapters.py keeps reading exactly what it read
+        before and ``mtp`` still keeps the adapter out of the head.
+        """
+        return tuple(prefix for prefix, _ in self.towers)
+
+    @property
+    def tower_modalities(self) -> tuple[tuple[str, str], ...]:
+        """Only the towers a modality exercises; ``mtp``-style entries excluded.
+
+        This is the set dormancy analysis keys on. A ``None``-modality prefix
+        must not appear here: treating a lookahead head as an unexercised
+        modality tower would conflate two genuinely different sets.
+        """
+        return tuple((p, m) for p, m in self.towers if m is not None)
+
 
 REGISTRY: tuple[FamilySpec, ...] = (
     FamilySpec(
@@ -116,7 +168,11 @@ REGISTRY: tuple[FamilySpec, ...] = (
         # on the set and not on a vendor name.
         model_types=("gemma4", "gemma4_text", "gemma4_unified", "gemma4_unified_text"),
         language_prefixes=("model.language_model",),
-        tower_prefixes=("model.vision_tower", "model.audio_tower", "model.embed_vision"),
+        towers=(
+            ("model.vision_tower", "image"),
+            ("model.audio_tower", "audio"),
+            ("model.embed_vision", "image"),
+        ),
         adapter_leaf_modules=(
             "q_proj",
             "k_proj",
@@ -137,10 +193,14 @@ REGISTRY: tuple[FamilySpec, ...] = (
         # the same checkpoint, so declaring only one would make the selector
         # silently empty under the other load path.
         language_prefixes=("model.language_model", "model.layers"),
-        # No audio tower -- Qwen3.5 carries `vision_config` only -- and an `mtp`
-        # multi-token-prediction head that Gemma4 has no analogue for. Listing it
-        # here is what keeps an adapter out of it.
-        tower_prefixes=("model.visual", "mtp"),
+        # `model.visual` is the vision tower (image-exercised). `mtp` is NOT a
+        # modality tower: no input declaration exercises it; the None is what
+        # keeps it out of tower_modalities while tower_prefixes keeps the
+        # adapter out of the head.
+        towers=(
+            ("model.visual", "image"),
+            ("mtp", None),
+        ),
         adapter_leaf_modules=(
             "q_proj",
             "k_proj",

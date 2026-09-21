@@ -37,6 +37,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from foundationscale.families import plan_adapter_targets, torch_linear_predicate
+from foundationscale.families.registry import resolve_family
+from foundationscale.families.towers import resolve_module_path
 from foundationscale.gates.core import (
     REGISTRY,
     GateRegistry,
@@ -275,13 +277,33 @@ UNTRAINABLE_MODALITIES: tuple[tuple[str, str], ...] = (
 # plane declared audio untrainable and then hardcoded the flag that makes an
 # untrainable tower fatal, so EVERY multi-rank run on an omni checkpoint aborted
 # on the first backward pass.
-_MODALITY_TOWERS: tuple[tuple[str, str], ...] = (
-    ("vision_tower", "image"),
-    ("audio_tower", "audio"),
-)
+def _family_config_mapping(model: Any) -> Mapping[str, Any]:
+    """The model's config as a plain mapping, or an empty one if it cannot be read.
+
+    Never raises. Family resolution is an ENRICHMENT of the DDP decision below,
+    not a precondition for training, so a config this function cannot read must
+    degrade to "family unknown" -- which already has an announced path -- rather
+    than take down a run that would otherwise have worked. The shapes differ by
+    provenance: transformers configs expose ``to_dict()``, a few wrappers are
+    already mappings, and test doubles are neither.
+    """
+    config = getattr(model, "config", None)
+    if config is None:
+        return {}
+    to_dict = getattr(config, "to_dict", None)
+    if callable(to_dict):
+        try:
+            produced = to_dict()
+        except Exception:  # noqa: BLE001 - any config failure means "unknown", not "abort"
+            return {}
+        if isinstance(produced, Mapping):
+            return produced
+    if isinstance(config, Mapping):
+        return config
+    return {}
 
 
-def _dormant_modality_towers(model: Any, *, image_declared: bool) -> list[str]:
+def _dormant_modality_towers(model: Any, *, family: Any, image_declared: bool) -> list[str]:
     """Towers PRESENT on ``model`` that this run's declaration cannot exercise.
 
     Keyed on the DECLARATION and on the loaded module tree -- never on the data,
@@ -291,22 +313,41 @@ def _dormant_modality_towers(model: Any, *, image_declared: bool) -> list[str]:
     (audio dormant), and a plain LLM where nothing is dormant and a genuinely
     unused parameter must still be reported by DDP rather than tolerated.
 
-    Returns the attribute names, in declaration order, so the announcement names
+    WHY THE TABLE IS GONE (#523). This used to walk a two-row literal naming
+    ``vision_tower`` and ``audio_tower`` as bare attributes. That table was a
+    second, silent family registry: it knew Gemma4's spelling and nothing else,
+    so on qwen3.5 -- whose tower is ``model.visual`` -- it found no towers, left
+    the flag False, and every multi-rank run aborted on the first backward. The
+    towers are now read from the family's own declaration, which is the whole
+    point of the registry: adding a family is a registration, not an edit here.
+
+    A ``None`` modality (qwen3.5's ``mtp`` head) is skipped: it is out of adapter
+    scope but it is not a tower any declaration could exercise, so it must not
+    force the flag on its own.
+
+    WHY THE ROOT IS STILL PROBED. The declared path is authoritative, but the code
+    it replaced also looked for the bare attribute on the model root, and that was
+    not an accident: the SAME checkpoint exposes different roots under different
+    auto-classes -- the measured reason ``qwen3.5`` has to declare TWO language
+    prefixes. Dropping the root probe would therefore have been a silent
+    regression on exactly the load path nobody tests. So the declared path is
+    tried first and the final segment is tried at the root only as a fallback.
+
+    Returns the declared paths, in declaration order, so the announcement names
     the towers rather than merely admitting that some exist.
     """
+    if family is None:
+        return []
     exercised = {"image"} if image_declared else set()
     dormant: list[str] = []
-    for attr, modality in _MODALITY_TOWERS:
-        if modality in exercised:
+    for path, modality in family.towers:
+        if modality is None or modality in exercised:
             continue
-        tower = getattr(model, attr, None)
-        if tower is None:
-            # Composite VLMs nest the towers one level down under `.model`, the
-            # same shape that defeats a flat getattr on expert counts.
-            inner = getattr(model, "model", None)
-            tower = getattr(inner, attr, None) if inner is not None else None
-        if tower is not None:
-            dormant.append(attr)
+        found = resolve_module_path(model, path) is not None
+        if not found:
+            found = getattr(model, path.rsplit(".", 1)[-1], None) is not None
+        if found:
+            dormant.append(path)
     return dormant
 
 
@@ -557,6 +598,19 @@ class TrainConfig:
     # older releases route it through opaque **kwargs where a misspelt or
     # unsupported name is silently ignored. Never passed when None.
     attn_implementation: str | None = None
+    # sdp_backend declares which of torch's four SDPA kernels this process
+    # may run. It exists because of a measurement, not a preference: on
+    # GB200 (#526/#527) the backend torch silently selected was
+    # load-bearing -- DP=4 end-to-end train_loss differed run-to-run by up
+    # to 94% on gemma-4-31B/26B-A4B while DP=1 was bit-reproducible -- and
+    # the choice was neither pinned nor RECORDED, so two runs could not be
+    # compared on the axis that was flipping. Like attn_implementation it
+    # binds at model load via process-global torch toggles, never on
+    # TrainingArguments, and it REFUSES (96) a backend this torch build
+    # cannot toggle. None means "torch decides per shape": legitimate,
+    # today's default, ANNOUNCED at bind time, and recorded
+    # unmeasured-with-reason rather than silently.
+    sdp_backend: str | None = None
     lr_scheduler_type: str | None = None
     warmup_steps: int | None = None
     # Declarable only -- there is NO wiring behind these two. sharding_strategy
@@ -2406,6 +2460,10 @@ def _manifest_payload(
             "max_grad_norm": cfg.max_grad_norm,
             "gradient_checkpointing": cfg.gradient_checkpointing,
             "attn_implementation": cfg.attn_implementation,
+            # Declared and recorded unconditionally like its neighbours;
+            # whether the declaration BECAME a pin is outcome, so that
+            # reading is telemetry, not config (#526/#527).
+            "sdp_backend": cfg.sdp_backend,
             "lr_scheduler_type": cfg.lr_scheduler_type,
             "warmup_steps": cfg.warmup_steps,
             "logging_steps": cfg.logging_steps,
@@ -3038,6 +3096,29 @@ def _build_run_manifest(
         )
         for key, (value, source) in (telemetry or {}).items()
     }
+    # sdp_backend is recorded on EVERY manifest (#526/#527): an axis the
+    # reader cannot see is an axis that never happened. "measured" is
+    # permitted only when THIS process demonstrably applied the pin --
+    # the binding site writes FS_SDP_BACKEND_PINNED strictly after all
+    # four toggles land, so the cell cannot outlive a pin that did not
+    # take (the FS_ATTEMPT audit-channel precedent at the return below).
+    # Otherwise source is "unmeasured" and value carries the reason
+    # string, never None, per the TelemetryEntry contract. setdefault
+    # lets the REFUSE-96 manifest override with a more precise reason.
+    # Imported at point of use so the pin logic stays importable -- and
+    # testable -- without this module's heavyweight dependency stack.
+    from foundationscale.train.sdp_backend import sdp_backend_telemetry_pair
+
+    _sdp_value, _sdp_source = sdp_backend_telemetry_pair(os.environ.get("FS_SDP_BACKEND_PINNED"))
+    telemetry_section.setdefault(
+        "sdp_backend",
+        TelemetryEntry(
+            key="sdp_backend",
+            value=_sdp_value,
+            source=_sdp_source,
+            unit=None,
+        ),
+    )
     return RunManifest(
         run_id=_run_id(cfg),
         attempt=int(os.environ.get("FS_ATTEMPT", "1")),
@@ -3511,6 +3592,46 @@ def _train(cfg: TrainConfig) -> int:
     model_kwargs: dict[str, Any] = {}
     if cfg.attn_implementation is not None:
         model_kwargs["attn_implementation"] = cfg.attn_implementation
+    # sdp_backend (#526/#527) binds HERE, beside attn_implementation and
+    # before from_pretrained, because the defect it prevents is
+    # load-path-relative: the toggles are a process-global mask that must
+    # be set before the loader runs any kernel-selection probing. None is
+    # a legitimate choice -- today's default -- so it ANNOUNCES rather
+    # than refuses; a named backend this torch build cannot toggle
+    # REFUSES (96) instead of running unpinned under a declaration that
+    # says pinned, the exact trust-restoring failure the finding
+    # measured. The import sits at the use point so that
+    # train.sdp_backend stays loadable -- and testable -- without
+    # loop.py's dependency stack.
+    from foundationscale.train.sdp_backend import (
+        apply_sdp_pin,
+        sdp_pin_refusal_reason,
+        sdp_pinned_announcement,
+        sdp_unpinned_announcement,
+    )
+
+    if cfg.sdp_backend is not None:
+        _sdp_reason = sdp_pin_refusal_reason(
+            cfg.sdp_backend,
+            torch.backends.cuda,
+            getattr(torch, "__version__", "unknown"),
+        )
+        if _sdp_reason is not None:
+            _mark(Step.REFUSE, _sdp_reason)
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={"exit": EXIT_REFUSE, "sdp_backend": cfg.sdp_backend},
+                telemetry={"sdp_backend": (_sdp_reason, "unmeasured")},
+            )
+            return EXIT_REFUSE
+        apply_sdp_pin(cfg.sdp_backend, torch.backends.cuda)
+        # Pin-state is written strictly AFTER the toggles land; from this
+        # line on, _emit_manifest may honestly call the axis "measured".
+        os.environ["FS_SDP_BACKEND_PINNED"] = cfg.sdp_backend
+        print(sdp_pinned_announcement(cfg.sdp_backend))
+    else:
+        print(sdp_unpinned_announcement())
     # Bind the declared precision at construction. The spelling is `dtype`, and
     # that is MEASURED rather than read off a changelog: on transformers 5.13.0
     # both `dtype` and `torch_dtype` produce torch.float32 and the latter warns
@@ -3983,7 +4104,24 @@ def _train(cfg: TrainConfig) -> int:
     # tell DDP to expect them. Announcing is half the fix: a run that carries
     # untrained towers should say so, because "trained a multimodal model" and
     # "carried two thirds of one unchanged" are different claims.
-    _dormant_towers = _dormant_modality_towers(model, image_declared=IMAGE_COLUMN is not None)
+    _family = resolve_family(_family_config_mapping(model))
+    _dormant_towers = _dormant_modality_towers(
+        model, family=_family, image_declared=IMAGE_COLUMN is not None
+    )
+    if _family is None:
+        # Deliberately NOT a refusal. Dormancy is unknowable for an unregistered
+        # family, but the run is otherwise fine and refusing here would stop a
+        # working text-only run on an unregistered checkpoint. The safe direction
+        # is DDP's strict default: a genuinely unused parameter still aborts
+        # loudly, and the operator is told the axis was not measured.
+        _mark(
+            Step.VALIDATED,
+            "[   ok] modality.dormant_towers: UNMEASURED -- no registered family "
+            "claims this checkpoint's model_type, so which submodules are towers "
+            "has never been declared. ddp_find_unused_parameters stays False "
+            "(strict); if this model carries an unexercised tower, the first "
+            "backward will abort and the fix is a FamilySpec registration",
+        )
     if _dormant_towers:
         kwargs["ddp_find_unused_parameters"] = True
         _mark(

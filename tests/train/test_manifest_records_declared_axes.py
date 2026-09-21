@@ -166,6 +166,10 @@ _DECLARATION_TOKENS: dict[str, tuple[str, object, str]] = {
     "warmup_steps": ("4", 4, "4"),
     "sharding_strategy": ("ddp", "ddp", "ddp"),
     "cpu_optimizer_offload": ("false", False, "False"),
+    # sdp_backend is choice-constrained (#527), so the generic synthetic-<axis>
+    # token argparse would otherwise receive is rejected at parse time. Pinning
+    # a real backend keeps this axis in the round-trip rather than out of it.
+    "sdp_backend": ("math", "math", "math"),
 }
 
 

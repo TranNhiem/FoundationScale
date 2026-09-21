@@ -57,6 +57,7 @@ What this module does about it
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 from collections.abc import Mapping, MutableMapping, Sequence
@@ -1117,3 +1118,231 @@ def partition_consistency(files: Mapping[str, str]) -> Finding:
         },
         control=_GREP_POSITIVE_CONTROLS,
     )
+
+
+class DiscoveryVerdict(Enum):
+    """Typed discriminator for the shape of a discovery outcome.
+
+    WHY AN ENUM, NOT A STRING OR A PROSE LINE. The exit contract (rc 0/5/95/96)
+    is mapped from this value by the caller, so the four outcome shapes must be
+    distinguishable BY TYPE -- substring-matching announcement English to tell
+    UNMEASURED from "no IB present" is the silent-wrong-answer defect relocated
+    one layer up: both return an empty selection, both formerly spoke prose,
+    and only one of them is safe to treat as a refusal.
+    """
+
+    OK = "ok"  # devices interrogated; selection is a measurement (may be empty
+    # only via NONE_SURVIVED, never here).
+    DECLARED_NONE = "declared_none"  # profile declared no pattern; rc 0 eligible.
+    NO_MATCH = "no_match"  # surface readable, glob matched nothing; rc 5 refusal.
+    NONE_SURVIVED = "none_survived"  # matched, but fabric/state rejected all; rc 5.
+    UNMEASURED = "unmeasured"  # cannot look; rc 95, NOT confusable with no-match.
+
+
+def discover_ib_devices(
+    pattern: str, sysfs_root: Path
+) -> tuple[tuple[str, ...], DiscoveryVerdict, tuple[str, ...]]:
+    """Resolve a profile HCA glob against sysfs; report every device considered.
+
+    WHY THIS EXISTS (#520). ``ClusterProfile.ib_hca_pattern`` ships as the shell
+    glob ``mlx5_*``. NCCL_IB_HCA is a comma-separated PREFIX list and does not
+    glob, so the field could never be exported verbatim, and reducing it to the
+    bare prefix ``mlx5`` is a MEASURED regression: on the GB200 estate
+    ``mlx5_0,1,4,5`` are InfiniBand 400 Gb/s NDR and ACTIVE, while
+    ``mlx5_2,3,6,7`` are Ethernet 200 Gb/s bond0 members. A bare ``mlx5``
+    selects EIGHT devices of which only FOUR are on the job's fabric. The old
+    code refused to apply the field at all -- honest, but it left the operator
+    hand-exporting an answer the framework could simply measure. This function
+    is that measurement: resolve the glob at runtime, interrogate each match's
+    port, and select only what is provably InfiniBand and provably up.
+
+    NO SILENCE, IN EITHER DIRECTION. Every input produces a non-empty
+    announcement tuple, because on this fabric the cost of a quiet wrong answer
+    was a job pinned to the wrong network while the framework said nothing:
+
+    * An empty pattern is an explicit abstention (the profile declared none),
+      not an error, and says so -- verdict DECLARED_NONE.
+    * A missing or unlistable ``sysfs_root`` is UNMEASURED, not "no IB
+      matched" -- we cannot distinguish "no InfiniBand" from "cannot look",
+      and those two must not read alike, because only one of them is safe to
+      act on. "Unlistable" covers a root that is a plain file or a directory
+      the caller cannot descend: ``exists()`` says nothing about either.
+    * A match we cannot interrogate (OSError) is announced by name. A device we
+      could not read is never silently selected AND never silently dropped; a
+      vanished file mid-walk (a device can disappear between ``iterdir()`` and
+      ``read_text()``) is data, not a crash.
+    * Every matched device reports the actual ``link_layer`` and ``state``
+      strings read, selected or not, because "Ethernet" versus "InfiniBand" is
+      the entire finding -- a paraphrase would hide the defect.
+
+    SELECTION RULES. ``link_layer`` must be exactly ``InfiniBand`` after
+    stripping. ``state`` arrives as ``"4: ACTIVE"`` -- a numeric code, a colon,
+    a name -- so we parse that documented grammar (text after the final colon)
+    and require the NAME to equal ``ACTIVE``. A substring test is provably
+    wrong here: ``"ACTIVE" in "7: INACTIVE"`` is True, which would select a
+    port that is down at exactly the junction this module exists to prove.
+    Both reads come from ``ports/1``, and the prefix list this feeds pins port
+    1 (see ``_ib_hca_value``), so discovery and export always describe the
+    SAME port.
+
+    Args:
+        pattern: The profile's shell glob, e.g. ``"mlx5_*"``. Whitespace-only
+            counts as undeclared.
+        sysfs_root: The device directory to walk -- ``/sys/class/infiniband``
+            in production, a ``tmp_path`` tree under test. Passed in rather
+            than hardcoded so the function has no hidden dependency on the host.
+
+    Returns:
+        ``(selected, verdict, announcements)``: the surviving device names in
+        stable sorted order (``iterdir()`` order is filesystem-dependent;
+        announcements must be diffable between runs), the typed verdict so the
+        caller can map to rc 0/5/95 without parsing prose, then one line per
+        decision plus a final summary. If the glob matched devices but none
+        survived, the verdict is NONE_SURVIVED and a distinct loud line
+        precedes the summary: that shape means the pattern points at the wrong
+        fabric, which is the #520 defect itself, not a quiet miss.
+    """
+    cleaned = pattern.strip()
+    if not cleaned:
+        return (
+            (),
+            DiscoveryVerdict.DECLARED_NONE,
+            (
+                "ib_hca_pattern: the profile declared none (pattern is empty), so "
+                "no device was discovered and nothing is selected -- NCCL's own "
+                "interface selection stands",
+            ),
+        )
+
+    if not sysfs_root.exists():
+        return (
+            (),
+            DiscoveryVerdict.UNMEASURED,
+            (
+                f"ib_hca_pattern={cleaned!r}: discovery surface {sysfs_root} is "
+                f"ABSENT; this is UNMEASURED -- 'cannot look' is not the same "
+                f"observation as 'no IB device matched', and the two must not read "
+                f"alike. Selecting nothing.",
+            ),
+        )
+
+    try:
+        entries = sorted(sysfs_root.iterdir())
+    except OSError as exc:
+        # A root that exists but is a plain file, or a directory we cannot
+        # descend, is the same class of observation as a missing root: we
+        # could not look. Crashing here would break the "walk speaks or fails
+        # legibly" contract one directory-layout away from production.
+        return (
+            (),
+            DiscoveryVerdict.UNMEASURED,
+            (
+                f"ib_hca_pattern={cleaned!r}: discovery surface {sysfs_root} is "
+                f"UNREADABLE ({exc}); this is UNMEASURED -- 'cannot look' is not "
+                f"the same observation as 'no IB device matched'. Selecting "
+                f"nothing.",
+            ),
+        )
+
+    announcements: list[str] = []
+    selected: list[str] = []
+    matched = 0
+
+    for entry in entries:
+        name = entry.name
+        if not fnmatch.fnmatch(name, cleaned):
+            continue
+        matched += 1
+        port1 = entry / "ports" / "1"
+        try:
+            link_layer = (port1 / "link_layer").read_text(encoding="utf-8").strip()
+            state = (port1 / "state").read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            # One try covers both reads on purpose: whichever file failed, the
+            # device as a whole is uninterrogated, and half a reading (link
+            # layer known, state unknown) is not a sound basis to select on.
+            announcements.append(
+                f"{name}: UNREADABLE ({exc}); skipped -- a device we could not "
+                f"interrogate is neither silently selected nor silently dropped, "
+                f"and the walk continues"
+            )
+            continue
+
+        if link_layer != "InfiniBand":
+            announcements.append(
+                f"{name}: NOT selected -- link_layer={link_layer!r}, "
+                f"state={state!r}; only InfiniBand is on the job's fabric. The "
+                f"glob matched but the fabric did not: this is the #520 defect "
+                f"at single-device scale"
+            )
+            continue
+        # Parse the documented "4: ACTIVE" grammar and compare the NAME, not a
+        # substring: containment would let "7: INACTIVE" pass, selecting a port
+        # that is down.
+        state_name = state.rsplit(":", 1)[-1].strip().upper()
+        if state_name != "ACTIVE":
+            announcements.append(
+                f"{name}: NOT selected -- link_layer={link_layer!r}, "
+                f"state={state!r}; the port is not ACTIVE"
+            )
+            continue
+        selected.append(name)
+        announcements.append(f"{name}: SELECTED -- link_layer={link_layer!r}, state={state!r}")
+
+    if matched == 0:
+        verdict = DiscoveryVerdict.NO_MATCH
+        announcements.append(
+            f"LOUD: glob {cleaned!r} matched NO device under {sysfs_root}; "
+            f"this is a clean measurement of absence (rc 5 refusal), NOT "
+            f"UNMEASURED -- the surface was readable and spoke"
+        )
+    elif not selected:
+        verdict = DiscoveryVerdict.NONE_SURVIVED
+        announcements.append(
+            f"LOUD: glob {cleaned!r} matched {matched} device(s) but NONE "
+            f"survived -- the pattern is pointing at the wrong fabric, which is "
+            f"the #520 defect itself, not a quiet miss"
+        )
+    else:
+        verdict = DiscoveryVerdict.OK
+    announcements.append(
+        f"summary: {matched} matched glob {cleaned!r}, {len(selected)} "
+        f"survived; resulting prefix list: "
+        f"{','.join(f'{n}:1' for n in selected)!r}"
+    )
+    return tuple(selected), verdict, tuple(announcements)
+
+
+# --------------------------------------------------------------------------- #
+
+
+def _ib_hca_value(selected: tuple[str, ...]) -> str:
+    """Render the discovered devices as an NCCL_IB_HCA value.
+
+    WHY PORT 1 IS PINNED. NCCL accepts ``dev:port``, and discovery above read
+    port 1's ``link_layer`` and ``state``. Exporting a bare device name would
+    let NCCL pick ANY port -- including one whose fabric was never measured --
+    which would quietly reopen the exact over-match this whole exercise closed.
+    The ``:1`` suffix keeps the exported value pinned to the port that was
+    actually interrogated.
+
+    WHY EMPTY IS REFUSED, NOT RENDERED. An exported-but-empty NCCL_IB_HCA is
+    NOT the same variable as an unset one, and an advisory docstring does not
+    stop ``os.environ["NCCL_IB_HCA"] = _ib_hca_value(())``. Enforcement lives
+    here: rendering an empty selection raises, so "do not export" is a fact of
+    the type system of behaviour, not a hope. Callers must branch on the
+    DiscoveryVerdict first (OK renders; DECLARED_NONE / NO_MATCH /
+    NONE_SURVIVED / UNMEASURED must not reach this function).
+
+    Raises:
+        ValueError: If ``selected`` is empty -- there is nothing measured to
+            export, and an empty export is a configuration lie.
+    """
+    if not selected:
+        raise ValueError(
+            "refusing to render an empty NCCL_IB_HCA value: an exported-but-"
+            "empty variable is not the same as an unset one; call only on a "
+            "DiscoveryVerdict.OK selection and otherwise leave NCCL_IB_HCA "
+            "unset"
+        )
+    return ",".join(f"{name}:1" for name in selected)

@@ -213,6 +213,15 @@ MODULE_PATHS = {
     # lands rather than left PENDING.
     "families_registry": "src/foundationscale/families/registry.py",
     "families_adapters": "src/foundationscale/families/adapters.py",
+    # #521/#523/#527: same argument as the two rows above -- every defect in
+    # these three is SILENT. A mis-converted corpus still trains, a wrong
+    # dormancy answer still produces a run (or an abort nobody attributes to
+    # this file), and an SDPA pin that did not take still finishes with a loss
+    # curve. None of them has a failure mode an ordinary suite would notice, so
+    # they are enrolled with rows from the day they land rather than PENDING.
+    "families_corpus": "src/foundationscale/families/corpus.py",
+    "families_towers": "src/foundationscale/families/towers.py",
+    "train_sdp_backend": "src/foundationscale/train/sdp_backend.py",
 }
 
 _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")

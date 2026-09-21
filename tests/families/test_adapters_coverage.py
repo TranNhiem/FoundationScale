@@ -105,7 +105,7 @@ def test_first_integer_wins_for_moe_expert_paths() -> None:
         name="moe",
         model_types=("moe_test",),
         language_prefixes=("model.layers",),
-        tower_prefixes=(),
+        towers=(),
         adapter_leaf_modules=("gate_proj",),
         expert_count_path=(),
     )
@@ -131,7 +131,7 @@ def test_positions_with_nothing_adaptable_are_not_charged_to_the_declaration() -
         name="normyl",
         model_types=("norm_test",),
         language_prefixes=("model.layers",),
-        tower_prefixes=(),
+        towers=(),
         adapter_leaf_modules=("q_proj",),
         expert_count_path=(),
     )
@@ -156,7 +156,7 @@ def test_unindexed_language_prefix_is_unmeasurable_not_zero_of_zero() -> None:
         name="flat",
         model_types=("flat_test",),
         language_prefixes=("model.blocks",),
-        tower_prefixes=(),
+        towers=(),
         adapter_leaf_modules=("q_proj", "k_proj"),
         expert_count_path=(),
     )
@@ -183,7 +183,7 @@ def test_a_generator_is_consumed_exactly_once() -> None:
         name="gen",
         model_types=("gen_test",),
         language_prefixes=("model.layers",),
-        tower_prefixes=(),
+        towers=(),
         adapter_leaf_modules=("q_proj",),
         expert_count_path=(),
     )
@@ -208,7 +208,7 @@ def test_a_vision_tower_dilutes_neither_numerator_nor_denominator() -> None:
         name="vlm",
         model_types=("vlm_test",),
         language_prefixes=("model.language_model",),
-        tower_prefixes=("model.vision_tower",),
+        towers=(("model.vision_tower", "image"),),
         adapter_leaf_modules=("q_proj",),
         expert_count_path=(),
     )
