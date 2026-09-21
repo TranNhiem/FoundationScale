@@ -1488,7 +1488,20 @@ jobs:
     # per-mutant scope, because the battery's claim is "does ANY test in this
     # repo catch this mutation" and scoping the suite down would narrow the
     # claim while leaving the number looking the same.
-    timeout-minutes: 38
+    #
+    # Raised again 38 -> 75 with the inner deadline 30m -> 60m (#530), for the
+    # same reason one size up. #530 took `perf_telemetry` from 8 rows to 15,
+    # making it the largest shard (next is `manifest` at 11), and it crossed 30m
+    # having scored 10 of 15 -- every one of them killed, so the module was
+    # sound and only the wall was wrong. MEASURED from that run: baseline plus
+    # 10 all-killed rows = 21 suite runs in 30m, i.e. ~1.4 min per suite run, so
+    # 15 rows (2n+1 = 31 runs) needs ~44m. 60m is that plus room for the suite
+    # to keep growing, and 75m keeps the outer backstop the same ~1.25x behind
+    # the inner deadline that #356 chose. Nothing here is a judgement that 15
+    # rows is too many: the corpus is supposed to grow, and a deadline that
+    # forces rows to be split across invented module keys would encode a CI
+    # budget into the corpus taxonomy, which is the wrong place for it.
+    timeout-minutes: 75
     strategy:
       # Every shard reports. fail-fast would cancel the siblings of the first
       # red one, and a cancelled sibling is an unmeasured module wearing the
@@ -1535,12 +1548,12 @@ jobs:
         # which is exactly the "looks like something else" failure being fixed.
         run: |
           set +e
-          timeout --signal=INT --kill-after=60s 30m \
+          timeout --signal=INT --kill-after=60s 60m \
             python tools/mutate.py --module "${{ matrix.module }}"
           rc=$?
           set -e
           if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
-            echo "::error::mutation shard ${{ matrix.module }} exceeded its 30-minute deadline."
+            echo "::error::mutation shard ${{ matrix.module }} exceeded its 60-minute deadline."
             echo "::error::NOTHING WAS MEASURED for this module. This is exit 2 (never"
             echo "::error::measured), not a cancellation and not a pass: no mutant in"
             echo "::error::${{ matrix.module }} was scored, so no claim about it holds."
