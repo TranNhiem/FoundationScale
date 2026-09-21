@@ -545,6 +545,32 @@
         "#504"
       ],
       "adjudicator": "validation_campaigns/verification_matrix/t1_23_audio_declaration_arms.py"
+    },
+    {
+      "id": "T0-11",
+      "tier": 0,
+      "group": "performance and measurement",
+      "claim": "MFU/TFLOPs charge the ACTIVE routed experts, not the total expert count",
+      "run_arm": "build FlopsModel from the real Qwen3.5-35B-A3B and gemma-4-26B-A4B configs, and from a live module tree carrying BOTH expert storage layouts -- the indexed experts.<i> form and the fused, unindexed mlp.experts.gate_up_proj / .down_proj form",
+      "control_arm": "a DENSE model's flops_per_token must come out BIT-IDENTICAL to the pre-#529 value, not merely close, or every published dense number silently moves; the real gemma-4-31B config, which states num_experts: null, must stay on that dense path rather than being read as a Mixture-of-Experts model with an unknown count; and a model that declares experts but no per-token count must report UNMEASURED carrying its reason, never a dense number wearing a measured label",
+      "cost": "0 GPU -- config and module-tree arithmetic, seconds. The end-to-end MFU figure this feeds additionally needs a tray and a declared device peak.",
+      "status": "MEASURED GREEN on the formula (#529). The defect was real and large: FlopsModel charged 6 * total non-embedding parameters with no concept of routing, overstating MFU by the total/active ratio -- 6.51x on Qwen3.5-35B-A3B, measured, not estimated. Two of the three corrections came only from reading real checkpoints rather than reasoning about them. First, gemma-4-31B is DENSE and states num_experts: null, so a hasattr/key-presence test classifies it as MoE-with-unknown-count and destroys its MFU; the count must be keyed on the VALUE being a positive int, and bool is excluded because a flag is not a count. Second, and this one I shipped before catching it: the detector required an INDEXED experts.<i> segment, but the Qwen3.5-35B-A3B language model FUSES all 256 experts per layer into two unindexed stacked tensors -- 768 indexed tensors live under mtp. and ZERO under model. -- so the detector found 0 routed parameters in a model that is overwhelmingly experts by weight and the whole correction silently did nothing on the exact checkpoint it was written for. It matches the experts path SEGMENT now, and the test pins both layouts with the real tensor names. The shared expert is excluded because it runs for every token; on the measured checkpoint no tensor matches both patterns, so that guard is true by construction rather than by luck of naming, and the mutation row against it is a provably EQUIVALENT mutant rather than a test gap -- investigated, not papered over. Enrolled in the mutation battery in the same change, promoting perf/telemetry.py out of PENDING_ENROLMENT under the exit condition its own pending reason had named: 7 MUST-FIRE rows plus a MUST-PASS control. WHAT IS NOT MEASURED HERE: no end-to-end MFU number on hardware. The device peak is UNMEASURED until an operator declares it -- for this estate's GB200 that is 2,500 TFLOPS BF16 DENSE, not the 5,000 headline that includes sparsity -- and gemma-4-26B-A4B declares 128 experts with no per-token count under any spelling, so its MFU is now correctly UNMEASURED rather than 6x overstated. That is the right answer, not a complete one.",
+      "blocked_by": [],
+      "findings": [],
+      "adjudicator": null
+    },
+    {
+      "id": "T0-12",
+      "tier": 0,
+      "group": "performance and measurement",
+      "claim": "the suite's verdict does not depend on the order its files are collected in",
+      "run_arm": "run tests/provenance alone, then run it in the same process after tests/tooling, and compare the two verdicts",
+      "control_arm": "a green FULL-SUITE run must not be accepted as settling this: full-suite collection order happens to hide the pollution, so the ordered pair is the measurement and the full run is precisely the reading that must NOT be trusted here. The differential also has to be taken on a throwaway worktree of committed HEAD, or a failure in the working tree cannot be told apart from one the working tree introduced.",
+      "cost": "0 GPU, seconds",
+      "status": "MEASURED RED (#528), and PRE-EXISTING rather than introduced. tests/tooling leaves module state behind that makes tests/provenance fail when it runs afterwards, while the same files pass alone and the full suite passes end to end -- so the build is green for a reason that has nothing to do with the code being correct. Verified as pre-existing on a throwaway worktree of committed HEAD, which showed 5 such failures against 4 in the working tree at the time: the staged work did not cause it and does not depend on it. Recorded RED rather than fixed in the same pass, deliberately -- the fix is module-state hygiene in the tooling tests and belongs to its own change, and a defect that only appears under an ordering the suite does not currently exercise is exactly the kind that gets quietly absorbed if it is not written down first. No pytest-randomly or ordering job is wired yet, so nothing in CI would catch a regression of this class today; that gap is part of what this row records.",
+      "blocked_by": [],
+      "findings": [],
+      "adjudicator": null
     }
   ]
 }

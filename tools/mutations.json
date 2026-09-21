@@ -599,5 +599,57 @@
       "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/train/sdp_backend.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
       "must_survive": true
     }
+  ],
+  "perf_telemetry": [
+    {
+      "name": "perf_telemetry.charge-total-experts-not-active",
+      "what": "The #529 defect itself: zeroing the inactive term charges every routed expert on a Mixture-of-Experts model, so 6*N_total is billed where only the top-k experts ran. MFU is then overstated by the total/active ratio -- measured at 6.51x on Qwen3.5-35B-A3B. Nothing about the run changes shape: the units, the exit code and the report layout are identical, and the only symptom is a performance figure that flatters the framework.",
+      "anchor": "        inactive = self.routed_expert_parameters * (self.experts_total - self.experts_active)\n",
+      "replacement": "        inactive = 0\n"
+    },
+    {
+      "name": "perf_telemetry.expert-count-keyed-on-presence-not-value",
+      "what": "Reads the expert count by KEY PRESENCE instead of by value being a positive int. The measured gemma-4-31B config -- a DENSE model -- states num_experts: null, so a presence test classifies it as Mixture-of-Experts with an unknown count and destroys its MFU, reporting UNMEASURED for a model whose FLOPs are perfectly countable. Same failure shape as reading a composite config flatly, one level further in.",
+      "anchor": "        value = getattr(source, name, None)\n        if isinstance(value, bool) or not isinstance(value, int):\n            continue\n        if value > 0:\n            return value\n",
+      "replacement": "        if hasattr(source, name):\n            return 1\n"
+    },
+    {
+      "name": "perf_telemetry.routed-expert-walk-requires-an-index",
+      "what": "Restores the bug this detector was written with: requiring an INDEXED experts.<i> segment. The Qwen3.5-35B-A3B language model FUSES its 256 experts per layer into mlp.experts.gate_up_proj and mlp.experts.down_proj, carrying no index -- 768 indexed tensors live under mtp. and NONE under model. So the walk finds 0 routed parameters in a model that is overwhelmingly experts by weight, and the whole #529 correction silently does nothing on the exact checkpoint it was written for.",
+      "anchor": "    return \"experts\" in qualified_name.split(\".\")\n",
+      "replacement": "    parts = qualified_name.split(\".\")\n    return any(\n        p == \"experts\" and i + 1 < len(parts) and parts[i + 1].isdigit()\n        for i, p in enumerate(parts)\n    )\n"
+    },
+    {
+      "name": "perf_telemetry.routed-expert-walk-matches-substring",
+      "what": "Matches 'experts' as a SUBSTRING of the qualified name rather than as a path segment, so any parameter whose name merely contains the letters -- expertsy.gate_proj.weight, a future experts_router -- is scaled down by the routing fraction. That UNDERSTATES FLOPs and therefore OVERSTATES MFU, the direction this module is explicitly designed not to fail in.",
+      "anchor": "    return \"experts\" in qualified_name.split(\".\")\n",
+      "replacement": "    return \"experts\" in qualified_name\n"
+    },
+    {
+      "name": "perf_telemetry.missing-per-token-count-reported-as-dense",
+      "what": "Drops the refusal when a config declares experts but no per-token count. gemma-4-26B-A4B is exactly this case: 128 experts declared, no num_experts_per_tok / num_experts_per_token / top_k anywhere. Without the refusal the dense formula is reported as a measured number, overstating MFU by about 6x, where the honest answer is UNMEASURED with the reason attached.",
+      "anchor": "            if experts_active is None:\n                reason = (\n",
+      "replacement": "            if False:\n                reason = (\n"
+    },
+    {
+      "name": "perf_telemetry.bool-accepted-as-an-expert-count",
+      "what": "Lets a bool pass as an expert count. bool is an int subclass, so a config stating num_experts: true would be read as one expert and the model silently treated as Mixture-of-Experts -- a flag read as a quantity. The module already applies this exclusion to layer and hidden sizes; dropping it here makes the expert path the one place where a flag becomes a number.",
+      "anchor": "        if isinstance(value, bool) or not isinstance(value, int):\n",
+      "replacement": "        if not isinstance(value, int):\n"
+    },
+    {
+      "name": "perf_telemetry.from-model-never-counts-routed-parameters",
+      "what": "Stops the live module walk from counting any routed-expert parameter, so from_model always reports zero of them. On a declared Mixture-of-Experts model that turns into UNMEASURED-for-lack-of-a-parameter-count even though the parameters are sitting in the module tree being walked -- the one constructor that can measure the active fraction without the operator declaring anything stops measuring it.",
+      "anchor": "            if _is_routed_expert_parameter(name):\n",
+      "replacement": "            if False and _is_routed_expert_parameter(name):\n"
+    },
+    {
+      "name": "perf_telemetry.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is perf_telemetry's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "        routed = 0\n",
+      "replacement": "        routed = 0  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/perf/telemetry.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
+    }
   ]
 }

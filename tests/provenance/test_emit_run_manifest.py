@@ -994,9 +994,9 @@ def test_shipped_pair_passes_completeness_muster(capsys):
     assert blob == "", f"shipped pair refused: {blob.strip()[:400]}"
     data = mutate.load_table(None)
     assert set(data) == set(mutate.MODULE_PATHS)
-    assert len(data) == 14
+    assert len(data) == 15
     assert all(data.values())
-    assert sum(len(rows) for rows in data.values()) == 98  # 89 JSON + 9 embedded
+    assert sum(len(rows) for rows in data.values()) == 106  # 97 JSON + 9 embedded
     emit = data["emit_run_manifest"]
     n_const = len(mutate.EMIT_RUN_MANIFEST_ROWS)
     assert n_const == 8  # census leg: row growth reddens this by design

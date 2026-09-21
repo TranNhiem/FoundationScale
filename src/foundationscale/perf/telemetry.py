@@ -112,6 +112,60 @@ _TOKENS_UNMEASURED_REASON = (
 )
 
 
+def _is_routed_expert_parameter(qualified_name: str) -> bool:
+    """True for a parameter owned by a ROUTED expert, judged by qualified name.
+
+    Name-based because this module must import without torch, the same
+    constraint that makes the embedding walk match on class name.
+
+    BOTH STORAGE LAYOUTS COUNT, and the measured checkpoint is why. An earlier
+    version of this function required an INDEXED ``experts.<i>`` segment, which
+    is how ``mtp`` stores its experts. The language model does not: on
+    Qwen3.5-35B-A3B every one of its 256 experts per layer is FUSED into two
+    stacked tensors, ``mlp.experts.gate_up_proj`` and ``mlp.experts.down_proj``,
+    carrying no index at all. Requiring an index therefore found 0 routed
+    parameters in the language model of a model that is 90% experts by weight --
+    768 indexed tensors under ``mtp.`` and none under ``model.``. Matching the
+    ``experts`` path SEGMENT catches both layouts.
+
+    A SHARED expert is deliberately excluded: Qwen3.5 declares
+    ``shared_expert_intermediate_size`` and runs that expert for EVERY token, so
+    scaling it by the routing fraction would understate the work. On the
+    measured checkpoint no tensor matches both patterns, so this exclusion is
+    belt-and-braces rather than load-bearing -- it is kept because it makes the
+    "routed" contract true by construction rather than by luck of naming.
+
+    An unrecognised spelling leaves the parameter counted as always-active,
+    which OVERSTATES FLOPs and therefore UNDERSTATES MFU. That direction is
+    chosen on purpose: the failure mode worth designing against is a
+    performance number that flatters the framework.
+    """
+    if "shared_expert" in qualified_name:
+        return False
+    return "experts" in qualified_name.split(".")
+
+
+def _positive_int(source: object, names: tuple[str, ...]) -> int | None:
+    """First of ``names`` on ``source`` whose VALUE is a positive int, else None.
+
+    Keyed on the value, never on key presence, because the measured
+    gemma-4-31B config -- a DENSE model -- states ``num_experts: null``. A
+    ``hasattr``/``in`` test therefore classifies it as a Mixture-of-Experts
+    model with an unknown expert count and destroys its MFU, which is the same
+    failure shape as reading a composite config flatly, one level further in.
+
+    ``bool`` is excluded because it is an ``int`` subclass and a flag is not a
+    count -- the rule this module already applies to layer and hidden sizes.
+    """
+    for name in names:
+        value = getattr(source, name, None)
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        if value > 0:
+            return value
+    return None
+
+
 @dataclass(frozen=True)
 class FlopsModel:
     """Declares how FLOPs per token are counted, so the formula is auditable.
@@ -135,10 +189,31 @@ class FlopsModel:
     layers: int
     hidden_size: int
     sequence_length: int
+    routed_expert_parameters: int = 0
+    """Parameters living in ROUTED experts -- the ones a router selects per token.
+
+    Zero on a dense model, and zero is what keeps the dense estimate bit-identical
+    to the pre-#529 formula. A SHARED expert (Qwen3.5 declares
+    ``shared_expert_intermediate_size``) runs for every token and therefore does
+    NOT belong here: scaling it by the routing fraction would understate."""
+
+    experts_total: int | None = None
+    """Routed experts the layer owns. ``None`` means dense, not unknown."""
+
+    experts_active: int | None = None
+    """Routed experts that run per token (``num_experts_per_tok``)."""
+
+    unmeasured_reason: str | None = None
+    """Set when a FLOP count cannot honestly be produced for this model.
+
+    Callers must consult this BEFORE :attr:`flops_per_token`. It exists because
+    the alternative -- returning the dense number for a model whose active
+    expert count is unknown -- overstates MFU by the total/active ratio, about
+    6x on gemma-4-26B-A4B, while looking entirely plausible (#529)."""
 
     @property
     def flops_per_token(self) -> int:
-        """The standard transformer estimate: ``6N + 12 * L * h * s``.
+        """The standard transformer estimate: ``6N_active + 12 * L * h * s``.
 
         The ``6 *`` term is forward+backward matmul work per non-embedding
         parameter (2 FLOPs forward, 4 backward). The ``12 * L * h * s`` term
@@ -147,11 +222,38 @@ class FlopsModel:
         would understate long-sequence runs precisely where attention
         dominates. Both terms are estimates; see the class docstring for what
         is not claimed.
+
+        ACTIVE, NOT TOTAL (#529). On a Mixture-of-Experts model only
+        ``experts_active`` of ``experts_total`` routed experts run per token, so
+        charging every expert overstates the work by the total/active ratio --
+        measured on this estate as roughly 6x for gemma-4-26B-A4B and 12x for
+        Qwen3.5-122B-A10B. The reference implementations (Megatron-LM,
+        torchtitan) charge active parameters, so charging total would also break
+        the comparability that is the entire reason for using this formula.
+
+        THE DENSE PATH IS BIT-IDENTICAL, not merely close: when
+        ``routed_expert_parameters`` is zero the expression below returns before
+        any division happens, so no float ever enters the arithmetic and the
+        integer result is the same one the pre-#529 formula produced. That
+        matters because a refactor that quietly moved every dense MFU number by
+        a rounding step would invalidate comparisons against runs already
+        published.
         """
-        return (
+        dense = (
             6 * self.non_embedding_parameters
             + 12 * self.layers * self.hidden_size * self.sequence_length
         )
+        if self.routed_expert_parameters <= 0:
+            return dense
+        if not self.experts_total or not self.experts_active:
+            # Unreachable through the constructors, which set unmeasured_reason
+            # instead. Charging the dense figure here would be the silent
+            # overstatement this property exists to prevent, so charge the
+            # routed experts in full: wrong in the SAFE direction, because an
+            # overstated FLOP count understates MFU.
+            return dense
+        inactive = self.routed_expert_parameters * (self.experts_total - self.experts_active)
+        return dense - 6 * (inactive // self.experts_total)
 
     @classmethod
     def from_hf_config(
@@ -160,6 +262,7 @@ class FlopsModel:
         sequence_length: int,
         parameters: int,
         non_embedding_parameters: int,
+        routed_expert_parameters: int = 0,
     ) -> FlopsModel | None:
         """Build from an HF config, or return None -- never a guess.
 
@@ -185,12 +288,38 @@ class FlopsModel:
             return None
         if isinstance(hidden, bool) or not isinstance(hidden, int) or hidden < 1:
             return None
+        experts_total = _positive_int(source, ("num_experts", "num_local_experts"))
+        experts_active = _positive_int(
+            source, ("num_experts_per_tok", "num_experts_per_token", "top_k")
+        )
+        reason: str | None = None
+        if experts_total is not None:
+            if experts_active is None:
+                reason = (
+                    f"UNMEASURED: the config declares {experts_total} experts but states "
+                    "no per-token expert count under any of num_experts_per_tok, "
+                    "num_experts_per_token or top_k, so how many experts run per token is "
+                    "unknown. Charging all of them would overstate MFU by the total/active "
+                    "ratio -- measured as about 6x on gemma-4-26B-A4B, which is exactly "
+                    "this case. Declare the per-token count to measure it (#529)"
+                )
+            elif routed_expert_parameters <= 0:
+                reason = (
+                    f"UNMEASURED: the config declares {experts_total} experts but no "
+                    "routed-expert parameter count was supplied, so the active fraction "
+                    "cannot be applied to anything. Pass routed_expert_parameters, or use "
+                    "from_model which counts them off the live module tree (#529)"
+                )
         return cls(
             parameters=parameters,
             non_embedding_parameters=non_embedding_parameters,
             layers=layers,
             hidden_size=hidden,
             sequence_length=sequence_length,
+            routed_expert_parameters=max(0, routed_expert_parameters),
+            experts_total=experts_total,
+            experts_active=experts_active,
+            unmeasured_reason=reason,
         )
 
     @classmethod
@@ -243,11 +372,18 @@ class FlopsModel:
         non_embedding = sum(n for pid, n in by_id.items() if pid not in embedding_ids)
         if parameters < 1 or non_embedding < 1:
             return None
+        routed = 0
+        for name, parameter in named_parameters():
+            if _is_routed_expert_parameter(name):
+                numel = getattr(parameter, "numel", None)
+                if numel is not None:
+                    routed += int(numel())
         return cls.from_hf_config(
             config,
             sequence_length=sequence_length,
             parameters=parameters,
             non_embedding_parameters=non_embedding,
+            routed_expert_parameters=routed,
         )
 
 
@@ -883,6 +1019,12 @@ class StepTelemetry(_CallbackBase):
                 "FlopsModel.from_hf_config(...) so that FLOPs per token is "
                 "an auditable formula rather than folklore"
             )
+        elif self._flops_model.unmeasured_reason is not None:
+            # Consulted BEFORE the arithmetic and before tps, because this says
+            # the FORMULA cannot be evaluated honestly for this model -- a fact
+            # about the declaration, not about whether this run happened to
+            # count tokens. Reporting a dense number here is the #529 defect.
+            model_tflops_reason = self._flops_model.unmeasured_reason
         elif tps is None:
             model_tflops_reason = tps_reason
         else:

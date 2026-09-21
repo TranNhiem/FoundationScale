@@ -222,6 +222,15 @@ MODULE_PATHS = {
     "families_corpus": "src/foundationscale/families/corpus.py",
     "families_towers": "src/foundationscale/families/towers.py",
     "train_sdp_backend": "src/foundationscale/train/sdp_backend.py",
+    # #529: promoted out of PENDING_ENROLMENT the moment it had rows. It sat
+    # PENDING under a reason that named its own exit condition -- "the battery
+    # has no rows for it yet, and enrolling a file with zero rows would report
+    # a pass over nothing" -- and #529 supplied them. It is the perf plane's
+    # only measuring surface, so every defect here is silent by construction:
+    # the run still trains, the units and the exit code are unchanged, and the
+    # only thing that moves is a published MFU figure. #529 was exactly that
+    # -- 6.51x overstated on Qwen3.5-35B-A3B, invisible to every other gate.
+    "perf_telemetry": "src/foundationscale/perf/telemetry.py",
 }
 
 _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")
