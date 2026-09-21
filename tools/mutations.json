@@ -644,6 +644,48 @@
       "replacement": "            if False and _is_routed_expert_parameter(name):\n"
     },
     {
+      "name": "perf_telemetry.fallback-drops-the-per-layer-sum",
+      "what": "Drops the layer count from the undeclared-span fallback, so a model that declares no layer_types is charged one layer's worth of attention instead of all of them. Every dense model takes this path, so the quadratic term collapses by a factor of L -- 48x at the shapes measured on this estate -- and the reported FLOP count UNDERSTATES, which OVERSTATES MFU. That is the direction this module is explicitly designed not to fail in, and nothing about the run changes shape: same units, same exit code, a flattering number.",
+      "anchor": "        span = self.layers * self.sequence_length\n",
+      "replacement": "        span = self.sequence_length\n"
+    },
+    {
+      "name": "perf_telemetry.declared-span-tested-by-truthiness",
+      "what": "Replaces the `is None` test with truthiness -- the natural way to write this fallback, and wrong. A model whose layers are ALL linear_attention has a legitimate attention span of exactly 0, and truthiness reads that real zero as undeclared and substitutes layers * sequence_length. A 100% error in the quadratic term, in the flattering direction, on exactly the family (#530: Qwen3.5 hybrids) the span field was added for. Every other test in this file passes under this mutant.",
+      "anchor": "        if span is None:\n",
+      "replacement": "        if not span:\n"
+    },
+    {
+      "name": "perf_telemetry.linear-attention-charged-like-full",
+      "what": "Charges a linear-attention layer the full sequence span, which is the pre-#530 defect itself. Qwen3.5 is a 3:1 hybrid -- 27B declares 16 full-attention layers of 64 -- so the quadratic term is billed roughly 4x, and linear attention's genuine cost is already inside the 6N parameter term, so it is also double-counted. The number stays plausible; only the hybrid families are wrong, and only by a few percent of MFU at 2K context and much more at the long contexts the benchmark mandate targets.",
+      "anchor": "        \"linear_attention\": 0,\n",
+      "replacement": "        \"linear_attention\": sequence_length,\n"
+    },
+    {
+      "name": "perf_telemetry.span-accepts-a-mismatched-layer-list",
+      "what": "Removes the length agreement between layer_types and num_hidden_layers, so a declaration covering ten layers is summed and reported as the span of a sixty-four layer model. The result is a partial sum presented as a measurement -- strictly worse than the undeclared fallback, because the fallback is documented as overstating while this is an arbitrary undercount that flatters. Configs disagree with themselves often enough (sub-configs, truncated exports) that this is a live path, not a hypothetical.",
+      "anchor": "    if not isinstance(layer_types, (list, tuple)) or len(layer_types) != layers:\n",
+      "replacement": "    if not isinstance(layer_types, (list, tuple)):\n"
+    },
+    {
+      "name": "perf_telemetry.sliding-window-not-capped-at-the-sequence",
+      "what": "Charges a sliding-attention layer at its declared window even when the window is wider than the sequence, so a 8192-token window on a 2048-token sequence bills four times the keys that exist. A layer cannot attend past the end of its input. This overstates rather than flatters, so it would never show up as a suspiciously good result -- it would quietly depress reported MFU on every Gemma4 run and be read as a framework performance problem.",
+      "anchor": "    sliding = sequence_length if window is None else min(sequence_length, window)\n",
+      "replacement": "    sliding = sequence_length if window is None else window\n"
+    },
+    {
+      "name": "perf_telemetry.unknown-layer-vocabulary-looks-understood",
+      "what": "Drops the recognised-anchor guard, so a config whose layer_types are entirely unrecognised returns a span instead of None. The .get default then reconstructs layers * sequence_length exactly -- the right number, by accident, but now carrying a DECLARED span rather than an honest undeclared one. The next family with a genuinely cheap layer type is charged in full and the telemetry asserts it measured the layout. A wrong answer that reports itself as measured is the failure this guard exists for.",
+      "anchor": "    if not any(entry in spans for entry in layer_types):\n",
+      "replacement": "    if False:\n"
+    },
+    {
+      "name": "perf_telemetry.bool-accepted-as-a-sliding-window",
+      "what": "Reads sliding_window with a bare getattr instead of through _positive_int, so a bool passes. isinstance(True, int) is True in Python, so a config stating sliding_window: true is read as a window of ONE TOKEN and every sliding-attention layer is charged a span of 1 -- the quadratic term all but vanishes and MFU is overstated by orders of magnitude on a Gemma4-shaped model. This is the same flag-read-as-a-quantity defect the module already guards against for expert and layer counts; the mutant makes the window the one place it is not enforced.",
+      "anchor": "    window = _positive_int(source, (\"sliding_window\", \"sliding_window_size\"))\n",
+      "replacement": "    window = getattr(source, \"sliding_window\", None)\n"
+    },
+    {
       "name": "perf_telemetry.inert-control-must-pass",
       "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is perf_telemetry's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
       "anchor": "        routed = 0\n",

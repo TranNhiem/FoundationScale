@@ -70,9 +70,9 @@ ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml"
 MUTATE_PY = ROOT / "tools" / "mutate.py"
 MUTATIONS_JSON = ROOT / "tools" / "mutations.json"
 
-JSON_ROWS, JSON_MODS = 97, 14
+JSON_ROWS, JSON_MODS = 104, 14
 EMBEDDED_ROWS, EMBEDDED_MODS = 9, 1
-TOTAL_ROWS, TOTAL_MODS = 106, 15
+TOTAL_ROWS, TOTAL_MODS = 113, 15
 # Rows are the corpus denominator; distinct (module, anchor) pairs are the
 # DISTINGUISHABILITY denominator. They differ because `core` publishes 9 rows
 # over 6 anchors, so a green verdict there resolves the anchor set and cannot
@@ -84,9 +84,11 @@ TOTAL_ROWS, TOTAL_MODS = 106, 15
 # there -- requiring an INDEXED experts.<i> segment, and matching `experts` as
 # a bare SUBSTRING -- are different replacements of that same line. They are
 # independent mutants (different replacement text, different failure), but
-# they share an anchor, so the gap between 106 rows and 102 pairs widens by
-# one here and that is stated rather than absorbed.
-DISTINCT_ANCHORS = 102
+# they share an anchor, so the gap between 113 rows and 109 pairs widens by
+# one here and that is stated rather than absorbed. #530 adds seven rows on
+# seven fresh anchors, so it moves both figures by the same seven and leaves
+# the gap at four: three from `core`, one from the perf_telemetry pair.
+DISTINCT_ANCHORS = 109
 # Row-shape counts are pins, not prose trivia. They are the reason the
 # insertion composition control and deletion exactly-once control exercise
 # real shipped shapes. Do not set either pin to 0 merely to pass after a

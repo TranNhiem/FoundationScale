@@ -499,14 +499,14 @@ itself, from the Makefile's own accounting:
 
 ## 23. Project structure
 
-`src/` = 46261 LOC across 60 files. `launchers/` contains 10231 shell LOC plus 1615 Python
+`src/` = 46345 LOC across 60 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 34169 Python LOC and 6706 shell LOC on top of the
-package. `tools/` contains 9997 Python LOC. 236202 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 9997 Python LOC. 236595 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (69992 .py LOC); conftest carries the skip guard
+tests/                 the test suite (70298 .py LOC); conftest carries the skip guard
 tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
                        real_checkpoint_probe, preflight/, mutate, census)
 checks/                standalone repository gates: countables drift, packaging
@@ -551,8 +551,8 @@ everything listed. [-> docs/DEVELOPMENT.md]
   `tests/conftest.py` names every skip with its reason; a probe step feeds the guard a
   deliberately skipped test and requires it to fire. On a laptop the variable stays
   unset and skips are merely named.
-* **Mutation testing asks the other question.** The mutation corpus is 106 rows over 15
-  modules. Of those, 91 are MUST_FIRE mutants and 15 are MUST_PASS controls. Exit codes
+* **Mutation testing asks the other question.** The mutation corpus is 113 rows over 15
+  modules. Of those, 98 are MUST_FIRE mutants and 15 are MUST_PASS controls. Exit codes
   separate "a mutant survived" (1) from "nothing was measured" (2) — a red suite, any
   skipped test, or a stale anchor all read as never-measured, never as caught.
 * **CI has five jobs on purpose**: `check` (hygiene across Python 3.10/3.11/3.12),

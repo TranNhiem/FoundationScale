@@ -166,13 +166,58 @@ def _positive_int(source: object, names: tuple[str, ...]) -> int | None:
     return None
 
 
+def _attention_span_total(source: object, layers: int, sequence_length: int) -> int | None:
+    """Total attention key-span summed over layers, or None when undeclared (#530).
+
+    The quadratic attention term assumes every layer attends over the whole
+    sequence. Three of the families this framework targets do not: Qwen3.5 is a
+    3:1 hybrid whose linear-attention layers have no quadratic cost at all
+    (27B is 16 full of 64), and Gemma4 interleaves sliding-window layers whose
+    cost is bounded by the WINDOW rather than by the sequence. Charging every
+    layer at ``sequence_length`` overstates that term roughly 4x on the hybrid.
+
+    Returns None rather than a partial number whenever the declaration is not
+    fully understood, because the caller's fallback is ``layers *
+    sequence_length`` -- which overstates FLOPs and therefore UNDERSTATES MFU.
+    That is the safe direction to be wrong in, and it is the same reasoning
+    :attr:`FlopsModel.flops_per_token` already applies to an unresolvable expert
+    count. Unlike the expert case (#529) this is not worth refusing over: the
+    quadratic term is about 3.5% of the total at the shapes measured on this
+    estate, so taking MFU offline for every hybrid model over a 3% term would be
+    disproportionate. It IS worth fixing before long-context runs, where the
+    term stops being 3%.
+    """
+    layer_types = getattr(source, "layer_types", None)
+    if not isinstance(layer_types, (list, tuple)) or len(layer_types) != layers:
+        return None
+    if not all(isinstance(entry, str) for entry in layer_types):
+        return None
+    # Through _positive_int so a bool window is rejected: isinstance(True, int)
+    # is True, and a flag read as a window charges every sliding layer at 1.
+    window = _positive_int(source, ("sliding_window", "sliding_window_size"))
+    sliding = sequence_length if window is None else min(sequence_length, window)
+    spans = {
+        "full_attention": sequence_length,
+        "sliding_attention": sliding,
+        "chunked_attention": sliding,
+        "linear_attention": 0,
+    }
+    # An entirely unrecognised vocabulary means the family is not understood, and
+    # the .get default below would otherwise reconstruct `layers * sequence_length`
+    # while LOOKING like a measurement. Require at least one recognised anchor.
+    if not any(entry in spans for entry in layer_types):
+        return None
+    return sum(spans.get(entry, sequence_length) for entry in layer_types)
+
+
 @dataclass(frozen=True)
 class FlopsModel:
     """Declares how FLOPs per token are counted, so the formula is auditable.
 
     WHAT IS CLAIMED: a per-token FLOP figure computed by the stated formula
-    ``6 * non_embedding_parameters + 12 * layers * hidden_size *
-    sequence_length`` from the declared fields.
+    ``6 * non_embedding_parameters + 12 * hidden_size * attention_span_total``
+    from the declared fields, where ``attention_span_total`` defaults to
+    ``layers * sequence_length`` when a per-layer breakdown is not declared.
 
     WHAT IS NOT CLAIMED: that this is the true FLOP count. The estimate
     ignores layernorm, softmax, activation and optimizer FLOPs. It is the
@@ -182,6 +227,23 @@ class FlopsModel:
     count would make every comparison against a published number a category
     error. The fields are data, not code, so the declaration travels with the
     number and the formula can be re-derived by any reader.
+
+    ALSO NOT CLAIMED: that MFU derived from this is silicon utilisation. Two
+    conventions separate the two, and both must be stated wherever the number
+    is published rather than left implicit:
+
+    * GRADIENT CHECKPOINTING. Under full recompute the hardware runs forward,
+      recompute-forward and backward -- roughly 8N-equivalents against the 6N
+      charged here -- so reported MFU is about 4/3 UNDERSTATED.
+    * LoRA. The weight-gradient GEMMs are skipped for frozen base parameters,
+      so real work is about 4N against the 6N charged, and reported MFU is
+      about 1.5x OVERSTATED.
+
+    They point opposite ways and roughly cancel, which is the trap worth
+    naming: a LoRA run under full recompute reports a number that is
+    accidentally near the truth. Cancelling is luck, not correctness. Both are
+    the standard model-FLOPs convention and are defensible as such; presenting
+    the result as hardware utilisation without saying so is not.
     """
 
     parameters: int
@@ -189,6 +251,19 @@ class FlopsModel:
     layers: int
     hidden_size: int
     sequence_length: int
+    attention_span_total: int | None = None
+    """Sum over layers of the key-span each layer actually attends over (#530).
+
+    ``None`` means UNDECLARED, and the quadratic term then falls back to
+    ``layers * sequence_length`` -- bit-identical to the pre-#530 formula, and
+    wrong in the overstating direction, which understates MFU.
+
+    The type is ``int | None`` rather than an ``int`` defaulting to 0 because a
+    model whose layers are all linear-attention has a legitimate span of exactly
+    zero. Writing the fallback as ``span or layers * sequence_length`` would
+    silently replace that real zero with the naive value -- a 100% error in the
+    flattering direction -- so the check is ``is None``, not truthiness."""
+
     routed_expert_parameters: int = 0
     """Parameters living in ROUTED experts -- the ones a router selects per token.
 
@@ -213,15 +288,23 @@ class FlopsModel:
 
     @property
     def flops_per_token(self) -> int:
-        """The standard transformer estimate: ``6N_active + 12 * L * h * s``.
+        """The standard transformer estimate: ``6N_active + 12 * h * span``.
 
         The ``6 *`` term is forward+backward matmul work per non-embedding
-        parameter (2 FLOPs forward, 4 backward). The ``12 * L * h * s`` term
-        is the attention score/context matmuls, which scale with sequence
-        length and are NOT captured by any parameter count -- dropping it
-        would understate long-sequence runs precisely where attention
-        dominates. Both terms are estimates; see the class docstring for what
-        is not claimed.
+        parameter (2 FLOPs forward, 4 backward). The ``12 * h * span`` term is
+        the attention score/context matmuls, which scale with sequence length
+        and are NOT captured by any parameter count -- dropping it would
+        understate long-sequence runs precisely where attention dominates.
+        Both terms are estimates; see the class docstring for what is not
+        claimed.
+
+        PER-LAYER, NOT PER-MODEL (#530). ``L * s`` is only right when every
+        layer attends over the whole sequence. When
+        :attr:`attention_span_total` is declared it replaces that product with
+        the summed per-layer key-span, so a Qwen3.5 hybrid charges only its
+        full-attention layers and a Gemma4 sliding-window layer charges its
+        window. Undeclared falls back to ``L * s``, which is bit-identical to
+        the pre-#530 formula and overstates rather than flatters.
 
         ACTIVE, NOT TOTAL (#529). On a Mixture-of-Experts model only
         ``experts_active`` of ``experts_total`` routed experts run per token, so
@@ -239,10 +322,10 @@ class FlopsModel:
         a rounding step would invalidate comparisons against runs already
         published.
         """
-        dense = (
-            6 * self.non_embedding_parameters
-            + 12 * self.layers * self.hidden_size * self.sequence_length
-        )
+        span = self.attention_span_total
+        if span is None:
+            span = self.layers * self.sequence_length
+        dense = 6 * self.non_embedding_parameters + 12 * self.hidden_size * span
         if self.routed_expert_parameters <= 0:
             return dense
         if not self.experts_total or not self.experts_active:
@@ -316,6 +399,7 @@ class FlopsModel:
             layers=layers,
             hidden_size=hidden,
             sequence_length=sequence_length,
+            attention_span_total=_attention_span_total(source, layers, sequence_length),
             routed_expert_parameters=max(0, routed_expert_parameters),
             experts_total=experts_total,
             experts_active=experts_active,

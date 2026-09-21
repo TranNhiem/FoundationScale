@@ -26,8 +26,8 @@
 #     longer does: as of #242 it shards per module across a job matrix, and
 #     `mutation-module` below is the mirror of one shard.
 #
-#     The mutation corpus is 106 rows over 15 modules.
-#     Of those, 91 are MUST_FIRE mutants and 15 are MUST_PASS controls.
+#     The mutation corpus is 113 rows over 15 modules.
+#     Of those, 98 are MUST_FIRE mutants and 15 are MUST_PASS controls.
 #
 #     Each scoreable row runs the whole suite, so the wall time is one full
 #     pytest run per MUST_FIRE row rather than one in total. All four counts
