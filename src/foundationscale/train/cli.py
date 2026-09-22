@@ -168,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--adapter-dropout", type=float, default=None)
-    # --- The nine declaration axes ------------------------------------------
+    # --- The thirteen declaration axes ---------------------------------------
     # Every flag below defaults to None for exactly the reason --precision does:
     # None means NOT DECLARED. An omitted flag applies the transformers engine
     # default (AdamW, accumulation 1, max_grad_norm 1.0, no recompute, linear LR
@@ -195,6 +195,29 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "forward/backward passes per optimizer step. Omit: the engine "
             "default (1) applies and is NOT recorded as a claim"
+        ),
+    )
+    p.add_argument(
+        "--dataloader-num-workers",
+        type=int,
+        default=None,
+        help=(
+            "worker processes feeding each rank. Omit: the engine default (0) "
+            "applies -- batches are collated on the training process itself -- "
+            "and is NOT recorded as a claim. A measured single-GPU run with the "
+            "default idled the device 55%% of wall time waiting on batches, so "
+            "an MFU reported without this declared may be measuring the input "
+            "pipeline rather than the kernel"
+        ),
+    )
+    p.add_argument(
+        "--dataloader-prefetch-factor",
+        type=int,
+        default=None,
+        help=(
+            "batches each worker loads ahead. REFUSES (96) unless "
+            "--dataloader-num-workers is at least 1, because torch rejects the "
+            "pair at the first batch, after the model is already resident"
         ),
     )
     p.add_argument(
@@ -528,6 +551,8 @@ def _build_config(argv: Sequence[str] | None, args: argparse.Namespace) -> Train
         optimizer=args.optimizer,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         max_grad_norm=args.max_grad_norm,
+        dataloader_num_workers=args.dataloader_num_workers,
+        dataloader_prefetch_factor=args.dataloader_prefetch_factor,
         attn_implementation=args.attn_implementation,
         sdp_backend=args.sdp_backend,
         lr_scheduler_type=args.lr_scheduler_type,

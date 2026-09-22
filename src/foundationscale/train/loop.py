@@ -34,7 +34,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from foundationscale.families import plan_adapter_targets, torch_linear_predicate
 from foundationscale.families.registry import resolve_family
@@ -534,6 +534,39 @@ def _tf_version() -> str:
         return "unknown"
 
 
+#: The declaration axes, named once so the count cannot drift again.
+#:
+#: Every name here is a TrainConfig field whose ``None`` default means NOT
+#: DECLARED. The tuple exists because the count did drift: five comments, the
+#: CLI banner, a test docstring and docs/VERIFICATION_MATRIX.md all said "nine"
+#: while the block held eleven, having gained sdp_backend (#526/#527) and
+#: logging_steps without anyone updating the prose. A number repeated in eight
+#: places and enforced in none is a number that is wrong somewhere, which is the
+#: same lesson #502 taught about the matrix summary: prose outside an enforced
+#: region drifts away from the rows it describes.
+#:
+#: So this tuple is the single source of truth and
+#: tests/train/test_declaration_axes_count.py holds every prose site to it.
+#: It is deliberately NOT used to BUILD the manifest config section: that dict
+#: is written out key by key with a per-key rationale, and a loop over this
+#: tuple would delete the rationales to save eleven lines.
+DECLARATION_AXES: Final[tuple[str, ...]] = (
+    "optimizer",
+    "gradient_accumulation_steps",
+    "max_grad_norm",
+    "gradient_checkpointing",
+    "attn_implementation",
+    "sdp_backend",
+    "lr_scheduler_type",
+    "warmup_steps",
+    "sharding_strategy",
+    "cpu_optimizer_offload",
+    "logging_steps",
+    "dataloader_num_workers",
+    "dataloader_prefetch_factor",
+)
+
+
 @dataclass(frozen=True, kw_only=True)
 class TrainConfig:
     """Everything the thin path needs, as data.
@@ -577,7 +610,7 @@ class TrainConfig:
     adapter_alpha: float | None = None
     adapter_targets: tuple[str, ...] | None = None
     adapter_dropout: float | None = None
-    # --- The nine declaration axes -------------------------------------------
+    # --- The thirteen declaration axes ---------------------------------------
     # Every one of these defaults to None, and None means exactly what
     # precision's None means: not declared -- claim nothing, apply nothing,
     # record the absence. Each axis has a live HF Trainer default behind it
@@ -611,6 +644,21 @@ class TrainConfig:
     # today's default, ANNOUNCED at bind time, and recorded
     # unmeasured-with-reason rather than silently.
     sdp_backend: str | None = None
+    # The input pipeline is a declaration axis because it was MEASURED to be
+    # load-bearing and was not declarable: a single-GPU run of examples/train_tiny.py
+    # on a 144-core host recorded perf_dataloader_stall_fraction = 0.549 -- the
+    # device idle, waiting on batches, for 55% of wall time -- while the loop's own
+    # host-budget advisory printed "dataloader workers: 0". The advisory could see
+    # the problem and the config had no way to say anything about it, so every run
+    # silently took the transformers default of 0 workers and collated batches on
+    # the training process. MFU computed over such a run measures the input
+    # pipeline, not the kernel, and nothing in the manifest said which.
+    #
+    # Both stay None-means-not-declared like their neighbours. prefetch_factor is
+    # meaningless without workers and torch raises on that pair, so it is REFUSED
+    # at START rather than allowed to crash after the model is resident.
+    dataloader_num_workers: int | None = None
+    dataloader_prefetch_factor: int | None = None
     lr_scheduler_type: str | None = None
     warmup_steps: int | None = None
     # Declarable only -- there is NO wiring behind these two. sharding_strategy
@@ -2409,7 +2457,7 @@ def _manifest_payload(
             "max_steps": cfg.max_steps,
             "per_device_batch_size": cfg.per_device_batch_size,
             # Recorded as a plain value alongside batch size and step count, not
-            # as one of the nine provenance-shaped axes, because it has a real
+            # as one of the thirteen declaration axes, because it has a real
             # default (128) rather than a None abstention -- there is no
             # "the run did not say" state for it, only a value it ran at.
             # It is here at all because every performance number in this
@@ -2447,7 +2495,7 @@ def _manifest_payload(
                 list(cfg.adapter_targets) if cfg.adapter_targets is not None else None
             ),
             "adapter_dropout": cfg.adapter_dropout,
-            # The nine declaration axes are recorded UNCONDITIONALLY -- None and
+            # The thirteen declaration axes are recorded UNCONDITIONALLY -- None and
             # all. That is the precision rule (#342) applied to every axis: a
             # key present carrying None says "the operator abstained and the
             # engine default applied, unclaimed"; a missing key would say
@@ -2467,6 +2515,13 @@ def _manifest_payload(
             "lr_scheduler_type": cfg.lr_scheduler_type,
             "warmup_steps": cfg.warmup_steps,
             "logging_steps": cfg.logging_steps,
+            # Recorded for the same reason max_sequence_length is: every
+            # throughput number in this manifest is only interpretable next to
+            # the input pipeline that fed it. A run at MFU 0.31 with workers
+            # undeclared and one at MFU 0.31 with eight workers are not the same
+            # result, and a reader diffing them must not have to guess.
+            "dataloader_num_workers": cfg.dataloader_num_workers,
+            "dataloader_prefetch_factor": cfg.dataloader_prefetch_factor,
             "sharding_strategy": cfg.sharding_strategy,
             "cpu_optimizer_offload": cfg.cpu_optimizer_offload,
         },
@@ -3041,7 +3096,7 @@ def _build_run_manifest(
             # contract is {key, value, source, ...} for every field, and the
             # key is never what carries the abstention: key present + value
             # None = abstained; key absent = this loop never populated the
-            # field. All nine declaration axes go through this same path.
+            # field. All thirteen declaration axes go through this same path.
             _put(key, value, _config_source(key))
     # argv is the composed launch command; without it a run is not reproducible
     # from its own output (#180). stage says WHICH point in the lifecycle wrote
@@ -3395,6 +3450,36 @@ def _train(cfg: TrainConfig) -> int:
             cfg,
             stage="refused",
             extra={"exit": EXIT_REFUSE, "sharding_strategy": cfg.sharding_strategy},
+        )
+        return EXIT_REFUSE
+
+    # torch's DataLoader raises when prefetch_factor is set with num_workers=0,
+    # and it raises at the FIRST BATCH -- after the model is resident and the
+    # allocation is burned. The declaration is checkable here, before any of that,
+    # so it is checked here. Note the two rejected states are different facts and
+    # the message says which: an explicit 0, and no declaration at all (the
+    # transformers default is 0, so the effect is identical and the cause is not).
+    if cfg.dataloader_prefetch_factor is not None and not cfg.dataloader_num_workers:
+        _mark(
+            Step.REFUSE,
+            f"dataloader_prefetch_factor={cfg.dataloader_prefetch_factor!r} is "
+            f"declared, but dataloader_num_workers is "
+            f"{'0' if cfg.dataloader_num_workers == 0 else 'not declared (engine default 0)'}"
+            ". Prefetch depth describes worker processes that would not exist: "
+            "torch's DataLoader rejects the pair, and it does so at the first "
+            "batch, once the model is already resident. Declare "
+            "--dataloader-num-workers N with N >= 1 alongside it, or drop the "
+            "prefetch declaration -- refusing now rather than burning the "
+            "allocation to raise the same error later",
+        )
+        _emit_manifest(
+            cfg,
+            stage="refused",
+            extra={
+                "exit": EXIT_REFUSE,
+                "dataloader_prefetch_factor": cfg.dataloader_prefetch_factor,
+                "dataloader_num_workers": cfg.dataloader_num_workers,
+            },
         )
         return EXIT_REFUSE
 
@@ -4150,11 +4235,16 @@ def _train(cfg: TrainConfig) -> int:
     # coercion, because every one of these has a live TrainingArguments default
     # behind it (AdamW, accumulation 1, max_grad_norm 1.0, no recompute, linear
     # LR with zero warmup) and passing that default undeclared would convert an
-    # abstention into the appearance of a statement (#342). Two of the nine are
-    # deliberately NOT in this dict: attn_implementation binds at model
-    # construction (introspected and possibly refused at its own site above),
-    # and sharding_strategy / cpu_optimizer_offload have no TrainingArguments
-    # wiring at all -- they are refused at START rather than silently dropped.
+    # abstention into the appearance of a statement (#342).
+    # Five of the thirteen declaration axes are deliberately NOT in this dict,
+    # each for its own reason:
+    # attn_implementation binds at model construction (introspected and
+    # possibly refused at its own site above); sdp_backend binds through
+    # process-global torch toggles and never touches TrainingArguments;
+    # sharding_strategy and cpu_optimizer_offload have no TrainingArguments
+    # wiring at all -- they are refused at START rather than silently dropped;
+    # and logging_steps is resolved once into logging_steps_effective above,
+    # because it is the one axis whose ABSENCE still binds a cadence.
     # Every key added here flows through the `accepted` introspection check
     # below, so an older transformers REFUSES on a knob it does not know
     # instead of silently training without it.
@@ -4170,6 +4260,10 @@ def _train(cfg: TrainConfig) -> int:
         kwargs["lr_scheduler_type"] = cfg.lr_scheduler_type
     if cfg.warmup_steps is not None:
         kwargs["warmup_steps"] = cfg.warmup_steps
+    if cfg.dataloader_num_workers is not None:
+        kwargs["dataloader_num_workers"] = cfg.dataloader_num_workers
+    if cfg.dataloader_prefetch_factor is not None:
+        kwargs["dataloader_prefetch_factor"] = cfg.dataloader_prefetch_factor
     accepted = set(inspect.signature(TrainingArguments.__init__).parameters)
     if "save_safetensors" in accepted:
         kwargs["save_safetensors"] = True

@@ -1,6 +1,6 @@
 """The four kernel-axis declarations must reach the kernel, not just the CLI.
 
-loop.py grew nine "declaration axes" whose ``None`` default means NOT DECLARED
+loop.py grew thirteen "declaration axes" whose ``None`` default means NOT DECLARED
 (#342's abstention-is-not-a-claim rule). This module measures four of them at
 the site each one claims to affect, never at the site that merely parses them:
 
