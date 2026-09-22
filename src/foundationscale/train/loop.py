@@ -669,14 +669,25 @@ class TrainConfig:
     # backend exists in this plane.
     sharding_strategy: str | None = None
     cpu_optimizer_offload: bool | None = None
-    # logging_steps sits OUTSIDE the nine axes above on purpose: it is the one
-    # knob whose absence still binds. None means not declared, and the wiring
-    # site in _train then falls back to max(1, min(10, max_steps)) -- the
-    # historical unconditional binding -- so an undeclared run behaves exactly
-    # as it did before the knob existed. The nine axes' None applies NOTHING;
-    # this one's None applies the fallback, and the manifest records both the
-    # declaration (config section) and the value actually bound (telemetry
-    # section's logging_steps_effective).
+    # logging_steps IS one of the declaration axes -- DECLARATION_AXES names it
+    # -- but it is the one whose None still BINDS. The wiring site in _train
+    # falls back to max(1, min(10, max_steps)), the historical unconditional
+    # binding, so an undeclared run behaves exactly as it did before the knob
+    # existed. Every other axis applies NOTHING when undeclared; this one
+    # applies the fallback, and the manifest records both the declaration
+    # (config section) and the value actually bound (telemetry section's
+    # logging_steps_effective).
+    #
+    # This comment used to open by placing logging_steps OUTSIDE the axes above,
+    # with the count spelled as a bare English word, and by the time anyone read
+    # it that was wrong twice over: logging_steps had been added to the tuple,
+    # and the tuple had grown past the number the sentence stated. The
+    # axis-count gate caught neither, because it anchors on a number word
+    # followed by the full noun phrase, and this line named no phrase at all --
+    # a count written in a shape the matcher cannot reach (#533). An anchored
+    # scanner is only ever as wide as its anchor, which is why the gate now runs
+    # a second scan, over the modules that own this contract, refusing a counted
+    # mention of the noun that does not say which set it counts.
     logging_steps: int | None = None
     # Harmless knobs.
     max_steps: int = 20
@@ -3063,7 +3074,7 @@ def _build_run_manifest(
         none.
 
         The answer is not inferred from the value. ``value is None`` would work
-        for the nine axes, whose only absence marker is None, and would be
+        for the declaration axes, whose only absence marker is None, and would be
         wrong for ``max_steps=20``, which is ambiguous between a typed flag and
         the field default. cli.py measures the distinction with a sentinel
         parse and hands the answer over in ``cli_declared``.

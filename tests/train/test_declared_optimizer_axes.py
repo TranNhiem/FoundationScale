@@ -370,7 +370,7 @@ def test_omitted_axes_add_no_kwarg_and_record_an_explicit_absence(
     out = capsys.readouterr().out
 
     assert rc in (loop.EXIT_PASS, loop.EXIT_RED, loop.EXIT_UNMEASURED), (
-        f"a run declaring NOTHING on the three axes was REFUSED (rc={rc}): {out}"
+        f"a run declaring NOTHING on the three pinned axes was REFUSED (rc={rc}): {out}"
     )
     assert "[fs:train:trainer]" in out, f"run stopped before Trainer construction: {out}"
     assert len(stack.training_arguments) == 1

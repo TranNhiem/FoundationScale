@@ -33,7 +33,7 @@ from foundationscale.train.loop import (
     _manifest_payload,
 )
 
-# The nine axes introduced as deliberately declarable-but-default-free train
+# The nine baseline axes introduced as deliberately declarable-but-default-free train
 # controls. This tuple names the current contract; `_new_axis_names` then
 # compares the FULL TrainConfig field set against the emitter's key set, so a
 # future eleventh axis that reaches only one side is RED in this test rather
@@ -51,7 +51,7 @@ _NINE_DECLARED_AXES: tuple[str, ...] = (
 )
 
 
-# TrainConfig fields that are not one of the nine axes under test. Precision
+# TrainConfig fields that are not one of the nine baseline axes under test. Precision
 # and the adapter declarations predate that contract, while the remaining
 # fields are machine facts, objective/runtime controls, or the nested topology
 # declaration. A field absent from this set is treated as a new declaration
@@ -105,7 +105,7 @@ _CONFIG_FIELDS_OUTSIDE_THE_NINE: frozenset[str] = frozenset(
 )
 
 
-# Keys other than the nine axes that `_manifest_payload` is currently known to
+# Keys other than the nine baseline axes that `_manifest_payload` is currently known to
 # emit. This is intentionally a second split rather than the config-field
 # split above: the latter describes what TrainConfig declares, while this one
 # describes what the emitter actually puts into `config`. Comparing the two
@@ -225,7 +225,7 @@ def _new_axis_names(cfg: TrainConfig) -> set[str]:
     # while dropping the delivery under test.
     missing_current = set(_NINE_DECLARED_AXES) - train_axis_names
     assert not missing_current, (
-        f"the manifest axis contract lost one of the declared nine axes: {sorted(missing_current)}"
+        f"the manifest axis contract lost one of the nine baseline axes: {sorted(missing_current)}"
     )
     return train_axis_names
 
