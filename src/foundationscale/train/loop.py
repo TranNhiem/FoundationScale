@@ -564,6 +564,9 @@ DECLARATION_AXES: Final[tuple[str, ...]] = (
     "logging_steps",
     "dataloader_num_workers",
     "dataloader_prefetch_factor",
+    "torch_compile",
+    "torch_compile_backend",
+    "torch_compile_mode",
 )
 
 
@@ -610,7 +613,7 @@ class TrainConfig:
     adapter_alpha: float | None = None
     adapter_targets: tuple[str, ...] | None = None
     adapter_dropout: float | None = None
-    # --- The thirteen declaration axes ---------------------------------------
+    # --- The sixteen declaration axes ---------------------------------------
     # Every one of these defaults to None, and None means exactly what
     # precision's None means: not declared -- claim nothing, apply nothing,
     # record the absence. Each axis has a live HF Trainer default behind it
@@ -669,6 +672,34 @@ class TrainConfig:
     # backend exists in this plane.
     sharding_strategy: str | None = None
     cpu_optimizer_offload: bool | None = None
+    # torch.compile is a declaration axis because it was MEASURED to move both
+    # numbers a throughput claim rests on, in opposite directions, and neither
+    # move was recordable. On a GB200 tray, gemma-4-E4B at seq 2048: compile
+    # off 403.4 ms/step at 106.43 GiB, compile on 305.2 ms at 79.80 GiB -- 1.32x
+    # faster on 25 GiB less. On the 12B dense checkpoint the eager arm did not
+    # fit at all at the same batch, so compile was not an optimisation there but
+    # the difference between a run and an OOM. Two runs whose manifests were
+    # identical could therefore differ by a third in throughput, and nothing in
+    # either manifest said why.
+    #
+    # It also changes memory in a way that is NOT monotone and must not be
+    # inferred: with compile off, activation memory is flat across gradient
+    # accumulation (121.27 GiB at accum 4 and at accum 8, measured); with
+    # compile on it GROWS (87.21 -> 94.60 GiB over the same pair), and that
+    # growth is what turns a 12B run that fits at accum 1 into an OOM at accum
+    # 2. A reader comparing two accumulation settings has to be able to see
+    # which compile arm produced them.
+    #
+    # backend and mode are separate axes rather than one composite because they
+    # are separately declarable on TrainingArguments and separately defaulted by
+    # it. They carry a cross-field trap, which is why __post_init__ is not the
+    # only guard: transformers flips torch_compile to True when either is set,
+    # so declaring a backend alone silently compiles a run whose manifest says
+    # nothing about compilation. That pair is REFUSED (96) at START, the same
+    # shape as prefetch-without-workers.
+    torch_compile: bool | None = None
+    torch_compile_backend: str | None = None
+    torch_compile_mode: str | None = None
     # logging_steps IS one of the declaration axes -- DECLARATION_AXES names it
     # -- but it is the one whose None still BINDS. The wiring site in _train
     # falls back to max(1, min(10, max_steps)), the historical unconditional
@@ -2468,7 +2499,7 @@ def _manifest_payload(
             "max_steps": cfg.max_steps,
             "per_device_batch_size": cfg.per_device_batch_size,
             # Recorded as a plain value alongside batch size and step count, not
-            # as one of the thirteen declaration axes, because it has a real
+            # as one of the sixteen declaration axes, because it has a real
             # default (128) rather than a None abstention -- there is no
             # "the run did not say" state for it, only a value it ran at.
             # It is here at all because every performance number in this
@@ -2506,7 +2537,7 @@ def _manifest_payload(
                 list(cfg.adapter_targets) if cfg.adapter_targets is not None else None
             ),
             "adapter_dropout": cfg.adapter_dropout,
-            # The thirteen declaration axes are recorded UNCONDITIONALLY -- None and
+            # The sixteen declaration axes are recorded UNCONDITIONALLY -- None and
             # all. That is the precision rule (#342) applied to every axis: a
             # key present carrying None says "the operator abstained and the
             # engine default applied, unclaimed"; a missing key would say
@@ -2535,6 +2566,14 @@ def _manifest_payload(
             "dataloader_prefetch_factor": cfg.dataloader_prefetch_factor,
             "sharding_strategy": cfg.sharding_strategy,
             "cpu_optimizer_offload": cfg.cpu_optimizer_offload,
+            # Recorded unconditionally for the same reason the dataloader axes
+            # are: a measured 1.32x step-time difference and a 25 GiB memory
+            # difference sit behind this one flag, so a throughput number is
+            # not interpretable without it. The compile WARMUP is outcome, not
+            # declaration, and lives in the telemetry section.
+            "torch_compile": cfg.torch_compile,
+            "torch_compile_backend": cfg.torch_compile_backend,
+            "torch_compile_mode": cfg.torch_compile_mode,
         },
         "extra": extra or {},
         # Outcome telemetry is its own top-level section, never folded into
@@ -3107,7 +3146,7 @@ def _build_run_manifest(
             # contract is {key, value, source, ...} for every field, and the
             # key is never what carries the abstention: key present + value
             # None = abstained; key absent = this loop never populated the
-            # field. All thirteen declaration axes go through this same path.
+            # field. All sixteen declaration axes go through this same path.
             _put(key, value, _config_source(key))
     # argv is the composed launch command; without it a run is not reproducible
     # from its own output (#180). stage says WHICH point in the lifecycle wrote
@@ -3490,6 +3529,59 @@ def _train(cfg: TrainConfig) -> int:
                 "exit": EXIT_REFUSE,
                 "dataloader_prefetch_factor": cfg.dataloader_prefetch_factor,
                 "dataloader_num_workers": cfg.dataloader_num_workers,
+            },
+        )
+        return EXIT_REFUSE
+
+    # transformers does not treat torch_compile_backend/mode as inert when
+    # torch_compile is unset: TrainingArguments.__post_init__ flips
+    # torch_compile to True if either is present. So a run declaring only a
+    # backend COMPILES, and its manifest records torch_compile=None -- the
+    # abstention reading, "this run did not compile", which is the opposite of
+    # what happened. The declaration is checkable before the model is resident,
+    # so it is checked here, the same shape as prefetch-without-workers.
+    # The guard is `is not True`, not `is None`, because the two rejected states
+    # are different facts and the FALSE one is the worse of them. An omitted
+    # torch_compile records None -- "the run did not say". An explicit false
+    # records a positive claim that the run did NOT compile. transformers flips
+    # the flag on for both, so the explicit-false pair ships a manifest that
+    # contradicts the run it describes, which no reader can catch downstream.
+    if cfg.torch_compile is not True and (
+        cfg.torch_compile_backend is not None or cfg.torch_compile_mode is not None
+    ):
+        declared_compile_axes = ", ".join(
+            f"{name}={value!r}"
+            for name, value in (
+                ("torch_compile_backend", cfg.torch_compile_backend),
+                ("torch_compile_mode", cfg.torch_compile_mode),
+            )
+            if value is not None
+        )
+        compile_state = (
+            "explicitly false"
+            if cfg.torch_compile is False
+            else "not declared (engine default off)"
+        )
+        _mark(
+            Step.REFUSE,
+            f"{declared_compile_axes} is declared, but torch_compile is "
+            f"{compile_state}. transformers "
+            "turns torch_compile ON when either of those is set, so this run "
+            "would compile while its manifest said otherwise. Compilation is "
+            "worth a third of the step time and 25 GiB here, so a run recorded "
+            "as uncompiled and executed compiled makes the throughput number "
+            "unattributable -- and an explicit false makes it a false claim "
+            "rather than an abstention. Declare --torch-compile true alongside "
+            "it, or drop the backend and mode declarations",
+        )
+        _emit_manifest(
+            cfg,
+            stage="refused",
+            extra={
+                "exit": EXIT_REFUSE,
+                "torch_compile": cfg.torch_compile,
+                "torch_compile_backend": cfg.torch_compile_backend,
+                "torch_compile_mode": cfg.torch_compile_mode,
             },
         )
         return EXIT_REFUSE
@@ -4247,7 +4339,7 @@ def _train(cfg: TrainConfig) -> int:
     # behind it (AdamW, accumulation 1, max_grad_norm 1.0, no recompute, linear
     # LR with zero warmup) and passing that default undeclared would convert an
     # abstention into the appearance of a statement (#342).
-    # Five of the thirteen declaration axes are deliberately NOT in this dict,
+    # Five of the sixteen declaration axes are deliberately NOT in this dict,
     # each for its own reason:
     # attn_implementation binds at model construction (introspected and
     # possibly refused at its own site above); sdp_backend binds through
@@ -4275,6 +4367,12 @@ def _train(cfg: TrainConfig) -> int:
         kwargs["dataloader_num_workers"] = cfg.dataloader_num_workers
     if cfg.dataloader_prefetch_factor is not None:
         kwargs["dataloader_prefetch_factor"] = cfg.dataloader_prefetch_factor
+    if cfg.torch_compile is not None:
+        kwargs["torch_compile"] = cfg.torch_compile
+    if cfg.torch_compile_backend is not None:
+        kwargs["torch_compile_backend"] = cfg.torch_compile_backend
+    if cfg.torch_compile_mode is not None:
+        kwargs["torch_compile_mode"] = cfg.torch_compile_mode
     accepted = set(inspect.signature(TrainingArguments.__init__).parameters)
     if "save_safetensors" in accepted:
         kwargs["save_safetensors"] = True

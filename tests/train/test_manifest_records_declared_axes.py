@@ -727,17 +727,25 @@ def test_explicit_false_is_cli_source_not_omission(
 ) -> None:
     """Explicit negative booleans must not be laundered into defaults.
 
-    `--gradient-checkpointing false` and `--cpu-optimizer-offload false` carry
-    information: the operator answered. Not passing either flag is a different
-    declaration state (None/default). If both become False, the provenance
-    boundary has silently converted abstention into a choice.
+    `--gradient-checkpointing false`, `--cpu-optimizer-offload false` and
+    `--torch-compile false` carry information: the operator answered. Not passing
+    the flag is a different declaration state (None/default). If they become
+    False alike, the provenance boundary has silently converted abstention into
+    a choice.
+
+    torch_compile is the one where the distinction has teeth beyond provenance.
+    transformers turns compilation ON whenever a backend or mode is present, so
+    an explicit false recorded next to either of those would be a manifest
+    contradicting its own run -- which is why that pair is REFUSED upstream
+    (see tests/train/test_torch_compile_axes.py) and why the false must survive
+    to the manifest intact here, rather than being flattened into an omission.
     """
     boolean_cases = tuple(
         case
         for case in _axis_cases(_baseline_config(tmp_path / "representative"))
         if isinstance(case.config_value, bool)
     )
-    current_booleans = {"gradient_checkpointing", "cpu_optimizer_offload"}
+    current_booleans = {"gradient_checkpointing", "cpu_optimizer_offload", "torch_compile"}
 
     # REACHED-SITE: both boolean axes covered by this delivery entered the
     # generic axis contract; otherwise the assertions below would be vacuous.

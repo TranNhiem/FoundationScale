@@ -36,7 +36,7 @@ Re-measured on the same instrument, over the same scope, on the same day this se
 
 `TrainConfig` now carries nine tier-0 axes — `optimizer`, `gradient_accumulation_steps`, `max_grad_norm`, `gradient_checkpointing`, `attn_implementation`, `lr_scheduler_type`, `warmup_steps`, `sharding_strategy`, `cpu_optimizer_offload` — each resolved through `ConfigResolver` and recorded. Each is bound into the kwargs dict only when the operator declared it, so an undeclared axis still takes the engine default; what changed is that the ABSENCE is itself recorded, which is precisely the distinction the original measurement said no artifact could make.
 
-Two of the thirteen declaration axes are declarable without being executable, and the matrix says so rather than counting them as capability: `sharding_strategy=fsdp|zero3` and `cpu_optimizer_offload=true` REFUSE with 96 rather than accept a declaration this plane cannot honour. That is why T1-13 and T1-14 read REFUSED and not UNBLOCKED — an unrunnable arm is not the same fact as a missing one.
+Two of the sixteen declaration axes are declarable without being executable, and the matrix says so rather than counting them as capability: `sharding_strategy=fsdp|zero3` and `cpu_optimizer_offload=true` REFUSE with 96 rather than accept a declaration this plane cannot honour. That is why T1-13 and T1-14 read REFUSED and not UNBLOCKED — an unrunnable arm is not the same fact as a missing one.
 
 ## Two tiers, and tier 0 is not optional
 

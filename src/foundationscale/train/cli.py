@@ -168,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--adapter-dropout", type=float, default=None)
-    # --- The thirteen declaration axes ---------------------------------------
+    # --- The sixteen declaration axes ---------------------------------------
     # Every flag below defaults to None for exactly the reason --precision does:
     # None means NOT DECLARED. An omitted flag applies the transformers engine
     # default (AdamW, accumulation 1, max_grad_norm 1.0, no recompute, linear LR
@@ -265,6 +265,38 @@ def build_parser() -> argparse.ArgumentParser:
             "build lacks the toggle. Omit: torch decides per shape "
             "(legitimate, today's default) and the manifest records "
             "the axis UNMEASURED with the reason, never silently"
+        ),
+    )
+    p.add_argument(
+        "--torch-compile",
+        choices=("true", "false"),
+        default=None,
+        help=(
+            "compile the model with torch.compile, declared as true/false. A "
+            "string, not store_true, so an OMITTED flag stays distinguishable "
+            "from an explicit false. Measured on GB200: 1.32x faster per step "
+            "on 25 GiB less memory, and on a 12B checkpoint the difference "
+            "between a run and an OOM. Omit: the engine default (off) applies "
+            "and is NOT recorded as a claim"
+        ),
+    )
+    p.add_argument(
+        "--torch-compile-backend",
+        default=None,
+        help=(
+            "inductor backend for torch.compile. REFUSES (96) unless "
+            "--torch-compile is also declared: transformers turns compilation "
+            "ON when this is set, so alone it would compile a run whose "
+            "manifest says it did not"
+        ),
+    )
+    p.add_argument(
+        "--torch-compile-mode",
+        default=None,
+        help=(
+            "torch.compile mode (e.g. default, reduce-overhead, max-autotune). "
+            "REFUSES (96) unless --torch-compile is also declared, for the same "
+            "reason as --torch-compile-backend"
         ),
     )
     p.add_argument(
@@ -548,6 +580,9 @@ def _build_config(argv: Sequence[str] | None, args: argparse.Namespace) -> Train
         cpu_optimizer_offload=(
             None if args.cpu_optimizer_offload is None else args.cpu_optimizer_offload == "true"
         ),
+        torch_compile=(None if args.torch_compile is None else args.torch_compile == "true"),
+        torch_compile_backend=args.torch_compile_backend,
+        torch_compile_mode=args.torch_compile_mode,
         optimizer=args.optimizer,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         max_grad_norm=args.max_grad_norm,

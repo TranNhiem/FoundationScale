@@ -1,0 +1,530 @@
+{
+  "campaign": "gb200_scaling",
+  "measured_on": "2026-09-22",
+  "device": {
+    "arch": "sm_100",
+    "memory_mib_per_gpu": 189471,
+    "power_cap_w": 1200,
+    "max_sm_clock_mhz": 2062,
+    "gpus_per_tray": 4,
+    "datasheet_bf16_dense_tflops": 2500.0,
+    "measured_sustained_tflops": 1503.4
+  },
+  "toolchain": {
+    "torch": "2.12.1+cu130",
+    "transformers": "5.13.0",
+    "python": "3.11",
+    "attention_backends_installed": [
+      "eager",
+      "sdpa"
+    ],
+    "attention_backends_absent": [
+      "flash_attn",
+      "flash_attn_interface",
+      "transformer_engine",
+      "xformers",
+      "kernels"
+    ]
+  },
+  "harness": {
+    "flops_per_token": "6 * N_active + 12 * L * H * S",
+    "n_active_note": "non-embedding parameters ACTIVE per token; routed expert parameters scaled by top_k/num_experts",
+    "step_time": "max across ranks, barrier + device synchronize on both sides of the timer",
+    "warmup": "reported separately, never folded into the step average",
+    "oom": "recorded as a result row, not a crash"
+  },
+  "confound_control": {
+    "finding": "scheduler step cgroup granted 2 CPUs where the job held 120",
+    "method": "same binary, same node, same step; only the cpuset changed",
+    "arms": [
+      {
+        "cpus": 128,
+        "world": 1,
+        "step_ms": 403.4,
+        "tokens_per_s_per_gpu": 10153.4,
+        "scaling_efficiency": null
+      },
+      {
+        "cpus": 128,
+        "world": 4,
+        "step_ms": 390.3,
+        "tokens_per_s_per_gpu": 10494.2,
+        "scaling_efficiency": 1.034
+      },
+      {
+        "cpus": 2,
+        "world": 1,
+        "step_ms": 392.9,
+        "tokens_per_s_per_gpu": 10426.2,
+        "scaling_efficiency": null
+      },
+      {
+        "cpus": 2,
+        "world": 4,
+        "step_ms": 1262.8,
+        "tokens_per_s_per_gpu": 3243.7,
+        "scaling_efficiency": 0.311
+      }
+    ],
+    "note": "invisible at world 1; one rank never needs more than about one CPU to dispatch"
+  },
+  "weak_scaling": {
+    "shape": "seq 2048, per-rank batch 2, eager, dormant towers frozen, ddp",
+    "gemma-4-E4B": {
+      "compile_off": [
+        {
+          "world": 1,
+          "step_ms": 403.4,
+          "tokens_per_s_aggregate": 10153.4,
+          "tflops_aggregate": 268.9,
+          "peak_mem_gib": 106.43,
+          "scaling_efficiency": null
+        },
+        {
+          "world": 2,
+          "step_ms": 420.3,
+          "tokens_per_s_aggregate": 19492.6,
+          "tflops_aggregate": 516.2,
+          "peak_mem_gib": 113.83,
+          "scaling_efficiency": 0.96
+        },
+        {
+          "world": 4,
+          "step_ms": 390.3,
+          "tokens_per_s_aggregate": 41976.7,
+          "tflops_aggregate": 1111.6,
+          "peak_mem_gib": 106.43,
+          "scaling_efficiency": 1.034
+        },
+        {
+          "world": 8,
+          "step_ms": 397.0,
+          "tokens_per_s_aggregate": 82547.4,
+          "tflops_aggregate": 2186.1,
+          "peak_mem_gib": 113.83,
+          "scaling_efficiency": 1.016
+        }
+      ],
+      "compile_on": [
+        {
+          "world": 1,
+          "step_ms": 305.2,
+          "tokens_per_s_aggregate": 13420.2,
+          "tflops_aggregate": 355.4,
+          "peak_mem_gib": 79.8,
+          "scaling_efficiency": null
+        },
+        {
+          "world": 2,
+          "step_ms": 336.4,
+          "tokens_per_s_aggregate": 24354.8,
+          "tflops_aggregate": 645.0,
+          "peak_mem_gib": 87.22,
+          "scaling_efficiency": 0.907
+        },
+        {
+          "world": 4,
+          "step_ms": 296.0,
+          "tokens_per_s_aggregate": 55346.0,
+          "tflops_aggregate": 1465.7,
+          "peak_mem_gib": 87.21,
+          "scaling_efficiency": 1.031
+        },
+        {
+          "world": 8,
+          "step_ms": 311.4,
+          "tokens_per_s_aggregate": 105244.6,
+          "tflops_aggregate": 2787.1,
+          "peak_mem_gib": 87.2,
+          "scaling_efficiency": 0.98
+        }
+      ]
+    },
+    "gemma-4-12B": {
+      "compile_off": "OOM at every world size at this batch",
+      "compile_on": [
+        {
+          "world": 1,
+          "step_ms": 391.2,
+          "tokens_per_s_aggregate": 10469.4,
+          "tflops_per_gpu": 732.2,
+          "mfu_vs_measured": 0.487,
+          "peak_mem_gib": 156.39,
+          "scaling_efficiency": null
+        },
+        {
+          "world": 2,
+          "step_ms": 417.6,
+          "tokens_per_s_aggregate": 19617.6,
+          "tflops_per_gpu": 686.0,
+          "mfu_vs_measured": 0.4563,
+          "peak_mem_gib": 156.43,
+          "scaling_efficiency": 0.937
+        },
+        {
+          "world": 4,
+          "step_ms": 412.4,
+          "tokens_per_s_aggregate": 39730.0,
+          "tflops_per_gpu": 694.6,
+          "mfu_vs_measured": 0.462,
+          "peak_mem_gib": 156.43,
+          "scaling_efficiency": 0.949
+        },
+        {
+          "world": 8,
+          "step_ms": 434.2,
+          "tokens_per_s_aggregate": 75459.5,
+          "tflops_per_gpu": 659.6,
+          "mfu_vs_measured": 0.4388,
+          "peak_mem_gib": 156.55,
+          "scaling_efficiency": 0.901
+        }
+      ]
+    }
+  },
+  "peak_throughput": {
+    "model": "gemma-4-E4B",
+    "world": 8,
+    "shard": "ddp",
+    "batch_per_rank": 2,
+    "grad_accum": 8,
+    "compile": "on",
+    "step_ms": 1816.7,
+    "tokens_per_s_aggregate": 144296.6,
+    "tflops_aggregate": 3821.3,
+    "mfu_vs_measured": 0.3177,
+    "peak_mem_gib": 94.6,
+    "median_power_w": 728.0
+  },
+  "gradient_accumulation": {
+    "shape": "gemma-4-E4B, world 4, seq 2048, per-rank batch 2, ddp",
+    "compile_off": [
+      {
+        "grad_accum": 4,
+        "step_ms": 1369.9,
+        "tokens_per_s_aggregate": 47841.5,
+        "peak_mem_gib": 121.27
+      },
+      {
+        "grad_accum": 8,
+        "step_ms": 2673.3,
+        "tokens_per_s_aggregate": 49029.7,
+        "peak_mem_gib": 121.27
+      }
+    ],
+    "compile_on": [
+      {
+        "grad_accum": 4,
+        "step_ms": 971.4,
+        "tokens_per_s_aggregate": 67468.8,
+        "peak_mem_gib": 87.21
+      },
+      {
+        "grad_accum": 8,
+        "step_ms": 1837.1,
+        "tokens_per_s_aggregate": 71348.4,
+        "peak_mem_gib": 94.6
+      }
+    ],
+    "finding": "memory is flat across accumulation with compile off and GROWS with compile on; that growth OOMs a 12B run that fits at accum 1"
+  },
+  "sharding": {
+    "shape": "world 8, seq 2048, eager, fsdp2, dormant towers frozen",
+    "arms": [
+      {
+        "model": "gemma-4-E4B",
+        "world": 4,
+        "batch": 2,
+        "shard": "fsdp2",
+        "grad_ckpt": "off",
+        "step_ms": 575.3,
+        "peak_mem_gib": 84.51,
+        "ddp_comparison_mem_gib": 106.43,
+        "ddp_comparison_step_ms": 390.3
+      },
+      {
+        "model": "gemma-4-26B-A4B",
+        "batch": 1,
+        "grad_ckpt": "off",
+        "step_ms": 756.7,
+        "tokens_per_s_per_gpu": 2706.5,
+        "tflops_per_gpu": 55.7,
+        "mfu_vs_measured": 0.0371,
+        "peak_mem_gib": 65.36,
+        "active_params": 3080000000,
+        "total_nonembedding_params": 24490000000
+      },
+      {
+        "model": "gemma-4-31B",
+        "batch": 1,
+        "grad_ckpt": "off",
+        "step_ms": 986.6,
+        "tokens_per_s_per_gpu": 2075.7,
+        "tflops_per_gpu": 381.2,
+        "mfu_vs_measured": 0.2536,
+        "peak_mem_gib": 143.24
+      },
+      {
+        "model": "gemma-4-26B-A4B",
+        "batch": 2,
+        "grad_ckpt": "off",
+        "step_ms": 802.8,
+        "tokens_per_s_aggregate": 40815.9,
+        "peak_mem_gib": 109.03
+      },
+      {
+        "model": "gemma-4-26B-A4B",
+        "batch": 2,
+        "grad_ckpt": "on",
+        "step_ms": 1002.3,
+        "tokens_per_s_aggregate": 32693.1,
+        "peak_mem_gib": 36.49
+      },
+      {
+        "model": "gemma-4-31B",
+        "batch": 2,
+        "grad_ckpt": "off",
+        "status": "oom"
+      },
+      {
+        "model": "gemma-4-31B",
+        "batch": 2,
+        "grad_ckpt": "on",
+        "step_ms": 2057.8,
+        "tokens_per_s_aggregate": 15923.9,
+        "peak_mem_gib": 42.6
+      }
+    ]
+  },
+  "context_length": {
+    "shape": "gemma-4-E4B, world 4, batch 1, ddp, compile off",
+    "arms": [
+      {
+        "seq": 2048,
+        "attn": "eager",
+        "step_ms": 389.3,
+        "peak_mem_gib": 71.76
+      },
+      {
+        "seq": 2048,
+        "attn": "sdpa",
+        "step_ms": 409.9,
+        "peak_mem_gib": 64.22
+      },
+      {
+        "seq": 4096,
+        "attn": "eager",
+        "step_ms": 414.9,
+        "peak_mem_gib": 122.18
+      },
+      {
+        "seq": 4096,
+        "attn": "sdpa",
+        "step_ms": 698.5,
+        "peak_mem_gib": 99.2
+      },
+      {
+        "seq": 8192,
+        "attn": "eager",
+        "status": "oom"
+      },
+      {
+        "seq": 8192,
+        "attn": "sdpa",
+        "step_ms": 1912.8,
+        "peak_mem_gib": 148.55
+      },
+      {
+        "seq": 16384,
+        "attn": "eager",
+        "status": "oom"
+      },
+      {
+        "seq": 16384,
+        "attn": "sdpa",
+        "status": "oom"
+      }
+    ],
+    "finding": "sdpa is 1.68x SLOWER than eager at 4096 where both fit, and is the only arm that reaches 8192"
+  },
+  "cross_family": {
+    "claim": "the structural fsdp2 wrap reached a second family with no code change",
+    "arms": [
+      {
+        "model": "Qwen3.5-27B",
+        "blocks_sharded": 64,
+        "step_ms": 10097.9,
+        "tokens_per_s_per_gpu": 202.8,
+        "peak_mem_gib": 36.23,
+        "median_power_w": 315.1,
+        "flop_model": "not applicable"
+      },
+      {
+        "model": "Qwen3.5-35B-A3B",
+        "blocks_sharded": 40,
+        "step_ms": 6690.8,
+        "tokens_per_s_per_gpu": 306.1,
+        "peak_mem_gib": 43.76,
+        "median_power_w": 300.3,
+        "flop_model": "not applicable",
+        "active_params": 2440000000,
+        "total_nonembedding_params": 33640000000
+      }
+    ],
+    "flop_model_refusal_reason": "layer_types declares linear_attention; the 12*L*H*S term assumes quadratic softmax attention",
+    "finding": "structural reach is not measurement validity"
+  },
+  "interconnect": {
+    "cross_tray_nvlink": "unavailable",
+    "error": "transport/nvls.cc NCCL WARN Cuda failure 801 'operation not supported'",
+    "cause": "multi-node NVLink needs an IMEX domain spanning both trays; the trays were held by two separate scheduler jobs",
+    "consequence": "measured none at this size: the fallback transport still reached 0.980 weak-scaling efficiency at world 8"
+  },
+  "data_pipeline": {
+    "corpus_jsonl_files": 295,
+    "seq": 2048,
+    "arms": [
+      {
+        "workers": 0,
+        "batch_time_median_ms": 4.82,
+        "batch_time_p90_ms": 7.79,
+        "batch_time_max_ms": 11.52,
+        "blocked_median_ms": 4.82,
+        "tokens_per_s": 895500
+      },
+      {
+        "workers": 2,
+        "batch_time_median_ms": 2.11,
+        "batch_time_p90_ms": 5.67,
+        "batch_time_max_ms": 9.02,
+        "blocked_median_ms": 2.04,
+        "tokens_per_s": 1627425
+      },
+      {
+        "workers": 4,
+        "batch_time_median_ms": 0.49,
+        "batch_time_p90_ms": 2.89,
+        "batch_time_max_ms": 4.39,
+        "blocked_median_ms": 0.48,
+        "tokens_per_s": 3531849
+      },
+      {
+        "workers": 8,
+        "batch_time_median_ms": 0.1,
+        "batch_time_p90_ms": 1.42,
+        "batch_time_max_ms": 3.97,
+        "blocked_median_ms": 0.08,
+        "tokens_per_s": 7301768
+      },
+      {
+        "workers": 16,
+        "batch_time_median_ms": 0.07,
+        "batch_time_p90_ms": 1.11,
+        "batch_time_max_ms": 5.76,
+        "blocked_median_ms": 0.04,
+        "tokens_per_s": 9146620
+      }
+    ],
+    "control": "an empty corpus REFUSES with exit 96 rather than reporting a throughput number; verified",
+    "finding": "at 16 workers the loader supplies 63x the fastest measured GPU demand; blocked time is 0.002% of a step",
+    "scope": "TEXT path only; image decode is not measured here"
+  },
+  "not_measured": [
+    "image DECODE cost inside the input pipeline",
+    "video, and any modality other than still images",
+    "expert-parallel MoE execution",
+    "any attention kernel with an sm_100 build"
+  ],
+  "multimodal": {
+    "shape": "gemma-4-E4B-it, seq 2048 fixed, per-rank batch 1, eager, ddp",
+    "note": "seq is fixed, so images CONVERT text tokens into placeholder tokens rather than adding tokens",
+    "ddp_find_unused_parameters": true,
+    "ddp_note": "required: with no images the vision tower gets no gradient and the reducer hangs; costs a full autograd traversal every step",
+    "images_found": 34932,
+    "images_failed_to_decode": 0,
+    "decode_note": "0% here; a different estate corpus measured 21.5% undecodable, so the filter stays load-bearing",
+    "ln_vocab": 12.4766,
+    "world_1": [
+      {
+        "images_per_sample": 0,
+        "step_ms": 427.7,
+        "tokens_per_s_per_gpu": 4788,
+        "image_tokens": 0,
+        "text_tokens": 2048,
+        "peak_mem_gib": 71.76,
+        "median_loss": 0.0049
+      },
+      {
+        "images_per_sample": 1,
+        "step_ms": 586.3,
+        "tokens_per_s_per_gpu": 3493,
+        "image_tokens": 258,
+        "text_tokens": 1790,
+        "peak_mem_gib": 75.97,
+        "median_loss": 0.0096
+      },
+      {
+        "images_per_sample": 2,
+        "step_ms": 581.3,
+        "tokens_per_s_per_gpu": 3523,
+        "image_tokens": 516,
+        "text_tokens": 1532,
+        "peak_mem_gib": 80.24,
+        "median_loss": 0.0127
+      },
+      {
+        "images_per_sample": 4,
+        "step_ms": 571.3,
+        "tokens_per_s_per_gpu": 3585,
+        "image_tokens": 1032,
+        "text_tokens": 1016,
+        "peak_mem_gib": 88.9,
+        "median_loss": 0.0054
+      }
+    ],
+    "world_4": [
+      {
+        "images_per_sample": 0,
+        "step_ms": 518.2,
+        "tokens_per_s_per_gpu": 3952,
+        "tokens_per_s_aggregate": 15810,
+        "peak_mem_gib": 86.57,
+        "median_loss": 0.005
+      },
+      {
+        "images_per_sample": 1,
+        "step_ms": 674.5,
+        "tokens_per_s_per_gpu": 3036,
+        "tokens_per_s_aggregate": 12145,
+        "peak_mem_gib": 90.81,
+        "median_loss": 0.0101
+      },
+      {
+        "images_per_sample": 2,
+        "step_ms": 678.9,
+        "tokens_per_s_per_gpu": 3017,
+        "tokens_per_s_aggregate": 12066,
+        "peak_mem_gib": 95.08,
+        "median_loss": 0.0112
+      },
+      {
+        "images_per_sample": 4,
+        "step_ms": 664.3,
+        "tokens_per_s_per_gpu": 3083,
+        "tokens_per_s_aggregate": 12331,
+        "peak_mem_gib": 103.74,
+        "median_loss": 0.0055
+      }
+    ],
+    "findings": [
+      "a multimodal step costs a flat ~37% over text-only",
+      "the cost is paid by the FIRST image; 1, 2 and 4 images land within 3% of each other in step time",
+      "memory climbs linearly at about 4.3 GiB per image, so image count is memory-bound not time-bound",
+      "world-4 text-only reaches only 83% of world 1 because find_unused_parameters=True is on"
+    ],
+    "controls": [
+      "median loss reported against ln(vocab) on every arm; unmasked image placeholders drive loss ABOVE it (19.16 vs 12.48 in a prior estate defect). Measured 0.0049-0.0127, so the masking is correct",
+      "a directory with no decodable image REFUSES with exit 96 rather than reporting a multimodal number; verified"
+    ]
+  }
+}
