@@ -94,22 +94,26 @@ def build_parser() -> argparse.ArgumentParser:
             "WORLD_SIZE and recorded, not used to configure anything"
         ),
     )
-    # These four are DECLARATIONS, not knobs. The plane builds a
-    # transformers.Trainer whose kwargs carry no tensor/pipeline/expert/
-    # context-parallel key, so any degree > 1 is refused (EXIT_REFUSE) before a
-    # model is loaded rather than trained as pure DDP under a parallel label.
-    # Stated here so an operator learns it at --help time instead of after an
-    # allocation is burned -- a knob that appears configurable and is not is
-    # worse than a missing knob.
-    _unwired = (
-        "declared {name}-parallel degree. REFUSED when > 1: no {name} is wired "
-        "into this plane, so a larger degree would be recorded and never "
-        "executed (finding #375)"
+    # Two of these four now EXECUTE and two do not, and the help says which,
+    # because a knob that appears configurable and is not is worse than a
+    # missing knob. tp and cp bind through accelerate's ParallelismConfig
+    # behind TrainingArguments.parallelism_config. pp and ep have no field in
+    # that config, so any degree > 1 is refused (EXIT_REFUSE) before a model is
+    # loaded rather than trained as pure DDP under a parallel label.
+    _wired = (
+        "declared {name}-parallel degree. EXECUTED: bound through accelerate's "
+        "ParallelismConfig. REFUSED (96) when > 1 on a build whose transformers "
+        "has no parallelism_config argument, rather than dropped"
     )
-    p.add_argument("--tp", type=int, default=1, help=_unwired.format(name="tensor"))
+    _unwired = (
+        "declared {name}-parallel degree. REFUSED when > 1: accelerate's "
+        "ParallelismConfig has no {name} field, so a larger degree would be "
+        "recorded and never executed (finding #375)"
+    )
+    p.add_argument("--tp", type=int, default=1, help=_wired.format(name="tensor"))
     p.add_argument("--pp", type=int, default=1, help=_unwired.format(name="pipeline"))
     p.add_argument("--ep", type=int, default=1, help=_unwired.format(name="expert"))
-    p.add_argument("--cp", type=int, default=1, help=_unwired.format(name="context"))
+    p.add_argument("--cp", type=int, default=1, help=_wired.format(name="context"))
     # Machine facts: no defaults, fail closed (doctrine 4).
     p.add_argument("--nodes", type=int, required=True)
     p.add_argument("--gpus-per-node", type=int, required=True)
@@ -333,11 +337,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--sharding-strategy",
         default=None,
         help=(
-            "declared sharding strategy. Only 'ddp' has execution behind it "
-            "in this plane -- any other value is REFUSED (96) rather than run "
-            "as plain DDP under a manifest that claims otherwise (#375's "
-            "defect class); FSDP/ZeRO/DeepSpeed were adjudicated and recorded, "
-            "never built. Omit: data parallelism only, and no claim is made"
+            "declared sharding strategy: 'ddp' replicates, 'fsdp' shards "
+            "parameters, gradients and optimizer state through transformers' "
+            "FSDP integration. Sharding is what makes a 26B or 31B checkpoint "
+            "reachable at all -- under replication every rank holds the whole "
+            "model plus AdamW state, about 8 bytes per parameter, so adding "
+            "GPUs never lowers per-GPU memory. ZeRO and DeepSpeed remain "
+            "adjudicated and unbuilt and are REFUSED (96). Omit: data "
+            "parallelism only, and no claim is made"
         ),
     )
     p.add_argument(
@@ -345,10 +352,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("true", "false"),
         default=None,
         help=(
-            "optimizer-state offload, declared as true/false. 'true' is "
-            "REFUSED (96): this plane wires no offload backend, so honouring "
-            "it would require executor code that was adjudicated and never "
-            "built. Omit: no offload, and no claim is recorded"
+            "offload to host memory, declared as true/false. 'true' requires "
+            "--sharding-strategy fsdp and is REFUSED (96) otherwise: the only "
+            "offload backend reachable here lives inside FSDP, and under "
+            "replication each rank owns a whole optimizer with no route off "
+            "device. NOTE the FSDP switch moves parameters and gradients as "
+            "well as optimizer state -- it is wider than this axis is named. "
+            "Omit: no offload, and no claim is recorded"
         ),
     )
     return p

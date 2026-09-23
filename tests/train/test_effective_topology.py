@@ -106,7 +106,14 @@ class _FakeTrainingArguments:
         bf16: bool | None = None,
         fp16: bool | None = None,
         save_safetensors: bool | None = None,
+        # Named so the tp/cp backend-availability refusal does NOT fire here.
+        # Without it every tensor-parallel arm in this module lands on "this
+        # transformers release has no parallelism_config", which is a true
+        # statement about the fixture and says nothing about the composition
+        # rule the arms below exist to measure.
+        parallelism_config: Any | None = None,
     ) -> None:
+        self.parallelism_config = parallelism_config
         self.output_dir = output_dir
         self.max_steps = max_steps
         self.per_device_train_batch_size = per_device_train_batch_size
@@ -190,14 +197,19 @@ def _install_fake_training_stack(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "transformers", transformers)
 
 
-@pytest.mark.parametrize("degree", ["tp", "pp", "ep", "cp"])
+@pytest.mark.parametrize("degree", ["pp", "ep"])
 def test_unwired_degree_refuses_before_any_trainer(
     degree: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Each degree named INDEPENDENTLY: tp=2 alone refuses, ep=2 alone refuses."""
+    """Each degree named INDEPENDENTLY: pp=2 alone refuses, ep=2 alone refuses.
+
+    tp and cp left this parametrisation when they gained an executor. They are
+    covered by the arm below, which refuses them for a DIFFERENT reason and at a
+    different site -- keeping them here would have passed for the wrong cause.
+    """
     # WORLD_SIZE unset so that, without the refusal, the declared-vs-effective
     # comparison is skipped on the driver and execution would flow all the way
     # to the Trainer tripwire -- the leg can come out different.
@@ -213,10 +225,39 @@ def test_unwired_degree_refuses_before_any_trainer(
     # REACHED-SITE: the refusal marker fired and names THIS degree by value.
     assert "fs:train:refuse" in out
     assert f"{degree}=2" in out
-    # OUTCOME: exit 96, the message says WHY (no Trainer kwarg carries the
-    # degree), and the tripwire above proves no Trainer was constructed.
+    # OUTCOME: exit 96, and the message says WHY -- the backend behind the
+    # degrees that DO bind has no field for this one.
     assert rc == EXIT_REFUSE
-    assert "transformers.Trainer" in out
+    assert "ParallelismConfig" in out
+
+
+@pytest.mark.parametrize("degree", ["tp", "cp"])
+def test_wired_degree_beside_replicated_data_refuses_at_the_composition_site(
+    degree: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """tp and cp execute, but not beside a REPLICATED data dimension.
+
+    The same dp=4 shape the arm above uses, so the two differ only in which
+    degree is declared -- and they land on different refusals, which is the
+    point: accelerate composes tensor and context parallelism with sharded data
+    parallelism only, so this arm must not be read as "tp is unwired".
+    """
+    monkeypatch.delenv("WORLD_SIZE", raising=False)
+    monkeypatch.delenv("LOCAL_WORLD_SIZE", raising=False)
+    _install_fake_training_stack(monkeypatch)
+    cfg = _cfg(tmp_path, dp=4, **{degree: 2})
+    rc = train(cfg)
+    out = capsys.readouterr().out
+    assert "fs:train:refuse" in out
+    assert f"{degree}=2" in out
+    assert rc == EXIT_REFUSE
+    # The composition site, NOT the unwired-degree site: naming the wrong one
+    # would let a regression that re-refuses tp wholesale pass this test.
+    assert "SHARDED data parallelism" in out
+    assert "ParallelismConfig has no" not in out
 
 
 def test_all_degrees_one_does_not_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

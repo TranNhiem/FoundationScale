@@ -4,9 +4,11 @@ SCOPE, STATED UP FRONT BECAUSE THE ROW'S CLAIM IS COMPOUND
 -----------------------------------------------------------
 The matrix row claims "tying survives save/load AND sharding". Only the first
 conjunct is reachable on this plane. T1-14 (#481) measured that a declared
-sharding_strategy is REFUSED, because no sharded backend is wired here -- so
-there is no sharded save to inspect, and no amount of care with this instrument
-would produce one. This adjudicator therefore answers the save/load conjunct and
+sharding_strategy was REFUSED, because no sharded backend was wired then -- so
+there was no sharded save to inspect, and no amount of care with this instrument
+would have produced one. `fsdp` has since been wired and is unit-tested but not
+yet measured on hardware, so the sharded conjunct is now unMEASURED rather than
+unreachable; this adjudicator still does not answer it. This adjudicator therefore answers the save/load conjunct and
 declares the sharding conjunct unreachable rather than letting a GREEN on half a
 claim be read as a GREEN on all of it.
 

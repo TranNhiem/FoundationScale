@@ -185,11 +185,48 @@ PRECISIONS: tuple[str, ...] = ("bf16", "fp16", "fp32", "nvfp4")
 ADAPTERS: tuple[str, ...] = ("lora",)
 # The sharding declarations the execution plane can actually HONOUR. "ddp" is
 # the only one: transformers.Trainer as wired here provides data parallelism
-# only, and every sharded alternative (FSDP/ZeRO/DeepSpeed) is adjudicated and
-# recorded in gates/ and provenance/ -- measured, named, and never built. The
-# tuple exists so the refusal message can name the accepted set, the same
-# reason PRECISIONS is a tuple; sorted for the verbatim-interpolation contract.
-SHARDING_STRATEGIES: tuple[str, ...] = ("ddp",)
+# only until FSDP was wired: "fsdp" now binds transformers' own FSDP
+# integration (`fsdp` + `fsdp_config`), which is what makes a 26B or 31B
+# checkpoint reachable at all -- under replication every rank holds the whole
+# model plus AdamW state, about 8 bytes per parameter, so adding GPUs never
+# lowers per-GPU memory. ZeRO and DeepSpeed remain adjudicated-and-unbuilt and
+# are still refused. The tuple exists so the refusal message can name the
+# accepted set, the same reason PRECISIONS is a tuple.
+SHARDING_STRATEGIES: tuple[str, ...] = ("ddp", "fsdp")
+
+
+def _parallelism_backend() -> tuple[Any, str | None]:
+    """accelerate's ParallelismConfig class, or the reason this build has none.
+
+    Tensor and context parallelism are the two of the six declared dimensions
+    that have a real executor reachable from this plane, and the executor is
+    accelerate's ParallelismConfig behind TrainingArguments.parallelism_config.
+    Both halves are checked -- the argument must exist on THIS transformers
+    release and the class must import -- because the two move independently and
+    a run that declares tp must not proceed on a build where the declaration
+    would be dropped on the floor.
+
+    Returns (class, None) when available and (None, reason) when not. The
+    caller REFUSES on the reason rather than falling back to plain data
+    parallelism, which would be the declaration-without-execution defect this
+    module exists to prevent, committed by the code that polices it.
+    """
+    try:
+        from transformers import TrainingArguments as _TrainingArguments
+    except Exception as exc:  # noqa: BLE001
+        return None, f"transformers is not importable ({type(exc).__name__})"
+    if "parallelism_config" not in inspect.signature(_TrainingArguments.__init__).parameters:
+        return None, (
+            "this transformers release has no parallelism_config argument, "
+            "which is where tensor and context parallelism bind"
+        )
+    try:
+        from accelerate.parallelism_config import (  # type: ignore[import-untyped]
+            ParallelismConfig,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return None, (f"accelerate.parallelism_config is not importable ({type(exc).__name__})")
+    return ParallelismConfig, None
 
 
 class Step:
@@ -3453,25 +3490,29 @@ def _train(cfg: TrainConfig) -> int:
         )
         return EXIT_REFUSE
 
-    # Measured, not assumed: cfg.tp/pp/ep/cp have ZERO execution consumers in
-    # this plane. Every occurrence is a record or validate site, and the
-    # Trainer kwargs dict built in step 6 carries no tensor/pipeline/expert/
-    # context-parallel key of any kind -- a run declaring tp=8 would train
-    # 8-way DDP while the manifest records tp=8. That is the unwired-knob
-    # class, and the house idiom for it is refusal (nvfp4 above), never a
-    # silent 1. Each degree is named independently: a guard on the product
-    # would pass tp=2, pp=1 combinations it must catch.
-    unwired = [name for name in ("tp", "pp", "ep", "cp") if getattr(cfg, name) > 1]
+    # This guard used to name all four of tp/pp/ep/cp, and it was right to:
+    # none of them had an execution consumer, so a run declaring tp=8 would
+    # have trained 8-way DDP under a manifest recording tp=8. Two of the four
+    # now have one. tp and cp bind through accelerate's ParallelismConfig and
+    # are wired in step 6, so they are no longer unwired and refusing them
+    # would be the opposite defect -- refusing a capability the plane has.
+    #
+    # pp and ep stay, and the reason is a fact about the backend rather than
+    # about effort: ParallelismConfig carries dp_replicate_size, dp_shard_size,
+    # tp_size, cp_size and sp_size, and NO pipeline or expert field. There is
+    # nothing here to bind them to. Each degree is still named independently: a
+    # guard on the product would pass pp=2, ep=1 combinations it must catch.
+    unwired = [name for name in ("pp", "ep") if getattr(cfg, name) > 1]
     if unwired:
         _mark(
             Step.REFUSE,
             f"declared {', '.join(f'{name}={getattr(cfg, name)}' for name in unwired)} "
-            "cannot be executed: the plane builds a transformers.Trainer "
-            "whose kwargs carry no tensor/pipeline/expert/context-parallel "
-            "key, so the degree would be recorded but never executed "
-            "(finding #375). "
-            "Refusing rather than training pure DDP under a parallel label "
-            "the run does not have",
+            "cannot be executed: the parallelism backend this plane reaches is "
+            "accelerate's ParallelismConfig, which has fields for data, tensor, "
+            "context and sequence parallelism and none for pipeline or experts, "
+            "so the degree would be recorded but never executed (finding #375). "
+            "Declare --tp / --cp, which this plane does execute. Refusing rather "
+            "than training pure DDP under a parallel label the run does not have",
         )
         _emit_manifest(
             cfg,
@@ -3487,13 +3528,12 @@ def _train(cfg: TrainConfig) -> int:
     if cfg.sharding_strategy not in (None, *SHARDING_STRATEGIES):
         _mark(
             Step.REFUSE,
-            f"sharding_strategy={cfg.sharding_strategy!r} is declared, but no "
-            f"sharded backend is wired in this plane: the execution path is "
-            f"transformers.Trainer, which provides data parallelism only, and "
-            f"the only honourable declarations are None and {SHARDING_STRATEGIES}. "
-            "FSDP / ZeRO / DeepSpeed were measured, adjudicated and recorded in "
-            "gates/ and provenance/ -- and never built. Refusing rather than "
-            "running plain DDP while the manifest claims something else "
+            f"sharding_strategy={cfg.sharding_strategy!r} is declared, but the "
+            f"only strategies this plane executes are None and "
+            f'{SHARDING_STRATEGIES}. "ddp" is replication and "fsdp" binds '
+            "transformers' own FSDP integration; ZeRO and DeepSpeed remain "
+            "adjudicated and recorded in gates/ and provenance/ and are still "
+            "not built. Refusing rather than "
             "happened (#375's defect class: declaration without execution)",
         )
         _emit_manifest(
@@ -3586,22 +3626,91 @@ def _train(cfg: TrainConfig) -> int:
         )
         return EXIT_REFUSE
 
-    if cfg.cpu_optimizer_offload is True:
+    # Offload has exactly one backend here and it lives inside FSDP, so the
+    # declaration is honoured under fsdp and refused everywhere else. Under
+    # replication there is nothing to offload WITH: each rank owns a whole
+    # optimizer and transformers offers no route to move it off device without
+    # DeepSpeed, which is still unbuilt.
+    if cfg.cpu_optimizer_offload is True and cfg.sharding_strategy != "fsdp":
         _mark(
             Step.REFUSE,
-            "cpu_optimizer_offload=True is declared, but this plane has no "
-            "optimizer-offload backend: the only routes transformers offers for "
-            "it are the DeepSpeed/FSDP integrations, and those executors are "
-            "adjudicated and recorded in gates/ and provenance/, never built. "
-            "Refusing rather than training with optimizer states resident on "
-            "device while the manifest records an offload that never happened "
-            "(--cpu-optimizer-offload false or omit the flag to declare the "
-            "execution this backend actually performs)",
+            "cpu_optimizer_offload=True is declared, but sharding_strategy is "
+            f"{cfg.sharding_strategy!r}. The only offload backend reachable from "
+            "this plane is the one inside transformers' FSDP integration, so the "
+            "declaration is executable under --sharding-strategy fsdp and "
+            "nowhere else: under replication each rank owns a whole optimizer "
+            "and there is no route to move it off device without DeepSpeed, "
+            "which is adjudicated and not built. Refusing rather than training "
+            "with optimizer states resident on device while the manifest records "
+            "an offload that never happened",
         )
         _emit_manifest(
             cfg,
             stage="refused",
-            extra={"exit": EXIT_REFUSE, "cpu_optimizer_offload": True},
+            extra={
+                "exit": EXIT_REFUSE,
+                "cpu_optimizer_offload": True,
+                "sharding_strategy": cfg.sharding_strategy,
+            },
+        )
+        return EXIT_REFUSE
+
+    # tp and cp DO bind, but only where the backend exists. Checked before the
+    # model is resident, and refused rather than dropped: the kwarg-introspection
+    # guard further down would catch an unknown parallelism_config too, but it
+    # would do so after the allocation is burned and while naming the kwarg
+    # rather than the declaration the operator made.
+    if cfg.tp > 1 or cfg.cp > 1:
+        _parallelism_cls, parallelism_reason = _parallelism_backend()
+        if _parallelism_cls is None:
+            _mark(
+                Step.REFUSE,
+                f"tp={cfg.tp} cp={cfg.cp} is declared, but {parallelism_reason}. "
+                "Tensor and context parallelism bind through "
+                "TrainingArguments.parallelism_config, and on a build without it "
+                "the declaration would be dropped and the run would train "
+                "data-parallel while the manifest recorded a mesh it never had",
+            )
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={
+                    "exit": EXIT_REFUSE,
+                    "tp": cfg.tp,
+                    "cp": cfg.cp,
+                    "parallelism_backend": parallelism_reason,
+                },
+            )
+            return EXIT_REFUSE
+
+    # accelerate composes tensor and context parallelism with SHARDED data
+    # parallelism, never with replication: "Tensor/Context parallelism cannot be
+    # used with pure data parallelism". Left to reach the backend, that arrives
+    # as a ValueError escaping the thin path and is adjudicated RED (5) -- the
+    # code for a defect, when what happened is an operator declaring a mesh that
+    # does not exist. It is checkable from the declaration alone, so it is
+    # checked here and answered 96.
+    if (cfg.tp > 1 or cfg.cp > 1) and cfg.dp > 1 and cfg.sharding_strategy != "fsdp":
+        _mark(
+            Step.REFUSE,
+            f"tp={cfg.tp} cp={cfg.cp} is declared alongside dp={cfg.dp} under "
+            f"sharding_strategy={cfg.sharding_strategy!r}. Tensor and context "
+            "parallelism compose with SHARDED data parallelism, not with "
+            "replication: accelerate rejects tp/cp above 1 next to a replicated "
+            "data dimension outright. Declare --sharding-strategy fsdp to make "
+            "the data dimension a shard (2D parallel), or leave --dp at 1 and "
+            "let the data dimension be derived from world_size / (tp * cp)",
+        )
+        _emit_manifest(
+            cfg,
+            stage="refused",
+            extra={
+                "exit": EXIT_REFUSE,
+                "tp": cfg.tp,
+                "cp": cfg.cp,
+                "dp": cfg.dp,
+                "sharding_strategy": cfg.sharding_strategy,
+            },
         )
         return EXIT_REFUSE
 
@@ -4339,15 +4448,15 @@ def _train(cfg: TrainConfig) -> int:
     # behind it (AdamW, accumulation 1, max_grad_norm 1.0, no recompute, linear
     # LR with zero warmup) and passing that default undeclared would convert an
     # abstention into the appearance of a statement (#342).
-    # Five of the sixteen declaration axes are deliberately NOT in this dict,
+    # Three of the sixteen declaration axes are deliberately NOT in this dict,
     # each for its own reason:
     # attn_implementation binds at model construction (introspected and
     # possibly refused at its own site above); sdp_backend binds through
-    # process-global torch toggles and never touches TrainingArguments;
-    # sharding_strategy and cpu_optimizer_offload have no TrainingArguments
-    # wiring at all -- they are refused at START rather than silently dropped;
-    # and logging_steps is resolved once into logging_steps_effective above,
+    # process-global torch toggles and never touches TrainingArguments; and
+    # logging_steps is resolved once into logging_steps_effective above,
     # because it is the one axis whose ABSENCE still binds a cadence.
+    # sharding_strategy and cpu_optimizer_offload used to be in this list as
+    # axes with no wiring at all; they are wired below now.
     # Every key added here flows through the `accepted` introspection check
     # below, so an older transformers REFUSES on a knob it does not know
     # instead of silently training without it.
@@ -4373,6 +4482,51 @@ def _train(cfg: TrainConfig) -> int:
         kwargs["torch_compile_backend"] = cfg.torch_compile_backend
     if cfg.torch_compile_mode is not None:
         kwargs["torch_compile_mode"] = cfg.torch_compile_mode
+
+    # --- the parallelism that EXECUTES ---------------------------------------
+    # Everything above is a per-run knob. These two blocks are the mesh, and
+    # until they existed the mesh was a manifest entry with nothing behind it.
+    if cfg.sharding_strategy == "fsdp":
+        # The legacy STRING form rather than a bare True. transformers 5.17
+        # accepts both and says the string is dropped at 5.20, but the cluster
+        # toolchain is 5.13, which knows only the string -- and a plane that
+        # must run on both picks the spelling both parse. Revisit at 5.20.
+        kwargs["fsdp"] = "full_shard auto_wrap"
+        fsdp_config: dict[str, Any] = {}
+        if cfg.cpu_optimizer_offload is True:
+            # FSDP's offload moves parameters AND gradients AND optimizer state
+            # to host memory. It is not an optimizer-only switch, and the axis
+            # is named as though it were, so the manifest records what was
+            # DECLARED and this comment records what is EXECUTED -- the wider
+            # thing. Claiming the narrower one would be the same class of
+            # defect as not wiring it at all.
+            fsdp_config["offload_params"] = True
+        if fsdp_config:
+            kwargs["fsdp_config"] = fsdp_config
+    if cfg.tp > 1 or cfg.cp > 1:
+        # Availability was established at START, so this cannot be the site
+        # that discovers the backend is missing.
+        parallelism_cls, _ = _parallelism_backend()
+        mesh: dict[str, int] = {}
+        if cfg.tp > 1:
+            mesh["tp_size"] = cfg.tp
+        if cfg.cp > 1:
+            mesh["cp_size"] = cfg.cp
+        if cfg.dp > 1:
+            # dp_shard_size, with no replicate branch, and the asymmetry is
+            # forced rather than chosen: tp/cp alongside a REPLICATED data
+            # dimension is refused at START, so by the time this runs a
+            # declared dp can only be a shard. A dp_replicate_size branch here
+            # would be unreachable code carrying an implication -- that the
+            # combination is supported -- which the refusal above denies.
+            #
+            # Passed only when DECLARED. Left out, accelerate derives the data
+            # dimension from world_size / (tp * cp), which is the right default;
+            # passed and inconsistent, accelerate raises. Either way the mesh
+            # that runs and the mesh that was declared cannot silently differ.
+            mesh["dp_shard_size"] = cfg.dp
+        kwargs["parallelism_config"] = parallelism_cls(**mesh)
+
     accepted = set(inspect.signature(TrainingArguments.__init__).parameters)
     if "save_safetensors" in accepted:
         kwargs["save_safetensors"] = True

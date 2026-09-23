@@ -30,7 +30,7 @@ its own gate and controls rather than as a single refactor commit.
 
 ## The headline finding
 
-`src/foundationscale/` measures 46,608 lines and implements **a small number of training primitives** while its main training path delegates. Across all 52 git-tracked `src/*.py` files, an AST probe finds axis A nonzero: 1 `backward()` call, 3 `optimizer.step()` calls, 2 module-scope torch imports (both `if TYPE_CHECKING:`, never executed — #510), and 0 `nn.Module`/`forward`/`DataLoader` markers; axis B is larger: 1 trainer construction, 4 fit/train/save calls, 3 `AutoModel.from_pretrained`, 1 data collator, and 30 function-scope lazy imports. Verdict: IMPLEMENTS-PRIMITIVES.
+`src/foundationscale/` measures 46,772 lines and implements **a small number of training primitives** while its main training path delegates. Across all 52 git-tracked `src/*.py` files, an AST probe finds axis A nonzero: 1 `backward()` call, 3 `optimizer.step()` calls, 2 module-scope torch imports (both `if TYPE_CHECKING:`, never executed — #510), and 0 `nn.Module`/`forward`/`DataLoader` markers; axis B is larger: 1 trainer construction, 4 fit/train/save calls, 3 `AutoModel.from_pretrained`, 1 data collator, and 30 function-scope lazy imports. Verdict: IMPLEMENTS-PRIMITIVES.
 
 **Axis A read alone is materially misleading** — and it was read alone when D2, D3 and D4 were
 first drafted, at a point when it still measured zero (#508). The package *does* ship a training
@@ -73,7 +73,7 @@ the review rather than after it:
 - It moved *during* the review. These documents were written against a census of 13,667 lines.
   The T2 boundary move then relocated the 2,546-line checkpoint decision API out of
   `tools/live_save_gate.py` and into `src/foundationscale/gates/adjudication.py`, and the fixes
-  landed since have added the rest: `src/foundationscale/` now measures 46,608 lines. The
+  landed since have added the rest: `src/foundationscale/` now measures 46,772 lines. The
   structural finding survived re-measurement in re-scoped form: the package now holds real
   decision logic where it previously held none, and a delegating trainer where it previously
   held nothing at all.

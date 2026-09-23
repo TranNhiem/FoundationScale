@@ -182,6 +182,11 @@ def _install_fake_runtime(monkeypatch) -> list:
             gradient_checkpointing=None,
             lr_scheduler_type=None,
             warmup_steps=None,
+            # fsdp is named here because the strategy now HAS a backend: without
+            # it the introspection guard refuses the proceed arm and the test
+            # reads as a subject failure rather than a fixture gap.
+            fsdp=None,
+            fsdp_config=None,
             **extra,
         ):
             self.extra = extra
@@ -233,7 +238,11 @@ def _install_fake_runtime(monkeypatch) -> list:
 ADJUDICATED_CODES = (loop.EXIT_PASS, loop.EXIT_RED, loop.EXIT_UNMEASURED)
 
 
-@pytest.mark.parametrize("axis", ["tp", "pp", "ep", "cp"])
+# tp and cp left this list when they gained an executor: they now bind
+# accelerate's ParallelismConfig, and refusing them would be the opposite
+# defect -- refusing a capability the plane has. pp and ep stay because that
+# config has no pipeline or expert field to bind them to.
+@pytest.mark.parametrize("axis", ["pp", "ep"])
 @pytest.mark.parametrize("world_size", [1, 2], ids=["world1", "world2"])
 def test_declared_parallel_degree_above_one_refuses_at_the_375_site(
     tmp_path, monkeypatch, capsys, axis, world_size
@@ -325,7 +334,9 @@ def test_all_parallel_degrees_at_one_reach_trainer_construction(tmp_path, monkey
     assert rc in ADJUDICATED_CODES
 
 
-@pytest.mark.parametrize("strategy", ["fsdp", "zero3"])
+# fsdp left this list when it gained a backend; zero3 stays adjudicated and
+# unbuilt.
+@pytest.mark.parametrize("strategy", ["zero3"])
 def test_sharding_strategy_without_a_backend_refuses(tmp_path, monkeypatch, capsys, strategy):
     """A declared sharded execution this plane never built: REFUSE 96."""
     constructed = _install_fake_runtime(monkeypatch)
@@ -345,7 +356,7 @@ def test_sharding_strategy_without_a_backend_refuses(tmp_path, monkeypatch, caps
     assert constructed == [], "a refused run constructed a Trainer"
 
 
-@pytest.mark.parametrize("strategy", [None, "ddp"])
+@pytest.mark.parametrize("strategy", [None, "ddp", "fsdp"])
 def test_undeclared_or_ddp_sharding_proceeds(tmp_path, monkeypatch, capsys, strategy):
     """INVERSE CONTROL: the only honourable sharding declarations proceed."""
     constructed = _install_fake_runtime(monkeypatch)
