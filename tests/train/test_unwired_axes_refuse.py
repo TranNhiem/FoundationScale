@@ -131,6 +131,9 @@ def _install_fake_runtime(monkeypatch) -> list:
         pad_token = "<pad>"
         eos_token = None
 
+    class _FakeBlock:
+        """A transformer block class the fake model genuinely contains."""
+
     class _FakeModel:
         # state_dict() -> {} drives _declare_checkpoint down its honest dense
         # branch: no expert keys, no expert-named tensors, agreement by both
@@ -139,6 +142,18 @@ def _install_fake_runtime(monkeypatch) -> list:
 
         def state_dict(self) -> dict:
             return {}
+
+        # FSDP's auto_wrap policy is derived from the model that was actually
+        # loaded, so a model with no blocks at all is refused rather than
+        # wrapped at the root only. This fake declares one so the fsdp proceed
+        # arm measures the strategy rather than the fixture's emptiness.
+        _no_split_modules = ["_FakeBlock"]
+
+        def modules(self) -> list:
+            return [self, _FakeBlock()]
+
+        def named_modules(self) -> list:
+            return [("", self), ("model.layers.0", _FakeBlock())]
 
     class _FakeAutoTokenizer:
         @staticmethod

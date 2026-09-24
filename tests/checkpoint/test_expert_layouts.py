@@ -1143,3 +1143,104 @@ def test_unrecognized_projection_silences_the_aggregate_count() -> None:
     assert result.verdict is Verdict.PASS, result.detail
     assert result.coverage.checked == 32
     assert result.coverage.expected is None  # abstained, not guessed and not 16
+
+
+def _bridge_gemma4_ctx(*, extra: tuple[TensorMeta, ...] = ()) -> CheckpointGateContext:
+    """The layout Megatron-Bridge ACTUALLY writes for Gemma-4 26B-A4B.
+
+    Every other fixture in this module places the router at the HF spelling,
+    ``model.layers.N.router.per_expert_scale``, beside the experts. Bridge nests it
+    INSIDE them -- ``...mlp.experts.router.weight`` -- and the first real
+    26B-A4B Bridge checkpoint (iter_0000750 of the official run) failed every
+    expert gate on 90 routers read as "unrecognized expert layouts". A fixture
+    that spelled the router the kind way could never have caught that, which is
+    the whole reason this one spells it the production way. Names are copied from
+    that checkpoint's DCP metadata, with the layer count cut to two.
+    """
+    num_experts = 4
+    tensors: list[TensorMeta] = []
+    for layer in range(2):
+        base = f"language_model.decoder.layers.{layer}.mlp.experts"
+        for fc, shape in (
+            ("linear_fc1", (num_experts, 16, 8)),
+            ("linear_fc2", (num_experts, 8, 8)),
+        ):
+            tensors.append(
+                TensorMeta(
+                    fqn=f"{base}.experts.experts.{fc}.weight",
+                    shape=shape,
+                    dtype=_EXPERT_DTYPE,
+                    storage_id=f"bridge:L{layer}:{fc}",
+                )
+            )
+        tensors.append(
+            TensorMeta(
+                fqn=f"{base}.router.weight",
+                shape=(num_experts, 16),
+                dtype=_EXPERT_DTYPE,
+                storage_id=f"bridge:L{layer}:router.weight",
+            )
+        )
+        tensors.append(
+            _router_meta(f"{base}.router.per_expert_scale", num_experts, f"bridge:L{layer}:pes")
+        )
+        tensors.append(_router_meta(f"{base}.router.scale", 1, f"bridge:L{layer}:scale"))
+    tensors.extend(extra)
+    return _ctx(
+        tensors,
+        num_experts=num_experts,
+        num_moe_layers=2,
+        expected_expert_bytes=None,
+        origin="bridge-gemma4-production-spelling",
+    )
+
+
+def test_router_nested_inside_experts_is_not_an_expert_tensor() -> None:
+    """A router under an ``experts`` segment is excluded from the expert population."""
+    for fqn in (
+        "language_model.decoder.layers.0.mlp.experts.router.weight",
+        "language_model.decoder.layers.0.mlp.experts.router.per_expert_scale",
+        "language_model.decoder.layers.0.mlp.experts.router.scale",
+    ):
+        assert not cg._expert_named(fqn), fqn
+    # The stacked expert weight beside it is still an expert tensor.
+    assert cg._expert_named(
+        "language_model.decoder.layers.0.mlp.experts.experts.experts.linear_fc1.weight"
+    )
+
+
+def test_bridge_gemma4_layout_is_recognized() -> None:
+    """The production Bridge spelling no longer fails closed on its routers.
+
+    Before the router exclusion this returned FAIL naming
+    ``...mlp.experts.router.*`` as an unrecognized expert layout. Coverage is
+    pinned to the 4 stacked weights so the fix cannot pass by silently shrinking
+    the population to nothing.
+    """
+    result = ExpertDistinctnessGate().run(_bridge_gemma4_ctx())
+
+    assert result.verdict is not Verdict.FAIL, result.detail
+    assert "router" not in result.detail
+    assert result.coverage.checked == 4
+
+
+def test_a_genuinely_unknown_expert_tensor_still_fails_closed() -> None:
+    """Control: the router exemption must not become "odd names pass".
+
+    Same production layout plus one expert-named tensor that is not a router and
+    matches no family. It must still FAIL, and name that tensor -- otherwise the
+    test above would pass on a gate that had simply stopped looking.
+    """
+    mystery = TensorMeta(
+        fqn="language_model.decoder.layers.0.mlp.experts.mystery_blob",
+        shape=(4, 16),
+        dtype=_EXPERT_DTYPE,
+        storage_id="bridge:L0:mystery",
+    )
+    result = ExpertDistinctnessGate().run(_bridge_gemma4_ctx(extra=(mystery,)))
+
+    assert result.verdict is Verdict.FAIL, result.detail
+    # Read from the evidence list, not the one-line detail: the detail names only
+    # the FIRST unrecognized tensor, so asserting on it would make this control
+    # depend on iteration order instead of on whether the tensor was refused.
+    assert mystery.fqn in result.evidence["unrecognized_fqns"]

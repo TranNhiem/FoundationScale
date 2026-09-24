@@ -195,6 +195,53 @@ ADAPTERS: tuple[str, ...] = ("lora",)
 SHARDING_STRATEGIES: tuple[str, ...] = ("ddp", "fsdp")
 
 
+def _fsdp_wrap_classes(model: Any) -> list[str]:
+    """Transformer-block class names to wrap, from the model ACTUALLY loaded.
+
+    transformers resolves FSDP's auto_wrap policy from ``_no_split_modules``, a
+    list of CLASS NAMES declared on the model. On an omni checkpoint that list
+    names towers the causal-LM build never instantiates -- gemma-4-26B-A4B
+    declares ``Gemma4AudioLayer`` -- and accelerate raises "Could not find the
+    transformer layer class X in the model" from inside the first step, after
+    the weights are resident and the allocation is burned. Measured on a tray.
+
+    So the declared names are INTERSECTED with the classes present in this model
+    object, and if that leaves nothing the blocks are found structurally
+    instead: the children of an ``nn.ModuleList`` whose qualified name ends in
+    "layers". Structure rather than vocabulary, so the next family works without
+    a new branch here.
+
+    Returns [] when neither route finds anything, which the caller turns into a
+    refusal -- an empty wrap list would shard only the root and quietly give
+    back most of the memory saving the declaration asked for.
+    """
+    present = {type(module).__name__ for module in model.modules()}
+    declared: list[str] = []
+    inner = getattr(model, "base_model", None)
+    for candidate in (model, inner, getattr(inner, "model", None)):
+        names = getattr(candidate, "_no_split_modules", None) if candidate is not None else None
+        if names:
+            declared = list(names)
+            break
+    keep = [name for name in declared if name in present]
+    if keep:
+        return keep
+    # Imported only on the fallback path: the intersection above answers for
+    # every model that declares its blocks honestly, and a torch.nn import is
+    # not free to demand from callers that never reach here.
+    import torch.nn as nn
+
+    structural: list[str] = []
+    for name, module in model.named_modules():
+        if isinstance(module, nn.ModuleList) and name.endswith("layers"):
+            for child in module:
+                child_name = type(child).__name__
+                if child_name not in structural:
+                    structural.append(child_name)
+                break
+    return structural
+
+
 def _parallelism_backend() -> tuple[Any, str | None]:
     """accelerate's ParallelismConfig class, or the reason this build has none.
 
@@ -4491,8 +4538,63 @@ def _train(cfg: TrainConfig) -> int:
         # accepts both and says the string is dropped at 5.20, but the cluster
         # toolchain is 5.13, which knows only the string -- and a plane that
         # must run on both picks the spelling both parse. Revisit at 5.20.
-        kwargs["fsdp"] = "full_shard auto_wrap"
         fsdp_config: dict[str, Any] = {}
+        # TIED EMBEDDINGS DECIDE THE FSDP VERSION, not the granularity, and the
+        # decision is read off the model rather than assumed. Measured on a
+        # tray, in this order:
+        #
+        #   FSDP2 + per-layer wrap -> "Parameter embed_tokens.weight is shared
+        #     with a parameter already managed by another FSDP group". FSDP2
+        #     tracks each parameter's owning group and a tied embedding/output
+        #     tensor is reachable from two of them. gemma-4-26B-A4B ties them
+        #     and ships no lm_head tensor at all.
+        #   FSDP2 + NO_WRAP -> the same refusal. One group was not enough.
+        #   FSDP1 + NO_WRAP -> the tie is accepted, then OOM on a single 48 GiB
+        #     allocation: one group means one FlatParameter spanning the whole
+        #     model, which has to be materialised before it can be sharded.
+        #   FSDP1 + per-layer wrap -> what this does. FSDP1 flattens each group
+        #     separately and keeps shared parameters in the root group, so the
+        #     tie survives AND no single buffer is the size of the model.
+        #
+        # So the version is chosen by the tie and the granularity stays per
+        # layer either way.
+        model_config = getattr(model, "config", None)
+        text_config = getattr(model_config, "text_config", model_config)
+        tied = bool(getattr(text_config, "tie_word_embeddings", False))
+        kwargs["fsdp"] = "full_shard auto_wrap"
+        # Pinned explicitly rather than left to transformers' own resolution of
+        # _no_split_modules, which matches class NAMES and dies on a name the
+        # loaded model does not contain.
+        wrap_classes = _fsdp_wrap_classes(model)
+        if not wrap_classes:
+            _mark(
+                Step.REFUSE,
+                "sharding_strategy=fsdp is declared, but no transformer block "
+                "class could be resolved to wrap: the model declares "
+                f"_no_split_modules={getattr(model, '_no_split_modules', None)!r}, "
+                "none of which are present, and no nn.ModuleList whose name ends "
+                "in 'layers' was found either. Wrapping only the root would need "
+                "one flat buffer the size of the whole model -- measured, that "
+                "OOMs at 48 GiB on a 184 GiB device -- so this refuses instead",
+            )
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={"exit": EXIT_REFUSE, "sharding_strategy": cfg.sharding_strategy},
+            )
+            return EXIT_REFUSE
+        fsdp_config["transformer_layer_cls_to_wrap"] = wrap_classes
+        if tied:
+            fsdp_config["version"] = 1
+            _mark(
+                Step.VALIDATED,
+                "fsdp: tie_word_embeddings is set, so FSDP version 1 is pinned. "
+                "transformers defaults to 2, which tracks each parameter's "
+                "owning group and rejects the tied embedding/output tensor at "
+                "the first step; version 1 flattens each group separately and "
+                "keeps shared parameters in the root group. Granularity is "
+                f"unchanged -- wrapping {wrap_classes}",
+            )
         if cfg.cpu_optimizer_offload is True:
             # FSDP's offload moves parameters AND gradients AND optimizer state
             # to host memory. It is not an optimizer-only switch, and the axis

@@ -124,7 +124,11 @@ def _base_kwargs(tmp_path: Path, gpus_per_node: int = 1) -> dict[str, object]:
 
 
 def _install_fake_runtime(
-    monkeypatch: pytest.MonkeyPatch, *, parallelism: bool = True
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    parallelism: bool = True,
+    blocks: bool = True,
+    tied: bool = False,
 ) -> SimpleNamespace:
     """Install the optional-extra fakes and return recorders for what train() touched.
 
@@ -198,17 +202,40 @@ def _install_fake_runtime(
     datasets_mod = ModuleType("datasets")
     datasets_mod.load_dataset = lambda *args, **kwargs: {"train": _FakeSplit()}
 
-    class _Auto:
-        @classmethod
-        def from_pretrained(cls, *args: object, **kwargs: object) -> SimpleNamespace:
-            return SimpleNamespace(
+    class _FakeDecoderLayer:
+        """A block class that IS present in the fake model."""
+
+    class _FakeModel(SimpleNamespace):
+        # Faithful to the defect this fixture exists to catch: an omni
+        # checkpoint declares block classes the causal-LM build never
+        # instantiates. gemma-4-26B-A4B declares Gemma4AudioLayer, and
+        # transformers' own auto_wrap resolution died on it at the first step,
+        # on a tray, after the weights were resident. A fake that declared only
+        # classes it contains could not tell a correct intersection from no
+        # intersection at all.
+        _no_split_modules = ["_FakeDecoderLayer", "_FakeAbsentAudioLayer"] if blocks else []
+
+        def __init__(self) -> None:
+            super().__init__(
                 pad_token=None,
                 eos_token="</s>",
-                config=SimpleNamespace(use_cache=False),
+                config=SimpleNamespace(use_cache=False, tie_word_embeddings=tied),
                 parameters=lambda: [],
                 state_dict=lambda: {},
                 to=lambda *a, **k: None,
             )
+            self._blocks = [_FakeDecoderLayer(), _FakeDecoderLayer()] if blocks else []
+
+        def modules(self):
+            return [self, *self._blocks]
+
+        def named_modules(self):
+            return [("", self)] + [(f"model.layers.{i}", b) for i, b in enumerate(self._blocks)]
+
+    class _Auto:
+        @classmethod
+        def from_pretrained(cls, *args: object, **kwargs: object) -> object:
+            return _FakeModel()
 
     class _FakeCollator:
         def __init__(self, tokenizer: object = None, mlm: bool = False) -> None:
@@ -306,7 +333,12 @@ def test_fsdp_reaches_training_arguments(tmp_path: Path, monkeypatch: pytest.Mon
     # The legacy STRING form, not a bare True: the cluster toolchain is
     # transformers 5.13, which knows only the string, and 5.17 still parses it.
     assert constructed.kwargs["fsdp"] == "full_shard auto_wrap"
-    assert "fsdp_config" not in constructed.kwargs
+    # The wrap list is DERIVED from the loaded model, and the absent class the
+    # fake declares must not appear: transformers resolves _no_split_modules by
+    # class name and raises on a name the model does not contain.
+    config = constructed.kwargs["fsdp_config"]
+    assert config["transformer_layer_cls_to_wrap"] == ["_FakeDecoderLayer"]
+    assert "offload_params" not in config
 
 
 def test_ddp_and_omitted_pass_no_fsdp_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -355,7 +387,10 @@ def test_offload_under_fsdp_reaches_fsdp_config(
     assert rc in PROCEEDED_CODES
     constructed = _only_training_arguments(stack)
     assert constructed.kwargs["fsdp"] == "full_shard auto_wrap"
-    assert constructed.kwargs["fsdp_config"] == {"offload_params": True}
+    assert constructed.kwargs["fsdp_config"] == {
+        "transformer_layer_cls_to_wrap": ["_FakeDecoderLayer"],
+        "offload_params": True,
+    }
 
 
 def test_offload_without_fsdp_refuses(
@@ -516,3 +551,139 @@ def test_tp_refuses_when_the_backend_is_absent(
     assert "[fs:train:trainer]" not in out
     assert rc == loop.EXIT_REFUSE
     assert stack.constructed == []
+
+
+def test_fsdp_refuses_when_no_block_class_resolves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A model with no resolvable blocks is refused, not wrapped at the root.
+
+    An empty wrap list is not a harmless default: FSDP would shard the root
+    module only, hand back most of the memory saving the declaration asked for,
+    and record sharding_strategy=fsdp in the manifest while doing it. The
+    failure this guards is silent in exactly the way a memory number is -- the
+    run completes, and only the peak GiB says anything was wrong.
+    """
+    stack = _install_fake_runtime(monkeypatch, blocks=False)
+    cfg = loop.TrainConfig(**_base_kwargs(tmp_path), sharding_strategy="fsdp")
+
+    rc = loop.train(cfg)
+    out = capsys.readouterr().out
+
+    assert "[fs:train:refuse]" in out
+    assert "no transformer block class" in out
+    assert "[fs:train:trainer]" not in out
+    assert rc == loop.EXIT_REFUSE
+    assert stack.constructed == []
+
+
+def test_tied_embeddings_select_fsdp_version_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A tied model pins FSDP version 1 and keeps per-layer wrapping.
+
+    Measured on a tray, in order, for gemma-4-26B-A4B (tied, no lm_head tensor):
+    FSDP2 + per-layer wrap and FSDP2 + NO_WRAP both refused the shared
+    embedding/output tensor at the first step; FSDP1 + NO_WRAP accepted the tie
+    and then OOMed on one 48 GiB flat buffer. FSDP1 + per-layer wrap trained.
+    This pins that exact combination, and announces it.
+    """
+    stack = _install_fake_runtime(monkeypatch, tied=True)
+    rc = loop.train(loop.TrainConfig(**_base_kwargs(tmp_path), sharding_strategy="fsdp"))
+    out = capsys.readouterr().out
+
+    assert rc in PROCEEDED_CODES
+    kwargs = _only_training_arguments(stack).kwargs
+    assert kwargs["fsdp"] == "full_shard auto_wrap"
+    assert kwargs["fsdp_config"]["version"] == 1
+    assert kwargs["fsdp_config"]["transformer_layer_cls_to_wrap"] == ["_FakeDecoderLayer"]
+    assert "FSDP version 1 is pinned" in out
+
+
+def test_untied_model_leaves_fsdp_version_to_the_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The version pin is caused by the tie and appears only with it."""
+    stack = _install_fake_runtime(monkeypatch, tied=False)
+    loop.train(loop.TrainConfig(**_base_kwargs(tmp_path), sharding_strategy="fsdp"))
+
+    assert "version" not in _only_training_arguments(stack).kwargs["fsdp_config"]
+
+
+def test_wrap_classes_fall_back_to_structure_when_declared_names_are_absent() -> None:
+    """Real torch modules: a declared-but-absent class does not blank the wrap list.
+
+    This is the Gemma4AudioLayer shape -- the model names a class it never
+    instantiates -- with nothing valid to intersect, so the derivation must find
+    the blocks by structure: the children of a ModuleList whose name ends in
+    "layers". A fake could not exercise that walk; it needs real nn.Modules.
+    """
+    import torch.nn as nn
+
+    class Block(nn.Module):
+        pass
+
+    class Model(nn.Module):
+        _no_split_modules = ["Gemma4AudioLayer"]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.model = nn.Module()
+            self.model.layers = nn.ModuleList([Block(), Block()])
+
+    assert loop._fsdp_wrap_classes(Model()) == ["Block"]
+
+
+def test_wrap_classes_intersect_declared_names_with_present_ones() -> None:
+    """Declared names that ARE present win over the structural walk."""
+    import torch.nn as nn
+
+    class DecoderLayer(nn.Module):
+        pass
+
+    class Model(nn.Module):
+        _no_split_modules = ["DecoderLayer", "AbsentVisionLayer"]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.layers = nn.ModuleList([DecoderLayer()])
+
+    assert loop._fsdp_wrap_classes(Model()) == ["DecoderLayer"]
+
+
+def test_wrap_classes_look_through_a_peft_wrapper() -> None:
+    """A PEFT-wrapped model carries _no_split_modules on base_model.model."""
+    import torch.nn as nn
+
+    class DecoderLayer(nn.Module):
+        pass
+
+    class Inner(nn.Module):
+        _no_split_modules = ["DecoderLayer"]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.layers = nn.ModuleList([DecoderLayer()])
+
+    class Wrapper(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.base_model = nn.Module()
+            self.base_model.model = Inner()
+
+    assert loop._fsdp_wrap_classes(Wrapper()) == ["DecoderLayer"]
+
+
+def test_wrap_classes_are_empty_when_nothing_resolves() -> None:
+    """No declared class present and no layers ModuleList: an empty list, which
+    the caller refuses rather than wrapping the root alone."""
+    import torch.nn as nn
+
+    class Model(nn.Module):
+        _no_split_modules = ["Nowhere"]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.proj = nn.Linear(2, 2)
+
+    assert loop._fsdp_wrap_classes(Model()) == []

@@ -360,8 +360,21 @@ def _expert_named(fqn: str) -> bool:
     vector, not an expert weight), and classifying those as expert failures would
     accuse clean artifacts. Weird hyphenated names like ``fooexperts.bar`` are
     caught by :func:`_matches_expert_family` below instead.
+
+    A ``router`` segment excludes the tensor even when it sits INSIDE an
+    ``experts`` segment. Megatron-Bridge nests Gemma-4's gate there --
+    ``...mlp.experts.router.weight`` (128, 2816), ``.router.per_expert_scale``,
+    ``.router.scale`` -- where the HF spelling keeps it beside the experts. A
+    router is one gating matrix per layer, not per-expert storage, so it has no
+    distinctness and no expert byte volume to verify; counting it made every gate
+    over a real 26B-A4B Bridge checkpoint fail closed on 90 "unrecognized expert
+    layouts" that were all routers. Measured on iter_0000750 of the official run:
+    150 expert-named tensors = 60 stacked expert weights + 90 routers.
     """
-    return any(seg in {"expert", "experts"} for seg in fqn.lower().split("."))
+    segs = fqn.lower().split(".")
+    if "router" in segs:
+        return False
+    return any(seg in {"expert", "experts"} for seg in segs)
 
 
 def _matches_expert_family(fqn: str) -> bool:
