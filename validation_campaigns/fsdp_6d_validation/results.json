@@ -32,22 +32,125 @@
         "save_complete": "PASS, 1013/1013 declared tensors"
       }
     },
-    "not_measured": ["multi-node FSDP", "cpu_optimizer_offload on hardware", "tp and cp in the thin plane on hardware"]
+    "not_measured": [
+      "multi-node FSDP",
+      "an offloaded run that completes a save",
+      "cp in the thin plane on hardware",
+      "tp with fsdp on an untied model"
+    ],
+    "cpu_optimizer_offload": {
+      "measured_on": "2026-09-25",
+      "setup": "gemma-4-26B-A4B, 4 GPUs, seq 2048, micro-batch 1, accumulation 8, 12 steps, save every 10",
+      "defect_found": "the offload key sent to transformers was one its fsdp_config parser ignores; fixed in #538, which also refuses when the built plugin arguments lack cpu_offload",
+      "before_fix": {
+        "offload_true_peak_allocated_bytes": 136577127936,
+        "offload_false_peak_allocated_bytes": 136577127936,
+        "reading": "byte-identical: the declared offload never executed",
+        "offload_false_run": {
+          "train_loss": 1.527,
+          "save_gate": "PASS 4/4",
+          "exit": 0
+        }
+      },
+      "after_fix": {
+        "gpu_memory_used_p50_gib": {
+          "offload_false": [
+            181,
+            183,
+            176,
+            183
+          ],
+          "offload_true": [
+            106,
+            106,
+            105,
+            103
+          ]
+        },
+        "s_per_step": {
+          "offload_false": 7.4,
+          "offload_true": "15.4 to 19.6"
+        },
+        "host_memory_used_gib": {
+          "baseline": 91,
+          "during_training": 912
+        },
+        "first_save": "rank 0 killed; host memory reached the node's total",
+        "cpu_ram_efficient_loading": "tried; no change to the host footprint",
+        "exit": 1
+      }
+    },
+    "tensor_parallel": {
+      "measured_on": "2026-09-25",
+      "model": "gemma-4-26B-A4B (16 attention heads, 8 KV heads, 2 global KV heads, tied embeddings)",
+      "defects_found_and_fixed": [
+        "#539: a pre-load topology pin blocked every tp run before the model loaded; dp/tp/cp are now compared against the device mesh accelerate builds, and a mismatch refuses",
+        "#540: the model loaded without a tp plan, so train() raised on model.tp_size None; the load now passes tp_plan=auto and tp_size"
+      ],
+      "runs": [
+        {
+          "layout": "tp=2 dp=2 fsdp",
+          "result": "refused at Trainer construction: accelerate composes tp with FSDP version 2 only, and the tie needs version 1",
+          "now": "refused before the Trainer (#540)"
+        },
+        {
+          "layout": "tp=4",
+          "result": "mesh matched the declaration; first forward died on a reshape, 4 does not divide 2 global KV heads",
+          "now": "refused before the Trainer (#540)"
+        },
+        {
+          "layout": "tp=2",
+          "mesh": {
+            "tp": 2,
+            "cp": 1,
+            "dp": 1
+          },
+          "steps": 10,
+          "loss": 1.674,
+          "s_per_step": 6.35,
+          "result": "first save deadlocked: Trainer.save_model calls save_pretrained on the writing rank only, whose tensor-parallel gather is a collective; NCCL watchdog timeout after 600 s",
+          "now": "refused before the Trainer (#540)"
+        }
+      ],
+      "conclusion": "no tp layout runs end to end on this model in the thin plane; tp belongs in the Bridge lane"
+    }
   },
   "megatron_bridge_multidimensional_training": {
     "steps_per_run": 20,
     "seq_length": 4096,
     "global_batch": 16,
     "runs": [
-      {"layout": "TP=2 EP=2 ETP=2 DP=2 +sequence_parallel", "loss_step10": 1.4546, "loss_step20": 1.0634, "s_per_iter": 124.1, "skipped": 0, "checkpoint_sharding": "t 1/2, p 1/1", "exit": 0},
-      {"layout": "TP=2 PP=2 ETP=2", "loss_step10": 1.4329, "loss_step20": 1.1553, "s_per_iter": 131.9, "grad_norm_step10": 66.77, "grad_norm_step20": 6.41, "skipped": 0, "checkpoint_sharding": "t 1/2, p 1/2", "exit": 0},
-      {"layout": "TP=1 EP=4 CP=2", "exit": 1, "error": "no dot product attention backend available",
-       "cause": {
-         "FlashAttention2": "head_dim must be <= 256; the full-attention layers use 512",
-         "UnfusedDotProductAttention": "does not support context parallelism",
-         "FusedAttention": "no backend supports the provided input (head_dim 512 with context parallelism)"
-       },
-       "classification": "attention kernel limit, not configuration"}
+      {
+        "layout": "TP=2 EP=2 ETP=2 DP=2 +sequence_parallel",
+        "loss_step10": 1.4546,
+        "loss_step20": 1.0634,
+        "s_per_iter": 124.1,
+        "skipped": 0,
+        "checkpoint_sharding": "t 1/2, p 1/1",
+        "exit": 0
+      },
+      {
+        "layout": "TP=2 PP=2 ETP=2",
+        "loss_step10": 1.4329,
+        "loss_step20": 1.1553,
+        "s_per_iter": 131.9,
+        "grad_norm_step10": 66.77,
+        "grad_norm_step20": 6.41,
+        "skipped": 0,
+        "checkpoint_sharding": "t 1/2, p 1/2",
+        "exit": 0
+      },
+      {
+        "layout": "TP=1 EP=4 CP=2",
+        "exit": 1,
+        "error": "no dot product attention backend available",
+        "cause": {
+          "FlashAttention2": "head_dim must be <= 256; the full-attention layers use 512",
+          "UnfusedDotProductAttention": "does not support context parallelism",
+          "FusedAttention": "no backend supports the provided input (head_dim 512 with context parallelism)"
+        },
+        "classification": "attention kernel limit, not configuration"
+      }
     ],
     "pipeline_parallel_note": "set through a recipe override; the resolved config confirms pipeline_model_parallel_size 2",
     "adjudication_of_sharded_checkpoints": {
@@ -59,8 +162,24 @@
   "official_run_matched_eval": {
     "harness": "sfteval, 356 scorable rows, temperature 0; no think-mode row has a parseable reference",
     "baseline_reproducibility": "the prior run's final checkpoint scored 320/356 and 321/356 on two days, against 321/355 originally",
-    "iter_750": {"official": "279/356", "prior_same_iter": "290/356", "mcnemar_discordant": [35, 46], "p": 0.2664},
-    "iter_1000": {"official": "278/356", "prior_same_iter": "269/356", "mcnemar_discordant": [51, 42], "p": 0.4069},
+    "iter_750": {
+      "official": "279/356",
+      "prior_same_iter": "290/356",
+      "mcnemar_discordant": [
+        35,
+        46
+      ],
+      "p": 0.2664
+    },
+    "iter_1000": {
+      "official": "278/356",
+      "prior_same_iter": "269/356",
+      "mcnemar_discordant": [
+        51,
+        42
+      ],
+      "p": 0.4069
+    },
     "conclusion": "statistically equivalent at both points; the gap changes sign, so it is run-to-run noise"
   }
 }

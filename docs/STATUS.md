@@ -30,8 +30,9 @@ New axis machinery should not be built into the thin trainer to compete with it.
 |---|---|---|
 | data parallelism (replication) | executes | the GB200 scaling campaign, 1→8 GPUs |
 | `sharding_strategy=fsdp` | executes | **measured end to end on one tray**: gemma-4-26B-A4B, 60 steps, save gate PASS 4/4 at step 50, final adjudication clear, exit 0, train loss 1.308 (#535, #536, #537). Not yet run multi-node |
-| `cpu_optimizer_offload` | executes under fsdp only | unit-tested (#535); not measured on hardware |
-| `--tp`, `--cp` | execute via accelerate `ParallelismConfig` | unit-tested (#535); not measured on hardware |
+| `cpu_optimizer_offload` | executes under fsdp only, **since #538** | before #538 it was a silent no-op (a key transformers ignores; on and off arms reached a byte-identical peak). Measured after the fix on one tray: GPU ~181 → ~106 GiB per GPU, 2–2.6× step time; the first full-state-dict save exhausts host memory, so no offloaded 26B run has completed |
+| `--tp` | trains; **refused (96) wherever it cannot also save** | measured on the 26B (#539, #540): tp=2 trained 10 steps (loss 1.674, 6.35 s/step), then the first save deadlocked, because transformers' Trainer saves on one rank and a tensor-parallel save gathers with a collective. tp without fsdp now refuses; tp with fsdp needs FSDP version 2, which a tied model cannot use, so it refuses there too. A tp degree that does not divide every head count refuses (tp=4 against 2 global KV heads died in the first forward). Net: no tp layout runs end to end on Gemma-4 in this plane |
+| `--cp` | executes via accelerate `ParallelismConfig` | unit-tested (#535); not measured on hardware |
 | gradient checkpointing, torch.compile (3 axes), dataloader axes | execute | #532, #534, scaling campaign |
 | `--pp`, `--ep` | **refused (96)** | `ParallelismConfig` has no pipeline or expert field — a backend fact, not an omission |
 | `sharding_strategy=zero3` | **refused (96)** | ZeRO/DeepSpeed adjudicated and unbuilt |
@@ -96,7 +97,14 @@ floor, and a gap of that size is not a regression. The decisive comparison is at
   fit.
 - **A step inside a held tray gets 2 CPUs**, which alone cost 3× throughput at world 4. Direct
   node login is the only measured escape.
-- **Wired-but-unmeasured in the thin plane:** offload, tp, cp. Unit evidence only.
+- **Wired-but-unmeasured in the thin plane:** cp. Unit evidence only.
+- **Tensor parallelism in the thin plane has no end-to-end layout on Gemma-4** (§2). It
+  trains, but every layout that trains is refused because it cannot save or cannot compose
+  with the tie. Tensor parallelism for this model belongs in the Bridge lane, which saves
+  across tensor ranks (§4).
+- **Offloaded 26B cannot save on one tray.** With offload engaged, host memory sits near
+  912 GiB through training and the first full-state-dict save exhausts the node. Setting
+  `cpu_ram_efficient_loading` did not move it; the source of the host footprint is open.
 - **FSDP saves experts in fp32** under mixed precision (982 fp32 tensors to 32 bf16), so one
   26B checkpoint is ~414 GB. The byte-volume check only fails on a shortfall, so a 2x excess
   passes -- and its message calls that "matches", which overstates.
@@ -110,8 +118,8 @@ floor, and a gap of that size is not a regression. The decisive comparison is at
    adjudicator into the adjudicator of record for every production run.
 2. **An in-distribution held-out set that scores thinking.** Replaces an instrument that cannot
    see half the behaviour it is used to judge.
-3. **Hardware measurement of offload, tp and cp** in the thin plane — converts three
-   unit-tested axes into measured ones, or finds the next real defect the way the 26B smoke did.
+3. **Hardware measurement of cp** in the thin plane, and **an offloaded save that fits in host
+   memory** — offload and tp were measured (#538–#540) and each surfaced a real defect.
 4. **An sm_100 attention kernel** (FlashAttention-3 or TransformerEngine) in the benchmark image —
    the single largest measured throughput gap, and the reason long context OOMs early.
 5. **Multi-node FSDP** — the one FSDP claim not yet measured; needs two free trays.

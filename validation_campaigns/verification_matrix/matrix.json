@@ -100,7 +100,7 @@
       "run_arm": "off",
       "control_arm": "declaring on with no backend REFUSES",
       "cost": "0 GPU",
-      "status": "SHIPPED (#373, #535): declared and recorded; false and undeclared proceed, offload=true now EXECUTES under --sharding-strategy fsdp through FSDP's own offload (unit-tested, not yet measured on hardware) and still REFUSES 96 without fsdp, where no offload backend is reachable",
+      "status": "SHIPPED (#373, #535, #538): declared and recorded; false and undeclared proceed, and offload=true still REFUSES 96 without fsdp, where no offload backend is reachable. Under fsdp it EXECUTES only since #538: before it the key sent was one transformers ignores, so offload ran as a no-op (hardware on and off arms reached a byte-identical peak), and a declared offload absent from the built plugin arguments now REFUSES 96. Measured on one tray after the fix: gemma-4-26B-A4B trains with GPU memory down from about 181 to about 106 GiB per GPU at 2-2.6x the step time, but the first full-state-dict save exhausts the node's host memory, so no offloaded run has completed",
       "blocked_by": [],
       "findings": [],
       "adjudicator": null
