@@ -197,6 +197,13 @@ class CheckpointGateContext:
     supply one; ``None`` means the byte gate must fall back to per-FQN implied
     bytes and say so in its PASS. Preferred over the implied sum wherever it
     exists — it is the one number aliasing cannot inflate."""
+    weights_path: str | None = None
+    """Where the tensor DATA can be read, when a caller has it. Metadata cannot see
+    inside a stacked expert tensor, so expert_distinctness abstains on that layout;
+    given a path it reads every expert slice and settles the question instead.
+    ``None`` keeps the metadata-only behaviour exactly, which is what every caller
+    that predates this field gets. Stored as a string, not an open handle: the
+    context stays frozen, picklable and torch-free until a gate actually reads."""
 
     @classmethod
     def from_path(
@@ -285,6 +292,7 @@ class CheckpointGateContext:
             expected_expert_bytes=expected_expert_bytes,
             origin=os.fspath(path),
             expert_storage_bytes=expert_storage_bytes,
+            weights_path=os.fspath(path),
         )
 
 
@@ -540,6 +548,82 @@ def _layer_normalized_stem(fqn: str) -> str:
     to one stem; indices embedded INSIDE a segment (``fc1``, ``w2``) stay put.
     """
     return ".".join("{}" if seg.isdigit() else seg for seg in fqn.split("."))
+
+
+def _hash_stacked_expert_slices(
+    weights_path: str, stacked: Sequence[TensorMeta]
+) -> tuple[int, list[str], str | None]:
+    """Hash every expert slice of every stacked tensor; name any duplicated pair.
+
+    Settles the one question metadata cannot: whether the N experts packed into a
+    stacked tensor hold N distinct payloads. Duplicated slices occupy exactly the
+    storage span distinct ones would, so no amount of shape or byte accounting can
+    see it -- and it is this estate's worst historical failure (experts aliased
+    across expert-parallel ranks, trained for weeks as 16 experts replicated 8x).
+
+    Reads ONE expert slice at a time through the format-agnostic reader, so peak
+    memory is one slice, never one whole stacked tensor, and the same code covers
+    DCP and safetensors. The cost is reading every expert byte once: for the 26B in
+    fp32 that is ~91 GB, which is paid at save time by the rank that adjudicates.
+
+    torch is imported HERE, not at module import: the module stays torch-free by
+    contract, and a caller without torch gets the reason back instead of a crash,
+    so the gate can keep its honest abstention.
+
+    KNOWN LIMIT: identical experts are LEGITIMATE immediately after sparse
+    upcycling, where one dense FFN is copied into every expert, and this check will
+    FAIL that first save. None of this estate's checkpoints are upcycled; a run
+    that is must say so before relying on this gate, and the gate should then learn
+    a declared exemption rather than a silent one.
+
+    Returns (slices_hashed, duplicate_descriptions, unavailable_reason). A non-None
+    reason means the check could not run and NO conclusion was drawn.
+    """
+    try:
+        import hashlib
+
+        import torch
+
+        from foundationscale.checkpoint.dcp import open_weights
+    except Exception as exc:  # noqa: BLE001 -- unavailability is a result, not a crash
+        return 0, [], f"data-level check unavailable ({type(exc).__name__}: {exc})"
+    try:
+        source = open_weights(weights_path)
+    except Exception as exc:  # noqa: BLE001
+        return 0, [], f"checkpoint data unreadable at {weights_path} ({type(exc).__name__})"
+    hashed = 0
+    duplicates: list[str] = []
+    try:
+        for meta in stacked:
+            shape = tuple(source.shape(meta.fqn))
+            if not shape:
+                return hashed, duplicates, f"{meta.fqn} has no leading expert dimension"
+            first_seen: dict[str, int] = {}
+            for i in range(shape[0]):
+                read = source.read_box(
+                    meta.fqn, [i, *([0] * (len(shape) - 1))], [i + 1, *shape[1:]]
+                )
+                if not read.complete:
+                    return (
+                        hashed,
+                        duplicates,
+                        (
+                            f"slice {i} of {meta.fqn} read incompletely "
+                            f"({read.elements_covered}/{read.elements_expected} elements)"
+                        ),
+                    )
+                raw = read.tensor.contiguous().reshape(-1).view(torch.uint8).numpy().tobytes()
+                digest = hashlib.blake2b(raw, digest_size=16).hexdigest()
+                hashed += 1
+                if digest in first_seen:
+                    duplicates.append(f"{meta.fqn}: experts {first_seen[digest]} and {i}")
+                else:
+                    first_seen[digest] = i
+    except Exception as exc:  # noqa: BLE001
+        return hashed, duplicates, f"slice read failed ({type(exc).__name__}: {exc})"
+    finally:
+        source.close()
+    return hashed, duplicates, None
 
 
 def _stacked_layout_problems(
@@ -1194,7 +1278,38 @@ class ExpertDistinctnessGate(Gate):
         goes through ``_result`` — the same mechanism the framework itself uses for
         framework-level abstentions — so the SKIP keeps the true examined count,
         with the complete reasoning carried in the detail string and evidence.
+
+        When the context carries ``weights_path`` the abstention is no longer the
+        only honest outcome: every expert slice is hashed and the question is
+        answered directly -- FAIL naming a duplicated pair, or PASS over the exact
+        slice count. If the read cannot run (no torch, unreadable data, incomplete
+        coverage) the reason is recorded and the abstention below stands untouched.
         """
+        data_note = ""
+        if c.weights_path is not None:
+            hashed, duplicates, unavailable = _hash_stacked_expert_slices(c.weights_path, stacked)
+            if duplicates:
+                return self.fail(
+                    f"STACKED MoE layout, data-level check: {len(duplicates)} duplicated "
+                    f"expert slice pair(s) across {len(stacked)} stacked tensor(s) "
+                    f"(first: {duplicates[0]}). The experts are aliased to the same "
+                    "bytes -- the storage span looked distinct, the contents are not",
+                    Coverage(checked=hashed, unit="expert slices"),
+                    evidence={
+                        "layout": "stacked",
+                        "duplicates": duplicates[:16],
+                        "slices_hashed": hashed,
+                        "origin": c.origin,
+                    },
+                )
+            if unavailable is None:
+                return self.ok(
+                    f"STACKED MoE layout, data-level check: all {hashed} expert slices "
+                    f"across {len(stacked)} stacked tensor(s) hold distinct bytes. The "
+                    "question metadata cannot answer was settled by reading every slice",
+                    Coverage(checked=hashed, expected=hashed, unit="expert slices"),
+                )
+            data_note = f" A data-level check was attempted and could not run: {unavailable}."
         checked_claims: list[str] = []
         if c.num_experts is not None:
             checked_claims.append(
@@ -1266,7 +1381,8 @@ class ExpertDistinctnessGate(Gate):
                 "is a first-class correct outcome; a PASS here would be a claim "
                 "broader than its evidence). What would settle it: a data-level "
                 "per-slice comparison (hash every expert slice within each stacked "
-                "tensor) — a tensor read this gate deliberately never performs."
+                "tensor), which this gate performs whenever its context carries a "
+                "weights_path and this one did not succeed." + data_note
             ),
             evidence={
                 "layout": "stacked",
@@ -1276,6 +1392,7 @@ class ExpertDistinctnessGate(Gate):
                 "logical_experts_claimed": logical_experts,
                 "per_expert_identity": "unobservable-from-metadata",
                 "would_settle": "data-level per-slice hash of each expert slice",
+                "data_level_check": data_note.strip() or "not attempted: no weights_path",
                 "origin": c.origin,
             },
         )

@@ -508,6 +508,10 @@ def build_context(
         expected_expert_bytes=declared["expected_expert_bytes"],
         # One origin field, both provenances: what was measured vs what was declared.
         origin=f"{meta.origin} [metadata={meta.format}; declared={config_path}]",
+        # The data under the metadata, so a stacked MoE layout can be settled by
+        # hashing expert slices instead of abstaining. meta.origin is the path the
+        # metadata was read from: the same artifact, never a neighbour.
+        weights_path=meta.origin,
     )
 
 

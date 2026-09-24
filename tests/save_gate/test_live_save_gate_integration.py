@@ -319,13 +319,26 @@ class TestFirstSaveCompositeDenominator:
 class TestStackedFirstSaveTool:
     """The discriminating case end-to-end through the tool (LG3 constraint)."""
 
-    def test_stacked_moe_first_save_stays_blocked_at_two_thirds(self, tmp_path):
+    def test_stacked_moe_first_save_stays_blocked_at_two_thirds(self, tmp_path, monkeypatch):
         """[FAILS-BEFORE on the '2/3 applicable' wording and the abstention
         wire key; the exit code, the UNDERCOVERED verdict, and the 2/3 counts
         are PASSES-BEFORE fences] A genuinely-MoE STACKED first save must
         keep blocking: distinctness is NOT_ESTABLISHED, not inapplicable. A
         lazy 'any SKIP leaves the denominator' rewrite turns this test green
         for the wrong reason -- it exists to kill that rewrite."""
+        # The data-level slice check is forced unavailable. This test's subject is
+        # what happens when distinctness CANNOT be established -- the abstention must
+        # stay charged against the composite -- and a checkpoint whose data is
+        # readable no longer reaches that branch: the gate hashes the slices and
+        # answers. (This fixture writes identical experts, so it would answer FAIL
+        # on 28 duplicate pairs, which is correct and is not the subject.)
+        from foundationscale.gates import checkpoint_gates as _cg
+
+        monkeypatch.setattr(
+            _cg,
+            "_hash_stacked_expert_slices",
+            lambda *_a, **_k: (0, [], "forced unavailable: metadata-only path under test"),
+        )
         _probe_declared_or_calibrate(MOE_CFG, 8, 2)
         base = _make_base(tmp_path, _stacked_moe_full_tensors(), MOE_CFG, name="st-base")
         ckpt = _materialize_artifact(tmp_path, _stacked_moe_full_tensors(), name="st-ckpt")

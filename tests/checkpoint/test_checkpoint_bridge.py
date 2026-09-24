@@ -33,7 +33,7 @@ import json
 import os
 import pickle
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -118,12 +118,22 @@ def _expert_fqns() -> list[str]:
     ]
 
 
-def _write_healthy_moe_checkpoint(root: Path, torch_mod: Any) -> tuple[str, ...]:
-    """Fused-layout MoE checkpoint: one (experts, in, out) tensor per weight/layer."""
+def _write_healthy_moe_checkpoint(
+    root: Path, torch_mod: Any, *, duplicate_expert: bool = False
+) -> tuple[str, ...]:
+    """Fused-layout MoE checkpoint: one (experts, in, out) tensor per weight/layer.
+
+    ``duplicate_expert`` copies expert 0 over expert 1 inside the FIRST stacked
+    tensor. Shapes, dtypes and storage spans are untouched -- that is the point: it
+    is the aliasing no metadata can see, and only a data-level read can catch.
+    """
     tensors: dict[str, tuple[tuple[int, ...], list[tuple[tuple[int, ...], Any]]]] = {}
     for i, fqn in enumerate(_expert_fqns()):
         blob = torch_mod.arange(120, dtype=torch_mod.float32).reshape(_EXPERT_SHAPE)
-        tensors[fqn] = (_EXPERT_SHAPE, [((0, 0, 0), blob + float(i * 1000))])
+        blob = blob + float(i * 1000)
+        if duplicate_expert and i == 0:
+            blob[1] = blob[0]
+        tensors[fqn] = (_EXPERT_SHAPE, [((0, 0, 0), blob)])
     for i, layer in enumerate(_EXPERT_LAYERS):
         fqn = f"model.layers.{layer}.attention.qkv.weight"
         blob = torch_mod.arange(24, dtype=torch_mod.float32).reshape(4, 6)
@@ -342,7 +352,11 @@ def test_stacked_on_disk_checkpoint_abstains_instead_of_passing(
         ),
     )
 
-    ctx = CheckpointGateContext.from_path(tmp_path)
+    # Metadata ONLY: weights_path removed. This test's claim is about what
+    # metadata can establish, and from_path now also records where the data is --
+    # with the path present the gate reads the slices and settles the question,
+    # which the two tests below pin. Without it, the abstention must stand.
+    ctx = replace(CheckpointGateContext.from_path(tmp_path), weights_path=None)
     results = {gid: REGISTRY.get(gid).run(ctx) for gid in _CHECKPOINT_GATE_IDS}
 
     distinctness = results["checkpoint.expert_distinctness"]
@@ -635,3 +649,89 @@ def test_read_metadata_describes_safetensors_layout_without_tensor_payloads(
     # change, which would prove nothing about the payload being unreadable.
     with pytest.raises(CheckpointError):
         SafetensorsReader(tmp_path).read_full("a")
+
+
+def test_stacked_distinctness_is_settled_by_reading_the_slices(
+    tmp_path: Path, torch_mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the data reachable, the abstention becomes a real PASS over every slice.
+
+    This is the change that lets a stacked-MoE run through the training loop: the
+    26B FSDP smoke stopped at its first save because first_save verified 2 of 3
+    properties, the third being exactly this abstention. Coverage is pinned to the
+    exact slice count (4 stacked tensors x 8 experts) so a check that quietly read
+    nothing could not pass.
+    """
+    declared = _write_healthy_moe_checkpoint(tmp_path, torch_mod)
+    _install_manifest(
+        monkeypatch,
+        _ManifestStub(
+            declared_fqns=declared,
+            num_experts=_NUM_EXPERTS,
+            num_moe_layers=len(_EXPERT_LAYERS),
+            expected_expert_bytes=EXPECTED_EXPERT_BYTES,
+        ),
+    )
+    ctx = CheckpointGateContext.from_path(tmp_path)
+    assert ctx.weights_path is not None
+
+    result = REGISTRY.get("checkpoint.expert_distinctness").run(ctx)
+
+    assert result.verdict is Verdict.PASS, result.detail
+    assert result.coverage.checked == len(_expert_fqns()) * _NUM_EXPERTS
+    assert result.coverage.expected == result.coverage.checked
+
+    first_save = REGISTRY.get("checkpoint.first_save").run(ctx)
+    assert first_save.verdict is Verdict.PASS, first_save.detail
+
+
+def test_duplicated_expert_slice_fails_the_data_level_check(
+    tmp_path: Path, torch_mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MUST_FIRE: one expert copied over another is caught, and named.
+
+    The planted defect changes no shape, dtype or storage span, so every
+    metadata-level check passes over it -- the historical aliasing bug hid for
+    weeks exactly this way. Only the slice read can see it.
+    """
+    declared = _write_healthy_moe_checkpoint(tmp_path, torch_mod, duplicate_expert=True)
+    _install_manifest(
+        monkeypatch,
+        _ManifestStub(
+            declared_fqns=declared,
+            num_experts=_NUM_EXPERTS,
+            num_moe_layers=len(_EXPERT_LAYERS),
+            expected_expert_bytes=EXPECTED_EXPERT_BYTES,
+        ),
+    )
+
+    result = REGISTRY.get("checkpoint.expert_distinctness").run(
+        CheckpointGateContext.from_path(tmp_path)
+    )
+
+    assert result.verdict is Verdict.FAIL, result.detail
+    assert "experts 0 and 1" in result.detail
+    assert result.evidence["duplicates"][0].endswith("experts 0 and 1")
+
+
+def test_unreadable_data_keeps_the_abstention_and_says_why(
+    tmp_path: Path, torch_mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed read draws no conclusion: the metadata abstention stands, with the reason."""
+    declared = _write_healthy_moe_checkpoint(tmp_path, torch_mod)
+    _install_manifest(
+        monkeypatch,
+        _ManifestStub(
+            declared_fqns=declared,
+            num_experts=_NUM_EXPERTS,
+            num_moe_layers=len(_EXPERT_LAYERS),
+            expected_expert_bytes=EXPECTED_EXPERT_BYTES,
+        ),
+    )
+    ctx = replace(CheckpointGateContext.from_path(tmp_path), weights_path=str(tmp_path / "gone"))
+
+    result = REGISTRY.get("checkpoint.expert_distinctness").run(ctx)
+
+    assert result.verdict is Verdict.SKIP, result.detail
+    assert "could not run" in result.detail
+    assert "ABSTAINS" in result.detail

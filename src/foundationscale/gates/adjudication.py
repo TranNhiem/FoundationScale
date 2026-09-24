@@ -1227,7 +1227,9 @@ def _measure(path: Path) -> CheckpointMetadata:
         raise GateUnmeasured(f"checkpoint unreadable: {path}: {exc}") from exc
 
 
-def _context(meta: CheckpointMetadata, decl: Declared, origin: str) -> CheckpointGateContext:
+def _context(
+    meta: CheckpointMetadata, decl: Declared, origin: str, *, weights_path: str | None = None
+) -> CheckpointGateContext:
     tensors = tuple(
         TensorMeta(
             fqn=fqn,
@@ -1245,6 +1247,11 @@ def _context(meta: CheckpointMetadata, decl: Declared, origin: str) -> Checkpoin
         num_moe_layers=decl.num_moe_layers,
         expected_expert_bytes=decl.expected_expert_bytes,
         origin=origin,
+        # Where the tensor data can be read, so expert_distinctness can settle a
+        # stacked layout by hashing slices instead of abstaining. meta.origin is
+        # the path the metadata itself was read from, so the data and the
+        # metadata under judgment are guaranteed to be the same artifact.
+        weights_path=weights_path,
     )
 
 
@@ -2354,7 +2361,12 @@ def adjudicate_checkpoint(
         fqn_map=fqn_map_loaded,
         adapter_modules=adapter_modules_loaded,
     )
-    ctx = _context(meta, decl, f"{meta.origin} [gates=live; base={base_dir}; cfg={cfg_source}]")
+    ctx = _context(
+        meta,
+        decl,
+        f"{meta.origin} [gates=live; base={base_dir}; cfg={cfg_source}]",
+        weights_path=meta.origin,
+    )
 
     gates: list[Gate] = [g() for g in _ALWAYS_GATES]
     if event == "first_save":
