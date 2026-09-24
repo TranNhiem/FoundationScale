@@ -169,6 +169,20 @@ def _install_fake_runtime(
                 config=SimpleNamespace(use_cache=False)
             )
             self.state = SimpleNamespace(log_history=[])
+            # accelerate's root mesh: only the dimensions above 1, canonical order.
+            pc = getattr(self.args, "parallelism_config", None)
+            if pc is not None:
+                dims = [
+                    (name, int(getattr(pc, f"{name}_size", None) or 1))
+                    for name in ("dp_replicate", "dp_shard", "cp", "tp")
+                ]
+                live = [(n, v) for n, v in dims if v > 1]
+                self.accelerator = SimpleNamespace(
+                    torch_device_mesh=SimpleNamespace(
+                        mesh_dim_names=tuple(n for n, _ in live),
+                        mesh=SimpleNamespace(shape=tuple(v for _, v in live)),
+                    )
+                )
             stack.constructed.append((args, kwargs))
 
         def train(self, *args: object, **kwargs: object) -> None:
@@ -261,6 +275,7 @@ def _install_fake_runtime(
     transformers_mod = ModuleType("transformers")
     transformers_mod.TrainingArguments = FakeTrainingArguments  # type: ignore[attr-defined]
     transformers_mod.Trainer = FakeTrainer  # type: ignore[attr-defined]
+    stack.trainer_cls = FakeTrainer
     transformers_mod.AutoTokenizer = _Auto  # type: ignore[attr-defined]
     transformers_mod.AutoModelForCausalLM = _Auto  # type: ignore[attr-defined]
     transformers_mod.AutoConfig = _Auto  # type: ignore[attr-defined]
@@ -748,3 +763,97 @@ def test_wrap_classes_are_empty_when_nothing_resolves() -> None:
             self.proj = nn.Linear(2, 2)
 
     assert loop._fsdp_wrap_classes(Model()) == []
+
+
+def _torchrun_env(monkeypatch: pytest.MonkeyPatch, world: int) -> None:
+    """The env torchrun sets, which is what routes train() into the comparison.
+
+    The real Topology goes back in as well, since the comparison reads its fields
+    and the fixture's stand-in carries none, over a profile wide enough to hold
+    the ranks.
+    """
+    import dataclasses
+
+    from foundationscale.topology import Topology
+
+    monkeypatch.setattr(loop, "Topology", Topology)
+    profile = dataclasses.replace(_SYNTHETIC_PROFILE, gpus_per_node=world)
+    monkeypatch.setattr(loop, "_resolve_profile", lambda cfg: profile)
+    for name, value in (
+        ("WORLD_SIZE", world),
+        ("LOCAL_WORLD_SIZE", world),
+        ("RANK", 0),
+        ("LOCAL_RANK", 0),
+    ):
+        monkeypatch.setenv(name, str(value))
+
+
+def test_tp_mesh_under_torchrun_is_not_blocked_by_the_preload_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """tp=2 dp=2 on 4 ranks proceeds, and the mesh is what the declaration is held to.
+
+    The tests above run on the driver path, where WORLD_SIZE is unset and the
+    declared-vs-effective comparison is skipped -- which is how a pre-load pin of
+    tp=1 blocked every hardware tp run while every unit test passed (#539).
+    """
+    stack = _install_fake_runtime(monkeypatch)
+    _torchrun_env(monkeypatch, 4)
+    cfg = loop.TrainConfig(
+        **_base_kwargs(tmp_path, gpus_per_node=4), tp=2, dp=2, sharding_strategy="fsdp"
+    )
+
+    rc = loop.train(cfg)
+    out = capsys.readouterr().out
+
+    assert rc in PROCEEDED_CODES, f"exited {rc}: {out[-2000:]}"
+    assert "effective_overrides" not in out
+    assert "device mesh measured {'tp': 2, 'cp': 1, 'dp': 2}" in out
+    assert len(stack.constructed) == 1
+
+
+def test_mesh_that_differs_from_the_declaration_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Standing the pre-load check down is only honest if the mesh check can fire."""
+    stack = _install_fake_runtime(monkeypatch)
+    _torchrun_env(monkeypatch, 4)
+    real_init = stack.trainer_cls.__init__
+
+    def flattening_init(self: object, *args: object, **kwargs: object) -> None:
+        real_init(self, *args, **kwargs)
+        mesh = SimpleNamespace(mesh_dim_names=("dp_shard",), mesh=SimpleNamespace(shape=(4,)))
+        self.accelerator = SimpleNamespace(torch_device_mesh=mesh)  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(stack.trainer_cls, "__init__", flattening_init)
+    cfg = loop.TrainConfig(
+        **_base_kwargs(tmp_path, gpus_per_node=4), tp=2, dp=2, sharding_strategy="fsdp"
+    )
+
+    rc = loop.train(cfg)
+    out = capsys.readouterr().out
+
+    assert rc == loop.EXIT_REFUSE
+    assert "accelerate built {'tp': 1, 'cp': 1, 'dp': 4}" in out
+    assert "training starts" not in out
+
+
+def test_unreadable_mesh_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No mesh to read is a mismatch, not a pass: the pre-load check already stood down."""
+    stack = _install_fake_runtime(monkeypatch)
+    _torchrun_env(monkeypatch, 2)
+    real_init = stack.trainer_cls.__init__
+
+    def meshless_init(self: object, *args: object, **kwargs: object) -> None:
+        real_init(self, *args, **kwargs)
+        self.accelerator = SimpleNamespace(torch_device_mesh=None)  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(stack.trainer_cls, "__init__", meshless_init)
+    cfg = loop.TrainConfig(**_base_kwargs(tmp_path, gpus_per_node=2), tp=2)
+
+    rc = loop.train(cfg)
+
+    assert rc == loop.EXIT_REFUSE
+    assert "unreadable" in capsys.readouterr().out

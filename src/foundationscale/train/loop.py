@@ -962,11 +962,15 @@ def _effective_topology(cfg: TrainConfig) -> Topology | Finding | None:  # noqa:
       transformers.Trainer kwargs dict built in :func:`train` carries no
       tensor/pipeline/expert/context-parallel key of any kind, so every rank
       the launcher started is a data-parallel replica.
-    * ``tp``/``pp``/``ep``/``cp`` are pinned to 1 for the same reason: no
-      model-parallel degree is wired anywhere in this plane, so 1 is the
-      degree the runtime executes. :func:`train` refuses any declared degree
-      > 1 before a model is loaded, which is what makes the pin honest
-      rather than a second silent default.
+    * ``pp``/``ep`` are pinned to 1: no pipeline or expert degree is wired
+      in this plane, and :func:`train` refuses either above 1 before a model
+      is loaded, which is what makes the pin honest.
+    * ``tp``/``cp`` are pinned to 1 as well, but only because no mesh exists
+      yet: they ARE wired, through ``ParallelismConfig`` (#535). So when
+      either is declared above 1, :func:`train` drops the dp/tp/cp findings
+      this topology would produce and compares those axes against the device
+      mesh accelerate builds, read after the Trainer exists (#539). Before
+      that, every tp/cp run under torchrun was blocked by this pin.
     * ``gpus_per_node`` is ``LOCAL_WORLD_SIZE``, the launcher's own
       statement of how many ranks landed on each node.
     * ``nodes`` is ``WORLD_SIZE // LOCAL_WORLD_SIZE``.
@@ -1055,6 +1059,33 @@ def _effective_topology(cfg: TrainConfig) -> Topology | Finding | None:  # noqa:
             severity=_loudest(),
             message=f"WORLD_SIZE={world} cannot form a valid topology: {exc}",
         )
+
+
+# The declared-vs-effective findings a pre-load topology cannot settle once a
+# tp/cp mesh is declared: those axes exist only in the mesh accelerate builds.
+_MESH_DEFERRED_CODES = frozenset(
+    f"topology.effective_overrides_{axis}" for axis in ("dp", "tp", "cp")
+)
+
+
+def _measured_mesh(trainer: Any) -> dict[str, int] | str:
+    """tp, cp and dp read from the device mesh accelerate built, or why they could not be.
+
+    accelerate's root mesh carries only the dimensions above 1, named from
+    ``dp_replicate``, ``dp_shard``, ``cp``, ``sp`` and ``tp``; an absent name is a
+    degree of 1. dp is replicate x shard, the whole data dimension.
+    """
+    mesh = getattr(getattr(trainer, "accelerator", None), "torch_device_mesh", None)
+    names = getattr(mesh, "mesh_dim_names", None)
+    shape = getattr(getattr(mesh, "mesh", None), "shape", None)
+    if not names or shape is None or len(names) != len(shape):
+        return f"accelerator.torch_device_mesh is unreadable ({mesh!r})"
+    sizes = dict(zip(names, (int(n) for n in shape), strict=True))
+    return {
+        "tp": sizes.get("tp", 1),
+        "cp": sizes.get("cp", 1),
+        "dp": sizes.get("dp_replicate", 1) * sizes.get("dp_shard", 1),
+    }
 
 
 def _default_context_builder(ckpt_dir: Path | str) -> Any:
@@ -3813,7 +3844,21 @@ def _train(cfg: TrainConfig) -> int:
     elif isinstance(effective, Finding):
         findings.append(effective)
     else:
-        findings.extend(declared_vs_effective(declared, effective))
+        compared = declared_vs_effective(declared, effective)
+        if cfg.tp > 1 or cfg.cp > 1:
+            # #539: before load there is no mesh, so the effective topology can
+            # only say tp=cp=1 and dp=WORLD_SIZE -- which a declared tp/cp mesh
+            # contradicts by definition. dp, tp and cp are compared against
+            # the mesh accelerate builds once the Trainer exists; nodes and
+            # gpus_per_node are still compared here.
+            compared = [f for f in compared if f.code not in _MESH_DEFERRED_CODES]
+            _mark(
+                Step.CONSISTENCY,
+                f"tp={cfg.tp} cp={cfg.cp} declared: dp/tp/cp are compared against "
+                "the device mesh after the Trainer is built; nodes and "
+                "gpus_per_node are compared now",
+            )
+        findings.extend(compared)
         _mark(
             Step.CONSISTENCY,
             f"WORLD_SIZE={os.environ['WORLD_SIZE']}: declared-vs-effective compared",
@@ -4930,6 +4975,21 @@ def _train(cfg: TrainConfig) -> int:
         "transformers.Trainer constructed (single-node DDP is automatic under "
         "torchrun); FoundationScaleSaveGate attached",
     )
+    if cfg.tp > 1 or cfg.cp > 1:
+        # #539: the other half of the deferred comparison. The mesh is the
+        # runtime's own statement of what it built; unreadable counts as a
+        # mismatch, because the pre-load check already stood down for it.
+        measured = _measured_mesh(trainer)
+        wanted = {"tp": cfg.tp, "cp": cfg.cp, "dp": cfg.dp}
+        if measured != wanted:
+            _mark(
+                Step.REFUSE,
+                f"declared mesh {wanted} but accelerate built {measured}. "
+                "Training would run a different layout under the declared "
+                "label; refusing (96) before the first step",
+            )
+            return EXIT_REFUSE
+        _mark(Step.CONSISTENCY, f"device mesh measured {measured}: matches the declaration")
 
     # --- 7. Train -----------------------------------------------------------
     #
