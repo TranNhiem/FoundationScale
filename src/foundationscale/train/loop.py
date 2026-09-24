@@ -1088,6 +1088,27 @@ def _measured_mesh(trainer: Any) -> dict[str, int] | str:
     }
 
 
+_TP_HEAD_FIELDS = ("num_attention_heads", "num_key_value_heads", "num_global_key_value_heads")
+
+
+def _tp_head_refusal(model: Any, tp: int) -> str | None:
+    """Name the head count a tp degree does not divide, or None when all divide.
+
+    Tensor parallelism splits attention heads across ranks, so every head count
+    the model declares has to be a multiple of tp. Nothing downstream checks
+    this: on the 26B (2 global KV heads) tp=4 loaded, built its mesh, and died
+    in the first forward with a reshape error (#540). Absent fields are skipped;
+    only a declared count can be violated.
+    """
+    config = getattr(model, "config", None)
+    text_config = getattr(config, "text_config", config)
+    for field in _TP_HEAD_FIELDS:
+        count = getattr(text_config, field, None)
+        if isinstance(count, int) and count > 0 and count % tp:
+            return f"tp={tp} does not divide {field}={count}"
+    return None
+
+
 def _default_context_builder(ckpt_dir: Path | str) -> Any:
     """Torch-free by contract: checkpoint_gates parses metadata with stdlib only."""
     from foundationscale.gates.checkpoint_gates import CheckpointGateContext
@@ -4031,6 +4052,14 @@ def _train(cfg: TrainConfig) -> int:
     # unclaimed (#342), which keeps every existing run bit-identical.
     if cfg.precision in _PRECISION_TORCH_DTYPES:
         model_kwargs["dtype"] = getattr(torch, _PRECISION_TORCH_DTYPES[cfg.precision])
+    # #540: a tp degree has to reach the model load, not only ParallelismConfig.
+    # accelerate asserts model.tp_size == parallelism_config.tp_size inside
+    # train(); a model loaded without a tp plan has tp_size None, and that is
+    # what a 26B tp=4 run raised on hardware after every earlier stage passed.
+    # "auto" uses the plan the model class ships (config.base_model_tp_plan).
+    if cfg.tp > 1:
+        model_kwargs["tp_plan"] = "auto"
+        model_kwargs["tp_size"] = cfg.tp
     try:
         # #410: REUSE the RL plane's surface for IMAGES -- do not rebuild an
         # image path here. But route the TEXT arm the way it has always been
@@ -4629,6 +4658,27 @@ def _train(cfg: TrainConfig) -> int:
             )
             return EXIT_REFUSE
         fsdp_config["transformer_layer_cls_to_wrap"] = wrap_classes
+        if tied and (cfg.tp > 1 or cfg.cp > 1):
+            # accelerate's ParallelismConfig composes tp/cp with FSDP version 2
+            # only, and a tied model needs version 1 (above). Measured on the
+            # 26B: the Trainer refuses at construction with "ParallelismConfig
+            # is only compatible DistributedType.FSDP (version 2)". Refuse
+            # here, before the Trainer, with the reason named (#540).
+            _mark(
+                Step.REFUSE,
+                f"tp={cfg.tp} cp={cfg.cp} with sharding_strategy=fsdp on a model "
+                "with tie_word_embeddings: accelerate composes tp/cp with FSDP "
+                "version 2 only, and FSDP version 2 rejects the tied "
+                "embedding/output tensor, so no FSDP version runs this "
+                "combination. Declare tp/cp without fsdp (dp=1), or use an "
+                "untied model",
+            )
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={"exit": EXIT_REFUSE, "sharding_strategy": cfg.sharding_strategy},
+            )
+            return EXIT_REFUSE
         if tied:
             fsdp_config["version"] = 1
             _mark(
@@ -4657,6 +4707,34 @@ def _train(cfg: TrainConfig) -> int:
             fsdp_config["cpu_offload"] = True
         if fsdp_config:
             kwargs["fsdp_config"] = fsdp_config
+    if cfg.tp > 1:
+        _head_reason = _tp_head_refusal(model, cfg.tp)
+        if _head_reason is not None:
+            _mark(
+                Step.REFUSE,
+                f"{_head_reason}: tensor parallelism splits attention heads "
+                "across ranks, so the first forward would fail on a reshape. "
+                "Refusing (96) before the Trainer is built",
+            )
+            _emit_manifest(cfg, stage="refused", extra={"exit": EXIT_REFUSE, "tp": cfg.tp})
+            return EXIT_REFUSE
+    if cfg.tp > 1 and cfg.sharding_strategy != "fsdp":
+        # Measured on the 26B at tp=2 (#540): ten steps trained (loss 1.674,
+        # 6.35 s/step), then the first save deadlocked. transformers' Trainer
+        # calls save_pretrained on the writing rank only, and under a tp plan
+        # save_pretrained all-gathers every sharded tensor -- a collective the
+        # other rank never joins -- so the run hangs until the NCCL watchdog
+        # kills it. A run that cannot save cannot be adjudicated, so refuse.
+        _mark(
+            Step.REFUSE,
+            f"tp={cfg.tp} without sharding_strategy=fsdp: transformers' Trainer "
+            "saves on the writing rank only, and a tensor-parallel "
+            "save_pretrained gathers every shard with a collective the other "
+            "ranks never enter, so the first checkpoint deadlocks (measured). "
+            "Refusing (96) before the Trainer is built",
+        )
+        _emit_manifest(cfg, stage="refused", extra={"exit": EXIT_REFUSE, "tp": cfg.tp})
+        return EXIT_REFUSE
     if cfg.tp > 1 or cfg.cp > 1:
         # Availability was established at START, so this cannot be the site
         # that discovers the backend is missing.

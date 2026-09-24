@@ -138,7 +138,15 @@ def _install_fake_runtime(
     introspecting the signature of whatever ``transformers`` is importable, which
     inside these tests is this fake.
     """
-    stack = SimpleNamespace(training_arguments=[], constructed=[], manifests=[])
+    stack = SimpleNamespace(
+        training_arguments=[],
+        constructed=[],
+        manifests=[],
+        # head_counts: a test sets it and the fake model's config carries it;
+        # None leaves the config bare. model_kwargs: from_pretrained records.
+        head_counts=None,
+        model_kwargs=None,
+    )
     accepted = _BASE_ACCEPTED + (("parallelism_config",) if parallelism else ())
 
     class FakeTrainingArguments:
@@ -240,7 +248,14 @@ def _install_fake_runtime(
             super().__init__(
                 pad_token=None,
                 eos_token="</s>",
-                config=SimpleNamespace(use_cache=False, tie_word_embeddings=tied),
+                # Head counts land on the config only when a test declares them:
+                # _tp_head_refusal skips absent fields (#540), so the default
+                # None arm must leave the config bare rather than carrying Nones.
+                config=SimpleNamespace(
+                    use_cache=False,
+                    tie_word_embeddings=tied,
+                    **(stack.head_counts or {}),
+                ),
                 parameters=lambda: [],
                 state_dict=lambda: {},
                 to=lambda *a, **k: None,
@@ -256,6 +271,9 @@ def _install_fake_runtime(
     class _Auto:
         @classmethod
         def from_pretrained(cls, *args: object, **kwargs: object) -> object:
+            # Last write wins: the model load is the last thing train() asks
+            # this surface for, so the stack reads back the load's kwargs.
+            stack.model_kwargs = dict(kwargs)
             return _FakeModel()
 
     class _FakeCollator:
@@ -517,7 +535,9 @@ def test_offload_with_ddp_refuses(
 def test_tp_reaches_parallelism_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """tp=2 proceeds and arrives as tp_size on a real ParallelismConfig."""
     stack = _install_fake_runtime(monkeypatch)
-    cfg = loop.TrainConfig(**_base_kwargs(tmp_path, gpus_per_node=2), tp=2)
+    cfg = loop.TrainConfig(
+        **_base_kwargs(tmp_path, gpus_per_node=2), tp=2, sharding_strategy="fsdp"
+    )
 
     rc = loop.train(cfg)
 
@@ -857,3 +877,143 @@ def test_unreadable_mesh_refuses(
 
     assert rc == loop.EXIT_REFUSE
     assert "unreadable" in capsys.readouterr().out
+
+
+def test_tp_plan_and_tp_size_reach_the_model_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """tp=2 hands the LOAD the plan, not only ParallelismConfig the degree.
+
+    accelerate asserts model.tp_size == parallelism_config.tp_size inside
+    train(); a model loaded without a tp plan has tp_size None, and that is
+    what a 26B tp=4 run raised on hardware after every earlier stage passed
+    (#540). "auto" binds the plan the model class ships.
+    """
+    stack = _install_fake_runtime(monkeypatch)
+    _torchrun_env(monkeypatch, 2)
+    cfg = loop.TrainConfig(
+        **_base_kwargs(tmp_path, gpus_per_node=2), tp=2, sharding_strategy="fsdp"
+    )
+
+    rc = loop.train(cfg)
+
+    assert rc in PROCEEDED_CODES
+    assert len(stack.constructed) == 1
+    assert stack.model_kwargs["tp_plan"] == "auto"
+    assert stack.model_kwargs["tp_size"] == 2
+
+
+def test_no_tp_passes_no_tp_kwargs_to_the_model_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """tp=1 is the absence of the kwargs, not tp_plan=None."""
+    stack = _install_fake_runtime(monkeypatch)
+    cfg = loop.TrainConfig(**_base_kwargs(tmp_path))
+
+    rc = loop.train(cfg)
+
+    assert rc in PROCEEDED_CODES
+    assert "tp_plan" not in stack.model_kwargs
+    assert "tp_size" not in stack.model_kwargs
+
+
+def test_tp_that_does_not_divide_a_declared_head_count_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The check the first forward used to perform, answered before the Trainer.
+
+    Nothing downstream checked head divisibility: on the 26B (2 global KV
+    heads) tp=4 loaded, built its mesh, and died in the first forward with a
+    reshape error (#540). The refusal names the field and the count so the
+    operator sees the declaration, not a backend traceback.
+    """
+    stack = _install_fake_runtime(monkeypatch)
+    stack.head_counts = {"num_global_key_value_heads": 2}
+    cfg = loop.TrainConfig(**_base_kwargs(tmp_path, gpus_per_node=4), tp=4)
+
+    rc = loop.train(cfg)
+    out = capsys.readouterr().out
+
+    assert "[fs:train:refuse]" in out
+    assert "num_global_key_value_heads=2" in out
+    assert "[fs:train:trainer]" not in out
+    assert rc == loop.EXIT_REFUSE
+    assert stack.constructed == []
+    manifest = _refused_manifest(stack)
+    assert manifest.extra["tp"] == 4
+
+
+def test_tied_model_with_tp_and_fsdp_refuses_before_the_trainer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No FSDP version runs tp on a tied model, so refuse with the reason named.
+
+    accelerate composes tp/cp with FSDP version 2 only, and a tied model needs
+    version 1. Measured on the 26B: the Trainer refuses at construction with
+    "ParallelismConfig is only compatible DistributedType.FSDP (version 2)".
+    This arm proves the refusal fires before that construction is attempted
+    (#540): proof it fired early is a trainer that was never built.
+    """
+    stack = _install_fake_runtime(monkeypatch, tied=True)
+    cfg = loop.TrainConfig(
+        **_base_kwargs(tmp_path, gpus_per_node=4), tp=2, dp=2, sharding_strategy="fsdp"
+    )
+
+    rc = loop.train(cfg)
+    out = capsys.readouterr().out
+
+    assert "[fs:train:refuse]" in out
+    assert "FSDP version 2" in out
+    assert "[fs:train:trainer]" not in out
+    assert rc == loop.EXIT_REFUSE
+    assert stack.constructed == []
+    manifest = _refused_manifest(stack)
+    assert manifest.extra["sharding_strategy"] == "fsdp"
+
+
+def test_tp_head_refusal_is_none_when_every_declared_count_divides() -> None:
+    """All three head fields declared and divisible: nothing to refuse."""
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            num_attention_heads=8, num_key_value_heads=4, num_global_key_value_heads=2
+        )
+    )
+
+    assert loop._tp_head_refusal(model, 2) is None
+
+
+def test_tp_head_refusal_skips_fields_the_model_does_not_declare() -> None:
+    """Only a DECLARED count can be violated; an absent field is not a zero."""
+    assert loop._tp_head_refusal(SimpleNamespace(config=SimpleNamespace()), 4) is None
+
+
+def test_tp_head_refusal_reads_through_text_config_nesting() -> None:
+    """Multimodal configs nest the head counts under text_config."""
+    config = SimpleNamespace(text_config=SimpleNamespace(num_global_key_value_heads=2))
+
+    assert loop._tp_head_refusal(SimpleNamespace(config=config), 4) == (
+        "tp=4 does not divide num_global_key_value_heads=2"
+    )
+
+
+def test_tp_without_fsdp_refuses_because_its_first_save_deadlocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Pure tp trains on hardware and then hangs at the first checkpoint.
+
+    Measured on the 26B at tp=2 (#540): ten steps, then transformers' Trainer
+    called save_pretrained on the writing rank only, whose tensor-parallel
+    gather is a collective the other rank never joins. A run that cannot save
+    cannot be adjudicated, so it refuses before the Trainer is built.
+    """
+    stack = _install_fake_runtime(monkeypatch)
+    _torchrun_env(monkeypatch, 2)
+    cfg = loop.TrainConfig(**_base_kwargs(tmp_path, gpus_per_node=2), tp=2)
+
+    rc = loop.train(cfg)
+    out = capsys.readouterr().out
+
+    assert rc == loop.EXIT_REFUSE
+    assert "deadlocks" in out
+    assert stack.constructed == []
+    assert _refused_manifest(stack).extra["tp"] == 2
