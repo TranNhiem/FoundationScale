@@ -801,6 +801,7 @@ def _torchrun_env(monkeypatch: pytest.MonkeyPatch, world: int) -> None:
     monkeypatch.setattr(loop, "_resolve_profile", lambda cfg: profile)
     # A real ParallelismConfig builds its mesh over a process group the fixture
     # does not have; the stand-in records which config it was asked on (#541).
+    monkeypatch.setattr(loop, "_init_trainer_process_group", lambda: None)
     parallelism_cls, _ = loop._parallelism_backend()
     if parallelism_cls is not None:
         monkeypatch.setattr(
@@ -1053,3 +1054,32 @@ def test_tp_smaller_than_the_world_loads_on_the_mesh_the_trainer_uses(
     tag, owner = stack.model_kwargs["device_mesh"]
     assert tag == "mesh-of"
     assert owner is _only_training_arguments(stack).kwargs["parallelism_config"]
+
+
+def test_the_process_group_is_accelerates_before_the_load_mesh_is_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mesh build must find accelerate's process group already there.
+
+    Built first, the mesh created a cuda-only group, and the fabric probe then
+    failed on its CPU tensor before training (measured, tp=2 dp=2 on 4 GPUs).
+    """
+    stack = _install_fake_runtime(monkeypatch)
+    _torchrun_env(monkeypatch, 4)
+    order: list[str] = []
+    monkeypatch.setattr(loop, "_init_trainer_process_group", lambda: order.append("group"))
+    parallelism_cls, _ = loop._parallelism_backend()
+    monkeypatch.setattr(
+        parallelism_cls,
+        "get_device_mesh",
+        lambda self, device_type=None: order.append("mesh") or ("mesh-of", self),
+        raising=False,
+    )
+    cfg = loop.TrainConfig(
+        **_base_kwargs(tmp_path, gpus_per_node=4), tp=2, dp=2, sharding_strategy="fsdp"
+    )
+
+    loop.train(cfg)
+
+    assert order[:2] == ["group", "mesh"]
+    assert "device_mesh" in stack.model_kwargs

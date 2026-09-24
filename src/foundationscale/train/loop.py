@@ -1109,6 +1109,17 @@ def _tp_head_refusal(model: Any, tp: int) -> str | None:
     return None
 
 
+def _init_trainer_process_group() -> None:
+    """Create the process group the way TrainingArguments will: through accelerate.
+
+    PartialState is shared state, so the TrainingArguments built later finds this
+    group and reuses it rather than creating a second one (#541).
+    """
+    from accelerate import PartialState  # type: ignore[import-untyped]
+
+    PartialState()
+
+
 def _parallelism_mesh_kwargs(cfg: Any) -> dict[str, int]:
     """The ParallelismConfig arguments for a declared tp/cp/dp, built in one place.
 
@@ -4096,6 +4107,11 @@ def _train(cfg: TrainConfig) -> int:
             # to the load; the same ParallelismConfig object, which caches the
             # mesh, then goes to TrainingArguments, so the model's shards and
             # the trainer's mesh are one mesh, not two that happen to agree.
+            # The process group must exist before the mesh does, and it must be
+            # accelerate's: left to itself, the mesh build creates a cuda-only
+            # group, and the fabric probe and the stop agreement then fail on
+            # their CPU tensors (measured, tp=2 dp=2 on 4 GPUs).
+            _init_trainer_process_group()
             parallelism_cls, _ = _parallelism_backend()
             parallelism_config = parallelism_cls(**_parallelism_mesh_kwargs(cfg))
             model_kwargs["device_mesh"] = parallelism_config.get_device_mesh("cuda")
