@@ -340,6 +340,9 @@ def _install_fake_runtime(
     monkeypatch.setattr(loop, "_resolve_profile", lambda cfg: _SYNTHETIC_PROFILE)
     monkeypatch.delenv("WORLD_SIZE", raising=False)
     monkeypatch.delenv("FS_RUN_ID", raising=False)
+    # The fake transformers carries no save path; a test about tp's save
+    # capability sets this itself (#541).
+    monkeypatch.setattr(loop, "_tp_save_reaches_every_rank", lambda: True)
     return stack
 
 
@@ -1083,3 +1086,22 @@ def test_the_process_group_is_accelerates_before_the_load_mesh_is_built(
 
     assert order[:2] == ["group", "mesh"]
     assert "device_mesh" in stack.model_kwargs
+
+
+def test_tp_refuses_where_transformers_cannot_save_a_tp_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With fsdp too: the writing rank gathers tp shards alone, so no save completes.
+
+    Measured on 4 GPUs at tp=2 dp=2 with fsdp: ten steps trained, then the first
+    save failed inside save_pretrained's own tp gather (#541).
+    """
+    stack = _install_fake_runtime(monkeypatch)
+    _torchrun_env(monkeypatch, 4)
+    monkeypatch.setattr(loop, "_tp_save_reaches_every_rank", lambda: False)
+    cfg = loop.TrainConfig(
+        **_base_kwargs(tmp_path, gpus_per_node=4), tp=2, dp=2, sharding_strategy="fsdp"
+    )
+
+    assert loop.train(cfg) == loop.EXIT_REFUSE
+    assert not stack.training_arguments

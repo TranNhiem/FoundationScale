@@ -1109,6 +1109,20 @@ def _tp_head_refusal(model: Any, tp: int) -> str | None:
     return None
 
 
+def _tp_save_reaches_every_rank() -> bool:
+    """Whether this transformers can checkpoint a tensor-parallel model at all.
+
+    Older releases gather tp shards inside ``save_pretrained``, which the
+    Trainer calls on the writing rank only (#540, #541). The rework that saves
+    from every rank is what this detects.
+    """
+    try:
+        from transformers import PreTrainedModel
+    except ImportError:
+        return False
+    return hasattr(PreTrainedModel, "gather_sharded_state_dict_for_save")
+
+
 def _init_trainer_process_group() -> None:
     """Create the process group the way TrainingArguments will: through accelerate.
 
@@ -4787,6 +4801,23 @@ def _train(cfg: TrainConfig) -> int:
             "save_pretrained gathers every shard with a collective the other "
             "ranks never enter, so the first checkpoint deadlocks (measured). "
             "Refusing (96) before the Trainer is built",
+        )
+        _emit_manifest(cfg, stage="refused", extra={"exit": EXIT_REFUSE, "tp": cfg.tp})
+        return EXIT_REFUSE
+    if cfg.tp > 1 and not _tp_save_reaches_every_rank():
+        # Measured with fsdp on Qwen2.5-7B at tp=2 dp=2 (#541): the mesh
+        # matched, ten steps trained (5.3 s/step), then the first save failed.
+        # accelerate's full state dict is already gathered to CPU, and the
+        # writing rank's save_pretrained gathers it AGAIN over the tp group --
+        # alone, so no backend can complete it (nccl rejects the CPU tensor;
+        # a CPU backend would wait forever). transformers since reworked that
+        # path; this probes for the rework rather than trusting a version.
+        _mark(
+            Step.REFUSE,
+            f"tp={cfg.tp}: this transformers saves a tensor-parallel model by "
+            "gathering its shards on the writing rank alone, so the first "
+            "checkpoint cannot complete under any sharding (measured with fsdp "
+            "and without). Refusing (96) before the Trainer is built",
         )
         _emit_manifest(cfg, stage="refused", extra={"exit": EXIT_REFUSE, "tp": cfg.tp})
         return EXIT_REFUSE
