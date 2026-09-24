@@ -4602,7 +4602,14 @@ def _train(cfg: TrainConfig) -> int:
             # DECLARED and this comment records what is EXECUTED -- the wider
             # thing. Claiming the narrower one would be the same class of
             # defect as not wiring it at all.
-            fsdp_config["offload_params"] = True
+            #
+            # The key is "cpu_offload", the one transformers' fsdp_config
+            # parser reads (5.13 and 5.17). It used to be "offload_params",
+            # which transformers drops without a word: two 26B runs, offload
+            # declared on and off, reached a byte-identical peak (#538). The
+            # guard after TrainingArguments below reads what was BUILT, so a
+            # future rename fails there instead of training un-offloaded.
+            fsdp_config["cpu_offload"] = True
         if fsdp_config:
             kwargs["fsdp_config"] = fsdp_config
     if cfg.tp > 1 or cfg.cp > 1:
@@ -4799,6 +4806,21 @@ def _train(cfg: TrainConfig) -> int:
             os.environ, int(getattr(args, "dataloader_num_workers", 0) or 0)
         ):
             _mark(Step.HOST, _host_line)
+        # #538: a declared offload must be in the plugin arguments transformers
+        # BUILT, not only in the dict handed to it -- its fsdp_config parser
+        # ignores keys it does not know, which is how offload once ran as a
+        # no-op under its declared label. Unreadable counts as absent.
+        if cfg.cpu_optimizer_offload is True:
+            _plugin_args = getattr(args, "fsdp_plugin_args", None)
+            if not (isinstance(_plugin_args, dict) and _plugin_args.get("cpu_offload") is True):
+                _mark(
+                    Step.REFUSE,
+                    "cpu_optimizer_offload=True is declared, but the FSDP plugin "
+                    "arguments transformers built do not carry cpu_offload=True "
+                    f"(fsdp_plugin_args={_plugin_args!r}). Training would run "
+                    "un-offloaded under the declared label; refusing (96)",
+                )
+                return EXIT_REFUSE
         # #516: the process group exists as of the line above -- TrainingArguments'
         # __post_init__ reads self.device, which builds accelerate's PartialState,
         # which calls init_process_group. So this is the FIRST line at which a

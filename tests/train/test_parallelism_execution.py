@@ -146,6 +146,11 @@ def _install_fake_runtime(
             self.kwargs = dict(kwargs)
             for name, value in kwargs.items():
                 setattr(self, name, value)
+            # transformers derives fsdp_plugin_args from fsdp_config; the fake
+            # models only the one key train() re-reads after construction.
+            config = kwargs.get("fsdp_config")
+            offload = isinstance(config, dict) and config.get("cpu_offload") is True
+            self.fsdp_plugin_args = {"cpu_offload": True} if offload else {}
             stack.training_arguments.append(self)
 
     FakeTrainingArguments.__init__.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
@@ -154,6 +159,8 @@ def _install_fake_runtime(
             for name in accepted
         ]
     )
+
+    stack.training_arguments_cls = FakeTrainingArguments
 
     class FakeTrainer:
         def __init__(self, *args: object, **kwargs: object) -> None:
@@ -338,7 +345,7 @@ def test_fsdp_reaches_training_arguments(tmp_path: Path, monkeypatch: pytest.Mon
     # class name and raises on a name the model does not contain.
     config = constructed.kwargs["fsdp_config"]
     assert config["transformer_layer_cls_to_wrap"] == ["_FakeDecoderLayer"]
-    assert "offload_params" not in config
+    assert "cpu_offload" not in config
 
 
 def test_ddp_and_omitted_pass_no_fsdp_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -389,8 +396,62 @@ def test_offload_under_fsdp_reaches_fsdp_config(
     assert constructed.kwargs["fsdp"] == "full_shard auto_wrap"
     assert constructed.kwargs["fsdp_config"] == {
         "transformer_layer_cls_to_wrap": ["_FakeDecoderLayer"],
-        "offload_params": True,
+        "cpu_offload": True,
     }
+
+
+def test_offload_config_survives_the_real_transformers_parser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dict train() builds must mean offload to TRANSFORMERS, not to this file.
+
+    The test above pins the dict; this one hands it to the real TrainingArguments
+    and reads the plugin arguments transformers derives. The dict used to say
+    "offload_params", which the parser drops silently, and a mirror assertion
+    passed over it while two hardware runs trained un-offloaded (#538).
+    """
+    from transformers import TrainingArguments
+
+    stack = _install_fake_runtime(monkeypatch)
+    cfg = loop.TrainConfig(
+        **_base_kwargs(tmp_path), sharding_strategy="fsdp", cpu_optimizer_offload=True
+    )
+    assert loop.train(cfg) in PROCEEDED_CODES
+    built = _only_training_arguments(stack).kwargs
+    monkeypatch.undo()
+    real = TrainingArguments(
+        output_dir=str(tmp_path / "real"),
+        fsdp=built["fsdp"],
+        fsdp_config=dict(built["fsdp_config"]),
+        report_to=[],
+    )
+    assert real.fsdp_plugin_args.get("cpu_offload") is True
+
+
+def test_offload_absent_from_built_plugin_args_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """If transformers ever drops the key again, the run refuses instead of training."""
+    stack = _install_fake_runtime(monkeypatch)
+    real_init = stack.training_arguments_cls.__init__
+
+    def dropping_init(self: object, **kwargs: object) -> None:
+        real_init(self, **kwargs)
+        self.fsdp_plugin_args = {}  # type: ignore[attr-defined]
+
+    # _parallelism_backend introspects this signature; keep it.
+    dropping_init.__signature__ = real_init.__signature__  # type: ignore[attr-defined]
+    monkeypatch.setattr(stack.training_arguments_cls, "__init__", dropping_init)
+    cfg = loop.TrainConfig(
+        **_base_kwargs(tmp_path), sharding_strategy="fsdp", cpu_optimizer_offload=True
+    )
+
+    rc = loop.train(cfg)
+    out = capsys.readouterr().out
+
+    assert rc == loop.EXIT_REFUSE
+    assert "cpu_offload" in out
+    assert "[fs:train:trainer]" not in out
 
 
 def test_offload_without_fsdp_refuses(
