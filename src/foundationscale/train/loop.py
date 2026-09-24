@@ -1109,6 +1109,33 @@ def _tp_head_refusal(model: Any, tp: int) -> str | None:
     return None
 
 
+def _parallelism_mesh_kwargs(cfg: Any) -> dict[str, int]:
+    """The ParallelismConfig arguments for a declared tp/cp/dp, built in one place.
+
+    Two sites need the same mesh: the model load, which must be handed the tp
+    submesh when tp is smaller than the world (#541), and TrainingArguments.
+    """
+    mesh: dict[str, int] = {}
+    if cfg.tp > 1:
+        mesh["tp_size"] = cfg.tp
+    if cfg.cp > 1:
+        mesh["cp_size"] = cfg.cp
+    if cfg.dp > 1:
+        # dp_shard_size, with no replicate branch, and the asymmetry is
+        # forced rather than chosen: tp/cp alongside a REPLICATED data
+        # dimension is refused at START, so by the time this runs a
+        # declared dp can only be a shard. A dp_replicate_size branch here
+        # would be unreachable code carrying an implication -- that the
+        # combination is supported -- which the refusal above denies.
+        #
+        # Passed only when DECLARED. Left out, accelerate derives the data
+        # dimension from world_size / (tp * cp), which is the right default;
+        # passed and inconsistent, accelerate raises. Either way the mesh
+        # that runs and the mesh that was declared cannot silently differ.
+        mesh["dp_shard_size"] = cfg.dp
+    return mesh
+
+
 def _default_context_builder(ckpt_dir: Path | str) -> Any:
     """Torch-free by contract: checkpoint_gates parses metadata with stdlib only."""
     from foundationscale.gates.checkpoint_gates import CheckpointGateContext
@@ -4057,9 +4084,21 @@ def _train(cfg: TrainConfig) -> int:
     # train(); a model loaded without a tp plan has tp_size None, and that is
     # what a 26B tp=4 run raised on hardware after every earlier stage passed.
     # "auto" uses the plan the model class ships (config.base_model_tp_plan).
+    parallelism_config: Any = None
     if cfg.tp > 1:
         model_kwargs["tp_plan"] = "auto"
         model_kwargs["tp_size"] = cfg.tp
+        if int(os.environ.get("WORLD_SIZE", "1")) > cfg.tp:
+            # #541: with tp smaller than the world, transformers builds a 1-D
+            # mesh of tp_size ranks on its own, and every rank outside it dies
+            # at load (IndexError, measured: tp=2 dp=2 on 4 GPUs). So the mesh
+            # accelerate will train on is built HERE and its tp submesh handed
+            # to the load; the same ParallelismConfig object, which caches the
+            # mesh, then goes to TrainingArguments, so the model's shards and
+            # the trainer's mesh are one mesh, not two that happen to agree.
+            parallelism_cls, _ = _parallelism_backend()
+            parallelism_config = parallelism_cls(**_parallelism_mesh_kwargs(cfg))
+            model_kwargs["device_mesh"] = parallelism_config.get_device_mesh("cuda")
     try:
         # #410: REUSE the RL plane's surface for IMAGES -- do not rebuild an
         # image path here. But route the TEXT arm the way it has always been
@@ -4739,25 +4778,11 @@ def _train(cfg: TrainConfig) -> int:
         # Availability was established at START, so this cannot be the site
         # that discovers the backend is missing.
         parallelism_cls, _ = _parallelism_backend()
-        mesh: dict[str, int] = {}
-        if cfg.tp > 1:
-            mesh["tp_size"] = cfg.tp
-        if cfg.cp > 1:
-            mesh["cp_size"] = cfg.cp
-        if cfg.dp > 1:
-            # dp_shard_size, with no replicate branch, and the asymmetry is
-            # forced rather than chosen: tp/cp alongside a REPLICATED data
-            # dimension is refused at START, so by the time this runs a
-            # declared dp can only be a shard. A dp_replicate_size branch here
-            # would be unreachable code carrying an implication -- that the
-            # combination is supported -- which the refusal above denies.
-            #
-            # Passed only when DECLARED. Left out, accelerate derives the data
-            # dimension from world_size / (tp * cp), which is the right default;
-            # passed and inconsistent, accelerate raises. Either way the mesh
-            # that runs and the mesh that was declared cannot silently differ.
-            mesh["dp_shard_size"] = cfg.dp
-        kwargs["parallelism_config"] = parallelism_cls(**mesh)
+        kwargs["parallelism_config"] = (
+            parallelism_config
+            if parallelism_config is not None
+            else parallelism_cls(**_parallelism_mesh_kwargs(cfg))
+        )
 
     accepted = set(inspect.signature(TrainingArguments.__init__).parameters)
     if "save_safetensors" in accepted:

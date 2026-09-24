@@ -799,6 +799,16 @@ def _torchrun_env(monkeypatch: pytest.MonkeyPatch, world: int) -> None:
     monkeypatch.setattr(loop, "Topology", Topology)
     profile = dataclasses.replace(_SYNTHETIC_PROFILE, gpus_per_node=world)
     monkeypatch.setattr(loop, "_resolve_profile", lambda cfg: profile)
+    # A real ParallelismConfig builds its mesh over a process group the fixture
+    # does not have; the stand-in records which config it was asked on (#541).
+    parallelism_cls, _ = loop._parallelism_backend()
+    if parallelism_cls is not None:
+        monkeypatch.setattr(
+            parallelism_cls,
+            "get_device_mesh",
+            lambda self, device_type=None: ("mesh-of", self),
+            raising=False,
+        )
     for name, value in (
         ("WORLD_SIZE", world),
         ("LOCAL_WORLD_SIZE", world),
@@ -901,6 +911,8 @@ def test_tp_plan_and_tp_size_reach_the_model_load(
     assert len(stack.constructed) == 1
     assert stack.model_kwargs["tp_plan"] == "auto"
     assert stack.model_kwargs["tp_size"] == 2
+    # tp equals the world here, so transformers' own 1-D mesh is the right one.
+    assert "device_mesh" not in stack.model_kwargs
 
 
 def test_no_tp_passes_no_tp_kwargs_to_the_model_load(
@@ -1017,3 +1029,27 @@ def test_tp_without_fsdp_refuses_because_its_first_save_deadlocks(
     assert "deadlocks" in out
     assert stack.constructed == []
     assert _refused_manifest(stack).extra["tp"] == 2
+
+
+def test_tp_smaller_than_the_world_loads_on_the_mesh_the_trainer_uses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """tp=2 dp=2 on 4 ranks: the load gets the mesh, and it is the trainer's mesh.
+
+    Left to itself, transformers builds a 1-D mesh of tp_size ranks and every
+    rank outside it died at load (IndexError, measured on 4 GPUs, #541). The
+    mesh is built from the ParallelismConfig that TrainingArguments receives,
+    so the model's shards and the trainer's mesh cannot be two different meshes.
+    """
+    stack = _install_fake_runtime(monkeypatch)
+    _torchrun_env(monkeypatch, 4)
+    cfg = loop.TrainConfig(
+        **_base_kwargs(tmp_path, gpus_per_node=4), tp=2, dp=2, sharding_strategy="fsdp"
+    )
+
+    rc = loop.train(cfg)
+
+    assert rc in PROCEEDED_CODES
+    tag, owner = stack.model_kwargs["device_mesh"]
+    assert tag == "mesh-of"
+    assert owner is _only_training_arguments(stack).kwargs["parallelism_config"]
