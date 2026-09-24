@@ -1,0 +1,66 @@
+{
+  "campaign": "fsdp_and_6d_validation",
+  "measured_on": "2026-09-24",
+  "hardware": "GB200, one tray of 4 GPUs per run",
+  "model": "gemma-4-26B-A4B (MoE, 128 experts, top-8, tied embeddings)",
+  "fsdp_thin_plane": {
+    "smoke_run": {
+      "steps": 10,
+      "train_loss": 1.67,
+      "result": "trained and saved, then stopped at the first save",
+      "first_save": "UNDERCOVERED 2/3",
+      "cause": "expert_distinctness abstains on a stacked expert layout; save_complete and expert_bytes both passed"
+    },
+    "defects_found_and_fixed": [
+      "wrap class resolved by name; the checkpoint declares a class its causal-LM build never instantiates -> derived from the loaded model",
+      "FSDP2 rejects a tied embedding/output tensor reachable from two groups, with per-layer wrapping and with one group",
+      "FSDP1 with one group accepts the tie and then OOMs on one 48 GiB flat buffer -> FSDP1 with per-layer wrapping, selected by the tie",
+      "stacked-MoE first save verified only 2 of 3 properties -> data-level expert slice hash"
+    ],
+    "complete_run": {
+      "steps": 60,
+      "save_interval": 50,
+      "train_loss": 1.308,
+      "input_tokens": 1174927,
+      "runtime_s": 1071,
+      "save_gate_step_50": "PASS 4/4",
+      "final_adjudication": "clear: 3 verified, first_save declared inapplicable after the first save",
+      "exit": 0,
+      "replayed_on_final_checkpoint": {
+        "expert_distinctness": "PASS, data-level, 7680/7680 slices distinct",
+        "expert_bytes": "PASS",
+        "save_complete": "PASS, 1013/1013 declared tensors"
+      }
+    },
+    "not_measured": ["multi-node FSDP", "cpu_optimizer_offload on hardware", "tp and cp in the thin plane on hardware"]
+  },
+  "megatron_bridge_multidimensional_training": {
+    "steps_per_run": 20,
+    "seq_length": 4096,
+    "global_batch": 16,
+    "runs": [
+      {"layout": "TP=2 EP=2 ETP=2 DP=2 +sequence_parallel", "loss_step10": 1.4546, "loss_step20": 1.0634, "s_per_iter": 124.1, "skipped": 0, "checkpoint_sharding": "t 1/2, p 1/1", "exit": 0},
+      {"layout": "TP=2 PP=2 ETP=2", "loss_step10": 1.4329, "loss_step20": 1.1553, "s_per_iter": 131.9, "grad_norm_step10": 66.77, "grad_norm_step20": 6.41, "skipped": 0, "checkpoint_sharding": "t 1/2, p 1/2", "exit": 0},
+      {"layout": "TP=1 EP=4 CP=2", "exit": 1, "error": "no dot product attention backend available",
+       "cause": {
+         "FlashAttention2": "head_dim must be <= 256; the full-attention layers use 512",
+         "UnfusedDotProductAttention": "does not support context parallelism",
+         "FusedAttention": "no backend supports the provided input (head_dim 512 with context parallelism)"
+       },
+       "classification": "attention kernel limit, not configuration"}
+    ],
+    "pipeline_parallel_note": "set through a recipe override; the resolved config confirms pipeline_model_parallel_size 2",
+    "adjudication_of_sharded_checkpoints": {
+      "expert_distinctness": "PASS, data-level, 7680/7680 slices distinct on both the TP/EP/ETP and the TP/PP/ETP checkpoints",
+      "save_complete": "VACUOUS: the launcher writes no run manifest with declared tensor names",
+      "overall": "NOT CLEARED, for that one reason"
+    }
+  },
+  "official_run_matched_eval": {
+    "harness": "sfteval, 356 scorable rows, temperature 0; no think-mode row has a parseable reference",
+    "baseline_reproducibility": "the prior run's final checkpoint scored 320/356 and 321/356 on two days, against 321/355 originally",
+    "iter_750": {"official": "279/356", "prior_same_iter": "290/356", "mcnemar_discordant": [35, 46], "p": 0.2664},
+    "iter_1000": {"official": "278/356", "prior_same_iter": "269/356", "mcnemar_discordant": [51, 42], "p": 0.4069},
+    "conclusion": "statistically equivalent at both points; the gap changes sign, so it is run-to-run noise"
+  }
+}

@@ -87,7 +87,7 @@
       "run_arm": "ddp",
       "control_arm": "a strategy with no wiring REFUSES 96 rather than silently running DDP",
       "cost": "0 GPU",
-      "status": "SHIPPED (#373): declared and recorded; fsdp/zero3 REFUSE 96 rather than silently running DDP, while ddp and undeclared proceed",
+      "status": "SHIPPED (#373, #535): declared and recorded; ddp and undeclared proceed, fsdp now EXECUTES through transformers' FSDP integration (unit-tested, and measured end to end on one tray: gemma-4-26B-A4B trained 60 steps, passed its first-save gate and its final adjudication, exit 0; not yet measured multi-node), and zero3 still REFUSES 96 rather than silently running DDP",
       "blocked_by": [],
       "findings": [],
       "adjudicator": null
@@ -100,7 +100,7 @@
       "run_arm": "off",
       "control_arm": "declaring on with no backend REFUSES",
       "cost": "0 GPU",
-      "status": "SHIPPED (#373): declared and recorded; offload=true REFUSES 96 with no backend, while false and undeclared proceed",
+      "status": "SHIPPED (#373, #535): declared and recorded; false and undeclared proceed, offload=true now EXECUTES under --sharding-strategy fsdp through FSDP's own offload (unit-tested, not yet measured on hardware) and still REFUSES 96 without fsdp, where no offload backend is reachable",
       "blocked_by": [],
       "findings": [],
       "adjudicator": null
