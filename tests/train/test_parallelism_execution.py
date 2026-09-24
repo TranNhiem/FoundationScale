@@ -277,9 +277,12 @@ def _install_fake_runtime(
             return _FakeModel()
 
     class _FakeCollator:
-        def __init__(self, tokenizer: object = None, mlm: bool = False) -> None:
+        def __init__(
+            self, tokenizer: object = None, mlm: bool = False, pad_to_multiple_of: int | None = None
+        ) -> None:
             self.tokenizer = tokenizer
             self.mlm = mlm
+            self.pad_to_multiple_of = pad_to_multiple_of
 
     torch_mod = ModuleType("torch")
     torch_mod.__version__ = "0.0+synthetic"
@@ -1105,3 +1108,48 @@ def test_tp_refuses_where_transformers_cannot_save_a_tp_model(
 
     assert loop.train(cfg) == loop.EXIT_REFUSE
     assert not stack.training_arguments
+
+
+@pytest.mark.parametrize(("cp", "multiple"), [(1, None), (2, 4), (4, 8)])
+def test_cp_pads_every_sequence_to_a_length_context_parallel_can_split(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cp: int, multiple: int | None
+) -> None:
+    """cp splits each sequence into 2*cp chunks; any other length is a bare assert.
+
+    Measured at cp=2 dp=2 on 4 GPUs: the first step raised AssertionError from
+    torch's context-parallel load balancer (#542). cp=1 keeps the historical
+    collator, with no padding multiple at all.
+    """
+    stack = _install_fake_runtime(monkeypatch)
+    _torchrun_env(monkeypatch, 4)
+    cfg = loop.TrainConfig(
+        **_base_kwargs(tmp_path, gpus_per_node=4),
+        cp=cp,
+        dp=4 // cp,
+        sharding_strategy="fsdp",
+    )
+
+    rc = loop.train(cfg)
+
+    assert rc in PROCEEDED_CODES
+    _, trainer_kwargs = stack.constructed[0]
+    collator = trainer_kwargs["data_collator"]
+    assert collator.pad_to_multiple_of == multiple
+
+
+def test_cp_with_an_image_column_refuses_because_its_collator_cannot_pad_to_the_split(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The image collator has no padding multiple, so cp would hit the same assert (#542)."""
+    stack = _install_fake_runtime(monkeypatch)
+    _torchrun_env(monkeypatch, 4)
+    # The fake dataset has only "text"; naming it passes the column-exists check
+    # so the run reaches the collator, which is where this refusal lives.
+    monkeypatch.setenv("FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN", "text")
+    cfg = loop.TrainConfig(
+        **_base_kwargs(tmp_path, gpus_per_node=4), cp=2, dp=2, sharding_strategy="fsdp"
+    )
+
+    assert loop.train(cfg) == loop.EXIT_REFUSE
+    assert not stack.constructed
+    assert "cp=2 with an image column" in capsys.readouterr().out

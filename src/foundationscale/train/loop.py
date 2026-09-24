@@ -4969,7 +4969,24 @@ def _train(cfg: TrainConfig) -> int:
     # declared-image arm replaces it, with the (widened) prompt surface's
     # collator -- see train_image_collator_or_refuse for why the pixel
     # loading lives in the surface and not here.
-    data_collator: Any = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    # cp: torch's context-parallel load balancer splits every sequence into
+    # 2*cp chunks and raises a bare AssertionError on any length that does not
+    # divide (measured, cp=2 dp=2, #542). Right padding is invisible to causal
+    # attention and carries label -100, so padding to the multiple changes no
+    # loss term. cp=1 builds exactly the historical collator.
+    _collator_kwargs: dict[str, Any] = {"pad_to_multiple_of": 2 * cfg.cp} if cfg.cp > 1 else {}
+    data_collator: Any = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer, mlm=False, **_collator_kwargs
+    )
+    if IMAGE_COLUMN is not None and cfg.cp > 1:
+        _mark(
+            Step.REFUSE,
+            f"cp={cfg.cp} with an image column: the image collator does not pad "
+            f"to a multiple of 2*cp={2 * cfg.cp}, and context parallelism cannot "
+            "split a sequence that does not divide. Refusing (96)",
+        )
+        _emit_manifest(cfg, stage="refused", extra={"exit": EXIT_REFUSE, "cp": cfg.cp})
+        return EXIT_REFUSE
     if IMAGE_COLUMN is not None:
         from foundationscale.rl.prompt_surface import (
             refuse_if_pixel_column_dropped,
