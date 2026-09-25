@@ -1,0 +1,39 @@
+
+{
+  "type": "object",
+  "description": "Measured data readiness verdict for a dataset.",
+  "required": ["verdict", "dataset_id", "stats", "checks"],
+  "additionalProperties": true,
+  "properties": {
+    "verdict": {"enum": ["PASS", "RED", "UNMEASURED"]},
+    "dataset_id": {"type": "string", "minLength": 1},
+    "stats": {
+      "type": "object",
+      "required": ["num_records", "num_tokens", "length_hist", "domain_breakdown", "dedup_rate", "decontam_hits", "pii_remaining", "truncation_rate"],
+      "additionalProperties": true,
+      "properties": {
+        "num_records": {"type": "integer", "minimum": 0},
+        "num_tokens": {"type": ["integer", "null"]},
+        "length_hist": {"type": ["object", "array", "null"], "additionalProperties": true},
+        "domain_breakdown": {"type": "object", "additionalProperties": true},
+        "dedup_rate": {"type": ["number", "null"]},
+        "decontam_hits": {"type": ["integer", "null"]},
+        "pii_remaining": {"type": ["integer", "null"]},
+        "truncation_rate": {"type": ["number", "null"]}
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["rule_id", "passed", "detail"],
+        "additionalProperties": true,
+        "properties": {
+          "rule_id": {"type": "string", "pattern": "^[A-Z]{2,4}-[A-Z0-9_-]+$"},
+          "passed": {"type": ["boolean", "null"]},
+          "detail": {"type": "string"}
+        }
+      }
+    }
+  }
+}

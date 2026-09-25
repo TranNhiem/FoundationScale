@@ -1,0 +1,13 @@
+
+{
+  "type": "object",
+  "description": "A checkpoint produced by a launchable stage.",
+  "required": ["path", "run_manifest", "stage", "base_model"],
+  "additionalProperties": true,
+  "properties": {
+    "path": {"type": "string", "minLength": 1},
+    "run_manifest": {"type": ["string", "null"]},
+    "stage": {"type": "string", "minLength": 1},
+    "base_model": {"type": ["string", "object"], "additionalProperties": true}
+  }
+}
