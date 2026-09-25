@@ -33,7 +33,6 @@
       }
     },
     "not_measured": [
-      "an offloaded run that completes a save",
       "tp on a transformers release with the reworked tensor-parallel save"
     ],
     "cpu_optimizer_offload": {
@@ -199,6 +198,45 @@
         }
       ],
       "reading": "the writing node's host footprint exceeds the other's by the full-state-dict gather; that gather is the leading explanation for the offloaded save exhausting host memory"
+    },
+    "offload_sharded_save": {
+      "measured_on": "2026-09-25",
+      "fixes": [
+        "#544 sharded intermediate and final saves",
+        "#545 gloo group for CPU-offloaded collectives",
+        "#547 fabric sibling variable follows the operator's value",
+        "#548 gate context built from the distributed checkpoint metadata, keys unwrapped from 'model.'"
+      ],
+      "runs": [
+        {
+          "model": "gemma-4-26B-A4B",
+          "setup": "2 trays x 4 GPUs, dp=8, cpu offload, fsdp_state_dict=sharded, 12 steps, save every 10",
+          "save_gate": "PASS 4/4 at steps 10 and 12 on the writing rank (1 declared SKIP: objective.hparam_drift)",
+          "first_save": "PASS 3/3; expert_distinctness hashes every stacked expert slice, about 400 s per save",
+          "final_checkpoint": "8 distributed-checkpoint shards",
+          "exit": {
+            "node_0": 0,
+            "node_1": 0
+          },
+          "peak_host_used_mib": {
+            "node_0": 738245,
+            "node_1": 742449
+          },
+          "comparison": "one tray, full state dict, offload: about 977 GiB, exhausted host memory"
+        },
+        {
+          "model": "Qwen2.5-7B-Instruct",
+          "setup": "1 tray, cpu offload, fsdp_state_dict=sharded",
+          "exit": 0,
+          "peak_host_gib": 404
+        }
+      ],
+      "defects_found_on_hardware": [
+        "Trainer.save_model writes nothing under a sharded state dict, so the final save wrote an empty directory",
+        "the gates found no safetensors in a distributed checkpoint and ran 0 of 0",
+        "expert_distinctness SKIPped without a weights path, which made first_save undercovered and blocked the run (exit 5)"
+      ],
+      "open": "the final checkpoint must be merged to safetensors before serving"
     }
   },
   "megatron_bridge_multidimensional_training": {

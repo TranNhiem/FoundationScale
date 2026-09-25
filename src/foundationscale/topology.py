@@ -412,6 +412,9 @@ def apply_fabric_declaration(
         than a quiet success.
     """
     announcements: list[str] = []
+    # Snapshot BEFORE applying anything, so a value this loop writes is never
+    # mistaken for an operator's choice.
+    operator_set = {v for v, _ in _FABRIC_VARS if environ.get(v) is not None}
     for variable, field_name in _FABRIC_VARS:
         declared = str(getattr(profile, field_name, "") or "").strip()
         if not declared:
@@ -425,6 +428,21 @@ def apply_fabric_declaration(
             announcements.append(
                 f"{variable}: already set to {existing!r} by the operator, "
                 f"left alone (profile would have said {declared!r})"
+            )
+            continue
+        # #547: the two socket variables name ONE interface. When the operator
+        # exported its sibling, that choice is the interface the job is on, and
+        # filling this one from the profile would split the planes -- measured:
+        # NCCL_SOCKET_IFNAME=<data-iface> by hand plus the profile's eth0 for gloo killed
+        # all four ranks at the first gloo group ("Unable to find address for:
+        # eth0") on a host that has no eth0.
+        sibling = next((v for v, f in _FABRIC_VARS if f == field_name and v != variable), None)
+        operator_sibling = environ.get(sibling) if sibling in operator_set else None
+        if operator_sibling:
+            environ[variable] = operator_sibling
+            announcements.append(
+                f"{variable}={operator_sibling} follows the operator's {sibling} "
+                f"(profile would have said {declared!r}; one interface, two consumers)"
             )
             continue
         environ[variable] = declared

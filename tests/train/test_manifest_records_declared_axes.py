@@ -93,6 +93,10 @@ _CONFIG_FIELDS_OUTSIDE_THE_NINE: frozenset[str] = frozenset(
         "cp",
         "dry_run",
         "launch_corpus",
+        # A real-valued default ("full"), like max_sequence_length's 128: no
+        # abstention state exists, so the exclusion here is from the
+        # PROVENANCE contract -- the payload still emits the key (#544).
+        "fsdp_state_dict",
         # Provenance ABOUT the other fields, not a declaration axis: it records
         # which flags argparse actually saw so every other key can state a
         # measured `source`. It is deliberately absent from the manifest's
@@ -127,6 +131,9 @@ _PAYLOAD_KEYS_OUTSIDE_THE_NINE: frozenset[str] = frozenset(
         "profile_name",
         "profile_path",
         "dry_run",
+        # Emitted alongside sharding_strategy; the exclusion comment on the
+        # config-field set above applies here too (#544).
+        "fsdp_state_dict",
         "precision",
         "adapter",
         "adapter_rank",

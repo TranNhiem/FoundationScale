@@ -361,6 +361,21 @@ def build_parser() -> argparse.ArgumentParser:
             "Omit: no offload, and no claim is recorded"
         ),
     )
+    p.add_argument(
+        "--fsdp-state-dict",
+        choices=("full", "sharded"),
+        default="full",
+        help=(
+            "checkpoint layout under --sharding-strategy fsdp (#544). 'full' "
+            "(default; identical to every run before this flag existed) "
+            "gathers every rank's shard onto rank 0's host before writing -- "
+            "measured at ~106 GB of model plus ~202 GB of optimizer against "
+            "956 GiB of host RAM on a 26B cpu-offload run. 'sharded' writes "
+            "one DCP shard per rank under pytorch_model_fsdp_0/, and is "
+            "REFUSED (96) without --sharding-strategy fsdp because no other "
+            "save path has a state_dict_type to set"
+        ),
+    )
     return p
 
 
@@ -604,6 +619,7 @@ def _build_config(argv: Sequence[str] | None, args: argparse.Namespace) -> Train
         warmup_steps=args.warmup_steps,
         logging_steps=args.logging_steps,
         sharding_strategy=args.sharding_strategy,
+        fsdp_state_dict=args.fsdp_state_dict,
     )
 
 

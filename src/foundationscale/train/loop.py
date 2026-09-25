@@ -195,6 +195,17 @@ ADAPTERS: tuple[str, ...] = ("lora",)
 SHARDING_STRATEGIES: tuple[str, ...] = ("ddp", "fsdp")
 
 
+# The checkpoint layouts transformers' FSDP integration can write (#544).
+# "full" is the default and is byte-identical to every run before this knob
+# existed: every rank's shard is gathered onto rank 0's host before writing.
+# "sharded" makes every rank write its own DCP shard instead -- the fix for
+# the measured 26B cpu-offload save that gathered ~106 GB of model plus ~202
+# GB of optimizer onto one host and exhausted 956 GiB of RAM. The tuple
+# exists so refusal messages can name the accepted set, the same reason
+# SHARDING_STRATEGIES is one.
+FSDP_STATE_DICT_TYPES: tuple[str, ...] = ("full", "sharded")
+
+
 def _fsdp_wrap_classes(model: Any) -> list[str]:
     """Transformer-block class names to wrap, from the model ACTUALLY loaded.
 
@@ -756,6 +767,15 @@ class TrainConfig:
     # backend exists in this plane.
     sharding_strategy: str | None = None
     cpu_optimizer_offload: bool | None = None
+    # #544: which FSDP state-dict layout checkpoints are written with. NOT a
+    # None-default axis, unlike every neighbour: "full" is the historical
+    # behaviour, so an undeclared run must bind it and an abstaining run must
+    # be byte-identical to one from before the knob existed. There is no
+    # "the run did not say" state to record -- only the layout it ran at.
+    # Meaningful only under sharding_strategy="fsdp": without FSDP there is
+    # no state_dict_type to set, so "sharded" elsewhere is REFUSED (96) at
+    # START rather than run as a full save under a sharded label.
+    fsdp_state_dict: str = "full"
     # torch.compile is a declaration axis because it was MEASURED to move both
     # numbers a throughput claim rests on, in opposite directions, and neither
     # move was recordable. On a GB200 tray, gemma-4-E4B at seq 2048: compile
@@ -878,6 +898,11 @@ class TrainConfig:
                 raise ValueError(f"{field_name} must be >= 1")
         if self.precision is not None and self.precision not in PRECISIONS:
             raise ValueError(f"precision={self.precision!r} is not one of {PRECISIONS}")
+        if self.fsdp_state_dict not in FSDP_STATE_DICT_TYPES:
+            raise ValueError(
+                f"fsdp_state_dict={self.fsdp_state_dict!r} is not one of "
+                f"{FSDP_STATE_DICT_TYPES} (#544)"
+            )
         # Range checks on the declared optional axes mirror the ones
         # TrainingArguments performs -- but performed HERE, at statement time,
         # so an out-of-range declaration is a config error with a named field
@@ -1161,11 +1186,132 @@ def _parallelism_mesh_kwargs(cfg: Any) -> dict[str, int]:
     return mesh
 
 
-def _default_context_builder(ckpt_dir: Path | str) -> Any:
-    """Torch-free by contract: checkpoint_gates parses metadata with stdlib only."""
-    from foundationscale.gates.checkpoint_gates import CheckpointGateContext
+def _default_context_builder(ckpt_dir: Path | str, *, declared: Any = None) -> Any:
+    """Build the gate context over either checkpoint layout (#544, #548).
 
-    return CheckpointGateContext.from_path(ckpt_dir)
+    Torch-free by contract for the safetensors layout: checkpoint_gates parses
+    metadata with stdlib only, and that path is byte-for-byte unchanged --
+    root ``*.safetensors`` shards still go straight through
+    ``CheckpointGateContext.from_path``. An FSDP SHARDED_STATE_DICT checkpoint
+    instead stores its weights as a DCP store under ``pytorch_model_fsdp_0/``,
+    where accelerate's wrapper (``{"model": state_dict}``) prefixes every
+    tensor key with ``model.``. #544 refused that layout outright because
+    from_path offers no name-transform hook and a wrapped-vs-UNWRAPPED
+    comparison against the declared FQNs would RED a healthy save; both call
+    sites adjudicated the raise as UNMEASURED, i.e. no verdict at all over a
+    real artifact. #548 builds the context HERE instead, from the same DCP
+    metadata reader ``_checkpoint_weight_entries`` already uses (shapes,
+    dtype names, extra-state flags -- no tensor bytes are read), stripping
+    EXACTLY one leading ``model.`` so the wrapped keys line up against the
+    unwrapped declared FQNs. A key without the wrapper raises by name rather
+    than guessing: a namespace this plane did not write must not be silently
+    accepted as though it were none. TensorMeta fields are filled exactly as
+    from_path fills them, its ``declared`` handling (explicit block, else the
+    manifest's, else flat attributes, else None -- never a zero-length
+    denominator) is mirrored, ``weights_path`` points at the DCP store (read
+    with ``weights_key_prefix='model.'``) because DCP bytes are not
+    safetensors-readable, and ``origin`` names the DCP store so a
+    report can tell which layout was adjudicated.
+    """
+    from foundationscale.gates.checkpoint_gates import (
+        CheckpointGateContext,
+        TensorMeta,
+        _distinct_storage_bytes,
+        _is_real_tensor,
+        _matches_expert_family,
+    )
+
+    path = Path(ckpt_dir)
+    dcp_dir = path / _FSDP_DCP_SUBDIRNAME
+    if sorted(path.glob("*.safetensors")) or not (dcp_dir / _DCP_METADATA_FILENAME).is_file():
+        return CheckpointGateContext.from_path(path)
+
+    # DCP branch (#548). Both lazy imports are torch-backed (unpickling DCP
+    # metadata needs torch), which is why they happen only once the layout is
+    # known to need them.
+    from foundationscale import checkpoint as fsckpt
+    from foundationscale.checkpoint.dcp_meta import read_metadata
+
+    metadata = read_metadata(dcp_dir)
+    built: list[TensorMeta] = []
+    for name, stored in sorted(metadata.tensors.items()):
+        fqn = name
+        if not stored.is_extra_state:
+            if not name.startswith("model."):
+                raise ValueError(
+                    f"DCP tensor key {name!r} under {dcp_dir} does not carry "
+                    "the 'model.' wrapper accelerate's save_fsdp_model "
+                    "applies; refusing to strip a namespace this plane did "
+                    "not write (#548)"
+                )
+            fqn = name[len("model.") :]
+        shape = getattr(stored, "shape", None)
+        if shape is None:
+            shape = getattr(stored, "size", None)
+        if shape is None:
+            shape = ()
+        built.append(
+            TensorMeta(
+                fqn=fqn,
+                shape=tuple(shape),
+                dtype=str(stored.dtype).removeprefix("torch."),
+                storage_id=getattr(stored, "storage_id", None),
+                kind=(
+                    "extra_state"
+                    if ("_extra_state" in fqn or getattr(stored, "is_extra_state", False))
+                    else "tensor"
+                ),
+            )
+        )
+    tensors = tuple(built)
+
+    # Mirrored verbatim from CheckpointGateContext.from_path: an explicit
+    # ``declared`` argument overrides the manifest's block; absent both,
+    # pre-block flat attributes; absent those, None -- never a zero-length
+    # denominator the completeness gate auto-satisfies.
+    manifest = fsckpt.load_manifest(str(path))
+    block = declared if declared is not None else getattr(manifest, "declared", None)
+    if block is not None:
+        declared_fqns = tuple(block.declared_fqns) or None
+        num_experts = block.num_experts
+        num_moe_layers = block.num_moe_layers
+        expected_expert_bytes = block.expected_expert_bytes
+    else:
+        flat_fqns = getattr(manifest, "declared_fqns", None)
+        declared_fqns = None if flat_fqns is None else (tuple(flat_fqns) or None)
+        num_experts = getattr(manifest, "num_experts", None)
+        num_moe_layers = getattr(manifest, "num_moe_layers", None)
+        expected_expert_bytes = getattr(manifest, "expected_expert_bytes", None)
+
+    expert_storage_bytes = getattr(metadata, "expert_storage_bytes", None)
+    if expert_storage_bytes is None:
+        # Same fallback from_path applies: recognized layouts only, and a None
+        # physical sum stays unset so the byte gate reaches its own refusal.
+        expert_tensors = [
+            t for t in tensors if _is_real_tensor(t) and _matches_expert_family(t.fqn)
+        ]
+        if expert_tensors:
+            physical, storage_complete = _distinct_storage_bytes(expert_tensors)
+            if storage_complete and physical is not None:
+                expert_storage_bytes = physical
+
+    return CheckpointGateContext(
+        tensors=tensors,
+        declared_fqns=declared_fqns,
+        num_experts=num_experts,
+        num_moe_layers=num_moe_layers,
+        expected_expert_bytes=expected_expert_bytes,
+        origin=f"{dcp_dir} (FSDP DCP store, 'model.'-wrapped keys stripped, #548)",
+        expert_storage_bytes=expert_storage_bytes,
+        # The slice reader is format-agnostic (open_weights covers DCP), so
+        # expert_distinctness can settle a stacked MoE layout here exactly as
+        # it does on safetensors. Without this the gate abstains, first_save is
+        # UNDERCOVERED and the run blocks -- measured on a 2-tray 26B sharded
+        # save at checkpoint-10. The stored keys keep their wrapper, so the
+        # reader is told to prepend it.
+        weights_path=str(dcp_dir),
+        weights_key_prefix="model.",
+    )
 
 
 ContextBuilder = Callable[[Path | str], Any]
@@ -1272,6 +1418,120 @@ def _safetensors_entries(ckpt_dir: Path) -> list[tuple[str, str]]:
     return entries
 
 
+# #544: where accelerate's save_fsdp_model puts the weights of a
+# SHARDED_STATE_DICT save: f"{FSDP_MODEL_NAME}_{model_index}" with
+# FSDP_MODEL_NAME="pytorch_model_fsdp", holding a DCP store (.metadata plus
+# *.distcp shards). The state dict is wrapped as {"model": state_dict}, so
+# every saved tensor key is "model.<fqn>".
+_FSDP_DCP_SUBDIRNAME = "pytorch_model_fsdp_0"
+
+
+def _dir_listing(path: Path) -> list[str] | str:
+    """Contents for a diagnostic, never a crash: a missing directory is itself the finding."""
+    if not path.is_dir():
+        return "<directory absent>"
+    return sorted(p.name for p in path.iterdir())
+
+
+def _save_final_fsdp_sharded(trainer: Any, final_dir: Path) -> None:
+    """Write the final checkpoint as per-rank DCP shards (#544); collective, call on every rank."""
+    from accelerate.utils import save_fsdp_model  # type: ignore[import-untyped]
+
+    accelerator = trainer.accelerator
+    final_dir.mkdir(parents=True, exist_ok=True)
+    save_fsdp_model(accelerator.state.fsdp_plugin, accelerator, trainer.model, str(final_dir))
+    if getattr(trainer.args, "should_save", False):
+        config = getattr(accelerator.unwrap_model(trainer.model), "config", None)
+        if config is not None:
+            config.save_pretrained(str(final_dir))
+        processing = getattr(trainer, "processing_class", None)
+        if processing is not None:
+            processing.save_pretrained(str(final_dir))
+
+
+_DCP_METADATA_FILENAME = ".metadata"
+
+# torch dtype names (as dcp_meta reports them, "torch." already stripped) to
+# the safetensors header vocabulary that _histogram_from_entries and
+# _PRECISION_ACCEPTED_DTYPES speak. Unknown is a raise, never a guess.
+_TORCH_DTYPE_TO_SAFETENSORS: dict[str, str] = {
+    "float64": "F64",
+    "float32": "F32",
+    "float16": "F16",
+    "bfloat16": "BF16",
+    "int64": "I64",
+    "uint64": "U64",
+    "int32": "I32",
+    "uint32": "U32",
+    "int16": "I16",
+    "uint16": "U16",
+    "int8": "I8",
+    "uint8": "U8",
+    "bool": "BOOL",
+    "float8_e4m3fn": "F8_E4M3",
+    "float8_e5m2": "F8_E5M2",
+}
+
+
+def _checkpoint_weight_entries(ckpt_dir: Path) -> list[tuple[str, str]]:
+    """(name, dtype) for every weight tensor in a checkpoint, whichever layout wrote it (#544).
+
+    A checkpoint directory now has ONE of two layouts:
+
+      (a) today's: ``*.safetensors`` shards at the root;
+      (b) sharded FSDP: a DCP store under ``pytorch_model_fsdp_0/`` whose
+          tensor keys are all wrapped as ``model.<fqn>``.
+
+    Layout (a) answers through :func:`_safetensors_entries` unchanged. Layout
+    (b) answers from the DCP metadata alone (shapes and dtype names; no tensor
+    bytes are read), strips EXACTLY one leading ``model.`` wrapper, skips the
+    non-tensor byte blobs the rest of the checkpoint package already filters
+    on ``is_extra_state``, and normalises dtypes into the safetensors
+    vocabulary so :func:`_histogram_from_entries` works unmodified.
+
+    Both layouts present is AMBIGUOUS and raises -- two artifacts claiming one
+    save must not be adjudicated by guessing which to read. Neither present is
+    the historical empty case, returned as ``[]`` so the callers' vacuous
+    comparisons refuse. A DCP key without the wrapper raises: a namespace this
+    plane did not write must not be silently accepted as though it were none.
+    """
+    root_shards = sorted(ckpt_dir.glob("*.safetensors"))
+    dcp_dir = ckpt_dir / _FSDP_DCP_SUBDIRNAME
+    dcp_present = (dcp_dir / _DCP_METADATA_FILENAME).is_file()
+    if root_shards and dcp_present:
+        raise ValueError(
+            f"{ckpt_dir} holds BOTH root safetensors shards "
+            f"({[p.name for p in root_shards[:3]]}) and a DCP store under "
+            f"{_FSDP_DCP_SUBDIRNAME}/; the two layouts claim the same save and "
+            "this plane refuses to guess which one to adjudicate (#544)"
+        )
+    if root_shards:
+        return _safetensors_entries(ckpt_dir)
+    if not dcp_present:
+        return []
+    from foundationscale.checkpoint.dcp_meta import read_metadata
+
+    metadata = read_metadata(dcp_dir)
+    entries: list[tuple[str, str]] = []
+    for name, stored in sorted(metadata.tensors.items()):
+        if stored.is_extra_state:
+            continue
+        if not name.startswith("model."):
+            raise ValueError(
+                f"DCP tensor key {name!r} under {dcp_dir} does not carry the "
+                "'model.' wrapper accelerate's save_fsdp_model applies; "
+                "refusing to strip a namespace this plane did not write (#544)"
+            )
+        dtype = _TORCH_DTYPE_TO_SAFETENSORS.get(stored.dtype)
+        if dtype is None:
+            raise ValueError(
+                f"tensor {name!r} has torch dtype {stored.dtype!r}, which has "
+                "no safetensors-vocabulary mapping; refusing to guess one (#544)"
+            )
+        entries.append((name[len("model.") :], dtype))
+    return entries
+
+
 def _histogram_from_entries(entries: list[tuple[str, str]]) -> dict[str, int] | None:
     """Count already-read entries by dtype; None -- never ``{}`` -- when empty.
 
@@ -1301,7 +1561,7 @@ def _is_adapter_only(entries: list[tuple[str, str]]) -> bool:
 def _dtype_histogram(ckpt_dir: Path) -> dict[str, int] | None:
     """Count saved tensors by safetensors dtype, stdlib only (no torch).
 
-    The header read lives in ``_safetensors_entries`` (#424): this histogram
+    The header read lives in ``_checkpoint_weight_entries`` (#424, #544): this histogram
     and the adapter-only reading derive from that one pass, so they can never
     disagree about the shard set and no shard is read twice. Returns None when
     there is nothing to look at -- zero shards, or zero tensors across them --
@@ -1310,7 +1570,7 @@ def _dtype_histogram(ckpt_dir: Path) -> dict[str, int] | None:
     malformed shard RAISES; the caller treats unreadable headers the same as
     absent tensors.
     """
-    return _histogram_from_entries(_safetensors_entries(ckpt_dir))
+    return _histogram_from_entries(_checkpoint_weight_entries(ckpt_dir))
 
 
 @dataclass(frozen=True)
@@ -2269,7 +2529,10 @@ class FoundationScaleSaveGate(_CallbackBase):
                 # reading (#424): the names and the dtypes must come from the
                 # same shard set -- two passes could see different shards under
                 # a concurrent writer -- and no shard header is read twice.
-                entries = _safetensors_entries(ckpt_dir)
+                # #544: either layout feeds BOTH readings through this one
+                # call; layout (b) keys arrive with the "model." wrapper already
+                # stripped so the adapter-only marker test applies unchanged.
+                entries = _checkpoint_weight_entries(ckpt_dir)
                 histogram = _histogram_from_entries(entries)
                 adapter_only = _is_adapter_only(entries)
             except Exception as exc:  # noqa: BLE001 -- unreadable shard headers
@@ -2280,7 +2543,8 @@ class FoundationScaleSaveGate(_CallbackBase):
                 adapter_only = False
                 _mark(
                     Step.SAVE_GATE,
-                    f"precision: could not read safetensors headers under {ckpt_dir} "
+                    "precision: could not read weight metadata (safetensors or DCP) "
+                    f"under {ckpt_dir} "
                     f"({exc!r}); the comparison will refuse as vacuous",
                 )
             agreement = check_precision_agreement(
@@ -2754,6 +3018,14 @@ def _manifest_payload(
             "dataloader_prefetch_factor": cfg.dataloader_prefetch_factor,
             "sharding_strategy": cfg.sharding_strategy,
             "cpu_optimizer_offload": cfg.cpu_optimizer_offload,
+            # Recorded like max_sequence_length rather than the None-default
+            # axes: the default ("full") is a real value, so there is no
+            # abstention state to carry -- only the save layout the run
+            # declared. It is here because everything downstream of it (which
+            # shard shapes exist, which gates can read them) depends on the
+            # layout, so a throughput or verdict number is not interpretable
+            # without it (#544).
+            "fsdp_state_dict": cfg.fsdp_state_dict,
             # Recorded unconditionally for the same reason the dataloader axes
             # are: a measured 1.32x step-time difference and a 25 GiB memory
             # difference sit behind this one flag, so a throughput number is
@@ -3806,6 +4078,48 @@ def _train(cfg: TrainConfig) -> int:
         )
         return EXIT_REFUSE
 
+    # #544: a sharded checkpoint layout is a property of FSDP's save path --
+    # accelerate's save_fsdp_model is the only code here that honours a
+    # state_dict_type. Under replication the Trainer writes ordinary root
+    # safetensors and the declaration would be recorded but never executed.
+    if cfg.fsdp_state_dict == "sharded" and cfg.sharding_strategy != "fsdp":
+        _mark(
+            Step.REFUSE,
+            f"fsdp_state_dict='sharded' is declared, but sharding_strategy is "
+            f"{cfg.sharding_strategy!r}. The sharded layout exists only under "
+            "transformers' FSDP integration; without --sharding-strategy fsdp "
+            "there is no state_dict_type to set and training would write FULL "
+            "saves under a sharded label. Declare --sharding-strategy fsdp "
+            "alongside it, or drop the sharded-layout declaration",
+        )
+        _emit_manifest(
+            cfg,
+            stage="refused",
+            extra={
+                "exit": EXIT_REFUSE,
+                "fsdp_state_dict": cfg.fsdp_state_dict,
+                "sharding_strategy": cfg.sharding_strategy,
+            },
+        )
+        return EXIT_REFUSE
+
+    # #545: an offload declaration must reach accelerate BEFORE the process
+    # group exists, and it cannot do so through fsdp_config alone. Measured
+    # on hardware: transformers 5.13 passes fsdp_config['cpu_offload'] to the
+    # accelerate plugin but never exports FSDP_OFFLOAD_PARAMS, and accelerate
+    # 1.14's PartialState builds the cuda:nccl,cpu:gloo pair only when
+    # ACCELERATE_USE_FSDP='true' and FSDP_OFFLOAD_PARAMS='true' are already
+    # in the environment at init_process_group time. Without the cpu:gloo
+    # half the group is NCCL-only and step 0 dies with "No backend type
+    # associated with device type cpu". The group is built by
+    # TrainingArguments (through accelerate's PartialState) -- and earlier
+    # still when a tp mesh is handed to the model load -- so the export
+    # happens here, ahead of both. Exporting is the claim; the guard just
+    # after the group exists is the measurement.
+    if cfg.cpu_optimizer_offload is True and cfg.sharding_strategy == "fsdp":
+        os.environ["ACCELERATE_USE_FSDP"] = "true"
+        os.environ["FSDP_OFFLOAD_PARAMS"] = "true"
+
     # tp and cp DO bind, but only where the backend exists. Checked before the
     # model is resident, and refused rather than dropped: the kwarg-introspection
     # guard further down would catch an unknown parallelism_config too, but it
@@ -4347,7 +4661,18 @@ def _train(cfg: TrainConfig) -> int:
                 f"a filesystem without this fault and re-run. Underlying: {exc!r}",
             )
             return EXIT_REFUSE
-        _mark(Step.RED, f"model/dataset construction failed: {exc!r}")
+        # The innermost frame belongs in the line: a FileNotFoundError
+        # raised without a filename (measured on a 2-node run) leaves the
+        # operator nothing actionable, and the deepest frame is where the
+        # failure actually happened. Guarded because traceback can be None
+        # for an exception that was never raised-and-caught through real
+        # frames.
+        _site = ""
+        _frames = traceback.extract_tb(exc.__traceback__) if exc.__traceback__ is not None else []
+        if _frames:
+            _frame = _frames[-1]
+            _site = f" (innermost frame: {_frame.filename}:{_frame.lineno} in {_frame.name})"
+        _mark(Step.RED, f"model/dataset construction failed: {exc!r}{_site}")
         return EXIT_RED
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -4774,6 +5099,16 @@ def _train(cfg: TrainConfig) -> int:
             # guard after TrainingArguments below reads what was BUILT, so a
             # future rename fails there instead of training un-offloaded.
             fsdp_config["cpu_offload"] = True
+        if cfg.fsdp_state_dict == "sharded":
+            # #544: ask accelerate for StateDictType.SHARDED_STATE_DICT -- one
+            # DCP shard per rank under pytorch_model_fsdp_0/ -- instead of the
+            # full save that gathers every shard onto rank 0's host. With
+            # cpu_optimizer_offload that gather was measured at ~106 GB of
+            # model plus ~202 GB of optimizer against 956 GiB of host RAM.
+            # "full" sets NOTHING here: transformers' default is already the
+            # full layout, and leaving the key out keeps an undeclared run
+            # byte-identical to one from before the knob existed.
+            fsdp_config["state_dict_type"] = "SHARDED_STATE_DICT"
         if fsdp_config:
             kwargs["fsdp_config"] = fsdp_config
     if cfg.tp > 1:
@@ -5033,6 +5368,31 @@ def _train(cfg: TrainConfig) -> int:
                     "un-offloaded under the declared label; refusing (96)",
                 )
                 return EXIT_REFUSE
+        # #544: same read-what-was-BUILT rule as the cpu_offload guard above:
+        # transformers' fsdp_config parser drops keys it does not know without
+        # a word, so state_dict_type having been ACCEPTED in the kwargs proves
+        # nothing. If the built config dropped it, the run would write full
+        # saves under the sharded label -- the exact gather this axis exists
+        # to remove.
+        if cfg.fsdp_state_dict == "sharded":
+            _built_fsdp_config = getattr(args, "fsdp_config", None)
+            if isinstance(_built_fsdp_config, Mapping):
+                _built_state_dict_type = _built_fsdp_config.get("state_dict_type")
+            else:
+                _built_state_dict_type = getattr(_built_fsdp_config, "state_dict_type", None)
+            if _built_state_dict_type != "SHARDED_STATE_DICT":
+                _mark(
+                    Step.REFUSE,
+                    "fsdp_state_dict='sharded' is declared (expects "
+                    "state_dict_type='SHARDED_STATE_DICT'), but the FSDP config "
+                    "transformers built carries "
+                    f"state_dict_type={_built_state_dict_type!r} "
+                    f"(fsdp_config={_built_fsdp_config!r}). Training would "
+                    "write FULL state dicts under the sharded declaration; "
+                    "refusing (96) rather than recording a layout the run "
+                    "does not have",
+                )
+                return EXIT_REFUSE
         # #516: the process group exists as of the line above -- TrainingArguments'
         # __post_init__ reads self.device, which builds accelerate's PartialState,
         # which calls init_process_group. So this is the FIRST line at which a
@@ -5059,6 +5419,35 @@ def _train(cfg: TrainConfig) -> int:
                 f"[{Step.FABRIC}] lines above for every attempt",
             )
             return EXIT_REFUSE
+        # #545: with cpu_optimizer_offload the very first step moves optimizer
+        # state over a CPU collective, so the process group needs a CPU
+        # backend, not NCCL alone. The env pair exported at START asks
+        # accelerate's PartialState for cuda:nccl,cpu:gloo; this guard reads
+        # what was BUILT, because the unset env was measured to produce an
+        # NCCL-only group and step 0 then died with "No backend type
+        # associated with device type cpu". A declaration silently executed
+        # on the wrong fabric is the class this whole module exists to
+        # refuse. Single-process runs have no group and nothing to offload
+        # over, so they skip the guard.
+        if cfg.cpu_optimizer_offload is True and cfg.sharding_strategy == "fsdp":
+            _dist = torch.distributed
+            if _dist.is_available() and _dist.is_initialized():
+                _backend_config = _dist.get_backend_config()
+                if "cpu:gloo" not in _backend_config:
+                    _mark(
+                        Step.REFUSE,
+                        "cpu_optimizer_offload=True is declared with fsdp, but "
+                        f"the process group accelerate built is {_backend_config!r} "
+                        "-- no cpu:gloo backend. Offloaded state moves over the "
+                        "CPU backend, and without one the first step fails with "
+                        '"No backend type associated with device type cpu" '
+                        "(measured, #545). ACCELERATE_USE_FSDP and "
+                        "FSDP_OFFLOAD_PARAMS were exported before the group was "
+                        "built; a build that still lacks the cpu backend cannot "
+                        "honour the declaration, so this refuses (96) here "
+                        "rather than dying at step 0",
+                    )
+                    return EXIT_REFUSE
         # #447: measure the device BEFORE the Trainer moves the model onto it.
         # The move is where a preempted GPU raises OutOfMemoryError, two minutes
         # into a run, and train()'s boundary handler adjudicates that RED against
@@ -5363,7 +5752,16 @@ def _train(cfg: TrainConfig) -> int:
         # from the ranks that hold them. Scoping the CALL to the writing rank
         # would hang the peers it is waiting on. Only the INSPECTION that
         # follows is the writing rank's business.
-        trainer.save_model(str(final_dir))
+        if cfg.fsdp_state_dict == "sharded":
+            # #544: under SHARDED_STATE_DICT transformers' save_model writes
+            # NOTHING -- it saves under FSDP only for FULL_STATE_DICT. Measured
+            # on a GB200 tray: checkpoint-10/12 in DCP layout, then no final/
+            # at all. Write the final through the same accelerate call the
+            # Trainer uses for intermediate checkpoints; it is a collective,
+            # so every rank enters it.
+            _save_final_fsdp_sharded(trainer, final_dir)
+        else:
+            trainer.save_model(str(final_dir))
     except Exception as exc:  # noqa: BLE001 -- classified into RED vs REFUSE below
         environment = _environment_failure_reason(exc)
         if environment is not None:
@@ -5421,7 +5819,20 @@ def _train(cfg: TrainConfig) -> int:
     # examined is UNMEASURED, and it would be reported as clean.
     shards = sorted(final_dir.glob("*.safetensors"))
     legacy = sorted(final_dir.glob("*.bin"))
-    if legacy and not shards:
+    # #544: an FSDP "sharded" final save writes no root safetensors at all;
+    # every rank wrote its own DCP shard under pytorch_model_fsdp_0/. That
+    # layout must be recognised here or a healthy sharded run lands in the
+    # "0 safetensors shards" vacant-verdict branch below and reports its own
+    # checkpoint as absent. For layout (a) the subdir does not exist, both
+    # conditions reduce to the historical ones, and the branch outcomes --
+    # marks, manifests, exit codes -- are unchanged.
+    dcp_subdir = final_dir / _FSDP_DCP_SUBDIRNAME
+    dcp_shards = (
+        sorted(dcp_subdir.glob("*.distcp"))
+        if (dcp_subdir / _DCP_METADATA_FILENAME).is_file()
+        else []
+    )
+    if legacy and not shards and not dcp_shards:
         _mark(
             Step.RED,
             f"final save wrote {len(legacy)} legacy .bin shard(s) and 0 "
@@ -5429,11 +5840,11 @@ def _train(cfg: TrainConfig) -> int:
             "gate reads safetensors and would examine nothing",
         )
         return _agree_on_exit(EXIT_RED)
-    if not shards:
+    if not shards and not dcp_shards:
         _mark(
             Step.UNMEASURED,
             f"final save produced 0 safetensors shards in {final_dir} "
-            f"(contents: {sorted(p.name for p in final_dir.iterdir())}); the "
+            f"(contents: {_dir_listing(final_dir)}); the "
             "format the gate depends on is absent, so its verdict would be vacuous",
         )
         _emit_manifest(
@@ -5445,7 +5856,18 @@ def _train(cfg: TrainConfig) -> int:
             telemetry=telemetry,
         )
         return _agree_on_exit(EXIT_UNMEASURED)
-    _mark(Step.SAVED, f"final checkpoint -> {final_dir} ({len(shards)} safetensors shard(s))")
+    if shards:
+        _mark(Step.SAVED, f"final checkpoint -> {final_dir} ({len(shards)} safetensors shard(s))")
+    else:
+        _mark(
+            Step.SAVED,
+            f"final checkpoint -> {final_dir} ({len(dcp_shards)} DCP shard(s) "
+            f"under {_FSDP_DCP_SUBDIRNAME}/, FSDP sharded layout, #544). The "
+            "registered gates below adjudicate through the context builder, "
+            "which refuses the wrapped model.* namespace, so they report "
+            "UNMEASURED rather than comparing wrapped names against unwrapped "
+            "declarations",
+        )
 
     # --- 9. Adjudicate. UNMEASURED is not PASS. -----------------------------
     report, err = _run_save_gates(REGISTRY, final_dir)

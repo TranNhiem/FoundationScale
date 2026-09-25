@@ -204,6 +204,11 @@ class CheckpointGateContext:
     ``None`` keeps the metadata-only behaviour exactly, which is what every caller
     that predates this field gets. Stored as a string, not an open handle: the
     context stays frozen, picklable and torch-free until a gate actually reads."""
+    weights_key_prefix: str = ""
+    """Prepended to every FQN when reading from ``weights_path``. An FSDP sharded
+    store keeps accelerate's ``model.`` wrapper on its keys while ``tensors`` carry
+    the unwrapped FQNs the declaration uses (#548). Empty keeps every older caller
+    exactly as it was."""
 
     @classmethod
     def from_path(
@@ -311,6 +316,8 @@ def _coerce(ctx: Any) -> CheckpointGateContext:
             expected_expert_bytes=getattr(ctx, "expected_expert_bytes", None),
             origin=getattr(ctx, "origin", repr(ctx)),
             expert_storage_bytes=getattr(ctx, "expert_storage_bytes", None),
+            weights_path=getattr(ctx, "weights_path", None),
+            weights_key_prefix=getattr(ctx, "weights_key_prefix", ""),
         )
     raise TypeError(
         f"checkpoint gates need a CheckpointGateContext or path, got {type(ctx).__name__}"
@@ -551,7 +558,7 @@ def _layer_normalized_stem(fqn: str) -> str:
 
 
 def _hash_stacked_expert_slices(
-    weights_path: str, stacked: Sequence[TensorMeta]
+    weights_path: str, stacked: Sequence[TensorMeta], key_prefix: str = ""
 ) -> tuple[int, list[str], str | None]:
     """Hash every expert slice of every stacked tensor; name any duplicated pair.
 
@@ -595,14 +602,13 @@ def _hash_stacked_expert_slices(
     duplicates: list[str] = []
     try:
         for meta in stacked:
-            shape = tuple(source.shape(meta.fqn))
+            key = key_prefix + meta.fqn
+            shape = tuple(source.shape(key))
             if not shape:
                 return hashed, duplicates, f"{meta.fqn} has no leading expert dimension"
             first_seen: dict[str, int] = {}
             for i in range(shape[0]):
-                read = source.read_box(
-                    meta.fqn, [i, *([0] * (len(shape) - 1))], [i + 1, *shape[1:]]
-                )
+                read = source.read_box(key, [i, *([0] * (len(shape) - 1))], [i + 1, *shape[1:]])
                 if not read.complete:
                     return (
                         hashed,
@@ -1287,7 +1293,9 @@ class ExpertDistinctnessGate(Gate):
         """
         data_note = ""
         if c.weights_path is not None:
-            hashed, duplicates, unavailable = _hash_stacked_expert_slices(c.weights_path, stacked)
+            hashed, duplicates, unavailable = _hash_stacked_expert_slices(
+                c.weights_path, stacked, c.weights_key_prefix
+            )
             if duplicates:
                 return self.fail(
                     f"STACKED MoE layout, data-level check: {len(duplicates)} duplicated "
@@ -1511,6 +1519,22 @@ class ExpertDistinctnessGate(Gate):
                 ),
             ),
         ]
+
+
+def _floor_relation(measured: int, expected: int) -> str:
+    """Word the byte floor honestly: "matches" only when the numbers are equal.
+
+    The gate is a FLOOR -- the incident it exists for was a shortfall (ratio
+    0.125). Above the floor it passes, but calling 2x "matches" misreports it:
+    measured on a GB200 FSDP sharded save, fp32 master weights stored against
+    a bf16 declaration read exactly 2.000 and were reported as a match.
+    """
+    if measured == expected:
+        return f"matches declared {expected:,}"
+    return (
+        f"exceeds declared {expected:,} (ratio {measured / expected:.3f}; the gate "
+        "is a floor, and e.g. fp32 storage against a bf16 declaration reads 2.000)"
+    )
 
 
 @register
@@ -1812,13 +1836,13 @@ class ExpertByteVolumeGate(Gate):
         if physical is not None:
             return self.ok(
                 f"expert byte volume {physical:,} measured over distinct storage "
-                f"matches declared {expected:,}",
+                f"{_floor_relation(physical, expected)}",
                 coverage,
                 evidence=evidence,
             )
         return self.ok(
             f"metadata-implied only (no storage identity; aliasing cannot be "
-            f"excluded): expert byte volume {implied:,} matches declared {expected:,}",
+            f"excluded): expert byte volume {implied:,} {_floor_relation(implied, expected)}",
             coverage,
             evidence=evidence,
         )

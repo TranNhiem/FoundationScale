@@ -142,13 +142,16 @@ does not change.
 2. **A held-out set on which thinking is actually exercised.** The rescorer now scores think
    rows, but the checkpoints leave the thought channel empty. A score that sees reasoning needs
    a model trained to emit it and a judge for the 400 free-text rows.
-3. **An offloaded save that fits in host memory** — offload, tp and cp were measured
-   (#538–#542) and each surfaced a real defect; cp now runs end to end. The likely cause is
-   arithmetic, not a leak. A 26B full-state-dict save writes about 414 GB (optimizer 202 GB,
-   FSDP model 106 GB, safetensors 106 GB) through one host. Without offload, measured on two
-   trays, the writing node's host peaks about 194 GiB above the other node's. With offload, training
-   already holds about 912 GiB of host memory on a 956 GiB node. Candidate fix: sharded state
-   dicts for intermediate saves, a full state dict only at the end. Not yet measured.
+3. **An offloaded save that fits in host memory — measured, with sharded state dicts.** The
+   full-state-dict save gathers about 414 GB through one host and exhausted host memory under
+   offload. `fsdp_state_dict="sharded"` now writes every save, the final one included, as a
+   distributed checkpoint (#544), and the save gates read it directly (#548). gemma-4-26B-A4B
+   with CPU offload on two trays: 12 steps, save gate PASS 4/4 at steps 10 and 12, final
+   checkpoint written as 8 shards, exit 0 on both nodes, host peak 721 and 725 GiB per node
+   (one tray with a full state dict needed about 977 GiB). Qwen2.5-7B with offload on one
+   tray: exit 0, host peak 404 GiB. Two costs remain: the final checkpoint is a distributed
+   checkpoint, not safetensors, so serving needs a merge step; and on the 26B the expert
+   distinctness gate hashes every expert slice, about 400 s per save.
 4. **An sm_100 attention kernel** (FlashAttention-3 or TransformerEngine) in the benchmark image —
    the single largest measured throughput gap, and the reason long context OOMs early.
 5. **tp on a newer transformers.** Transformers 5.17 reworked the tensor-parallel save that
