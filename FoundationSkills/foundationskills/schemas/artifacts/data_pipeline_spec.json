@@ -1,0 +1,25 @@
+
+{
+  "type": "object",
+  "description": "Specification for transforming raw data into an FS-ready dataset.",
+  "required": ["target_format", "ops", "seed", "tokenizer", "rationale"],
+  "additionalProperties": true,
+  "properties": {
+    "target_format": {"enum": ["pretrain", "cpt", "sft", "preference", "rl", "mm_sft"]},
+    "ops": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["op", "config"],
+        "additionalProperties": true,
+        "properties": {
+          "op": {"type": "string", "minLength": 1},
+          "config": {"type": "object", "additionalProperties": true}
+        }
+      }
+    },
+    "seed": {"type": "integer"},
+    "tokenizer": {"type": ["string", "null"]},
+    "rationale": {"type": "array", "items": {"type": "string"}}
+  }
+}

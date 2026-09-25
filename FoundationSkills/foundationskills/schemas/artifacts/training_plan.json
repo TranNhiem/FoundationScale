@@ -1,0 +1,56 @@
+
+{
+  "type": "object",
+  "description": "Executable-or-explicitly-refused multi-stage training plan.",
+  "required": ["goal", "stages", "decisions", "feasibility", "provenance_notes"],
+  "additionalProperties": true,
+  "properties": {
+    "goal": {"type": "object", "additionalProperties": true},
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "stage", "algorithm", "method", "recipe_id", "because", "hparams", "data", "executable", "missing", "estimate"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "stage": {"enum": ["pretrain", "cpt", "sft", "preference", "rl"]},
+          "algorithm": {"type": ["string", "null"]},
+          "method": {"enum": ["full", "lora", "qlora"]},
+          "recipe_id": {"type": ["string", "null"]},
+          "because": {"type": "string"},
+          "hparams": {"type": "object", "additionalProperties": true},
+          "data": {"type": "object", "additionalProperties": true},
+          "executable": {"type": "boolean"},
+          "missing": {"type": ["string", "null"]},
+          "estimate": {"type": "object", "additionalProperties": true}
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["step", "choice", "because"],
+        "additionalProperties": true,
+        "properties": {
+          "step": {"type": "string"},
+          "choice": {"type": "string"},
+          "because": {"type": "string"}
+        }
+      }
+    },
+    "feasibility": {
+      "type": "object",
+      "required": ["verdict", "findings", "alternatives"],
+      "additionalProperties": true,
+      "properties": {
+        "verdict": {"enum": ["ok", "warn", "infeasible"]},
+        "findings": {"type": "array", "additionalProperties": true},
+        "alternatives": {"type": "array", "additionalProperties": true}
+      }
+    },
+    "provenance_notes": {"type": "array", "additionalProperties": true}
+  }
+}

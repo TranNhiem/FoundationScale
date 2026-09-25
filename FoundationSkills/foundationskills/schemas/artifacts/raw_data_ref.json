@@ -1,0 +1,23 @@
+
+{
+  "type": "object",
+  "description": "References to raw data sources before pipeline construction.",
+  "required": ["sources"],
+  "additionalProperties": true,
+  "properties": {
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["uri", "kind"],
+        "additionalProperties": true,
+        "properties": {
+          "uri": {"type": "string", "minLength": 1},
+          "kind": {"enum": ["local_dir", "jsonl", "json", "parquet", "csv", "hf_dataset", "documents", "image_text"]},
+          "options": {"type": "object", "additionalProperties": true}
+        }
+      }
+    }
+  }
+}

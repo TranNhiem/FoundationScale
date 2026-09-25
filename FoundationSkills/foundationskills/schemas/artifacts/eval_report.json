@@ -1,0 +1,24 @@
+
+{
+  "type": "object",
+  "description": "Benchmark evaluations for a checkpoint.",
+  "required": ["checkpoint", "benchmarks", "verdict"],
+  "additionalProperties": true,
+  "properties": {
+    "checkpoint": {"type": "string", "minLength": 1},
+    "benchmarks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "score", "baseline"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "score": {"type": ["number", "null"]},
+          "baseline": {"type": ["number", "null"]}
+        }
+      }
+    },
+    "verdict": {"enum": ["PASS", "RED", "UNMEASURED"]}
+  }
+}
