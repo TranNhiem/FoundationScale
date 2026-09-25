@@ -31,8 +31,8 @@ New axis machinery should not be built into the thin trainer to compete with it.
 | data parallelism (replication) | executes | the GB200 scaling campaign, 1→8 GPUs |
 | `sharding_strategy=fsdp` | executes | **measured end to end on one tray**: gemma-4-26B-A4B, 60 steps, save gate PASS 4/4 at step 50, final adjudication clear, exit 0, train loss 1.308 (#535, #536, #537). Not yet run multi-node |
 | `cpu_optimizer_offload` | executes under fsdp only, **since #538** | before #538 it was a silent no-op (a key transformers ignores; on and off arms reached a byte-identical peak). Measured after the fix on one tray: GPU ~181 → ~106 GiB per GPU, 2–2.6× step time; the first full-state-dict save exhausts host memory, so no offloaded 26B run has completed |
-| `--tp` | trains; **refused (96) wherever it cannot also save** | measured on the 26B (#539, #540): tp=2 trained 10 steps (loss 1.674, 6.35 s/step), then the first save deadlocked, because transformers' Trainer saves on one rank and a tensor-parallel save gathers with a collective. tp without fsdp now refuses; tp with fsdp needs FSDP version 2, which a tied model cannot use, so it refuses there too. A tp degree that does not divide every head count refuses (tp=4 against 2 global KV heads died in the first forward). Net: no tp layout runs end to end on Gemma-4 in this plane |
-| `--cp` | executes via accelerate `ParallelismConfig` | unit-tested (#535); not measured on hardware |
+| `--tp` | trains; **refused (96) wherever it cannot also save** | measured on the 26B (#539, #540): tp=2 trained 10 steps (loss 1.674, 6.35 s/step), then the first save deadlocked, because transformers' Trainer saves on one rank and a tensor-parallel save gathers with a collective. tp without fsdp now refuses; tp with fsdp needs FSDP version 2, which a tied model cannot use, so it refuses there too. A tp degree that does not divide every head count refuses (tp=4 against 2 global KV heads died in the first forward). On an untied model (Qwen2.5-7B, tp=2 dp=2 fsdp, #541) the load now lands on accelerate's own mesh and ten steps trained (5.3 s/step), then the first save failed the same way: the writing rank gathers tp shards alone. That save path is transformers' own; the installed release cannot checkpoint a tensor-parallel model under any sharding, so tp refuses wherever that release is installed, detected by the reworked save API rather than a version. Net: no tp layout runs end to end in this plane on this toolchain |
+| `--cp` | executes via accelerate `ParallelismConfig`; batches padded to a multiple of 2×cp | **measured end to end** on Qwen2.5-7B, cp=2 dp=2 fsdp (#542): mesh matched, 12 steps, loss 1.757, 13.9 s/step, save gate PASS at both checkpoints, exit 0. Before #542 the first step died on a bare assertion: context parallelism splits each sequence into 2×cp chunks. cp with an image column refuses (its collator cannot pad to that multiple). Gemma-4 cannot use it here: the tie needs FSDP version 1 |
 | gradient checkpointing, torch.compile (3 axes), dataloader axes | execute | #532, #534, scaling campaign |
 | `--pp`, `--ep` | **refused (96)** | `ParallelismConfig` has no pipeline or expert field — a backend fact, not an omission |
 | `sharding_strategy=zero3` | **refused (96)** | ZeRO/DeepSpeed adjudicated and unbuilt |
@@ -60,9 +60,12 @@ Measured on `iter_0000750` of the official run (a real 26B-A4B Bridge checkpoint
   hash the 26B's 91 GB of fp32 expert weights. Known limit: identical experts are legitimate
   right after sparse upcycling, and this check would fail that first save.
 - **Expert byte volume** — skips: no run manifest declares the expected volume.
-- **Checkpoint completeness (`save_complete`)** — **vacuous**: Bridge writes no manifest carrying
-  `declared_fqns`, so there is no declared tensor set to compare against. This is the gap that
-  keeps FoundationScale from being the adjudicator of record for Bridge runs.
+- **Checkpoint completeness (`save_complete`)** — **real since #543.** `tools/bridge_fqn_map.py`
+  builds the model definition on the meta device (no checkpoint in the loop) and emits the
+  declared tensor set for `--fqn-map`. Measured: 928 declared tensors; CLEAR 928/928 on the
+  TP2/EP2/ETP2 and TP2/PP2/ETP2 checkpoints and on the official run's iteration 1750; a map with
+  one planted extra tensor BLOCKS (1 of 929 absent). Known limit: the map shares Megatron's
+  module code with the run, so it cannot catch a module the code never builds.
 
 ## 4. Megatron 6D: what trains, measured
 
@@ -97,11 +100,10 @@ floor, and a gap of that size is not a regression. The decisive comparison is at
   fit.
 - **A step inside a held tray gets 2 CPUs**, which alone cost 3× throughput at world 4. Direct
   node login is the only measured escape.
-- **Wired-but-unmeasured in the thin plane:** cp. Unit evidence only.
-- **Tensor parallelism in the thin plane has no end-to-end layout on Gemma-4** (§2). It
-  trains, but every layout that trains is refused because it cannot save or cannot compose
-  with the tie. Tensor parallelism for this model belongs in the Bridge lane, which saves
-  across tensor ranks (§4).
+- **Tensor parallelism in the thin plane has no end-to-end layout on this toolchain** (§2).
+  It trains, on Gemma-4 and on an untied 7B, but the installed transformers cannot save a
+  tensor-parallel model, so every tp layout is refused. Tensor parallelism belongs in the
+  Bridge lane, which saves across tensor ranks (§4).
 - **Offloaded 26B cannot save on one tray.** With offload engaged, host memory sits near
   912 GiB through training and the first full-state-dict save exhausts the node. Setting
   `cpu_ram_efficient_loading` did not move it; the source of the host footprint is open.
@@ -112,14 +114,13 @@ floor, and a gap of that size is not a regression. The decisive comparison is at
 
 ## 7. Candidate next features, ranked
 
-1. **Bridge run manifest → `save_complete` becomes real.** Emit a FoundationScale manifest
-   beside every Bridge checkpoint, with `declared_fqns` derived independently of the checkpoint
-   itself. Closes the last vacuous gate on the production path. Highest leverage: it turns the
-   adjudicator into the adjudicator of record for every production run.
+1. **Emit the fqn map from the Bridge launcher** beside every checkpoint, so `save_complete`
+   runs without an operator step. The producer exists and is measured (#543); wiring it in
+   makes FoundationScale the adjudicator of record for every production run.
 2. **An in-distribution held-out set that scores thinking.** Replaces an instrument that cannot
    see half the behaviour it is used to judge.
-3. **Hardware measurement of cp** in the thin plane, and **an offloaded save that fits in host
-   memory** — offload and tp were measured (#538–#540) and each surfaced a real defect.
+3. **An offloaded save that fits in host memory** — offload, tp and cp were measured
+   (#538–#542) and each surfaced a real defect; cp now runs end to end.
 4. **An sm_100 attention kernel** (FlashAttention-3 or TransformerEngine) in the benchmark image —
    the single largest measured throughput gap, and the reason long context OOMs early.
 5. **Multi-node FSDP** — the one FSDP claim not yet measured; needs two free trays.

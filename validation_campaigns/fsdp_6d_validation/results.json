@@ -35,8 +35,7 @@
     "not_measured": [
       "multi-node FSDP",
       "an offloaded run that completes a save",
-      "cp in the thin plane on hardware",
-      "tp with fsdp on an untied model"
+      "tp on a transformers release with the reworked tensor-parallel save"
     ],
     "cpu_optimizer_offload": {
       "measured_on": "2026-09-25",
@@ -85,7 +84,9 @@
       "model": "gemma-4-26B-A4B (16 attention heads, 8 KV heads, 2 global KV heads, tied embeddings)",
       "defects_found_and_fixed": [
         "#539: a pre-load topology pin blocked every tp run before the model loaded; dp/tp/cp are now compared against the device mesh accelerate builds, and a mismatch refuses",
-        "#540: the model loaded without a tp plan, so train() raised on model.tp_size None; the load now passes tp_plan=auto and tp_size"
+        "#540: the model loaded without a tp plan, so train() raised on model.tp_size None; the load now passes tp_plan=auto and tp_size",
+        "#541: with tp below the world size transformers built its own 1-D mesh and every rank outside it died at load (IndexError); the load now receives accelerate's mesh, built after accelerate's process group, and the same ParallelismConfig goes to the Trainer",
+        "#541: the installed transformers saves a tensor-parallel model by gathering shards on the writing rank alone; tp now refuses wherever that release is installed"
       ],
       "runs": [
         {
@@ -110,9 +111,43 @@
           "s_per_step": 6.35,
           "result": "first save deadlocked: Trainer.save_model calls save_pretrained on the writing rank only, whose tensor-parallel gather is a collective; NCCL watchdog timeout after 600 s",
           "now": "refused before the Trainer (#540)"
+        },
+        {
+          "model": "Qwen2.5-7B-Instruct (untied)",
+          "layout": "tp=2 dp=2 fsdp",
+          "mesh": {
+            "tp": 2,
+            "cp": 1,
+            "dp": 2
+          },
+          "steps": 10,
+          "s_per_step": 5.32,
+          "result": "first save failed: accelerate's full state dict is already on CPU, and the writing rank's save_pretrained all-gathers it over the tp group alone ('No backend type associated with device type cpu')",
+          "now": "refused before the Trainer (#541); positive control fired on hardware"
         }
       ],
-      "conclusion": "no tp layout runs end to end on this model in the thin plane; tp belongs in the Bridge lane"
+      "conclusion": "no tp layout runs end to end in the thin plane on the installed transformers, tied or untied; tp belongs in the Bridge lane"
+    },
+    "context_parallel": {
+      "measured_on": "2026-09-25",
+      "model": "Qwen2.5-7B-Instruct (untied)",
+      "setup": "4 GPUs, seq 2048, 12 steps, save every 10",
+      "defect_found": "torch's context-parallel load balancer raises a bare AssertionError unless the sequence length divides 2*cp; batches are now padded to that multiple (#542)",
+      "run": {
+        "layout": "cp=2 dp=2 fsdp",
+        "mesh": {
+          "tp": 1,
+          "cp": 2,
+          "dp": 2
+        },
+        "steps": 12,
+        "train_loss": 1.757,
+        "s_per_step": 13.92,
+        "save_gate_step_10": "PASS 4/4",
+        "save_gate_step_12": "PASS 4/4",
+        "exit": 0
+      },
+      "gemma_4": "not runnable in the thin plane: accelerate composes cp with FSDP version 2 only, and the tie needs version 1"
     }
   },
   "megatron_bridge_multidimensional_training": {
@@ -155,8 +190,10 @@
     "pipeline_parallel_note": "set through a recipe override; the resolved config confirms pipeline_model_parallel_size 2",
     "adjudication_of_sharded_checkpoints": {
       "expert_distinctness": "PASS, data-level, 7680/7680 slices distinct on both the TP/EP/ETP and the TP/PP/ETP checkpoints",
-      "save_complete": "VACUOUS: the launcher writes no run manifest with declared tensor names",
-      "overall": "NOT CLEARED, for that one reason"
+      "save_complete": "PASS since #543: tools/bridge_fqn_map.py declares 928 tensors from the model definition on the meta device; 928/928 present on both the TP/EP/ETP and the TP/PP/ETP checkpoints",
+      "overall": "CLEARED",
+      "positive_control": "a map with one planted extra tensor BLOCKS: 1 of 929 declared tensors absent",
+      "official_run_iter_1750": "CLEAR: save_complete 928/928, expert_distinctness 7680/7680, expert_bytes 45,675,970,560"
     }
   },
   "official_run_matched_eval": {

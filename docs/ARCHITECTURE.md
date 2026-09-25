@@ -352,7 +352,7 @@ The four axes that distinguish the group-relative family are a shared
 |---|---|---|---|---|
 | `ratio_scope` | token | **sequence** | token | token |
 | advantage | (r−mean)/std | (r−mean)/std | **(r−mean) only** | (r−mean)/std |
-| `clip_bounds` | (0.8, 1.2) | **(0.9997, 1.0003)** | (0.8, 1.2) | **(0.8, 1.28)** |
+| `clip_bounds` | (0.8, 1.2) | **(0.10177, 1.0003)** | (0.8, 1.2) | **(0.8, 1.28)** |
 | `reduction` | token_mean | **sequence_mean** | **constant** | token_mean |
 
 `GRPOPolicyLoss` was retrofitted to declare these three properties even though
@@ -453,19 +453,19 @@ working home fails a test rather than an import at a user's site.
 
 ## Around the package
 
-`src/` is 47180 LOC across 60 files; `tests/` adds 73000 `.py` LOC (its
+`src/` is 47269 LOC across 60 files; `tests/` adds 73234 `.py` LOC (its
 conftest carries the skip guard). Beside the package:
 
 | Tree | Contents |
 |---|---|
-| `tools/` | 9997 Python LOC of CLIs over the package: `emit_run_manifest`, `live_save_gate`, `real_checkpoint_probe`, `preflight/`, `mutate`, `census`. |
+| `tools/` | 10177 Python LOC of CLIs over the package: `emit_run_manifest`, `live_save_gate`, `real_checkpoint_probe`, `preflight/`, `mutate`, `census`. |
 | `checks/` | Standalone repository gates: countables drift, packaging reachability, `bash -lc` sweep, workflow YAML audit. |
 | `launchers/` | The estate launch plane (13008 shell LOC) plus two bash contract suites and Python helpers (lora target census, peft override replay) — 1615 Python LOC. |
 | `validation_campaigns/h100_validation/` | The experimental H100 harness (34169 Python, 6706 shell LOC): build script, `gate_*.py`, `patch_*.py`, its own tests, and the published `h100/` deliverables. **Evidence campaigns, not framework code — read as lab notebooks.** |
 | `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 240541 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 241045 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 
