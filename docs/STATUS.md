@@ -29,7 +29,7 @@ New axis machinery should not be built into the thin trainer to compete with it.
 | Axis | State | Evidence |
 |---|---|---|
 | data parallelism (replication) | executes | the GB200 scaling campaign, 1→8 GPUs |
-| `sharding_strategy=fsdp` | executes | **measured end to end on one tray**: gemma-4-26B-A4B, 60 steps, save gate PASS 4/4 at step 50, final adjudication clear, exit 0, train loss 1.308 (#535, #536, #537). Not yet run multi-node |
+| `sharding_strategy=fsdp` | executes | **measured end to end on one tray**: gemma-4-26B-A4B, 60 steps, save gate PASS 4/4 at step 50, final adjudication clear, exit 0, train loss 1.308 (#535, #536, #537). **Measured on two trays** (8 GPUs, dp=8, torchrun rendezvous off Slurm): Qwen2.5-7B and gemma-4-26B-A4B, 12 steps each, train loss 1.763 and 1.752. On both, the writing rank's save gate PASSed 4/4 at steps 10 and 12, the seven non-writing ranks abstained, the final checkpoint was written, and both nodes exited 0. 26B peak GPU memory about 132 GiB per GPU (about 181 on one tray). The writing node's host memory peaked at 493 GiB against 299 GiB on the other node: the full-state-dict save gathers on one host |
 | `cpu_optimizer_offload` | executes under fsdp only, **since #538** | before #538 it was a silent no-op (a key transformers ignores; on and off arms reached a byte-identical peak). Measured after the fix on one tray: GPU ~181 → ~106 GiB per GPU, 2–2.6× step time; the first full-state-dict save exhausts host memory, so no offloaded 26B run has completed |
 | `--tp` | trains; **refused (96) wherever it cannot also save** | measured on the 26B (#539, #540): tp=2 trained 10 steps (loss 1.674, 6.35 s/step), then the first save deadlocked, because transformers' Trainer saves on one rank and a tensor-parallel save gathers with a collective. tp without fsdp now refuses; tp with fsdp needs FSDP version 2, which a tied model cannot use, so it refuses there too. A tp degree that does not divide every head count refuses (tp=4 against 2 global KV heads died in the first forward). On an untied model (Qwen2.5-7B, tp=2 dp=2 fsdp, #541) the load now lands on accelerate's own mesh and ten steps trained (5.3 s/step), then the first save failed the same way: the writing rank gathers tp shards alone. That save path is transformers' own; the installed release cannot checkpoint a tensor-parallel model under any sharding, so tp refuses wherever that release is installed, detected by the reworked save API rather than a version. Net: no tp layout runs end to end in this plane on this toolchain |
 | `--cp` | executes via accelerate `ParallelismConfig`; batches padded to a multiple of 2×cp | **measured end to end** on Qwen2.5-7B, cp=2 dp=2 fsdp (#542): mesh matched, 12 steps, loss 1.757, 13.9 s/step, save gate PASS at both checkpoints, exit 0. Before #542 the first step died on a bare assertion: context parallelism splits each sequence into 2×cp chunks. cp with an image column refuses (its collator cannot pad to that multiple). Gemma-4 cannot use it here: the tie needs FSDP version 1 |
@@ -97,10 +97,23 @@ duplicate is caught). On sfteval it scores 316/356 against 321/356 for the prior
 checkpoint: 13 questions only the official run gets right, 18 only the prior one, paired exact
 McNemar p = 0.47. The Bridge lane reproduces the prior recipe's quality; it does not exceed it.
 
+**Rescored with thinking rows included.** The think-aware scorer (§6) scores 638 of the 1,038
+rows instead of 356: 566/638 for the official run against 567/638 for the prior run, 26 and 27
+discordant, p = 1.0. On the 140 think-mode rows: 130 against 128, p = 0.63. The conclusion
+does not change.
+
 ## 6. Known limits worth knowing before building on this
 
-- **sfteval scores no think-mode rows.** 140 think rows, none with a parseable reference. Every
-  number it produces describes non-thinking behaviour only.
+- **sfteval's own scorer cannot score thinking rows; a second scorer can.** All 140 think-mode
+  references end in `<answer>B</answer>`, a marker sfteval's scorer does not know, and 142
+  true/false references answer `O`/`X`. An offline rescorer reads both, plus multi-select golds, from
+  the stored outputs, with no regeneration. It is certified by 12 fixed controls and by agreement
+  with the old scorer on every row the old scorer could score (356/356 on one run; 355/356 on the
+  other, where the one difference is an old-scorer miss, checked by hand). It scores 638 of 1,038
+  rows. The other 400 have free-text references (388 identity answers, 12 short answers) and
+  need a judge. Two readings: the checkpoints emit an empty thought channel on every think row,
+  so a think-mode score measures answer format, not reasoning. And both runs answer all 8
+  multi-select questions with a single letter, so they score 0/8.
 - **No attention kernel with an sm_100 build** is installed in the benchmark environment; SDPA
   falls back to an Ampere-generation CUTLASS kernel and runs 1.68× slower than eager where both
   fit.
@@ -120,13 +133,23 @@ McNemar p = 0.47. The Bridge lane reproduces the prior recipe's quality; it does
 
 ## 7. Candidate next features, ranked
 
-1. **Emit the fqn map from the Bridge launcher** beside every checkpoint, so `save_complete`
-   runs without an operator step. The producer exists and is measured (#543); wiring it in
-   makes FoundationScale the adjudicator of record for every production run.
-2. **An in-distribution held-out set that scores thinking.** Replaces an instrument that cannot
-   see half the behaviour it is used to judge.
+1. **The fqn map for Bridge runs that start from no converted base.** FoundationScale's own
+   Bridge launcher already writes one at submit, from the DCP census of the converted base
+   checkpoint, gated to the checkpoint's namespace. `tools/bridge_fqn_map.py` (#543) covers
+   the case where no converted base exists, as for the official run, which was launched
+   outside this repository. Replacing the census path is deferred until a hardware run can
+   validate the replacement.
+2. **A held-out set on which thinking is actually exercised.** The rescorer now scores think
+   rows, but the checkpoints leave the thought channel empty. A score that sees reasoning needs
+   a model trained to emit it and a judge for the 400 free-text rows.
 3. **An offloaded save that fits in host memory** — offload, tp and cp were measured
-   (#538–#542) and each surfaced a real defect; cp now runs end to end.
+   (#538–#542) and each surfaced a real defect; cp now runs end to end. The likely cause is
+   arithmetic, not a leak. A 26B full-state-dict save writes about 414 GB (optimizer 202 GB,
+   FSDP model 106 GB, safetensors 106 GB) through one host. Without offload, measured on two
+   trays, the writing node's host peaks about 194 GiB above the other node's. With offload, training
+   already holds about 912 GiB of host memory on a 956 GiB node. Candidate fix: sharded state
+   dicts for intermediate saves, a full state dict only at the end. Not yet measured.
 4. **An sm_100 attention kernel** (FlashAttention-3 or TransformerEngine) in the benchmark image —
    the single largest measured throughput gap, and the reason long context OOMs early.
-5. **Multi-node FSDP** — the one FSDP claim not yet measured; needs two free trays.
+5. **tp on a newer transformers.** Transformers 5.17 reworked the tensor-parallel save that
+   blocks tp here. It is detected by feature, not version, and has not been measured.

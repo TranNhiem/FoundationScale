@@ -152,10 +152,6 @@ PENDING_ENROLMENT: dict[str, str] = {
         "sequences pre-GPU blocking, save-gate callback adjudication, missing-extra "
         "refusal, and the 0/5/95/96 exit-code contract"
     ),
-    "tools/bridge_fqn_map.py": (
-        "emits the declared tensor set a Megatron-Bridge save_complete counts against, "
-        "refusing an empty denominator rather than writing one"
-    ),
     "tools/count_census_modules.py": (
         "is the production LoRA census denominator and accepts wrapped versus bare "
         "payload shapes and record forms"

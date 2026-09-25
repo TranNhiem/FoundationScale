@@ -231,6 +231,12 @@ MODULE_PATHS = {
     # only thing that moves is a published MFU figure. #529 was exactly that
     # -- 6.51x overstated on Qwen3.5-35B-A3B, invisible to every other gate.
     "perf_telemetry": "src/foundationscale/perf/telemetry.py",
+    # #543: promoted out of PENDING_ENROLMENT with its rows, as perf_telemetry
+    # was. It writes the denominator save_complete counts a Megatron checkpoint
+    # against; a map that drops a tensor class, or an empty map written instead
+    # of refused, turns a real completeness check back into a vacuous one with
+    # no other symptom.
+    "bridge_fqn_map": "tools/bridge_fqn_map.py",
 }
 
 _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")

@@ -693,5 +693,51 @@
       "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/perf/telemetry.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
       "must_survive": true
     }
+  ],
+  "bridge_fqn_map": [
+    {
+      "name": "bridge_fqn_map.walk-dict-keys-not-values",
+      "what": "Extends the traversal stack with a dict's KEYS (strings) instead of its VALUES. Strings never isinstance-match any tensor type, so every tensor nested under a mapping -- which is the entire sharded state dict -- is silently never visited, and the tool reports zero declared tensors without any exception being raised. On a real Bridge run this is exactly the vacuous-empty-map failure the tool exists to forbid, only now produced by the walker itself, and the count-mismatch against the checkpoint is the only evidence. Caught by: test_factory_tensors_are_declared_not_dropped",
+      "anchor": "            stack.extend(cur.values())\n",
+      "replacement": "            stack.extend(cur)\n"
+    },
+    {
+      "name": "bridge_fqn_map.skip-tuple-containers",
+      "what": "Recurses into lists but not tuples when walking the sharded state dict. Megatron state dicts freely nest tuples (a list of per-layer tuples is idiomatic), so every tensor sitting inside a tuple container is silently dropped from the declared set -- on the 26B that shape of nesting is what the vision-tower patch-embedder entry models. The walk completes normally, the file writes, the exit code is 0, and the only symptom is a map that under-declares tensors the save actually wrote, flipping their adjudication to undeclared. Caught by: test_factory_tensors_are_declared_not_dropped",
+      "anchor": "        elif isinstance(cur, (list, tuple)):\n            stack.extend(cur)\n",
+      "replacement": "        elif isinstance(cur, list):\n            stack.extend(cur)\n"
+    },
+    {
+      "name": "bridge_fqn_map.objects-counted-as-tensors",
+      "what": "Routes ShardedObject entries into the TENSOR set instead of the object set. Non-tensor state such as the TE ``linear_qkv._extra_state`` records then masquerade as declared tensors, inflating the declared-object count down to zero and claiming tensors the checkpoint never writes as tensors. The JSON still has the right shape and the run still exits 0; the map simply promises a disk entry for state that is not a tensor, so the downstream gate compares against a list that can never match a real save. Caught by: test_factory_tensors_are_declared_not_dropped",
+      "anchor": "        elif isinstance(cur, object_types):\n            objects.add(cur.key)\n",
+      "replacement": "        elif isinstance(cur, object_types):\n            tensors.add(cur.key)\n"
+    },
+    {
+      "name": "bridge_fqn_map.union-becomes-intersection",
+      "what": "Accumulates per-chunk tensor keys by INTERSECTION instead of union. With the accumulator starting as the empty set, the very first chunk intersects to nothing, so a model built from any number of chunks -- one for non-pipelined, many for pipelined layouts -- always declares zero tensors. The defect only appears in the aggregation loop, the builder and walker are untouched, and an empty denominator is precisely the vacuity this tool was written to refuse, yet here it is manufactured silently after a fully successful model build. Caught by: test_chunks_are_unioned_so_layout_does_not_change_the_map",
+      "anchor": "        tensors |= t\n",
+      "replacement": "        tensors &= t\n"
+    },
+    {
+      "name": "bridge_fqn_map.keep-only-extra-state",
+      "what": "Inverts the ``_extra_state`` filter so the declared list keeps ONLY keys containing that marker instead of excluding them. Every real weight tensor is filtered out of ``declared_fqns`` while the non-tensor extra-state records would be the sole survivors (in practice: an empty list), so the emitted map declares none of the 928 tensors the checkpoint genuinely holds. The document retains its exact schema, sort order and exit path; only the predicate is flipped, and the downstream gate then sees a checkpoint full of 'undeclared' tensors. Caught by: test_map_excludes_extra_state_and_records_its_source",
+      "anchor": "        \"declared_fqns\": sorted(t for t in tensors if \"_extra_state\" not in t),\n",
+      "replacement": "        \"declared_fqns\": sorted(t for t in tensors if \"_extra_state\" in t),\n"
+    },
+    {
+      "name": "bridge_fqn_map.unmeasured-is-exit-zero",
+      "what": "Sets the UNMEASURED exit code to 0, colliding it with the success code. When the model declares no tensors the refusal branch now exits 'successfully', so CI and the calling ``live_save_gate`` read the vacuous run as a pass -- the one signal that distinguishes 'map written' from 'nothing to compare against' is destroyed. The stderr message still prints, but nobody downstream reads stderr; the exit contract is the entire interface, and it now lies exactly where the tool was built to tell the truth. Caught by: test_an_empty_model_yields_an_empty_map_for_main_to_refuse",
+      "anchor": "EXIT_UNMEASURED = 95\n",
+      "replacement": "EXIT_UNMEASURED = 0\n"
+    },
+    {
+      "name": "bridge_fqn_map.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is bridge_fqn_map's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "    return EXIT_OK\n",
+      "replacement": "    return EXIT_OK  # inert must-pass control\n",
+      "must_survive": true,
+      "why": "Anchor chosen mechanically: the exact line occurs once in tools/bridge_fqn_map.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a correct suite can go red on it."
+    }
   ]
 }

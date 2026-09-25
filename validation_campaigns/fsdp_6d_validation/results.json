@@ -33,7 +33,6 @@
       }
     },
     "not_measured": [
-      "multi-node FSDP",
       "an offloaded run that completes a save",
       "tp on a transformers release with the reworked tensor-parallel save"
     ],
@@ -148,6 +147,58 @@
         "exit": 0
       },
       "gemma_4": "not runnable in the thin plane: accelerate composes cp with FSDP version 2 only, and the tie needs version 1"
+    },
+    "multi_node": {
+      "measured_on": "2026-09-25",
+      "setup": "2 trays x 4 GPUs, dp=8, sharding_strategy=fsdp, torchrun rendezvous off Slurm, seq 2048, micro-batch 1, accumulation 4, 12 steps, save every 10",
+      "runs": [
+        {
+          "model": "Qwen2.5-7B-Instruct",
+          "train_loss": 1.763,
+          "save_gate_step_10": "PASS 4/4 on the writing rank; 7 ranks ABSTAIN",
+          "save_gate_step_12": "PASS 4/4 on the writing rank; 7 ranks ABSTAIN",
+          "final_checkpoint": "written",
+          "exit": {
+            "node_0": 0,
+            "node_1": 0
+          },
+          "peak_gpu_mib": {
+            "node_0": 42397,
+            "node_1": 40489
+          },
+          "peak_host_used_mib": {
+            "node_0": 294897,
+            "node_1": 241454
+          }
+        },
+        {
+          "model": "gemma-4-26B-A4B",
+          "train_loss": 1.752,
+          "save_gate_step_10": "PASS 4/4 on the writing rank; 7 ranks ABSTAIN",
+          "save_gate_step_12": "PASS 4/4 on the writing rank; 7 ranks ABSTAIN",
+          "final_checkpoint": "written",
+          "exit": {
+            "node_0": 0,
+            "node_1": 0
+          },
+          "peak_gpu_mib": {
+            "node_0": 134781,
+            "node_1": 135499
+          },
+          "peak_host_used_mib": {
+            "node_0": 504599,
+            "node_1": 306460
+          },
+          "host_baseline_mib": 95867,
+          "checkpoint_bytes": {
+            "optimizer": 201891731687,
+            "fsdp_model": 106177082413,
+            "safetensors": 106176666252
+          },
+          "runtime_s_including_saves": 684.1
+        }
+      ],
+      "reading": "the writing node's host footprint exceeds the other's by the full-state-dict gather; that gather is the leading explanation for the offloaded save exhausting host memory"
     }
   },
   "megatron_bridge_multidimensional_training": {
@@ -228,6 +279,33 @@
       "p": 0.4731,
       "export": "1013 tensors, 60 stacked expert tensors, 51,612,009,852 bytes",
       "expert_distinctness": "7680/7680 slices distinct; planted duplicate detected"
+    },
+    "iter_2467_think_aware_rescore": {
+      "scorer": "offline rescorer over the stored outputs; reads <answer>X</answer>, O/X true-false and multi-select golds",
+      "certification": {
+        "controls": "12/12",
+        "agreement_with_sfteval_scorer": {
+          "official": "355/356",
+          "prior": "356/356"
+        },
+        "adjudicated": "the one official disagreement is a sfteval-scorer miss: prediction ends <answer>D</answer>, gold D"
+      },
+      "scored_rows": 638,
+      "unscorable_free_text_rows": 400,
+      "official": "566/638",
+      "prior": "567/638",
+      "discordant": [
+        26,
+        27
+      ],
+      "mcnemar_p": 1.0,
+      "think_rows": {
+        "official": "130/140",
+        "prior": "128/140",
+        "mcnemar_p": 0.625
+      },
+      "multi_select": "0/8 on both: every answer is a single letter",
+      "caveat": "every think-mode prediction has an empty thought channel, so think scores measure answer format, not reasoning"
     }
   }
 }
