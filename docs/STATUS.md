@@ -123,13 +123,21 @@ does not change.
   It trains, on Gemma-4 and on an untied 7B, but the installed transformers cannot save a
   tensor-parallel model, so every tp layout is refused. Tensor parallelism belongs in the
   Bridge lane, which saves across tensor ranks (§4).
-- **Offloaded 26B cannot save on one tray.** With offload engaged, host memory sits near
-  912 GiB through training and the first full-state-dict save exhausts the node. Setting
-  `cpu_ram_efficient_loading` did not move it; the source of the host footprint is open.
+- **Offloaded 26B saves only with sharded state dicts, and only measured on two trays.** With
+  offload engaged, host memory sits near 912 GiB through training on one tray and the
+  full-state-dict save exhausts the node. `fsdp_state_dict="sharded"` fits on two trays (item 3
+  of §7); one tray with sharded saves has not been measured. The sharded final checkpoint is a
+  distributed checkpoint and needs a merge step before serving.
 - **FSDP saves experts in fp32** under mixed precision (982 fp32 tensors to 32 bf16), so one
   26B checkpoint is ~414 GB. The byte-volume check only fails on a shortfall, so a 2x excess
-  passes -- and its message calls that "matches", which overstates.
+  passes; its message now says "exceeds declared" and prints the ratio instead of "matches".
 - **Context parallelism is unavailable for Gemma-4** on the installed TransformerEngine (§4).
+- **The RL trainer takes one on-policy update per batch**, so its ratio is 1 and its clip fraction
+  0 by construction: the clipped objectives never clip. Log-probabilities are scored over the
+  rows of non-saturated groups only, and a whole-batch forward runs out of GPU memory at about
+  12 rows of 384 new tokens on a 7B. `logprob_micro_batch` scores those rows in slices with an
+  exact gradient (#546): measured on Qwen2.5-7B GSPO, 8 rollouts x 4 prompts, micro-batch 4
+  trains where micro-batch 0 runs out of memory. The RL trainer has no FSDP path or save yet.
 
 ## 7. Candidate next features, ranked
 
