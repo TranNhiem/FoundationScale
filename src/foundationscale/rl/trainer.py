@@ -29,7 +29,9 @@ the same rows it backpropagates (generation scores are never reused -- their
 shapes differ and the bug is silent); abstaining rows are dropped and the
 report is built only from rows the gradient actually touched; and the
 emitted ``StepReport`` carries a real ``LossOutput`` with
-``loss=float(tensor)``.
+``loss=float(tensor)`` and with the #546 observability pair
+``ratio_mean``/``clip_fraction`` in its metrics channel, measured off the
+same kept tensors the loss was priced from.
 
 WHAT IS NOT CLAIMED: convergence, benchmark results, or equivalence with
 any published implementation -- the equivalence test proves the tensor path
@@ -44,7 +46,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never executed at runtime
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 
     import torch
 
@@ -89,6 +91,62 @@ def _refuse_exit_96(message: str) -> NoReturn:
 # remainder is stated rather than dropped: a truncated list that does not say it
 # was truncated is a different lie from the one this message was fixed to stop.
 _MAX_GROUPS_REPORTED: int = 8
+
+
+def _token_logprobs(logits: torch.Tensor, target_ids: torch.Tensor) -> torch.Tensor:
+    """Return per-token target log-probabilities without a dense log-softmax.
+
+    ``log_softmax(logits).gather(...)`` first materialises a B x T x V
+    tensor. This expression asks for the same scalar field as two B x T
+    planes instead: the target score selected by ``gather`` and the
+    full-vocabulary normaliser selected by ``logsumexp``. Upcasting the
+    logits before the reduction keeps the reduction numerics explicit while
+    leaving the full-vocabulary activation budget with the caller's row
+    slice, which is the quantity ``logprob_micro_batch`` controls.
+    """
+    import torch  # function-local: see module docstring
+
+    # The shift is EXPLICIT here. The dense form got it implicitly: gather
+    # accepts an index shorter than its input on the non-gathered dims, so
+    # it read logits[:, :T-1] -- the positions that predict target_ids --
+    # and ignored the last. logsumexp has no such index and would normalise
+    # over all T positions, so the logits are narrowed to the targets first.
+    logits = logits[:, : target_ids.shape[1]]
+    target = target_ids.unsqueeze(-1)
+    return logits.gather(-1, target).squeeze(-1).float() - torch.logsumexp(logits.float(), dim=-1)
+
+
+def _micro_batched_backward(
+    *,
+    loss_tensor: torch.Tensor,
+    current_logprobs: torch.Tensor,
+    row_slices: Sequence[tuple[int, int]],
+    forward_slice: Callable[[int, int], torch.Tensor],
+) -> None:
+    """Deliver a surrogate leaf gradient through fresh row-sliced graphs.
+
+    ``current_logprobs`` must be the detached batch-sized leaf already used
+    by ``loss_tensor``. The first backward therefore computes only the
+    derivative of the declared surrogate with respect to that leaf.
+    Re-forwarding one slice and calling ``backward`` with the matching
+    leaf-gradient slice states the chain rule directly, so parameter
+    gradients accumulate to the same value as the whole-batch graph without
+    retaining every row graph at once.
+
+    ``optimizer.zero_grad()`` and ``optimizer.step()`` deliberately remain
+    with the caller: this helper owns backward ordering, not the optimiser
+    protocol around it.
+    """
+    loss_tensor.backward()
+    output_grad = current_logprobs.grad
+    if output_grad is None:
+        raise RuntimeError(
+            "the surrogate produced no gradient for the detached log-probability leaf; "
+            "micro-batched replay cannot be chained"
+        )
+    for start, end in row_slices:
+        slice_logp = forward_slice(start, end)
+        slice_logp.backward(output_grad[start:end])
 
 
 def _per_group_reward_summary(
@@ -267,6 +325,13 @@ class RLTrainConfig:
     top_p: float = 0.95
     top_k: int = 0
     prompts_per_step: int = 2
+    # Caps how many rows each log-probability forward keeps resident. Zero
+    # preserves the historical whole-batch scorer; a positive value first
+    # prices the surrogate from one batch-sized detached leaf, then replays
+    # row slices only to deliver that leaf's gradient to the parameters.
+    # The loss, kept-row selection and metrics still describe one logical
+    # batch, while full-vocabulary scorer activations are bounded per slice.
+    logprob_micro_batch: int = 0
     seed: int = 0
     device: str | None = None
 
@@ -304,6 +369,11 @@ class RLTrainer:
             raise TrainerRefusal(
                 f"prompts_per_step={config.prompts_per_step}: 0 prompts of at least 1 "
                 f"required per step"
+            )
+        if config.logprob_micro_batch < 0:
+            raise ValueError(
+                f"logprob_micro_batch={config.logprob_micro_batch}: a negative row "
+                "budget is not meaningful; use 0 for the whole batch"
             )
         self.config = config
 
@@ -499,6 +569,41 @@ class RLTrainer:
             )
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
+        # #546: pad on the LEFT before any prompt is encoded for
+        # generation. Right padding is the tokenizer default, and with it
+        # one batched generate() call over prompts of different lengths
+        # puts pad tokens BETWEEN a shorter prompt and the continuation it
+        # appends -- transformers itself warns "right-padding was
+        # detected" on this call -- so the model attends across pad slots
+        # mid-sequence and every real token after them is conditioned on
+        # pads. Left padding makes the pads a prefix instead. The things
+        # the code below actually relies on are unchanged -- verified by
+        # reading it, not assumed:
+        #   * completions are generated[:, prompt_width:]; generate()
+        #     returns rows of width prompt_width + max_new_tokens with the
+        #     prompt (pads included, on whichever side) occupying the FIRST
+        #     prompt_width columns either way, so the slice boundary moves
+        #     only with the width, never with the side;
+        #   * the attention mask in _one_step is built from pad ids on the
+        #     kept sequences, so left pads are excluded from attention
+        #     exactly as right pads were;
+        #   * response_mask only writes into columns >= prompt_width - 1, a
+        #     region no left pad can reach;
+        #   * forward_logprobs derives no positions itself -- it hands the
+        #     model input_ids plus the full attention mask, and the no-grad
+        #     old pass and the graph-carrying current pass see the SAME
+        #     padded batch, so old and current readings stay conditioned
+        #     identically and the importance ratio compares like with
+        #     like. What left padding fixes is the conditioning INSIDE
+        #     generate(), which is the pass that was wrong.
+        # On the processor surface the trainer's `tokenizer` IS the
+        # processor's tokenizer, but the attribute is set on both spellings
+        # so the invariant survives a future surface that separates them;
+        # the second set is free when they are one object.
+        tokenizer.padding_side = "left"
+        inner_tokenizer = getattr(prompt_surface.surface, "tokenizer", None)
+        if inner_tokenizer is not None:
+            inner_tokenizer.padding_side = "left"
 
         objective = self._resolve_objective()
         reward = MCQLetterReward(answer_pattern=self.config.answer_pattern)
@@ -684,19 +789,61 @@ class RLTrainer:
                 file=sys.stderr,
             )
 
-        def forward_logprobs() -> Any:
+        n_rows = int(kept_sequences.shape[0])
+        micro_batch = self.config.logprob_micro_batch
+        use_logprob_micro_batching = 0 < micro_batch < n_rows
+        row_slices: tuple[tuple[int, int], ...] = (
+            tuple(
+                (start, min(start + micro_batch, n_rows)) for start in range(0, n_rows, micro_batch)
+            )
+            if use_logprob_micro_batching
+            else ((0, n_rows),)
+        )
+
+        def forward_logprob_slice(start: int, end: int) -> torch.Tensor:
+            # Every tensor with a per-row leading dimension follows the same
+            # half-open row range: the generated ids, their full-width
+            # attention mask, the shifted targets and every modality tensor.
+            # ``narrow`` names dimension 0 explicitly; silently slicing a
+            # modality's feature axis would score a different condition.
+            width = end - start
+            sliced_modalities = {
+                key: value.narrow(0, start, width) for key, value in modality_kwargs.items()
+            }
             logits = model(
-                input_ids=kept_sequences, attention_mask=attention, **modality_kwargs
+                input_ids=kept_sequences.narrow(0, start, width),
+                attention_mask=attention.narrow(0, start, width),
+                **sliced_modalities,
             ).logits
-            logps = torch.log_softmax(logits, dim=-1)
-            return torch.gather(logps, 2, target_ids.unsqueeze(-1)).squeeze(-1)
+            return _token_logprobs(logits, target_ids.narrow(0, start, width))
 
         # Old logprobs are RECOMPUTED under no_grad over the same rows -- the
         # generation scores are never reused: their shapes differ and the bug
-        # is silent.
-        with torch.no_grad():
-            old_logprobs = forward_logprobs()
-        current_logprobs = forward_logprobs().requires_grad_(True)
+        # is silent. When micro-batching, current logprobs are also read
+        # under no_grad and become ONE detached leaf. The loss and metrics
+        # below therefore see the same batch-shaped tensors as the
+        # whole-batch path; only the way parameter gradients are delivered
+        # changes.
+        if use_logprob_micro_batching:
+            with torch.no_grad():
+                old_logprobs = torch.cat(
+                    [forward_logprob_slice(start, end) for start, end in row_slices],
+                    dim=0,
+                )
+                current_logprobs = (
+                    torch.cat(
+                        [forward_logprob_slice(start, end) for start, end in row_slices],
+                        dim=0,
+                    )
+                    .detach()
+                    .requires_grad_(True)
+                )
+        else:
+            # A zero budget, and a budget spanning every row, retain the
+            # historical single current forward as one live graph.
+            with torch.no_grad():
+                old_logprobs = forward_logprob_slice(0, n_rows)
+            current_logprobs = forward_logprob_slice(0, n_rows).requires_grad_(True)
 
         prompt_id_values = [f"row-{index // self.config.group_size}" for index, _ in rows]
         # The estimator reads the PER-TOKEN supervision mask, not a per-row
@@ -775,20 +922,51 @@ class RLTrainer:
             )
             return None
 
+        # #546: bind the kept tensors ONCE. The step-observability metrics
+        # emitted below must be measured off the exact tensors the kernel
+        # prices -- gathering a second old/current pair for reporting would
+        # let the report describe a gradient it never took.
+        kept_current = current_logprobs.index_select(0, keep)
+        kept_old = old_logprobs.index_select(0, keep).detach()
+        kept_mask = response_mask.index_select(0, keep).detach()
         loss_tensor = loss_fn(
-            current_logprobs=current_logprobs.index_select(0, keep),
-            old_logprobs=old_logprobs.index_select(0, keep).detach(),
+            current_logprobs=kept_current,
+            old_logprobs=kept_old,
             advantages=advantage_tensor,
-            mask=response_mask.index_select(0, keep).detach(),
+            mask=kept_mask,
         )
         optimizer.zero_grad()
-        loss_tensor.backward()
+        if use_logprob_micro_batching:
+            # zero_grad precedes both backward phases. The first fills the
+            # detached leaf; each slice then re-creates only its own model
+            # graph, consumes its matching leaf gradient and frees the graph.
+            # step() is still issued once, after every slice contribution.
+            _micro_batched_backward(
+                loss_tensor=loss_tensor,
+                current_logprobs=current_logprobs,
+                row_slices=row_slices,
+                forward_slice=forward_logprob_slice,
+            )
+        else:
+            loss_tensor.backward()
         optimizer.step()
 
         measured = float(loss_tensor.detach())
         loss_output = LossOutput(
             loss=measured,
             components=_loss_components(objective, measured),
+            # #546: the step-1 invariant (ratio == 1.0, clip fraction ==
+            # 0.0, because old and current are read off the same weights) is
+            # carried as OBSERVED metrics on the LossOutput -- never as new
+            # StepReport fields, whose contract forbids derived quantities
+            # and second copies; an unmeasurable entry stays absent, never
+            # 0.0.
+            metrics=_ratio_and_clip_metrics(
+                objective=objective,
+                current_logprobs=kept_current,
+                old_logprobs=kept_old,
+                mask=kept_mask,
+            ),
         )
         # Reward telemetry over the rows the gradient ACTUALLY touched, not
         # over everything offered. Leaving this None made the one number that
@@ -805,6 +983,80 @@ class RLTrainer:
             reward_stats=RewardStats.over(tuple(float(rewards[row]) for row in kept_rows)),
             sync=None,
         )
+
+
+def _ratio_and_clip_metrics(
+    *,
+    objective: Any,
+    current_logprobs: torch.Tensor,
+    old_logprobs: torch.Tensor,
+    mask: torch.Tensor,
+) -> tuple[Any, ...]:
+    """Per-step observability metrics for the step's ``LossOutput.metrics`` (#546).
+
+    WHAT IS CLAIMED: the tuple carries a ``MetricObservation`` named
+    ``ratio_mean`` -- the mean importance ratio over exactly the supervised
+    positions -- and, when the objective declares ``clip_bounds``, one named
+    ``clip_fraction`` -- the fraction of those ratios OUTSIDE the declared
+    ``(low, high)`` band. Both are measured from the same kept
+    ``current_logprobs`` / ``old_logprobs`` / ``mask`` tensors the kernel
+    priced, so on the first step -- old and current read off the same
+    weights -- the pair is exactly (1.0, 0.0), and the invariant becomes
+    checkable from the public report instead of from a debugger. The pair
+    rides in the ``metrics`` channel precisely because the ``StepReport``
+    contract (algorithm.py) forbids derived quantities and second copies of
+    a count the ``LossOutput`` already holds: an observation belongs in the
+    observation's own record.
+
+    Ratios are token-level, ``exp(current - old)`` per supervised position,
+    unless the objective declares ``ratio_scope == "sequence"``: then each
+    row contributes its sequence-level ratio, ``exp`` of the masked mean
+    log-ratio -- the very expression ``TensorPolicyLoss`` forms for that
+    scope -- and both the mean and the clipped fraction are taken over rows.
+    When the objective declares no ``clip_bounds`` the clip fraction is
+    UNMEASURABLE, so that entry is omitted rather than reported as 0.0 --
+    absent is not zero. An all-zero mask omits both, for the same reason.
+
+    WHAT IS NOT CLAIMED: that these names are DECLARED on the objective.
+    Declared metric expectations live on each objective's ``declaration()``
+    -- the way ``DPOLoss`` declares ``accuracy`` with bounds and a degenerate
+    tuple -- and nothing this loop runs reconciles observed metrics against
+    that declaration: ``StepReport.__post_init__`` validates the components,
+    the reward-stats count and the sync record only, and ``verify_step`` --
+    the check that does reconcile observed metrics against declared ones --
+    is not on the trainer's path. Emitting the pair therefore keeps every
+    accounting check in algorithm.py green, which is the coherence the
+    channel requires here.
+    """
+    import torch
+
+    from foundationscale.gates.objective_gates import MetricObservation
+
+    # Detached float64 readings: the ratio and the clip fraction are
+    # reported, never differentiated, and the upcast keeps the reported mean
+    # honest when the log-probability plane itself runs bf16.
+    cur = current_logprobs.detach().to(dtype=torch.float64)
+    old = old_logprobs.detach().to(dtype=torch.float64)
+    mask_f = mask.detach().to(dtype=torch.float64)
+    if not bool(mask_f.sum() > 0):
+        return ()
+    log_ratio = (cur - old) * mask_f
+    if getattr(objective, "ratio_scope", "token") == "sequence":
+        # One ratio per row -- the masked-mean-of-log-ratios the kernel
+        # exponentiates for sequence scope -- so the clipped fraction here is
+        # over rows, not tokens. Rows are the kernel's kept rows, which the
+        # kernel refused unless each carried supervision, so no denominator
+        # can be zero on this path.
+        ratios = torch.exp(log_ratio.sum(dim=-1) / mask_f.sum(dim=-1))
+    else:
+        ratios = torch.exp(log_ratio)[mask_f > 0.5]
+    metrics: list[Any] = [MetricObservation(name="ratio_mean", value=float(ratios.mean()))]
+    clip_bounds = getattr(objective, "clip_bounds", None)
+    if clip_bounds is not None:
+        low, high = float(clip_bounds[0]), float(clip_bounds[1])
+        outside = ((ratios < low) | (ratios > high)).to(dtype=torch.float64)
+        metrics.append(MetricObservation(name="clip_fraction", value=float(outside.mean())))
+    return tuple(metrics)
 
 
 def _declared_component_names(objective: Any) -> tuple[str, ...]:
