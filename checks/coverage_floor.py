@@ -184,8 +184,10 @@ SLACK: int = 5
 
 REPORT_DEFAULT = "coverage.json"
 
-# Two of these three ADJUDICATE: a live-save gate and a run-manifest emitter decide what counts
-# as a run, so their own execution paths must be covered by the claim. The rest of tools/ is
+# Three of these four ADJUDICATE: a live-save gate and a run-manifest emitter decide what counts
+# as a run, and the Bridge fqn map is the declared tensor set save_complete counts against, so
+# their own execution paths must be covered by the claim (the map's Megatron build needs a GPU
+# and is pragma-excluded; what it does with the chunks is measured). The rest of tools/ is
 # deliberately OUT of the claim this gate makes, and is omitted in pyproject.toml
 # [tool.coverage.run] WITH its measured percentages rather than dropped in silence.
 #
@@ -195,6 +197,7 @@ REPORT_DEFAULT = "coverage.json"
 # gate on a clean tree. It must be in the claim or in nothing, and it is in CI's claim.
 TOOLS_IN_SCOPE: tuple[str, ...] = (
     "tools/__init__.py",
+    "tools/bridge_fqn_map.py",
     "tools/emit_run_manifest.py",
     "tools/live_save_gate.py",
 )
@@ -275,6 +278,7 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/verify/__init__.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/verify/parity.py": 99,  # set by --update; measured 99.1%
     "tools/__init__.py": 100,  # set by --update; measured 100.0%
+    "tools/bridge_fqn_map.py": 100,  # set by --update; measured 100.0%
     "tools/live_save_gate.py": 98,  # set by --update; measured 98.5%
 }
 # --- end FLOORS ---
