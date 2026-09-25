@@ -217,6 +217,17 @@
       ],
       "p": 0.4069
     },
-    "conclusion": "statistically equivalent at both points; the gap changes sign, so it is run-to-run noise"
+    "conclusion": "statistically equivalent at iterations 750, 1000 and the final 2467; the gap changes sign between points, so it is run-to-run noise. The official run reproduces the prior recipe",
+    "iter_2467_final": {
+      "official": "316/356",
+      "prior_same_iter": "321/356",
+      "mcnemar_discordant": [
+        13,
+        18
+      ],
+      "p": 0.4731,
+      "export": "1013 tensors, 60 stacked expert tensors, 51,612,009,852 bytes",
+      "expert_distinctness": "7680/7680 slices distinct; planted duplicate detected"
+    }
   }
 }

@@ -76,7 +76,7 @@ real optimizer steps and a saved checkpoint, not just process-group setup:
 |---|---|
 | TP=2, EP=2, ETP=2, DP=2 + sequence parallel | trains: loss 1.45 → 1.06, 123 s/step, checkpoint saved across tensor ranks |
 | TP=2, PP=2, ETP=2 | trains: loss 1.43 → 1.16, 132 s/step, checkpoint saved across tensor AND pipeline ranks |
-| EP=4 (the official run) | trains: 2,467-step run in progress, healthy |
+| EP=4 (the official run) | trains: all 2,467 steps completed; final checkpoint exported and evaluated (§5) |
 | CP=2 | **does not run**: no TransformerEngine attention kernel covers Gemma-4's head_dim-512 full-attention layers with context parallelism (FlashAttention caps at 256; the unfused path cannot split the sequence; cuDNN has no kernel for the combination). A kernel limit, not configuration |
 
 Pipeline parallelism has no native launcher knob and is passed as a recipe override; the
@@ -89,7 +89,13 @@ gemma-4-26B-A4B full fine-tune on the v3 corpus through the Bridge lane (EP=4, o
 2,467 iterations). At iteration 750 it scores 279/356 on sfteval against 290/356 for the prior
 run of the same recipe at the same iteration — paired exact McNemar p = 0.27, not a difference.
 81 of 356 questions flip between two runs of one recipe at one iteration; that is the noise
-floor, and a gap of that size is not a regression. The decisive comparison is at iteration 2467.
+floor, and a gap of that size is not a regression.
+
+**Final, iteration 2467.** The run completed. Its HF export holds the expected 1,013 tensors
+(60 stacked expert tensors, 51.6 GB), and all 7,680 expert slices are byte-distinct (a planted
+duplicate is caught). On sfteval it scores 316/356 against 321/356 for the prior run's final
+checkpoint: 13 questions only the official run gets right, 18 only the prior one, paired exact
+McNemar p = 0.47. The Bridge lane reproduces the prior recipe's quality; it does not exceed it.
 
 ## 6. Known limits worth knowing before building on this
 
