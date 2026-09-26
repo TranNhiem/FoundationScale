@@ -17,6 +17,7 @@ def base_caps(**overrides: object) -> FSCapabilities:
         refused_axes=("pp", "ep"),
         axes_measured=True,
         rl_algorithms=("grpo", "ppo"),
+        rl_runnable={"grpo": None, "ppo": None},
         families={"qwen": ("llm",)},
         backends=("ddp", "fsdp"),
         notes=(),
@@ -97,3 +98,26 @@ def test_capabilities_to_dict_round_shape() -> None:
     assert data["train_flags"] == ["--model", "--objective"]
     assert data["families"] == {"qwen": ["llm"]}
     assert set(data["refused_axes"]) == {"pp", "ep"}
+
+
+def test_rl_runnability_is_measured_not_assumed() -> None:
+    caps = probe()
+    if not caps.available:
+        assert caps.errors
+        return
+    # Registered-but-refused algorithms are reported with FS's own reason.
+    assert set(caps.rl_runnable) == set(caps.rl_algorithms)
+    runnable = {a for a, r in caps.rl_runnable.items() if r is None}
+    assert runnable, "no runnable RL algorithm measured"
+    refused = [a for a, r in caps.rl_runnable.items() if r is not None]
+    for alg in refused:
+        msg = caps.check("rl", algorithm=alg)
+        assert msg and "refuses" in msg and alg in msg
+    for alg in runnable:
+        assert caps.check("rl", algorithm=alg) is None
+
+
+def test_rl_check_refuses_when_runnability_unmeasured() -> None:
+    caps = FSCapabilities(available=True, fs_version="x", train_objectives=("sft",),
+                          rl_algorithms=("gspo",), backends=("fsdp",))
+    assert "unmeasured" in (caps.check("rl", algorithm="gspo") or "")

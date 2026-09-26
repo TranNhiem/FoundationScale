@@ -1,0 +1,31 @@
+
+# RAFT / ReST-style rejection-sampling fine-tuning: sample n completions per
+# prompt, keep only the correct (or top-reward) ones, and SFT on them. Repeat.
+name: raft
+stage: rl
+family: online
+data_format: rl
+requires: [gold_answers]
+key_hparams:
+  group_size:
+    default: 8
+    range: [4, 16]
+    note: "samples per prompt; only reward-passing completions enter the SFT set"
+  temperature:
+    default: 1.0
+    range: [0.7, 1.2]
+    note: "sampling temperature for candidate generation"
+  num_iterations:
+    default: 3
+    range: [2, 8]
+    note: "sample-then-tune rounds; diminishing returns after ~4"
+failure_modes:
+  - symptom: "few prompts produce any passing completion"
+    cause: "base/sft policy too weak for the task difficulty"
+    recovery: "curriculum from easy to hard; warm-start with a short RL stage"
+  - symptom: "mode collapse to the easiest reasoning pattern"
+    cause: "rejection sampling keeps only what already works"
+    recovery: "dedup kept completions by solution signature; mix in SFT data each round"
+fs_entry: fskills-rl
+references:
+  - "Dong et al. 2023, RAFT: Reward rAnked FineTuning for Generative Foundation Model Alignment"

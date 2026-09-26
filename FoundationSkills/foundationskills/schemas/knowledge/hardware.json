@@ -1,0 +1,40 @@
+
+{
+  "type": "object",
+  "description": "A hardware target with measured-or-labelled throughput facts.",
+  "required": ["id", "gpu_name", "mem_gb", "gpus_per_node", "bf16_dense_tflops", "peak_provenance", "interconnect", "mfu", "scheduler", "cluster_rules", "notes"],
+  "additionalProperties": true,
+  "properties": {
+    "id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "gpu_name": {"type": "string", "minLength": 1},
+    "mem_gb": {"type": "number", "minimum": 1},
+    "gpus_per_node": {"type": "integer", "minimum": 1},
+    "bf16_dense_tflops": {"type": "number", "minimum": 1},
+    "peak_provenance": {"enum": ["measured", "datasheet"]},
+    "interconnect": {"type": "string", "minLength": 1},
+    "mfu": {
+      "type": "object",
+      "required": ["dense", "moe"],
+      "additionalProperties": true,
+      "properties": {
+        "dense": {"$ref": "#/$defs/mfu_entry"},
+        "moe": {"$ref": "#/$defs/mfu_entry"}
+      }
+    },
+    "scheduler": {"enum": ["slurm", "local", null]},
+    "cluster_rules": {"type": "array", "items": {"type": "string"}},
+    "notes": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "mfu_entry": {
+      "type": "object",
+      "required": ["value", "provenance", "evidence"],
+      "additionalProperties": true,
+      "properties": {
+        "value": {"type": "number", "minimum": 0, "maximum": 1},
+        "provenance": {"enum": ["measured", "derived", "literature"]},
+        "evidence": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

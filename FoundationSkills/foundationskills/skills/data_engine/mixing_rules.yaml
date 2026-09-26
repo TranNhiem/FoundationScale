@@ -1,0 +1,88 @@
+
+# Mixture design rules consumed by foundationskills.skills.data_engine.mix.design_mixture.
+# Rules: the most specific matching rule wins (specificity = number of `when` keys).
+# A component is either {ratio: w} (weight; renormalized to sum 1) or may add
+# {min: m, max: M} bounds (min is granted first, residual split by weight, clamped).
+rules:
+  - id: MIX-CPT-PRESERVE
+    when: {stage_in: [cpt], preserve_general: true}
+    components:
+      domain: {ratio: 0.65}
+      general_replay: {ratio: 0.25}
+      code_math: {ratio: 0.10}
+    because: >-
+      Continued pretraining keeps the domain share in the 0.6-0.8 band with
+      15-30% general replay to prevent forgetting; a small code+math sliver
+      preserves reasoning.
+    citation: >-
+      Ibrahim et al. 2024, "Simple and Scalable Strategies to Continually
+      Pre-train Large Language Models", arXiv:2403.08763 (5-30% replay band);
+      optional ratio optimizers: DoReMi (arXiv:2305.10429), RegMix (arXiv:2407.01492).
+  - id: MIX-CPT-NO-PRESERVE
+    when: {stage_in: [cpt], preserve_general: false}
+    components:
+      domain: {ratio: 0.85}
+      code_math: {ratio: 0.15}
+    because: >-
+      No preservation requirement: maximal domain exposure, keeping a small
+      code+math share as structure-bearing signal.
+    citation: >-
+      Ibrahim et al. 2024, arXiv:2403.08763 (replay optional when forgetting
+      is not a concern).
+  - id: MIX-SFT-REASONING
+    when: {stage_in: [sft], goal_in: [reasoning, math, code]}
+    components:
+      domain_instructions: {ratio: 0.55}
+      general_instruction_replay: {ratio: 0.25}
+      math_code_reasoning: {ratio: 0.20}
+    because: >-
+      Reasoning SFT anchors on domain instructions, keeps 20-30% general
+      instruction replay so chat ability survives, and holds 20% math/code
+      reasoning traces for chain-of-thought coverage.
+    citation: >-
+      Tulu 3 mixture practice (arXiv:2411.15124); SmolTalk/SmolLM2 SFT
+      mixture (arXiv:2502.02737).
+  - id: MIX-SFT-TOOL-CALLING
+    when: {stage_in: [sft], goal_in: [tool_calling]}
+    components:
+      tool_traces: {ratio: 0.60}
+      general_chat: {ratio: 0.40}
+    because: >-
+      Tool-calling SFT needs a majority of verified tool traces; general chat
+      replay keeps conversational competence. Synthetic tool traces are
+      phase-2 data (see data_engine.phase2).
+    citation: >-
+      xLAM function-calling (arXiv:2409.03217); ToolACE (arXiv:2409.00917);
+      PHASE-2: synthetic tool traces require the synthesize/toolcall_format ops.
+  - id: MIX-SFT-CHAT
+    when: {stage_in: [sft], goal_in: [general_chat]}
+    components:
+      general_instructions: {ratio: 0.70}
+      math_code: {ratio: 0.15}
+      safety: {ratio: 0.15}
+    because: >-
+      General-chat SFT is dominated by broad instructions with modest
+      math/code and safety shares to avoid capability regression.
+    citation: >-
+      Tulu 3 (arXiv:2411.15124); SmolTalk/SmolLM2 (arXiv:2502.02737).
+  - id: MIX-SFT-DOMAIN
+    when: {stage_in: [sft]}
+    components:
+      domain_instructions: {ratio: 0.70}
+      general_instruction_replay: {ratio: 0.30}
+    because: >-
+      Default SFT domain-adaptation mixture: mostly domain instructions with
+      general instruction replay at the top of the 20-30% band.
+    citation: >-
+      Tulu 3 (arXiv:2411.15124); Ibrahim et al. 2024 replay band by analogy
+      (arXiv:2403.08763).
+  - id: MIX-RL
+    when: {stage_in: [rl]}
+    components:
+      domain_verifiable: {ratio: 0.70}
+      verifiable_math_replay: {ratio: 0.30}
+    because: >-
+      Verifiable-reward RL anchors on domain prompts with verifiable answers
+      and keeps general math-verifiable prompts as replay for stability.
+    citation: >-
+      DAPO (arXiv:2503.14476); DeepSeek-R1 (arXiv:2501.12948) verifiable-reward RL.

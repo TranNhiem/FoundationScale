@@ -1,0 +1,76 @@
+
+# Stage-selection rules for the training planner. Every rule is inspectable
+# prose: `because` is shown to the user in the plan's decision log.
+rules:
+  - id: cpt-large-domain
+    when: {goal_in: [domain_expert, reasoning], domain_tokens_gte: 100000000}
+    action: add_stage
+    stage: cpt
+    algorithm_hint: causal_lm
+    because: ">=100M domain tokens is enough for continued pretraining to move the base model's distribution; SFT alone cannot absorb that volume."
+  - id: cpt-too-little-data
+    when: {domain_tokens_lt: 20000000}
+    action: skip_stage
+    stage: cpt
+    algorithm_hint: null
+    because: "too little data for CPT to beat SFT; fold the documents into SFT examples or RAG instead of a CPT stage."
+  - id: sft-non-instruct-base
+    when: {base_is_instruct: false}
+    action: add_stage
+    stage: sft
+    algorithm_hint: sft
+    because: "the base model has no instruction tuning; an SFT stage is mandatory before preference or RL stages can bind instruction-following."
+  - id: sft-when-instructions
+    when: {has_instructions: true}
+    action: add_stage
+    stage: sft
+    algorithm_hint: sft
+    because: "instruction/chat data is present; SFT is the cheapest capability-per-token stage and always precedes preference/RL."
+  - id: rl-verifiable-answers
+    when: {has_verifiable_answers: true, goal_in: [reasoning, math, code]}
+    action: add_stage
+    stage: rl
+    algorithm_hint: dr_grpo
+    because: "verifiable gold answers enable reference-free group RL (hint dr_grpo, no reference model needed); the planner must still ask FS which algorithms are runnable."
+  - id: preference-from-pairs
+    when: {has_pairs: true}
+    action: add_stage
+    stage: preference
+    algorithm_hint: dpo
+    because: "paired preference data exists; note FS does not run the preference family today -- the planner will either refuse this stage or redirect to an RL stage with verifiable rewards."
+  - id: order-sft-before-post
+    when: {has_instructions: true}
+    action: order
+    stage: sft
+    algorithm_hint: null
+    because: "SFT always precedes preference and RL stages: post-training objectives bind to instruction-following, not raw completion."
+  - id: order-cpt-before-sft
+    when: {domain_tokens_gte: 100000000}
+    action: order
+    stage: cpt
+    algorithm_hint: null
+    because: "CPT precedes SFT: continuing pretraining after SFT would erase the instruction distribution."
+  - id: replay-when-preserve-general
+    when: {preserve_general: true}
+    action: order
+    stage: cpt
+    algorithm_hint: null
+    because: "preserve_general requests general-capability insurance: mix >=10-20% general replay into every domain stage (see mixing_rules) to bound catastrophic forgetting."
+  - id: tool-calling-sft
+    when: {goal_in: [tool_calling]}
+    action: add_stage
+    stage: sft
+    algorithm_hint: sft
+    because: "tool calling is a format-heavy supervised skill; tool-call example construction is a PHASE-2 data-engine op (toolcall_format) -- flag as REFUSED if not already materialised."
+  - id: general-chat-instruct-skip-sft
+    when: {goal_in: [general_chat], base_is_instruct: true, has_instructions: false}
+    action: skip_stage
+    stage: sft
+    algorithm_hint: null
+    because: "the base is already instruction-tuned and no new instruction data is given; skip SFT -- a preference stage (or none at all) is the right move."
+  - id: order-rl-last
+    when: {has_verifiable_answers: true}
+    action: order
+    stage: rl
+    algorithm_hint: null
+    because: "RL runs last: on-policy updates are destructive and must start from the best available SFT/preference checkpoint."

@@ -1,0 +1,32 @@
+
+# Online DPO: interleaves on-policy generation with DPO updates -- pairs are
+# (best, worst) of the current policy scored by a reward model or judge each
+# round, closing the distribution-shift gap of offline DPO.
+name: online_dpo
+stage: preference
+family: online
+data_format: preference
+requires: [reward_fn, reference_model]
+key_hparams:
+  beta:
+    default: 0.1
+    range: [0.05, 0.3]
+    note: "KL strength to the reference"
+  learning_rate:
+    default: 5.0e-7
+    range: [1.0e-7, 1.0e-6]
+    note: "policy LR per round"
+  samples_per_prompt:
+    default: 4
+    range: [2, 8]
+    note: "on-policy generations per prompt per round; best/worst selected by the reward"
+failure_modes:
+  - symptom: "reward hacking of the online judge"
+    cause: "best-of-k selection the judge prefers (length, markdown headers)"
+    recovery: "audit traces; ensemble or tighten the reward; reduce samples_per_prompt"
+  - symptom: "instability across rounds (policy seesaws)"
+    cause: "round batch too small relative to LR"
+    recovery: "more prompts per round, lower LR, longer cooldown between rounds"
+fs_entry: fskills-rl
+references:
+  - "Guo et al. 2024, Direct Language Model Alignment from Online AI Feedback"

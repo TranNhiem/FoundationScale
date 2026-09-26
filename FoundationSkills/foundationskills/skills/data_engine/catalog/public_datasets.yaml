@@ -1,0 +1,323 @@
+
+# Public dataset catalog. Licenses are best-effort; "verify" means confirm the
+# license on the source page before redistribution. Sizes are order-of-magnitude.
+- id: fineweb
+  hf_id: HuggingFaceFW/fineweb
+  formats: [pretrain, cpt]
+  domains: [general, web]
+  goals: [domain_expert, general_chat]
+  size_tokens: 15000000000000
+  license: odc-by
+  languages: [en]
+  notes: Full crawl ~15T tokens; the sample-10BT config is the usual entry point.
+- id: fineweb-edu
+  hf_id: HuggingFaceFW/fineweb-edu
+  formats: [pretrain, cpt]
+  domains: [general, web, education]
+  goals: [domain_expert, reasoning, general_chat]
+  size_tokens: 1300000000000
+  license: odc-by
+  languages: [en]
+  notes: Educational-quality filtered slice of FineWeb.
+- id: dclm-baseline
+  hf_id: mlfoundations/dclm-baseline-1.0
+  formats: [pretrain, cpt]
+  domains: [general, web]
+  goals: [domain_expert, general_chat]
+  size_tokens: 3800000000000
+  license: odc-by
+  languages: [en]
+  notes: DCLM reference pool; check per-source terms of use (verify).
+- id: dolma
+  hf_id: allenai/dolma
+  formats: [pretrain, cpt]
+  domains: [general, web, code, science]
+  goals: [domain_expert, general_chat]
+  size_tokens: 3000000000000
+  license: odc-by
+  languages: [en]
+  notes: Pick a config (e.g. v1_6-sample); multi-domain mixture.
+- id: wikipedia
+  hf_id: wikimedia/wikipedia
+  formats: [pretrain, cpt]
+  domains: [general, encyclopedia]
+  goals: [domain_expert, general_chat]
+  size_tokens: 11000000000
+  license: cc-by-sa-4.0
+  languages: [multilingual]
+  notes: Use config 20231101.en for English; content also under GFDL historically (verify).
+- id: the-stack-v2-dedup
+  hf_id: bigcode/the-stack-v2-dedup
+  formats: [pretrain, cpt]
+  domains: [code]
+  goals: [code]
+  size_tokens: 900000000000
+  license: verify
+  languages: [multilingual]
+  notes: SWH source with per-repo licenses; verify redistribution per language.
+- id: the-stack-smol
+  hf_id: bigcode/the-stack-smol
+  formats: [pretrain, cpt]
+  domains: [code]
+  goals: [code]
+  size_examples: 300000
+  license: verify
+  languages: [multilingual]
+  notes: Small 10k-per-language sample of The Stack; per-repo licenses (verify).
+- id: starcoderdata
+  hf_id: bigcode/starcoderdata
+  formats: [pretrain, cpt]
+  domains: [code]
+  goals: [code]
+  size_tokens: 250000000000
+  license: bigcode-openrail-m
+  languages: [multilingual]
+  notes: StarCoder training corpus with FIM formatting.
+- id: openwebmath
+  hf_id: open-web-math/open-web-math
+  formats: [pretrain, cpt]
+  domains: [math, web]
+  goals: [math, reasoning]
+  size_tokens: 14700000000
+  license: odc-by
+  languages: [en]
+  notes: Math-heavy Common Crawl extract.
+- id: finemath
+  hf_id: HuggingFaceTB/finemath
+  formats: [pretrain, cpt]
+  domains: [math, web]
+  goals: [math, reasoning]
+  size_tokens: 34000000000
+  license: odc-by
+  languages: [en]
+  notes: Quality-filtered math pretraining data.
+- id: proof-pile-2
+  hf_id: EleutherAI/proof-pile-2
+  formats: [pretrain, cpt]
+  domains: [math, code, science]
+  goals: [math, reasoning]
+  size_tokens: 55000000000
+  license: verify
+  languages: [en]
+  notes: Contains arXiv + OpenWebMath + AlgebraicStack; per-subset licenses (verify).
+- id: tulu-3-sft-mixture
+  hf_id: allenai/tulu-3-sft-mixture
+  formats: [sft]
+  domains: [general, math, code, safety]
+  goals: [general_chat, reasoning, math]
+  size_examples: 939344
+  license: odc-by
+  languages: [en, multilingual]
+  notes: Curated SFT mixture used for Tulu 3; includes decontamination metadata.
+- id: openhermes-2.5
+  hf_id: teknium/OpenHermes-2.5
+  formats: [sft]
+  domains: [general]
+  goals: [general_chat]
+  size_examples: 1000000
+  license: apache-2.0
+  languages: [en]
+  notes: Large GPT-4-generated instruction set; license tag best-effort (verify).
+- id: slimorca
+  hf_id: Open-Orca/SlimOrca
+  formats: [sft]
+  domains: [general]
+  goals: [general_chat]
+  size_examples: 517982
+  license: mit
+  languages: [en]
+  notes: Cleaned subset of OpenOrca (FLAN answers).
+- id: smoltalk
+  hf_id: HuggingFaceTB/smoltalk
+  formats: [sft]
+  domains: [general, math, code]
+  goals: [general_chat, reasoning]
+  size_examples: 1100000
+  license: apache-2.0
+  languages: [en]
+  notes: SFT mixture behind SmolLM2.
+- id: infinity-instruct
+  hf_id: BAAI/Infinity-Instruct
+  formats: [sft]
+  domains: [general]
+  goals: [general_chat, domain_expert]
+  size_examples: 7000000
+  license: apache-2.0
+  languages: [en, multilingual]
+  notes: Very large instruction corpus with difficulty labels; pick a subset (verify license).
+- id: openthoughts-114k
+  hf_id: open-thoughts/OpenThoughts-114k
+  formats: [sft]
+  domains: [math, code, science]
+  goals: [reasoning, math]
+  size_examples: 114000
+  license: verify
+  languages: [en]
+  notes: R1-distilled reasoning traces.
+- id: numinamath-cot
+  hf_id: AI-MO/NuminaMath-CoT
+  formats: [sft]
+  domains: [math]
+  goals: [math, reasoning]
+  size_examples: 859494
+  license: cc-by-nc-4.0
+  languages: [en]
+  notes: Non-commercial; math word-problem CoT solutions.
+- id: openr1-math-220k
+  hf_id: open-r1/OpenR1-Math-220k
+  formats: [sft]
+  domains: [math]
+  goals: [math, reasoning]
+  size_examples: 220000
+  license: apache-2.0
+  languages: [en]
+  notes: R1-generated verified math traces.
+- id: ultrafeedback-binarized
+  hf_id: HuggingFaceH4/ultrafeedback_binarized
+  formats: [preference]
+  domains: [general]
+  goals: [general_chat]
+  size_examples: 63000
+  license: mit
+  languages: [en]
+  notes: TRL-style chosen/rejected splits; decontaminated variants available.
+- id: helpsteer2
+  hf_id: nvidia/HelpSteer2
+  formats: [preference]
+  domains: [general]
+  goals: [general_chat]
+  size_examples: 21362
+  license: cc-by-4.0
+  languages: [en]
+  notes: Multi-attribute ratings usable for reward modeling or DPO pairs.
+- id: tulu-3-preference-mixture
+  hf_id: allenai/llama-3.1-tulu-3-8b-preference-mixture
+  formats: [preference]
+  domains: [general, math]
+  goals: [general_chat, reasoning]
+  size_examples: 272064
+  license: odc-by
+  languages: [en]
+  notes: On-policy preference pairs used for Tulu 3 DPO.
+- id: gsm8k
+  hf_id: openai/gsm8k
+  formats: [rl, sft]
+  domains: [math]
+  goals: [math, reasoning]
+  size_examples: 7473
+  license: mit
+  languages: [en]
+  notes: Train split has verifiable numeric answers (main/train).
+- id: math-hendrycks
+  hf_id: EleutherAI/hendrycks_math
+  formats: [rl, sft]
+  domains: [math]
+  goals: [math, reasoning]
+  size_examples: 7500
+  license: mit
+  languages: [en]
+  notes: Competition math with boxed answers; original repo license MIT (verify).
+- id: numinamath-tir
+  hf_id: AI-MO/NuminaMath-TIR
+  formats: [rl, sft]
+  domains: [math, code]
+  goals: [math, reasoning]
+  size_examples: 72441
+  license: cc-by-nc-4.0
+  languages: [en]
+  notes: Tool-integrated reasoning traces; non-commercial.
+- id: dapo-math-17k
+  hf_id: BytedTsinghua-SIA/DAPO-Math-17k
+  formats: [rl]
+  domains: [math]
+  goals: [math, reasoning]
+  size_examples: 17000
+  license: verify
+  languages: [en]
+  notes: RL prompt set with integer answers used for DAPO.
+- id: big-math-rl-verified
+  hf_id: SynthLabsAI/Big-Math-RL-Verified
+  formats: [rl]
+  domains: [math]
+  goals: [math, reasoning]
+  size_examples: 251000
+  license: verify
+  languages: [en]
+  notes: Large verified RL math prompt pool; verify license before release.
+- id: llava-onevision-data
+  hf_id: lmms-lab/LLaVA-OneVision-Data
+  formats: [mm_sft]
+  domains: [general, vision]
+  goals: [general_chat, domain_expert]
+  size_examples: 4300000
+  license: verify
+  languages: [en]
+  notes: Image+conversation SFT; per-source image licenses (verify).
+- id: sharegpt4v
+  hf_id: ShareGPT4V/ShareGPT4V
+  formats: [mm_sft]
+  domains: [general, vision]
+  goals: [general_chat]
+  size_examples: 102000
+  license: verify
+  languages: [en]
+  notes: GPT-4V captioned image-text pairs; verify image licensing.
+- id: the-cauldron
+  hf_id: HuggingFaceM4/the_cauldron
+  formats: [mm_sft]
+  domains: [general, vision, documents]
+  goals: [general_chat]
+  size_examples: 1880310
+  license: apache-2.0
+  languages: [en, multilingual]
+  notes: 50-task vision-language mixture used for Idefics2.
+- id: glaive-function-calling-v2
+  hf_id: glaiveai/glaive-function-calling-v2
+  formats: [sft]
+  domains: [tools]
+  goals: [tool_calling]
+  size_examples: 113000
+  license: verify
+  languages: [en]
+  notes: Synthetic function-calling conversations; verify license tag on the card.
+- id: xlam-function-calling-60k
+  hf_id: Salesforce/xlam-function-calling-60k
+  formats: [sft]
+  domains: [tools]
+  goals: [tool_calling]
+  size_examples: 60000
+  license: cc-by-4.0
+  languages: [en]
+  notes: xLAM synthetic function-calling data (gated on HF).
+- id: toolace
+  hf_id: Team-ACE/ToolACE
+  formats: [sft]
+  domains: [tools]
+  goals: [tool_calling]
+  size_examples: 11342
+  license: apache-2.0
+  languages: [en]
+  notes: Verifier-checked multi-turn tool traces (verify license on card).
+- id: uspto-patents-hupd
+  hf_id: HUPD/hupd
+  formats: [pretrain, cpt]
+  domains: [patents, industrial]
+  goals: [domain_expert]
+  size_examples: 4500000
+  license: verify
+  languages: [en]
+  notes: Harvard USPTO patent dataset; patents are public record but verify reuse terms.
+- id: manufacturing-open-corpus
+  hf_id: null
+  formats: [cpt, sft]
+  domains: [manufacturing, industrial]
+  goals: [domain_expert]
+  size_tokens: 0
+  license: verify
+  languages: [en]
+  notes: >-
+    No large open manufacturing/industrial corpus is known to exist. Candidate
+    sources to assemble one: USPTO/EPO patents, public technical standards
+    bodies' free excerpts, government manufacturing reports (NIST), and
+    internal documentation. All "verify" licensing; this entry is a placeholder
+    so agents see the gap rather than hallucinating a corpus.

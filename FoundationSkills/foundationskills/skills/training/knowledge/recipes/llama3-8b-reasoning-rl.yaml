@@ -1,0 +1,63 @@
+
+# Reference-scenario RL stage: verifiable-answer reasoning on Dr.GRPO.
+# RL runs through fskills-rl (registered-CLI is library-only, single-device);
+# `fs.args` is intentionally empty -- the RLTrainConfig fields live in hparams.
+id: llama3-8b-reasoning-rl
+version: 1.0.0
+title: Llama-3.1-8B reasoning RL with Dr.GRPO (verifiable rewards)
+index:
+  family: llama3
+  size_b: [6.0, 10.0]
+  arch: dense
+  stage: rl
+  goal: reasoning
+  domain: any
+  method: lora
+  hardware: [gb200-189gb, h100-80gb, a100-80gb]
+data:
+  format: rl
+  min_tokens: null
+  recommended_tokens: null
+  min_examples: 1000
+  recommended_examples: 10000
+  mixture:
+    math_verified: 0.7
+    logic_puzzles_verified: 0.3
+stages:
+  - name: rl-reasoning-drgrpo
+    stage: rl
+    algorithm: dr_grpo
+    hparams:
+      # RLTrainConfig-field-shaped: the fskills-rl driver consumes these
+      group_size: 8
+      learning_rate: 1.0e-6
+      max_new_tokens: 256
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 0
+      prompts_per_step: 4
+      max_steps: 500
+      seed: 0
+      answer_pattern: "\\boxed{(.+)}"
+    fs:
+      entry: fskills-rl
+      args: {}
+hardware:
+  min_gpus: 1
+  gpu_mem_gb: 80
+  est_gpu_hours: 48.0
+evaluation:
+  benchmarks:
+    - gsm8k
+    - math_500
+  success: ">= +8 points over the SFT checkpoint on GSM8K with mean response length stable within +-20%"
+risks:
+  - "FS RLTrainer is single-device: with LoRA the model must still fit in ONE GPU under activation+K/V"
+  - "Dr.GRPO removes length normalisation: watch for response-length inflation"
+  - "require the readiness report to show gold answers parsed (fs_columns.gold_key) -- RL on unparseable answers trains noise"
+provenance:
+  status: literature
+  evidence:
+    - "Shao et al. 2024, DeepSeekMath (GRPO), arXiv:2402.03300"
+    - "Liu et al. 2025, Understanding R1-Zero-Like Training (Dr.GRPO), arXiv:2503.20783"
+  validated_on: null

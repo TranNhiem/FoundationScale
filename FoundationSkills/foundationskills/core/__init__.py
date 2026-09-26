@@ -27,6 +27,15 @@ from foundationskills.core.provenance import Provenance, make_provenance
 from foundationskills.core.registry import REGISTRY, SkillRegistry, get_skill, list_skills, register_skill
 from foundationskills.core.schema import SchemaError, assert_valid, load_schema, validate
 
+from foundationskills.core.provenance import sha256_file, sha256_json
+from foundationskills.core.orchestrator import (
+    ConfirmationRequired,
+    Orchestrator,
+    Step,
+    plan_hash,
+    require_confirmation,
+)
+
 __all__ = [
     "EXIT_CODES",
     "Status",
@@ -58,4 +67,11 @@ __all__ = [
     "assert_valid",
     "load_schema",
     "validate",
+    "sha256_file",
+    "sha256_json",
+    "ConfirmationRequired",
+    "Orchestrator",
+    "Step",
+    "plan_hash",
+    "require_confirmation",
 ]

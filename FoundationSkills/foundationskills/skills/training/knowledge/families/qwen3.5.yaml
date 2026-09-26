@@ -1,0 +1,124 @@
+
+# Alibaba Qwen 3.5 family.
+#
+# size_b is estimated as safetensors_GB / 2 under bf16 (see MEASURED local
+# model facts). All local variants are composite VLM checkpoints
+# (ForConditionalGeneration) with a vision tower.
+name: qwen3.5
+display_name: Alibaba Qwen 3.5
+fs_family: qwen3.5
+model_types:
+  - qwen3_5
+  - qwen3_5_text
+  - qwen3_5_moe
+  - qwen3_5_moe_text
+modalities: [text, image]
+variants:
+  - id: Qwen3.5-27B
+    hf_id: null
+    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Alibaba/Qwen3.5/Qwen3.5-27B
+    size_b: 27.8     # 55.6 GB safetensors / 2 (bf16)
+    active_b: null
+    arch: dense
+    hidden: 5120
+    layers: 64
+    heads: 24
+    kv_heads: 4
+    head_dim: 256
+    vocab: 248320
+    context_length: 262144
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: false
+    instruct: false
+  - id: Qwen3.5-35B-A3B
+    hf_id: null
+    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Alibaba/Qwen3.5/Qwen3.5-35B-A3B
+    size_b: 35.95    # 71.9 GB safetensors / 2 (bf16)
+    active_b: 3.0    # from the A3B suffix
+    arch: moe
+    hidden: 2048
+    layers: 40
+    heads: 16
+    kv_heads: 2
+    head_dim: 256
+    vocab: 248320
+    context_length: 262144
+    num_experts: 256
+    experts_per_token: 8
+    tied_embeddings: false
+    instruct: false
+  - id: Qwen3.5-122B-A10B
+    hf_id: null
+    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Alibaba/Qwen3.5/Qwen3.5-122B-A10B
+    size_b: 125.1    # 250.2 GB safetensors / 2 (bf16; name says 122B)
+    active_b: 10.0   # from the A10B suffix
+    arch: moe
+    hidden: 3072
+    layers: 48
+    heads: 32
+    kv_heads: 2
+    head_dim: 256
+    vocab: 248320
+    context_length: 262144
+    num_experts: 256
+    experts_per_token: 8
+    tied_embeddings: false
+    instruct: false
+tokenizer:
+  vocab_size: 248320
+  bos: null
+  eos: <|im_end|>
+  pad: <|endoftext|>
+chat_template:
+  source: tokenizer
+  family_tag: qwen3.5
+  assistant_marker: <|im_start|>assistant
+  generation_prompt: "<|im_start|>assistant\n"
+  notes: >-
+    Qwen3.5 may emit thinking tags (<think>...</think>) before the answer; the
+    assistant marker still splits the turn. A chat_template.jinja is present in
+    all measured local checkpoints.
+special_tokens:
+  eos: <|im_end|>
+  pad: <|endoftext|>
+  im_start: <|im_start|>
+  im_end: <|im_end|>
+lora_targets:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+quirks:
+  - >-
+    Hybrid attention (layer_types): linear_attention layers alternate with
+    full_attention layers; the full-attention layers alone bound serving
+    KV-cache growth, and linear-attention state changes the memory math for
+    long contexts.
+  - >-
+    Linear-attention layers introduce projections that are NOT guaranteed to
+    use the standard q/k/v/o leaf names: add them to lora_targets only after
+    verifying names against the instantiated module graph -- never guess.
+  - >-
+    Very large vocab of 248320: embedding + lm_head are a large share of dense
+    variants (untied); account for them in memory estimates.
+  - >-
+    262144-token context (max_position_embeddings) -- activation/KV memory
+    dominates fast beyond a few k tokens; gradient checkpointing recommended.
+  - >-
+    FS registers adapters against two language prefixes (model.language_model
+    when loaded as a VLM, model.layers when loaded as a plain causal LM) and
+    keeps the mtp multi-token-prediction head out of adapter scope.
+  - >-
+    Assistant responses may carry <think> segments; some data pipelines render
+    those in the target text -- decide loss policy accordingly.
+provenance:
+  status: literature
+  evidence:
+    - local config.json
+    - local safetensors byte size
+    - FS family registry (foundationscale.families.registry) for tower scoping
+  validated_on: null

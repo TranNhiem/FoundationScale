@@ -1,0 +1,64 @@
+
+id: llama3-8b-manufacturing-sft-full
+version: 1.0.0
+title: Llama-3.1-8B manufacturing-domain SFT (full fine-tune)
+index:
+  family: llama3
+  size_b: [6.0, 10.0]
+  arch: dense
+  stage: sft
+  goal: domain_expert
+  domain: manufacturing
+  method: full
+  hardware: [gb200-189gb, h100-80gb]
+data:
+  format: sft
+  min_tokens: null
+  recommended_tokens: null
+  min_examples: 2000
+  recommended_examples: 50000
+  mixture:
+    manufacturing_instructions: 0.7
+    general_chat_replay: 0.3
+stages:
+  - name: sft-manufacturing-full
+    stage: sft
+    algorithm: sft
+    hparams:
+      learning_rate: 1.0e-5
+      epochs: 2
+    fs:
+      entry: foundationscale-train
+      args:
+        objective: sft
+        sharding-strategy: fsdp
+        precision: bf16
+        optimizer: adamw
+        gradient-checkpointing: true
+        per-device-batch-size: 2
+        gradient-accumulation-steps: 8
+        learning-rate: 1.0e-5
+        lr-scheduler-type: cosine
+        warmup-steps: 100
+        max-grad-norm: 1.0
+        max-sequence-length: 4096
+        save-interval: 500
+        logging-steps: 10
+        seed: 0
+hardware:
+  min_gpus: 2
+  gpu_mem_gb: 80
+  est_gpu_hours: 10.0
+evaluation:
+  benchmarks:
+    - manufacturing_qa_holdout
+  success: ">= +20 points over base on the manufacturing QA holdout with <=2 points general-capability regression"
+risks:
+  - "full-FT of 8B needs weight+grad+optimizer ~96GB: FSDP over >=2x80GB or 1x189GB"
+  - "FS trains on the full rendered text with NO assistant-only loss masking (measured) -- must be disclosed"
+  - "small instruction sets (<5k) overfit fast at full-FT LRs; keep LR at 1e-5 and 2 epochs"
+provenance:
+  status: literature
+  evidence:
+    - "Lambert et al. 2024, Tulu 3: Pushing Frontiers in Open Language Model Post-Training, arXiv:2411.15124"
+  validated_on: null

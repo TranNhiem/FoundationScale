@@ -1,0 +1,36 @@
+
+# KTO: prospect-theoretic alignment from UNPAIRED binary feedback
+# (desirable/undesirable), removing the need for paired comparisons. Introduces
+# loss aversion against a KL baseline to a reference policy.
+name: kto
+stage: preference
+family: preference
+data_format: preference
+requires: [reference_model]
+key_hparams:
+  beta:
+    default: 0.1
+    range: [0.05, 0.3]
+    note: "KL weight to the reference policy"
+  desirable_weight:
+    default: 1.0
+    range: [0.5, 2.0]
+    note: "class weight for desirable examples -- tune when classes are imbalanced"
+  undesirable_weight:
+    default: 1.0
+    range: [0.5, 2.0]
+    note: "class weight for undesirable examples; raise to combat reward hacking signals"
+  learning_rate:
+    default: 5.0e-7
+    range: [1.0e-7, 1.0e-6]
+    note: "same order as DPO"
+failure_modes:
+  - symptom: "class imbalance (mostly desirable) swamps the KL term"
+    cause: "loss-aversion baseline is class-conditioned"
+    recovery: "reweight desirable_weight / undesirable_weight toward the minority class"
+  - symptom: "KL drift"
+    cause: "beta too small for long runs on narrow data"
+    recovery: "raise beta toward 0.2-0.3"
+fs_entry: fskills-rl
+references:
+  - "Ethayarajh et al. 2024, KTO: Model Alignment as Prospect Theoretic Optimization, arXiv:2402.01306"

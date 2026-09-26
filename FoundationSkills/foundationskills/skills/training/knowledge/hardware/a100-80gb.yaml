@@ -1,0 +1,24 @@
+
+# NVIDIA A100 80GB (DGX A100): literature reference target.
+id: a100-80gb
+gpu_name: NVIDIA A100 80GB (DGX A100)
+mem_gb: 80
+gpus_per_node: 8
+bf16_dense_tflops: 312.0
+peak_provenance: datasheet
+interconnect: NVLink intra-node; InfiniBand cluster
+mfu:
+  dense:
+    value: 0.35
+    provenance: literature
+    evidence: "literature MFU ~0.3-0.4 for multi-B dense LLM training on A100 (GPT-3-era reports); not measured on this estate"
+  moe:
+    value: 0.15
+    provenance: literature
+    evidence: "MoE routing overhead roughly halves dense MFU in published reports; not measured on this estate"
+scheduler: slurm
+cluster_rules: []
+notes:
+  - "datasheet dense bf16 312 TFLOP/s (sparse ~624); use the dense figure"
+  - "all figures are literature -- treat time estimates as +-50%"
+  - "8 GPUs per node (DGX A100 standard)"

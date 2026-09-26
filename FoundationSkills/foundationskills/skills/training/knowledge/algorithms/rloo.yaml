@@ -1,0 +1,28 @@
+
+# RLOO (REINFORCE Leave-One-Out): sample k completions per prompt and use the
+# average of the OTHER k-1 returns as each sample's baseline -- group-relative
+# without GRPO's std normalisation.
+name: rloo
+stage: rl
+family: group_rl
+data_format: rl
+requires: [reward_fn]
+key_hparams:
+  group_size:
+    default: 4
+    range: [2, 8]
+    note: "k samples per prompt; 'Back to Basics' shows k=2-4 is competitive and cheap"
+  learning_rate:
+    default: 1.0e-6
+    range: [1.0e-6, 3.0e-6]
+    note: "policy LR"
+failure_modes:
+  - symptom: "baseline has high variance with small k"
+    cause: "leave-one-out baseline from k-1 samples is noisy at k=2"
+    recovery: "raise group_size; for verifiable rewards prefer GRPO-class normalisation"
+  - symptom: "KL drift on long runs"
+    cause: "no explicit KL term by default"
+    recovery: "add small kl_beta (needs reference model) or shorten runs"
+fs_entry: fskills-rl
+references:
+  - "Ahmadian et al. 2024, Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs, arXiv:2402.14740"

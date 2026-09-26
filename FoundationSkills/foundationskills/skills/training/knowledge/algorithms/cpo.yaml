@@ -1,0 +1,32 @@
+
+# CPO (Contrastive Preference Optimization): combines the SFT term with a
+# contrastive preference term over label-smoothed model distributions --
+# designed for machine translation originally, mid-risk on general chat.
+name: cpo
+stage: preference
+family: preference
+data_format: preference
+requires: [pairs]
+key_hparams:
+  beta:
+    default: 0.1
+    range: [0.1, 1.0]
+    note: "temperature of the contrastive preference term"
+  cpo_alpha:
+    default: 1.0
+    range: [0.5, 2.0]
+    note: "weight of the SFT (chosen-response) term relative to the contrastive term"
+  learning_rate:
+    default: 1.0e-6
+    range: [5.0e-7, 5.0e-6]
+    note: "between SFT and DPO LRs"
+failure_modes:
+  - symptom: "chosen-response log-prob rises, rejected does not fall"
+    cause: "contrastive term underweighted vs the SFT term"
+    recovery: "raise cpo_alpha? No -- lower cpo_alpha below 1 or raise beta"
+  - symptom: "bleed-through of rejection style into generations"
+    cause: "contrastive loss sharpens rejected distributions into the boundary"
+    recovery: "increase smoothing / reduce beta"
+fs_entry: fskills-rl
+references:
+  - "Xu et al. 2024, Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation"

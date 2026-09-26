@@ -1,0 +1,71 @@
+
+id: qwen3.5-35b-a3b-code-cpt
+version: 1.0.0
+title: Qwen3.5-35B-A3B (MoE) code continued pretraining (full)
+index:
+  family: qwen3.5
+  size_b: [30.0, 40.0]
+  arch: moe
+  stage: cpt
+  goal: code
+  domain: code
+  method: full
+  hardware: [gb200-189gb, h100-80gb]
+data:
+  format: cpt
+  min_tokens: 500000000
+  recommended_tokens: 2000000000
+  min_examples: null
+  recommended_examples: null
+  mixture:
+    code_corpus: 0.85
+    general_replay: 0.15
+stages:
+  - name: cpt-code
+    stage: cpt
+    algorithm: causal_lm
+    hparams:
+      learning_rate: 1.0e-5
+      lr_scheduler_type: cosine
+      warmup_steps: 200
+      epochs: 1
+      replay_ratio: 0.15
+      # global batch: 2 dev * 64 accum * 4 GPU * 4096 tok = ~2M tokens/step on a GB200 tray
+      global_batch_tokens: 2000000
+    fs:
+      entry: foundationscale-train
+      args:
+        objective: sft
+        sharding-strategy: fsdp
+        precision: bf16
+        optimizer: adamw
+        gradient-checkpointing: true
+        per-device-batch-size: 2
+        gradient-accumulation-steps: 64
+        learning-rate: 1.0e-5
+        lr-scheduler-type: cosine
+        warmup-steps: 200
+        max-grad-norm: 1.0
+        max-sequence-length: 4096
+        save-interval: 1000
+        logging-steps: 10
+        seed: 0
+hardware:
+  min_gpus: 4
+  gpu_mem_gb: 189
+  est_gpu_hours: 60.0
+evaluation:
+  benchmarks:
+    - humanevalplus
+    - ds1000
+  success: ">= +10 points pass@1 over base on HumanEval+ with <=2 points regression on general benchmarks"
+risks:
+  - "MoE CPT at 36B total: FSDP-shard weights+optimizer (72+144GB) across >=4 GPUs; MFU on MoE is UNMEASURED here (derived 0.15) -- budget with margin"
+  - "FS runs causal LM as --objective sft over the `text` column only: ship {id, text, meta} records"
+  - "248k vocab: embedding entropy spikes are normal in early code CPT; do not mistake for divergence"
+provenance:
+  status: literature
+  evidence:
+    - "Ibrahim et al. 2024, Continued Pre-training strategies, arXiv:2403.08763"
+    - "Qwen2.5-Coder technical report practice"
+  validated_on: null

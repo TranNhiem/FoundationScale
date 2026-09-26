@@ -1,0 +1,39 @@
+
+# Dr.GRPO (Understanding R1-Zero-Like Training): removes the std normalisation
+# and the per-question length/sum normalisation of GRPO, which were shown to
+# introduce optimisation bias. Reference-free: no KL term, no reference model.
+name: dr_grpo
+stage: rl
+family: group_rl
+data_format: rl
+requires: [gold_answers]
+key_hparams:
+  group_size:
+    default: 8
+    range: [4, 16]
+    note: "Dr.GRPO drops /std normalisation, removing the question-difficulty bias; smaller groups still work"
+  learning_rate:
+    default: 1.0e-6
+    range: [1.0e-6, 3.0e-6]
+    note: "reference-free runs are the most aggressive -- start at 1e-6"
+  kl_weight:
+    default: 0.0
+    range: null
+    note: "hard 0 by design: reference-free; no reference model is loaded"
+  max_new_tokens:
+    default: 256
+    range: [128, 2048]
+    note: "budget the tail: length bias is reported when length normalisation is absent"
+failure_modes:
+  - symptom: "response lengths inflate over training"
+    cause: "no length normalisation by design; length bias shows up as monotonically growing token counts"
+    recovery: "monitor mean sample length; cap max_new_tokens; add an overlong-response shaping term (DAPO-style)"
+  - symptom: "early-epoch NaNs / loss spikes on small models"
+    cause: "removing std normalisation can amplify token-scale advantages for very imbalanced rewards"
+    recovery: "lower LR toward 1e-7, enlarge group_size, clamp raw advantages to +-5"
+  - symptom: "zero-advantage saturation persists"
+    cause: "same cause as GRPO -- all-equal groups; normalisation removal does not fix reward granularity"
+    recovery: "shape intermediate rewards or use DAPO dynamic sampling"
+fs_entry: fskills-rl
+references:
+  - "Liu et al. 2025, Understanding R1-Zero-Like Training: A Critical Perspective (Dr.GRPO), arXiv:2503.20783"

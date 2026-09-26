@@ -1,0 +1,40 @@
+
+# Proximal Policy Optimization for language models: on-policy updates with a
+# learned value function (critic), GAE advantage estimation, and token-level
+# clipping. Reference model typically present for KL control.
+name: ppo
+stage: rl
+family: actor_critic
+data_format: rl
+requires: [critic, reward_fn, reference_model]
+key_hparams:
+  gae_lambda:
+    default: 0.95
+    range: [0.9, 1.0]
+    note: "GAE lambda -- bias/variance tradeoff of the advantage"
+  gamma:
+    default: 1.0
+    range: [0.99, 1.0]
+    note: "discount; 1.0 for the typical fixed-horizon RLHF token MDP"
+  clip_eps:
+    default: 0.2
+    range: [0.1, 0.3]
+    note: "token-level PPO clip"
+  learning_rate:
+    default: 1.0e-6
+    range: [1.0e-6, 3.0e-6]
+    note: "policy LR; critic LR is usually an order of magnitude higher"
+failure_modes:
+  - symptom: "value function blows up (huge value losses, exploding advantages)"
+    cause: "critic undertrained relative to the moving policy, or reward scale drifts"
+    recovery: "reward normalisation/whitening, lower policy LR, warm-start critic"
+  - symptom: "KL blow-up toward the end"
+    cause: "kl_beta too small for the run length"
+    recovery: "adaptive KL controller; raise kl_beta"
+  - symptom: "reward hacking"
+    cause: "reward model exploited by longer/formatted responses"
+    recovery: "cap response length; audit traces; ensemble rewards"
+fs_entry: fskills-rl
+references:
+  - "Schulman et al. 2017, Proximal Policy Optimization Algorithms, arXiv:1707.06347"
+  - "Ouyang et al. 2022, Training language models to follow instructions with human feedback (InstructGPT PPO-ptx), arXiv:2203.02155"

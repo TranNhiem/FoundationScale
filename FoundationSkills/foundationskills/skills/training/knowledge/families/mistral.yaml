@@ -1,0 +1,97 @@
+
+# Mistral AI reference family (literature entry; FS does NOT register it).
+name: mistral
+display_name: Mistral AI
+fs_family: null
+model_types:
+  - mistral
+  - mixtral
+modalities: [text]
+variants:
+  - id: mistral-7b-v0.3
+    hf_id: mistralai/Mistral-7B-v0.3
+    local_path: null
+    size_b: 7.25
+    active_b: null
+    arch: dense
+    hidden: 4096
+    layers: 32
+    heads: 32
+    kv_heads: 8
+    head_dim: 128
+    vocab: 32768
+    context_length: 32768
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: false
+    instruct: false
+  - id: mistral-7b-instruct-v0.3
+    hf_id: mistralai/Mistral-7B-Instruct-v0.3
+    local_path: null
+    size_b: 7.25
+    active_b: null
+    arch: dense
+    hidden: 4096
+    layers: 32
+    heads: 32
+    kv_heads: 8
+    head_dim: 128
+    vocab: 32768
+    context_length: 32768
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: false
+    instruct: true
+  - id: mixtral-8x7b-v0.1
+    hf_id: mistralai/Mixtral-8x7B-v0.1
+    local_path: null
+    size_b: 46.7
+    active_b: 12.9
+    arch: moe
+    hidden: 4096
+    layers: 32
+    heads: 32
+    kv_heads: 8
+    head_dim: 128
+    vocab: 32000
+    context_length: 32768
+    num_experts: 8
+    experts_per_token: 2
+    tied_embeddings: false
+    instruct: false
+tokenizer:
+  vocab_size: 32768
+  bos: <s>
+  eos: </s>
+  pad: null
+chat_template:
+  source: tokenizer
+  family_tag: mistral
+  assistant_marker: "[/INST]"
+  generation_prompt: null
+  notes: >-
+    Mistral Instruct uses [INST]...[/INST] markers, not role/chat-node turns;
+    the tokenizer template (v0.3) must be used or SFT rendering breaks.
+special_tokens:
+  bos: <s>
+  eos: </s>
+lora_targets:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+quirks:
+  - >-
+    FS does not register this family: pass --adapter-target explicitly; FS
+    refuses automatic LoRA targeting (foundationscale.families.registry knows
+    only gemma4 and qwen3.5).
+  - "Mixtral vocab (32000) differs from Mistral-7B v0.3 (32768); tokenizer.vocab_size above follows Mistral-7B v0.3."
+  - "Mistral-7B v0.1 used sliding-window attention (window 4096); v0.3 removed it. Verify the window setting per checkpoint before long-context runs."
+provenance:
+  status: literature
+  evidence:
+    - Mistral AI model cards / config.json (mistralai/*)
+  validated_on: null

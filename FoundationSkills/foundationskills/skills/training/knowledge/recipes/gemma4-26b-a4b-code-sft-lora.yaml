@@ -1,0 +1,70 @@
+
+id: gemma4-26b-a4b-code-sft-lora
+version: 1.0.0
+title: Gemma-4 26B-A4B (MoE) code SFT (LoRA)
+index:
+  family: gemma4
+  size_b: [20.0, 30.0]
+  arch: moe
+  stage: sft
+  goal: code
+  domain: code
+  method: lora
+  hardware: [gb200-189gb]
+data:
+  format: sft
+  min_tokens: null
+  recommended_tokens: null
+  min_examples: 5000
+  recommended_examples: 100000
+  mixture:
+    code_instructions: 0.7
+    code_edits: 0.2
+    general_chat_replay: 0.1
+stages:
+  - name: sft-code-lora
+    stage: sft
+    algorithm: sft
+    hparams:
+      learning_rate: 1.0e-4
+      epochs: 2
+      lora_rank: 32
+      lora_alpha: 64
+    fs:
+      entry: foundationscale-train
+      args:
+        objective: sft
+        sharding-strategy: fsdp
+        precision: bf16
+        optimizer: adamw
+        gradient-checkpointing: true
+        adapter: lora
+        adapter-rank: 32
+        adapter-alpha: 64
+        adapter-dropout: 0.05
+        per-device-batch-size: 2
+        gradient-accumulation-steps: 8
+        learning-rate: 1.0e-4
+        lr-scheduler-type: cosine
+        warmup-steps: 100
+        max-sequence-length: 4096
+        save-interval: 500
+        logging-steps: 10
+        seed: 0
+hardware:
+  min_gpus: 2
+  gpu_mem_gb: 80
+  est_gpu_hours: 12.0
+evaluation:
+  benchmarks:
+    - humanevalplus
+    - mbpp_plus
+  success: ">= +10 points pass@1 over base on HumanEval+ with MBPP+ not regressing"
+risks:
+  - "MoE routing is not adapter-wrapped: LoRA only tunes dense projections -- watch for expert-underuse collapse on narrow code sets"
+  - "128 experts x 8 active: memory estimate must use size_b (not active_b) for weights, active_b for compute"
+provenance:
+  status: literature
+  evidence:
+    - "Hu et al. 2021, LoRA, arXiv:2106.09685"
+  validated_on: null

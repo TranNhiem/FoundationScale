@@ -1,0 +1,27 @@
+
+# REINFORCE with a learned scalar baseline: the classic policy-gradient with a
+# variance-reduction term, no clipping, no groups.
+name: reinforce_baseline
+stage: rl
+family: online
+data_format: rl
+requires: [reward_fn]
+key_hparams:
+  learning_rate:
+    default: 1.0e-6
+    range: [1.0e-6, 3.0e-6]
+    note: "unclipped policy gradient is fragile; start low"
+  baseline_decay:
+    default: 0.99
+    range: [0.9, 0.999]
+    note: "EMA decay of the scalar return baseline"
+failure_modes:
+  - symptom: "gradient variance blows up; loss spikes every few steps"
+    cause: "single-sample per-prompt returns minus a slow baseline is noisy"
+    recovery: "raise baseline_decay toward 0.999, increase batch, or switch to a group baseline (GRPO-class)"
+  - symptom: "reward hacking"
+    cause: "reward model exploitable (length, format)"
+    recovery: "audit traces; regularize with a small KL term (needs reference model)"
+fs_entry: fskills-rl
+references:
+  - "Williams 1992, Simple statistical gradient-following algorithms for connectionist reinforcement learning"

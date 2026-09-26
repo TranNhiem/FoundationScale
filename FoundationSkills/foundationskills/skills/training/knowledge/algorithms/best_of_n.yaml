@@ -1,0 +1,28 @@
+
+# Best-of-N alignment: sample N completions, rank with a reward model, take the
+# best as the alignment signal -- either pure inference-time reranking or a
+# distillation SFT set. No gradient-based policy update in the reranking case.
+name: best_of_n
+stage: rl
+family: online
+data_format: rl
+requires: [reward_fn]
+key_hparams:
+  n:
+    default: 4
+    range: [2, 16]
+    note: "samples per prompt; quality rises ~log(N) while inference cost rises linearly"
+  temperature:
+    default: 1.0
+    range: [0.7, 1.2]
+    note: "sampling temperature; diversity matters more than sharpness here"
+failure_modes:
+  - symptom: "reward model hacking at high N"
+    cause: "best-of-N is the adversarial maximiser of the reward model"
+    recovery: "ensemble rewards, audit top picks, cap N"
+  - symptom: "distilled set duplicates the base policy modes"
+    cause: "reward model agrees with the policy too strongly"
+    recovery: "raise temperature, increase N, mix with a preference or RL stage"
+fs_entry: fskills-rl
+references:
+  - "Stiennon et al. 2020, Learning to summarize from human feedback (best-of-N baseline), arXiv:2009.01325"

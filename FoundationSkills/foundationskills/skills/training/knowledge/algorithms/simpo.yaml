@@ -1,0 +1,35 @@
+
+# SimPO: reference-free preference learning with LENGTH-NORMALISED average
+# log-probabilities as implicit reward, plus a target reward margin gamma.
+name: simpo
+stage: preference
+family: preference
+data_format: preference
+requires: [pairs]
+key_hparams:
+  beta:
+    default: 2.0
+    range: [2.0, 2.5]
+    note: "reward scaling; much LARGER than DPO's 0.1 -- do not copy DPO hyperparameters over"
+  gamma:
+    default: 1.0
+    range: [0.5, 1.5]
+    note: "target reward margin between chosen and rejected; ~0.5 for hard/noisy pairs"
+  learning_rate:
+    default: 6.0e-7
+    range: [3.0e-7, 1.0e-6]
+    note: "lower than DPO; SimPO is sensitive to LR"
+  epochs:
+    default: 1
+    range: [1, 2]
+    note: "1 epoch is standard in the paper"
+failure_modes:
+  - symptom: "verbose degenerate generations even with length normalisation"
+    cause: "gamma too small; margin objective not binding"
+    recovery: "raise gamma toward 1.5 and add a max-length cap in eval"
+  - symptom: "loss wildly oscillates for large beta"
+    cause: "beta ~2.5 at DPO-style LRs amplifies logit movement"
+    recovery: "drop LR to 3e-7..6e-7 (SimPO needs a lower LR than DPO)"
+fs_entry: fskills-rl
+references:
+  - "Meng et al. 2024, SimPO: Simple Preference Optimization with a Reference-Free Reward, arXiv:2405.14734"

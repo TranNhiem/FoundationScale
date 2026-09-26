@@ -1,0 +1,213 @@
+
+# Google Gemma 4 family.
+#
+# size_b is estimated as safetensors_GB / 2 under bf16 (see MEASURED local
+# model facts); the vendor name rounds the estimate to the nearest B.
+# Every local variant was read from its on-disk config.json / safetensors.
+name: gemma4
+display_name: Google Gemma 4
+fs_family: gemma4
+model_types:
+  - gemma4
+  - gemma4_text
+  - gemma4_unified
+  - gemma4_unified_text
+modalities: [text, image, audio]
+variants:
+  - id: gemma-4-E4B
+    hf_id: null
+    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-E4B
+    size_b: 8.0      # 16.0 GB safetensors / 2 (bf16); PLE inflates the total -- see quirks; ~4B effective compute
+    active_b: 4.0
+    arch: dense
+    hidden: 2560
+    layers: 42
+    heads: 8
+    kv_heads: 2
+    head_dim: 256
+    vocab: 262144
+    context_length: 131072
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: true
+    instruct: false
+  - id: gemma-4-E4B-it
+    hf_id: null
+    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-E4B-it
+    size_b: 8.0
+    active_b: 4.0
+    arch: dense
+    hidden: 2560
+    layers: 42
+    heads: 8
+    kv_heads: 2
+    head_dim: 256
+    vocab: 262144
+    context_length: 131072
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: true
+    instruct: true
+  - id: gemma-4-12B
+    hf_id: null
+    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-12B
+    size_b: 11.95    # 23.9 GB safetensors / 2 (name says 12B); top-level model_type is gemma4_unified
+    active_b: null
+    arch: dense
+    hidden: 3840
+    layers: 48
+    heads: 16
+    kv_heads: 8
+    head_dim: 256
+    vocab: 262144
+    context_length: 262144
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: true
+    instruct: false
+  - id: gemma-4-12B-it
+    hf_id: null
+    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-12B-it
+    size_b: 11.95
+    active_b: null
+    arch: dense
+    hidden: 3840
+    layers: 48
+    heads: 16
+    kv_heads: 8
+    head_dim: 256
+    vocab: 262144
+    context_length: 262144
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: true
+    instruct: true
+  - id: gemma-4-26B-A4B
+    hf_id: null
+    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-26B-A4B
+    size_b: 25.8     # 51.6 GB safetensors / 2 (bf16)
+    active_b: 4.0    # from the A4B suffix
+    arch: moe
+    hidden: 2816
+    layers: 30
+    heads: 16
+    kv_heads: 8
+    head_dim: 256
+    vocab: 262144
+    context_length: 262144
+    num_experts: 128
+    experts_per_token: 8
+    tied_embeddings: true
+    instruct: false
+  - id: gemma-4-26b-it
+    hf_id: null
+    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-26b-it
+    size_b: 25.8
+    active_b: 4.0
+    arch: moe
+    hidden: 2816
+    layers: 30
+    heads: 16
+    kv_heads: 8
+    head_dim: 256
+    vocab: 262144
+    context_length: 262144
+    num_experts: 128
+    experts_per_token: 8
+    tied_embeddings: true
+    instruct: true
+  - id: gemma-4-31B
+    hf_id: null
+    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-31B
+    size_b: 31.25    # 62.5 GB safetensors / 2 (bf16; name says 31B)
+    active_b: null
+    arch: dense
+    hidden: 5376
+    layers: 60
+    heads: 32
+    kv_heads: 16
+    head_dim: 256
+    vocab: 262144
+    context_length: 262144
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: true
+    instruct: false
+  - id: gemma-4-31b-it
+    hf_id: null
+    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-31b-it
+    size_b: 31.25
+    active_b: null
+    arch: dense
+    hidden: 5376
+    layers: 60
+    heads: 32
+    kv_heads: 16
+    head_dim: 256
+    vocab: 262144
+    context_length: 262144
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: true
+    instruct: true
+tokenizer:
+  vocab_size: 262144
+  bos: <bos>
+  eos: <eos>
+  pad: <pad>
+chat_template:
+  source: tokenizer
+  family_tag: gemma4
+  assistant_marker: "<start_of_turn>model"
+  generation_prompt: "<start_of_turn>model\n"
+  notes: >-
+    The -it variants ship a chat_template.jinja (has_chat_template_file=true).
+    Measured: the gemma-4-12B and gemma-4-E4B BASE checkpoints carry no chat
+    template file, so SFT on those needs the Data Engine builtin renderer or an
+    explicit template.
+special_tokens:
+  bos: <bos>
+  eos: <eos>
+  pad: <pad>
+  start_of_turn: <start_of_turn>
+  end_of_turn: <end_of_turn>
+lora_targets:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+quirks:
+  - >-
+    Measured on gemma-4-31B: the vision tower carries {q,k,v,o,gate,up,down}_proj
+    as Gemma4ClippableLinear subclasses, which FS 'type(m) is Linear' adapter
+    targeting rejects; FS scopes adapters to model.language_model and excludes
+    model.vision_tower / model.audio_tower / model.embed_vision. A tower-blind
+    leaf-name matcher would crash in peft.
+  - >-
+    Interleaved attention (layer_types): sliding-window attention with window
+    1024 (512 on E4B) alternates with full_attention layers.
+  - >-
+    Logit softcapping: Gemma-family models traditionally softcap attention/final
+    logits (e.g. attn_logit_softcapping, final_logit_softcapping); verify against
+    the actual modeling code before assuming untied-transformer logit behaviour.
+  - >-
+    E4B per-layer embeddings (PLE): hidden_size_per_layer_input=256 with
+    vocab_size_per_layer_input=262144 inflates total params to ~8B while the
+    compute tower is ~4B; use active_b (not size_b) for FLOP estimates on E4B.
+  - >-
+    Tied word embeddings across all variants (tie_word_embeddings=true); the
+    embed tokens cost is amortised but weight tying interacts with adapter
+    freezing -- verify adapters never target the embed/lm_head.
+  - >-
+    Tokenizer model_max_length is a sentinel (~1e30), not a context limit; rely
+    on each variant's context_length (max_position_embeddings) instead.
+provenance:
+  status: literature
+  evidence:
+    - local config.json
+    - local safetensors byte size
+    - FS family registry (foundationscale.families.registry) for tower scoping
+  validated_on: null
