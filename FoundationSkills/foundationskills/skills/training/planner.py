@@ -306,6 +306,16 @@ def _recipe_stage_hparams(recipe_raw: dict, stage: str) -> dict:
     return {}
 
 
+def _card_requires(algorithm: str | None) -> tuple[str, ...]:
+    """The algorithm card's declared requirements (e.g. reference_model)."""
+    try:
+        card = load_algorithm_cards().get(str(algorithm)) if algorithm else None
+    except Exception:  # noqa: BLE001 - a missing card declares nothing
+        return ()
+    raw = _get(card, "raw", {}) or {} if card is not None else {}
+    return tuple(str(r) for r in (raw.get("requires") or _get(card, "requires", ()) or ()))
+
+
 def _card_default_hparams(algorithm: str | None) -> dict:
     if not algorithm:
         return {}
@@ -510,7 +520,7 @@ def plan(
 
     for sel in selected:
         stage = sel["stage"]
-        gpus_for_stage = 1 if stage == "rl" else gpus
+        gpus_for_stage = 1 if stage in ("rl", "preference") else gpus  # FS RL/Preference trainers are single-device
         assumptions: list[str] = []
         cpt: dict | None = None
         if stage == "cpt":
@@ -533,6 +543,18 @@ def plan(
         rule_choice = select_method(goal=goal_kinds[0], stage=stage, data_tokens=tokens, variant=variant,
                                     hardware=hw, gpus=gpus_for_stage, prefer=None)
         rule_method = str(_get(rule_choice, "method", "full"))
+        adapter_ok = (caps.rl_adapter_support if stage == "rl" else
+                      caps.pref_adapter_support if stage == "preference" else True)
+        if stage in ("rl", "preference") and rule_method in ("lora", "qlora") and adapter_ok is not True:
+            # FS's RL/Preference trainers have no adapter fields: they train the full
+            # model (masters/optimizer on host). Planning LoRA there would be fiction.
+            decide("method", f"{stage}: full (FS trainer has no adapter support)",
+                   f"rules preferred {rule_method}, but FS {'RLTrainer' if stage == 'rl' else 'PreferenceTrainer'} "
+                   f"config declares no adapter/LoRA field (measured): the full model trains, fp32 masters and "
+                   f"optimizer state on the host")
+            rule_choice = {"method": "full", "because": [f"FS {stage} trainer supports full fine-tuning only"],
+                           "alternatives": []}
+            rule_method = "full"
         query = RecipeQuery(
             family=_get(family, "name"),
             size_b=float(_get(variant, "size_b", 0.0) or 0.0),
@@ -591,7 +613,15 @@ def plan(
 
         # hparams: card defaults <- recipe stage hparams <- cpt policy overlay
         hparams = _card_default_hparams(algorithm)
-        hparams.update(_recipe_stage_hparams(recipe_raw, stage))
+        recipe_stage_algo = next((st.get("algorithm") for st in (recipe_raw.get("stages") or [])
+                                  if isinstance(st, dict) and st.get("stage") == stage), None)
+        if recipe_raw and recipe_stage_algo not in (None, algorithm):
+            # hparams like beta/lr are algorithm-specific (DPO beta 0.1 vs SimPO ~2.0):
+            # a recipe written for another algorithm contributes none of them
+            provenance_notes.append(f"stage {stage}: recipe {recipe_id} is for {recipe_stage_algo}, not {algorithm}; "
+                                    f"its hparams are NOT applied (algorithm-card defaults used)")
+        else:
+            hparams.update(_recipe_stage_hparams(recipe_raw, stage))
         if cpt is not None:
             hparams.update(
                 {
@@ -643,6 +673,8 @@ def plan(
             sharding=sharding if sharding in ("ddp", "fsdp") else "fsdp",
             grad_ckpt=grad_ckpt,
             world=gpus_for_stage,
+            reference_copy=(stage == "preference" and "reference_model" in _card_requires(algorithm)),
+            optimizer="host_adamw" if stage in ("rl", "preference") else "adamw",
         )
         time_kwargs: dict[str, Any] = {"tokens": tokens, "hardware": hw, "gpus": gpus_for_stage, "method": method,
                                        "stage": stage, "sharding": sharding, "micro_batch": micro_batch,

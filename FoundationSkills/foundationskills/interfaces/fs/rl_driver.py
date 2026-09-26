@@ -38,7 +38,13 @@ _RL_FIELDS: frozenset[str] = frozenset(
         "prompts_per_step", "seed", "device",
     }
 )
-_FSKILLS_FIELDS: frozenset[str] = frozenset({"output_dir", "save_final"})
+_FSKILLS_FIELDS: frozenset[str] = frozenset({"output_dir", "save_final", "trainer"})
+# trainer kind -> (module, trainer class, config class). "preference" is FS's
+# offline PreferenceTrainer (dpo/ipo/kto/orpo/simpo/cpo; main e17c1b2).
+_TRAINERS: dict[str, tuple[str, str, str]] = {
+    "rl": ("foundationscale.rl.trainer", "RLTrainer", "RLTrainConfig"),
+    "preference": ("foundationscale.rl.preference_trainer", "PreferenceTrainer", "PreferenceTrainConfig"),
+}
 
 
 def _line(status: str, reason: str) -> None:
@@ -148,11 +154,36 @@ def main(argv: list[str] | None = None) -> int:
         return 96
     config: dict[str, Any] = raw
 
-    try:
-        from foundationscale.rl.trainer import RLTrainConfig, RLTrainer, TrainerRefusal
-    except Exception as exc:
-        _line("refuse", f"missing module foundationscale.rl.trainer: {type(exc).__name__}: {exc}")
+    kind = str(config.get("trainer", "rl"))
+    if kind not in _TRAINERS:
+        _line("refuse", f"unknown trainer {kind!r} (known: {', '.join(sorted(_TRAINERS))})")
         return 96
+    module_name, trainer_name, config_name = _TRAINERS[kind]
+    try:
+        import importlib
+
+        module = importlib.import_module(module_name)
+        RLTrainer = getattr(module, trainer_name)  # noqa: N806 - the bound FS trainer class
+        RLTrainConfig = getattr(module, config_name)  # noqa: N806
+        from foundationscale.rl.trainer import TrainerRefusal
+    except Exception as exc:
+        _line("refuse", f"missing FS trainer {module_name}.{trainer_name}: {type(exc).__name__}: {exc}")
+        return 96
+    if kind == "preference":
+        # FS's PreferenceTrainer reads ONE JSONL file; the Data Engine writes a
+        # shard directory. Concatenate in shard order (a pure copy, no rewrite).
+        dataset = Path(str(config.get("dataset", "")))
+        if dataset.is_dir():
+            shards = sorted(dataset.glob("*.jsonl"))
+            if not shards:
+                _line("refuse", f"dataset directory {dataset} holds no .jsonl shards")
+                return 96
+            merged = Path(str(config.get("output_dir", "."))) / "pairs.jsonl"
+            merged.parent.mkdir(parents=True, exist_ok=True)
+            with merged.open("w", encoding="utf-8") as out:
+                for shard in shards:
+                    out.write(shard.read_text(encoding="utf-8"))
+            config = {**config, "dataset": str(merged)}
 
     rl_fields = rl_config_fields(RLTrainConfig)
     unknown = sorted(set(config) - rl_fields - _FSKILLS_FIELDS)
@@ -171,6 +202,10 @@ def main(argv: list[str] | None = None) -> int:
         _line("refuse", f"config could not be bound to RLTrainConfig: {type(exc).__name__}: {exc}")
         return 96
 
+    if args.dry_run and kind == "preference":
+        # construction already validated algorithm, knobs and family (no model load)
+        _line("pass", f"dry-run: preference algorithm {rl_config.algorithm!r} accepted by FS PreferenceTrainer")
+        return 0
     if args.dry_run:
         try:
             trainer._resolve_objective()
@@ -218,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     max_steps = int(getattr(rl_config, "max_steps", measured))
     unmeasured = max(0, max_steps - measured)
 
-    _write_json(output_dir / "rl_reports.json", {"reports": [_report_to_dict(r) for r in reports]})
+    _write_json(output_dir / f"{kind}_reports.json", {"reports": [_report_to_dict(r) for r in reports]})
 
     manifest: dict[str, Any] = {
         "config": config,
@@ -248,23 +283,23 @@ def main(argv: list[str] | None = None) -> int:
             tokenizer.save_pretrained(str(final_dir))
         checkpoint_status = f"saved: {final_dir}"
     else:
-        checkpoint_status = "checkpoint: UNMEASURED (RLTrainer exposes no model)"
+        checkpoint_status = f"checkpoint: UNMEASURED ({trainer_name} exposes no model)"
     manifest["checkpoint"] = checkpoint_status
 
     save_final = bool(config.get("save_final", False))
     if measured == 0:
         manifest["status"] = "UNMEASURED: 0 measured steps"
-        _write_json(output_dir / "fskills_rl_manifest.json", manifest)
+        _write_json(output_dir / f"fskills_{kind}_manifest.json", manifest)
         _line("unmeasured", f"0 of {max_steps} step(s) produced a measurable update; a run that trained nothing is not a pass")
         return 95
     if save_final and model_obj is None:
         manifest["status"] = "UNMEASURED: save_final requested but no model attribute is exposed"
-        _write_json(output_dir / "fskills_rl_manifest.json", manifest)
+        _write_json(output_dir / f"fskills_{kind}_manifest.json", manifest)
         _line("unmeasured", checkpoint_status + "; save_final was required")
         return 95
 
     manifest["status"] = "PASS"
-    _write_json(output_dir / "fskills_rl_manifest.json", manifest)
+    _write_json(output_dir / f"fskills_{kind}_manifest.json", manifest)
     _line("pass", f"{measured} measured step(s) ({unmeasured} unmeasured); {checkpoint_status}")
     return 0
 

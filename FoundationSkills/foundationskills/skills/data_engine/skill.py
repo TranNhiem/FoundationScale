@@ -165,26 +165,24 @@ class DataEngineSkill(BaseSkill):
 
         if effective_target == "preference":
             caps = getattr(ctx, "capabilities", None)
-            if caps is None or not getattr(caps, "rl_runnable", None):
-                detail = "FS capabilities were not probed for this run"
-            else:
-                runnable = [
-                    a for a in _PREFERENCE_ALGOS if caps.rl_runnable.get(a) is None and a in caps.rl_runnable
-                ]
-                detail = (
-                    "no preference algorithm is runnable on the probed FS"
-                    if not runnable
-                    else f"runnable preference algorithms on probed FS: {runnable}"
+            runnable: list[str] = []
+            if caps is not None and hasattr(caps, "check"):
+                # ask the measured preference plane (FS PreferenceTrainer since main
+                # e17c1b2), not the RL loop, which refuses the preference family
+                runnable = [a for a in _PREFERENCE_ALGOS
+                            if caps.check("preference", algorithm=a, require_checkpoint=False) is None]
+            if not runnable:
+                detail = ("FS capabilities were not probed for this run" if caps is None
+                          else "no preference algorithm is runnable on the probed FS")
+                findings.append(
+                    self.finding(
+                        "DE-IN-006",
+                        f"preference dataset requested; the measured FS cannot train the preference family ({detail}). "
+                        "The dataset is still useful later, but not trainable on the installed FS.",
+                        {"capabilities": detail},
+                        "train SFT now and convert to an RL stage with verifiable rewards, or upgrade FS",
+                    )
                 )
-            findings.append(
-                self.finding(
-                    "DE-IN-006",
-                    "preference dataset requested; the measured FS preference family is not trainable "
-                    f"({detail}). The dataset is still useful later, but not trainable on the installed FS.",
-                    {"capabilities": detail},
-                    "train SFT now and convert to an RL stage with verifiable rewards, or run preference training outside FS",
-                )
-            )
         return findings
 
     # ---- run ---------------------------------------------------------------

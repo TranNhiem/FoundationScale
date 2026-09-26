@@ -32,6 +32,7 @@ Scope: FoundationSkills against FoundationScale `origin/main` 77bfa65 (plus this
 | Recipe `gemma4-e4b-general-chat-sft-lora` (exact recipe config: FSDP×4, b4, ga8, adamw_torch_fused, 30 steps) | **`fskills launch`** | **PASS**; save gates 4/4; run `recipe-sft-3df648c2`, commit `f4643a7` | 75.9 GB/GPU; 55.0 model-TF/s/GPU (MFU 3.7% measured by FS). **Recipe promoted to `validated`** (scope: execution) |
 | Gemma-4 **26B-A4B MoE** LoRA SFT, FSDP×4 | `fskills launch` | **RED 5** from FoundationScale: `Could not find the transformer layer class to wrap in the model` | new measured core gap: FS's FSDP cannot wrap Gemma-4 MoE layers |
 | Gemma-4 **26B-A4B MoE** LoRA SFT, **DDP**×4 (planner now switches automatically), recipe `gemma4-26b-a4b-code-sft-lora`, 20 steps | **`fskills launch`** (r04dgx03) | **PASS**; save gates 4/4; run `moe-sft-531c2296`. **Recipe promoted to `validated`** | 83.3 GB/GPU vs 94.3 GB planned (+13%); ~1,507 tokens/s/GPU = **1.6% MFU** (LoRA convention). The previous MoE MFU of 15% was a guess, about 9× optimistic. FoundationScale reports MFU as UNMEASURED because Gemma-4 names experts-per-token `top_k_experts` (#529) |
+| **Preference (SimPO)** on Gemma-4 E4B-it over 12,857 Intel/orca_dpo_pairs pairs (Data Engine PASS), FS `PreferenceTrainer` (main e17c1b2) | **`fskills launch --measurement-only`** (r04dgx03, 1 GPU) | **10/10 steps measured** (real SimPO loss, accuracy and margin); exit 95 only because a final save was required. Measurement specs now set `save_final=false` | FS confirmed the plan: "SimPOLoss is reference-free; no second model was loaded" and `MasterWeightOptimizer(host-fp32)` |
 | `fskills-rl` Dr.GRPO, E4B base | driver | **REFUSED 96**: base checkpoint has no chat template | expected; this is why stage chaining exists (F4) |
 | `fskills-rl` Dr.GRPO, E4B-it, ARC-Easy MCQ, 6 steps | driver | **UNMEASURED 95**: rewards saturated on 5 of 6 steps; no checkpoint (FoundationScale saves none) | the RL loop runs on GB200: generation, scoring, advantages |
 
@@ -84,13 +85,14 @@ Megatron-specific lessons are kept there for a future Megatron backend.
 
 1. RL checkpoint persistence: `RLTrainer.run()` keeps the policy in a local variable.
 2. RL reward beyond single-letter multiple-choice: free-form, numeric and `\boxed{}` answers.
-3. The preference family (DPO/IPO/KTO/ORPO/SimPO/CPO) and the online family are not wired to RLTrainer.
+3. ~~Preference family not wired~~ **Closed by main e17c1b2** (`PreferenceTrainer`: dpo/ipo/kto/orpo/simpo/cpo, measured by the probe and validated here). The online family (online_dpo, iterative_dpo, raft, best_of_n) is still not runnable.
 4. Multi-GPU RL.
 5. A reference-policy path (grpo/ppo with `kl_weight ≠ 0`).
 6. Assistant-only loss masking for SFT.
 7. PP/EP execution; no Megatron backend.
 8. A dedicated pretrain/CPT objective, and a minimum-LR floor for cosine schedules.
 9. FSDP auto-wrap for Gemma-4 MoE (26B-A4B): refused with "Could not find the transformer layer class to wrap".
+11. Neither `RLTrainer` nor `PreferenceTrainer` accepts LoRA/adapters (no config field; measured): RL and preference stages train the full model on one GPU (fp32 masters on the host). `PreferenceTrainer` also persists no checkpoint, and reads one JSONL file (the driver concatenates shards).
 10. MoE MFU for Gemma-4: FS reads experts-per-token only from `num_experts_per_tok`, `num_experts_per_token` or `top_k`; Gemma-4 uses `top_k_experts` (#529).
 
 The skills report each of these as `missing: ...` in plans and specs. They are never silently skipped.

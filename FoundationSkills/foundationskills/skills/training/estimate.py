@@ -111,6 +111,10 @@ def tokens_per_step(micro_batch: int, seq_len: int, grad_accum: int, dp: int) ->
 
 def _optimizer_bytes_per_param(optimizer: str, assumptions: list[str]) -> float:
     name = optimizer.lower()
+    if name.startswith("host"):
+        assumptions.append("optimizer state on HOST: fp32 masters + moments live in CPU memory "
+                           "(FS MasterWeightOptimizer), 0 GPU bytes/param")
+        return 0.0
     if "adam" in name:
         return 12.0  # fp32 master weights + m + v
     if name.startswith("sgd"):
@@ -134,6 +138,7 @@ def estimate_memory(
     optimizer: str = "adamw",
     lora_rank: int = 16,
     attn: str = "sdpa",
+    reference_copy: bool = False,
 ) -> MemoryEstimate:
     """Per-GPU memory estimate for one training configuration."""
     if method not in {"full", "lora", "qlora"}:
@@ -176,6 +181,11 @@ def estimate_memory(
             f"trainable {p:,} params (rank={lora_rank}, 7 targets/layer, intermediate≈4*hidden) at 16 bytes/param"
         )
 
+    if reference_copy:
+        # DPO/IPO/KTO: FS PreferenceTrainer loads a frozen bf16 copy of the initial
+        # policy on the same device (reference-free SimPO/ORPO/CPO do not).
+        weights_b += 2.0 * n
+        assumptions.append("reference model: frozen bf16 copy of the policy, +2 bytes/param (dpo/ipo/kto)")
     weights_gb = weights_b / state_div / GB
     grads_gb = grads_b / state_div / GB
     optimizer_gb = optim_b / state_div / GB

@@ -62,6 +62,19 @@ def launch(
             missing = spec.get("missing") or "spec.executable is not true (no positive evidence of executability)"
             raise LaunchRefused(f"launch refused: {missing}")
 
+    # The fskills-rl driver reads its config from disk; the spec carries it inline.
+    # Write it where argv points BEFORE the dry-run (a launch never wrote it, so
+    # every RL/preference launch would have failed on a missing file).
+    if isinstance(spec.get("rl_config"), dict):
+        argv_list = [str(a) for a in (spec.get("argv") or [])]
+        if "--config" in argv_list and argv_list.index("--config") + 1 < len(argv_list):
+            import json as _json
+
+            config_path = Path(argv_list[argv_list.index("--config") + 1])
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = config_path.with_name(f".{config_path.name}.tmp")
+            tmp.write_text(_json.dumps(spec["rl_config"], indent=1, sort_keys=True), encoding="utf-8")
+            tmp.replace(config_path)
     dry_run_rc: int | None = None
     dry_run_argv = spec.get("dry_run_argv")
     if dry_run_argv:

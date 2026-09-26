@@ -37,7 +37,7 @@ rules:
     action: add_stage
     stage: preference
     algorithm_hint: dpo
-    because: "paired preference data exists; note FS does not run the preference family today -- the planner will either refuse this stage or redirect to an RL stage with verifiable rewards."
+    because: "paired preference data exists: a preference stage aligns responses to it (the planner asks FS which preference algorithms run; reference-free SimPO is the measured default)"
   - id: order-sft-before-post
     when: {has_instructions: true}
     action: order

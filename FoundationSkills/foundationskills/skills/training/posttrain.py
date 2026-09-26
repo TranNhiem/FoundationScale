@@ -101,7 +101,7 @@ def select_posttrain_stages(goal: Any, data_facts: dict, caps: Any) -> list[dict
                 "stage": "preference",
                 "name": "preference",
                 "because": "preference pairs without verifiable answers: the preference family is the ask (likely non-executable on FS today)",
-                "requested_algorithm": str(facts.get("requested_preference_algorithm") or "dpo"),
+                "requested_algorithm": str(facts.get("requested_preference_algorithm") or "simpo"),
             }
         )
     if has_answers:
@@ -160,24 +160,28 @@ def select_algorithm(stage: str, goal: Any, data_facts: dict, caps: Any) -> dict
         }
 
     if stage == "preference":
-        requested = str(facts.get("requested_preference_algorithm") or "dpo")
+        explicit = facts.get("requested_preference_algorithm")
+        # Default SimPO: reference-free (no frozen copy -> half the memory), and the
+        # measured winner on both estates -- FS main e17c1b2 (Qwen2.5-7B, GB200,
+        # held-out MCQ 0.630 -> simpo 0.720, dpo 0.700, kto 0.720; orpo/cpo
+        # REGRESS) and FoxBrain ODPO on Gemma-4 (sigmoid DPO diverged on
+        # chosen/rejected length imbalance; SimPO beta=2.0 stable).
+        requested = str(explicit or "simpo")
         missing = caps.check("preference", algorithm=requested, require_checkpoint=False)
+        if missing is None:
+            because = (f"{requested} {'requested' if explicit else 'chosen (default)'}: runs on FS PreferenceTrainer"
+                       + ("" if explicit else "; reference-free SimPO measured best-or-tied (FS e17c1b2: +9 pts "
+                          "held-out MCQ on Qwen2.5-7B; FoxBrain: stable on Gemma-4 where sigmoid DPO diverged)"))
+            if requested in ("orpo", "cpo"):
+                because += "; WARNING: orpo/cpo regressed in FS's own measurement (NLL term lengthens outputs)"
+            return {"algorithm": requested, "because": because, "runnable": True, "fallback": None, "missing": None}
         has_answers = bool(facts.get("has_verifiable_answers"))
         rl_fallback = _first_runnable_rl(caps) if has_answers else None
-        because = (
-            f"{requested} requested; FS's preference/online family is 'not wired to this loop' on the installed FS"
-        )
+        because = f"{requested} requested but the installed FS cannot run it ({missing})"
         if rl_fallback is not None:
-            because += f"; proposed (a): run an RL stage with verifiable rewards instead ({rl_fallback})"
-        else:
-            because += "; proposed (b): keep a non-executable DPO stage with `missing` set until FS wires the preference loop"
-        return {
-            "algorithm": requested,
-            "because": because,
-            "runnable": missing is None,
-            "fallback": rl_fallback,
-            "missing": missing if missing is not None else None if rl_fallback is None else f"preference family not wired; RL fallback {rl_fallback} preferred",
-        }
+            because += f"; proposed: an RL stage with verifiable rewards instead ({rl_fallback})"
+        return {"algorithm": requested, "because": because, "runnable": False, "fallback": rl_fallback,
+                "missing": missing}
 
     return {
         "algorithm": None,
