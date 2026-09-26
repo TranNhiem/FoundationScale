@@ -516,7 +516,8 @@ def test_master_weights_forced_choice_is_selected_and_announced(
     dataset = _dataset(tmp_path, [_mcq_record("a"), _mcq_record("b")])
     _patch_surface_and_model(monkeypatch, tmp_path)
     monkeypatch.setattr(RLTrainer, "_one_step", lambda self, **kw: None)
-    with pytest.raises(trainer_mod.TrainerRefusal, match="vacuous"):  # every stubbed step UNMEASURED
+    # every stubbed step is UNMEASURED, so main refuses the run as vacuous
+    with pytest.raises(trainer_mod.TrainerRefusal, match="vacuous"):
         RLTrainer(config=_cfg(dataset=dataset, master_weights=True)).run()
     assert "forced by config master_weights=True" in capsys.readouterr().err
 
@@ -553,6 +554,7 @@ def test_master_weights_auto_selected_for_bf16_params(
 
     monkeypatch.setattr(transformers, "AutoModelForCausalLM", _Bf16Auto)
     monkeypatch.setattr(RLTrainer, "_one_step", lambda self, **kw: None)
-    with pytest.raises(trainer_mod.TrainerRefusal, match="vacuous"):  # every stubbed step UNMEASURED
+    # every stubbed step is UNMEASURED, so main refuses the run as vacuous
+    with pytest.raises(trainer_mod.TrainerRefusal, match="vacuous"):
         RLTrainer(config=_cfg(dataset=dataset)).run()
     assert "MasterWeightOptimizer" in capsys.readouterr().err
