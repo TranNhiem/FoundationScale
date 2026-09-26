@@ -68,7 +68,7 @@ def test_preference_without_answers_stays_non_executable() -> None:
     sel = select_algorithm("preference", {}, {"has_pairs": True}, _fake_caps())
     assert sel["runnable"] is False
     assert sel["fallback"] is None
-    assert "non-executable DPO stage" in sel["because"]
+    assert "cannot run it" in sel["because"]
     assert sel["missing"]
 
 

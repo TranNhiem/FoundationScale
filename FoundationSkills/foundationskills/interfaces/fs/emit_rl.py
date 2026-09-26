@@ -88,7 +88,19 @@ def emit_rl(
     # plus the aliases. Everything else is reported, never silently lost.
     from foundationskills.interfaces.fs.rl_driver import rl_config_fields
 
-    fields = rl_config_fields()
+    kind = "preference" if str(stage.get("stage")) == "preference" else "rl"
+    if kind == "preference":
+        try:
+            from foundationscale.rl.preference_trainer import PreferenceTrainConfig  # type: ignore
+
+            fields = rl_config_fields(PreferenceTrainConfig)
+        except Exception:  # noqa: BLE001 - older FS without the preference plane
+            fields = frozenset()
+            missing.append("missing: FS PreferenceTrainer (foundationscale.rl.preference_trainer)")
+        rl_config["trainer"] = "preference"
+        rl_config.pop("gold_key", None)  # preference records carry prompt/chosen/rejected, not a gold
+    else:
+        fields = rl_config_fields()
     for key, value in hparams.items():
         if value is None or key == "gold_key":
             continue
@@ -106,15 +118,24 @@ def emit_rl(
 
     # Data Engine rl datasets are MCQ-letter by construction (format drops the rest).
     answer_kind = "mcq_letter" if str(dataset.get("format")) == "rl" else None
-    check_reason = caps.check("rl", algorithm=algorithm, answer_kind=answer_kind)
+    check_stage = "preference" if rl_config.get("trainer") == "preference" else "rl"
+    check_reason = caps.check(check_stage, algorithm=algorithm, answer_kind=answer_kind)
     if check_reason is not None:
         missing.append(check_reason)
     # FS RL persists no checkpoint today: the stage cannot hand off, but an
     # operator may still run it to MEASURE (rewards, advantages, throughput).
-    measurement_only_ok = caps.check("rl", algorithm=algorithm, answer_kind=answer_kind,
+    measurement_only_ok = caps.check(check_stage, algorithm=algorithm, answer_kind=answer_kind,
                                      require_checkpoint=False) is None and bool(data_path)
+    if measurement_only_ok and missing:
+        # The only gap is the hand-off: a measurement run cannot save, so it must not
+        # REQUIRE a save (every such run would read UNMEASURED). The driver still
+        # records "checkpoint: UNMEASURED" in its manifest.
+        rl_config["save_final"] = False
+        notes.append("measurement-only: save_final=false (FS trainer persists no policy)")
 
-    argv = ["fskills-rl", "--config", f"{output_dir}/rl_config.json"]
+    # `python -m` works whether or not the fskills-rl console script is installed
+    # (a real launch failed with "No such file or directory: 'fskills-rl'").
+    argv = ["python", "-m", "foundationskills.interfaces.fs.rl_driver", "--config", f"{output_dir}/rl_config.json"]
     expected_outputs = [
         f"{output_dir}/rl_reports.json",
         f"{output_dir}/fskills_rl_manifest.json",

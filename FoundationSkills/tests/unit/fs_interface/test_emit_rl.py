@@ -55,7 +55,9 @@ def test_runnable_algorithm_config_and_argv(tmp_path):
     assert spec["executable"] is True
     assert spec["missing"] is None
     assert spec["entry"] == "fskills-rl"
-    assert spec["argv"] == ["fskills-rl", "--config", f"{tmp_path}/out/rl_config.json"]
+    # python -m works whether or not the console script is installed (measured launch failure)
+    assert spec["argv"] == ["python", "-m", "foundationskills.interfaces.fs.rl_driver", "--config",
+                            f"{tmp_path}/out/rl_config.json"]
     assert spec["dry_run_argv"] == spec["argv"] + ["--dry-run"]
 
     cfg = spec["rl_config"]

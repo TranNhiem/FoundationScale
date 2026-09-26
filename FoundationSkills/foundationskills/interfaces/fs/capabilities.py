@@ -40,6 +40,15 @@ class FSCapabilities:
     rl_reward_kinds: tuple[str, ...] = ()
     # Whether RLTrainer persists the trained policy (77bfa65: False); None = unmeasured
     rl_saves_checkpoint: bool | None = None
+    # FS's offline PreferenceTrainer (main e17c1b2): name -> None when it accepts
+    # the algorithm, else its refusal. Empty = no PreferenceTrainer (older FS).
+    pref_runnable: dict[str, str | None] = field(default_factory=dict)
+    pref_saves_checkpoint: bool | None = None
+    # Whether FS's RL / Preference trainers accept LoRA adapters (measured from
+    # their config fields; 77bfa65..e17c1b2: neither does -- they train the
+    # full model, fp32 masters + optimizer state on the HOST).
+    rl_adapter_support: bool | None = None
+    pref_adapter_support: bool | None = None
     notes: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
 
@@ -81,6 +90,19 @@ class FSCapabilities:
         if stage in {"pretrain", "cpt", "sft"} and "sft" not in objectives:
             opts = ", ".join(self.train_objectives) or "<none>"
             return f"missing: sft objective support for stage {stage} (installed FS objectives: {opts})"
+        if stage == "preference" and self.pref_runnable:
+            if not algorithm:
+                return "missing: algorithm for stage preference"
+            if algorithm not in self.pref_runnable:
+                return f"missing: preference algorithm {algorithm} (FS PreferenceTrainer knows: {', '.join(sorted(self.pref_runnable))})"
+            reason = self.pref_runnable[algorithm]
+            if reason is not None:
+                runs = ", ".join(sorted(a for a, r in self.pref_runnable.items() if r is None))
+                return f"missing: FS PreferenceTrainer refuses {algorithm} ({reason[:160]}); runnable: {runs}"
+            if require_checkpoint and self.pref_saves_checkpoint is not True:
+                why = "unmeasured" if self.pref_saves_checkpoint is None else "does not persist the trained policy (no checkpoint)"
+                return f"missing: FS PreferenceTrainer {why}"
+            return None  # offline, single-device: backend/axes do not apply
         if stage in {"preference", "rl"}:
             if not algorithm:
                 return f"missing: algorithm for stage {stage}"
@@ -248,6 +270,49 @@ def _probe_rl_rewards(errors: list[str]) -> tuple[tuple[str, ...], bool | None]:
     return tuple(kinds), saves
 
 
+def _probe_adapter_support() -> tuple[bool | None, bool | None]:
+    """An FS trainer supports adapters only if its config can declare one."""
+    import dataclasses
+
+    def has_adapter(module: str, cls: str) -> bool | None:
+        try:
+            config = getattr(__import__(module, fromlist=[cls]), cls)
+            names = {f.name.lower() for f in dataclasses.fields(config)}
+        except Exception:  # noqa: BLE001
+            return None
+        return any(k in n for n in names for k in ("adapter", "lora", "peft"))
+
+    return (has_adapter("foundationscale.rl.trainer", "RLTrainConfig"),
+            has_adapter("foundationscale.rl.preference_trainer", "PreferenceTrainConfig"))
+
+
+def _probe_preference(names: tuple[str, ...], errors: list[str]) -> tuple[dict[str, str | None], bool | None]:
+    """Behavioural: construct FS's PreferenceTrainer per algorithm (its __init__
+    validates family/knobs without loading a model); read its source for a save."""
+    try:
+        import inspect
+
+        from foundationscale.rl.preference_trainer import PreferenceTrainConfig, PreferenceTrainer  # type: ignore
+        from foundationscale.rl.trainer import TrainerRefusal  # type: ignore
+    except Exception:  # noqa: BLE001 - an older FS without the preference plane
+        return {}, None
+    out: dict[str, str | None] = {}
+    for name in names:
+        try:
+            PreferenceTrainer(PreferenceTrainConfig(model="probe/none", dataset="probe.jsonl", algorithm=name))
+            out[name] = None
+        except TrainerRefusal as exc:
+            out[name] = str(exc)
+        except Exception as exc:  # noqa: BLE001 - not a refusal: unmeasured
+            errors.append(f"preference runnability of {name} unmeasured: {type(exc).__name__}: {exc}")
+    try:
+        src = inspect.getsource(PreferenceTrainer)
+        saves: bool | None = "save_pretrained" in src or ".save(" in src
+    except Exception:  # noqa: BLE001
+        saves = None
+    return out, saves
+
+
 def _probe_cli(notes: list[str], errors: list[str]) -> tuple[frozenset[str], tuple[str, ...]]:
     try:
         from foundationscale.train import cli  # type: ignore
@@ -371,12 +436,18 @@ def probe(deep: bool = False, python: str | None = None) -> FSCapabilities:
     rl_runnable: dict[str, str | None] = {}
     rl_reward_kinds: tuple[str, ...] = ()
     rl_saves_checkpoint: bool | None = None
+    pref_runnable: dict[str, str | None] = {}
+    pref_saves_checkpoint: bool | None = None
+    rl_adapter_support: bool | None = None
+    pref_adapter_support: bool | None = None
     try:
         from foundationscale.rl.registry import available_algorithm_names  # type: ignore
 
         rl_algorithms = _str_tuple(tuple(available_algorithm_names()))
         rl_runnable = _probe_rl_runnable(rl_algorithms, errors)
         rl_reward_kinds, rl_saves_checkpoint = _probe_rl_rewards(errors)
+        pref_runnable, pref_saves_checkpoint = _probe_preference(rl_algorithms, errors)
+        rl_adapter_support, pref_adapter_support = _probe_adapter_support()
     except Exception as exc:
         errors.append(f"RL registry probe failed: {type(exc).__name__}: {exc}")
 
@@ -409,6 +480,10 @@ def probe(deep: bool = False, python: str | None = None) -> FSCapabilities:
         train_flag_choices=_probe_flag_choices(errors),
         rl_reward_kinds=rl_reward_kinds,
         rl_saves_checkpoint=rl_saves_checkpoint,
+        pref_runnable=pref_runnable,
+        pref_saves_checkpoint=pref_saves_checkpoint,
+        rl_adapter_support=rl_adapter_support,
+        pref_adapter_support=pref_adapter_support,
         notes=tuple(notes),
         errors=tuple(errors),
     )

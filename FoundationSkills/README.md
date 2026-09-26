@@ -84,8 +84,8 @@ docs/              ARCHITECTURE, RECIPES, WALKTHROUGH (reference scenario), VALI
   - memory estimates within 15% of measured values;
   - `fskills-rl` running Dr.GRPO.
 - **Honest limits of the installed FoundationScale** (measured; the skills report them rather than hide them):
-  - RL rewards only single-letter multiple-choice gold and saves no checkpoint;
-  - the preference family is not wired to RL;
+  - RL rewards only single-letter multiple-choice gold;
+  - RL and the new preference trainer (DPO/IPO/KTO/ORPO/SimPO/CPO) save no checkpoint and have no LoRA support;
   - SFT uses full-sequence loss;
   - PP/EP are refused;
   - there is no Megatron backend.

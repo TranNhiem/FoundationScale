@@ -486,3 +486,47 @@ def test_generation_prompt_parity_inserts_the_inference_suffix():
     out, status = align_with_generation_prompt(msgs, text, Tok())
     assert status == "inserted" and out.endswith("<|turn>model\n<|channel>thought\n<channel|>A<turn|>\n")
     assert align_with_generation_prompt(msgs, text, None)[1] == "no_tokenizer"
+
+
+def test_preference_plane_measured_and_planned():
+    """FS main e17c1b2 added PreferenceTrainer (dpo/ipo/kto/orpo/simpo/cpo). The
+    probe measures it behaviourally; preference stages route to fskills-rl with
+    trainer=preference; the default is SimPO; no checkpoint -> measurement-only."""
+    from foundationskills.interfaces.fs.capabilities import probe
+    from foundationskills.interfaces.fs.emit_rl import emit_rl
+    from foundationskills.skills.training.posttrain import select_algorithm
+    c = probe()
+    if not c.pref_runnable:  # an FS without the preference plane: nothing to measure
+        assert c.check("preference", algorithm="simpo", require_checkpoint=False) is not None
+        return
+    assert {a for a, r in c.pref_runnable.items() if r is None} == {"dpo", "ipo", "kto", "orpo", "simpo", "cpo"}
+    sel = select_algorithm("preference", "general_chat", {"has_pairs": True}, c)
+    assert sel["algorithm"] == "simpo" and sel["runnable"]
+    spec = emit_rl({"name": "pref", "stage": "preference", "algorithm": "simpo", "hparams": {"beta": 2.0}},
+                   dataset={"format": "preference", "shards": [{"path": "/d/shards/s.jsonl"}], "fs_columns": {}},
+                   model="/m", output_dir="/o", caps=c, run_name="pref")
+    cfg = spec["rl_config"]
+    assert cfg["trainer"] == "preference" and cfg["beta"] == 2.0 and "gold_key" not in cfg
+    if c.pref_saves_checkpoint is not True:
+        assert spec["executable"] is False and "PreferenceTrainer" in spec["missing"] and spec["measurement_only_ok"]
+
+
+def test_launch_writes_the_driver_config_and_uses_python_m(tmp_path):
+    """GB200: an RL/preference launch failed on the uninstalled console script, and
+    the launcher never wrote rl_config.json, so it would have failed anyway."""
+    from foundationskills.core import plan_hash
+    from foundationskills.interfaces.fs.emit_rl import emit_rl
+    from foundationskills.interfaces.fs.launch import launch
+    spec = emit_rl({"name": "rl", "stage": "rl", "algorithm": "dr_grpo", "hparams": {}},
+                   dataset={"format": "rl", "shards": [{"path": f"{tmp_path}/shards/s.jsonl"}],
+                            "fs_columns": {"gold_key": "answer"}},
+                   model="/m", output_dir=str(tmp_path / "out"), caps=caps(), run_name="rl")
+    assert spec["argv"][:3] == ["python", "-m", "foundationskills.interfaces.fs.rl_driver"]
+    calls = []
+
+    def runner(argv, **kw):
+        calls.append(argv)
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    launch(spec, confirm=plan_hash(spec), submit=False, runner=runner, measurement_only=True)
+    written = json.loads((tmp_path / "out" / "rl_config.json").read_text())
+    assert written["algorithm"] == "dr_grpo" and written["model"] == "/m"

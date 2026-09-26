@@ -203,7 +203,7 @@ class TrainingEmitSkill(BaseSkill):
                                      f"(FS writes adapter-only checkpoints; future merging skill)")
                 stage_model = f"{previous['output_dir']}/final"
 
-            if str(stage.get("stage")) == "rl":
+            if str(stage.get("stage")) in ("rl", "preference"):  # FS RLTrainer / PreferenceTrainer via fskills-rl
                 spec = emit_rl(
                     stage, dataset=dataset, model=stage_model, output_dir=output_dir,
                     caps=caps, run_name=run_name,
