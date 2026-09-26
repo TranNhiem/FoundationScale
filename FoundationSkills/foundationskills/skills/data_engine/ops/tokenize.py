@@ -295,7 +295,7 @@ def _tokenize_records(records: Iterable[dict], cfg: dict, stats: OpStats) -> Ite
 
 _CONFIG_SCHEMA = {
     "type": "object",
-    "additionalProperties": True,
+    "additionalProperties": False,  # unknown keys refused: a silently ignored key measures nothing
     "properties": {
         "tokenizer": {"type": ["string", "null"]},
         "seq_len": {"type": "integer", "minimum": 1},

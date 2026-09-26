@@ -74,6 +74,12 @@ load-bearing facts from `foundationskills.agent.intake`).
 | TR-PL-003 | INFO | handoff | a stage relies on an unvalidated (literature/community/derived) recipe |
 | TR-PL-004 | WARN | handoff | a stage needs data not yet prepared (handoff data_engine) |
 | TR-PL-005 | INFO | handoff | an sft stage is present: FS SFT full-sequence loss disclosure |
+| FS-IN-001 | BLOCK | input | (training.emit) the plan has no stages |
+| FS-IN-002 | BLOCK | input | (training.emit) a stage has no dataset payload |
+| FS-IN-003 | BLOCK | input | (training.emit) FoundationScale is not importable: refusal names it |
+| FS-HO-001 | WARN | handoff | (training.emit) a launch spec is non-executable; `missing` names the gap (e.g. LoRA adapter needs a merge before the next stage; FS RL saves no checkpoint) |
+| FS-HO-002 | BLOCK | handoff | (training.emit) every launch spec is non-executable |
+| FS-HO-003 | INFO | handoff | (training.emit) an RL spec is single-device; runnable as measurement-only (`fskills launch --measurement-only`) |
 
 Statuses: PASS 0 / RED 5 / UNMEASURED 95 / REFUSED 96. A `PlanningRefusal`
 (no stage selected; unknown model with no size; unknown hardware) is REFUSED

@@ -92,9 +92,15 @@ def _chain(spec_ops: list[dict[str, Any]]) -> tuple[Any, list[OpStats]]:
     records: Iterable[dict] = iter(())
     for step in spec_ops:
         op = _ops_base.OPS[names[len(stats)]]
+        cfg = dict(step.get("config") or {})
+        # Validate before running: an op that silently ignores a misspelled or
+        # foreign config key measures nothing while reporting success.
+        errors = validate(cfg, getattr(op, "config_schema", None) or {"type": "object"})
+        if errors:
+            raise PipelineError(f"op {op.name!r} config invalid: {'; '.join(errors[:5])}")
         op_stats = OpStats(name=op.name)
         stats.append(op_stats)
-        records = op(records, dict(step.get("config") or {}), op_stats)
+        records = op(records, cfg, op_stats)
     return records, stats
 
 

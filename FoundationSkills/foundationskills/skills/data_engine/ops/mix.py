@@ -199,5 +199,14 @@ def _mix(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[dict]:
         yield rec
 
 
-mix_op = FunctionOp(_NAME, _mix, config_schema={"type": "object", "required": ["components"]})
+mix_op = FunctionOp(_NAME, _mix, config_schema={
+    "type": "object", "required": ["components"], "additionalProperties": False,
+    "properties": {
+        "components": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+        "total_records": {"type": ["integer", "null"], "minimum": 1},
+        "total_tokens": {"type": ["integer", "null"], "minimum": 1},
+        "seed": {"type": "integer"},
+        "max_epochs": {"type": ["integer", "number"], "minimum": 1},
+    },
+})
 register_op(mix_op)
