@@ -44,7 +44,7 @@ def make_caps(**over):
 
 def good_stage(**hparams):
     return {"name": "sft1", "stage": "sft", "algorithm": None, "method": "full",
-            "hparams": hparams, "family": "gemma4", "data": {"format": "sft"}}
+            "hparams": {"max_sequence_length": 2048, **hparams}, "family": "gemma4", "data": {"format": "sft"}}
 
 
 def dataset(fmt="sft", tmp_path=None):

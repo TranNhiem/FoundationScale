@@ -91,6 +91,17 @@ def _hp(hparams: dict[str, Any], flag: str) -> Any:
     return None
 
 
+def _alias_conflicts(hparams: dict[str, Any]) -> list[str]:
+    """Two spellings of one flag with different values: which one is meant is
+    unknowable, so it is refused instead of letting alias order decide."""
+    out = []
+    for flag, aliases in _HPARAM_ALIASES.items():
+        values = {k: hparams[k] for k in aliases if hparams.get(k) is not None}
+        if len({str(v) for v in values.values()}) > 1:
+            out.append(f"conflicting hparams for --{flag}: {values}")
+    return out
+
+
 def fs_repo_root() -> str | None:
     """The FS source tree root: FS records code provenance from the launch cwd
     (capture_code_provenance(Path.cwd())), so launching anywhere else yields an
@@ -305,9 +316,13 @@ def emit_train(
             continue
         argv_flags.extend([f"--{flag}", _fmt(value)])
         emitted.add(flag)
+    missing.extend(_alias_conflicts(hparams))
     for flag in _LOAD_BEARING:
         if _hp(hparams, flag) is not None and flag not in emitted:
             missing.append(f"load-bearing hparam for --{flag} could not be passed to FS")
+    if "max-sequence-length" not in emitted:
+        # FS's own default is 128 tokens: an unplanned sequence length is not a default, it is a defect
+        missing.append("max_sequence_length not planned (FS default is 128 tokens)")
 
     env = dict(_BASE_ENV)
     # Hardware-profile env (e.g. the GB200 NCCL pins, measured) and the device

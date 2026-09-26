@@ -199,8 +199,8 @@ def test_f4_stage_chaining_names_the_lora_merge_and_rl_gaps(tmp_path):
           "num_tokens": 1000, "tokenizer": None, "chat_template_family": None,
           "fs_columns": {"text_column": "text", "image_column": None, "gold_key": None}}
     plan = {"stages": [
-        {"name": "sft", "stage": "sft", "algorithm": "sft", "method": "lora", "hparams": {"max_steps": 1}},
-        {"name": "sft2", "stage": "sft", "algorithm": "sft", "method": "full", "hparams": {"max_steps": 1}}]}
+        {"name": "sft", "stage": "sft", "algorithm": "sft", "method": "lora", "hparams": {"max_steps": 1, "max_sequence_length": 512}},
+        {"name": "sft2", "stage": "sft", "algorithm": "sft", "method": "full", "hparams": {"max_steps": 1, "max_sequence_length": 512}}]}
     res = TrainingEmitSkill().execute({"plan": plan, "dataset": ds, "model": "/m", "output_root": str(tmp_path),
                                        "nodes": 1, "gpus_per_node": 1, "hardware_id": "local"},
                                       SkillContext(workdir=tmp_path, capabilities=caps()))
@@ -383,3 +383,13 @@ def test_pipeline_refuses_foreign_op_config_keys(tmp_path):
                     {"op": "quality", "config": {"ruleset": "gopher"}}]}
     with pytest.raises(PipelineError, match="ruleset"):
         run_pipeline(spec, tmp_path / "out")
+
+
+def test_emitted_config_is_the_estimated_config_and_conflicts_refused():
+    """E2E on GB200: the planner estimated with grad ckpt on but did not write it
+    into the stage, so FS ran its default (off): 63 GB measured vs 32 GB planned."""
+    spec = _emit({"stage": "sft", "method": "lora", "hparams": {"max_steps": 1}})
+    assert "max_sequence_length not planned" in spec["missing"]  # FS default would be 128 tokens
+    spec = _emit({"stage": "sft", "method": "lora",
+                  "hparams": {"max_steps": 1, "seq_len": 4096, "max_sequence_length": 2048}})
+    assert "conflicting hparams for --max-sequence-length" in spec["missing"]

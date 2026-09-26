@@ -50,7 +50,9 @@ def base_stage(**hparams):
         "stage": "sft",
         "algorithm": None,
         "method": "full",
-        "hparams": hparams,
+        # a planned sequence length is required (FS's own default is 128 tokens)
+        "hparams": hparams if ("seq_len" in hparams or "max_sequence_length" in hparams)
+        else {"max_sequence_length": 2048, **hparams},
         "family": "gemma4",
         "data": {"format": "sft"},
     }

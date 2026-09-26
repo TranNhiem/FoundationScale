@@ -140,6 +140,12 @@ def _when_matches(when: dict, ctx: dict) -> bool:
     return True
 
 
+_HP_ALIASES = {
+    "max_sequence_length": ("seq_len", "max_seq_len"),
+    "per_device_batch_size": ("micro_batch", "micro_batch_size"),
+    "gradient_checkpointing": ("grad_ckpt",),
+    "sharding_strategy": ("sharding",),
+}
 _LIFECYCLE_RANK = {"pretrain": 0, "cpt": 1, "sft": 2, "preference": 3, "rl": 4}
 
 
@@ -237,8 +243,12 @@ def _stage_tokens(stage: str, data_facts: dict, domain_tokens: int, assumptions:
         assumptions.append(f"pretrain tokens heuristic: max(5x domain, 1B) = {tokens:,}")
         return int(tokens)
     if stage == "sft":
-        tokens = int(data_facts.get("sft_tokens") or min(max(domain_tokens // 100, 5_000_000), 200_000_000))
-        assumptions.append(f"sft tokens heuristic: clamp(domain/100, 5M, 200M) = {tokens:,} (state data_facts.sft_tokens to override)")
+        if data_facts.get("sft_tokens"):
+            tokens = int(data_facts["sft_tokens"])
+            assumptions.append(f"sft tokens: {tokens:,} (from sources tagged use_for sft, or data_facts.sft_tokens)")
+        else:
+            tokens = int(min(max(domain_tokens // 100, 5_000_000), 200_000_000))
+            assumptions.append(f"sft tokens heuristic: clamp(domain/100, 5M, 200M) = {tokens:,} (state data_facts.sft_tokens to override)")
         return tokens
     if stage == "preference":
         tokens = int(min(max(domain_tokens // 200, 5_000_000), 50_000_000))
@@ -408,6 +418,9 @@ def plan(
     if not tagged and len(sources) > 1:
         decide("data_analysis", "sources not tagged with use_for",
                "all sources' examples/tokens counted for every stage; tag sources with use_for for per-stage sizing")
+    if tagged and "sft_tokens" not in declared_facts and _sum_for("sft", "approx_tokens"):
+        # F8: a source tagged for SFT states its own size; the domain/100 heuristic is for untagged goals
+        data_facts["sft_tokens"] = _sum_for("sft", "approx_tokens")
     for key in ("sft_tokens", "rl_tokens", "rl_group_size", "rl_prompt_tokens", "rl_max_new_tokens"):
         if key in declared_facts:
             data_facts[key] = declared_facts[key]
@@ -573,6 +586,14 @@ def plan(
         micro_batch = int(_first("per_device_batch_size", "micro_batch", "micro_batch_size", default=2))
         grad_ckpt = bool(_first("gradient_checkpointing", "grad_ckpt", default=True))
         sharding = "ddp" if stage == "rl" else str(_first("sharding_strategy", "sharding", default="fsdp"))
+        if stage != "rl":
+            # The emitted command must BE the configuration that was estimated:
+            # FS defaults are seq 128, batch 1, no grad ckpt (measured on GB200: an
+            # unstated grad_ckpt made a 32 GB plan run at 63 GB).
+            for key, value in (("max_sequence_length", seq_len), ("per_device_batch_size", micro_batch),
+                               ("gradient_checkpointing", grad_ckpt), ("sharding_strategy", sharding)):
+                if not any(hparams.get(k) is not None for k in (key, *_HP_ALIASES.get(key, ()))):
+                    hparams[key] = value
 
         # estimate
         mem = estimate_memory(
