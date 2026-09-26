@@ -275,7 +275,16 @@ def build_readiness(dataset: dict, stats: list[dict], requirements: dict) -> dic
         checks.append(_check("DE-RDY-007", None, "truncation_rate unknown (no tokenize op ran)"))
     else:
         ok = truncation_rate <= max_trunc
-        checks.append(_check("DE-RDY-007", ok, f"truncation_rate={truncation_rate} vs max={max_trunc}"))
+        detail = f"truncation_rate={truncation_rate} vs max={max_trunc}"
+        tok = next((st for st in stats if st.get("name") == "tokenize"), None)
+        overlong = int(((tok or {}).get("dropped") or {}).get("overlong", 0))
+        if overlong:
+            # FoxBrain lesson: over-budget drops are NOT random -- long examples
+            # cluster in some sources/tasks (tool-call p95 ~17.7k tokens), so the
+            # surviving mix is skewed. Say how much was dropped.
+            seen = int((tok or {}).get("records_in", 0)) or 1
+            detail += f"; dropped_overlong={overlong} ({overlong / seen:.1%}) -- non-random: re-check the domain mix"
+        checks.append(_check("DE-RDY-007", ok, detail))
 
     # DE-RDY-008: the chat template ACTUALLY applied (format op's measured
     # template_source), never a default: an absent source is unmeasured (rv10).
@@ -317,6 +326,21 @@ def build_readiness(dataset: dict, stats: list[dict], requirements: dict) -> dic
                 f"loss masking (measured, FS commit 77bfa65; format op sft_loss_scope={scope or 'full_sequence'}).",
             )
         )
+
+    # DE-RDY-011: trained targets start the way inference prompts (sft/mm_sft).
+    # MEASURED: gemma-4-26b/31b generation prompts append an empty thought block
+    # that the plain training render lacks; the format op measures and aligns it.
+    if conv:
+        parity = dict(fmt_extra.get("generation_prompt_parity") or {})
+        if not parity or set(parity) <= {"no_tokenizer"}:
+            checks.append(_check("DE-RDY-011", None,
+                                 "generation-prompt parity unmeasured (no tokenizer chat template configured)"))
+        elif parity.get("unmeasured"):
+            checks.append(_check("DE-RDY-011", False,
+                                 f"{parity['unmeasured']} record(s) whose training render could not be matched to "
+                                 f"the tokenizer's generation prompt: {parity}"))
+        else:
+            checks.append(_check("DE-RDY-011", True, f"training targets match inference prompts: {parity}"))
 
     if any(c["passed"] is False for c in checks):
         verdict = "RED"

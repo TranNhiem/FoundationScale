@@ -167,6 +167,35 @@ TRAINING_PLAYBOOK: dict[str, Diagnosis] = {
             "for small models prefer ddp over fsdp",
         ),
     ),
+    "hang_no_progress": Diagnosis(
+        symptom="the job is RUNNING but the log has stopped advancing",
+        likely_causes=(
+            "a rank died and the others wait in a collective (the scheduler still says R)",
+            "a DataLoader worker died (e.g. a collate IndexError) and NCCL waits for the watchdog",
+            "first-iteration compile/warm-up (can take minutes: compare with the prior run)",
+        ),
+        checks=(
+            "judge health by GPU utilisation AND log mtime/line count, never by scheduler state",
+            "grep the log for Traceback/IndexError on any rank",
+            "compare elapsed time with the same config's first-iteration time in earlier runs",
+        ),
+        recovery=(
+            "cancel only your own job id (never pkill -u on a shared account) and relaunch with the cause fixed",
+            "for multimodal data: drop over-length records instead of truncating (media sentinels)",
+        ),
+    ),
+    "lr_not_applied": Diagnosis(
+        symptom="the logged learning rate differs from the plan (for example, warmup restarts after resume)",
+        likely_causes=(
+            "a default LR inherited from a launcher or recipe instead of the plan's explicit value",
+            "a resume without the LR-scheduler state, so warmup silently re-runs",
+        ),
+        checks=(
+            "compare the first logged learning_rate with warmup arithmetic: peak_lr * step / warmup_steps",
+            "confirm --learning-rate/--warmup-steps are in the emitted argv (fskills emit always passes them)",
+        ),
+        recovery=("relaunch with explicit LR and warmup; resume only from checkpoints that saved the scheduler",),
+    ),
     "fs_refused_96": Diagnosis(
         symptom="foundationscale-train exits 96 with [fs:train:refuse]",
         likely_causes=(

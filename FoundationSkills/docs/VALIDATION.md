@@ -30,6 +30,8 @@ Scope: FoundationSkills against FoundationScale `origin/main` 77bfa65 (plus this
 | Gemma-4 E4B-it LoRA SFT, FSDP×4, b2, grad ckpt, 30 steps | **`fskills launch` (plan → emit → confirm hash → dry-run → run)** | **PASS**; commit `bf4f8fe` recorded by FoundationScale | **37.7 GB/GPU vs 32.4 GB planned (−14%)**; MFU 1.5% *measured by FoundationScale* (device peak passed by the emitter) |
 | Recipe `gemma4-e4b-general-chat-sft-lora`, first attempt | `fskills launch` | **REFUSED 96** by transformers: `optimizer adamw` is not a valid name. Recovered through torchrun's exit 1 | defect F20 below; fixed |
 | Recipe `gemma4-e4b-general-chat-sft-lora` (exact recipe config: FSDP×4, b4, ga8, adamw_torch_fused, 30 steps) | **`fskills launch`** | **PASS**; save gates 4/4; run `recipe-sft-3df648c2`, commit `f4643a7` | 75.9 GB/GPU; 55.0 model-TF/s/GPU (MFU 3.7% measured by FS). **Recipe promoted to `validated`** (scope: execution) |
+| Gemma-4 **26B-A4B MoE** LoRA SFT, FSDP×4 | `fskills launch` | **RED 5** from FoundationScale: `Could not find the transformer layer class to wrap in the model` | new measured core gap: FS's FSDP cannot wrap Gemma-4 MoE layers |
+| Gemma-4 **26B-A4B MoE** LoRA SFT, **DDP**×4 (planner now switches automatically), recipe `gemma4-26b-a4b-code-sft-lora`, 20 steps | **`fskills launch`** (r04dgx03) | **PASS**; save gates 4/4; run `moe-sft-531c2296`. **Recipe promoted to `validated`** | 83.3 GB/GPU vs 94.3 GB planned (+13%); ~1,507 tokens/s/GPU = **1.6% MFU** (LoRA convention). The previous MoE MFU of 15% was a guess, about 9× optimistic. FoundationScale reports MFU as UNMEASURED because Gemma-4 names experts-per-token `top_k_experts` (#529) |
 | `fskills-rl` Dr.GRPO, E4B base | driver | **REFUSED 96**: base checkpoint has no chat template | expected; this is why stage chaining exists (F4) |
 | `fskills-rl` Dr.GRPO, E4B-it, ARC-Easy MCQ, 6 steps | driver | **UNMEASURED 95**: rewards saturated on 5 of 6 steps; no checkpoint (FoundationScale saves none) | the RL loop runs on GB200: generation, scoring, advantages |
 
@@ -70,6 +72,14 @@ The logits term (14 bytes per s·b·V element) was fitted to these three points 
 | — | the plan estimated grad ckpt and batch it never emitted (63 GB vs 32 GB); the emitted config is now the estimated one; missing sequence length refused (FoundationScale's default is 128) | E2E launch |
 | — | `--adapter-target` emitted per character, and later only the last module | reference scenario |
 
+## 5b. Knowledge from the FoxBrain campaigns
+
+`docs/FOXBRAIN_LESSONS.md` adjudicates 30 changes distilled from 402 facts in 16 FoxBrain documents. Two were verified and applied here:
+- Gemma-4 26B/31B generation-prompt parity (the empty thought block, now a readiness check);
+- the 31B architecture facts.
+
+Megatron-specific lessons are kept there for a future Megatron backend.
+
 ## 6. Measured FoundationScale core gaps (for the core workstream)
 
 1. RL checkpoint persistence: `RLTrainer.run()` keeps the policy in a local variable.
@@ -80,5 +90,7 @@ The logits term (14 bytes per s·b·V element) was fitted to these three points 
 6. Assistant-only loss masking for SFT.
 7. PP/EP execution; no Megatron backend.
 8. A dedicated pretrain/CPT objective, and a minimum-LR floor for cosine schedules.
+9. FSDP auto-wrap for Gemma-4 MoE (26B-A4B): refused with "Could not find the transformer layer class to wrap".
+10. MoE MFU for Gemma-4: FS reads experts-per-token only from `num_experts_per_tok`, `num_experts_per_token` or `top_k`; Gemma-4 uses `top_k_experts` (#529).
 
 The skills report each of these as `missing: ...` in plans and specs. They are never silently skipped.

@@ -102,6 +102,8 @@ Playbook keys:
 | `moe_router_imbalance` | aux loss too small / over-specialised routing |
 | `slow_throughput` | dataloader starvation / over-estimated MFU / wrong sharding |
 | `fs_refused_96` | exit 96: read the `[fs:train:refuse]` line; it names the missing input |
+| `hang_no_progress` | job RUNNING but the log stalled: judge by GPU util + log mtime, never scheduler state; look for a dead rank or DataLoader worker |
+| `lr_not_applied` | logged LR differs from the plan: check warmup arithmetic and that the scheduler state was resumed |
 
 ## FS interface
 

@@ -47,7 +47,7 @@ def base_case(tmp_path):
         _op("clean", records_in=3, records_out=3, extra={"pii_remaining": 0}),
         _op("dedup", records_in=10, records_out=8, dropped={"exact": 2}),
         _op("decontam", records_in=8, records_out=8, extra={"hits": 0, "action": "remove"}),
-        _op("format", records_in=8, records_out=8, extra={"sft_loss_scope": "full_sequence", "template_source": "gemma4"}),
+        _op("format", records_in=8, records_out=8, extra={"sft_loss_scope": "full_sequence", "template_source": "gemma4", "generation_prompt_parity": {"aligned": 8}}),
         _op(
             "tokenize",
             records_in=8,
@@ -90,7 +90,7 @@ def test_clean_case_passes(base_case):
     report = build_readiness(dataset, stats, requirements)
     assert report["verdict"] == "PASS"
     assert all(c["passed"] is True for c in report["checks"])
-    assert [c["rule_id"] for c in report["checks"]] == [f"DE-RDY-{i:03d}" for i in range(1, 11)]
+    assert [c["rule_id"] for c in report["checks"]] == [f"DE-RDY-{i:03d}" for i in range(1, 12)]
     # stats section filled from op stats
     s = report["stats"]
     assert s["num_records"] == 3
@@ -316,3 +316,19 @@ def test_verdict_precedence_red_over_unmeasured(base_case):
     stats = [s for s in stats if s["name"] != "clean"]  # DE-RDY-006 -> None
     report = build_readiness(dataset, stats, requirements)
     assert report["verdict"] == "RED"
+
+
+def test_de_rdy_011_generation_prompt_parity(base_case):
+    """MUST_FIRE: a record whose training render cannot be matched to the model's
+    inference prompt fails; no tokenizer means unmeasured; aligned/inserted pass."""
+    dataset, stats, requirements = base_case
+
+    def with_parity(parity):
+        return [dict(st, extra={**(st.get("extra") or {}), "generation_prompt_parity": parity})
+                if st.get("name") == "format" else st for st in stats]
+    assert _check(build_readiness(dataset, with_parity({"aligned": 3, "inserted": 5}), requirements),
+                  "DE-RDY-011")["passed"] is True
+    assert _check(build_readiness(dataset, with_parity({"aligned": 7, "unmeasured": 1}), requirements),
+                  "DE-RDY-011")["passed"] is False
+    assert _check(build_readiness(dataset, with_parity({"no_tokenizer": 8}), requirements),
+                  "DE-RDY-011")["passed"] is None

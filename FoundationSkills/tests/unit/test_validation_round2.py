@@ -467,3 +467,22 @@ def test_rl_learning_rate_and_new_fs_fields_pass_through():
     if "logprob_micro_batch" in rl_config_fields():
         assert cfg["logprob_micro_batch"] == 4
     assert "made_up" not in cfg and any("made_up" in n for n in spec["notes"])
+
+
+def test_generation_prompt_parity_inserts_the_inference_suffix():
+    """Gemma-4 26B/31B generation prompts end with an empty thought block the
+    plain training render lacks (measured on the real templates 2026-09-26)."""
+    from foundationskills.skills.data_engine.ops.format import align_with_generation_prompt
+
+    class Tok:
+        chat_template = "x"
+
+        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False, **kw):
+            body = "".join(f"<|turn>{'model' if m['role'] == 'assistant' else 'user'}\n{m['content']}<turn|>\n"
+                           for m in messages)
+            return body + ("<|turn>model\n<|channel>thought\n<channel|>" if add_generation_prompt else "")
+    msgs = [{"role": "user", "content": "Q"}, {"role": "assistant", "content": "A"}]
+    text = Tok().apply_chat_template(msgs)
+    out, status = align_with_generation_prompt(msgs, text, Tok())
+    assert status == "inserted" and out.endswith("<|turn>model\n<|channel>thought\n<channel|>A<turn|>\n")
+    assert align_with_generation_prompt(msgs, text, None)[1] == "no_tokenizer"

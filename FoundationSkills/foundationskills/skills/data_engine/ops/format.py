@@ -196,6 +196,38 @@ def render_with_reasoning(messages: list[dict[str, Any]], *, family: str | None,
     return render_chat(inline, family=family, tokenizer=None), "inline_fallback"
 
 
+def align_with_generation_prompt(messages: list[dict[str, Any]], text: str, tokenizer: Any) -> tuple[str, str]:
+    """Make the trained target start the way inference will prompt it.
+
+    MEASURED (2026-09-26): gemma-4-26b-it / 31b-it generation prompts end with
+    an empty thought block ``<|turn>model\n<|channel>thought\n<channel|>`` when
+    thinking is off, while the training render of the same turn is
+    ``<|turn>model\nANSWER`` -- the model would never see its inference prefix
+    in training (E4B's template has no such suffix). Rather than hard-coding a
+    family, render the real generation prompt for the conversation so far and,
+    when it continues past the rendered assistant opening, insert that
+    continuation before the final answer. Returns (text, status) with status in
+    {"aligned", "inserted", "no_tokenizer", "unmeasured"}."""
+    if tokenizer is None or not getattr(tokenizer, "chat_template", None):
+        return text, "no_tokenizer"
+    if not messages or messages[-1].get("role") != "assistant" or messages[-1].get("reasoning_content"):
+        return text, "aligned"  # reasoning turns carry their own thought span (render_with_reasoning)
+    final = str(messages[-1].get("content", ""))
+    try:
+        prompt = tokenizer.apply_chat_template(messages[:-1], tokenize=False, add_generation_prompt=True)
+    except Exception:  # noqa: BLE001 - recorded as unmeasured, never guessed
+        return text, "unmeasured"
+    at = text.rfind(final) if final else -1
+    if not isinstance(prompt, str) or at < 0:
+        return text, "unmeasured"
+    head = text[:at]
+    if head == prompt:
+        return text, "aligned"
+    if prompt.startswith(head) and len(prompt) > len(head):
+        return prompt + text[at:], "inserted"
+    return text, "unmeasured"
+
+
 def render_chat(messages: list[dict[str, str]], *, family: str | None, tokenizer: Any = None) -> str:
     """Render a conversation. Uses ``tokenizer.apply_chat_template`` when a
     tokenizer object with a chat_template is given; otherwise the builtin
@@ -331,8 +363,10 @@ def _convert(
         mode = "none"
         if any(m.get("reasoning_content") for m in messages):
             text, mode = render_with_reasoning(messages, family=family, tokenizer=tokenizer)
+        text, parity = align_with_generation_prompt(messages, text, tokenizer)
         text = _strip_bos(text, tokenizer)
         meta["reasoning_render"] = mode
+        meta["generation_prompt_parity"] = parity
         out: dict[str, Any] = {"id": rid, "messages": messages, "text": text, "meta": meta}
         if target == "mm_sft":
             image: str | None = None
@@ -466,6 +500,10 @@ def _format_records(records: Iterable[dict], cfg: dict, stats: OpStats) -> Itera
             yield rec
             continue
         out, source, error = converted
+        parity = (out.get("meta") or {}).get("generation_prompt_parity") if isinstance(out, dict) else None
+        if parity:
+            counts = stats.extra.setdefault("generation_prompt_parity", {})
+            counts[parity] = counts.get(parity, 0) + 1
         mode = (out.get("meta") or {}).get("reasoning_render") if isinstance(out, dict) else None
         if mode and mode != "none":
             modes = stats.extra.setdefault("reasoning_render", {})
