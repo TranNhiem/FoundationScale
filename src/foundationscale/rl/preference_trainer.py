@@ -1023,7 +1023,7 @@ class PreferenceTrainer:
             )
         loss_output = LossOutput(
             loss=measured_loss,
-            components=_loss_components(self._objective, measured_loss),
+            components=_loss_components(objective=self._objective, total=measured_loss),
             metrics=tuple(metric_observations),
         )
         weight_delta = self._measure_weight_delta()
