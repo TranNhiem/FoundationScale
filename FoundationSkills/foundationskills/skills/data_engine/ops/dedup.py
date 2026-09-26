@@ -57,8 +57,16 @@ _PUNCT_TABLE = str.maketrans("", "", string.punctuation)
 _PARA_SPLIT_RE = re.compile(r"\n\s*\n+")
 
 
-def _normalize_key(text: str) -> str:
-    return " ".join(text.lower().translate(_PUNCT_TABLE).split())
+def _normalize_key(text: str, mode: str = "light") -> str:
+    """Exact-dedup key. "light" (default): NFKC + casefold + whitespace collapse.
+    "aggressive" also strips ASCII punctuation -- it merges "x = 1" with "x 1"
+    and ``f(a,b)`` with ``fab``, so it is opt-in (fine for web prose, wrong for code)."""
+    import unicodedata
+
+    base = unicodedata.normalize("NFKC", text).casefold()
+    if mode == "aggressive":
+        base = base.translate(_PUNCT_TABLE)
+    return " ".join(base.split())
 
 
 def _record_key(rec: dict, key_cfg: str) -> str:
@@ -69,8 +77,9 @@ def _record_key(rec: dict, key_cfg: str) -> str:
         return ""
     messages = rec.get("messages")
     if isinstance(messages, list):
-        joined = "\n".join(str(m.get("content", "")) for m in messages if isinstance(m, dict))
-        if joined.strip():
+        # role-tagged turns, unambiguous separator: [user "a\nb"] != [user "a", user "b"]
+        joined = "\x1e".join(f"{m.get('role', '')}\x1f{m.get('content', '')}" for m in messages if isinstance(m, dict))
+        if any(isinstance(m, dict) and str(m.get("content", "")).strip() for m in messages):
             return joined
     parts = [rec.get("prompt"), rec.get("chosen")]
     return "\n".join(p for p in parts if isinstance(p, str))
@@ -79,7 +88,7 @@ def _record_key(rec: dict, key_cfg: str) -> str:
 def _shingles(text: str, ngram: int) -> list[str]:
     """Word n-gram shingles over the normalized text; char n-grams when the
     text has too few tokens (e.g. unsegmented CJK)."""
-    tokens = _normalize_key(text).split()
+    tokens = _normalize_key(text, "aggressive").split()  # MinHash shingles: punctuation is noise
     if not tokens:
         return []
     if len(tokens) >= max(2, ngram):
@@ -133,14 +142,14 @@ def _band_key(part: Sequence[int]) -> bytes:
     return hashlib.blake2b(repr(tuple(part)).encode("utf-8"), digest_size=12).digest()
 
 
-def _dedup_paragraphs(rec: dict, seen_paragraphs: set[str], stats: OpStats) -> None:
+def _dedup_paragraphs(rec: dict, seen_paragraphs: set[str], stats: OpStats, mode: str = "light") -> None:
     text = rec.get("text")
     if not isinstance(text, str):
         return
     kept: list[str] = []
     removed = 0
     for para in _PARA_SPLIT_RE.split(text):
-        norm = _normalize_key(para)
+        norm = _normalize_key(para, mode)
         if not norm:
             if para.strip():
                 kept.append(para)
@@ -157,10 +166,17 @@ def _dedup_paragraphs(rec: dict, seen_paragraphs: set[str], stats: OpStats) -> N
 
 def _dedup_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[dict]:
     exact_on = bool(cfg.get("exact", True))
+    exact_mode = str(cfg.get("exact_normalize", "light"))
+    if exact_mode not in ("light", "aggressive"):
+        raise ValueError(f"dedup exact_normalize must be 'light' or 'aggressive', got {exact_mode!r}")
+    stats.extra["exact_normalize"] = exact_mode
     near_cfg = cfg.get("near") or {}
     near_on = bool(near_cfg.get("enabled", True))
     num_perm = int(near_cfg.get("num_perm", 128))
     bands = max(1, int(near_cfg.get("bands", 16)))
+    if bands > num_perm or num_perm % bands:
+        # truncating rows = num_perm // bands would silently drop signature columns
+        raise ValueError(f"dedup near: bands ({bands}) must divide num_perm ({num_perm}) and be <= it")
     ngram = int(near_cfg.get("ngram", 5))
     threshold = float(near_cfg.get("threshold", 0.8))
     scope = str(cfg.get("scope", "document"))
@@ -195,7 +211,7 @@ def _dedup_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[di
             stats.drop("non_dict_record")
             continue
         key_text = _record_key(rec, key_cfg)
-        norm = _normalize_key(key_text)
+        norm = _normalize_key(key_text, exact_mode)
         if not norm:
             stats.extra["records_without_key"] += 1
             stats.records_out += 1
@@ -249,7 +265,7 @@ def _dedup_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[di
                     band_buckets.setdefault((band, _band_key(part)), []).append(signature)
 
         if scope == "sample":
-            _dedup_paragraphs(rec, seen_paragraphs, stats)
+            _dedup_paragraphs(rec, seen_paragraphs, stats, exact_mode)
 
         stats.records_out += 1
         yield rec

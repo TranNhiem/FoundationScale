@@ -377,7 +377,7 @@ class TrainingPlannerSkill(BaseSkill):
                     )
                 )
             provenance = stage.get("recipe_provenance")
-            if stage.get("recipe_derived") or provenance in ("literature", "community"):
+            if stage.get("recipe_derived") or provenance != "validated":  # rv42: anything not validated
                 findings.append(
                     self.finding(
                         "TR-PL-003",

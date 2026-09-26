@@ -136,8 +136,14 @@ def _atomic_write_json(path: Path, obj: dict[str, Any]) -> None:
             raise
 
 
+_SAFE_PART = __import__("re").compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
+
+
 def write_artifact(artifact: Artifact, directory: str | Path) -> ArtifactRef:
     """Validate and atomically write an artifact as <type>.<id>.json."""
+    for label, value in (("type", artifact.type), ("id", artifact.id)):
+        if not _SAFE_PART.match(str(value)):  # both name the file: no separators, no traversal
+            raise ValueError(f"artifact {label} {value!r} must match [A-Za-z0-9._-]+ and not start with '.'")
     errors = artifact.validate()
     if errors:
         raise SchemaError(f"artifact {artifact.type}/{artifact.id} invalid: " + "; ".join(errors))

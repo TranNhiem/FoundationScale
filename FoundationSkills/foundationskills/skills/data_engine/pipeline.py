@@ -156,10 +156,14 @@ def run_pipeline(spec: dict[str, Any], out_dir: Path, *, shard_records: int = 50
         buffer = []
         buffer_count = 0
 
+    pipeline_stats = OpStats(name="pipeline")
     for rec in records:
+        if not isinstance(rec, dict):  # a non-strict op passed a non-record through
+            pipeline_stats.drop("non_dict_record")
+            continue
         if num_records < _SCHEMA_COLUMNS_SAMPLE:
             columns.update(str(k) for k in rec.keys())
-        dom = (rec.get("meta") or {}).get("domain")
+        dom = (rec.get("meta") or {}).get("domain") if isinstance(rec.get("meta"), dict) else None
         if dom is not None:
             key = str(dom)
             domain_counts[key] = domain_counts.get(key, 0) + 1
@@ -170,7 +174,6 @@ def run_pipeline(spec: dict[str, Any], out_dir: Path, *, shard_records: int = 50
             flush()
     flush()
 
-    pipeline_stats = OpStats(name="pipeline")
     pipeline_stats.records_out = num_records
     pipeline_stats.extra = {
         "domain_counts": domain_counts,
@@ -185,6 +188,13 @@ def run_pipeline(spec: dict[str, Any], out_dir: Path, *, shard_records: int = 50
 
     measured_tokens, approx_tokens = _num_tokens(stats_dicts)
     text_column, image_column, gold_key = _FS_COLUMNS[spec["target_format"]]
+    # the format op writes the columns it actually emitted; prefer that measured hint
+    fmt_hint = next(((st.get("extra") or {}).get("fs_columns") for st in reversed(stats_dicts)
+                     if st.get("name") == "format" and (st.get("extra") or {}).get("fs_columns")), None)
+    if isinstance(fmt_hint, dict):
+        text_column = fmt_hint.get("text_column", text_column)
+        image_column = fmt_hint.get("image_column", image_column)
+        gold_key = fmt_hint.get("gold_key", gold_key)
     dataset: dict[str, Any] = {
         "format": spec["target_format"],
         "shards": shard_rows,

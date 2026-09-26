@@ -4,7 +4,8 @@
 Decisions where the spec is silent:
 
 - Every evaluated rule contributes to the score:
-  ``score = 1 - failed/evaluated`` (1.0 when nothing evaluated). Rules are
+  ``score = 1 - failed/evaluated``; None (unmeasured, never filtered) when
+  nothing evaluated. Rules are
   *flagged* into ``meta.quality = {"score", "failed": [...]}``; records are
   only dropped (``low_quality``) when ``cfg.min_quality_score`` is set.
 - Word-based rules (mean word length, symbol ratio, alpha-word ratio,
@@ -95,35 +96,52 @@ def _gopher_eval(text: str, *, word_rules: bool) -> list[tuple[str, bool]]:
     return out
 
 
+def looks_like_code(text: str, domain: str | None = None) -> bool:
+    """Code-like records must not be judged by prose rules (braces, terminal
+    punctuation and punctuation density are normal in code)."""
+    if (domain or "").lower() in _CODE_DOMAINS or "```" in text:
+        return True
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+    indented = sum(1 for line in lines if line.startswith(("    ", "\t"))) / len(lines)
+    symbols = sum(text.count(ch) for ch in "{};=()") / max(len(text), 1)
+    # density needs enough text to mean anything ("{value}" in one sentence is prose)
+    return indented >= 0.3 or (len(text) >= 80 and symbols >= 0.05)
+
+
 def _c4_eval(text: str, *, domain: str | None) -> list[tuple[str, bool]]:
+    """Rules whose precondition is unmet (fewer than 3 lines) are NOT evaluated:
+    counting them as passes would inflate the score with checks that never ran."""
     out: list[tuple[str, bool]] = []
     low = text.lower()
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    terminal_failed = False
-    if len(lines) >= 3:
+    code = looks_like_code(text, domain)
+    if len(lines) >= 3 and not code:
         terminal = sum(1 for line in lines if line.endswith(_TERMINAL_CHARS)) / len(lines)
-        terminal_failed = terminal < 0.5
-    out.append(("c4:terminal_punct", terminal_failed))
+        out.append(("c4:terminal_punct", terminal < 0.5))
     out.append(("c4:lorem_ipsum", "lorem ipsum" in low))
     js_boiler = "enable javascript" in low or "javascript is disabled" in low or "javascript is turned off" in low
     out.append(("c4:javascript_boilerplate", js_boiler))
-    has_braces = "{" in text or "}" in text
-    out.append(("c4:curly_braces", has_braces and (domain or "").lower() not in _CODE_DOMAINS))
+    if not code:
+        out.append(("c4:curly_braces", "{" in text or "}" in text))
     return out
 
 
-def _fineweb_eval(text: str) -> list[tuple[str, bool]]:
+def _fineweb_eval(text: str, domain: str | None = None) -> list[tuple[str, bool]]:
     out: list[tuple[str, bool]] = []
-    punct = sum(1 for ch in text if unicodedata.category(ch).startswith("P"))
-    out.append(("fineweb:punct_ratio", len(text) > 0 and punct / len(text) > 0.25))
+    code = looks_like_code(text, domain)
+    if not code and text:
+        punct = sum(1 for ch in text if unicodedata.category(ch).startswith("P"))
+        out.append(("fineweb:punct_ratio", punct / len(text) > 0.25))
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     short_failed = dup_failed = False
     if len(lines) >= 3:
         short = sum(1 for line in lines if len(line) < 30) / len(lines)
-        short_failed = short > 0.67
+        short_failed = short > 0.67 and not code
         dup_failed = (1.0 - len(set(lines)) / len(lines)) > 0.3
-    out.append(("fineweb:short_line_ratio", short_failed))
-    out.append(("fineweb:dup_lines", dup_failed))
+        out.append(("fineweb:short_line_ratio", short_failed))
+        out.append(("fineweb:dup_lines", dup_failed))
     return out
 
 
@@ -178,10 +196,11 @@ def _sft_eval(rec: dict) -> list[tuple[str, bool]]:
     if not stripped:
         return out  # further checks would be vacuous
     out.append(("sft:echo", bool(question) and question is not None and stripped == question.strip()))
-    out.append((
-        "sft:truncated",
-        len(stripped) >= _TRUNCATION_MIN_CHARS and not stripped.endswith(_TERMINAL_CHARS),
-    ))
+    if not looks_like_code(stripped):  # code answers legitimately end in braces/fences
+        out.append((
+            "sft:truncated",
+            len(stripped) >= _TRUNCATION_MIN_CHARS and not stripped.endswith(_TERMINAL_CHARS),
+        ))
     low = stripped.lower()
     out.append(("sft:refusal_boilerplate", any(marker in low for marker in _REFUSAL_MARKERS)))
     short = bool(question) and question is not None and len(question) >= 100 and len(stripped) < max(10.0, 0.05 * len(question))
@@ -242,13 +261,19 @@ def _quality_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[
         elif heuristics == "c4":
             evaluated.extend(_c4_eval(text, domain=None if domain is None else str(domain)))
         elif heuristics == "fineweb":
-            evaluated.extend(_fineweb_eval(text))
+            evaluated.extend(_fineweb_eval(text, None if domain is None else str(domain)))
         if sft_checks and _is_sft_shape(rec):
             evaluated.extend(_sft_eval(rec))
 
         failed = [tag for tag, is_failed in evaluated if is_failed]
-        score = 1.0 - len(failed) / len(evaluated) if evaluated else 1.0
-        quality: dict[str, Any] = {"score": round(score, 4), "failed": failed}
+        # No rule evaluated is absence of evidence: score None, never 1.0.
+        score: float | None = (1.0 - len(failed) / len(evaluated)) if evaluated else None
+        quality: dict[str, Any] = {"score": None if score is None else round(score, 4), "failed": failed}
+        if score is None:
+            quality["unmeasured"] = True
+            stats.modified["quality_unmeasured"] += 1
+        if looks_like_code(text, None if domain is None else str(domain)):
+            stats.modified["code_aware_records"] += 1
         if scorer_fn is not None:
             try:
                 external = float(scorer_fn(text))
@@ -256,14 +281,15 @@ def _quality_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[
                 stats.extra["scorer_error"] = f"scorer call failed: {type(exc).__name__}: {exc}"
             else:
                 quality["external_score"] = round(external, 4)
-                score *= max(0.0, min(1.0, external))
+                score = (1.0 if score is None else score) * max(0.0, min(1.0, external))
                 quality["score"] = round(score, 4)
+                quality.pop("unmeasured", None)
 
         rec_meta = rec.setdefault("meta", {})
         if isinstance(rec_meta, dict):
             rec_meta["quality"] = quality
 
-        if min_score is not None and score < float(min_score):
+        if min_score is not None and score is not None and score < float(min_score):
             stats.drop("low_quality")
             continue
         stats.records_out += 1

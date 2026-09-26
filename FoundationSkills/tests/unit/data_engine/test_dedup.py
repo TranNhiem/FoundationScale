@@ -26,8 +26,16 @@ UNRELATED = " ".join(f"zzz{i:03d}" for i in range(80))
 
 
 def test_exact_duplicates_normalized():
+    # rv8: punctuation-stripping merges distinct records ("x = 1" vs "x 1"), so it
+    # is the opt-in "aggressive" mode; the light default keeps them apart.
     recs = [{"id": "1", "text": "Hello,   World!"}, {"id": "2", "text": "hello world"}]
-    out, stats = run_dedup(recs, {"exact": True, "near": {"enabled": False}})
+    out, _ = run_dedup(recs, {"exact": True, "near": {"enabled": False}})
+    assert [r["id"] for r in out] == ["1", "2"]
+    recs = [{"id": "1", "text": "Hello,   World!"}, {"id": "2", "text": "HELLO, world!"}]
+    out, _ = run_dedup(recs, {"exact": True, "near": {"enabled": False}})
+    assert [r["id"] for r in out] == ["1"]  # case + whitespace still normalized
+    recs = [{"id": "1", "text": "Hello,   World!"}, {"id": "2", "text": "hello world"}]
+    out, stats = run_dedup(recs, {"exact": True, "exact_normalize": "aggressive", "near": {"enabled": False}})
     assert [r["id"] for r in out] == ["1"]
     assert stats.dropped["exact_dup"] == 1
     assert stats.extra["exact_dupes"] == 1

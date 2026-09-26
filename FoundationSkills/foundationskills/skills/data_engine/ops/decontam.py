@@ -79,6 +79,11 @@ def _ngrams(text: str, n: int) -> set[str]:
     return {" ".join(tokens[i:i + n]) for i in range(len(tokens) - n + 1)}
 
 
+def _norm_whole(text: str) -> bytes:
+    """Whole-text key for items shorter than n: an n-gram index cannot see them."""
+    return hashlib.blake2b(" ".join(text.lower().split()).encode("utf-8"), digest_size=16).digest()
+
+
 def _hashed_ngrams(text: str, n: int) -> set[bytes]:
     return {hashlib.blake2b(gram.encode("utf-8"), digest_size=16).digest() for gram in _ngrams(text, n)}
 
@@ -109,6 +114,8 @@ def _load_local_benchmark(path: Path) -> list[str]:
                     continue
                 if isinstance(obj, dict):
                     pieces = [str(obj[k]) for k in _TEXT_KEYS if isinstance(obj.get(k), str)]
+                    if not pieces:  # unfamiliar column names: every string field is benchmark text
+                        _collect_texts(obj, pieces)
                     if pieces:
                         docs.append("\n".join(pieces))
                 elif isinstance(obj, str):
@@ -181,6 +188,7 @@ def _decontam_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator
     action = str(cfg.get("action", "drop"))
 
     benchmark_sets: dict[str, set[bytes]] = {}
+    short_items: dict[str, set[bytes]] = {}
     unmeasured: dict[str, str] = {}
     for name in names:
         docs, reason = _load_benchmark_docs(name, cfg)
@@ -188,9 +196,19 @@ def _decontam_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator
             unmeasured[name] = reason
             continue
         grams: set[bytes] = set()
+        shorts: set[bytes] = set()
         for doc in docs or []:
-            grams |= _hashed_ngrams(doc, n)
+            doc_grams = _hashed_ngrams(doc, n)
+            if doc_grams:
+                grams |= doc_grams
+            elif doc.strip():
+                shorts.add(_norm_whole(doc))  # shorter than n: index the whole item
+        if not grams and not shorts:
+            # nothing indexable: claiming it was "checked" would be a vacuous pass
+            unmeasured[name] = "benchmark produced zero n-grams and zero items"
+            continue
         benchmark_sets[name] = grams
+        short_items[name] = shorts
 
     hits_by_benchmark: dict[str, int] = {name: 0 for name in benchmark_sets}
     hit_records = 0
@@ -199,8 +217,13 @@ def _decontam_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator
         if not isinstance(rec, dict):
             stats.drop("non_dict_record")
             continue
-        grams = _hashed_ngrams(primary_text(rec), n)
-        hits = [name for name, grams_set in benchmark_sets.items() if grams_set and grams & grams_set]
+        text = primary_text(rec)
+        grams = _hashed_ngrams(text, n)
+        whole = _norm_whole(text)
+        # A record shorter than n has no n-grams; compare it whole instead of
+        # letting a leaked short item pass as structurally clean.
+        hits = [name for name, grams_set in benchmark_sets.items()
+                if (grams and grams & grams_set) or whole in short_items.get(name, set())]
         if hits:
             hit_records += 1
             for name in hits:

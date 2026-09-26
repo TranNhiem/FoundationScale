@@ -288,3 +288,71 @@ def test_rv13_non_numeric_goal_facts_refuse_by_name():
             "hardware": {"gpu": "NVIDIA GB200", "gpus_per_node": 4, "nodes": 1}}
     with pytest.raises(PlanningRefusal, match="approx_examples"):
         plan(goal, caps=caps())
+
+
+# ---------------------------------------------------------------- round-2b (rv5-11, rv14, rv19, rv35, rv40-42, F10)
+def test_rv5_rv6_decontam_short_items_and_empty_benchmarks(tmp_path):
+    from foundationskills.skills.data_engine.ops.decontam import _decontam_op
+    bench = tmp_path / "b.jsonl"
+    bench.write_text(json.dumps({"q": "What is two plus two?"}) + "\n")
+    empty = tmp_path / "e.jsonl"
+    empty.write_text(json.dumps({"q": "   "}) + "\n")
+    st = OpStats("decontam")
+    out = list(_decontam_op([{"text": "What is two plus two?"}, {"text": "unrelated text here"}],
+                            {"benchmarks": ["b", "e"], "sources": {"b": str(bench), "e": str(empty)}}, st))
+    assert len(out) == 1 and st.extra["decontam_hits"] == 1       # short leaked item caught whole
+    assert "e" in st.extra["unmeasured_benchmarks"] and "e" not in st.extra["benchmarks_checked"]
+
+
+def test_rv7_no_evaluated_rule_is_unmeasured_not_perfect():
+    from foundationskills.skills.data_engine.ops.quality import _quality_op
+    st = OpStats("quality")
+    out = list(_quality_op([{"text": "x"}], {"heuristics": "none", "min_quality_score": 0.9}, st))
+    assert out and out[0]["meta"]["quality"]["score"] is None and st.modified["quality_unmeasured"] == 1
+
+
+def test_rv8_rv9_rv27_dedup_semantics():
+    from foundationskills.skills.data_engine.ops.dedup import _dedup_op, _record_key
+    a = {"messages": [{"role": "user", "content": "a\nb"}]}
+    b = {"messages": [{"role": "user", "content": "a"}, {"role": "user", "content": "b"}]}
+    assert _record_key(a, "auto") != _record_key(b, "auto")
+    st = OpStats("dedup")
+    out = list(_dedup_op([{"text": "x = 1"}, {"text": "x 1"}], {"near": {"enabled": False}}, st))
+    assert len(out) == 2  # light normalization keeps punctuation-distinct records
+    with pytest.raises(ValueError, match="divide"):
+        list(_dedup_op([{"text": "x"}], {"near": {"num_perm": 100, "bands": 16}}, OpStats("dedup")))
+
+
+def test_rv14_orchestrator_keeps_prior_artifacts_with_explicit_inputs():
+    import inspect
+    from foundationskills.core import orchestrator
+    assert 'request["inputs"] = inputs' in inspect.getsource(orchestrator.Orchestrator.run)
+
+
+def test_rv19_artifact_ids_cannot_escape_directory(tmp_path):
+    from foundationskills.core import Artifact, make_provenance, write_artifact
+    art = Artifact(type="goal_spec", id="../evil", payload={}, provenance=make_provenance("t", "0"))
+    with pytest.raises(ValueError):
+        write_artifact(art, tmp_path)
+
+
+def test_rv35_mix_refuses_duplicate_component_names():
+    from foundationskills.skills.data_engine.ops.mix import _mix as _mix_op
+    with pytest.raises(ValueError, match="unique"):
+        list(_mix_op([], {"components": [{"name": "a", "path": "/x.jsonl", "ratio": 0.5},
+                                         {"name": "a", "path": "/y.jsonl", "ratio": 0.5}], "seed": 0}, OpStats("mix")))
+
+
+def test_rv41_cpt_unknown_size_refuses():
+    from foundationskills.skills.training.cpt import cpt_policy
+    with pytest.raises(ValueError, match="size_b"):
+        cpt_policy(types.SimpleNamespace(size_b=None), 10**9, "domain_expert", True)
+
+
+def test_f10_drop_overlong_counts_drops():
+    from foundationskills.skills.data_engine.ops.tokenize import _tokenize_records
+    st = OpStats("tokenize")
+    # tokenize counts the rendered `text` the format op writes upstream
+    recs = [{"messages": [], "text": "w " * 2000}, {"messages": [], "text": "hi"}]
+    out = list(_tokenize_records(recs, {"seq_len": 256, "drop_overlong": True}, st))
+    assert len(out) == 1 and st.dropped["overlong"] == 1 and st.extra["truncation_rate"] == 0.0

@@ -148,7 +148,8 @@ def recommend_pipeline(
     pack = pretrain_like
     add(
         "tokenize",
-        {"pack": pack, "chunk": pretrain_like, "tokenizer": tokenizer, "seq_len": int(seq_len)},
+        {"pack": pack, "chunk": pretrain_like, "tokenizer": tokenizer, "seq_len": int(seq_len),
+         **({} if pretrain_like else {"drop_overlong": False})},
         (
             f"measure token counts and seq-length stats (tokenizer={tokenizer!r}, seq_len={int(seq_len)}); "
             + ("chunk documents longer than seq_len at paragraph boundaries (FS truncates at max_sequence_length, "
@@ -157,6 +158,16 @@ def recommend_pipeline(
         ),
     )
 
+    if not pretrain_like:
+        rationale.append(
+            "tokenize.drop_overlong is available (off): examples longer than seq_len would be truncated by FS; "
+            "if the readiness report fails DE-RDY-007, enable it or raise seq_len to the measured p99"
+        )
+    if target_format == "rl":
+        rationale.append(
+            "FS RL rewards only single-letter MCQ gold: free-form QA is dropped by format "
+            "(rl_answer_not_mcq_letter); use multiple-choice sources (choices + gold letter)"
+        )
     spec: dict[str, Any] = {
         "target_format": target_format,
         "ops": ops,

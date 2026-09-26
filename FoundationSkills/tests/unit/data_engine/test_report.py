@@ -226,7 +226,11 @@ def test_de_rdy_008_fires_on_family_mismatch_and_null_when_unrecorded(base_case)
     dataset, stats, requirements = base_case
     report = build_readiness(dict(dataset, chat_template_family="qwen3.5"), stats, requirements)
     assert _check(report, "DE-RDY-008")["passed"] is False
-    report2 = build_readiness(dict(dataset, chat_template_family=None), stats, requirements)
+    # rv10: evidence is the format op's MEASURED template_source, not a declared
+    # string; with no template_source recorded the check is unmeasured.
+    fmt_stats = [dict(st, extra={k: v for k, v in (st.get("extra") or {}).items() if k != "template_source"})
+                 if st.get("name") == "format" else st for st in stats]
+    report2 = build_readiness(dict(dataset, chat_template_family=None), fmt_stats, requirements)
     assert _check(report2, "DE-RDY-008")["passed"] is None
 
 
@@ -290,9 +294,9 @@ def test_de_rdy_010_absent_for_non_conversational(tmp_path, base_case):
     pre_requirements = dict(requirements, target_format="pretrain", chat_template_family=None)
     report = build_readiness(pre_dataset, stats, pre_requirements)
     assert "DE-RDY-010" not in {c["rule_id"] for c in report["checks"]}
-    # DE-RDY-008 has no applicable template -> unmeasured by doctrine
-    assert _check(report, "DE-RDY-008")["passed"] is None
-    assert report["verdict"] == "UNMEASURED"
+    # A raw-text corpus has no chat template: "not applicable" is not "unmeasured"
+    # (the old expectation meant no pretrain/cpt dataset could ever PASS).
+    assert _check(report, "DE-RDY-008")["passed"] is True
 
 
 def test_markdown_renders_verdict_rules_and_statuses(base_case):
