@@ -99,6 +99,17 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def _is_fs_refusal(exc: BaseException) -> bool:
+    """FS signals 'a required input is missing' with *Refusal exception classes."""
+    return type(exc).__name__.endswith("Refusal") and type(exc).__module__.startswith("foundationscale")
+
+
+def _exit_from_systemexit(exc: SystemExit) -> int:
+    """Only the four doctrine codes leave this process; anything else is RED."""
+    code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 5)
+    return code if code in (0, 5, 95, 96) else 5
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     try:
@@ -153,7 +164,13 @@ def main(argv: list[str] | None = None) -> int:
             if exc.code == 96:
                 _line("refuse", "objective resolution refused (exit 96 passthrough)")
                 return 96
-            raise
+            return _exit_from_systemexit(exc)
+        except Exception as exc:  # noqa: BLE001
+            if _is_fs_refusal(exc):
+                _line("refuse", f"{type(exc).__name__}: {exc}")
+                return 96
+            _line("red", f"unhandled {type(exc).__name__} in dry-run: {exc}")
+            return 5
         _line("pass", f"dry-run: algorithm {rl_config.algorithm!r} objective resolved (no model load)")
         return 0
 
@@ -169,8 +186,13 @@ def main(argv: list[str] | None = None) -> int:
             # its own reason; pass the verdict through under our marker.
             _line("refuse", "FS RLTrainer refused (exit 96 passthrough; see its REFUSE line above)")
             return 96
-        raise
+        return _exit_from_systemexit(exc)
     except Exception as exc:  # noqa: BLE001 - the contract's RED arm
+        if _is_fs_refusal(exc):
+            # Measured on GB200: BatchRefusal (a corpus FS cannot read) escaped
+            # RLTrainer.run and was reported RED. Every FS *Refusal is a 96.
+            _line("refuse", f"{type(exc).__name__}: {exc}")
+            return 96
         traceback.print_exc(file=sys.stderr)
         _line("red", f"unhandled {type(exc).__name__} escaped RLTrainer.run: {exc}")
         return 5

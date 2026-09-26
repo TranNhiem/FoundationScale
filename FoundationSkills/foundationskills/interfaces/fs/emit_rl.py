@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from foundationskills.interfaces.fs.capabilities import FSCapabilities
+from foundationskills.interfaces.fs.emit_train import fs_repo_root
 
 # hparams key -> RLTrainConfig field. Only keys present in the stage hparams
 # are emitted, so RLTrainConfig's own dataclass defaults govern the rest.
@@ -81,12 +82,22 @@ def emit_rl(
             continue  # resolved above from fs_columns fallback
         if hparam_key in hparams and hparams[hparam_key] is not None:
             rl_config[field] = hparams[hparam_key]
+    if "answer_pattern" in rl_config and str(dataset.get("format")) == "rl":
+        # Data Engine rl datasets carry single-letter MCQ gold (the only reward FS
+        # verifies); a recipe's free-form extraction pattern would not match it.
+        rl_config.pop("answer_pattern")
     rl_config["output_dir"] = output_dir
     rl_config["save_final"] = bool(stage.get("save_final", True))
 
-    check_reason = caps.check("rl", algorithm=algorithm)
+    # Data Engine rl datasets are MCQ-letter by construction (format drops the rest).
+    answer_kind = "mcq_letter" if str(dataset.get("format")) == "rl" else None
+    check_reason = caps.check("rl", algorithm=algorithm, answer_kind=answer_kind)
     if check_reason is not None:
         missing.append(check_reason)
+    # FS RL persists no checkpoint today: the stage cannot hand off, but an
+    # operator may still run it to MEASURE (rewards, advantages, throughput).
+    measurement_only_ok = caps.check("rl", algorithm=algorithm, answer_kind=answer_kind,
+                                     require_checkpoint=False) is None and bool(data_path)
 
     argv = ["fskills-rl", "--config", f"{output_dir}/rl_config.json"]
     expected_outputs = [
@@ -110,5 +121,7 @@ def emit_rl(
         "output_dir": output_dir,
         "run_name": run_name,
         "rl_config": rl_config,
+        "measurement_only_ok": measurement_only_ok,
+        "cwd": fs_repo_root(),
         "warnings": [_SINGLE_DEVICE_WARNING],
     }

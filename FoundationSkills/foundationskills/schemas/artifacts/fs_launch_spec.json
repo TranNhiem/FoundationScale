@@ -1,18 +1,81 @@
-
 {
   "type": "object",
   "description": "Concrete launch arguments for FoundationScale or the fskills RL adapter.",
-  "required": ["stage_name", "entry", "argv", "env", "sbatch", "dry_run_argv", "expected_outputs", "executable", "missing"],
+  "required": [
+    "stage_name",
+    "entry",
+    "argv",
+    "env",
+    "sbatch",
+    "dry_run_argv",
+    "expected_outputs",
+    "executable",
+    "missing"
+  ],
   "additionalProperties": true,
   "properties": {
-    "stage_name": {"type": "string", "minLength": 1},
-    "entry": {"enum": ["foundationscale-train", "fskills-rl"]},
-    "argv": {"type": "array", "items": {"type": "string"}},
-    "env": {"type": "object", "additionalProperties": {"type": "string"}},
-    "sbatch": {"type": ["string", "null"]},
-    "dry_run_argv": {"type": ["array", "null"], "items": {"type": "string"}},
-    "expected_outputs": {"type": "array", "items": {"type": "string"}},
-    "executable": {"type": "boolean"},
-    "missing": {"type": ["string", "null"]}
+    "stage_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "entry": {
+      "enum": [
+        "foundationscale-train",
+        "fskills-rl"
+      ]
+    },
+    "argv": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "sbatch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "dry_run_argv": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "expected_outputs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "executable": {
+      "type": "boolean"
+    },
+    "missing": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cwd": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "launch directory: the FS repo root (FS records code provenance from cwd)"
+    },
+    "model_source": {
+      "type": "string",
+      "description": "'base' or 'stage:<name>' (stage chaining)"
+    }
   }
 }

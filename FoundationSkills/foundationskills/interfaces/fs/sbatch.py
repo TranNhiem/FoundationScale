@@ -20,10 +20,23 @@ cannot silently disagree.
 """
 from __future__ import annotations
 
+import re
 import shlex
 from pathlib import Path
 
 _LAUNCHERS = ("torchrun", "python")
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+# argv tokens the shell must expand at run time (quoting them would hand
+# torchrun the literal text "$MASTER_ADDR" as its rendezvous endpoint)
+_RUNTIME_VARS = ("${MASTER_ADDR}",)
+
+
+def _quote(token: str) -> str:
+    if any(var in token for var in _RUNTIME_VARS):
+        if '"' in token or "`" in token or "$(" in token:
+            raise ValueError(f"refusing to render unsafe runtime token {token!r}")
+        return f'"{token}"'  # double quotes: expands ${MASTER_ADDR}, nothing else is special here
+    return shlex.quote(token)
 
 
 def render_sbatch(
@@ -36,8 +49,15 @@ def render_sbatch(
     job_name: str,
     log_dir: str,
     launcher: str,
+    cwd: str | None = None,
+    cpus_per_task: int | None = None,
 ) -> str:
-    """Return the sbatch script text for one launch."""
+    """Return the sbatch script text for one launch.
+
+    ``cwd`` is the FS repo root: FS records code provenance from the launch
+    directory, so the script cds there before srun."""
+    if not _SAFE_NAME.match(str(job_name)):
+        raise ValueError(f"job_name {job_name!r} must match [A-Za-z0-9._-]+")
     if launcher not in _LAUNCHERS:
         raise ValueError(f"launcher must be one of {_LAUNCHERS}, got {launcher!r}")
     if not argv:
@@ -54,6 +74,7 @@ def render_sbatch(
         f"#SBATCH --nodes={int(nodes)}",
         "#SBATCH --ntasks-per-node=1",
         f"#SBATCH --gres=gpu:{int(gpus_per_node)}",
+        *( [f"#SBATCH --cpus-per-task={int(cpus_per_task)}"] if cpus_per_task else [] ),
         "#SBATCH --time=10-00:00:00",
         "#SBATCH --exclude=r01dgx02",
         f"#SBATCH --output={log_dir}/%x-%j.out",
@@ -82,7 +103,11 @@ def render_sbatch(
             ]
         )
 
-    lines.append("srun " + shlex.join([str(a) for a in argv]))
+    if cwd:
+        lines.append("# FS records code provenance from the launch directory (its git commit).")
+        lines.append(f"cd {shlex.quote(str(cwd))}")
+        lines.append("")
+    lines.append("srun " + " ".join(_quote(str(a)) for a in argv))
     lines.append("")
     return "\n".join(lines)
 

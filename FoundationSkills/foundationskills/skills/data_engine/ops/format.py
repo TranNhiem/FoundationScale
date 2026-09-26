@@ -40,7 +40,7 @@ Deliberate choices where the spec is silent:
 """
 from __future__ import annotations
 
-from typing import Any, Iterable, Iterator
+from typing import Callable, Any, Iterable, Iterator
 
 from foundationskills.skills.data_engine.ops.base import FunctionOp, OpStats, counted, register_op
 
@@ -54,27 +54,23 @@ TARGET_FORMATS = ("pretrain", "cpt", "sft", "mm_sft", "preference", "rl")
 # ---------------------------------------------------------------------------
 
 
-def _render_gemma4(messages: list[dict[str, str]]) -> str:
-    """Gemma builtin template; the system prompt is folded into the first user turn."""
-    system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
-    body = [m for m in messages if m["role"] != "system"]
+def _render_gemma4(messages: list[dict[str, Any]], *, thinking: bool = False) -> str:
+    """Gemma-4 builtin template, copied from the real gemma-4-E4B-it
+    chat_template output (2026-09-26): ``<|turn>{role}\n...<turn|>\n`` with the
+    assistant role spelled ``model``. (The earlier builtin emitted Gemma-2/3
+    ``<start_of_turn>`` markers -- wrong for this family.) No ``<bos>``: FS's
+    tokenizer call adds it. ``thinking`` mirrors enable_thinking=True, which the
+    real template renders as a ``<|think|>`` system prefix."""
+    system = "\n\n".join(str(m["content"]) for m in messages if m["role"] == "system")
     parts: list[str] = []
-    system_used = not system
+    if thinking or system:
+        parts.append(f"<|turn>system\n{'<|think|>' + chr(10) if thinking else ''}{system}<turn|>\n")
+    body = [m for m in messages if m["role"] != "system"]
     for m in body:
         role = "model" if m["role"] == "assistant" else "user"
-        content = m["content"]
-        if not system_used and role == "user":
-            content = f"{system}\n\n{content}"
-            system_used = True
-        parts.append(f"<start_of_turn>{role}\n{content}<end_of_turn>\n")
-    if not system_used:
-        parts.insert(0, f"<start_of_turn>user\n{system}<end_of_turn>\n")
-    if body:
-        last_role = "model" if body[-1]["role"] == "assistant" else "user"
-        if last_role != "model":
-            parts.append("<start_of_turn>model\n")
-    else:
-        parts.append("<start_of_turn>model\n")
+        parts.append(f"<|turn>{role}\n{m['content']}<turn|>\n")
+    if not body or body[-1]["role"] != "assistant":
+        parts.append("<|turn>model\n")
     return "".join(parts)
 
 
@@ -134,6 +130,72 @@ def _render_internal(
     return _render_generic(messages), "generic", error
 
 
+def _strip_bos(text: str, tokenizer: Any) -> str:
+    """FS tokenizes the text column with special tokens on, which prepends BOS;
+    a template that already wrote ``<bos>`` would give every example two."""
+    bos = getattr(tokenizer, "bos_token", None) if tokenizer is not None else None
+    for token in filter(None, (bos, "<bos>")):
+        if isinstance(token, str) and text.startswith(token):
+            return text[len(token):]
+    return text
+
+
+def _inject_gemma4(messages: list[dict[str, Any]], tokenizer: Any) -> str:
+    """Gemma-4 renders a trace as ``<|channel>thought\n...\n<channel|>`` only on
+    tool-call turns and strips it from content, so render content-only in
+    thinking mode and insert the trace after the LAST ``<|turn>model\n``."""
+    trace = next((m.get("reasoning_content") for m in reversed(messages)
+                  if m.get("role") == "assistant" and m.get("reasoning_content")), None)
+    plain = [{k: v for k, v in m.items() if k != "reasoning_content"} for m in messages]
+    if tokenizer is not None and getattr(tokenizer, "chat_template", None):
+        text = tokenizer.apply_chat_template(plain, tokenize=False, enable_thinking=True)
+    else:
+        text = _render_gemma4(plain, thinking=True)
+    marker = "<|turn>model\n"
+    at = text.rfind(marker)
+    if trace is None or at < 0:
+        return text
+    at += len(marker)
+    return text[:at] + f"<|channel>thought\n{trace}\n<channel|>" + text[at:]
+
+
+REASONING_INJECTORS: dict[str, Callable[[list[dict[str, Any]], Any], str]] = {"gemma4": _inject_gemma4}
+
+
+def render_with_reasoning(messages: list[dict[str, Any]], *, family: str | None,
+                          tokenizer: Any = None) -> tuple[str, str]:
+    """Render, then VERIFY every reasoning trace survived. Returns (text, mode),
+    mode in {"none", "native", "injected", "inline_fallback", "lost"}.
+
+    Templates disagree: measured, Qwen3.5 renders reasoning_content natively as
+    ``<think>``; Gemma-4 silently drops it. "lost" means a tokenizer template
+    dropped the trace and no injector exists -- the op drops such records."""
+    traces = [m["reasoning_content"] for m in messages
+              if m.get("role") == "assistant" and isinstance(m.get("reasoning_content"), str)]
+    if not traces:
+        return render_chat(messages, family=family, tokenizer=tokenizer), "none"
+    has_template = tokenizer is not None and getattr(tokenizer, "chat_template", None)
+    if has_template:
+        try:
+            text = tokenizer.apply_chat_template(messages, tokenize=False)
+            if isinstance(text, str) and all(t in text for t in traces):
+                return text, "native"
+        except Exception:  # noqa: BLE001 - fall through to the injector
+            pass
+    injector = REASONING_INJECTORS.get(_normalise_family(family) or "")
+    if injector is not None:
+        text = injector(messages, tokenizer if has_template else None)
+        if all(t in text for t in traces):
+            return text, "injected"
+    if has_template:
+        return render_chat(messages, family=family, tokenizer=tokenizer), "lost"
+    inline = [dict(m) for m in messages]
+    for m in inline:
+        if m.get("role") == "assistant" and m.get("reasoning_content"):
+            m["content"] = f"<think>\n{m.pop('reasoning_content')}\n</think>\n\n{m['content']}"
+    return render_chat(inline, family=family, tokenizer=None), "inline_fallback"
+
+
 def render_chat(messages: list[dict[str, str]], *, family: str | None, tokenizer: Any = None) -> str:
     """Render a conversation. Uses ``tokenizer.apply_chat_template`` when a
     tokenizer object with a chat_template is given; otherwise the builtin
@@ -162,7 +224,10 @@ def _valid_messages(rec: dict) -> list[dict[str, str]] | None:
         role, content = m.get("role"), m.get("content")
         if role not in _ROLES or not isinstance(content, str):
             return None
-        out.append({"role": role, "content": content})
+        turn = {"role": role, "content": content}
+        if role == "assistant" and isinstance(m.get("reasoning_content"), str) and m["reasoning_content"].strip():
+            turn["reasoning_content"] = m["reasoning_content"]  # rendered + verified downstream
+        out.append(turn)
     return out
 
 
@@ -263,6 +328,11 @@ def _convert(
         if system_prompt and not (messages and messages[0]["role"] == "system"):
             messages = [{"role": "system", "content": system_prompt}, *messages]
         text, source, error = _render_internal(messages, family=family, tokenizer=tokenizer)
+        mode = "none"
+        if any(m.get("reasoning_content") for m in messages):
+            text, mode = render_with_reasoning(messages, family=family, tokenizer=tokenizer)
+        text = _strip_bos(text, tokenizer)
+        meta["reasoning_render"] = mode
         out: dict[str, Any] = {"id": rid, "messages": messages, "text": text, "meta": meta}
         if target == "mm_sft":
             image: str | None = None
@@ -282,6 +352,21 @@ def _convert(
             return None
         return {"id": rid, "prompt": prompt, "chosen": chosen, "rejected": rejected, "meta": meta}, None, None
 
+    if target == "rl" and isinstance(rec.get("choices"), list) and rec.get("choices"):
+        # FS RL verifies ONLY a single-letter gold on a question that ends with
+        # "Answer with a single letter." (foundationscale.rl.corpus).
+        stem = _first_str(rec, ("prompt", "question"))
+        letter = str(rec.get("answer") or "").strip()
+        if stem is None or not (len(letter) == 1 and "A" <= letter <= "Z"):
+            return None
+        lines = [f"{c.get('label')}. {c.get('text')}" for c in rec["choices"] if isinstance(c, dict)]
+        question = f"{stem}\n" + "\n".join(lines) + "\nAnswer with a single letter."
+        out = {"id": rid, "conversations": [{"from": "human", "value": question}, {"from": "gpt", "value": letter}],
+               "meta": meta, gold_key: letter}
+        if system_prompt:
+            out["system"] = system_prompt
+        return out, None, None
+
     if target == "rl":
         built = _as_sharegpt(rec)
         if built is None:
@@ -292,7 +377,10 @@ def _convert(
         out = {"id": rid, "conversations": turns, "meta": meta}
         if system:
             out["system"] = system
-        out[gold_key] = answer if isinstance(answer, str) else str(answer)
+        gold = (answer if isinstance(answer, str) else str(answer)).strip()
+        if not (len(gold) == 1 and "A" <= gold.upper() <= "Z"):
+            return None  # free-form gold: FS RL cannot verify it (dropped with a named reason)
+        out[gold_key] = gold.upper()
         return out, None, None
 
     return None
@@ -336,6 +424,7 @@ def _format_records(records: Iterable[dict], cfg: dict, stats: OpStats) -> Itera
         stats.extra["sft_loss_disclosure"] = _SFT_LOSS_DISCLOSURE
     if target == "rl":
         stats.extra["gold_key"] = gold_key
+        stats.extra["rl_reward_kind"] = "mcq_letter"
     hints = dict(_FS_COLUMN_HINTS.get(target, {"text_column": None, "image_column": None, "gold_key": None}))
     if target == "mm_sft":
         hints["text_column"], hints["image_column"] = "text", image_column
@@ -366,13 +455,24 @@ def _format_records(records: Iterable[dict], cfg: dict, stats: OpStats) -> Itera
         )
         if converted is None:
             if strict:
-                stats.drop(f"unconvertible:{target}")
+                if target == "rl" and (_first_str(rec, ("answer", "output", "response")) is not None
+                                       or rec.get("choices")):
+                    stats.drop("rl_answer_not_mcq_letter")  # FS RL rewards only single-letter MCQ gold
+                else:
+                    stats.drop(f"unconvertible:{target}")
                 continue
             stats.modified["unconvertible_passthrough"] += 1
             stats.records_out += 1
             yield rec
             continue
         out, source, error = converted
+        mode = (out.get("meta") or {}).get("reasoning_render") if isinstance(out, dict) else None
+        if mode and mode != "none":
+            modes = stats.extra.setdefault("reasoning_render", {})
+            modes[mode] = modes.get(mode, 0) + 1
+            if mode == "lost":
+                stats.drop("reasoning_lost_in_template")  # never keep a reasoning record without its trace
+                continue
         if error:
             stats.extra.setdefault("tokenizer_error", error)
         if source:

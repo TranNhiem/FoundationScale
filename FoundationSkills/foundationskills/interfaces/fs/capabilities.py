@@ -34,6 +34,12 @@ class FSCapabilities:
     rl_runnable: dict[str, str | None] = field(default_factory=dict)
     families: dict[str, tuple[str, ...]] = field(default_factory=dict)
     backends: tuple[str, ...] = ()
+    # flag -> allowed values (argparse `choices`); a value outside them is refused by FS
+    train_flag_choices: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Reward kinds FS RL can verify, measured behaviourally (77bfa65: mcq_letter only)
+    rl_reward_kinds: tuple[str, ...] = ()
+    # Whether RLTrainer persists the trained policy (77bfa65: False); None = unmeasured
+    rl_saves_checkpoint: bool | None = None
     notes: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
 
@@ -41,7 +47,9 @@ class FSCapabilities:
         data = asdict(self)
         data["train_flags"] = sorted(self.train_flags)
         data["families"] = {k: list(v) for k, v in self.families.items()}
-        for key in ("train_objectives", "sharding_strategies", "executed_axes", "refused_axes", "rl_algorithms", "backends", "notes", "errors"):
+        data["train_flag_choices"] = {k: list(v) for k, v in self.train_flag_choices.items()}
+        for key in ("train_objectives", "sharding_strategies", "executed_axes", "refused_axes", "rl_algorithms",
+                    "rl_reward_kinds", "backends", "notes", "errors"):
             data[key] = list(getattr(self, key))
         return data
 
@@ -56,10 +64,19 @@ class FSCapabilities:
         ep: int = 1,
         cp: int = 1,
         multi_gpu_rl: bool = False,
+        require_checkpoint: bool = True,
+        answer_kind: str | None = None,
     ) -> str | None:
-        """Return None if executable, else a 'missing: ...' reason naming the gap."""
+        """Return None if executable, else a 'missing: ...' reason naming the gap.
+
+        For rl/preference, ``require_checkpoint`` asks whether the stage can hand
+        weights to the next one (the default: a stage that trains and keeps
+        nothing has not completed). Pass False only for measurement-only runs.
+        ``answer_kind`` names the gold the data carries (e.g. "free_form")."""
         if not self.available:
             return "missing: importable foundationscale"
+        if stage not in _KNOWN_STAGES:
+            return f"missing: unknown stage {stage!r} (known: {', '.join(_KNOWN_STAGES)})"
         objectives = {o.lower() for o in self.train_objectives}
         if stage in {"pretrain", "cpt", "sft"} and "sft" not in objectives:
             opts = ", ".join(self.train_objectives) or "<none>"
@@ -78,8 +95,14 @@ class FSCapabilities:
                 return f"missing: {algorithm} is registered but FS RLTrainer refuses it ({reason[:160]}); runnable today: {runs}"
             # Runnability first: "multi-GPU" is the wrong refusal for an
             # algorithm that cannot run on any number of GPUs.
+            if answer_kind is not None and answer_kind not in self.rl_reward_kinds:
+                kinds = ", ".join(self.rl_reward_kinds) or "<unmeasured>"
+                return f"missing: FS RL rewards only {kinds}; data answers are {answer_kind}"
             if multi_gpu_rl:
                 return "missing: multi-GPU RL (FS RLTrainer is single-device)"
+            if require_checkpoint and self.rl_saves_checkpoint is not True:
+                why = "unmeasured" if self.rl_saves_checkpoint is None else "does not persist the trained policy (no checkpoint)"
+                return f"missing: FS RLTrainer {why}"
             return None  # the RL driver is single-device: backend/axes do not apply
         if backend not in self.backends:
             backs = ", ".join(self.backends) or "<none>"
@@ -89,7 +112,7 @@ class FSCapabilities:
         for axis, value in axes.items():
             if int(value) > 1 and axis in refused:
                 return f"missing: {axis}>1 is REFUSED by installed FS"
-            if int(value) > 1 and not self.axes_measured and axis in {"pp", "ep"}:
+            if int(value) > 1 and not self.axes_measured:
                 return f"missing: {axis} unmeasured; run probe(deep=True)"
         return None
 
@@ -167,6 +190,50 @@ def _probe_backends(sharding: tuple[str, ...], fs_module: Any) -> tuple[str, ...
     except Exception:
         pass
     return tuple(backends)
+
+
+_KNOWN_STAGES = ("pretrain", "cpt", "sft", "preference", "rl")
+
+
+def _probe_flag_choices(errors: list[str]) -> dict[str, tuple[str, ...]]:
+    try:
+        from foundationscale.train import cli  # type: ignore
+
+        return {
+            opt: tuple(str(c) for c in action.choices)
+            for action in getattr(cli.build_parser(), "_actions", [])
+            if getattr(action, "choices", None)
+            for opt in action.option_strings if str(opt).startswith("--")
+        }
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"flag choices probe failed: {type(exc).__name__}: {exc}")
+        return {}
+
+
+def _probe_rl_rewards(errors: list[str]) -> tuple[tuple[str, ...], bool | None]:
+    """Behavioural probe: hand FS's own gold reader a letter and free-form golds;
+    read RLTrainer's source for any checkpoint write. No model, no GPU."""
+    kinds: list[str] = []
+    try:
+        from foundationscale.rl import corpus  # type: ignore
+
+        if corpus._declared_gold({"answer": "B"}, "probe", 0, "answer") == "B":
+            kinds.append("mcq_letter")
+        if any(corpus._declared_gold({"answer": v}, "probe", 0, "answer") is not None for v in ("42", "x = 3/4")):
+            kinds.append("free_form")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"rl reward-kind probe failed: {type(exc).__name__}: {exc}")
+    saves: bool | None = None
+    try:
+        import inspect
+
+        from foundationscale.rl.trainer import RLTrainer  # type: ignore
+
+        src = inspect.getsource(RLTrainer)
+        saves = "save_pretrained" in src or ".save(" in src
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"rl checkpoint probe failed: {type(exc).__name__}: {exc}")
+    return tuple(kinds), saves
 
 
 def _probe_cli(notes: list[str], errors: list[str]) -> tuple[frozenset[str], tuple[str, ...]]:
@@ -290,11 +357,14 @@ def probe(deep: bool = False, python: str | None = None) -> FSCapabilities:
 
     rl_algorithms: tuple[str, ...] = ()
     rl_runnable: dict[str, str | None] = {}
+    rl_reward_kinds: tuple[str, ...] = ()
+    rl_saves_checkpoint: bool | None = None
     try:
         from foundationscale.rl.registry import available_algorithm_names  # type: ignore
 
         rl_algorithms = _str_tuple(tuple(available_algorithm_names()))
         rl_runnable = _probe_rl_runnable(rl_algorithms, errors)
+        rl_reward_kinds, rl_saves_checkpoint = _probe_rl_rewards(errors)
     except Exception as exc:
         errors.append(f"RL registry probe failed: {type(exc).__name__}: {exc}")
 
@@ -324,6 +394,9 @@ def probe(deep: bool = False, python: str | None = None) -> FSCapabilities:
         rl_runnable=rl_runnable,
         families=families,
         backends=tuple(backends),
+        train_flag_choices=_probe_flag_choices(errors),
+        rl_reward_kinds=rl_reward_kinds,
+        rl_saves_checkpoint=rl_saves_checkpoint,
         notes=tuple(notes),
         errors=tuple(errors),
     )
@@ -336,5 +409,7 @@ KNOWN_BASELINE: dict[str, Any] = {
     "refused_axes": ("pp", "ep"),
     "executed_axes": ("tp", "cp"),
     "rl_algorithm_count": 18,
+    "rl_reward_kinds": ("mcq_letter",),
+    "rl_saves_checkpoint": False,
     "note": "drift-test baseline only; never use for decisions",
 }

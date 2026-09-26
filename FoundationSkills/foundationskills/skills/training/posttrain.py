@@ -46,7 +46,7 @@ def _requested_rl_algorithm(goal: Any, data_facts: dict) -> str:
 
 def _first_runnable_rl(caps: Any) -> str | None:
     for name, *_ in _rl_candidates(caps):
-        if caps.check("rl", algorithm=name) is None:
+        if caps.check("rl", algorithm=name, require_checkpoint=False) is None:
             return name
     return None
 
@@ -67,7 +67,7 @@ def _rl_candidates(caps: Any, requested: str | None = None) -> list[tuple[str, s
     checked: list[tuple[str, str | None]] = []
     for name in order:
         try:
-            checked.append((name, caps.check("rl", algorithm=name)))
+            checked.append((name, caps.check("rl", algorithm=name, require_checkpoint=False)))
         except Exception as exc:  # noqa: BLE001 - treat as missing, keep checking others
             checked.append((name, f"missing: caps.check failed for {name}: {exc}"))
     return checked
@@ -161,7 +161,7 @@ def select_algorithm(stage: str, goal: Any, data_facts: dict, caps: Any) -> dict
 
     if stage == "preference":
         requested = str(facts.get("requested_preference_algorithm") or "dpo")
-        missing = caps.check("preference", algorithm=requested)
+        missing = caps.check("preference", algorithm=requested, require_checkpoint=False)
         has_answers = bool(facts.get("has_verifiable_answers"))
         rl_fallback = _first_runnable_rl(caps) if has_answers else None
         because = (

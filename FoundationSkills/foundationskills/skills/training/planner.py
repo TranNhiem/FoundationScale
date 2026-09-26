@@ -369,8 +369,19 @@ def plan(
 
     # 3. data analysis -------------------------------------------------------
     declared_facts = dict(goal.get("data_facts") or {})
-    sources = (goal.get("data") or {}).get("sources") or []
-    approx_tokens = sum(int(s.get("approx_tokens") or 0) for s in sources if isinstance(s, dict))
+    sources = [s for s in ((goal.get("data") or {}).get("sources") or []) if isinstance(s, dict)]
+    for src in sources:  # rv13: a non-number is a named refusal, not a ValueError
+        for key in ("approx_tokens", "approx_examples"):
+            if src.get(key) is not None and (isinstance(src[key], bool) or not isinstance(src[key], (int, float))):
+                raise PlanningRefusal(f"missing input: goal.data.sources[].{key} must be a number, got {src[key]!r}")
+    tagged = any(src.get("use_for") for src in sources)
+
+    def _sum_for(stage_name: str | None, key: str) -> int:
+        """F8: sum only the sources tagged for a stage; untagged goals count all."""
+        return sum(int(src.get(key) or 0) for src in sources
+                   if stage_name is None or not tagged or stage_name in (src.get("use_for") or []))
+
+    approx_tokens = _sum_for("cpt", "approx_tokens") if tagged else _sum_for(None, "approx_tokens")
     readiness_stats = (readiness or {}).get("stats") or {}
     domain_tokens = readiness_stats.get("num_tokens")
     domain_tokens = int(domain_tokens) if isinstance(domain_tokens, (int, float)) else int(approx_tokens)
@@ -386,9 +397,15 @@ def plan(
             )
         ),
         "requested_rl_algorithm": declared_facts.get("requested_rl_algorithm") or goal.get("rl_algorithm"),
-        "rl_examples": declared_facts.get("rl_examples")
-        or (sum(int(s.get("approx_examples") or 0) for s in sources if isinstance(s, dict)) or None),
+        "rl_examples": declared_facts.get("rl_examples") or (_sum_for("rl", "approx_examples") or None),
+        # the gold the RL data carries; FS verifies only single-letter MCQ gold
+        "answer_kind": declared_facts.get("answer_kind")
+        or next((src.get("answer_kind") for src in sources
+                 if src.get("answer_kind") and (not tagged or "rl" in (src.get("use_for") or []))), None),
     }
+    if not tagged and len(sources) > 1:
+        decide("data_analysis", "sources not tagged with use_for",
+               "all sources' examples/tokens counted for every stage; tag sources with use_for for per-stage sizing")
     for key in ("sft_tokens", "rl_tokens", "rl_group_size", "rl_prompt_tokens", "rl_max_new_tokens"):
         if key in declared_facts:
             data_facts[key] = declared_facts[key]
@@ -544,8 +561,13 @@ def plan(
                     "token_budget": cpt["token_budget"],
                 }
             )
-        seq_len = int(hparams.get("max_sequence_length") or 4096)
-        micro_batch = int(hparams.get("per_device_batch_size") or 2)
+        def _first(*keys: str, default: Any = None) -> Any:
+            return next((hparams[k] for k in keys if hparams.get(k) is not None), default)
+
+        seq_len = int(_first("max_sequence_length", "seq_len", "max_seq_len", default=4096))
+        micro_batch = int(_first("per_device_batch_size", "micro_batch", "micro_batch_size", default=2))
+        grad_ckpt = bool(_first("gradient_checkpointing", "grad_ckpt", default=True))
+        sharding = "ddp" if stage == "rl" else str(_first("sharding_strategy", "sharding", default="fsdp"))
 
         # estimate
         mem = estimate_memory(
@@ -553,12 +575,13 @@ def plan(
             method=method,
             seq_len=seq_len,
             micro_batch=micro_batch,
-            sharding="fsdp",
+            sharding=sharding if sharding in ("ddp", "fsdp") else "fsdp",
+            grad_ckpt=grad_ckpt,
             world=gpus_for_stage,
         )
-        time_kwargs: dict[str, Any] = {"tokens": tokens, "hardware": hw, "gpus": gpus_for_stage, "method": method}
-        if stage == "rl":
-            time_kwargs["rl_generation_factor"] = 3.0
+        time_kwargs: dict[str, Any] = {"tokens": tokens, "hardware": hw, "gpus": gpus_for_stage, "method": method,
+                                       "stage": stage, "sharding": sharding, "micro_batch": micro_batch,
+                                       "grad_ckpt": grad_ckpt}
         te = estimate_time(variant, **time_kwargs)
         estimate = {
             "tokens": tokens,
@@ -605,7 +628,15 @@ def plan(
 
         # executable from measured capabilities only
         if stage in ("preference", "rl"):
-            missing = caps.check(stage, algorithm=algorithm, multi_gpu_rl=(gpus_for_stage > 1))
+            answer_kind = data_facts.get("answer_kind") if stage == "rl" else None
+            missing = caps.check(stage, algorithm=algorithm, multi_gpu_rl=(stage == "rl" and gpus_for_stage > 1),
+                                 answer_kind=answer_kind)
+            if missing and "checkpoint" in missing and caps.check(
+                    stage, algorithm=algorithm, answer_kind=answer_kind, require_checkpoint=False) is None:
+                decide("executability", f"{stage}: measurement-only",
+                       f"{algorithm} runs on the installed FS, but FS RLTrainer persists no trained policy, so the "
+                       f"stage can be run to measure rewards/throughput and cannot hand weights to a later stage "
+                       f"(core gap: RL checkpoint persistence)")
         else:
             missing = caps.check(stage, backend="fsdp", tp=1)
         if missing is None and algo_sel.get("missing"):

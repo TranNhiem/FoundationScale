@@ -42,18 +42,30 @@ def launch(
     confirm: str | None,
     submit: bool = True,
     runner: Callable[..., Any] = subprocess.run,
+    measurement_only: bool = False,
 ) -> dict[str, Any]:
     """Launch a confirmed fs_launch_spec. Returns {job_id|pid, command, dry_run_rc, returncode}."""
+    # FS records code provenance from the launch cwd, and the spec env carries
+    # measured launch facts (e.g. GB200 NCCL pins); both apply to every process.
+    import os as _os
+
+    run_kwargs: dict[str, Any] = {"env": {**_os.environ, **{str(k): str(v) for k, v in (spec.get("env") or {}).items()}}}
+    if spec.get("cwd"):
+        run_kwargs["cwd"] = str(spec["cwd"])
     require_confirmation(spec, confirm)
 
     if spec.get("executable") is not True:
-        missing = spec.get("missing") or "spec.executable is not true (no positive evidence of executability)"
-        raise LaunchRefused(f"launch refused: {missing}")
+        # A measurement-only run (e.g. FS RL, which trains but saves nothing) is
+        # allowed ONLY when asked for explicitly and the spec says the sole gap is
+        # the hand-off; it is still behind the same confirmation hash.
+        if not (measurement_only and spec.get("measurement_only_ok") is True):
+            missing = spec.get("missing") or "spec.executable is not true (no positive evidence of executability)"
+            raise LaunchRefused(f"launch refused: {missing}")
 
     dry_run_rc: int | None = None
     dry_run_argv = spec.get("dry_run_argv")
     if dry_run_argv:
-        completed = runner(list(dry_run_argv), capture_output=True, text=True, check=False)
+        completed = runner(list(dry_run_argv), capture_output=True, text=True, check=False, **run_kwargs)
         dry_run_rc = int(completed.returncode)
         if dry_run_rc != 0:
             tail = (getattr(completed, "stdout", "") or "")[-2000:]
@@ -84,7 +96,7 @@ def launch(
         if not argv:
             raise LaunchRefused("launch refused: spec.argv is empty and no sbatch path applies")
         command = shlex.join(argv)
-        completed = runner(argv, capture_output=True, text=True, check=False)
+        completed = runner(argv, capture_output=True, text=True, check=False, **run_kwargs)
         returncode = int(completed.returncode)
 
     return {

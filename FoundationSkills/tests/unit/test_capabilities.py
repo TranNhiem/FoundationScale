@@ -17,6 +17,8 @@ def base_caps(**overrides: object) -> FSCapabilities:
         refused_axes=("pp", "ep"),
         axes_measured=True,
         rl_algorithms=("grpo", "ppo"),
+        rl_saves_checkpoint=True,  # hypothetical: FS 77bfa65 measures False (see test_fix_*)
+        rl_reward_kinds=("mcq_letter",),
         rl_runnable={"grpo": None, "ppo": None},
         families={"qwen": ("llm",)},
         backends=("ddp", "fsdp"),
@@ -89,7 +91,8 @@ def test_check_backend_axes_and_multi_gpu_rl() -> None:
     assert pp_refused and "pp>1 is REFUSED" in pp_refused
     unmeasured = base_caps(axes_measured=False, refused_axes=())
     assert "pp unmeasured; run probe(deep=True)" in (unmeasured.check("sft", pp=2) or "")
-    assert unmeasured.check("sft", tp=2) is None
+    # rv0: an unmeasured tp is not evidence that tp executes
+    assert "tp unmeasured" in (unmeasured.check("sft", tp=2) or "")
 
 
 def test_capabilities_to_dict_round_shape() -> None:
@@ -114,7 +117,10 @@ def test_rl_runnability_is_measured_not_assumed() -> None:
         msg = caps.check("rl", algorithm=alg)
         assert msg and "refuses" in msg and alg in msg
     for alg in runnable:
-        assert caps.check("rl", algorithm=alg) is None
+        # runnable != able to hand off: FS 77bfa65 saves no RL checkpoint (measured)
+        assert caps.check("rl", algorithm=alg, require_checkpoint=False) is None
+        if caps.rl_saves_checkpoint is not True:
+            assert "checkpoint" in (caps.check("rl", algorithm=alg) or "")
 
 
 def test_rl_check_refuses_when_runnability_unmeasured() -> None:
