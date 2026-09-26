@@ -605,6 +605,8 @@ def plan(
                     "token_budget": cpt["token_budget"],
                 }
             )
+            # the CPT token budget IS the total; a recipe "epochs" alongside it would contradict it
+            hparams.pop("epochs", None)
         def _first(*keys: str, default: Any = None) -> Any:
             return next((hparams[k] for k in keys if hparams.get(k) is not None), default)
 

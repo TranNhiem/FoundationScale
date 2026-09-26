@@ -35,7 +35,7 @@ stages:
         objective: sft
         sharding-strategy: fsdp
         precision: bf16
-        optimizer: adamw
+        optimizer: adamw_torch_fused  # transformers OptimizerNames (measured: "adamw" is refused by transformers 5.13)
         adapter: lora
         adapter-rank: 16
         adapter-alpha: 32

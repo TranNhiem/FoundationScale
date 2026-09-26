@@ -144,19 +144,23 @@ def _fmt(value: Any) -> str:
 
 
 def _derive_max_steps(stage: dict[str, Any], hparams: dict[str, Any], dp: int) -> int | None:
+    """Steps = total training tokens / tokens per step. ``hparams.tokens`` (or a
+    CPT ``token_budget``) is already a TOTAL; stage data tokens are ONE pass and
+    are multiplied by ``epochs`` (a real plan emitted 1 epoch for a 2-epoch recipe)."""
     if hparams.get("max_steps") is not None:
         return int(hparams["max_steps"])
-    tokens = hparams.get("tokens")
+    tokens = hparams.get("tokens") or hparams.get("token_budget")
     if tokens is None:
-        tokens = (stage.get("data") or {}).get("tokens")
-    if tokens is None:
-        tokens = (stage.get("estimate") or {}).get("tokens")
+        one_pass = (stage.get("data") or {}).get("tokens") or (stage.get("estimate") or {}).get("tokens")
+        if one_pass is None:
+            return None
+        tokens = float(one_pass) * float(hparams.get("epochs") or 1)
     if tokens is None:
         return None
     micro = max(1, int(_hp(hparams, "per-device-batch-size") or 1))
     seq = max(1, int(_hp(hparams, "max-sequence-length") or 2048))
     ga = max(1, int(_hp(hparams, "gradient-accumulation-steps") or 1))
-    return max(1, math.ceil(int(tokens) / (micro * seq * ga * max(1, dp))))
+    return max(1, math.ceil(float(tokens) / (micro * seq * ga * max(1, dp))))
 
 
 def _dataset_path(dataset: dict[str, Any], notes: list[str]) -> str | None:

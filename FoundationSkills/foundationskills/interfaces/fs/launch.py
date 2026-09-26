@@ -78,6 +78,7 @@ def launch(
     returncode: int | None = None
     command: str
 
+    extra: dict[str, Any] = {}
     if submit and spec.get("sbatch"):
         output_dir = Path(str(spec.get("output_dir") or "."))
         sbatch_path = output_dir / f"launch-{spec.get('stage_name', 'stage')}.sbatch"
@@ -98,6 +99,15 @@ def launch(
         command = shlex.join(argv)
         completed = runner(argv, capture_output=True, text=True, check=False, **run_kwargs)
         returncode = int(completed.returncode)
+        output = f"{getattr(completed, 'stdout', '') or ''}{getattr(completed, 'stderr', '') or ''}"
+        log_path = _write_launch_log(spec, output)
+        verdict = fs_verdict(output)
+        extra = {"log": log_path, "tail": output.splitlines()[-40:], "fs_verdict": verdict}
+        if verdict is not None and returncode not in (0, 5, 95, 96):
+            # torchrun collapses ANY child failure to exit 1; FS's own verdict line
+            # still says which it was (REFUSED 96 / UNMEASURED 95 / RED 5).
+            extra["returncode_raw"] = returncode
+            returncode = verdict
 
     return {
         "job_id": job_id,
@@ -105,4 +115,38 @@ def launch(
         "command": command,
         "dry_run_rc": dry_run_rc,
         "returncode": returncode,
+        **extra,
     }
+
+
+_FS_VERDICT = re.compile(r"^\[fs:train:(done|refuse)\]\s*(.*)$", re.M)
+
+
+def fs_verdict(output: str) -> int | None:
+    """Map FS's final [fs:train:*] line to its exit code; None if it printed none."""
+    matches = _FS_VERDICT.findall(output or "")
+    if not matches:
+        return None
+    kind, text = matches[-1]
+    if kind == "refuse":
+        return 96
+    upper = text.upper()
+    if "UNMEASURED" in upper:
+        return 95
+    if "PASS" in upper:
+        return 0
+    return 5
+
+
+def _write_launch_log(spec: dict[str, Any], output: str) -> str | None:
+    """Keep the full output next to the run (a failure with no log is undiagnosable)."""
+    target_dir = spec.get("output_dir") or spec.get("cwd")
+    if not target_dir:
+        return None
+    try:
+        path = Path(str(target_dir)) / "fskills_launch.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(output, encoding="utf-8")
+        return str(path)
+    except OSError:
+        return None
