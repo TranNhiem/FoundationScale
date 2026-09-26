@@ -392,6 +392,29 @@ class RLTrainer:
         # advantage estimator and KL weight.
         objective = getattr(algorithm, "_objective", None)
         if objective is None:
+            # The grpo entry binds GRPOAlgorithm -- the torch-free objective
+            # binding -- which carries no ``_objective`` by construction. That
+            # absence is EXPECTED, so the refusal names the algorithm's own
+            # declared reason (the k3 reference plane this one-model loop does
+            # not hold) instead of reading as a broken factory. Measured hole:
+            # before this arm, 'grpo' got the generic no-axes message.
+            reference_declared = False
+            requirements_fn = getattr(algorithm, "requirements", None)
+            if callable(requirements_fn):
+                try:
+                    declared_requires = requirements_fn().requires
+                except Exception:  # noqa: BLE001 -- metadata lookup must never mask the refusal
+                    declared_requires = {}
+                reference_declared = bool(declared_requires.get("reference_policy"))
+            if reference_declared:
+                raise TrainerRefusal(
+                    f"algorithm {self.config.algorithm!r} declares "
+                    f"requires.reference_policy=True: its k3 objective term prices "
+                    f"log-ratios against a frozen copy of the initial policy, and "
+                    f"this loop holds ONE model and produces no reference plane. "
+                    f"Reference-free group objectives (gspo/dr_grpo/dapo) run "
+                    f"today; the reference-policy path is not built."
+                )
             raise TrainerRefusal(
                 f"algorithm {self.config.algorithm!r}: 0 of 1 required objective "
                 f"instances expose the declared axes; the tensor kernel reads the "
