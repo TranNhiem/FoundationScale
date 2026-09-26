@@ -28,7 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Exactly the RLTrainConfig field names (drift guard: unknown keys refuse).
+# Fallback only: the live field set is read from the installed RLTrainConfig
+# (a hard-coded list refused FS's new logprob_micro_batch, #546).
 _RL_FIELDS: frozenset[str] = frozenset(
     {
         "model", "dataset", "algorithm", "answer_pattern", "gold_key",
@@ -99,6 +100,21 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def rl_config_fields(config_cls: Any = None) -> frozenset[str]:
+    """The installed RLTrainConfig's field names (measured), else the fallback."""
+    import dataclasses
+
+    if config_cls is None:
+        try:
+            from foundationscale.rl.trainer import RLTrainConfig as config_cls  # type: ignore
+        except Exception:  # noqa: BLE001
+            return _RL_FIELDS
+    try:
+        return frozenset(f.name for f in dataclasses.fields(config_cls))
+    except TypeError:
+        return _RL_FIELDS
+
+
 def _is_fs_refusal(exc: BaseException) -> bool:
     """FS signals 'a required input is missing' with *Refusal exception classes."""
     return type(exc).__name__.endswith("Refusal") and type(exc).__module__.startswith("foundationscale")
@@ -132,18 +148,19 @@ def main(argv: list[str] | None = None) -> int:
         return 96
     config: dict[str, Any] = raw
 
-    unknown = sorted(set(config) - _RL_FIELDS - _FSKILLS_FIELDS)
-    if unknown:
-        _line("refuse", f"unknown config keys: {', '.join(unknown)} (allowed: {', '.join(sorted(_RL_FIELDS | _FSKILLS_FIELDS))})")
-        return 96
-
     try:
         from foundationscale.rl.trainer import RLTrainConfig, RLTrainer, TrainerRefusal
     except Exception as exc:
         _line("refuse", f"missing module foundationscale.rl.trainer: {type(exc).__name__}: {exc}")
         return 96
 
-    fs_fields = {key: value for key, value in config.items() if key in _RL_FIELDS}
+    rl_fields = rl_config_fields(RLTrainConfig)
+    unknown = sorted(set(config) - rl_fields - _FSKILLS_FIELDS)
+    if unknown:
+        _line("refuse", f"unknown config keys: {', '.join(unknown)} (allowed: {', '.join(sorted(rl_fields | _FSKILLS_FIELDS))})")
+        return 96
+
+    fs_fields = {key: value for key, value in config.items() if key in rl_fields}
     try:
         rl_config = RLTrainConfig(**fs_fields)
         trainer = RLTrainer(rl_config)

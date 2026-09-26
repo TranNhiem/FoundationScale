@@ -23,6 +23,7 @@ from foundationskills.interfaces.fs.emit_train import fs_repo_root
 # are emitted, so RLTrainConfig's own dataclass defaults govern the rest.
 _HPARAM_TO_RL: dict[str, str] = {
     "lr": "learning_rate",
+    "learning_rate": "learning_rate",
     "group_size": "group_size",
     "max_steps": "max_steps",
     "max_new_tokens": "max_new_tokens",
@@ -36,6 +37,10 @@ _HPARAM_TO_RL: dict[str, str] = {
     "answer_pattern": "answer_pattern",
     "gold_key": "gold_key",
 }
+
+# consumed by the planner/estimator, not RLTrainConfig knobs
+_RL_IGNORED = frozenset({"kl_weight", "epochs", "tokens", "lora_rank", "lora_alpha", "lora_dropout",
+                         "lora_targets", "rl_generation_factor"})
 
 _SINGLE_DEVICE_WARNING = (
     "FS RLTrainer is single-device (one GPU): multi-GPU RL is refused by the installed FS"
@@ -53,6 +58,7 @@ def emit_rl(
 ) -> dict[str, Any]:
     """Build one ``fs_launch_spec`` payload for an RL stage."""
     missing: list[str] = []
+    notes: list[str] = []
     hparams = dict(stage.get("hparams") or {})
     algorithm = stage.get("algorithm")
     if algorithm is not None:
@@ -77,11 +83,20 @@ def emit_rl(
         rl_config["algorithm"] = algorithm
     if gold_key is not None:
         rl_config["gold_key"] = str(gold_key)
-    for hparam_key, field in _HPARAM_TO_RL.items():
-        if hparam_key == "gold_key":
-            continue  # resolved above from fs_columns fallback
-        if hparam_key in hparams and hparams[hparam_key] is not None:
-            rl_config[field] = hparams[hparam_key]
+    # Any hparam that IS an installed RLTrainConfig field passes through (measured;
+    # "learning_rate" used to be dropped because only the alias "lr" was mapped),
+    # plus the aliases. Everything else is reported, never silently lost.
+    from foundationskills.interfaces.fs.rl_driver import rl_config_fields
+
+    fields = rl_config_fields()
+    for key, value in hparams.items():
+        if value is None or key == "gold_key":
+            continue
+        field = _HPARAM_TO_RL.get(key, key)
+        if field in fields and field not in ("model", "dataset", "algorithm"):
+            rl_config[field] = value
+        elif key not in _RL_IGNORED:
+            notes.append(f"hparam {key!r} is not an RLTrainConfig field of the installed FS; not passed")
     if "answer_pattern" in rl_config and str(dataset.get("format")) == "rl":
         # Data Engine rl datasets carry single-letter MCQ gold (the only reward FS
         # verifies); a recipe's free-form extraction pattern would not match it.
@@ -121,6 +136,7 @@ def emit_rl(
         "output_dir": output_dir,
         "run_name": run_name,
         "rl_config": rl_config,
+        "notes": notes,
         "measurement_only_ok": measurement_only_ok,
         "cwd": fs_repo_root(),
         "warnings": [_SINGLE_DEVICE_WARNING],

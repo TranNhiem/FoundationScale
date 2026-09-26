@@ -447,3 +447,23 @@ def test_f14_memory_estimate_tracks_three_gb200_measurements(method, micro, meas
     est = estimate_memory(_variant(), method=method, seq_len=4096, micro_batch=micro, grad_ckpt=True,
                           sharding="fsdp", world=4)
     assert est.total_per_gpu_gb == pytest.approx(measured, rel=0.15)
+
+
+def test_rl_learning_rate_and_new_fs_fields_pass_through():
+    """Rebase onto #546: RLTrainConfig gained logprob_micro_batch, which a
+    hard-coded driver field list refused; and emit_rl dropped learning_rate
+    (only the alias lr was mapped), so FS RL ran at its default LR."""
+    import dataclasses
+    from foundationscale.rl.trainer import RLTrainConfig
+    from foundationskills.interfaces.fs.emit_rl import emit_rl
+    from foundationskills.interfaces.fs.rl_driver import rl_config_fields
+    assert rl_config_fields() == frozenset(f.name for f in dataclasses.fields(RLTrainConfig))
+    spec = emit_rl({"name": "rl", "stage": "rl", "algorithm": "dr_grpo",
+                    "hparams": {"learning_rate": 2e-6, "logprob_micro_batch": 4, "made_up": 1}},
+                   dataset={"format": "rl", "shards": [{"path": "/d/shards/s.jsonl"}], "fs_columns": {"gold_key": "answer"}},
+                   model="/m", output_dir="/o", caps=caps(), run_name="rl")
+    cfg = spec["rl_config"]
+    assert cfg["learning_rate"] == 2e-6
+    if "logprob_micro_batch" in rl_config_fields():
+        assert cfg["logprob_micro_batch"] == 4
+    assert "made_up" not in cfg and any("made_up" in n for n in spec["notes"])
