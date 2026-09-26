@@ -1,0 +1,44 @@
+{
+  "rules": [
+    {
+      "path": "src/foundationscale/**/*.py",
+      "merge_system_rule": true,
+      "rule": "FoundationScale doctrine rules (blocking when violated):\n\n## Measured-or-refused\n- Any new capability, metric, or claim in code or docstring must be either MEASURED by an attached evidence path or loudly REFUSED/UNMEASURED. Flag: a happy-path claim with no measurement hook, no refusal arm, and no VACUOUS/abstain channel.\n- An abstention or UNMEASURED arm must never be silently converted into a pass, a zero score, or a default value downstream.\n\n## Exit-code contract\n- Training/verification paths may exit only with 0/5/95/96. Flag any sys.exit / SystemExit / torchrun boundary value outside that set, or any catch that launders a known verdict into a bare nonzero.\n\n## No silent fallback\n- A configured-but-absent capability must refuse by name; falling back to defaults (dtype, device, objective, topology) without a _mark/refusal line is a defect.\n\n## Comments\n- Do not add narration-only comments; comments here state measured history or doctrinal rationale. A comment claiming behavior the code no longer has is a defect (stale-doctrine class)."
+    },
+    {
+      "path": "src/foundationscale/gates/**/*.py",
+      "merge_system_rule": true,
+      "rule": "Gate-plane rules (blocking when violated):\n\n## Vacuity\n- A gate returning PASS/ok over Coverage.none / checked=0 is a defect; the enforced-VACUOUS path exists for exactly this.\n- New gates MUST declare context_type and controls() (>=1 MUST_FIRE). A missing MUST_FIRE means the detector is unproven.\n\n## Registry integrity\n- Gate ids are assigned exactly once per class; inventing ids outside the registry or weakening the duplicate-id raise is a defect.\n- Refusal composition: a gate must not swallow a sub-gate's blocking verdict into a softer one."
+    },
+    {
+      "path": "src/foundationscale/rl/**/*.py",
+      "merge_system_rule": true,
+      "rule": "RL-plane rules (blocking when violated):\n\n## Group-relative honesty\n- GRPO-family steps exist only with within-group reward variance; an all-equal-reward group must be skipped UNMEASURED, never stepped.\n- used < offered must stay visible whenever rows drop (abstained rewards, undersized groups); hiding the drop is a defect.\n- An abstained (unparseable/ambigous) row must never be scored 0.0.\n\n## Objective resolution\n- Refusals must name the algorithm's declared unmet requirement (read requirements().requires), not a generic shape message. The reference_policy requirement means a k3 term and requires a frozen reference policy.\n\n## Generation hygiene\n- Sampling knobs are declared by config, never inherited from a checkpoint's generation_config; do_sample defaults are a defect class here."
+    },
+    {
+      "path": "src/foundationscale/train/**/*.py",
+      "merge_system_rule": true,
+      "rule": "Train-plane rules (blocking when violated):\n\n## Prologue purity\n- Nothing from torch/transformers may be imported or touched before validation completes; consult loaded modules through sys.modules only. The poisoned-module tests enforce this.\n\n## Run manifest\n- Exactly one writer (effective rank 0) per run; other ranks abstain with a mark line. Writes are temp+fsync+Path.replace; in-place write_text or multi-rank emission is a defect.\n- Exit COLLECTIVES: every substantive branch leaves via the rank-agreement path; a bare per-rank return is a rank-disagreement defect.\n\n## Declared axes\n- An axis the declared config sets but the engine cannot wire must refuse 96 before model load, never train as plain DDP under a misdescribed manifest."
+    },
+    {
+      "path": "tests/**/*.py",
+      "merge_system_rule": true,
+      "rule": "Test-plane rules (blocking when violated):\n\n- pytest.skip without a reason tied to an armed guard is forbidden (FS_FORBID_SKIPS=1 world): a skip is a failure by contract.\n- A test double must stand in for the seam, not the behavior: fakes that reimplement the logic under test make the test tautological; flag those.\n- Pinned strings must be justified by doctrine comments when pinning refusals/marks; an unexplained golden string that drifts with code churn is a smell, not doctrine.\n- Never weaken an assertion to make a run pass; change requires evidence recorded in the PR."
+    },
+    {
+      "path": "checks/**/*.py",
+      "merge_system_rule": true,
+      "rule": "Checks-plane rules (blocking when violated):\n\n- Every gate tool ships --self-test with MUST_FIRE and MUST_PASS controls; a gate without a proven control may not report verdicts.\n- Verdict taxonomy: 0 CLEAR / 5 RED / 95 UNMEASURED / 96 REFUSE -- a check exiting 1 on measured red, or computing a verdict from an absent input as success, is a defect.\n- A gate whose inputs are stale must say UNMEASURED, not reuse the last green state."
+    },
+    {
+      "path": "docs/**/*.md",
+      "merge_system_rule": true,
+      "rule": "Docs rules (blocking when violated):\n\n- Any absolute number about the repo (LOC, file counts, test counts, gate counts, mutation tallies) must match the countables census; flag numbers in prose that the countables gate would RED. Fix via checks/countables_drift.py --fix, never by hand-waving.\n- Claims about hardware results must carry estate+commit; 'works on H100/GB200' without a campaign row is an unmeasured claim.\n- Never describe a REFUSED capability as available. Absent-by-design features say so with the refusal surface named."
+    },
+    {
+      "path": "launchers/**",
+      "merge_system_rule": true,
+      "rule": "Launcher rules (blocking when violated):\n\n- The exit code reaching the caller must BE the verdict: wrapping torchrun/srun output so a red run reads 0 (or a refusal reads as a launch error) is the #72 defect class.\n- Provenance and drain steps must complete before emitting a success marker; a marker before the drain is laundered green.\n- GPU visibility assertions must use SLURM_STEP_GPUS/cgroup evidence, never sacct AllocTRES as the oracle."
+    }
+  ]
+}
