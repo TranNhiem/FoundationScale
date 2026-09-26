@@ -51,6 +51,7 @@ class IngestError(ValueError):
 
 CONFIG_SCHEMA: dict[str, Any] = {
     "type": "object",
+    "additionalProperties": False,  # unknown keys refused: a silently ignored key measures nothing
     "required": ["sources"],
     "properties": {
         "sources": {

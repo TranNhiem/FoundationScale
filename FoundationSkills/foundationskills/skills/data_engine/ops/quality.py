@@ -39,8 +39,12 @@ from foundationskills.skills.data_engine.ops.clean import mostly_cjk, primary_te
 
 CONFIG_SCHEMA: dict[str, Any] = {
     "type": "object",
+    # Unknown keys are refused: a recommender once sent {"ruleset": ...}, which this
+    # op ignored, so quality measured NOTHING on 23k real records.
+    "additionalProperties": False,
     "properties": {
-        "heuristics": {"enum": ["gopher", "c4", "fineweb", "none"]},
+        "heuristics": {"anyOf": [{"enum": ["gopher", "c4", "fineweb", "none"]},
+                                 {"type": "array", "items": {"enum": ["gopher", "c4", "fineweb"]}}]},
         "sft_checks": {"type": "boolean"},
         "min_quality_score": {"type": ["number", "null"]},
         "scorer": {
@@ -237,7 +241,9 @@ def _is_sft_shape(rec: dict) -> bool:
 
 
 def _quality_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[dict]:
-    heuristics = str(cfg.get("heuristics", "none"))
+    raw_heuristics = cfg.get("heuristics", "none")
+    heuristic_sets = [raw_heuristics] if isinstance(raw_heuristics, str) else list(raw_heuristics)
+    heuristic_sets = [h for h in heuristic_sets if h != "none"]
     sft_checks = bool(cfg.get("sft_checks", False))
     min_score = cfg.get("min_quality_score")
     scorer_fn = _load_scorer(cfg, stats)
@@ -256,11 +262,11 @@ def _quality_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[
             domain = meta.get("domain")
 
         evaluated: list[tuple[str, bool]] = []
-        if heuristics == "gopher":
+        if "gopher" in heuristic_sets:
             evaluated.extend(_gopher_eval(text, word_rules=not cjk))
-        elif heuristics == "c4":
+        if "c4" in heuristic_sets:
             evaluated.extend(_c4_eval(text, domain=None if domain is None else str(domain)))
-        elif heuristics == "fineweb":
+        if "fineweb" in heuristic_sets:
             evaluated.extend(_fineweb_eval(text, None if domain is None else str(domain)))
         if sft_checks and _is_sft_shape(rec):
             evaluated.extend(_sft_eval(rec))

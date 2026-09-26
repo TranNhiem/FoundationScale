@@ -209,6 +209,7 @@ class DataEngineSkill(BaseSkill):
                 domain=request.get("domain"),
                 benchmarks=list(request.get("benchmarks") or []),
                 seq_len=int(request.get("seq_len") or 4096),
+                drop_overlong=bool(request.get("drop_overlong", False)),
             )
 
         dataset_id = f"{target}-{sha256_json({'sources': sources, 'spec': spec})[:12]}"

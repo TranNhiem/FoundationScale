@@ -34,8 +34,10 @@ from foundationskills.skills.data_engine.ops.base import FunctionOp, OpStats, co
 
 CONFIG_SCHEMA: dict[str, Any] = {
     "type": "object",
+    "additionalProperties": False,  # unknown keys refused: a silently ignored key measures nothing
     "properties": {
         "exact": {"type": "boolean"},
+        "exact_normalize": {"enum": ["light", "aggressive"]},
         "near": {
             "type": "object",
             "properties": {

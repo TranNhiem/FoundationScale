@@ -32,6 +32,7 @@ from foundationskills.skills.data_engine.ops.clean import primary_text
 
 CONFIG_SCHEMA: dict[str, Any] = {
     "type": "object",
+    "additionalProperties": False,  # unknown keys refused: a silently ignored key measures nothing
     "properties": {
         "benchmarks": {"type": "array", "items": {"type": "string"}},
         "ngram": {"type": "integer", "minimum": 1},

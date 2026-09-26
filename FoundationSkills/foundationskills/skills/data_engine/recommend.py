@@ -30,6 +30,7 @@ def recommend_pipeline(
     domain: str | None,
     benchmarks: list[str],
     seq_len: int = 4096,
+    drop_overlong: bool = False,
 ) -> dict[str, Any]:
     """Build a data_pipeline_spec payload (with a rationale) for the target format."""
     if target_format not in FORMATS:
@@ -58,13 +59,13 @@ def recommend_pipeline(
     if pretrain_like:
         add(
             "clean",
-            {"pii_mode": "strict", "doc_cleaning": True},
+            {"pii": {"redact": True}, "strip_html": "auto", "normalize_unicode": True, "fix_mojibake": True},
             "strict PII redaction plus boilerplate/document cleaning for web-derived pretraining text",
         )
     else:
         add(
             "clean",
-            {"pii_mode": "strict"},
+            {"pii": {"redact": True}, "strip_html": "auto", "normalize_unicode": True},
             "strict PII redaction on human/model conversations before anything trains on them",
         )
 
@@ -72,39 +73,39 @@ def recommend_pipeline(
     if pretrain_like:
         add(
             "dedup",
-            {"level": "document", "near_dedup": True},
+            {"scope": "document", "exact": True, "near": {"enabled": True}},
             "document-level exact + near dedup; repeated boilerplate wastes tokens",
         )
     else:
         add(
             "dedup",
-            {"level": "sample", "near_dedup": False},
-            "sample-level exact dedup so no example is over-weighted",
+            {"scope": "document", "exact": True, "near": {"enabled": False}},
+            "per-example exact dedup so no example is over-weighted (near-dup off: paraphrased instructions are legitimate)",
         )
 
     # 4. quality
     if pretrain_like:
         add(
             "quality",
-            {"ruleset": "gopher_fineweb"},
+            {"heuristics": ["gopher", "fineweb"]},
             "gopher/fineweb-style web-quality heuristics and cutoffs",
         )
     elif sft_like:
         add(
             "quality",
-            {"ruleset": "sft_checks"},
+            {"heuristics": "none", "sft_checks": True},
             "SFT structural checks (roles, alternation, empty answers) and length sanity",
         )
     elif preference_like:
         add(
             "quality",
-            {"ruleset": "preference_checks"},
+            {"heuristics": "none", "sft_checks": False},
             "preference pair sanity: identical chosen/rejected and empty responses are dropped",
         )
     else:
         add(
             "quality",
-            {"ruleset": "rl_checks"},
+            {"heuristics": "none", "sft_checks": False},
             "RL prompt checks: a parseable gold answer (gold key) must exist per record",
         )
 
@@ -149,7 +150,7 @@ def recommend_pipeline(
     add(
         "tokenize",
         {"pack": pack, "chunk": pretrain_like, "tokenizer": tokenizer, "seq_len": int(seq_len),
-         **({} if pretrain_like else {"drop_overlong": False})},
+         **({} if pretrain_like else {"drop_overlong": bool(drop_overlong)})},
         (
             f"measure token counts and seq-length stats (tokenizer={tokenizer!r}, seq_len={int(seq_len)}); "
             + ("chunk documents longer than seq_len at paragraph boundaries (FS truncates at max_sequence_length, "

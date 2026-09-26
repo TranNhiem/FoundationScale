@@ -356,3 +356,30 @@ def test_f10_drop_overlong_counts_drops():
     recs = [{"messages": [], "text": "w " * 2000}, {"messages": [], "text": "hi"}]
     out = list(_tokenize_records(recs, {"seq_len": 256, "drop_overlong": True}, st))
     assert len(out) == 1 and st.dropped["overlong"] == 1 and st.extra["truncation_rate"] == 0.0
+
+
+def test_every_recommended_op_config_matches_the_op_schema():
+    """Found on real data: the recommender sent {"ruleset": ...}/{"pii_mode": ...}
+    which the ops silently ignored, so quality measured nothing on 23k records."""
+    from foundationskills.core.schema import validate
+    from foundationskills.skills.data_engine.ops import OPS
+    from foundationskills.skills.data_engine.recommend import recommend_pipeline
+    for fmt in ("pretrain", "cpt", "sft", "mm_sft", "preference", "rl"):
+        for benchmarks in ([], ["gsm8k"]):
+            spec = recommend_pipeline(target_format=fmt, sources=[{"uri": "/x", "kind": "jsonl"}], goal="reasoning",
+                                      algorithm=None, tokenizer="/t", chat_template_family="gemma4", domain="d",
+                                      benchmarks=benchmarks)
+            for step in spec["ops"]:
+                assert validate(step["config"], OPS[step["op"]].config_schema) == [], (fmt, step)
+
+
+def test_pipeline_refuses_foreign_op_config_keys(tmp_path):
+    """MUST_FIRE: an unknown key must fail loudly, not be ignored."""
+    from foundationskills.skills.data_engine.pipeline import PipelineError, run_pipeline
+    src = tmp_path / "c.jsonl"
+    src.write_text(json.dumps({"text": "hello"}) + "\n")
+    spec = {"target_format": "cpt", "seed": 0, "tokenizer": None, "rationale": [],
+            "ops": [{"op": "ingest", "config": {"sources": [{"uri": str(src), "kind": "jsonl"}]}},
+                    {"op": "quality", "config": {"ruleset": "gopher"}}]}
+    with pytest.raises(PipelineError, match="ruleset"):
+        run_pipeline(spec, tmp_path / "out")

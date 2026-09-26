@@ -488,6 +488,7 @@ def _format_records(records: Iterable[dict], cfg: dict, stats: OpStats) -> Itera
 
 _CONFIG_SCHEMA = {
     "type": "object",
+    "additionalProperties": False,  # unknown keys refused: a silently ignored key measures nothing
     "required": ["target_format"],
     "additionalProperties": True,
     "properties": {
