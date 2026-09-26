@@ -149,6 +149,54 @@ def pack_lengths(lengths: list[int], seq_len: int) -> dict[str, Any]:
     }
 
 
+
+# FS tokenizes with truncation=True at max_sequence_length (train/loop.py), so a
+# corpus record longer than seq_len silently loses its tail. For raw-text stages
+# the Data Engine splits such records instead. Two tokens of headroom cover the
+# BOS the FS tokenizer call adds and the EOS counted here.
+_CHUNK_HEADROOM = 2
+
+
+def _token_windows(tokenizer: Any, text: str, budget: int, stats: OpStats) -> list[str]:
+    """Split one over-long span into pieces of <= budget tokens."""
+    if tokenizer is not None:
+        try:
+            ids = tokenizer.encode(text, add_special_tokens=False)
+            return [tokenizer.decode(ids[i:i + budget]) for i in range(0, len(ids), budget)]
+        except Exception as exc:  # noqa: BLE001 - recorded; char windows used
+            stats.extra.setdefault("tokenizer_error", f"window split failed: {type(exc).__name__}: {exc}")
+    n = max(_approx_tokens(text), 1)
+    width = max(int(len(text) * budget / n * 0.95), 1)
+    return [text[i:i + width] for i in range(0, len(text), width)]
+
+
+def _chunk_text(tokenizer: Any, text: str, budget: int, stats: OpStats) -> list[str]:
+    """Greedy paragraph packing into chunks of <= budget tokens; a paragraph
+    longer than the budget is itself split into token windows."""
+    chunks: list[str] = []
+    current: list[str] = []
+    current_tokens = 0
+    for para in text.split("\n\n"):
+        if not para.strip():
+            continue
+        n = _count_text(tokenizer, para, stats)
+        if n > budget:
+            if current:
+                chunks.append("\n\n".join(current))
+                current, current_tokens = [], 0
+            chunks.extend(_token_windows(tokenizer, para, budget, stats))
+            continue
+        # +2 for the paragraph separator's tokens
+        if current and current_tokens + n + 2 > budget:
+            chunks.append("\n\n".join(current))
+            current, current_tokens = [], 0
+        current.append(para)
+        current_tokens += n + 2
+    if current:
+        chunks.append("\n\n".join(current))
+    return chunks
+
+
 def _tokenize_records(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[dict]:
     seq_len = int(cfg.get("seq_len", 4096))
     field = cfg.get("field") or "auto"
@@ -173,7 +221,26 @@ def _tokenize_records(records: Iterable[dict], cfg: dict, stats: OpStats) -> Ite
     domain_counts: Counter = Counter()
     total_tokens = 0
     truncated = 0
-    for rec in counted(records, stats):
+    chunk = bool(cfg.get("chunk", False))
+    budget = max(seq_len - _CHUNK_HEADROOM, 1)
+
+    def expanded(stream: Iterable[dict]) -> Iterator[dict]:
+        for rec in stream:
+            text = rec.get("text") if isinstance(rec, dict) else None
+            if not (chunk and isinstance(text, str)) or _count_text(tokenizer, text, stats) <= budget:
+                yield rec
+                continue
+            pieces = _chunk_text(tokenizer, text, budget, stats)
+            stats.modified["chunked_records"] += 1
+            stats.modified["chunks_emitted"] += len(pieces)
+            for k, piece in enumerate(pieces):
+                out = dict(rec)
+                out["id"] = f"{rec.get('id')}#{k}"
+                out["text"] = piece
+                out["meta"] = {**(rec.get("meta") or {}), "chunk_of": rec.get("id"), "chunk_index": k}
+                yield out
+
+    for rec in expanded(counted(records, stats)):
         texts = _texts_for(rec, field)
         num = sum(_count_text(tokenizer, t, stats) for t in texts)
         if add_eos and texts:
@@ -228,6 +295,7 @@ _CONFIG_SCHEMA = {
         "seq_len": {"type": "integer", "minimum": 1},
         "field": {"enum": ["text", "auto"]},
         "pack": {"type": "boolean"},
+        "chunk": {"type": "boolean"},
         "add_eos": {"type": "boolean"},
         "sample_for_hist": {"type": "integer", "minimum": 1},
     },

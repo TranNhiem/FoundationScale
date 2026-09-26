@@ -76,7 +76,9 @@ _TEXT_KEYS = ("text", "content", "document", "body")
 _MESSAGES_KEYS = ("messages", "conversations", "conversation")
 _IMAGE_KEYS = ("image", "images", "image_path", "image_url")
 _ANSWER_KEYS = ("answer", "solution", "gold", "gold_answer", "reference")
-_PROMPT_KEYS = ("prompt", "question")
+_PROMPT_KEYS = ("prompt", "question", "problem", "query")
+_RESPONSE_KEYS = ("response", "output", "completion", "assistant")
+_REASONING_KEYS = ("reasoning", "reasoning_content", "thinking", "rationale")
 
 _SHAREGPT_ROLES = {
     "human": "user",
@@ -275,10 +277,25 @@ def _iter_local_dir(uri: str, stats: OpStats) -> Iterator[tuple[str, dict]]:
 # canonical record mapping
 # --------------------------------------------------------------------------
 
+def _base_name(column: str) -> str:
+    """"response (content)" -> "response"; "Question" -> "question"."""
+    return column.split("(", 1)[0].strip().lower().replace(" ", "_")
+
+
 def _first_present(raw: dict, keys: tuple[str, ...]) -> Any:
+    """First non-None value among ``keys``: exact column names first, then
+    columns whose base name matches (published datasets annotate headers, e.g.
+    FreedomIntelligence/medical-r1-distill-data uses "response (content)")."""
     for key in keys:
         if key in raw and raw[key] is not None:
             return raw[key]
+    by_base = {}
+    for column, value in raw.items():
+        if isinstance(column, str) and value is not None:
+            by_base.setdefault(_base_name(column), value)
+    for key in keys:
+        if key in by_base:
+            return by_base[key]
     return None
 
 
@@ -332,6 +349,18 @@ def _map_record(raw: dict, *, source_uri: str, index: int, options: dict) -> dic
                 {"role": "user", "content": user},
                 {"role": "assistant", "content": out},
             ]
+    if "messages" not in rec:
+        question = _first_present(raw, _PROMPT_KEYS)
+        response = _first_present(raw, _RESPONSE_KEYS)
+        if isinstance(question, str) and isinstance(response, str):
+            reasoning = _first_present(raw, _REASONING_KEYS) if options.get("include_reasoning") else None
+            if isinstance(reasoning, str) and reasoning.strip():
+                # Opt-in: keep the trace, delimited so the template/tokenizer sees one assistant turn.
+                response = f"<think>\n{reasoning.strip()}\n</think>\n\n{response}"
+            rec["messages"] = [
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": response},
+            ]
     if "messages" in rec:
         rec["messages"] = _normalize_messages(rec["messages"])
 
@@ -365,6 +394,7 @@ def _map_record(raw: dict, *, source_uri: str, index: int, options: dict) -> dic
         if images is not None:
             rec["images"] = _normalize_images(images)
 
+    rec["_raw_keys"] = sorted(str(k) for k in raw)
     rid = rec.get("id", raw.get("id"))
     if rid is None:
         rid = hashlib.sha1(f"{source_uri}::{index}".encode("utf-8")).hexdigest()[:16]
@@ -447,6 +477,13 @@ def _ingest_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[d
         kind = str(spec.get("kind") or "")
         options = dict(spec.get("options") or {})
         for rec in _iter_source(uri, kind, options, stats, counter):
+            raw_keys = rec.pop("_raw_keys", None)
+            if raw_keys is not None:
+                stats.extra.setdefault("source_columns", {}).setdefault(uri, raw_keys)
+                if not any(rec.get(k) for k in ("text", "messages", "prompt")):
+                    # Nothing mapped: say which columns existed instead of letting a
+                    # later op drop the record as merely "empty".
+                    stats.modified["no_payload_mapped"] += 1
             if max_records is not None and emitted >= int(max_records):
                 stats.extra["truncated_at_max_records"] = int(max_records)
                 stats.extra["records_emitted"] = emitted
