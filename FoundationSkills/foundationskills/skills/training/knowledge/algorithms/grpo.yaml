@@ -1,0 +1,42 @@
+
+# Group Relative Policy Optimization (DeepSeekMath). Group-sampled candidate
+# answers to one prompt are scored, then normalised (mean/std) within the group
+# as the advantage -- no learned value function.
+name: grpo
+stage: rl
+family: group_rl
+data_format: rl
+requires: [gold_answers]
+key_hparams:
+  group_size:
+    default: 16
+    range: [8, 16]
+    note: "samples per prompt; optimisation runs out of signal when a group is all-correct or all-wrong (zero advantage)"
+  learning_rate:
+    default: 1.0e-6
+    range: [1.0e-6, 3.0e-6]
+    note: "policy LR; keep small -- RL on-policy updates are far more destructive than SFT"
+  kl_beta:
+    default: 0.0
+    range: [0.0, 0.04]
+    note: "KL to a frozen reference policy; ANY nonzero value requires a reference model (declared in `requires` when used)"
+  temperature:
+    default: 1.0
+    range: [0.8, 1.2]
+    note: "sampling temperature for group generation; lower collapses diversity, higher noisifies gradients"
+failure_modes:
+  - symptom: "reward plateaus, zero-gradient steps dominate"
+    cause: "zero-advantage saturation: all group members get identical rewards"
+    recovery: "increase group_size, shape intermediate rewards, or switch to DAPO dynamic sampling"
+  - symptom: "KL blow-up / policy drift"
+    cause: "kl_beta 0 with a long unstable run"
+    recovery: "restore a small kl_beta (requires reference model), reduce LR, shorten the run"
+  - symptom: "reward hacking: reward rises while judged quality falls"
+    cause: "rule-based verifiable reward is exploitable (format, length, marker strings)"
+    recovery: "audit top-reward traces; tighten the verifier; cap response length"
+  - symptom: "length explosion: responses grow unboundedly"
+    cause: "longer answers get more reward strokes under sum-normalised advantages"
+    recovery: "cap max_new_tokens, add explicit length penalties, switch to Dr.GRPO (no length normalisation)"
+fs_entry: fskills-rl
+references:
+  - "Shao et al. 2024, DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models (GRPO), arXiv:2402.03300"

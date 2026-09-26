@@ -1,0 +1,32 @@
+
+# ORPO (Odds Ratio Preference Optimization): monolithic SFT+preference in ONE
+# stage -- supervised loss on chosen responses plus an odds-ratio penalty on
+# rejected ones. No reference model.
+name: orpo
+stage: preference
+family: preference
+data_format: preference
+requires: [pairs]
+key_hparams:
+  orpo_lambda:
+    default: 0.1
+    range: [0.05, 0.5]
+    note: "weight of the odds-ratio (preference) term relative to the SFT term"
+  learning_rate:
+    default: 8.0e-6
+    range: [5.0e-6, 1.0e-5]
+    note: "higher than DPO because the SFT term must still learn the format"
+  epochs:
+    default: 1
+    range: [1, 3]
+    note: "monolithic run; the SFT term limits overtraining"
+failure_modes:
+  - symptom: "format regresses versus pure SFT"
+    cause: "lambda too large, preference term dominates early"
+    recovery: "lower orpo_lambda toward 0.05 or warm up with pure SFT first"
+  - symptom: "preference margin saturates while chat quality degrades"
+    cause: "single-stage joint loss trades format against preference"
+    recovery: "two-phase: SFT then a small-lambda ORPO continuation"
+fs_entry: fskills-rl
+references:
+  - "Hong et al. 2024, ORPO: Monolithic Preference Optimization without Reference Model, arXiv:2403.07691"

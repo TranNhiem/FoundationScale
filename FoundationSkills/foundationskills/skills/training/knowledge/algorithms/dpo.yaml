@@ -1,0 +1,36 @@
+
+# Direct Preference Optimization: closed-form offline preference learning on
+# (prompt, chosen, rejected) pairs against a frozen reference policy -- no
+# reward model, no on-policy sampling.
+name: dpo
+stage: preference
+family: preference
+data_format: preference
+requires: [pairs, reference_model]
+key_hparams:
+  beta:
+    default: 0.1
+    range: [0.1, 0.5]
+    note: "inverse temperature / KL strength to the reference; 0.1 standard, raise toward 0.3 for noisy pairs"
+  learning_rate:
+    default: 5.0e-7
+    range: [5.0e-7, 1.0e-6]
+    note: "full-model DPO; LoRA DPO uses ~1e-5..1e-4"
+  epochs:
+    default: 1
+    range: [1, 3]
+    note: "offline pairs overfit fast; 1 epoch on large sets"
+failure_modes:
+  - symptom: "generation lengths explode after DPO"
+    cause: "length bias in chosen vs rejected margins; logits for long responses get amplified"
+    recovery: "cap margins with a length term or use SimPO (length-normalised)"
+  - symptom: "reward margins grow but judged win-rate saturates (over-optimisation)"
+    cause: "offline objective cannot see its own distribution shift"
+    recovery: "early-stop on a judged win-rate; consider online/iterative DPO"
+  - symptom: "catastrophic forgetting / gibberish on out-of-domain prompts"
+    cause: "small narrow pair set at beta 0.1 for many epochs"
+    recovery: "mix in SFT examples (or use ORPO), lower beta, reduce epochs"
+fs_entry: fskills-rl
+references:
+  - "Rafailov et al. 2023, Direct Preference Optimization: Your Language Model is Secretly a Reward Model, arXiv:2305.18290"
+  - "Lambert et al. 2024, Tulu 3: Pushing Frontiers in Open Language Model Post-Training, arXiv:2411.15124"

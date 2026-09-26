@@ -1,0 +1,29 @@
+
+# NVIDIA GB200 tray: the measured estate hardware.
+id: gb200-189gb
+gpu_name: NVIDIA GB200
+mem_gb: 189
+gpus_per_node: 4
+bf16_dense_tflops: 1503.4
+peak_provenance: measured
+interconnect: NVLink intra-tray; IMEX fabric between trays
+mfu:
+  dense:
+    value: 0.318
+    provenance: measured
+    evidence: "FS MFU campaign 2026-09-22: Gemma-4 E4B DDP b2 ga8, 18,037 tok/s/gpu, 31.8% of measured 1503.4 TF peak"
+  moe:
+    value: 0.15
+    provenance: derived
+    evidence: "no MoE MFU run measured on this estate yet; roughly half the dense MFU as a routing/activation-imbalance heuristic -- DO NOT budget on it, remeasure first"
+scheduler: slurm
+cluster_rules:
+  - "every sbatch has --time=10-00:00:00"
+  - "never schedule node r01dgx02: --exclude=r01dgx02"
+  - "sbatch preamble must probe the IMEX fabric master (exec 3<>/dev/tcp/master/8081) and abort (exit 96) if refused, because launching while it is refused drains the trays"
+  - "slurm commands need a login shell (bash -lc)"
+notes:
+  - "measured dense bf16 peak 1503.4 TFLOP/s per GPU vs 2500 TFLOP/s datasheet -- always budget against the measured figure"
+  - "dense MFU 0.318 was measured for Gemma-4 E4B (dense <=10B); extrapolating to larger dense or any MoE model is derived, not measured"
+  - "estimated 4 GPUs per node (tray)"
+provenance: null

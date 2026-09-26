@@ -1,0 +1,52 @@
+
+# DAPO (Decoupled Clip and Dynamic sAmpling Policy Optimization) from the
+# DeepSeek/ByteDance open RL stack. Core tricks: clip-higher (decoupled
+# eps_low/eps_high), dynamic sampling to kill zero-advantage groups, token-level
+# loss aggregation, and overlong-response shaping.
+name: dapo
+stage: rl
+family: group_rl
+data_format: rl
+requires: [gold_answers]
+key_hparams:
+  clip_eps_low:
+    default: 0.2
+    range: null
+    note: "lower clip bound, PPO-style"
+  clip_eps_high:
+    default: 0.28
+    range: null
+    note: "decoupled (clip-higher) upper bound; raising it counteracts entropy collapse by letting low-prob good tokens rise more"
+  group_size:
+    default: 16
+    range: [8, 32]
+    note: "dynamic sampling oversamples prompts until groups carry signal (not all-correct, not all-wrong)"
+  learning_rate:
+    default: 1.0e-6
+    range: [1.0e-6, 3.0e-6]
+    note: "policy LR"
+  dynamic_sampling:
+    default: true
+    range: null
+    note: "resample prompts whose group advantage is exactly zero"
+  token_level_loss:
+    default: true
+    range: null
+    note: "sum over tokens before dividing (token-level) rather than per-trajectory mean; removes long-response penalty bias"
+  overlong_shaping:
+    default: true
+    range: null
+    note: "soft-penalty shaping for responses near max length instead of hard truncation reward"
+failure_modes:
+  - symptom: "entropy collapse early in training"
+    cause: "symmetric clipping suppresses low-prob exploration"
+    recovery: "use clip-higher (eps_high 0.28) -- this is the DAPO fix by design"
+  - symptom: "groups still carry no signal"
+    cause: "prompt set too easy/too hard for current policy; dynamic sampling halves effective batch"
+    recovery: "curriculum or dual-sided difficulty filtering; raise group_size beyond 16"
+  - symptom: "long-response reward inflation"
+    cause: "hard truncation of overlong answers pollutes advantage"
+    recovery: "enable overlong shaping; keep max_new_tokens as the hard cap"
+fs_entry: fskills-rl
+references:
+  - "Yu et al. 2025, DAPO: An Open-Source LLM Reinforcement Learning System at Scale, arXiv:2503.14476"

@@ -1,0 +1,36 @@
+
+# GSPO (Group Sequence Policy Optimization, Qwen team): group-objective
+# clipping on a SEQUENCE-level importance weight (geometric, length-normalised)
+# instead of per-token ratios. Removes token-level ratio instability, which
+# matters most for MoE policies whose expert routing flips under small updates.
+name: gspo
+stage: rl
+family: group_rl
+data_format: rl
+requires: [gold_answers]
+key_hparams:
+  clip_epsilon:
+    default: 3.5e-4
+    range: [3.0e-4, 4.0e-4]
+    note: "sequence-level clipping range is orders of magnitude SMALLER than token-level: the ratio is geometric across the whole response"
+  group_size:
+    default: 8
+    range: [4, 16]
+    note: "samples per prompt for the group baseline"
+  learning_rate:
+    default: 1.0e-6
+    range: [1.0e-6, 3.0e-6]
+    note: "policy LR; MoE policies tolerate lower LRs better under GSPO"
+failure_modes:
+  - symptom: "MoE policy collapses after a few hundred steps under a token-level objective"
+    cause: "token-level importance ratios amplify expert-routing flips"
+    recovery: "sequence-level ratio + small clip (this card); reduce LR"
+  - symptom: "clip fraction near 1.0 for most steps"
+    cause: "sequence ratios drift faster than token ratios -- LR too high for the sequence product"
+    recovery: "lower LR toward 5e-7 / shrink clip_epsilon to 3e-4"
+  - symptom: "kl-to-old-policy grows but rewards flat"
+    cause: "sequence clipping lets many tokens move together; watch effective batch entropy"
+    recovery: "stop and restart with half the LR; add a small KL regularizer (requires reference model)"
+fs_entry: fskills-rl
+references:
+  - "Zheng et al. 2025, Group Sequence Policy Optimization (GSPO), arXiv:2507.18071"

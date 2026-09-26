@@ -1,0 +1,68 @@
+
+id: gemma4-e4b-tool-calling-sft-lora
+version: 1.0.0
+title: Gemma-4 E4B tool-calling SFT (LoRA)
+index:
+  family: gemma4
+  size_b: [3.0, 10.0]
+  arch: dense
+  stage: sft
+  goal: tool_calling
+  domain: any
+  method: lora
+  hardware: [gb200-189gb]
+data:
+  format: sft
+  min_tokens: null
+  recommended_tokens: null
+  min_examples: 3000
+  recommended_examples: 30000
+  mixture:
+    tool_call_traces: 0.7
+    general_chat_replay: 0.3
+stages:
+  - name: sft-tools-lora
+    stage: sft
+    algorithm: sft
+    hparams:
+      learning_rate: 1.0e-4
+      epochs: 3
+      lora_rank: 32
+      lora_alpha: 64
+    fs:
+      entry: foundationscale-train
+      args:
+        objective: sft
+        sharding-strategy: fsdp
+        precision: bf16
+        optimizer: adamw
+        adapter: lora
+        adapter-rank: 32
+        adapter-alpha: 64
+        adapter-dropout: 0.05
+        per-device-batch-size: 4
+        gradient-accumulation-steps: 8
+        learning-rate: 1.0e-4
+        lr-scheduler-type: cosine
+        warmup-steps: 100
+        max-sequence-length: 4096
+        save-interval: 500
+        logging-steps: 10
+        seed: 0
+hardware:
+  min_gpus: 1
+  gpu_mem_gb: 48
+  est_gpu_hours: 6.0
+evaluation:
+  benchmarks:
+    - bfcl_v3
+  success: ">= 70% AST@1 on BFCL v3 single-turn"
+risks:
+  - "tool-call example construction (toolcall_format) is a PHASE-2 data-engine op: the planner must refuse unless tool-call traces are already materialised"
+  - "strict-JSON tool arguments break silently if the rendered text is truncated -- audit truncation_rate"
+provenance:
+  status: literature
+  evidence:
+    - "Hu et al. 2021, LoRA, arXiv:2106.09685"
+    - "BFCL v3 (Berkeley Function Calling Leaderboard)"
+  validated_on: null

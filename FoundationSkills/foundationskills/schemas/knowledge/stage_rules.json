@@ -1,0 +1,39 @@
+
+{
+  "type": "object",
+  "description": "Stage-selection rules consulted by the training planner.",
+  "required": ["rules"],
+  "additionalProperties": true,
+  "properties": {
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "when", "action", "stage", "algorithm_hint", "because"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+          "when": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "goal_in": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": ["general_chat", "reasoning", "math", "code", "domain_expert", "tool_calling"]}},
+              "domain_tokens_gte": {"type": "number", "minimum": 0},
+              "domain_tokens_lt": {"type": "number", "minimum": 0},
+              "has_pairs": {"type": "boolean"},
+              "has_verifiable_answers": {"type": "boolean"},
+              "has_instructions": {"type": "boolean"},
+              "base_is_instruct": {"type": "boolean"},
+              "preserve_general": {"type": "boolean"}
+            }
+          },
+          "action": {"type": "string", "enum": ["add_stage", "skip_stage", "order"]},
+          "stage": {"type": "string", "enum": ["pretrain", "cpt", "sft", "preference", "rl"]},
+          "algorithm_hint": {"type": ["string", "null"]},
+          "because": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

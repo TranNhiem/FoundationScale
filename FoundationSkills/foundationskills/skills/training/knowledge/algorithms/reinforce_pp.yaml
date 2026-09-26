@@ -1,0 +1,32 @@
+
+# REINFORCE++ (Hu 2025): removes the critic from PPO-class training and keeps
+# the practical machinery (clipping where enabled, KL regularisation, batch
+# normalisation of advantages) -- a bridge between REINFORCE and PPO.
+name: reinforce_pp
+stage: rl
+family: online
+data_format: rl
+requires: [reward_fn]
+key_hparams:
+  learning_rate:
+    default: 1.0e-6
+    range: [1.0e-6, 3.0e-6]
+    note: "policy LR"
+  clip_eps:
+    default: 0.2
+    range: [0.1, 0.3]
+    note: "token-level clip when the PPO-style update is enabled"
+  kl_beta:
+    default: 0.01
+    range: [0.0, 0.1]
+    note: "KL regularisation; nonzero requires a reference model"
+failure_modes:
+  - symptom: "high-variance updates for long generations"
+    cause: "no critic; per-trajectory returns only"
+    recovery: "increase batch / prompts per step, consider DAPO token-level loss"
+  - symptom: "KL drift"
+    cause: "kl_beta near zero on a long run"
+    recovery: "restore kl_beta 0.01 (reference model required)"
+fs_entry: fskills-rl
+references:
+  - "Hu et al. 2025, REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models"

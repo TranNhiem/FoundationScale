@@ -1,0 +1,68 @@
+
+id: mistral-7b-general-chat-sft-lora
+version: 1.0.0
+title: Mistral-7B-v0.3 general-chat SFT (LoRA)
+index:
+  family: mistral
+  size_b: [5.0, 9.0]
+  arch: dense
+  stage: sft
+  goal: general_chat
+  domain: any
+  method: lora
+  hardware: [gb200-189gb, h100-80gb, a100-80gb]
+data:
+  format: sft
+  min_tokens: null
+  recommended_tokens: null
+  min_examples: 5000
+  recommended_examples: 80000
+  mixture:
+    general_chat: 0.8
+    instruction_mix: 0.2
+stages:
+  - name: sft-chat-lora
+    stage: sft
+    algorithm: sft
+    hparams:
+      learning_rate: 2.0e-4
+      epochs: 2
+      lora_rank: 16
+      lora_alpha: 32
+    fs:
+      entry: foundationscale-train
+      args:
+        objective: sft
+        sharding-strategy: fsdp
+        precision: bf16
+        optimizer: adamw
+        adapter: lora
+        adapter-rank: 16
+        adapter-alpha: 32
+        adapter-dropout: 0.05
+        adapter-target: "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
+        per-device-batch-size: 4
+        gradient-accumulation-steps: 8
+        learning-rate: 2.0e-4
+        lr-scheduler-type: cosine
+        warmup-steps: 100
+        max-sequence-length: 4096
+        save-interval: 500
+        logging-steps: 10
+        seed: 0
+hardware:
+  min_gpus: 1
+  gpu_mem_gb: 40
+  est_gpu_hours: 5.0
+evaluation:
+  benchmarks:
+    - mt_bench
+  success: ">= 6.8 MT-Bench single-answer score with the [INST] template rendered exactly"
+risks:
+  - "FS does not register mistral: --adapter-target is passed explicitly; verify leaf names against the checkpoint"
+  - "Mistral's [INST]/[/INST] template has NO assistant header token -- verify the format op renders it correctly"
+provenance:
+  status: literature
+  evidence:
+    - "Hu et al. 2021, LoRA, arXiv:2106.09685"
+  validated_on: null

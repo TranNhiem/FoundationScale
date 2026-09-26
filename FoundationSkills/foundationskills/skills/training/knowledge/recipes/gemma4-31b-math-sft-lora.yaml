@@ -1,0 +1,71 @@
+
+id: gemma4-31b-math-sft-lora
+version: 1.0.0
+title: Gemma-4 31B math SFT (LoRA)
+index:
+  family: gemma4
+  size_b: [28.0, 34.0]
+  arch: dense
+  stage: sft
+  goal: math
+  domain: math
+  method: lora
+  hardware: [gb200-189gb, h100-80gb]
+data:
+  format: sft
+  min_tokens: null
+  recommended_tokens: null
+  min_examples: 10000
+  recommended_examples: 120000
+  mixture:
+    math_chain_of_thought: 0.7
+    math_verified_solutions: 0.2
+    general_chat_replay: 0.1
+stages:
+  - name: sft-math-lora
+    stage: sft
+    algorithm: sft
+    hparams:
+      learning_rate: 1.0e-4
+      epochs: 2
+      lora_rank: 32
+      lora_alpha: 64
+    fs:
+      entry: foundationscale-train
+      args:
+        objective: sft
+        sharding-strategy: fsdp
+        precision: bf16
+        optimizer: adamw
+        gradient-checkpointing: true
+        adapter: lora
+        adapter-rank: 32
+        adapter-alpha: 64
+        adapter-dropout: 0.05
+        per-device-batch-size: 2
+        gradient-accumulation-steps: 8
+        learning-rate: 1.0e-4
+        lr-scheduler-type: cosine
+        warmup-steps: 100
+        max-sequence-length: 4096
+        save-interval: 500
+        logging-steps: 10
+        seed: 0
+hardware:
+  min_gpus: 2
+  gpu_mem_gb: 80
+  est_gpu_hours: 14.0
+evaluation:
+  benchmarks:
+    - gsm8k
+    - math
+  success: ">= +12 points over base on GSM8K; long-form derivations do not inflate >2x mean length"
+risks:
+  - "Gemma4ClippableLinear lives in the vision tower only; FS scopes adapters to model.language_model (measured on gemma-4-31B)"
+  - "reasoning traces truncate at 4096 tokens -- audit truncation_rate before training"
+provenance:
+  status: literature
+  evidence:
+    - "Hu et al. 2021, LoRA, arXiv:2106.09685"
+    - "Shao et al. 2024, DeepSeekMath, arXiv:2402.03300"
+  validated_on: null

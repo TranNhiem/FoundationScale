@@ -1,0 +1,90 @@
+
+# Two-stage math recipe: SFT then RL (GSPO). The RL stage's fs.args is empty --
+# RLTrainConfig fields ride in hparams and the fskills-rl driver consumes them.
+id: qwen3.5-27b-math-sft-rl
+version: 1.0.0
+title: Qwen3.5-27B math (SFT + GSPO RL)
+index:
+  family: qwen3.5
+  size_b: [20.0, 30.0]
+  arch: dense
+  stage: rl
+  goal: math
+  domain: math
+  method: lora
+  hardware: [gb200-189gb]
+data:
+  format: rl
+  min_tokens: null
+  recommended_tokens: null
+  min_examples: 2000
+  recommended_examples: 20000
+  mixture:
+    math_verified: 0.8
+    logic_puzzles_verified: 0.2
+stages:
+  - name: sft-math-lora
+    stage: sft
+    algorithm: sft
+    hparams:
+      learning_rate: 1.0e-4
+      epochs: 2
+      lora_rank: 32
+      lora_alpha: 64
+    fs:
+      entry: foundationscale-train
+      args:
+        objective: sft
+        sharding-strategy: fsdp
+        precision: bf16
+        optimizer: adamw
+        gradient-checkpointing: true
+        adapter: lora
+        adapter-rank: 32
+        adapter-alpha: 64
+        adapter-dropout: 0.05
+        per-device-batch-size: 2
+        gradient-accumulation-steps: 8
+        learning-rate: 1.0e-4
+        lr-scheduler-type: cosine
+        warmup-steps: 100
+        max-sequence-length: 4096
+        save-interval: 500
+        logging-steps: 10
+        seed: 0
+  - name: rl-math-gspo
+    stage: rl
+    algorithm: gspo
+    hparams:
+      group_size: 8
+      learning_rate: 1.0e-6
+      clip_epsilon: 3.5e-4
+      max_new_tokens: 512
+      temperature: 1.0
+      top_p: 0.95
+      prompts_per_step: 2
+      max_steps: 400
+      seed: 0
+      answer_pattern: "\\boxed{(.+)}"
+    fs:
+      entry: fskills-rl
+      args: {}
+hardware:
+  min_gpus: 1
+  gpu_mem_gb: 189
+  est_gpu_hours: 40.0
+evaluation:
+  benchmarks:
+    - gsm8k
+    - math_500
+  success: "RL stage adds >= +5 points over the SFT checkpoint on MATH-500 with stable entropy (no collapse)"
+risks:
+  - "FS RLTrainer is single-device: the 27B must fit in ONE GPU with LoRA -- feasibility must verify before launch"
+  - "GSPO sequence-level clipping is ~1000x tighter than token-level clipping (3e-4..4e-4): do not copy token-level clip 0.2"
+  - "qwen3.5 emits <think> segments -- the answer_pattern must match the post-think answer, not the thinking"
+provenance:
+  status: literature
+  evidence:
+    - "Zheng et al. 2025, GSPO, arXiv:2507.18071"
+    - "Shao et al. 2024, DeepSeekMath, arXiv:2402.03300"
+  validated_on: null

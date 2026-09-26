@@ -1,0 +1,28 @@
+
+# IPO / PsiPO: replaces DPO's pairwise log-loss with a squared-regression loss
+# on the identity preference function, which by design resists DPO's
+# overfitting when pairs are near-deterministic.
+name: ipo
+stage: preference
+family: preference
+data_format: preference
+requires: [pairs, reference_model]
+key_hparams:
+  ipo_tau:
+    default: 0.1
+    range: [0.05, 0.5]
+    note: "regression temperature (PsiPo tau); larger = softer preferences"
+  learning_rate:
+    default: 5.0e-7
+    range: [1.0e-7, 1.0e-6]
+    note: "same order as DPO"
+failure_modes:
+  - symptom: "convergence much slower than DPO"
+    cause: "squared loss gradients shrink near the target; underfit with too-low LR"
+    recovery: "raise ipo_tau or LR gently; check pair dataset margin distribution"
+  - symptom: "KL drift to the reference"
+    cause: "tau too large for the pair margins"
+    recovery: "reduce tau"
+fs_entry: fskills-rl
+references:
+  - "Azar et al. 2024, A General Theoretical Paradigm to Understand Learning from Human Preferences (IPO/PsiPO), arXiv:2310.12036"

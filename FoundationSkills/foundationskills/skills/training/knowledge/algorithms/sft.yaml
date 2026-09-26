@@ -1,0 +1,36 @@
+
+# Supervised fine-tuning on chat-formatted data. FS trains on the FULL rendered
+# `text` (no assistant-only loss masking) -- this MUST be disclosed to the user
+# as a finding whenever FS runs SFT.
+name: sft
+stage: sft
+family: supervised
+data_format: sft
+requires: []
+key_hparams:
+  learning_rate:
+    default: 1.0e-5
+    range: [5.0e-6, 2.0e-5]
+    note: "full fine-tune; LoRA/adapter SFT uses 1e-4..2e-4 (rank 16-64) -- set via adapter flags, not this card"
+  epochs:
+    default: 2
+    range: [1, 3]
+    note: "Tulu-style mixes use ~2 epochs on >=100k examples; small sets (<5k) rarely justify >2"
+  max_sequence_length:
+    default: 4096
+    range: [2048, 8192]
+    note: "must cover rendered conversation length or truncation breaks the turn structure; audit truncation_rate in the readiness report"
+failure_modes:
+  - symptom: "model parrots the template but cannot answer (format memorisation)"
+    cause: "assistant tokens carry no distinct learning signal -- FS trains on the full rendered text (measured: NO assistant-only loss masking)"
+    recovery: "disclose the masking gap; increase data diversity and epochs, or raise loRA rank for small sets; verify the rendered `text` column round-trips the chat template"
+  - symptom: "catastrophic forgetting of base capabilities"
+    cause: "small homogeneous SFT set at full-FT LRs"
+    recovery: "mix general chat / replay data, lower LR to ~1e-5, add a replay component via mixing_rules"
+  - symptom: "training loss ~0 but eval broken"
+    cause: "chat template mismatch between the rendered text and the model's family template (assistant_marker)"
+    recovery: "re-render with the knowledge family chat_template; compare one example token-by-token"
+fs_entry: foundationscale-train
+references:
+  - "Lambert et al. 2024, Tulu 3: Pushing Frontiers in Open Language Model Post-Training, arXiv:2411.15124"
+  - "Mitsubishi et al. 2023, Fine-Tuning Language Models from Human Preferences (SFT practice), arXiv:2305.10425 -> use title check; see also Rafailov et al. DPO pipeline"

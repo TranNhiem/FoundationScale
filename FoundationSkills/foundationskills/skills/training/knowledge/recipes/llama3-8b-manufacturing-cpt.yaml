@@ -1,0 +1,72 @@
+
+# Domain CPT on an open-source 7-8B base -- the reference scenario recipe.
+id: llama3-8b-manufacturing-cpt
+version: 1.0.0
+title: Llama-3.1-8B manufacturing-domain continued pretraining (full)
+index:
+  family: llama3
+  size_b: [6.0, 10.0]
+  arch: dense
+  stage: cpt
+  goal: domain_expert
+  domain: manufacturing
+  method: full
+  hardware: [gb200-189gb, h100-80gb]
+data:
+  format: cpt
+  min_tokens: 100000000
+  recommended_tokens: 1000000000
+  min_examples: null
+  recommended_examples: null
+  mixture:
+    manufacturing_documents: 0.85
+    general_replay: 0.15
+stages:
+  - name: cpt-manufacturing
+    stage: cpt
+    algorithm: causal_lm
+    hparams:
+      learning_rate: 2.0e-5
+      lr_scheduler_type: cosine
+      warmup_steps: 200
+      epochs: 2
+      replay_ratio: 0.15
+      # global batch: 2 dev * 128 accum * 4 GPU * 4096 tok = ~4M tokens/step on a GB200 tray
+      global_batch_tokens: 4000000
+    fs:
+      entry: foundationscale-train
+      args:
+        objective: sft
+        sharding-strategy: fsdp
+        precision: bf16
+        optimizer: adamw
+        gradient-checkpointing: true
+        per-device-batch-size: 2
+        gradient-accumulation-steps: 128
+        learning-rate: 2.0e-5
+        lr-scheduler-type: cosine
+        warmup-steps: 200
+        max-grad-norm: 1.0
+        max-sequence-length: 4096
+        save-interval: 1000
+        logging-steps: 10
+        seed: 0
+hardware:
+  min_gpus: 4
+  gpu_mem_gb: 80
+  est_gpu_hours: 16.0
+evaluation:
+  benchmarks:
+    - manufacturing_qa_holdout
+    - domain_perplexity_holdout
+  success: "domain holdout perplexity improves >=15% vs base with <=2% regression on general perplexity"
+risks:
+  - "FS runs causal LM as --objective sft over the `text` column only: the pipeline must ship {id, text, meta} records (pretrain/cpt format)"
+  - "catastrophic forgetting without >=15% general replay"
+  - "rerun CPT uses rewarm+redecay, not the resumed old schedule (Ibrahim et al. 2024)"
+provenance:
+  status: literature
+  evidence:
+    - "Ibrahim et al. 2024, Simple and Scalable Strategies to Continually Pre-train LLMs, arXiv:2403.08763"
+    - "DeepSeekMath CPT practice, arXiv:2402.03300"
+  validated_on: null

@@ -1,0 +1,71 @@
+
+id: qwen2.5-7b-general-chat-sft-lora
+version: 1.0.0
+title: Qwen2.5-7B general-chat SFT (LoRA)
+index:
+  family: qwen2.5
+  size_b: [5.0, 9.0]
+  arch: dense
+  stage: sft
+  goal: general_chat
+  domain: any
+  method: lora
+  hardware: [gb200-189gb, h100-80gb, a100-80gb]
+data:
+  format: sft
+  min_tokens: null
+  recommended_tokens: null
+  min_examples: 5000
+  recommended_examples: 100000
+  mixture:
+    general_chat: 0.7
+    safety_examples: 0.1
+    instruction_mix: 0.2
+stages:
+  - name: sft-chat-lora
+    stage: sft
+    algorithm: sft
+    hparams:
+      learning_rate: 1.0e-4
+      epochs: 2
+      lora_rank: 16
+      lora_alpha: 32
+    fs:
+      entry: foundationscale-train
+      args:
+        objective: sft
+        sharding-strategy: fsdp
+        precision: bf16
+        optimizer: adamw
+        adapter: lora
+        adapter-rank: 16
+        adapter-alpha: 32
+        adapter-dropout: 0.05
+        adapter-target: "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
+        per-device-batch-size: 4
+        gradient-accumulation-steps: 8
+        learning-rate: 1.0e-4
+        lr-scheduler-type: cosine
+        warmup-steps: 100
+        max-sequence-length: 4096
+        save-interval: 500
+        logging-steps: 10
+        seed: 0
+hardware:
+  min_gpus: 1
+  gpu_mem_gb: 40
+  est_gpu_hours: 6.0
+evaluation:
+  benchmarks:
+    - mt_bench
+    - alpaca_eval_2
+  success: ">= 7.0 MT-Bench single-answer score; template round-trips ChatML"
+risks:
+  - "FS does not register qwen2.5: --adapter-target is passed explicitly; verify leaf names against the checkpoint"
+  - "ChatML rendering must use eos <|im_end|> for Instruct-style records, not <|endoftext|>"
+provenance:
+  status: literature
+  evidence:
+    - "Hu et al. 2021, LoRA, arXiv:2106.09685"
+    - "Lambert et al. 2024, Tulu 3, arXiv:2411.15124"
+  validated_on: null

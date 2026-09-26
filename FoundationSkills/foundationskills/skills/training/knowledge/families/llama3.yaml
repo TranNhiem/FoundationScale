@@ -1,0 +1,119 @@
+
+# Meta Llama 3 reference family (literature entry; FS does NOT register it).
+name: llama3
+display_name: Meta Llama 3
+fs_family: null
+model_types:
+  - llama
+modalities: [text]
+variants:
+  - id: llama-3.1-8b
+    hf_id: meta-llama/Meta-Llama-3.1-8B
+    local_path: null
+    size_b: 8.03
+    active_b: null
+    arch: dense
+    hidden: 4096
+    layers: 32
+    heads: 32
+    kv_heads: 8
+    head_dim: 128
+    vocab: 128256
+    context_length: 131072
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: false
+    instruct: false
+  - id: llama-3.1-8b-instruct
+    hf_id: meta-llama/Meta-Llama-3.1-8B-Instruct
+    local_path: null
+    size_b: 8.03
+    active_b: null
+    arch: dense
+    hidden: 4096
+    layers: 32
+    heads: 32
+    kv_heads: 8
+    head_dim: 128
+    vocab: 128256
+    context_length: 131072
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: false
+    instruct: true
+  - id: llama-3.1-70b
+    hf_id: meta-llama/Meta-Llama-3.1-70B
+    local_path: null
+    size_b: 70.6
+    active_b: null
+    arch: dense
+    hidden: 8192
+    layers: 80
+    heads: 64
+    kv_heads: 8
+    head_dim: 128
+    vocab: 128256
+    context_length: 131072
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: false
+    instruct: false
+  - id: llama-3.1-70b-instruct
+    hf_id: meta-llama/Meta-Llama-3.1-70B-Instruct
+    local_path: null
+    size_b: 70.6
+    active_b: null
+    arch: dense
+    hidden: 8192
+    layers: 80
+    heads: 64
+    kv_heads: 8
+    head_dim: 128
+    vocab: 128256
+    context_length: 131072
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: false
+    instruct: true
+tokenizer:
+  vocab_size: 128256
+  bos: <|begin_of_text|>
+  eos: <|eot_id|>
+  pad: null
+chat_template:
+  source: tokenizer
+  family_tag: llama3
+  assistant_marker: <|start_header_id|>assistant<|end_header_id|>
+  generation_prompt: "<|start_header_id|>assistant<|end_header_id|>\n\n"
+  notes: >-
+    The Instruct variants carry the Llama-3 header/turn template in
+    tokenizer_config (source tokenizer). Base checkpoints carry none; the
+    format op must render with this template explicitly.
+special_tokens:
+  begin_of_text: <|begin_of_text|>
+  end_of_text: <|end_of_text|>
+  start_header_id: <|start_header_id|>
+  end_header_id: <|end_header_id|>
+  eot_id: <|eot_id|>
+lora_targets:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+quirks:
+  - >-
+    FS does not register this family: pass --adapter-target explicitly; FS
+    refuses automatic LoRA targeting (foundationscale.families.registry knows
+    only gemma4 and qwen3.5).
+  - >-
+    RoPE frequency base changed between Llama 3 and 3.1 (long-context scaling);
+    do not mix configs when resuming training across variants.
+  - "GQA with kv_heads 8 on all listed variants."
+provenance:
+  status: literature
+  evidence:
+    - Llama 3 model cards / config.json (meta-llama/Meta-Llama-3.1-*)
+  validated_on: null

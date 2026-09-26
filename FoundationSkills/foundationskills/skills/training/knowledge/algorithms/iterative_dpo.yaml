@@ -1,0 +1,32 @@
+
+# Iterative DPO: repeated rounds -- train DPO on current pairs, then generate
+# new on-policy pairs from the improved policy and re-judge them. Static loop,
+# unlike online DPO's fused loop; each round is a standard offline DPO run.
+name: iterative_dpo
+stage: preference
+family: preference
+data_format: preference
+requires: [pairs, reference_model]
+key_hparams:
+  beta:
+    default: 0.1
+    range: [0.05, 0.3]
+    note: "per-round DPO temperature"
+  learning_rate:
+    default: 5.0e-7
+    range: [1.0e-7, 1.0e-6]
+    note: "per-round LR; each round starts from the previous round's policy"
+  num_iterations:
+    default: 3
+    range: [2, 6]
+    note: "rounds of generate->judge->DPO; returns diminish after ~3"
+failure_modes:
+  - symptom: "later rounds overfit / win-rate regresses"
+    cause: "on-policy pairs become too easy as the policy improves -> sparse margin signal"
+    recovery: "curriculum of harder prompts per round; stop when round-to-round judged win rate < 55%"
+  - symptom: "KL accumulates across rounds"
+    cause: "each round uses the PREVIOUS policy as its reference"
+    recovery: "anchor round 1 reference for the KL term, or decay beta across rounds"
+fs_entry: fskills-rl
+references:
+  - "Xiong et al. 2024, Iterative Preference Learning from Human Feedback: Bridging Theory and Practice for RLHF under KL-Constraint"

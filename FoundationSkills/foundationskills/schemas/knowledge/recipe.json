@@ -1,0 +1,117 @@
+
+{
+  "type": "object",
+  "description": "An indexed, citable training recipe. Recipes are literature until validated by a GPU run.",
+  "required": ["id", "version", "title", "index", "data", "stages", "hardware", "evaluation", "risks", "provenance"],
+  "additionalProperties": true,
+  "properties": {
+    "id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$", "description": "must equal the file stem under knowledge/recipes/"},
+    "version": {"type": "string", "minLength": 1},
+    "title": {"type": "string", "minLength": 1},
+    "index": {
+      "type": "object",
+      "required": ["family", "size_b", "arch", "stage", "goal", "domain", "method", "hardware"],
+      "additionalProperties": true,
+      "properties": {
+        "family": {"type": "string", "minLength": 1},
+        "size_b": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number", "minimum": 0}},
+        "arch": {"type": "string", "enum": ["dense", "moe"]},
+        "stage": {"type": "string", "enum": ["pretrain", "cpt", "sft", "preference", "rl"]},
+        "goal": {"type": "string", "enum": ["general_chat", "reasoning", "math", "code", "domain_expert", "tool_calling"]},
+        "domain": {"type": "string", "minLength": 1, "description": "domain name, or the literal 'any'"},
+        "method": {"type": "string", "enum": ["full", "lora", "qlora"]},
+        "hardware": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "data": {
+      "type": "object",
+      "required": ["format", "min_tokens", "recommended_tokens", "min_examples", "recommended_examples", "mixture"],
+      "additionalProperties": true,
+      "properties": {
+        "format": {"type": "string", "enum": ["pretrain", "cpt", "sft", "preference", "rl", "mm_sft"]},
+        "min_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "recommended_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "min_examples": {"type": ["integer", "null"], "minimum": 0},
+        "recommended_examples": {"type": ["integer", "null"], "minimum": 0},
+        "mixture": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0}}
+      }
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "stage", "algorithm", "hparams", "fs"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "stage": {"type": "string", "enum": ["pretrain", "cpt", "sft", "preference", "rl"]},
+          "algorithm": {"type": "string", "minLength": 1, "description": "must name an algorithm card in knowledge/algorithms/"},
+          "hparams": {"type": "object", "additionalProperties": true},
+          "fs": {
+            "type": "object",
+            "required": ["entry", "args"],
+            "additionalProperties": true,
+            "properties": {
+              "entry": {"type": "string", "enum": ["foundationscale-train", "fskills-rl"]},
+              "args": {"type": "object", "additionalProperties": true, "description": "FS CLI flag names without leading '--'; '_' and '-' both accepted. Empty for fskills-rl stages (RL params live in hparams)."}
+            }
+          }
+        }
+      }
+    },
+    "hardware": {
+      "type": "object",
+      "required": ["min_gpus", "gpu_mem_gb", "est_gpu_hours"],
+      "additionalProperties": true,
+      "properties": {
+        "min_gpus": {"type": "integer", "minimum": 1},
+        "gpu_mem_gb": {"type": "number", "minimum": 1},
+        "est_gpu_hours": {"type": ["number", "null"], "minimum": 0}
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "required": ["benchmarks", "success"],
+      "additionalProperties": true,
+      "properties": {
+        "benchmarks": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "success": {"type": "string", "minLength": 1}
+      }
+    },
+    "risks": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "provenance": {"oneOf": [{"$ref": "#/$defs/provenance_validated"}, {"$ref": "#/$defs/provenance_unvalidated"}]}
+  },
+  "$defs": {
+    "provenance_validated": {
+      "type": "object",
+      "required": ["status", "evidence", "validated_on"],
+      "additionalProperties": true,
+      "properties": {
+        "status": {"const": "validated"},
+        "evidence": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "validated_on": {
+          "type": "object",
+          "required": ["fs_commit", "hardware", "run_id", "date"],
+          "additionalProperties": true,
+          "properties": {
+            "fs_commit": {"type": "string", "minLength": 1},
+            "hardware": {"type": "string", "minLength": 1},
+            "run_id": {"type": "string", "minLength": 1},
+            "date": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "provenance_unvalidated": {
+      "type": "object",
+      "required": ["status", "evidence", "validated_on"],
+      "additionalProperties": true,
+      "properties": {
+        "status": {"enum": ["literature", "community"]},
+        "evidence": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "validated_on": {"type": "null"}
+      }
+    }
+  }
+}

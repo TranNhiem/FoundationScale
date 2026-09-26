@@ -1,0 +1,101 @@
+
+{
+  "type": "object",
+  "description": "A model family known to the FoundationSkills training knowledge base.",
+  "required": ["name", "display_name", "fs_family", "model_types", "modalities", "variants", "tokenizer", "chat_template", "special_tokens", "lora_targets", "quirks", "provenance"],
+  "additionalProperties": true,
+  "properties": {
+    "name": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9.]+$"},
+    "display_name": {"type": "string", "minLength": 1},
+    "fs_family": {"type": ["string", "null"], "description": "FS family registry name, or null when FS does not register this family."},
+    "model_types": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "modalities": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": ["text", "image", "audio", "video"]}},
+    "variants": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "hf_id", "local_path", "size_b", "active_b", "arch", "hidden", "layers", "heads", "kv_heads", "head_dim", "vocab", "context_length", "num_experts", "experts_per_token", "tied_embeddings", "instruct"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "hf_id": {"type": ["string", "null"]},
+          "local_path": {"type": ["string", "null"]},
+          "size_b": {"type": "number", "minimum": 0, "description": "total params, billions (est. safetensors_GB / 2 for bf16)"},
+          "active_b": {"type": ["number", "null"], "minimum": 0, "description": "activated params per token, billions; null means equal to size_b"},
+          "arch": {"type": "string", "enum": ["dense", "moe"]},
+          "hidden": {"type": "integer", "minimum": 1},
+          "layers": {"type": "integer", "minimum": 1},
+          "heads": {"type": "integer", "minimum": 1},
+          "kv_heads": {"type": "integer", "minimum": 1},
+          "head_dim": {"type": ["integer", "null"], "minimum": 1},
+          "vocab": {"type": "integer", "minimum": 1},
+          "context_length": {"type": "integer", "minimum": 1},
+          "num_experts": {"type": ["integer", "null"], "minimum": 1},
+          "experts_per_token": {"type": ["integer", "null"], "minimum": 1},
+          "tied_embeddings": {"type": "boolean"},
+          "instruct": {"type": "boolean"}
+        }
+      }
+    },
+    "tokenizer": {
+      "type": "object",
+      "required": ["vocab_size", "bos", "eos", "pad"],
+      "additionalProperties": true,
+      "properties": {
+        "vocab_size": {"type": "integer", "minimum": 1},
+        "bos": {"type": ["string", "null"]},
+        "eos": {"type": "string", "minLength": 1},
+        "pad": {"type": ["string", "null"]}
+      }
+    },
+    "chat_template": {
+      "type": "object",
+      "required": ["source", "family_tag", "assistant_marker", "generation_prompt", "notes"],
+      "additionalProperties": true,
+      "properties": {
+        "source": {"type": "string", "enum": ["tokenizer", "builtin"]},
+        "family_tag": {"type": "string", "minLength": 1},
+        "assistant_marker": {"type": ["string", "null"]},
+        "generation_prompt": {"type": ["string", "null"]},
+        "notes": {"type": "string"}
+      }
+    },
+    "special_tokens": {"type": "object", "additionalProperties": {"type": "string"}},
+    "lora_targets": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "quirks": {"type": "array", "items": {"type": "string"}},
+    "provenance": {"oneOf": [{"$ref": "#/$defs/provenance_validated"}, {"$ref": "#/$defs/provenance_unvalidated"}]}
+  },
+  "$defs": {
+    "provenance_validated": {
+      "type": "object",
+      "required": ["status", "evidence", "validated_on"],
+      "additionalProperties": true,
+      "properties": {
+        "status": {"const": "validated"},
+        "evidence": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "validated_on": {
+          "type": "object",
+          "required": ["fs_commit", "hardware", "run_id", "date"],
+          "additionalProperties": true,
+          "properties": {
+            "fs_commit": {"type": "string", "minLength": 1},
+            "hardware": {"type": "string", "minLength": 1},
+            "run_id": {"type": "string", "minLength": 1},
+            "date": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "provenance_unvalidated": {
+      "type": "object",
+      "required": ["status", "evidence", "validated_on"],
+      "additionalProperties": true,
+      "properties": {
+        "status": {"enum": ["literature", "community"]},
+        "evidence": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "validated_on": {"type": "null"}
+      }
+    }
+  }
+}

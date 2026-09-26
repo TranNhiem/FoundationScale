@@ -1,0 +1,131 @@
+
+# Alibaba Qwen 2.5 reference family (literature entry; FS does NOT register it).
+name: qwen2.5
+display_name: Alibaba Qwen 2.5
+fs_family: null
+model_types:
+  - qwen2
+modalities: [text]
+variants:
+  - id: qwen2.5-7b
+    hf_id: Qwen/Qwen2.5-7B
+    local_path: null
+    size_b: 7.62
+    active_b: null
+    arch: dense
+    hidden: 3584
+    layers: 28
+    heads: 28
+    kv_heads: 4
+    head_dim: 128
+    vocab: 152064
+    context_length: 131072
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: true
+    instruct: false
+  - id: qwen2.5-7b-instruct
+    hf_id: Qwen/Qwen2.5-7B-Instruct
+    local_path: null
+    size_b: 7.62
+    active_b: null
+    arch: dense
+    hidden: 3584
+    layers: 28
+    heads: 28
+    kv_heads: 4
+    head_dim: 128
+    vocab: 152064
+    context_length: 131072
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: true
+    instruct: true
+  - id: qwen2.5-14b
+    hf_id: Qwen/Qwen2.5-14B
+    local_path: null
+    size_b: 14.77
+    active_b: null
+    arch: dense
+    hidden: 5120
+    layers: 40
+    heads: 40
+    kv_heads: 8
+    head_dim: 128
+    vocab: 152064
+    context_length: 131072
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: false
+    instruct: false
+  - id: qwen2.5-32b
+    hf_id: Qwen/Qwen2.5-32B
+    local_path: null
+    size_b: 32.8
+    active_b: null
+    arch: dense
+    hidden: 5120
+    layers: 64
+    heads: 40
+    kv_heads: 8
+    head_dim: 128
+    vocab: 152064
+    context_length: 131072
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: false
+    instruct: false
+  - id: qwen2.5-72b
+    hf_id: Qwen/Qwen2.5-72B
+    local_path: null
+    size_b: 72.7
+    active_b: null
+    arch: dense
+    hidden: 8192
+    layers: 80
+    heads: 64
+    kv_heads: 8
+    head_dim: 128
+    vocab: 152064
+    context_length: 131072
+    num_experts: null
+    experts_per_token: null
+    tied_embeddings: false
+    instruct: false
+tokenizer:
+  vocab_size: 152064
+  bos: null
+  eos: <|endoftext|>
+  pad: <|endoftext|>
+chat_template:
+  source: tokenizer
+  family_tag: qwen2.5
+  assistant_marker: <|im_start|>assistant
+  generation_prompt: "<|im_start|>assistant\n"
+  notes: >-
+    Instruct variants use the ChatML template (<|im_start|>/<|im_end|>) with
+    eos <|im_end|>; base variants end documents with <|endoftext|>.
+special_tokens:
+  endoftext: <|endoftext|>
+  im_start: <|im_start|>
+  im_end: <|im_end|>
+lora_targets:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+quirks:
+  - >-
+    FS does not register this family: pass --adapter-target explicitly; FS
+    refuses automatic LoRA targeting (foundationscale.families.registry knows
+    only gemma4 and qwen3.5).
+  - "Embeddings are tied on the 7B variant (like 0.5B-3B) but untied from 14B up; memory estimates must not assume one rule."
+  - "Sliding-window attention was disabled in Qwen2.5 (full attention everywhere); 131072 context applies to Instruct configurations -- verify max_position_embeddings per checkpoint."
+provenance:
+  status: literature
+  evidence:
+    - Qwen2.5 model cards / config.json (Qwen/Qwen2.5-*)
+  validated_on: null

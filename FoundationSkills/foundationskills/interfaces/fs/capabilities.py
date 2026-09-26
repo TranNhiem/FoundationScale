@@ -28,6 +28,10 @@ class FSCapabilities:
     refused_axes: tuple[str, ...] = ()
     axes_measured: bool = False
     rl_algorithms: tuple[str, ...] = ()
+    # Registered is not runnable: RLTrainer refuses most of the registry
+    # (measured on 77bfa65: only dr_grpo, gspo, dapo run). name -> None when it
+    # runs, else FS's own refusal text. Empty when unmeasured.
+    rl_runnable: dict[str, str | None] = field(default_factory=dict)
     families: dict[str, tuple[str, ...]] = field(default_factory=dict)
     backends: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
@@ -61,13 +65,22 @@ class FSCapabilities:
             opts = ", ".join(self.train_objectives) or "<none>"
             return f"missing: sft objective support for stage {stage} (installed FS objectives: {opts})"
         if stage in {"preference", "rl"}:
-            if multi_gpu_rl:
-                return "missing: multi-GPU RL (FS RLTrainer is single-device)"
             if not algorithm:
                 return f"missing: algorithm for stage {stage}"
             if algorithm not in self.rl_algorithms:
                 algs = ", ".join(self.rl_algorithms) or "<none unmeasured>"
                 return f"missing: RL algorithm {algorithm} (installed FS algorithms: {algs})"
+            if algorithm not in self.rl_runnable:
+                return f"missing: runnability of {algorithm} unmeasured by probe (RLTrainer objective check)"
+            reason = self.rl_runnable[algorithm]
+            if reason is not None:
+                runs = ", ".join(sorted(a for a, r in self.rl_runnable.items() if r is None)) or "<none>"
+                return f"missing: {algorithm} is registered but FS RLTrainer refuses it ({reason[:160]}); runnable today: {runs}"
+            # Runnability first: "multi-GPU" is the wrong refusal for an
+            # algorithm that cannot run on any number of GPUs.
+            if multi_gpu_rl:
+                return "missing: multi-GPU RL (FS RLTrainer is single-device)"
+            return None  # the RL driver is single-device: backend/axes do not apply
         if backend not in self.backends:
             backs = ", ".join(self.backends) or "<none>"
             return f"missing: {backend} backend (installed FS has: {backs})"
@@ -235,6 +248,32 @@ def _probe_axes(deep: bool, python: str | None, notes: list[str]) -> tuple[tuple
     return tuple(executed), tuple(refused), measured
 
 
+def _probe_rl_runnable(names: tuple[str, ...], errors: list[str]) -> dict[str, str | None]:
+    """Ask FS's own objective resolver (the check RLTrainer runs before loading
+    a model) whether each registered algorithm is runnable. No model, no GPU."""
+    import types
+
+    try:
+        from foundationscale.rl.trainer import RLTrainer, TrainerRefusal
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"rl runnability unmeasured: {type(exc).__name__}: {exc}")
+        return {}
+    resolve = getattr(RLTrainer, "_resolve_objective", None)
+    if resolve is None:
+        errors.append("rl runnability unmeasured: RLTrainer._resolve_objective not found")
+        return {}
+    out: dict[str, str | None] = {}
+    for name in names:
+        try:
+            resolve(types.SimpleNamespace(config=types.SimpleNamespace(algorithm=name)))
+            out[name] = None
+        except TrainerRefusal as exc:
+            out[name] = str(exc)
+        except Exception as exc:  # noqa: BLE001 - not a refusal: leave unmeasured
+            errors.append(f"rl runnability of {name} unmeasured: {type(exc).__name__}: {exc}")
+    return out
+
+
 def probe(deep: bool = False, python: str | None = None) -> FSCapabilities:
     """Probe installed FoundationScale. Failures are recorded, never fatal."""
     notes: list[str] = []
@@ -250,10 +289,12 @@ def probe(deep: bool = False, python: str | None = None) -> FSCapabilities:
     executed_axes, refused_axes, axes_measured = _probe_axes(deep, python, notes)
 
     rl_algorithms: tuple[str, ...] = ()
+    rl_runnable: dict[str, str | None] = {}
     try:
         from foundationscale.rl.registry import available_algorithm_names  # type: ignore
 
         rl_algorithms = _str_tuple(tuple(available_algorithm_names()))
+        rl_runnable = _probe_rl_runnable(rl_algorithms, errors)
     except Exception as exc:
         errors.append(f"RL registry probe failed: {type(exc).__name__}: {exc}")
 
@@ -280,6 +321,7 @@ def probe(deep: bool = False, python: str | None = None) -> FSCapabilities:
         refused_axes=refused_axes,
         axes_measured=axes_measured,
         rl_algorithms=tuple(rl_algorithms),
+        rl_runnable=rl_runnable,
         families=families,
         backends=tuple(backends),
         notes=tuple(notes),

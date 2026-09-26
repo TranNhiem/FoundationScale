@@ -1,0 +1,44 @@
+
+# CPT / continued pretraining. FS has no --objective cpt: the SFT objective is
+# causal LM over the dataset's `text` column, so pretrain and CPT both run
+# through foundationscale-train --objective sft on a {text} corpus (measured).
+name: causal_lm
+stage: cpt
+family: supervised
+data_format: cpt
+requires: []
+key_hparams:
+  learning_rate:
+    default: 2.0e-5
+    range: [1.0e-5, 3.0e-5]
+    note: "size-dependent: ~1e-5 toward 30B, ~3e-5 toward <=8B; roughly one decade below a from-scratch pretrain LR"
+  warmup_ratio:
+    default: 0.01
+    range: [0.005, 0.03]
+    note: "1% warmup then cosine decay to 10% of peak; for repeated CPT rounds use rewarm+redecay rather than resuming the old schedule (Ibrahim et al. 2024)"
+  lr_scheduler_type:
+    default: cosine
+    range: null
+    note: "cosine to 10% of peak LR; linear decay acceptable for short continuation runs"
+  epochs:
+    default: 1
+    range: [1, 4]
+    note: "cap at 1-2 for large corpora; only small domains (<100M tokens) justify 3-4, with abuse-risk of memorisation"
+  replay_ratio:
+    default: 0.15
+    range: [0.05, 0.4]
+    note: "fraction of general replay data mixed in when preserve_general is true"
+failure_modes:
+  - symptom: "catastrophic forgetting: general evaluation collapses after CPT"
+    cause: "domain data trained without general replay, or LR too high for 3+ epochs"
+    recovery: "mix 10-20% general replay (mixing_rules), lower LR toward 1e-5, reduce epochs"
+  - symptom: "loss spikes / divergence mid-run"
+    cause: "LR too high for the continuation token count, bad batches (boilerplate HTML), or bf16 instability"
+    recovery: "drop LR, audit outliers in the corpus (data engine quality op), clip at 1.0, resume from last clean checkpoint"
+  - symptom: "CPT corpus silently rejected or trained as empty conversations"
+    cause: "FS runs causal LM as --objective sft over the `text` column only; chat-shaped records without a rendered `text` column train on nothing"
+    recovery: "ship {id, text, meta} records via the data engine format op with target_format pretrain/cpt"
+fs_entry: foundationscale-train
+references:
+  - "Ibrahim et al. 2024, Simple and Scalable Strategies to Continually Pre-train Large Language Models, arXiv:2403.08763"
+  - "DeepSeek-AI 2024, DeepSeek-V3 Technical Report, arXiv:2412.19437 (CPT/data-contamination practice)"
