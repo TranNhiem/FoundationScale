@@ -158,8 +158,11 @@ tokenizer:
 chat_template:
   source: tokenizer
   family_tag: gemma4
-  assistant_marker: "<start_of_turn>model"
-  generation_prompt: "<start_of_turn>model\n"
+  # Measured from the real gemma-4-E4B-it chat_template (2026-09-26); Gemma-4
+  # uses <|turn>/<turn|>, NOT the Gemma-2/3 <start_of_turn> markers.
+  assistant_marker: "<|turn>model"
+  generation_prompt: "<|turn>model\n"
+  thinking: "enable_thinking=True renders a '<|turn>system\n<|think|>\n<turn|>' prefix; a reasoning trace goes in '<|channel>thought\n...\n<channel|>' after '<|turn>model\n' (the template renders it only on tool-call turns -- the Data Engine injects and verifies it)"
   notes: >-
     The -it variants ship a chat_template.jinja (has_chat_template_file=true).
     Measured: the gemma-4-12B and gemma-4-E4B BASE checkpoints carry no chat
@@ -169,8 +172,11 @@ special_tokens:
   bos: <bos>
   eos: <eos>
   pad: <pad>
-  start_of_turn: <start_of_turn>
-  end_of_turn: <end_of_turn>
+  turn_open: <|turn>
+  turn_close: <turn|>
+  think: <|think|>
+  channel_open: <|channel>
+  channel_close: <channel|>
 lora_targets:
   - q_proj
   - k_proj

@@ -23,6 +23,10 @@ mfu:
       value: 0.046
       provenance: measured
       evidence: "FoundationSkills validation 2026-09-26: Gemma-4 E4B full FT, FSDP x4, b1, grad ckpt, seq 4096; 69.7 model-TF/s/GPU over a 20-step run (short run, not steady state)"
+    - config: {sharding: fsdp, micro_batch: 2, grad_ckpt: true, method: lora}
+      value: 0.0152
+      provenance: measured
+      evidence: "FoundationSkills E2E 2026-09-26 (launched by fskills launch): Gemma-4 E4B-it LoRA r16, FSDP x4, b2, grad ckpt, seq 4096; 22.8 model-TF/s/GPU over 30 steps (short run); peak 37.7 GB/GPU vs 32.4 GB planned"
   moe:
     value: 0.15
     provenance: derived

@@ -56,7 +56,7 @@ hardware:
 evaluation:
   benchmarks:
     - mt_bench
-  success: ">= 6.5 MT-Bench single-answer score; <start_of_turn>model template round-trips"
+  success: ">= 6.5 MT-Bench single-answer score; <|turn>model template round-trips"
 risks:
   - "E4B base has NO chat_template file (measured): render with the family template explicitly via the format op"
   - "FS chooses LoRA targets automatically for gemma4 (registered family): vision/audio towers are correctly excluded"
