@@ -199,12 +199,24 @@ def _probe_flag_choices(errors: list[str]) -> dict[str, tuple[str, ...]]:
     try:
         from foundationscale.train import cli  # type: ignore
 
-        return {
+        choices = {
             opt: tuple(str(c) for c in action.choices)
             for action in getattr(cli.build_parser(), "_actions", [])
             if getattr(action, "choices", None)
             for opt in action.option_strings if str(opt).startswith("--")
         }
+        # FS forwards these to transformers unvalidated; the installed transformers
+        # defines what is legal (measured: "adamw" was refused by 5.13 at
+        # TrainingArguments construction, after GPUs were allocated).
+        try:
+            from transformers.trainer_utils import SchedulerType  # type: ignore
+            from transformers.training_args import OptimizerNames  # type: ignore
+
+            choices.setdefault("--optimizer", tuple(o.value for o in OptimizerNames))
+            choices.setdefault("--lr-scheduler-type", tuple(t.value for t in SchedulerType))
+        except Exception as exc:  # noqa: BLE001 - recorded; values stay unvalidated
+            errors.append(f"transformers optimizer/scheduler vocabulary unmeasured: {type(exc).__name__}: {exc}")
+        return choices
     except Exception as exc:  # noqa: BLE001
         errors.append(f"flag choices probe failed: {type(exc).__name__}: {exc}")
         return {}

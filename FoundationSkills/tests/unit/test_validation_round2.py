@@ -393,3 +393,35 @@ def test_emitted_config_is_the_estimated_config_and_conflicts_refused():
     spec = _emit({"stage": "sft", "method": "lora",
                   "hparams": {"max_steps": 1, "seq_len": 4096, "max_sequence_length": 2048}})
     assert "conflicting hparams for --max-sequence-length" in spec["missing"]
+
+
+def test_f19_launch_keeps_output_and_recovers_fs_verdict_through_torchrun(tmp_path):
+    from foundationskills.core import plan_hash
+    from foundationskills.interfaces.fs.launch import fs_verdict, launch
+
+    def runner(argv, **kw):  # torchrun: child refused (96) but torchrun exits 1
+        return types.SimpleNamespace(returncode=1, stdout="[fs:train:refuse]  cluster profile refused\n", stderr="")
+    spec = {"stage_name": "s", "entry": "foundationscale-train", "argv": ["torchrun"], "env": {}, "sbatch": None,
+            "dry_run_argv": None, "expected_outputs": [], "executable": True, "missing": None,
+            "output_dir": str(tmp_path / "run")}
+    res = launch(spec, confirm=plan_hash(spec), submit=False, runner=runner)
+    assert res["returncode"] == 96 and res["returncode_raw"] == 1 and res["fs_verdict"] == 96
+    assert (tmp_path / "run" / "fskills_launch.log").read_text().startswith("[fs:train:refuse]")
+    assert fs_verdict("[fs:train:done]          PASS") == 0 and fs_verdict("no fs lines") is None
+
+
+def test_every_recipe_fs_value_is_legal_for_the_installed_stack():
+    """GB200 E2E: recipe optimizer "adamw" passed FS's parser (no choices) and was
+    refused by transformers at TrainingArguments construction (exit 96, after
+    GPUs were allocated). Values are now checked against measured vocabularies."""
+    from foundationskills.interfaces.fs.capabilities import probe
+    from foundationskills.skills.training.knowledge import load_recipes
+    choices = probe().train_flag_choices
+    for recipe in load_recipes():
+        for stage in recipe.raw.get("stages", []):
+            for key, value in ((stage.get("fs") or {}).get("args") or {}).items():
+                flag = "--" + str(key).lstrip("-").replace("_", "-")
+                allowed = choices.get(flag)
+                if allowed:
+                    rendered = ("true" if value else "false") if isinstance(value, bool) else str(value)
+                    assert rendered in allowed, f"{recipe.raw['id']}: {flag}={rendered!r} not in {allowed[:6]}..."
