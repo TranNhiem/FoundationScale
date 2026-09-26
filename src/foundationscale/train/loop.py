@@ -3701,6 +3701,53 @@ def _build_run_manifest(
     )
 
 
+def _effective_rank() -> int:
+    """Best available statement of this process's global rank, else 0.
+
+    Manifest emission happens at stages where the collective does not exist
+    yet (refusals fire while the trainer is still a plan) and at stages where
+    it has already been torn down. ``torch.distributed`` is therefore consulted
+    ONLY through ``sys.modules`` -- importing it is a torch touch, and the
+    prologue forbids those before validation has run. Before collective
+    bring-up the launcher's ``RANK`` stamp is the source; a host with neither
+    -- the plain single-process run every test takes -- is rank 0, because
+    somebody must write and there is exactly one somebody present.
+    """
+    dist = sys.modules.get("torch.distributed")
+    if dist is not None:
+        is_available = getattr(dist, "is_available", None)
+        is_initialized = getattr(dist, "is_initialized", None)
+        get_rank = getattr(dist, "get_rank", None)
+        if (
+            callable(is_available)
+            and callable(is_initialized)
+            and callable(get_rank)
+            and is_available()
+            and is_initialized()
+        ):
+            return int(get_rank())
+    raw = os.environ.get("RANK", "")
+    return int(raw) if raw.isdigit() else 0
+
+
+def _atomic_write_text(path: Path, payload: str) -> None:
+    """Temp file (fsync) + ``Path.replace``, never in-place ``write_text``.
+
+    Successive stages legitimately overwrite the manifest (``train`` first, the
+    terminal stage last), but a reader racing a stage transition must never
+    catch a half-written file; the replace makes the intended overwrite atomic.
+    """
+    tmp = path.parent / f".{path.name}.tmp.{os.getpid()}"
+    try:
+        with tmp.open("w", encoding="utf-8") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def _emit_manifest(
     cfg: TrainConfig,
     *,
@@ -3720,10 +3767,24 @@ def _emit_manifest(
 
     ``declared`` carries the checkpoint denominator when a model exists to
     derive it from; the gates read its absence as UNKNOWN and fail closed.
+
+    One writer per run: this file lives at run scope, so rank 0 -- the global
+    rank, from the live collective when one exists and the launcher's ``RANK``
+    stamp otherwise -- writes it and every other rank abstains with its own
+    mark line. Two ranks truncating one path can only duplicate the work or
+    hand a reader torn JSON.
     """
     out_dir = Path(cfg.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / MANIFEST_NAME
+    rank = _effective_rank()
+    if rank != 0:
+        _mark(
+            Step.MANIFEST,
+            f"run manifest ({stage}) -> {path}: rank 0 writes this file; rank "
+            f"{rank} abstains as a non-writer (one writer per run)",
+        )
+        return path
+    out_dir.mkdir(parents=True, exist_ok=True)
     manifest = _build_run_manifest(
         cfg, stage=stage, extra=extra, declared=declared, notes=notes, telemetry=telemetry
     )
@@ -3731,7 +3792,8 @@ def _emit_manifest(
         # Degrade loudly. The previous implementation probed provenance for four
         # writer names it does not export and fell through here silently on
         # every single run, which read like integration and was none.
-        path.write_text(
+        _atomic_write_text(
+            path,
             json.dumps(
                 # The degraded writer cannot use EffectiveValue -- that
                 # import is exactly what failed above -- so the provenance
@@ -3752,7 +3814,6 @@ def _emit_manifest(
                 default=str,
             )
             + "\n",
-            encoding="utf-8",
         )
         _mark(
             Step.MANIFEST,
@@ -3761,7 +3822,7 @@ def _emit_manifest(
             "and every checkpoint gate will abstain",
         )
         return path
-    path.write_text(manifest.to_json() + "\n", encoding="utf-8")
+    _atomic_write_text(path, manifest.to_json() + "\n")
     _mark(Step.MANIFEST, f"run manifest ({stage}) -> {path}")
     # #487: the manifest records an unattributable run HONESTLY, and for a long
     # time that was the whole of it. Nothing outside provenance/manifest.py read

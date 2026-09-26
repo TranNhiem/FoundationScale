@@ -55,11 +55,15 @@ def extract_mcq_gold(question: str, answer: str) -> str | None:
     assistant turn holds an optional ``<think>...</think>`` block followed by
     the letter. The think block is stripped FIRST: reasoning rehearses
     candidate letters, and counting letters inside it would see ghosts the
-    writer discarded. Outside the block the answer is scanned for standalone
-    letters A--Z.
+    writer discarded. Outside the block the answer is scanned for letters
+    A--Z, upper-cased, and occurrences collapse to DISTINCT candidates: a
+    repeated single letter -- a stuttered "BB", a filler word built from one
+    letter -- stays one candidate; only a second DISTINCT letter adds a second
+    candidate.
 
-    Return the letter ONLY when exactly one candidate is found. Any other
-    count -- zero candidates, or two or more -- is an ambiguity, and an
+    Return the letter ONLY when exactly one distinct candidate is found. Any
+    other count -- zero candidates, or two or more distinct letters -- is an
+    ambiguity, and an
     ambiguous gold is an ABSTENTION, never a guess. A guessed gold trains
     the model backwards against a wrong target while reporting a clean
     accuracy; an abstained gold costs one row of supervision and trains
