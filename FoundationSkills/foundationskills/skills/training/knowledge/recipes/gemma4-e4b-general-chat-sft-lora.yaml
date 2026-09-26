@@ -61,8 +61,14 @@ risks:
   - "E4B base has NO chat_template file (measured): render with the family template explicitly via the format op"
   - "FS chooses LoRA targets automatically for gemma4 (registered family): vision/audio towers are correctly excluded"
 provenance:
-  status: literature
+  status: validated
   evidence:
-    - "Hu et al. 2021, LoRA, arXiv:2106.09685"
-    - "Lambert et al. 2024, Tulu 3, arXiv:2411.15124"
-  validated_on: null
+    - "Tulu 3, arXiv:2411.15124 (hyperparameter source)"
+    - "FoundationSkills validation 2026-09-26: planned by training.planner, emitted by training.emit and launched by fskills launch with this exact configuration (30 steps); FS save gates 4/4 PASS; peak 75.9 GB/GPU; 55.0 model-TF/s/GPU (MFU 3.7% measured by FS)"
+    - "SCOPE: runs correctly and reproducibly on FoundationScale; benchmark quality (MT-Bench) NOT yet measured"
+  validated_on:
+    fs_commit: f4643a7b6169efa6ebeec678d75827a3020c3966
+    hardware: gb200-189gb
+    run_id: recipe-sft-3df648c2
+    date: "2026-09-26"
+    run_manifest: /home/hhri-ai/hh28144/Project-Developments/FoundationScale/runs/fskills_validation/train_e2e2/recipe-sft/run_manifest.json

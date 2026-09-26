@@ -88,7 +88,7 @@ def test_activations_no_ckpt_sdpa() -> None:
     est = estimate_memory(dense7b(), method="full", seq_len=4096, micro_batch=1, grad_ckpt=False, world=8)
     # per layer s*b*h*34 = 4096*4096*34 = 570,425,344 bytes; x32 layers
     expected_bytes = 32 * 4096 * 1 * 4096 * 34
-    expected_bytes += 4096 * 1 * dense7b().vocab * 10  # F14 logits term (measured gap on GB200)
+    expected_bytes += 4096 * 1 * dense7b().vocab * 14  # F14 logits term, fitted to three GB200 measurements
     assert est.activations_gb == pytest.approx(expected_bytes / 1e9)
 
 
@@ -96,7 +96,7 @@ def test_activations_with_ckpt() -> None:
     est = estimate_memory(dense7b(), method="full", seq_len=4096, micro_batch=1, grad_ckpt=True, world=8)
     # 2*s*b*h per layer + one full layer: 32*2*4096*4096 + 4096*4096*34
     expected_bytes = 32 * 2 * 4096 * 4096 + 4096 * 4096 * 34
-    expected_bytes += 4096 * 1 * dense7b().vocab * 10  # F14 logits term (measured gap on GB200)
+    expected_bytes += 4096 * 1 * dense7b().vocab * 14  # F14 logits term, fitted to three GB200 measurements
     assert est.activations_gb == pytest.approx(expected_bytes / 1e9)
 
 
@@ -106,7 +106,7 @@ def test_activations_without_sdpa_keep_quadratic_term() -> None:
     )
     # factor 34 + 5*a*s/h = 34 + 5*32*4096/4096 = 194
     expected_bytes = 32 * 4096 * 4096 * 194
-    expected_bytes += 4096 * 1 * dense7b().vocab * 10  # F14 logits term (measured gap on GB200)
+    expected_bytes += 4096 * 1 * dense7b().vocab * 14  # F14 logits term, fitted to three GB200 measurements
     assert est.activations_gb == pytest.approx(expected_bytes / 1e9)
 
 
