@@ -253,6 +253,13 @@ def emit_train(
     if _hp(hparams, "warmup-steps") is None and hparams.get("warmup_ratio") is not None and max_steps is not None:
         pairs.append(("warmup-steps", max(0, round(float(hparams["warmup_ratio"]) * max_steps))))
         notes.append("warmup-steps derived from warmup_ratio x max_steps")
+    if max_steps is not None:
+        for i, (flag, value) in enumerate(pairs):
+            if flag == "warmup-steps" and int(value) >= int(max_steps):
+                clamped = max(1, math.ceil(0.1 * int(max_steps)))
+                pairs[i] = (flag, clamped)
+                notes.append(f"warmup_steps {value} >= max_steps {max_steps}: clamped to {clamped} (10%); "
+                             f"the LR would otherwise never finish warming up")
     known = {a for aliases in _HPARAM_ALIASES.values() for a in aliases} | _CONSUMED_KEYS
     for key in sorted(set(hparams) - known):
         notes.append(f"hparam {key!r} maps to no FS train flag; not passed (FS has no such knob)")
@@ -269,7 +276,12 @@ def emit_train(
         pairs.append(("adapter-dropout", float(hparams.get("lora_dropout", 0.0))))
         # Auto LoRA targeting only exists for FS-registered families
         # (measured: gemma4, qwen3.5). Any other family needs explicit targets.
-        targets = list(stage.get("lora_targets") or hparams.get("lora_targets") or [])
+        raw_targets = stage.get("lora_targets") or hparams.get("lora_targets") or []
+        # Recipes write "q_proj,k_proj,..." as one string; list() of a string would
+        # emit one --adapter-target per CHARACTER (it did: "--adapter-target j").
+        if isinstance(raw_targets, str):
+            raw_targets = [t for t in re.split(r"[,\s]+", raw_targets) if t]
+        targets = [str(t) for t in raw_targets]
         family = stage.get("family")
         registered = family is not None and str(family) in (caps.families or {})
         if targets and not registered:
@@ -290,6 +302,9 @@ def emit_train(
     order: list[str] = []
     repeatables: list[tuple[str, Any]] = []
     for flag, value in pairs:
+        if flag == "adapter-target":  # repeatable: a dict keyed by flag would keep only the last one
+            repeatables.append((flag, value))
+            continue
         by_flag[flag] = value
         order.append(flag)
     for raw_key, value in fs_args.items():
@@ -297,8 +312,9 @@ def emit_train(
         if flag in _META_FLAGS:
             notes.append(f"recipe fs.args --{flag} ignored: structural flags are owned by the emitter")
             continue
-        if flag == "adapter-target":  # repeatable
-            repeatables.append((flag, value))
+        if flag == "adapter-target":  # repeatable: one flag per module name
+            names = re.split(r"[,\s]+", value) if isinstance(value, str) else list(value or [])
+            repeatables.extend((flag, str(n)) for n in names if str(n))
             continue
         if flag not in by_flag:
             order.append(flag)

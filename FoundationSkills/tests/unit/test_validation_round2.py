@@ -425,3 +425,15 @@ def test_every_recipe_fs_value_is_legal_for_the_installed_stack():
                 if allowed:
                     rendered = ("true" if value else "false") if isinstance(value, bool) else str(value)
                     assert rendered in allowed, f"{recipe.raw['id']}: {flag}={rendered!r} not in {allowed[:6]}..."
+
+
+def test_lora_targets_string_emits_one_flag_per_module():
+    """Reference scenario: a recipe's "q_proj,k_proj,..." string was iterated per
+    CHARACTER, emitting "--adapter-target j" dozens of times."""
+    c = caps(train_flags=caps().train_flags | {"--adapter-target"}, families={})
+    spec = _emit({"stage": "sft", "method": "lora", "family": "llama3",
+                  "hparams": {"max_steps": 1, "max_sequence_length": 512, "lora_targets": "q_proj,k_proj, v_proj"}},
+                 caps=c)
+    argv = spec["argv"]
+    targets = [argv[i + 1] for i, a in enumerate(argv) if a == "--adapter-target"]
+    assert targets == ["q_proj", "k_proj", "v_proj"]
