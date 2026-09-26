@@ -291,6 +291,9 @@ def estimate_time(
                 d += 2.0
             if grad_ckpt is not None and bool(cfg.get("grad_ckpt")) != bool(grad_ckpt):
                 d += 1.0
+            point_method = cfg.get("method", "full")
+            if (method in ("lora", "qlora", "rl_lora")) != (point_method in ("lora", "qlora")):
+                d += 3.0  # LoRA vs full changes FLOPs per step: never borrow across
             if micro_batch is not None and cfg.get("micro_batch") is not None:
                 d += abs(math.log2(max(1, int(micro_batch))) - math.log2(max(1, int(cfg["micro_batch"])))) * 0.5
             return d

@@ -87,6 +87,13 @@
                   },
                   "grad_ckpt": {
                     "type": "boolean"
+                  },
+                  "method": {
+                    "enum": [
+                      "full",
+                      "lora",
+                      "qlora"
+                    ]
                   }
                 }
               },

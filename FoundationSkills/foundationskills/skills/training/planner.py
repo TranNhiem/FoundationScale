@@ -274,14 +274,33 @@ def _stage_tokens(stage: str, data_facts: dict, domain_tokens: int, assumptions:
     return int(domain_tokens)
 
 
+# Recipe fs.args flag -> canonical hparam key. Emitter-owned flags (objective,
+# adapter) and structural ones are not hparams.
+_FS_ARG_TO_HPARAM = {"adapter-rank": "lora_rank", "adapter-alpha": "lora_alpha", "adapter-dropout": "lora_dropout",
+                     "adapter-target": "lora_targets"}
+_FS_ARG_SKIP = frozenset({"objective", "adapter", "model", "dataset", "output-dir", "profile-name", "profile-path",
+                          "nodes", "gpus-per-node", "dry-run", "dp"})
+
+
 def _recipe_stage_hparams(recipe_raw: dict, stage: str) -> dict:
+    """The recipe stage's hparams AND its fs.args, folded into one canonical
+    dict. fs.args used to ride only on the recipe and never reached the plan,
+    so a real E2E command lost the recipe's precision/optimizer/warmup/batch
+    settings; folding them in before estimation also keeps estimate == command."""
     for stage_entry in recipe_raw.get("stages", []) or []:
         if not isinstance(stage_entry, dict):
             continue
         if stage_entry.get("stage") == stage or stage_entry.get("name") == stage:
+            out: dict[str, Any] = {}
+            for raw_flag, value in dict(((stage_entry.get("fs") or {}).get("args")) or {}).items():
+                flag = str(raw_flag).lstrip("-").replace("_", "-")
+                if flag in _FS_ARG_SKIP:
+                    continue
+                out[_FS_ARG_TO_HPARAM.get(flag, flag.replace("-", "_"))] = value
             hparams = stage_entry.get("hparams")
             if isinstance(hparams, dict):
-                return dict(hparams)
+                out.update(hparams)  # explicit recipe hparams win over its fs.args spelling
+            return out
     return {}
 
 
