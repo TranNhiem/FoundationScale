@@ -281,6 +281,21 @@ class IPOLoss:
         pair_loss = (h - 1 / (2 * tau)) ** 2
         loss      = weight * mean(pair_loss)
 
+    With ``length_normalise=True`` the margin is instead the
+    length-normalised form of TRL (Hugging Face ``trl``'s ``IPOTrainer``),
+    which uses per-sequence MEAN token log-probabilities in place of the
+    paper's sums::
+
+        h = (pi_chosen - ref_chosen) / n_chosen
+            - (pi_rejected - ref_rejected) / n_rejected
+
+    where ``n_*`` is that side's supervised-token count, DERIVED from the
+    mask, and the reference columns remain sequence SUMS divided by that
+    same count. The default stays the paper's form bit-for-bit; the
+    normalised form exists because a sum-built ``h`` grows with
+    completion length (O(100) at ~300 tokens), so the squared hinge
+    explodes where the normalised margin stays O(1).
+
     This is a SQUARED loss, deliberately, and that is the entire point of
     the method: a log-sigmoid saturates, so a handful of already-separated
     pairs can dominate it, while the squared hinge at ``1 / (2 * tau)``
@@ -293,11 +308,13 @@ class IPOLoss:
     the name ``beta`` would silently mean something else.
 
     WHAT IS CLAIMED: the loss is the squared form above over exactly the
-    supplied pairs, with ``h`` built from masked SUMS of token
-    log-probabilities; preference accuracy (fraction of rows with
-    ``h > 0``) and the mean margin ``h`` are reported through the metrics
-    channel; a zero-supervision side, a missing column, or a non-finite
-    reading is refused rather than measured.
+    supplied pairs; ``h`` is the paper's masked-SUM margin by default,
+    and TRL's masked-MEAN margin when ``length_normalise`` is True, with
+    the margin metric reporting exactly the ``h`` actually used;
+    preference accuracy (fraction of rows with ``h > 0``) and the mean
+    margin are reported through the metrics channel; a zero-supervision
+    side, a missing column, or a non-finite reading is refused rather
+    than measured.
 
     WHAT IS NOT CLAIMED: that the objective saturates -- it does not, and
     cannot be driven by a few already-separated pairs -- or that ``tau``
@@ -305,6 +322,7 @@ class IPOLoss:
     """
 
     tau: float = 1.0
+    length_normalise: bool = False
     weight: float = 1.0
     chosen_mask_column: str = "chosen_loss_mask"
     rejected_mask_column: str = "rejected_loss_mask"
@@ -320,6 +338,13 @@ class IPOLoss:
             raise LossConfigRefusal(
                 f"tau={self.tau!r}: a non-positive or non-finite tau "
                 f"inverts or annihilates the preference signal"
+            )
+        if not isinstance(self.length_normalise, bool):
+            raise LossConfigRefusal(
+                f"length_normalise={self.length_normalise!r}: the flag "
+                f"selecting TRL's length-normalised margin in place of "
+                f"the paper's masked-sum margin must be a bool; any "
+                f"other truth value hides which h the run actually used"
             )
         if (
             not isinstance(self.weight, (int, float))
@@ -497,7 +522,17 @@ class IPOLoss:
             ref_r = _reference_score(
                 reference_rejected[row_index], self.reference_rejected_column, row_index
             )
-            margin = (pi_c - ref_c) - (pi_r - ref_r)
+            if self.length_normalise:
+                # TRL's IPOTrainer form: each anchored sequence sum is
+                # divided by its own side's supervised-token count, so the
+                # margin stops scaling with completion length; the
+                # reference columns stay sequence SUMS and are divided by
+                # the same mask-derived counts.
+                margin = (pi_c - ref_c) / supervised_c - (pi_r - ref_r) / supervised_r
+            else:
+                # The paper's form: raw sequence-level masked SUMS,
+                # deliberately not length-normalised.
+                margin = (pi_c - ref_c) - (pi_r - ref_r)
             margins.append(margin)
             pair_losses.append((margin - target) ** 2)
 

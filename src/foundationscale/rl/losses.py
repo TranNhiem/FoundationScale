@@ -63,14 +63,25 @@ def _mask_value(raw: Any, row: int, position: int) -> float:
 
 
 def _as_float(raw: Any, row: int, position: int) -> float:
+    # The finiteness refusal matches preference_objectives.py's twin, so DPO
+    # and the other five preference oracles refuse the same inputs: a NaN
+    # token reading would otherwise become a NaN loss that no later check
+    # attributes to its row.
     try:
-        return float(raw)
+        value = float(raw)
     except (TypeError, ValueError) as exc:
         raise BatchRefusal(
             f"log-probability at row {row}, position {position} does not "
             f"convert to a scalar float ({type(raw).__name__}); forward_fn "
             f"must return one scalar target log-probability per token"
         ) from exc
+    if not math.isfinite(value):
+        raise BatchRefusal(
+            f"log-probability at row {row}, position {position} is "
+            f"{raw!r}, which is not finite; a non-finite token reading "
+            f"would poison the margin this loss reports"
+        )
+    return value
 
 
 def _reference_score(raw: Any, column: str, row: int) -> float:

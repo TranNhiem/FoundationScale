@@ -82,6 +82,16 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/rl/preference_torch.py": (
+        "tensor preference kernel (dpo/ipo/simpo/orpo/cpo/kto): 1e-6 parity-matched "
+        "to the float oracles and 100% line-covered, but no mutation row yet proves "
+        "that flipping a sign or dropping the beta scale would be caught."
+    ),
+    "src/foundationscale/rl/preference_trainer.py": (
+        "preference training loop (pair loading, reference logprobs, micro-batched "
+        "backward): GPU-run and line-covered, but zero mutation rows, so enrolling "
+        "it in MODULE_PATHS now would report a pass over nothing."
+    ),
     "src/foundationscale/rl/prompt_surface.py": (
         "#371 routing layer: 100% line-covered by 15 legs, but covered is not "
         "MUTATED -- no row yet proves that silently flipping the surface choice, "

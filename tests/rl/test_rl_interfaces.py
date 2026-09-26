@@ -203,6 +203,17 @@ TORCH_FREE_MODULES = {
         "verify_sync",
     ),
     "foundationscale.rl.torch_backend": ("TensorPolicyLoss",),
+    "foundationscale.rl.preference_torch": (
+        "TensorPreferenceLoss",
+        "is_paired",
+        "needs_reference",
+        "preference_metrics",
+    ),
+    "foundationscale.rl.preference_trainer": (
+        "PreferenceTrainConfig",
+        "PreferenceTrainer",
+        "load_pairs_jsonl",
+    ),
     "foundationscale.rl.trainer": (
         "RLTrainConfig",
         "RLTrainer",
