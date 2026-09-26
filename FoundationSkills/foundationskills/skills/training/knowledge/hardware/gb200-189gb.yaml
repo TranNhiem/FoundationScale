@@ -28,9 +28,9 @@ mfu:
       provenance: measured
       evidence: "FoundationSkills E2E 2026-09-26 (launched by fskills launch): Gemma-4 E4B-it LoRA r16, FSDP x4, b2, grad ckpt, seq 4096; 22.8 model-TF/s/GPU over 30 steps (short run); peak 37.7 GB/GPU vs 32.4 GB planned"
   moe:
-    value: 0.15
-    provenance: derived
-    evidence: "no MoE MFU run measured on this estate yet; roughly half the dense MFU as a routing/activation-imbalance heuristic -- DO NOT budget on it, remeasure first"
+    value: 0.016
+    provenance: measured
+    evidence: "FoundationSkills validation 2026-09-26 (fskills launch, run moe-sft-531c2296): Gemma-4 26B-A4B-it LoRA r32, DDP x4 (FS FSDP cannot wrap this MoE), b2, ga8, grad ckpt, seq 4096; ~1,507 tokens/s/GPU -> 4*N_active*tok/s = 24 TF/s/GPU = 1.6% of 1503.4 (LoRA convention); peak 83.3 GB/GPU vs 94.3 planned. The previous 0.15 was a guess, ~9x optimistic."
 scheduler: slurm
 # Launch env measured on these trays (estate launcher + FoundationSkills
 # validation 2026-09-26): without it FS's fabric probe refused 96 with

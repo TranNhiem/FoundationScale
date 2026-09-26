@@ -34,7 +34,7 @@ stages:
       entry: foundationscale-train
       args:
         objective: sft
-        sharding-strategy: fsdp
+        sharding-strategy: ddp  # FS FSDP cannot wrap Gemma-4 MoE layers (measured 2026-09-26)
         precision: bf16
         optimizer: adamw_torch_fused  # transformers OptimizerNames (measured: "adamw" is refused by transformers 5.13)
         gradient-checkpointing: true
@@ -64,7 +64,14 @@ risks:
   - "MoE routing is not adapter-wrapped: LoRA only tunes dense projections -- watch for expert-underuse collapse on narrow code sets"
   - "128 experts x 8 active: memory estimate must use size_b (not active_b) for weights, active_b for compute"
 provenance:
-  status: literature
+  status: validated
   evidence:
-    - "Hu et al. 2021, LoRA, arXiv:2106.09685"
-  validated_on: null
+    - "hyperparameters: Tulu 3 (arXiv:2411.15124) LoRA SFT practice"
+    - "FoundationSkills validation 2026-09-26: planned, emitted and launched by fskills launch on 4x GB200 (DDP; FS FSDP fails on this MoE), 20 steps; FS save gates 4/4 PASS; peak 83.3 GB/GPU vs 94.3 GB planned; ~1,507 tokens/s/GPU"
+    - "SCOPE: runs correctly on FoundationScale; code-benchmark quality NOT yet measured"
+  validated_on:
+    fs_commit: 3f4cf029f1cdc2abc03846d1d0eba234b9f5b2c1
+    hardware: gb200-189gb
+    run_id: moe-sft-531c2296
+    date: "2026-09-26"
+    run_manifest: /home/hhri-ai/hh28144/Project-Developments/FoundationScale/runs/fskills_validation/train_moe/moe-sft/run_manifest.json

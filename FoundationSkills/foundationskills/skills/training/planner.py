@@ -614,6 +614,17 @@ def plan(
         micro_batch = int(_first("per_device_batch_size", "micro_batch", "micro_batch_size", default=2))
         grad_ckpt = bool(_first("gradient_checkpointing", "grad_ckpt", default=True))
         sharding = "ddp" if stage == "rl" else str(_first("sharding_strategy", "sharding", default="fsdp"))
+        variant_raw = dict(_get(variant, "raw", {}) or {})
+        if sharding == "fsdp" and variant_raw.get("fs_fsdp") is False:
+            # measured per-variant gap (e.g. Gemma-4 26B-A4B MoE: FS's FSDP auto-wrap
+            # cannot find the layer class); DDP replicates, and feasibility below
+            # prices that honestly (a full FT that does not fit becomes infeasible)
+            sharding = "ddp"
+            hparams["sharding_strategy"] = "ddp"
+            hparams.pop("sharding", None)
+            decide("method", f"{stage}: sharding ddp",
+                   f"FS FSDP does not work for {_get(variant, 'id')}: "
+                   f"{variant_raw.get('fs_fsdp_evidence', 'measured failure')}")
         if stage != "rl":
             # The emitted command must BE the configuration that was estimated:
             # FS defaults are seq 128, batch 1, no grad ckpt (measured on GB200: an

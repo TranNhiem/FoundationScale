@@ -63,18 +63,19 @@ counters and the realized mixture.
 | DE-HO-001 | handoff | BLOCK | readiness verdict is RED |
 | DE-HO-002 | handoff | WARN | readiness verdict is UNMEASURED (null checks listed) |
 | DE-HO-003 | handoff | BLOCK | zero records written |
-| DE-RDY-001 | readiness | check | dataset format matches `requirements.target_format` |
-| DE-RDY-002 | readiness | check | `num_tokens` >= `min_tokens` (null → unmeasured) |
-| DE-RDY-003 | readiness | check | `num_records` >= `min_records` |
-| DE-RDY-004 | readiness | check | tokenize truncation rate <= `max_truncation_rate` |
-| DE-RDY-005 | readiness | check | dedup ran when `require_dedup` (missing → unmeasured) |
-| DE-RDY-006 | readiness | check | dedup duplicate-rate sanity from dedup stats |
-| DE-RDY-007 | readiness | check | decontam ran when `require_decontam`, zero hits required |
-| DE-RDY-008 | readiness | check | PII remaining <= `max_pii_remaining` |
-| DE-RDY-009 | readiness | check | chat template family matches `chat_template_family` when given |
-| DE-RDY-010 | readiness | check | fs_columns present and non-empty shards |
+| DE-RDY-001 | readiness | check | dataset format equals `target_format` |
+| DE-RDY-002 | readiness | check | token count >= `min_tokens` (null when tokens are unknown or approximate) |
+| DE-RDY-003 | readiness | check | record count >= `min_records` |
+| DE-RDY-004 | readiness | check | a dedup op ran (failure when `require_dedup` and none ran) |
+| DE-RDY-005 | readiness | check | decontamination ran with no unmeasured benchmarks and no remaining hits |
+| DE-RDY-006 | readiness | check | PII remaining after redaction <= `max_pii_remaining` (measured by the clean op) |
+| DE-RDY-007 | readiness | check | truncation rate <= `max_truncation_rate`; reports the over-length drop rate, since drops are non-random |
+| DE-RDY-008 | readiness | check | the chat template actually applied (measured template source; fallback or family mismatch fails; not applicable to raw text) |
+| DE-RDY-009 | readiness | check | every shard's first record carries the FS columns |
+| DE-RDY-010 | readiness | disclosure | sft/mm_sft: FS trains on the full rendered text (no assistant-only loss masking) |
+| DE-RDY-011 | readiness | check | sft/mm_sft: training targets start exactly as the tokenizer's inference prompt does (Gemma-4 26B/31B empty-thought prefix aligned) |
 
-(Readiness rule ids DE-RDY-001..010 are emitted by
+(Readiness rule ids DE-RDY-001..011 are emitted by
 `foundationskills.skills.data_engine.report.build_readiness`; consult the
 readiness_report artifact `checks` for per-rule details.)
 

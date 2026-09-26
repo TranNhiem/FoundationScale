@@ -150,7 +150,7 @@ def recommend_pipeline(
     add(
         "tokenize",
         {"pack": pack, "chunk": pretrain_like, "tokenizer": tokenizer, "seq_len": int(seq_len),
-         **({} if pretrain_like else {"drop_overlong": bool(drop_overlong)})},
+         **({} if pretrain_like else {"drop_overlong": bool(drop_overlong) or target_format == "mm_sft"})},
         (
             f"measure token counts and seq-length stats (tokenizer={tokenizer!r}, seq_len={int(seq_len)}); "
             + ("chunk documents longer than seq_len at paragraph boundaries (FS truncates at max_sequence_length, "
@@ -163,6 +163,11 @@ def recommend_pipeline(
         rationale.append(
             "tokenize.drop_overlong is available (off): examples longer than seq_len would be truncated by FS; "
             "if the readiness report fails DE-RDY-007, enable it or raise seq_len to the measured p99"
+        )
+    if target_format == "mm_sft":
+        rationale.append(
+            "mm_sft: over-length records are DROPPED, never truncated -- right-truncation can split paired media "
+            "sentinels and crash the collate (FoxBrain job 712: IndexError -> NCCL watchdog timeout)"
         )
     if target_format == "rl":
         rationale.append(

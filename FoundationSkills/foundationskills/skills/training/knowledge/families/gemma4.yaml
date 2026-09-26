@@ -83,6 +83,8 @@ variants:
     tied_embeddings: true
     instruct: true
   - id: gemma-4-26B-A4B
+    fs_fsdp: false
+    fs_fsdp_evidence: "measured 2026-09-26 on GB200 via fskills launch: FS FSDP raised Trainer.train() Exception('Could not find the transformer layer class to wrap in the model.') for gemma-4-26b-it (MoE); DDP is used instead"
     hf_id: null
     local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-26B-A4B
     size_b: 25.8     # 51.6 GB safetensors / 2 (bf16)
@@ -100,6 +102,8 @@ variants:
     tied_embeddings: true
     instruct: false
   - id: gemma-4-26b-it
+    fs_fsdp: false
+    fs_fsdp_evidence: "measured 2026-09-26 on GB200 via fskills launch: FS FSDP raised Trainer.train() Exception('Could not find the transformer layer class to wrap in the model.') for gemma-4-26b-it (MoE); DDP is used instead"
     hf_id: null
     local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-26b-it
     size_b: 25.8
@@ -186,6 +190,33 @@ lora_targets:
   - up_proj
   - down_proj
 quirks:
+  - >-
+    MEASURED 2026-09-26 on the real templates: gemma-4-26b-it and gemma-4-31b-it
+    generation prompts (thinking off) end with an EMPTY thought block
+    '<|turn>model\n<|channel>thought\n<channel|>'; E4B's does not. A plain training
+    render lacks it, so SFT targets must carry the same prefix. The Data Engine
+    aligns this per tokenizer (DE-RDY-011); FoxBrain SFT_OFFICIAL_V3 records the
+    same v2->v3 fix on 4,183 no-think rows.
+  - >-
+    The stock template's strip_thinking() deletes <|channel>...<channel|> from
+    assistant content and renders thinking only on tool-call turns, so a reasoning
+    trace vanishes silently; the Data Engine injects and verifies it.
+  - >-
+    FS FSDP fails on gemma-4-26B-A4B ('Could not find the transformer layer class
+    to wrap', measured); FoxBrain traced the MoE block to a plain nn.Module. The
+    planner uses DDP for this variant.
+  - >-
+    gemma-4-31B (config-verified): dense (enable_moe_block=false), 60 layers,
+    hidden 5376, 32 q / 16 kv heads but only 4 global kv heads (so tensor
+    parallelism is capped at 4), attention_k_eq_v=true (full-attention layers
+    have no separate v_proj), final_logit_softcapping=30, tied embeddings. The
+    softcap materialises full fp32 logits (seq x 262144 x 4 B = 16 GiB at 16K per
+    sequence), which the estimator's logits term covers.
+  - >-
+    End-of-turn supervision matters: FoxBrain's 26B SFT without the terminating
+    <turn|> (id 106) supervised never learned to stop. FS's full-sequence loss
+    trains on the rendered '<turn|>' after each answer, so this holds by
+    construction here.
   - >-
     Measured on gemma-4-31B: the vision tower carries {q,k,v,o,gate,up,down}_proj
     as Gemma4ClippableLinear subclasses, which FS 'type(m) is Linear' adapter

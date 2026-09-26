@@ -31,5 +31,10 @@ failure_modes:
     cause: "beta ~2.5 at DPO-style LRs amplifies logit movement"
     recovery: "drop LR to 3e-7..6e-7 (SimPO needs a lower LR than DPO)"
 fs_entry: fskills-rl
+failure_note_foxbrain: >-
+  Measured on Gemma-4 (FoxBrain ODPO_OFFICIAL/ODPO_MEASUREMENTS): sigmoid DPO diverged
+  (reward margin -116.8, grad_norm 1.5M) from chosen/rejected length imbalance, while
+  length-normalised, reference-free SimPO with beta=2.0 trained stably. The preference
+  family is not wired to FS RLTrainer yet; this informs the recipe once it is.
 references:
   - "Meng et al. 2024, SimPO: Simple Preference Optimization with a Reference-Free Reward, arXiv:2405.14734"
