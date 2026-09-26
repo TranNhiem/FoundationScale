@@ -196,14 +196,15 @@ def estimate_memory(
         assumptions.append("no gradient checkpointing: full per-layer activations")
     if variant.arch == "moe":
         assumptions.append("MoE activations use hidden only (approximation)")
-    # Logits: s*b*V in bf16, the fp32 upcast for the loss, and its fp32 grad
-    # (~10 bytes/element), unsharded. Measured on GB200 (Gemma-4 E4B, V=262k,
-    # seq 4096, b1, FSDP x4): without this term the estimate was 38.1 GB against
-    # 48.3 GB allocated -- the gap is exactly this ~10.7 GB.
+    # Logits: s*b*V elements, unsharded -- bf16 logits (2) + fp32 upcast (4) +
+    # fp32 softmax/loss buffer (4) + fp32 grad (4) = ~14 bytes/element. Fitted to
+    # three GB200 measurements of Gemma-4 E4B (V=262k, seq 4096, FSDP x4):
+    #   full b1: est 54.2 vs 48.3 GB (+12%); LoRA b2: 41 vs 37.7 (+9%); LoRA b4: 75.8 vs 75.9 (0%).
+    # Without the term the b1 estimate was 38.1 GB; at 10 B/elem the b4 case was -23%.
     vocab = int(getattr(variant, "vocab", 0) or 0)
     if vocab:
-        act_bytes += s * b * vocab * 10.0
-        assumptions.append(f"logits: s*b*V*10 bytes (bf16 logits + fp32 upcast + fp32 grad), V={vocab:,}")
+        act_bytes += s * b * vocab * 14.0
+        assumptions.append(f"logits: s*b*V*14 bytes (bf16 logits + fp32 upcast, loss buffer, grad), V={vocab:,}")
     else:
         assumptions.append("logits term omitted: variant vocab unknown (underestimates large-vocab models)")
     activations_gb = act_bytes / GB  # per-GPU micro-batch; not divided by world/tp (conservative)

@@ -437,3 +437,13 @@ def test_lora_targets_string_emits_one_flag_per_module():
     argv = spec["argv"]
     targets = [argv[i + 1] for i, a in enumerate(argv) if a == "--adapter-target"]
     assert targets == ["q_proj", "k_proj", "v_proj"]
+
+
+@pytest.mark.parametrize("method,micro,measured", [("full", 1, 48.3), ("lora", 2, 37.7), ("lora", 4, 75.9)])
+def test_f14_memory_estimate_tracks_three_gb200_measurements(method, micro, measured):
+    """Gemma-4 E4B on 4x GB200, FSDP, seq 4096, grad ckpt: peak allocated per GPU
+    measured by FS (2026-09-26). The estimator must stay within 15%."""
+    from foundationskills.skills.training.estimate import estimate_memory
+    est = estimate_memory(_variant(), method=method, seq_len=4096, micro_batch=micro, grad_ckpt=True,
+                          sharding="fsdp", world=4)
+    assert est.total_per_gpu_gb == pytest.approx(measured, rel=0.15)
