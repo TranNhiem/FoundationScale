@@ -19,7 +19,8 @@ def test_annotated_column_names_map_to_messages() -> None:
     rec = _map_record(raw, source_uri="hf", index=0, options={})
     assert rec["messages"] == [{"role": "user", "content": "Q?"}, {"role": "assistant", "content": "A."}]
     with_trace = _map_record(raw, source_uri="hf", index=0, options={"include_reasoning": True})
-    assert with_trace["messages"][1]["content"].startswith("<think>\nthink\n</think>")
+    # the trace travels as reasoning_content; format renders + verifies it per family
+    assert with_trace["messages"][1] == {"role": "assistant", "content": "A.", "reasoning_content": "think"}
 
 
 def test_problem_answer_columns_map_for_rl() -> None:

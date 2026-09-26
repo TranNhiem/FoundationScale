@@ -241,7 +241,8 @@ def check_feasibility(
 
     time_est: TimeEstimate | None = None
     try:
-        time_est = estimate_time(variant, tokens=tokens, hardware=hardware, gpus=gpus, method=method)
+        time_est = estimate_time(variant, tokens=tokens, hardware=hardware, gpus=gpus, method=method,
+                                 stage=stage, sharding=sharding, micro_batch=micro_batch, grad_ckpt=grad_ckpt)
     except Exception as exc:  # noqa: BLE001 - absence of evidence is UNMEASURED, never PASS
         findings.append(
             {

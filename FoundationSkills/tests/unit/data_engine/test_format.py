@@ -95,18 +95,18 @@ def test_preference_missing_field_dropped():
 def test_rl_output_is_accepted_by_fs_corpus_parser():
     from foundationscale.rl.corpus import _parse_record
 
+    # F7 (measured): FS RL verifies only single-letter gold, so a free-form
+    # answer is dropped with a named reason instead of shipping an unrewardable row.
     rec = {"id": "r1", "prompt": "2+2?", "answer": "4", "meta": {}}
     out, stats = run_format([rec], {"target_format": "rl"})
-    record = out[0]
-    assert record["conversations"] == [{"from": "human", "value": "2+2?"}, {"from": "gpt", "value": "4"}]
-    assert record["answer"] == "4"
-    assert stats.extra["gold_key"] == "answer"
-    assert stats.extra["fs_columns"]["gold_key"] == "answer"
-    sample = _parse_record(record, 0, "answer")
-    assert sample.response == "4"
-    assert sample.prompt_turns == (("user", "2+2?"),)
-    # "4" is not a single A-Z letter: FS abstains on the gold, never crashes.
-    assert sample.gold is None
+    assert out == [] and stats.dropped["rl_answer_not_mcq_letter"] == 1
+    assert stats.extra["gold_key"] == "answer" and stats.extra["rl_reward_kind"] == "mcq_letter"
+    mcq = {"id": "r1m", "prompt": "2+2?", "choices": [{"label": "A", "text": "3"}, {"label": "B", "text": "4"}],
+           "answer": "B"}
+    out, stats = run_format([mcq], {"target_format": "rl"})
+    sample = _parse_record(out[0], 0, "answer")
+    assert sample.gold == "B" and sample.response == "B"
+    assert out[0]["conversations"][0]["value"].endswith("Answer with a single letter.")
 
 
 def test_rl_single_letter_gold_is_kept_by_fs():
@@ -162,16 +162,19 @@ def test_gemma4_builtin_template_exact():
         {"role": "assistant", "content": "A"},
     ]
     text = render_chat(msgs, family="gemma4")
+    # Gemma-4 format, copied from the real gemma-4-E4B-it template (2026-09-26);
+    # the old expectation encoded Gemma-2/3 <start_of_turn> markers. No <bos>: FS adds it.
     assert text == (
-        "<start_of_turn>user\nSYS\n\nQ<end_of_turn>\n"
-        "<start_of_turn>model\nA<end_of_turn>\n"
+        "<|turn>system\nSYS<turn|>\n"
+        "<|turn>user\nQ<turn|>\n"
+        "<|turn>model\nA<turn|>\n"
     )
 
 
 def test_gemma4_generation_prompt_when_ending_on_user():
     msgs = [{"role": "user", "content": "Q"}]
     text = render_chat(msgs, family="gemma4")
-    assert text.endswith("<start_of_turn>model\n")
+    assert text.endswith("<|turn>model\n")
 
 
 def test_qwen35_chatml_template_exact():

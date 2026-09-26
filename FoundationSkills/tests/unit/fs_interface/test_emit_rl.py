@@ -17,6 +17,8 @@ def make_caps(**over):
         refused_axes=("pp", "ep"),
         axes_measured=True,
         rl_algorithms=("dr_grpo", "gspo", "dapo", "dpo"),
+        rl_saves_checkpoint=True,  # hypothetical: FS 77bfa65 measures False (see test_fix_*)
+        rl_reward_kinds=("mcq_letter",),
         rl_runnable={"dr_grpo": None, "gspo": None, "dapo": None,
                      "dpo": "0 of 1 required advantage estimators declared; preference family not wired"},
         families={"gemma4": ("gemma4",)},

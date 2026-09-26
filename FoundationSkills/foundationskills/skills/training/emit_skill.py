@@ -166,23 +166,51 @@ class TrainingEmitSkill(BaseSkill):
         launch_dir = ctx.workdir / "launch"
         launch_dir.mkdir(parents=True, exist_ok=True)
 
+        # The hardware profile carries launch facts measured on the cluster
+        # (GB200 NCCL pins, CPUs per task, device peak for FS's MFU). Emitting
+        # with only an id silently dropped all of them.
+        hardware: dict[str, Any] = {"id": hardware_id, "scheduler": _guess_scheduler(hardware_id, nodes)}
+        try:
+            from foundationskills.skills.training.knowledge import load_hardware
+
+            profile = load_hardware().get(hardware_id)
+            if profile is not None:
+                raw = dict(getattr(profile, "raw", None) or {})
+                hardware = {**raw, **{k: getattr(profile, k) for k in ("env", "cpus_per_task", "bf16_dense_tflops",
+                                                                    "peak_provenance", "scheduler")
+                                      if hasattr(profile, k)}, "id": hardware_id}
+                hardware.setdefault("scheduler", _guess_scheduler(hardware_id, nodes))
+        except Exception:  # noqa: BLE001 - emission proceeds; the spec notes what is missing
+            pass
+
         specs: list[dict[str, Any]] = []
         artifact_refs = []
+        previous: dict[str, Any] | None = None
         for stage in stages:
             stage_name = str(stage.get("name") or "stage")
             run_name = f"{run_prefix}-{stage_name}"
             output_dir = str(output_root / run_name)
             dataset = datasets_map.get(stage_name) or single_dataset or {}
-            hardware = {"id": hardware_id, "scheduler": _guess_scheduler(hardware_id, nodes)}
+            # A stage starts from the previous stage's output, not the base.
+            stage_model, model_source, chain_missing = model, "base", None
+            if previous is not None:
+                model_source = f"stage:{previous['name']}"
+                if previous["kind"] == "rl":
+                    chain_missing = (f"missing: stage {previous['name']!r} (RL) produced no checkpoint "
+                                     f"(FS RLTrainer does not save)")
+                elif previous["method"] in ("lora", "qlora"):
+                    chain_missing = (f"missing: merge the {previous['name']!r} LoRA adapter into the base model "
+                                     f"(FS writes adapter-only checkpoints; future merging skill)")
+                stage_model = f"{previous['output_dir']}/final"
 
             if str(stage.get("stage")) == "rl":
                 spec = emit_rl(
-                    stage, dataset=dataset, model=model, output_dir=output_dir,
+                    stage, dataset=dataset, model=stage_model, output_dir=output_dir,
                     caps=caps, run_name=run_name,
                 )
             else:
                 spec = emit_train(
-                    stage, dataset=dataset, model=model, output_dir=output_dir,
+                    stage, dataset=dataset, model=stage_model, output_dir=output_dir,
                     hardware=hardware, nodes=nodes, gpus_per_node=gpus_per_node,
                     caps=caps, run_name=run_name,
                 )
@@ -200,10 +228,18 @@ class TrainingEmitSkill(BaseSkill):
                         job_name=run_name,
                         log_dir=str(launch_dir),
                         launcher=launcher,
+                        cwd=spec.get("cwd"),
+                        cpus_per_task=hardware.get("cpus_per_task"),
                     )
                     spec = {**spec, "sbatch": sbatch_text}
                     write_sbatch(launch_dir / f"{run_name}.sbatch", sbatch_text)
 
+            spec = {**spec, "model_source": model_source}
+            if chain_missing:
+                spec = {**spec, "executable": False,
+                        "missing": "; ".join(m for m in (spec.get("missing"), chain_missing) if m)}
+            previous = {"name": stage_name, "kind": str(stage.get("stage")),
+                        "method": str(stage.get("method") or "full"), "output_dir": output_dir}
             artifact = Artifact(
                 type="fs_launch_spec",
                 id=run_name,

@@ -148,7 +148,8 @@ def _cmd_launch(args: argparse.Namespace) -> int:
 
     spec = _load_payload(args.spec)
     try:
-        result = launch(spec, confirm=args.confirm, submit=not args.no_submit)
+        result = launch(spec, confirm=args.confirm, submit=not args.no_submit,
+                        measurement_only=bool(getattr(args, "measurement_only", False)))
     except ConfirmationRequired as exc:
         print(f"[fskills:cli:refuse] {exc}", file=sys.stderr)
         return 96
@@ -156,7 +157,10 @@ def _cmd_launch(args: argparse.Namespace) -> int:
         print(f"[fskills:cli:refuse] {exc}", file=sys.stderr)
         return 96
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 0
+    rc = result.get("returncode")
+    if rc is None:  # submitted to the scheduler: the verdict arrives with the job
+        return 0
+    return int(rc) if int(rc) in (0, 5, 95, 96) else 5
 
 
 def _cmd_hash(args: argparse.Namespace) -> int:
@@ -263,6 +267,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--spec", required=True)
     p.add_argument("--confirm", default=None)
     p.add_argument("--no-submit", dest="no_submit", action="store_true")
+    p.add_argument("--measurement-only", dest="measurement_only", action="store_true",
+                   help="run a spec whose only gap is the hand-off (e.g. FS RL saves no checkpoint)")
     p.set_defaults(func=_cmd_launch)
 
     p = sub.add_parser("hash", help="print the confirmation hash of a spec/plan")

@@ -130,6 +130,8 @@ class Hardware:
     cluster_rules: tuple[str, ...]
     notes: tuple[str, ...]
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    env: dict[str, str] = field(default_factory=dict)  # launch env the emitter exports
+    cpus_per_task: int | None = None
 
 
 @dataclass(frozen=True)
@@ -269,7 +271,9 @@ def _hardware_from(data: dict[str, Any], path: Path) -> Hardware:
             bf16_dense_tflops=float(data["bf16_dense_tflops"]),
             peak_provenance=str(data["peak_provenance"]),
             interconnect=str(data["interconnect"]),
-            mfu={str(k): dict(v) for k, v in dict(data["mfu"]).items()},
+            mfu={str(k): (dict(v) if isinstance(v, dict) else [dict(x) for x in v]) for k, v in dict(data["mfu"]).items()},
+            env={str(k): str(v) for k, v in dict(data.get("env") or {}).items()},
+            cpus_per_task=None if data.get("cpus_per_task") is None else int(data["cpus_per_task"]),
             scheduler=None if data.get("scheduler") is None else str(data["scheduler"]),
             cluster_rules=tuple(str(x) for x in data.get("cluster_rules", [])),
             notes=tuple(str(x) for x in data.get("notes", [])),

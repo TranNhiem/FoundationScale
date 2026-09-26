@@ -299,21 +299,71 @@ def _first_present(raw: dict, keys: tuple[str, ...]) -> Any:
     return None
 
 
-def _normalize_messages(value: Any) -> list[dict]:
+def _content(value: Any) -> Any:
+    """Strings stay strings; structured content (OpenAI-style part lists for
+    multimodal turns) is kept as-is rather than str()-ed into Python repr."""
+    if isinstance(value, (str, list)):
+        return value
+    return "" if value is None else str(value)
+
+
+def _normalize_messages(value: Any, dropped: list[int] | None = None) -> list[dict]:
+    """Canonical {role, content[, reasoning_content]} turns. Non-dict turns are
+    counted into ``dropped`` (never discarded invisibly)."""
     if not isinstance(value, list):
         return []
     out: list[dict] = []
     for turn in value:
         if not isinstance(turn, dict):
+            if dropped is not None:
+                dropped.append(1)
             continue
         if "role" in turn and "content" in turn:
-            out.append({"role": str(turn["role"]), "content": str(turn["content"])})
-            continue
-        frm = str(turn.get("from", turn.get("speaker", "user")))
-        role = _SHAREGPT_ROLES.get(frm.lower(), frm)
-        content = turn.get("value", turn.get("text", turn.get("content", "")))
-        out.append({"role": role, "content": str(content)})
+            norm = {"role": str(turn["role"]), "content": _content(turn["content"])}
+        else:
+            frm = str(turn.get("from", turn.get("speaker", "user")))
+            role = _SHAREGPT_ROLES.get(frm.lower(), frm)
+            norm = {"role": role, "content": _content(turn.get("value", turn.get("text", turn.get("content", ""))))}
+        trace = turn.get("reasoning_content", turn.get("reasoning"))
+        if isinstance(trace, str) and trace.strip():
+            norm["reasoning_content"] = trace
+        out.append(norm)
     return out
+
+
+def _mcq_choices(raw: dict) -> list[dict] | None:
+    """[{label, text, source_label}] with labels forced to A, B, C... (FS reads a
+    single A-Z gold; ARC ships some items labelled 1-4)."""
+    value = raw.get("choices", raw.get("options"))
+    pairs: list[tuple[str, str]] = []
+    if isinstance(value, dict) and isinstance(value.get("text"), list):  # ARC style
+        labels = value.get("label") or [chr(65 + i) for i in range(len(value["text"]))]
+        pairs = [(str(lab), str(txt)) for lab, txt in zip(labels, value["text"])]
+    elif isinstance(value, list) and value and all(isinstance(v, str) for v in value):
+        pairs = [(chr(65 + i), v) for i, v in enumerate(value)]
+    elif isinstance(value, list) and value and all(isinstance(v, dict) and "text" in v for v in value):
+        pairs = [(str(v.get("label", chr(65 + i))), str(v["text"])) for i, v in enumerate(value)]
+    if not pairs or len(pairs) > 26:
+        return None
+    return [{"label": chr(65 + i), "text": txt, "source_label": lab} for i, (lab, txt) in enumerate(pairs)]
+
+
+def _mcq_gold(raw: dict, choices: list[dict]) -> str | None:
+    """The gold as a letter; accepts the source label, the letter, or an index."""
+    by_source = {c["source_label"]: c["label"] for c in choices}
+    letters = [c["label"] for c in choices]
+    for key in ("answerKey", "answer_key", "answer", "label", "gold"):
+        value = raw.get(key)
+        if isinstance(value, bool) or value is None:
+            continue
+        if isinstance(value, int):
+            return letters[value] if 0 <= value < len(letters) else None
+        text = str(value).strip()
+        if text in by_source:
+            return by_source[text]
+        if text in letters:
+            return text
+    return None
 
 
 def _normalize_images(value: Any) -> list[str]:
@@ -354,15 +404,31 @@ def _map_record(raw: dict, *, source_uri: str, index: int, options: dict) -> dic
         response = _first_present(raw, _RESPONSE_KEYS)
         if isinstance(question, str) and isinstance(response, str):
             reasoning = _first_present(raw, _REASONING_KEYS) if options.get("include_reasoning") else None
+            assistant: dict[str, Any] = {"role": "assistant", "content": response}
             if isinstance(reasoning, str) and reasoning.strip():
-                # Opt-in: keep the trace, delimited so the template/tokenizer sees one assistant turn.
-                response = f"<think>\n{reasoning.strip()}\n</think>\n\n{response}"
-            rec["messages"] = [
-                {"role": "user", "content": question},
-                {"role": "assistant", "content": response},
-            ]
+                # Opt-in: the trace travels as reasoning_content; the format op renders
+                # it per family and VERIFIES it survived (Gemma-4's template drops it).
+                assistant["reasoning_content"] = reasoning.strip()
+            rec["messages"] = [{"role": "user", "content": question}, assistant]
     if "messages" in rec:
-        rec["messages"] = _normalize_messages(rec["messages"])
+        dropped_turns: list[int] = []
+        rec["messages"] = _normalize_messages(rec["messages"], dropped_turns)
+        if dropped_turns:
+            rec["_dropped_turns"] = len(dropped_turns)
+
+    # Multiple-choice: FS RL verifies only single-letter gold, so MCQ sources are
+    # the ones RL can use. choices -> [{label, text}], gold -> the letter.
+    if "choices" not in rec:
+        choices = _mcq_choices(raw)
+        if choices:
+            rec["choices"] = choices
+            gold = _mcq_gold(raw, choices)
+            if gold is not None:
+                rec["answer"] = gold
+            if "prompt" not in rec:
+                stem = _first_present(raw, ("question", "problem", "stem", "prompt", "query"))
+                if isinstance(stem, str):
+                    rec["prompt"] = stem
 
     # preference / RL companions first, so prompt mapping sees the shape
     if "chosen" not in rec and isinstance(raw.get("chosen"), str):
@@ -478,6 +544,8 @@ def _ingest_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[d
         options = dict(spec.get("options") or {})
         for rec in _iter_source(uri, kind, options, stats, counter):
             raw_keys = rec.pop("_raw_keys", None)
+            if rec.get("_dropped_turns"):
+                stats.modified["non_dict_turns_dropped"] += int(rec.pop("_dropped_turns"))
             if raw_keys is not None:
                 stats.extra.setdefault("source_columns", {}).setdefault(uri, raw_keys)
                 if not any(rec.get(k) for k in ("text", "messages", "prompt")):

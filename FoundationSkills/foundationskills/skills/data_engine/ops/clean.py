@@ -70,6 +70,11 @@ CONFIG_SCHEMA: dict[str, Any] = {
     },
 }
 
+
+class CleanError(ValueError):
+    """An explicitly requested cleaning backend is unavailable (a refusal)."""
+
+
 DEFAULT_PII_TYPES = ("email", "phone", "ipv4", "credit_card", "national_id", "ssn")
 
 _PII_TOKENS = {
@@ -83,11 +88,16 @@ _PII_TOKENS = {
 }
 
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b")
-_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-_CREDIT_RE = re.compile(r"(?<![\d-])(?:\d[ -]?){13,19}(?![\d-])")
+# Number boundaries matter: real data had binary strings and long decimals
+# ("0.0000000000000004648") redacted as cards. A PII number must not sit inside
+# a larger number (no adjacent digit, '.', ',', '^'), and IPs are exactly 4 octets.
+_IPV4_RE = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d]|\.\d)")
+_CREDIT_RE = re.compile(
+    r"(?<![\d.,^-])(?:[2-6]\d{12,18}|[2-6]\d{3}(?:( |-)\d{4})(?:\1\d{4}){1,2}(?:\1\d{1,4})?)(?![\d]|\.\d|-\d)"
+)
 _NATID_RE = re.compile(r"\b[A-Z][12]\d{8}\b")
 _SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
-_PHONE_RE = re.compile(r"(?<![\w-])(?:\+\d{1,3}[\s-]?)?(?:\(?\d{2,4}\)?[\s-]){1,3}\d{3,4}(?![\w-])")
+_PHONE_RE = re.compile(r"(?<![\w.+-])(?:\+\d{1,3}[\s.-]?)?(?:\(\d{1,4}\)[\s.-]?|\d{1,4}[\s.-]){1,4}\d{3,4}(?![\w-]|\.\d)")
 _URL_RE = re.compile(r"\b(?:https?://|www\.)\S+", re.IGNORECASE)
 
 # redaction order matters: credit cards before phones, SSN before phones
@@ -115,12 +125,31 @@ def _luhn_ok(digits: str) -> bool:
 
 def _credit_card_ok(match: re.Match) -> bool:
     digits = re.sub(r"\D", "", match.group(0))
+    if set(digits) <= {"0", "1"}:  # binary strings pass Luhn often enough to matter
+        return False
     return 13 <= len(digits) <= 19 and _luhn_ok(digits)
 
 
+# Taiwan national ID: letter -> two-digit area code, then weights 1,9,8,...,1,1.
+_TW_LETTER_CODES = {c: n for c, n in zip("ABCDEFGHJKLMNPQRSTUVXYWZIO", range(10, 36))}
+
+
+def _natid_ok(match: re.Match) -> bool:
+    text = match.group(0)
+    code = _TW_LETTER_CODES.get(text[0])
+    if code is None:
+        return False
+    digits = [code // 10, code % 10] + [int(c) for c in text[1:]]
+    weights = [1, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1]
+    return sum(d * w for d, w in zip(digits, weights)) % 10 == 0
+
+
 def _phone_ok(match: re.Match) -> bool:
-    digits = re.sub(r"\D", "", match.group(0))
-    return 10 <= len(digits) <= 15
+    text = match.group(0)
+    digits = re.sub(r"\D", "", text)
+    # A bare space-separated digit run is as likely a table row as a phone, so
+    # a phone must carry a country code, parentheses, or -/. separators.
+    return 10 <= len(digits) <= 15 and (text.startswith("+") or "(" in text or "-" in text or "." in text)
 
 
 _PII_SCANNERS: dict[str, tuple[re.Pattern, Callable[[re.Match], bool] | None]] = {
@@ -128,7 +157,7 @@ _PII_SCANNERS: dict[str, tuple[re.Pattern, Callable[[re.Match], bool] | None]] =
     "phone": (_PHONE_RE, _phone_ok),
     "ipv4": (_IPV4_RE, _ipv4_ok),
     "credit_card": (_CREDIT_RE, _credit_card_ok),
-    "national_id": (_NATID_RE, None),
+    "national_id": (_NATID_RE, _natid_ok),
     "ssn": (_SSN_RE, None),
     "url": (_URL_RE, None),
 }
@@ -154,8 +183,11 @@ def pii_scan(text: str, types: Iterable[str] | None = None) -> dict[str, int]:
 
 def _redact_pii_builtin(text: str, types: set[str]) -> tuple[str, dict[str, int]]:
     counts: dict[str, int] = {}
+    unknown = sorted(set(types) - set(_PII_SCANNERS))
+    if unknown:  # a typo in the redaction list must not become "zero redactions"
+        raise ValueError(f"unknown PII type(s) {unknown}; known: {sorted(_PII_SCANNERS)}")
     for ptype in _PII_ORDER:
-        if ptype not in types or ptype not in _PII_SCANNERS:
+        if ptype not in types:
             continue
         pattern, validator = _PII_SCANNERS[ptype]
         token = _PII_TOKENS[ptype]
@@ -210,20 +242,30 @@ class _HTMLToText(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
-        self._skip = 0
+        self._skip: list[str] = []  # open skip tags; only a MATCHING close pops
 
     def handle_starttag(self, tag: str, attrs: Any) -> None:
         if tag in self._SKIP:
-            self._skip += 1
+            self._skip.append(tag)
+        elif self._skip:
+            return
         elif tag in self._BLOCK:
             self.parts.append("\n")
+        elif tag not in _KNOWN_HTML_TAGS:
+            # Not HTML (e.g. a <think> delimiter in reasoning data): keep verbatim.
+            self.parts.append(self.get_starttag_text() or f"<{tag}>")
 
     def handle_endtag(self, tag: str) -> None:
         if tag in self._SKIP:
-            if self._skip:
-                self._skip -= 1
+            if tag in self._skip:
+                while self._skip and self._skip.pop() != tag:
+                    pass
+        elif self._skip:
+            return
         elif tag in self._BLOCK:
             self.parts.append("\n")
+        elif tag not in _KNOWN_HTML_TAGS:
+            self.parts.append(f"</{tag}>")
 
     def handle_data(self, data: str) -> None:
         if not self._skip:
@@ -243,7 +285,14 @@ def html_to_text(html_text: str) -> str:
     return "\n".join(lines)
 
 
-_HTML_TAG_RE = re.compile(r"</[A-Za-z][A-Za-z0-9]*\s*>|<[A-Za-z][A-Za-z0-9]*(?:\s[^<>]{0,200})?/?>")
+# Only these names count as HTML. Real data showed the old "any <word>" rule
+# stripping <think> delimiters from 22k reasoning records.
+_KNOWN_HTML_TAGS = frozenset("""html head body div span p br a img table tr td th thead tbody ul ol li
+h1 h2 h3 h4 h5 h6 script style meta link title section article header footer nav pre code em strong b i
+blockquote iframe form input button noscript template hr sup sub small label select option""".split())
+_HTML_TAG_RE = re.compile(
+    r"</?(?:" + "|".join(sorted(_KNOWN_HTML_TAGS, key=len, reverse=True)) + r")\b[^<>]{0,300}/?>", re.IGNORECASE
+)
 
 
 # --------------------------------------------------------------------------
@@ -418,8 +467,10 @@ def _clean_text(
             text = fixed
     do_strip = strip_html is True or (strip_html == "auto" and _HTML_TAG_RE.search(text) is not None)
     if do_strip and _HTML_TAG_RE.search(text):
-        text = html_to_text(text)
-        stats.modified["html_stripped"] += 1
+        stripped_text = html_to_text(text)
+        if stripped_text != text:
+            stats.modified["html_stripped"] += 1
+            text = stripped_text
     if mojibake:
         fixed, changed = fix_mojibake(text)
         if changed:
@@ -462,9 +513,9 @@ def _clean_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[di
             presidio_analyzer = AnalyzerEngine()
             stats.backend = "presidio"
             stats.extra["pii_backend"] = "presidio"
-        except ImportError:
-            stats.extra["pii_backend"] = "builtin"
-            stats.extra["approximate_pii"] = True  # regex fallback is an approximation of NER
+        except ImportError as exc:
+            # explicitly requested: a refusal naming the dependency, never a silent downgrade
+            raise CleanError("pii.backend='presidio' requires optional dependency 'presidio-analyzer'") from exc
     else:
         stats.extra["pii_backend"] = "builtin"
 
@@ -474,9 +525,8 @@ def _clean_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[di
             import fasttext  # noqa: F401  type: ignore
 
             langid_backend = "fasttext"
-        except ImportError:
-            langid_backend = "builtin"
-            stats.extra["fasttext_missing"] = True
+        except ImportError as exc:
+            raise CleanError("langid.model_path is set but optional dependency 'fasttext' is missing") from exc
     stats.extra["langid_backend"] = langid_backend
     if langid_backend == "builtin":
         stats.extra["approximate_langid"] = True
@@ -497,12 +547,15 @@ def _clean_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[di
         messages = rec.get("messages")
         if isinstance(messages, list):
             for turn in messages:
-                if isinstance(turn, dict) and isinstance(turn.get("content"), str):
-                    turn["content"] = _clean_text(
-                        turn["content"], normalize=normalize, mojibake=mojibake, strip_html=strip_html,
-                        pii_redact=pii_redact, pii_types=pii_types,
-                        presidio_analyzer=presidio_analyzer, stats=stats,
-                    )
+                if not isinstance(turn, dict):
+                    continue
+                for key in ("content", "reasoning_content"):
+                    if isinstance(turn.get(key), str):
+                        turn[key] = _clean_text(
+                            turn[key], normalize=normalize, mojibake=mojibake, strip_html=strip_html,
+                            pii_redact=pii_redact, pii_types=pii_types,
+                            presidio_analyzer=presidio_analyzer, stats=stats,
+                        )
 
         text = primary_text(rec)
         stripped = text.strip()
@@ -542,8 +595,26 @@ def _clean_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[di
             stats.drop("char_repeat")
             continue
 
+        # What redaction left behind: the readiness report needs a MEASURED
+        # count here (absent key -> its PII check is UNMEASURED, not PASS).
+        scan_types = tuple(t for t in pii_types if t in _PII_SCANNERS)
+        remaining = sum(sum(pii_scan(t, scan_types).values()) for t in _record_texts(rec))
+        stats.extra["pii_remaining"] = int(stats.extra.get("pii_remaining", 0)) + remaining
+
         stats.records_out += 1
         yield rec
+    stats.extra.setdefault("pii_remaining", 0)
+
+
+def _record_texts(rec: dict) -> Iterator[str]:
+    for field in _TEXT_FIELDS:
+        if isinstance(rec.get(field), str):
+            yield rec[field]
+    for turn in rec.get("messages") or []:
+        if isinstance(turn, dict):
+            for key in ("content", "reasoning_content"):
+                if isinstance(turn.get(key), str):
+                    yield turn[key]
 
 
 register_op(FunctionOp("clean", _clean_op, CONFIG_SCHEMA))

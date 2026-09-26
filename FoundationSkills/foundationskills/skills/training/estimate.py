@@ -49,6 +49,8 @@ hardware card — estimates never invent an MFU.
 """
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -145,10 +147,12 @@ def estimate_memory(
     n = variant.total_params
     if variant.arch == "moe":
         assumptions.append("MoE: total params drive memory (all experts materialise)")
-    state_div = (world if sharding == "fsdp" else 1) * tp
+    # FSDP shards over the whole world, TP groups included (dp*tp == world), so
+    # the divisor is world -- not world*tp. DDP replicates; only TP splits.
+    state_div = world if sharding == "fsdp" else tp
     assumptions.append(
         f"states divided by {state_div} ({sharding} over world={world}"
-        f"{' = ZeRO-3-like sharding' if sharding == 'fsdp' else ' = replication'}; tp={tp})"
+        f"{' = ZeRO-3-like sharding' if sharding == 'fsdp' else ' = replication, split by tp'}; tp={tp})"
     )
 
     wb = 2.0 if precision in {"bf16", "fp16"} else 4.0
@@ -192,6 +196,16 @@ def estimate_memory(
         assumptions.append("no gradient checkpointing: full per-layer activations")
     if variant.arch == "moe":
         assumptions.append("MoE activations use hidden only (approximation)")
+    # Logits: s*b*V in bf16, the fp32 upcast for the loss, and its fp32 grad
+    # (~10 bytes/element), unsharded. Measured on GB200 (Gemma-4 E4B, V=262k,
+    # seq 4096, b1, FSDP x4): without this term the estimate was 38.1 GB against
+    # 48.3 GB allocated -- the gap is exactly this ~10.7 GB.
+    vocab = int(getattr(variant, "vocab", 0) or 0)
+    if vocab:
+        act_bytes += s * b * vocab * 10.0
+        assumptions.append(f"logits: s*b*V*10 bytes (bf16 logits + fp32 upcast + fp32 grad), V={vocab:,}")
+    else:
+        assumptions.append("logits term omitted: variant vocab unknown (underestimates large-vocab models)")
     activations_gb = act_bytes / GB  # per-GPU micro-batch; not divided by world/tp (conservative)
 
     subtotal = weights_gb + grads_gb + optimizer_gb + activations_gb
@@ -217,6 +231,10 @@ def estimate_time(
     gpus: int,
     method: str = "full",
     rl_generation_factor: float = 3.0,
+    sharding: str | None = None,
+    micro_batch: int | None = None,
+    grad_ckpt: bool | None = None,
+    stage: str | None = None,
 ) -> TimeEstimate:
     """Wall-clock estimate: ``FLOPs / (gpus * peak * MFU)``.
 
@@ -226,6 +244,8 @@ def estimate_time(
     """
     if method not in {"full", "lora", "qlora", "rl", "rl_lora"}:
         raise ValueError(f"unknown method {method!r}")
+    if stage == "rl" and method in {"full", "lora", "qlora"}:
+        method = "rl" if method == "full" else "rl_lora"  # generation cost applies to every RL stage
     gpus = max(1, int(gpus))
     tokens = int(tokens)
     assumptions: list[str] = []
@@ -249,12 +269,39 @@ def estimate_time(
         assumptions.append("MoE: FLOPs use active params, not total params")
 
     mfu_key = "moe" if variant.arch == "moe" else "dense"
-    entry = hardware.mfu.get(mfu_key) or hardware.mfu.get("dense")
+    entry = hardware.mfu.get(mfu_key)
+    if entry is None and mfu_key == "moe" and hardware.mfu.get("dense"):
+        entry = hardware.mfu.get("dense")
+        assumptions.append("no MoE MFU recorded: dense MFU used (MoE routing usually lowers it)")
+        entry = {**entry, "provenance": "derived-from-dense"}
     if not isinstance(entry, dict) or "value" not in entry:
         raise KnowledgeError(f"hardware {hardware.id!r}: mfu.{mfu_key} missing; time is UNMEASURED without MFU")
     mfu = float(entry["value"])
     mfu_provenance = str(entry.get("provenance", "unknown"))
-    assumptions.append(f"MFU {mfu} ({mfu_provenance}: {entry.get('evidence', 'no evidence recorded')})")
+    evidence = entry.get("evidence", "no evidence recorded")
+    # MFU depends on the configuration: measured on GB200, the same model ran at
+    # 31.8% (DDP, b2, ga8) and 4.6% (FSDP, b1, grad ckpt). Use the nearest
+    # measured point for this config when the profile records points.
+    points = [pt for pt in (hardware.mfu.get("points") or []) if isinstance(pt, dict) and "value" in pt]
+    if points and mfu_key == "dense" and any(v is not None for v in (sharding, micro_batch, grad_ckpt)):
+        def distance(pt: dict) -> float:
+            cfg = pt.get("config") or {}
+            d = 0.0
+            if sharding is not None and cfg.get("sharding") != sharding:
+                d += 2.0
+            if grad_ckpt is not None and bool(cfg.get("grad_ckpt")) != bool(grad_ckpt):
+                d += 1.0
+            if micro_batch is not None and cfg.get("micro_batch") is not None:
+                d += abs(math.log2(max(1, int(micro_batch))) - math.log2(max(1, int(cfg["micro_batch"])))) * 0.5
+            return d
+        best = min(points, key=distance)
+        mfu = float(best["value"])
+        exact = distance(best) == 0.0
+        mfu_provenance = str(best.get("provenance", "unknown")) if exact else "derived"
+        evidence = best.get("evidence", evidence)
+        if not exact:
+            assumptions.append(f"mfu extrapolated from the nearest measured config point {best.get('config')}")
+    assumptions.append(f"MFU {mfu} ({mfu_provenance}: {evidence})")
 
     total_flops = flops_per_token * tokens
     effective_flops_per_s = gpus * hardware.bf16_dense_tflops * 1e12 * mfu

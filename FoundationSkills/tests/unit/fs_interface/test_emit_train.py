@@ -34,6 +34,8 @@ def make_caps(**over):
         refused_axes=("pp", "ep"),
         axes_measured=True,
         rl_algorithms=("dr_grpo", "gspo", "dapo"),
+        rl_saves_checkpoint=True,  # hypothetical: FS 77bfa65 measures False (see test_fix_*)
+        rl_reward_kinds=("mcq_letter",),
         rl_runnable={"dr_grpo": None, "gspo": None, "dapo": None},
         families={"gemma4": ("gemma4",), "qwen3.5": ("qwen3_5",)},
         backends=("ddp", "fsdp"),
@@ -173,7 +175,8 @@ def test_torchrun_when_world_gt_1_else_python(tmp_path):
     multi = call(stage, caps, dataset(tmp_path=tmp_path), tmp_path, gpus=4)
     assert multi["argv"][0] == "torchrun"
     assert flag_value(multi["argv"], "--nproc-per-node") == "4"
-    assert "--rdzv-backend" in multi["argv"]
+    # one node: standalone rendezvous (a direct launch never expands $MASTER_ADDR)
+    assert "--standalone" in multi["argv"] and "--rdzv-endpoint" not in multi["argv"]
     assert "-m" in multi["argv"] and "foundationscale.train.cli" in multi["argv"]
     single = call(stage, caps, dataset(tmp_path=tmp_path), tmp_path, gpus=1)
     assert single["argv"][:3] == ["python", "-m", "foundationscale.train.cli"]

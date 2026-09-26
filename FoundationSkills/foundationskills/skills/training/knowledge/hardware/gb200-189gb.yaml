@@ -12,11 +12,31 @@ mfu:
     value: 0.318
     provenance: measured
     evidence: "FS MFU campaign 2026-09-22: Gemma-4 E4B DDP b2 ga8, 18,037 tok/s/gpu, 31.8% of measured 1503.4 TF peak"
+  # MFU is a property of the CONFIGURATION, not the GPU: the same model measured
+  # 31.8% and 4.6% on this hardware. estimate_time picks the nearest point.
+  points:
+    - config: {sharding: ddp, micro_batch: 2, grad_ckpt: false}
+      value: 0.318
+      provenance: measured
+      evidence: "FS MFU campaign 2026-09-22: Gemma-4 E4B DDP b2 ga8, 18,037 tok/s/gpu"
+    - config: {sharding: fsdp, micro_batch: 1, grad_ckpt: true}
+      value: 0.046
+      provenance: measured
+      evidence: "FoundationSkills validation 2026-09-26: Gemma-4 E4B full FT, FSDP x4, b1, grad ckpt, seq 4096; 69.7 model-TF/s/GPU over a 20-step run (short run, not steady state)"
   moe:
     value: 0.15
     provenance: derived
     evidence: "no MoE MFU run measured on this estate yet; roughly half the dense MFU as a routing/activation-imbalance heuristic -- DO NOT budget on it, remeasure first"
 scheduler: slurm
+# Launch env measured on these trays (estate launcher + FoundationSkills
+# validation 2026-09-26): without it FS's fabric probe refused 96 with
+# "NCCL invalid usage" on a single-tray srun attach.
+env:
+  NCCL_MNNVL_ENABLE: "0"
+  NCCL_SOCKET_IFNAME: bond0
+  GLOO_SOCKET_IFNAME: bond0
+  NCCL_NVLS_ENABLE: "1"
+cpus_per_task: 30
 cluster_rules:
   - "every sbatch has --time=10-00:00:00"
   - "never schedule node r01dgx02: --exclude=r01dgx02"
