@@ -465,6 +465,19 @@ def find_variant(model: str, root: Path | None = None) -> tuple[Family, Variant]
             if variant.local_path is not None and model == variant.local_path:
                 return family, variant
 
+    # Hub repos get renamed (meta-llama/Meta-Llama-3.1-8B -> meta-llama/Llama-3.1-8B):
+    # a normalized comparison (case, org prefix, "meta-" prefix) catches renames
+    # while still requiring the whole model name to match -- no fuzzy guessing.
+    def _norm(name: str) -> str:
+        tail = name.rstrip("/").split("/")[-1].lower()
+        return tail[5:] if tail.startswith("meta-") else tail
+
+    wanted = _norm(model)
+    hits = [(family, variant) for family in families.values() for variant in family.variants
+            if wanted in {_norm(variant.id), _norm(variant.hf_id or ""), _norm(variant.local_path or "")} - {""}]
+    if len(hits) == 1:
+        return hits[0]
+
     path = Path(model)
     config_file = path / "config.json"
     if not (path.is_dir() and config_file.is_file()):

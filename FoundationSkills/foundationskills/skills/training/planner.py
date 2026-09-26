@@ -22,6 +22,8 @@ Documented simplifications where the spec is silent:
 """
 from __future__ import annotations
 
+import dataclasses
+
 from types import SimpleNamespace
 from typing import Any
 
@@ -526,6 +528,11 @@ def plan(
         decide("algorithm_selection", f"{stage}: {algorithm}", algo_sel.get("because", ""))
 
         # recipe match
+        # Method first, from goal/data/hardware rules; it then selects the recipe,
+        # because recipe hparams are method-specific (a LoRA LR on a full FT is wrong).
+        rule_choice = select_method(goal=goal_kinds[0], stage=stage, data_tokens=tokens, variant=variant,
+                                    hardware=hw, gpus=gpus_for_stage, prefer=None)
+        rule_method = str(_get(rule_choice, "method", "full"))
         query = RecipeQuery(
             family=_get(family, "name"),
             size_b=float(_get(variant, "size_b", 0.0) or 0.0),
@@ -533,10 +540,18 @@ def plan(
             stage=stage,
             goal=goal_kinds[0],
             domain=goal.get("domain"),
-            method=None,
+            method=rule_method if rule_method in _METHODS else None,
             hardware=hw_resolved_id,
         )
         match = select_recipe(query)
+        recipe_method_note = ""
+        if match is None and query.method is not None:
+            fallback = select_recipe(dataclasses.replace(query, method=None))
+            if fallback is not None:
+                fb_method = (_get(_get(fallback, "recipe"), "raw", {}).get("index") or {}).get("method")
+                recipe_method_note = (f"no {rule_method} recipe; nearest recipe "
+                                      f"{_get(_get(fallback, 'recipe'), 'id')} is {fb_method}, so its hparams are "
+                                      f"NOT applied (algorithm-card defaults used)")
         ranked = rank_recipes(query, k=3)
         del ranked  # ranked is for diagnostics; the best match is authoritative
         recipe = _get(match, "recipe") if match is not None else None
@@ -559,18 +574,10 @@ def plan(
                 provenance_notes.append(f"stage {stage}: recipe match is derived ({adjustments or 'soft keys differ'})")
         decide("recipe_match", f"{stage}: {recipe_id or 'none'}", recipe_reasons)
 
-        # method
-        recipe_method = (recipe_raw.get("index") or {}).get("method")
-        prefer = recipe_method if recipe_method in _METHODS else None
-        method_choice = select_method(
-            goal=goal_kinds[0],
-            stage=stage,
-            data_tokens=tokens,
-            variant=variant,
-            hardware=hw,
-            gpus=gpus_for_stage,
-            prefer=prefer,
-        )
+        # method (decided above, before the recipe)
+        method_choice = rule_choice
+        if recipe_method_note:
+            provenance_notes.append(f"stage {stage}: {recipe_method_note}")
         method = str(_get(method_choice, "method", "full"))
         if method not in _METHODS:
             provenance_notes.append(f"stage {stage}: select_method returned {method!r}; clamped to 'full'")
