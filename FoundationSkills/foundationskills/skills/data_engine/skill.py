@@ -207,6 +207,7 @@ class DataEngineSkill(BaseSkill):
                 chat_template_family=request.get("chat_template_family"),
                 domain=request.get("domain"),
                 benchmarks=list(request.get("benchmarks") or []),
+                seq_len=int(request.get("seq_len") or 4096),
             )
 
         dataset_id = f"{target}-{sha256_json({'sources': sources, 'spec': spec})[:12]}"
@@ -263,12 +264,24 @@ class DataEngineSkill(BaseSkill):
 
         findings: list[Finding] = []
         if int(dataset.get("num_records", 0)) == 0:
+            ingest_stats = next((st for st in result.stats if st.get("name") == "ingest"), {})
+            unmapped = int((ingest_stats.get("modified") or {}).get("no_payload_mapped", 0))
+            columns = (ingest_stats.get("extra") or {}).get("source_columns", {})
+            if unmapped:
+                message = (f"pipeline wrote zero records; {unmapped} ingested record(s) had no text/messages/prompt "
+                           f"mapped from source columns {columns}")
+                recovery = ('map the columns explicitly via source options.field_map, e.g. '
+                            '{"prompt": "<question col>", "answer": "<answer col>"} or {"text": "<body col>"}')
+            else:
+                message = "pipeline wrote zero records; the dataset artifact was not written"
+                recovery = "inspect stats.json dropped-reason counters; the clean/quality thresholds may be too strict"
             findings.append(
                 self.finding(
                     "DE-HO-003",
-                    "pipeline wrote zero records; the dataset artifact was not written",
-                    {"stats_path": str(out_dir / "stats.json"), "dropped": _dropped_summary(result.stats)},
-                    "inspect stats.json dropped-reason counters; the clean/quality thresholds may be too strict",
+                    message,
+                    {"stats_path": str(out_dir / "stats.json"), "dropped": _dropped_summary(result.stats),
+                     "source_columns": columns},
+                    recovery,
                 )
             )
             return SkillResult(Status.RED, payload, tuple(artifacts), tuple(findings))

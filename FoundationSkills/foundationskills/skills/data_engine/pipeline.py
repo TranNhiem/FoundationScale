@@ -94,7 +94,7 @@ def _chain(spec_ops: list[dict[str, Any]]) -> tuple[Any, list[OpStats]]:
         op = _ops_base.OPS[names[len(stats)]]
         op_stats = OpStats(name=op.name)
         stats.append(op_stats)
-        records = op(counted(records, op_stats), dict(step.get("config") or {}), op_stats)
+        records = op(records, dict(step.get("config") or {}), op_stats)
     return records, stats
 
 
@@ -127,6 +127,11 @@ def run_pipeline(spec: dict[str, Any], out_dir: Path, *, shard_records: int = 50
         raise PipelineError("shard_records must be >= 1")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Shards get a directory of their own: FS loaders read EVERY .json/.jsonl in
+    # a dataset directory, so a stats.json beside the shards is parsed as corpus
+    # (measured: RLTrainer refused with "holds a top-level dict").
+    shard_dir = out_dir / "shards"
+    shard_dir.mkdir(parents=True, exist_ok=True)
 
     records, op_stats = _chain(list(spec["ops"]))
 
@@ -142,7 +147,7 @@ def run_pipeline(spec: dict[str, Any], out_dir: Path, *, shard_records: int = 50
         nonlocal buffer, buffer_count
         if not buffer:
             return
-        shard_path = out_dir / f"shard-{len(shards):05d}.jsonl"
+        shard_path = shard_dir / f"shard-{len(shards):05d}.jsonl"
         _atomic_write_lines(shard_path, buffer)
         shard_rows.append(
             {"path": str(shard_path), "sha256": sha256_file(shard_path), "records": buffer_count}

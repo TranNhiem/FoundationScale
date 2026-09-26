@@ -29,6 +29,7 @@ def recommend_pipeline(
     chat_template_family: str | None,
     domain: str | None,
     benchmarks: list[str],
+    seq_len: int = 4096,
 ) -> dict[str, Any]:
     """Build a data_pipeline_spec payload (with a rationale) for the target format."""
     if target_format not in FORMATS:
@@ -136,6 +137,9 @@ def recommend_pipeline(
     format_cfg: dict[str, Any] = {"target_format": target_format}
     if target_format in {"sft", "mm_sft"}:
         format_cfg["chat_template_family"] = chat_template_family
+        if tokenizer:
+            # the model's own chat_template beats the builtin approximation
+            format_cfg["tokenizer"] = tokenizer
     if rl_like:
         format_cfg["gold_key"] = "answer"
     add("format", format_cfg, f"render records into the FS-consumed {target_format!r} rows")
@@ -144,10 +148,12 @@ def recommend_pipeline(
     pack = pretrain_like
     add(
         "tokenize",
-        {"pack": pack, "tokenizer": tokenizer},
+        {"pack": pack, "chunk": pretrain_like, "tokenizer": tokenizer, "seq_len": int(seq_len)},
         (
-            f"measure token counts and seq-length stats (tokenizer={tokenizer!r}); "
-            + ("pack sequences for pretraining throughput" if pack else "no packing: example boundaries matter post-pretraining")
+            f"measure token counts and seq-length stats (tokenizer={tokenizer!r}, seq_len={int(seq_len)}); "
+            + ("chunk documents longer than seq_len at paragraph boundaries (FS truncates at max_sequence_length, "
+               "so an unchunked long document loses its tail) and pack for throughput"
+               if pack else "no packing: example boundaries matter post-pretraining")
         ),
     )
 
