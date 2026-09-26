@@ -121,7 +121,11 @@ def cpt_policy(variant: Any, domain_tokens: int | float, goal: Any, preserve_gen
     ``epochs_cap`` (int) and ``because`` (list[str]) explaining every choice.
     """
     size_b = float(getattr(variant, "size_b", 0.0) or 0.0)
-    size_label = f"{size_b:g}B" if size_b > 0 else "unknown size"
+    if size_b <= 0:
+        # rv41: an unknown size must not fall into the <=3B band (highest LR,
+        # smallest token cap) -- exactly wrong for a large model.
+        raise ValueError("missing input: base_model.size_b (CPT learning rate and token budget depend on it)")
+    size_label = f"{size_b:g}B"
     domain_tokens = int(max(0, domain_tokens))
     because: list[str] = []
 

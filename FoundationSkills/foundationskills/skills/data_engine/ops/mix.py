@@ -122,6 +122,10 @@ def _mix(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[dict]:
     if max_epochs < 1:
         raise ValueError("mix max_epochs must be >= 1")
 
+    names = [str(c.get("name", "component")) for c in components]
+    duplicates = sorted({n for n in names if names.count(n) > 1})
+    if duplicates:  # rv35: pools are keyed by name; a collision would sample the wrong data
+        raise ValueError(f"mix components need unique names; duplicated: {duplicates}")
     pools: dict[str, list[dict]] = {}
     for component in components:
         name = str(component.get("name", "component"))

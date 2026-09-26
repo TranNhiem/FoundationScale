@@ -64,7 +64,7 @@ class Orchestrator:
             request = dict(step.request)
             inputs = list(request.get("inputs", []))
             inputs.extend(ref for ref in self._prior_refs if ref["type"] in skill.consumes)
-            request.setdefault("inputs", inputs)
+            request["inputs"] = inputs  # explicit inputs first, then prior artifacts this skill consumes
             result = skill.execute(request, self.ctx)
             results.append(result)
             self._prior_refs.extend(a.to_dict() for a in result.artifacts)

@@ -139,6 +139,10 @@ def _readiness_009(dataset: dict) -> dict:
     return _check("DE-RDY-009", True, f"first record of every shard carries the fs columns {sorted(expected)}")
 
 
+def fmt_op_has_tokenizer(fmt_op: dict | None) -> bool:
+    return bool(fmt_op) and bool(((fmt_op or {}).get("extra") or {}).get("template_sources", {}).get("tokenizer"))
+
+
 def build_readiness(dataset: dict, stats: list[dict], requirements: dict) -> dict:
     """Build a readiness_report payload for ``dataset`` from per-op ``stats``.
 
@@ -273,37 +277,31 @@ def build_readiness(dataset: dict, stats: list[dict], requirements: dict) -> dic
         ok = truncation_rate <= max_trunc
         checks.append(_check("DE-RDY-007", ok, f"truncation_rate={truncation_rate} vs max={max_trunc}"))
 
-    # DE-RDY-008: chat template family match; template_fallback fails sft/mm_sft
+    # DE-RDY-008: the chat template ACTUALLY applied (format op's measured
+    # template_source), never a default: an absent source is unmeasured (rv10).
     req_family = reqs.get("chat_template_family")
     fmt_extra = _extra(fmt_op)
-    fallback = bool(fmt_extra.get("template_fallback"))
-    if conv and fallback:
-        checks.append(
-            _check(
-                "DE-RDY-008",
-                False,
-                "format op fell back to the generic template; the family's chat template was NOT applied",
-            )
-        )
-    elif req_family is not None:
-        have_family = dataset.get("chat_template_family")
-        if have_family is None:
-            checks.append(
-                _check("DE-RDY-008", None, f"chat_template_family {req_family!r} required but dataset records none")
-            )
-        else:
-            ok = have_family == req_family
-            checks.append(
-                _check("DE-RDY-008", ok, f"dataset chat_template_family {have_family!r} vs required {req_family!r}")
-            )
-    elif conv:
-        if fmt_op is None:
-            checks.append(_check("DE-RDY-008", None, "no format op stats; template source unmeasured"))
-        else:
-            source = fmt_extra.get("template_source", "tokenizer")
-            checks.append(_check("DE-RDY-008", True, f"chat template rendered via {source!r}; no family requirement"))
+    if not conv:
+        checks.append(_check("DE-RDY-008", True, f"not applicable: format {fmt!r} carries no chat template"))
+    elif fmt_op is None or not fmt_extra.get("template_source"):
+        checks.append(_check("DE-RDY-008", None, "format op recorded no template_source; template unmeasured"))
     else:
-        checks.append(_check("DE-RDY-008", None, f"no chat template applies to format {fmt!r}; check unmeasured"))
+        source = str(fmt_extra["template_source"])
+        modes = dict(fmt_extra.get("reasoning_render") or {})
+        problems: list[str] = []
+        if fmt_extra.get("template_fallback") or source == "generic":
+            problems.append("generic ROLE: fallback used; the family's chat template was NOT applied")
+        if modes.get("inline_fallback") and fmt_extra.get("tokenizer_error") is None and fmt_op_has_tokenizer(fmt_op):
+            problems.append(f"{modes['inline_fallback']} reasoning trace(s) inlined as <think> despite a tokenizer")
+        if req_family is not None and source not in ("tokenizer", str(req_family)):
+            problems.append(f"template {source!r} does not match required family {req_family!r}")
+        declared = dataset.get("chat_template_family")
+        if req_family is not None and declared is not None and declared != req_family:
+            problems.append(f"dataset declares chat_template_family {declared!r} but {req_family!r} is required")
+        detail = f"template_source={source!r}" + (f"; reasoning_render={modes}" if modes else "")
+        if modes.get("lost"):
+            detail += f"; {modes['lost']} record(s) dropped because the template lost their reasoning trace"
+        checks.append(_check("DE-RDY-008", not problems, "; ".join(problems) or detail))
 
     # DE-RDY-009: shard schemas carry the fs columns
     checks.append(_readiness_009(dataset))

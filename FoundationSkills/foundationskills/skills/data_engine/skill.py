@@ -191,7 +191,8 @@ class DataEngineSkill(BaseSkill):
 
     def run(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
         sources = list(request.get("sources") or [])
-        target = str(request.get("target_format"))
+        # rv11: the same effective target check_inputs validated (explicit pipeline wins when set)
+        target = str(request.get("target_format") or (request.get("pipeline") or {}).get("target_format"))
         explicit = request.get("pipeline")
         if isinstance(explicit, dict) and explicit:
             spec = dict(explicit)

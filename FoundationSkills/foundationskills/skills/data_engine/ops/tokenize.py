@@ -222,6 +222,9 @@ def _tokenize_records(records: Iterable[dict], cfg: dict, stats: OpStats) -> Ite
     total_tokens = 0
     truncated = 0
     chunk = bool(cfg.get("chunk", False))
+    # Example-level formats cannot be chunked (it would cut an answer from its
+    # question); drop_overlong removes examples FS would truncate, counted.
+    drop_overlong = bool(cfg.get("drop_overlong", False))
     budget = max(seq_len - _CHUNK_HEADROOM, 1)
 
     def expanded(stream: Iterable[dict]) -> Iterator[dict]:
@@ -245,6 +248,9 @@ def _tokenize_records(records: Iterable[dict], cfg: dict, stats: OpStats) -> Ite
         num = sum(_count_text(tokenizer, t, stats) for t in texts)
         if add_eos and texts:
             num += 1
+        if drop_overlong and num > seq_len:
+            stats.drop("overlong")
+            continue
         total_tokens += num
         lengths.append(num)
         if num > seq_len:
@@ -296,6 +302,7 @@ _CONFIG_SCHEMA = {
         "field": {"enum": ["text", "auto"]},
         "pack": {"type": "boolean"},
         "chunk": {"type": "boolean"},
+        "drop_overlong": {"type": "boolean"},
         "add_eos": {"type": "boolean"},
         "sample_for_hist": {"type": "integer", "minimum": 1},
     },

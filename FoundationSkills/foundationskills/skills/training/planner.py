@@ -397,6 +397,8 @@ def plan(
             )
         ),
         "requested_rl_algorithm": declared_facts.get("requested_rl_algorithm") or goal.get("rl_algorithm"),
+        "requested_preference_algorithm": declared_facts.get("requested_preference_algorithm")
+        or goal.get("preference_algorithm"),  # rv40: was dropped, silently replaced by "dpo"
         "rl_examples": declared_facts.get("rl_examples") or (_sum_for("rl", "approx_examples") or None),
         # the gold the RL data carries; FS verifies only single-letter MCQ gold
         "answer_kind": declared_facts.get("answer_kind")
@@ -478,7 +480,10 @@ def plan(
         assumptions: list[str] = []
         cpt: dict | None = None
         if stage == "cpt":
-            cpt = cpt_policy(variant, domain_tokens, goal_kinds[0], preserve_general)
+            try:
+                cpt = cpt_policy(variant, domain_tokens, goal_kinds[0], preserve_general)
+            except ValueError as exc:  # e.g. unknown model size: a named refusal, not a guess
+                raise PlanningRefusal(str(exc)) from exc
             tokens = int(cpt["token_budget"])
         else:
             tokens = _stage_tokens(stage, data_facts, domain_tokens, assumptions)
