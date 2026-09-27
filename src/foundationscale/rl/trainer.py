@@ -31,7 +31,11 @@ report is built only from rows the gradient actually touched; and the
 emitted ``StepReport`` carries a real ``LossOutput`` with
 ``loss=float(tensor)`` and with the #546 observability pair
 ``ratio_mean``/``clip_fraction`` in its metrics channel, measured off the
-same kept tensors the loss was priced from.
+same kept tensors the loss was priced from; and an objective declaring a
+non-zero ``kl_weight`` (grpo's k3) is priced against a frozen reference copy
+of the initial policy, loaded once from ``reference_model or model`` only
+when the objective needs it -- a reference-free objective never pays that
+memory.
 
 WHAT IS NOT CLAIMED: convergence, benchmark results, or equivalence with
 any published implementation -- the equivalence test proves the tensor path
@@ -281,14 +285,22 @@ class RLTrainConfig:
 
     model: str
     dataset: str
-    # dr_grpo, not grpo. GRPO declares a k3 reference term, so it requires a
-    # reference-policy log-probability column; this loop holds ONE model and
-    # produces no reference plane, so a default of "grpo" refuses on every
-    # step of every default run. A default that cannot run is not a default.
-    # Selecting "grpo" here remains legal and will refuse with that reason
-    # named, which is the honest outcome -- it just is not what an operator
-    # gets by typing nothing.
+    # dr_grpo, not grpo. dr_grpo is reference-free, so the default run never
+    # pays the memory for the frozen reference copy that grpo's k3 term
+    # requires. The default should be the cheapest entry that trains end to
+    # end; selecting "grpo" remains legal and now auto-loads that reference
+    # (see reference_policy below).
     algorithm: str = "dr_grpo"
+    # None = auto: a frozen reference copy of the initial policy is loaded
+    # iff the resolved objective declares kl_weight != 0.0. False forbids the
+    # load -- and _resolve_objective then refuses any objective that needs
+    # the term, with the missing input named. True forces the load even for
+    # a reference-free objective (declared, and therefore not silent waste).
+    reference_policy: bool | None = None
+    # Which checkpoint the reference copy is loaded from; None means the
+    # policy's own initial weights, which is what makes the step-1 k3
+    # contribution exactly zero.
+    reference_model: str | None = None
     # The answer surface the prompt asked the policy for, as a regex with one
     # capture group, or None to treat every A--Z in the completion as a candidate.
     # Paired with gold_key: gold_key says where the TRUTH is, answer_pattern says
@@ -410,10 +422,10 @@ class RLTrainer:
                 raise TrainerRefusal(
                     f"algorithm {self.config.algorithm!r} declares "
                     f"requires.reference_policy=True: its k3 objective term prices "
-                    f"log-ratios against a frozen copy of the initial policy, and "
-                    f"this loop holds ONE model and produces no reference plane. "
-                    f"Reference-free group objectives (gspo/dr_grpo/dapo) run "
-                    f"today; the reference-policy path is not built."
+                    f"log-ratios against a frozen copy of the initial policy, but "
+                    f"the binding exposes no `_objective` instance, so the "
+                    f"reference plane has nothing to feed. Bind the objective "
+                    f"(as grpo does) to run it under the reference-policy path."
                 )
             raise TrainerRefusal(
                 f"algorithm {self.config.algorithm!r}: 0 of 1 required objective "
@@ -442,19 +454,17 @@ class RLTrainer:
                 f"for it to read. The group-relative family runs today; the "
                 f"preference and online families are not wired to this loop."
             )
-        # A NAMED, DELIBERATE LIMITATION, not an oversight. An active KL term
-        # needs reference log-probabilities, which need a frozen copy of the
-        # initial policy held alongside the trained one. This loop holds ONE
-        # model. Refusing here names the missing input; letting it through
-        # would surface as the kernel's reference-absent refusal several
-        # frames deeper, where it reads like a bug rather than a boundary.
+        # An active k3 term needs a frozen reference copy. run() now loads
+        # that copy (auto unless reference_policy says otherwise); what
+        # survives here as a refusal is the DECLARED refusal to build one:
+        # reference_policy=False against an objective that needs the term.
         kl_weight = float(getattr(objective, "kl_weight", 0.0))
-        if kl_weight != 0.0:
+        if kl_weight != 0.0 and self.config.reference_policy is False:
             raise TrainerRefusal(
                 f"algorithm {self.config.algorithm!r} declares kl_weight={kl_weight}; "
-                f"0 of 1 required reference policies are loaded by this loop, so the "
-                f"k3 term cannot be measured. Reference-free objectives "
-                f"(kl_weight == 0.0) run today; the reference-policy path is not built."
+                f"reference_policy=False forbids the 1 of 1 reference policies "
+                f"the k3 term requires, so the term cannot be measured. Set "
+                f"reference_policy to None (auto) or True to load one."
             )
         return objective
 
@@ -566,21 +576,28 @@ class RLTrainer:
             )
         except Exception as exc:  # noqa: BLE001 -- load surface failure is a refusal
             _refuse_exit_96(f"tokenizer load failed for {self.config.model!r}: {exc}")
-        try:
+
+        def _load_causal_lm(model_id: str) -> Any:
             # Annotated Any: transformers 5.x wraps ``from_pretrained`` in a
             # decorator whose return type does not survive inference, so the
             # subsequent ``.to(device)`` resolves against the wrapper rather
             # than the model and reports the device string as a bad `self`.
             # The alternative -- a cast to PreTrainedModel -- would assert a
             # class the auto-loader does not promise across both branches.
-            model: Any = AutoModelForCausalLM.from_pretrained(self.config.model)
-        except Exception:
+            # Shared by the policy and the frozen reference copy: two inline
+            # copies of this try/except would be two chances for them to drift.
             try:
-                model = AutoModelForImageTextToText.from_pretrained(self.config.model)
-            except Exception as exc:  # noqa: BLE001
-                _refuse_exit_96(
-                    f"model load failed for {self.config.model!r} under both auto classes: {exc}"
-                )
+                loaded: Any = AutoModelForCausalLM.from_pretrained(model_id)
+            except Exception:
+                try:
+                    loaded = AutoModelForImageTextToText.from_pretrained(model_id)
+                except Exception as exc:  # noqa: BLE001
+                    _refuse_exit_96(
+                        f"model load failed for {model_id!r} under both auto classes: {exc}"
+                    )
+            return loaded
+
+        model = _load_causal_lm(self.config.model)
         model.to(device)
         model.train()
 
@@ -629,6 +646,20 @@ class RLTrainer:
             inner_tokenizer.padding_side = "left"
 
         objective = self._resolve_objective()
+        kl_weight = float(getattr(objective, "kl_weight", 0.0))
+        ref_model: Any = None
+        if kl_weight != 0.0 or self.config.reference_policy:
+            # The frozen reference plane: loaded before any optimizer step so
+            # it IS the initial policy -- which is what makes the step-1 k3
+            # contribution exactly zero. Only an objective declaring a
+            # non-zero kl_weight (or an operator forcing reference_policy=True)
+            # pays this memory; _resolve_objective already refused the
+            # needs-one-but-forbidden combination.
+            ref_model = _load_causal_lm(self.config.reference_model or self.config.model)
+            ref_model.to(device)
+            ref_model.eval()
+            for parameter in ref_model.parameters():
+                parameter.requires_grad_(False)
         reward = MCQLetterReward(answer_pattern=self.config.answer_pattern)
         loss_fn = TensorPolicyLoss(objective=objective)
         # #369: bf16 params stepped directly by AdamW at lr=1e-6 discard every
@@ -686,6 +717,7 @@ class RLTrainer:
                 objective=objective,
                 loss_fn=loss_fn,
                 optimizer=optimizer,
+                ref_model=ref_model,
                 device=device,
             )
             if report is not None:
@@ -705,6 +737,7 @@ class RLTrainer:
         objective: Any,
         loss_fn: TensorPolicyLoss,
         optimizer: Any,
+        ref_model: Any | None,
         device: str,
     ) -> StepReport | None:
         """One step over surviving rows, or ``None`` when none survive.
@@ -823,7 +856,9 @@ class RLTrainer:
             else ((0, n_rows),)
         )
 
-        def forward_logprob_slice(start: int, end: int) -> torch.Tensor:
+        def forward_logprob_slice(
+            start: int, end: int, *, scorer_model: Any = None
+        ) -> torch.Tensor:
             # Every tensor with a per-row leading dimension follows the same
             # half-open row range: the generated ids, their full-width
             # attention mask, the shifted targets and every modality tensor.
@@ -833,7 +868,10 @@ class RLTrainer:
             sliced_modalities = {
                 key: value.narrow(0, start, width) for key, value in modality_kwargs.items()
             }
-            logits = model(
+            # The scorer defaults to the policy; the frozen reference is the
+            # only other caller, and every per-row tensor still follows the
+            # same half-open row range.
+            logits = (model if scorer_model is None else scorer_model)(
                 input_ids=kept_sequences.narrow(0, start, width),
                 attention_mask=attention.narrow(0, start, width),
                 **sliced_modalities,
@@ -867,6 +905,21 @@ class RLTrainer:
             with torch.no_grad():
                 old_logprobs = forward_logprob_slice(0, n_rows)
             current_logprobs = forward_logprob_slice(0, n_rows).requires_grad_(True)
+
+        # The reference plane: same kept rows, same modality conditioning,
+        # same row slices as the policy planes, under no_grad. Computed only
+        # when a reference is loaded, which run() guarantees iff the
+        # objective's k3 term needs it (or the operator forced the load).
+        reference_logprobs: torch.Tensor | None = None
+        if ref_model is not None:
+            with torch.no_grad():
+                reference_logprobs = torch.cat(
+                    [
+                        forward_logprob_slice(start, end, scorer_model=ref_model)
+                        for start, end in row_slices
+                    ],
+                    dim=0,
+                )
 
         prompt_id_values = [f"row-{index // self.config.group_size}" for index, _ in rows]
         # The estimator reads the PER-TOKEN supervision mask, not a per-row
@@ -952,11 +1005,15 @@ class RLTrainer:
         kept_current = current_logprobs.index_select(0, keep)
         kept_old = old_logprobs.index_select(0, keep).detach()
         kept_mask = response_mask.index_select(0, keep).detach()
+        kept_ref: torch.Tensor | None = None
+        if reference_logprobs is not None:
+            kept_ref = reference_logprobs.index_select(0, keep)
         loss_tensor = loss_fn(
             current_logprobs=kept_current,
             old_logprobs=kept_old,
             advantages=advantage_tensor,
             mask=kept_mask,
+            reference_logprobs=kept_ref,
         )
         optimizer.zero_grad()
         if use_logprob_micro_batching:
@@ -977,7 +1034,13 @@ class RLTrainer:
         measured = float(loss_tensor.detach())
         loss_output = LossOutput(
             loss=measured,
-            components=_loss_components(objective, measured),
+            components=_loss_components(
+                objective=objective,
+                total=measured,
+                current_logprobs=kept_current,
+                reference_logprobs=kept_ref,
+                mask=kept_mask,
+            ),
             # #546: the step-1 invariant (ratio == 1.0, clip fraction ==
             # 0.0, because old and current are read off the same weights) is
             # carried as OBSERVED metrics on the LossOutput -- never as new
@@ -1087,31 +1150,72 @@ def _declared_component_names(objective: Any) -> tuple[str, ...]:
     return tuple(declaration.components)
 
 
-def _loss_components(objective: Any, total: float) -> tuple[Any, ...]:
+def _loss_components(
+    *,
+    objective: Any,
+    total: float,
+    current_logprobs: torch.Tensor | None = None,
+    reference_logprobs: torch.Tensor | None = None,
+    mask: torch.Tensor | None = None,
+) -> tuple[Any, ...]:
     """Decompose the measured scalar across the objective's declared components.
 
-    The kernel returns ONE scalar, so exactly one component can carry a
-    measured contribution. This loop runs only reference-free objectives
-    (``_resolve_objective`` refuses the rest), so the single declared
-    component IS the whole loss and the attribution is exact.
+    The kernel returns ONE scalar, so without a reference term exactly one
+    component can carry a measured contribution -- the first declared
+    component IS the whole loss. With an active k3 term the KL contribution
+    is re-measured off the kept tensors (detached, fp64: reported, never
+    differentiated) with the kernel's own expression and clamp, attributed
+    to the second declared component, and the policy component gets the
+    remainder ``total - kl``. Attributing the whole scalar to the policy
+    while the kl component read ``None`` would misstate both.
 
     Any further declared component is emitted with ``contribution=None`` --
-    UNMEASURED, never 0.0. Splitting one scalar across two names would
-    double-count it, and reporting an unmeasured term as zero would assert
-    it is inert when nothing measured whether it is.
+    UNMEASURED, never 0.0: reporting an unmeasured term as zero would
+    assert it is inert when nothing measured whether it is.
     """
+    import torch
+
     from foundationscale.gates.objective_gates import LossComponent
 
     names = _declared_component_names(objective)
-    return tuple(
-        LossComponent(
-            name=name,
-            weight=1.0 if index == 0 else 0.0,
-            observed=index == 0,
-            contribution=total if index == 0 else None,
-        )
-        for index, name in enumerate(names)
-    )
+    kl_weight = float(getattr(objective, "kl_weight", 0.0))
+    kl_contribution: float | None = None
+    if (
+        kl_weight != 0.0
+        and current_logprobs is not None
+        and reference_logprobs is not None
+        and mask is not None
+        and len(names) >= 2
+    ):
+        cur = current_logprobs.detach().to(dtype=torch.float64)
+        ref = reference_logprobs.detach().to(dtype=torch.float64)
+        mask_f = mask.detach().to(dtype=torch.float64)
+        log_reference_ratio = (ref - cur) * mask_f
+        # The kernel's own k3 expression, clamp included, upcast so the
+        # REPORTED split does not inherit the plane's bf16 read.
+        k3 = ((torch.expm1(log_reference_ratio) - log_reference_ratio) * mask_f).clamp(min=0.0)
+        kl_contribution = kl_weight * float(k3.sum() / mask_f.sum())
+    components: list[Any] = []
+    for index, name in enumerate(names):
+        if index == 0:
+            rest = total - kl_contribution if kl_contribution is not None else total
+            components.append(
+                LossComponent(name=name, weight=1.0, observed=True, contribution=rest)
+            )
+        elif index == 1 and kl_contribution is not None:
+            components.append(
+                LossComponent(
+                    name=name,
+                    weight=kl_weight,
+                    observed=True,
+                    contribution=kl_contribution,
+                )
+            )
+        else:
+            components.append(
+                LossComponent(name=name, weight=0.0, observed=False, contribution=None)
+            )
+    return tuple(components)
 
 
 # Sanity: BatchRefusal is imported so a caller can catch the tensor plane's

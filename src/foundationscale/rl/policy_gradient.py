@@ -33,7 +33,7 @@ import math
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 from foundationscale.gates.objective_gates import (
     LossComponent,
@@ -374,6 +374,37 @@ class RLOOPolicyLoss:
                 f"bound"
             )
 
+    # Axis declarations mirroring GRPOPolicyLoss's: restated in the shared
+    # axes vocabulary so the generic tensor kernel can read this objective,
+    # adding no field, no configuration and no behaviour.
+    @property
+    def ratio_scope(self) -> Literal["token", "sequence"]:
+        """Declare RLOO's token-scope importance ratio."""
+        return "token"
+
+    @property
+    def reduction(self) -> Literal["token_mean", "sequence_mean", "constant"]:
+        """Declare RLOO's supervised-token-mean policy denominator."""
+        return "token_mean"
+
+    @property
+    def kl_weight(self) -> float:
+        """Declare no reference term; RLOO as bound here reads no reference."""
+        return 0.0
+
+    @property
+    def clip_bounds(self) -> tuple[float, float]:
+        """Declare the unclipped ratio as a degenerate interval for the kernel.
+
+        ``(1e-9, inf)`` leaves ``clamp`` a no-op on every representable
+        positive ratio, so the PPO min selects ``ratio * advantage`` for
+        every token -- RLOO's declared unclipped form. ``semantics()``
+        still abstains (``clip_bounds=None``): the kernel reads the axis,
+        while the semantics handshake keeps stating that RLOO defines no
+        clip at all.
+        """
+        return (1e-9, float("inf"))
+
     @property
     def required_columns(self) -> tuple[str, ...]:
         """Return the batch columns consumed by this loss.
@@ -625,6 +656,7 @@ class RLOOAlgorithm:
 
     __slots__ = (
         "_next_step",
+        "_objective",
         "_requirements",
         "_requires",
         "_semantics",
@@ -636,14 +668,19 @@ class RLOOAlgorithm:
         """Construct RLOO's declarations independently of any supplied loss.
 
         WHAT IS CLAIMED: invalid semantic configuration is refused at
-        construction via a temporary default-parameter loss, mirroring GRPO.
+        construction, and the validating loss instance is kept as this
+        binding's ``_objective``: the tensor trainer reads its declared axes
+        (and its ``LeaveOneOutAdvantage``) straight off it, exactly as the
+        GRPO binding's stored objective is read. Setup still refuses any
+        caller-supplied loss that is not that same object family agreeing
+        field by field.
 
         WHAT IS NOT CLAIMED: that a later loss agrees; the setup handshake
         compares this declaration against the loss's own declaration. Note
         the inherited GRPO quirk: with the default estimator's
         ``min_group_size`` of 2, only ``group_size=2`` passes here.
         """
-        RLOOPolicyLoss(group_size=group_size)
+        self._objective = RLOOPolicyLoss(group_size=group_size)
         self._semantics = AlgorithmSemantics(
             group_size=group_size,
             ratio_scope="token",

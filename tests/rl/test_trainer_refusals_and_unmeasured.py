@@ -105,12 +105,14 @@ def test_objective_without_axes_and_unreadable_metadata_keeps_the_generic_refusa
 
 
 def test_grpo_refusal_names_the_reference_plane_from_the_real_registry() -> None:
-    """The registered GRPO binding is torch-free by construction; refusing it
-    must name ITS declared reason (the k3 reference plane), not the generic
-    no-axes message that reads as a broken factory. Measured hole: the generic
-    message was what a real ``algorithm='grpo'`` run printed."""
+    """The registered GRPO binding now exposes its objective and trains with a
+    loaded reference policy (auto). Forbidding that reference must refuse by
+    naming ITS declared reason (the k3 reference plane), not the generic
+    no-axes message that reads as a broken factory."""
+    objective = RLTrainer(config=_cfg(algorithm="grpo"))._resolve_objective()
+    assert float(objective.kl_weight) > 0.0
     with pytest.raises(TrainerRefusal) as excinfo:
-        RLTrainer(config=_cfg(algorithm="grpo"))._resolve_objective()
+        RLTrainer(config=_cfg(algorithm="grpo", reference_policy=False))._resolve_objective()
     message = str(excinfo.value)
     assert "reference" in message
     assert "expose the declared axes" not in message
@@ -430,6 +432,7 @@ def _one_step(decoded: list[str], advantage_fn: Any, monkeypatch: pytest.MonkeyP
         objective=_objective_with_advantage(advantage_fn),
         loss_fn=None,
         optimizer=SimpleNamespace(zero_grad=lambda: None, step=lambda: None),
+        ref_model=None,
         device="cpu",
     )
 

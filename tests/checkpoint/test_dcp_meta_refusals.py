@@ -196,9 +196,18 @@ def test_a_short_read_is_named_not_silently_accepted(
     real_stat = os.lstat
 
     class _LiedStat:
+        # Only st_size lies; every other field is the real one, because
+        # dcp_meta.os IS the global os module and the patch is process-wide
+        # (coverage's realpath calls lstat mid-test and reads st_mode).
         st_size = 10**9
 
-    monkeypatch.setattr(dcp_meta.os, "lstat", lambda p: _LiedStat())
+        def __init__(self, real: os.stat_result) -> None:
+            self._real = real
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._real, name)
+
+    monkeypatch.setattr(dcp_meta.os, "lstat", lambda p, *a, **k: _LiedStat(real_stat(p, *a, **k)))
     # lstat lied that the shard is huge: the header read must not trust it.
     with pytest.raises(CheckpointFormatError, match="does not fit shard size|short read"):
         read_metadata(str(target))

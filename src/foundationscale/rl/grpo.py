@@ -676,6 +676,7 @@ class GRPOAlgorithm:
 
     __slots__ = (
         "_next_step",
+        "_objective",
         "_requirements",
         "_requires",
         "_semantics",
@@ -699,10 +700,14 @@ class GRPOAlgorithm:
         WHAT IS NOT CLAIMED: that a later loss agrees; the setup handshake
         compares this declaration against the loss's own declaration.
         """
-        # The temporary default-bound loss performs all shared construction
-        # validation without becoming the run's loss. Setup still requires a
-        # loss supplied by the caller.
-        GRPOPolicyLoss(
+        # The default-bound loss performs all shared construction validation
+        # and is kept as this binding's objective: the tensor trainer reads
+        # ``_objective`` for the declared axes (ratio scope, clip bounds,
+        # reduction, advantage estimator, kl weight). Setup still requires a
+        # loss supplied by the caller and refuses any that disagrees with
+        # the declarations made here, so the stored instance doubles as the
+        # record of those declarations.
+        self._objective = GRPOPolicyLoss(
             group_size=group_size,
             clip_low=clip_low,
             clip_high=clip_high,
