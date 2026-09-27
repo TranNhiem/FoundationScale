@@ -191,6 +191,15 @@
         ]
       },
       "description": "explicit ordering of the selected stages"
+    },
+    "method": {
+      "type": "string",
+      "enum": [
+        "full",
+        "lora",
+        "qlora"
+      ],
+      "description": "operator override of the training method; the rules still run and the override is logged"
     }
   }
 }

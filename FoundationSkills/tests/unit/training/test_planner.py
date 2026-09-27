@@ -94,7 +94,7 @@ def patched(monkeypatch):
         planner,
         "select_method",
         lambda **kw: SimpleNamespace(
-            method=("lora" if kw["stage"] in ("sft", "preference") else "full"),
+            method=kw.get("prefer") or ("lora" if kw["stage"] in ("sft", "preference") else "full"),
             because=["fixture method rule"],
             alternatives=[],
         ),
@@ -258,3 +258,29 @@ def test_goal_stages_in_lifecycle_order_without_overrides(patched, monkeypatch) 
 def test_goal_stages_invalid_refuses(patched, bad) -> None:
     with pytest.raises(PlanningRefusal, match="goal.stages"):
         planner.plan(_goal(stages=bad), caps=_fake_caps())
+
+
+def test_goal_method_overrides_rules_and_logs_why(patched, monkeypatch) -> None:
+    monkeypatch.setattr(planner, "load_stage_rules", _override_rules)
+    ruled = planner.plan(_goal(stages=["sft"]), caps=_fake_caps())
+    rule_method = ruled["stages"][0]["method"]
+    forced = "full" if rule_method != "full" else "lora"
+    payload = planner.plan(_goal(stages=["sft"], method=forced), caps=_fake_caps())
+    assert payload["stages"][0]["method"] == forced
+    override = [d for d in payload["decisions"] if d["step"] == "operator_override" and "method" in d["choice"]]
+    assert len(override) == 1 and f"chose {rule_method}" in override[0]["because"]
+
+
+@pytest.mark.parametrize("bad", ["adapter", 1, ""])
+def test_goal_method_invalid_refuses(patched, bad) -> None:
+    with pytest.raises(PlanningRefusal, match="goal.method"):
+        planner.plan(_goal(method=bad), caps=_fake_caps())
+
+
+def test_lora_rank_reaches_the_memory_estimate(patched, monkeypatch) -> None:
+    seen: list[int] = []
+    real = planner.estimate_memory
+    monkeypatch.setattr(planner, "estimate_memory", lambda *a, **kw: (seen.append(kw.get("lora_rank")), real(*a, **kw))[1])
+    monkeypatch.setattr(planner, "_recipe_stage_hparams", lambda raw, stage: {"lora_rank": 64})
+    planner.plan(_goal(stages=["sft"]), caps=_fake_caps())
+    assert seen and set(seen) == {64}

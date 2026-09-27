@@ -576,6 +576,19 @@ def plan(
         rule_choice = select_method(goal=goal_kinds[0], stage=stage, data_tokens=tokens, variant=variant,
                                     hardware=hw, gpus=gpus_for_stage, prefer=None)
         rule_method = str(_get(rule_choice, "method", "full"))
+        if goal.get("method") is not None:
+            # Operator override: the rules still run so the log says what they wanted and why.
+            requested = goal.get("method")
+            if requested not in ("full", "lora", "qlora"):
+                raise PlanningRefusal(f"missing input: goal.method must be one of full|lora|qlora (got {requested!r})")
+            forced = select_method(goal=goal_kinds[0], stage=stage, data_tokens=tokens, variant=variant,
+                                   hardware=hw, gpus=gpus_for_stage, prefer=requested)
+            forced_method = str(_get(forced, "method", requested))
+            if forced_method != rule_method:
+                decide("operator_override", f"{stage}: method {forced_method}",
+                       f"goal.method={requested!r} overrides the rules, which chose {rule_method}: "
+                       f"{'; '.join(_get(rule_choice, 'because', []) or [])}")
+            rule_choice, rule_method = forced, forced_method
         adapter_ok = (caps.rl_adapter_support if stage == "rl" else
                       caps.pref_adapter_support if stage == "preference" else True)
         if stage in ("rl", "preference") and rule_method in ("lora", "qlora") and adapter_ok is not True:
@@ -706,6 +719,7 @@ def plan(
             sharding=sharding if sharding in ("ddp", "fsdp") else "fsdp",
             grad_ckpt=grad_ckpt,
             world=gpus_for_stage,
+            lora_rank=int(_first("lora_rank", "lora_r", default=16)),
             reference_copy=(stage == "preference" and "reference_model" in _card_requires(algorithm)),
             optimizer="host_adamw" if stage in ("rl", "preference") else "adamw",
         )
