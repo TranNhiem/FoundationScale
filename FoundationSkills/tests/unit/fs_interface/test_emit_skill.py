@@ -164,3 +164,19 @@ def test_must_fire_fs_ho_003_rl_single_device_info(tmp_path):
     info = [f for f in result.findings if f.rule_id == "FS-HO-003"]
     assert len(info) == 1
     assert info[0].severity.value == "INFO"
+
+
+def test_infeasible_plan_stage_is_never_executable(tmp_path):
+    stage = {**good_stage(), "feasibility": {"verdict": "infeasible", "findings": [
+        {"rule_id": "TR-FEAS-001", "passed": False, "detail": "memory 245.8 GB/GPU = 130.1% of 189 GB"}]}}
+    result = TrainingEmitSkill().execute(base_request(tmp_path, [stage]), ctx_for(tmp_path, make_caps()))
+    spec = result.payload["specs"][0]
+    assert spec["executable"] is False
+    assert "plan infeasible: memory 245.8 GB/GPU" in spec["missing"]
+    assert result.status is Status.RED  # FS-HO-002: the only spec is non-executable
+
+
+def test_feasible_plan_stage_stays_executable(tmp_path):
+    stage = {**good_stage(), "feasibility": {"verdict": "ok", "findings": []}}
+    result = TrainingEmitSkill().execute(base_request(tmp_path, [stage]), ctx_for(tmp_path, make_caps()))
+    assert result.payload["specs"][0]["executable"] is True

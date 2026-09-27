@@ -238,6 +238,15 @@ class TrainingEmitSkill(BaseSkill):
             if chain_missing:
                 spec = {**spec, "executable": False,
                         "missing": "; ".join(m for m in (spec.get("missing"), chain_missing) if m)}
+            # A stage the planner judged infeasible (e.g. memory > GPU) is never
+            # executable: launching it only buys a measured OOM (measured 2026-09-27).
+            feas = stage.get("feasibility") or {}
+            if feas.get("verdict") == "infeasible":
+                blocked = [str(f.get("detail")) for f in feas.get("findings") or []
+                           if isinstance(f, dict) and f.get("passed") is False]
+                reason = "plan infeasible: " + ("; ".join(blocked) or "stage feasibility verdict is infeasible")
+                spec = {**spec, "executable": False,
+                        "missing": "; ".join(m for m in (spec.get("missing"), reason) if m)}
             previous = {"name": stage_name, "kind": str(stage.get("stage")),
                         "method": str(stage.get("method") or "full"), "output_dir": output_dir}
             artifact = Artifact(
