@@ -70,9 +70,15 @@ def _score(recipe: Recipe, q: RecipeQuery) -> RecipeMatch | None:
 
     r_stage = idx.get("stage")
     if q.stage is not None:
-        if r_stage != q.stage:
+        # A multi-stage recipe (e.g. SFT then RL) is indexed by one stage; its other
+        # stages must stay reachable, or an SFT query ports another family's recipe.
+        sub_stages = {s.get("stage") for s in recipe.stages if isinstance(s, dict)}
+        if r_stage == q.stage:
+            reasons.append(f"stage exact (hard key): {q.stage}")
+        elif q.stage in sub_stages:
+            reasons.append(f"stage {q.stage} is a stage of this {r_stage} recipe (hard key)")
+        else:
             return None  # hard key
-        reasons.append(f"stage exact (hard key): {q.stage}")
     r_arch = idx.get("arch")
     if q.arch is not None:
         if r_arch != q.arch:

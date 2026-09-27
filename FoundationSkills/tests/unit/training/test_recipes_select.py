@@ -121,3 +121,19 @@ def test_rank_is_deterministic_on_ties() -> None:
 def test_no_candidates_returns_none_for_select() -> None:
     q = RecipeQuery(stage="rl")
     assert select_recipe(q, recipes=[]) is None
+
+
+def test_sub_stage_of_multi_stage_recipe_is_reachable():
+    import dataclasses
+    rl = dataclasses.replace(make_recipe("sft-then-rl", stage="rl"),
+                             stages=({"stage": "sft"}, {"stage": "rl"}))
+    other = make_recipe("other-family-sft", family="otherfam")
+    match = select_recipe(perfect_query(), recipes=[rl, other])
+    assert match is not None and match.recipe.id == "sft-then-rl"
+    assert any("stage sft is a stage of this rl recipe" in r for r in match.reasons)
+
+
+def test_stage_absent_from_recipe_stays_a_hard_miss():
+    import dataclasses
+    rl = dataclasses.replace(make_recipe("rl-only", stage="rl"), stages=({"stage": "rl"},))
+    assert select_recipe(perfect_query(), recipes=[rl]) is None
