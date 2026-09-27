@@ -38,8 +38,11 @@ Scope: FoundationSkills against FoundationScale `origin/main` 77bfa65 (plus this
 | `fskills-rl` Dr.GRPO, E4B base | driver | **REFUSED 96**: base checkpoint has no chat template | expected; this is why stage chaining exists (F4) |
 | `fskills-rl` Dr.GRPO, E4B-it, ARC-Easy MCQ, 6 steps | driver | **UNMEASURED 95**: rewards saturated on 5 of 6 steps; no checkpoint (FoundationScale saves none) | the RL loop runs on GB200: generation, scoring, advantages |
 | **Domain CPT**, recipe `gemma4-e4b-domain-cpt-full`, FSDP×3, b2 ga8 seq 4096, 349 steps (2.93 epochs) over a 17.1M-token FinePDFs misaki mix (75% domain / 25% general replay, Data Engine PASS) | **`fskills launch`** with `goal.stages=[cpt]` (r04dgx03, hold 2483) | **PASS**; save gates 4/4; run `fskills-cpt-7f82fbc5`. **Recipe promoted to `validated`** | loss 1.87 → 1.39, with a step down at each epoch boundary (multi-epoch memorisation on a small corpus; eval not measured); ~3,100 tokens/s/GPU; 85.9 GB/GPU peak allocated vs 84.2 planned |
+| Recipe `gemma4-31b-math-sft-lora` (31b-it, rank 32), FSDP×3 | `fskills launch` (r04dgx03) | **RED 5** from FoundationScale: `Could not find the transformer layer class to wrap in the model` | FS FSDP cannot wrap Gemma-4 31B dense either; the 31B variants now carry `fs_fsdp: false` |
+| Recipe `gemma4-31b-math-sft-lora`, **DDP**×3, 30 steps, over 20,289 medical-reasoning SFT rows | **`fskills launch`** (r04dgx03) | **PASS**; save gates 4/4; run `fskills-sft-be2be28b`, commit `e95bdc3`. **Recipe promoted to `validated`** | loss 2.90 → 1.07; ~790 tokens/s/GPU; 103.1 GB/GPU allocated vs 115.0 planned (+12%) |
+| Recipe `gemma4-12b-general-chat-sft-full` (12B-it, `goal.method=full`), FSDP×4, 30 steps, same SFT rows | **`fskills launch`** (r04dgx06) | **RED 5** from FoundationScale gates `checkpoint.save_complete` → `checkpoint.first_save`. Training itself ran: 30/30 steps. Recipe stays `literature` | loss 1.93 → 0.93; 5,433 tokens/s (~1,360/GPU); no peak-allocated telemetry (the run stopped at the gate); ~113 GB/GPU reserved (nvidia-smi) vs 91.6 GB allocated planned. The checkpoint is complete (677/677 base tensors plus an untied `lm_head`): the gate misses 10 renamed vision-embedder tensors (core gap 13) |
 
-## 4. Estimator calibration (Gemma-4 E4B on GB200)
+## 4. Estimator calibration (Gemma-4 on GB200)
 
 | Configuration | Estimate | Measured | Note |
 |---|---|---|---|
@@ -47,6 +50,7 @@ Scope: FoundationSkills against FoundationScale `origin/main` 77bfa65 (plus this
 | LoRA, FSDP×4, b2, grad ckpt | 41 GB/GPU | 37.7 GB | +9% |
 | LoRA, FSDP×4, b4, grad ckpt | 75.8 GB/GPU | 75.9 GB | 0% |
 | full FT, FSDP×3, b2, grad ckpt (held out, CPT 2026-09-27) | 84.2 GB/GPU | 85.9 GB | −2%; reserved 114.4 GB |
+| LoRA r32, **DDP**×3, Gemma-4 31B-it (held out, 2026-09-27) | 115.0 GB/GPU | 103.1 GB | +12% (conservative) |
 | full FT, FSDP b1 grad ckpt, throughput | 2,882 tokens/s/GPU | ~2,900 (from FoundationScale's 69.7 TF/s) | measured MFU point 4.6% |
 
 The logits term (14 bytes per s·b·V element) was fitted to these three points and is pinned by a test. The hardware profile stores **measured MFU points by configuration**: DDP b2 31.8%, FSDP b1 grad ckpt 4.6%, LoRA FSDP b2 1.5%. The estimator uses the nearest point and flags any extrapolation as `derived`.
@@ -82,6 +86,8 @@ All figures are torch **peak allocated** memory. Reserved memory (what nvidia-sm
 | F22 | `max_steps` was derived in tokens, but FoundationScale does not pack across rows, so the run was short of the planned epochs; steps are now counted in rows when the dataset reports its counts | CPT on GB200 |
 | F23 | direct launches kept output in memory, so a multi-hour run showed no progress until it ended; output now streams to `fskills_launch.log` | CPT on GB200 |
 | F24 | a mixed dataset came back UNMEASURED (DE-RDY-006: PII never measured on the replay component); a `clean` after `mix` measures both | real data |
+| F25 | the rules chose LoRA for a <50M-token SFT corpus with no way to ask for full FT, so the 12B full-SFT recipe could not be reached; `goal.method` (full/lora/qlora) now overrides and logs an `operator_override` decision | 12B recipe planning |
+| F26 | the memory estimate always assumed LoRA rank 16, whatever the plan's `lora_rank`; the rank now reaches the estimator | 31B rank-32 planning |
 
 ## 5b. Knowledge from the FoxBrain campaigns
 
@@ -104,5 +110,7 @@ Megatron-specific lessons are kept there for a future Megatron backend.
 9. FSDP auto-wrap for Gemma-4 MoE (26B-A4B): refused with "Could not find the transformer layer class to wrap".
 11. Neither `RLTrainer` nor `PreferenceTrainer` accepts LoRA/adapters (no config field; measured): RL and preference stages train the full model on one GPU (fp32 masters on the host). `PreferenceTrainer` also persists no checkpoint, and reads one JSONL file (the driver concatenates shards).
 10. MoE MFU for Gemma-4: FS reads experts-per-token only from `num_experts_per_tok`, `num_experts_per_token` or `top_k`; Gemma-4 uses `top_k_experts` (#529).
+12. FSDP auto-wrap for Gemma-4 **31B dense** (`gemma-4-31b-it`): same refusal as 9 (measured 2026-09-27). The planner falls back to DDP via the family flag `fs_fsdp: false`; 12B and E4B wrap fine.
+13. `checkpoint.save_complete` (`gates/checkpoint_gates.py`) compares in-memory parameter names with saved safetensors names without transformers' checkpoint key mapping. For `gemma4_unified` (12B) 10 vision-embedder tensors are renamed on save (for example `model.embed_vision.patch_dense.weight` → `model.vision_embedder.patch_dense.weight`), so a complete checkpoint is judged incomplete and the run ends RED 5 (measured 2026-09-27, `runs/fskills_r3/train_12b`).
 
 The skills report each of these as `missing: ...` in plans and specs. They are never silently skipped.

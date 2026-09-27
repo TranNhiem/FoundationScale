@@ -61,4 +61,5 @@ provenance:
   status: literature
   evidence:
     - "Lambert et al. 2024, Tulu 3, arXiv:2411.15124"
+    - "ATTEMPTED 2026-09-27 (not promoted): 4x GB200 FSDP full FT, 30 steps (runs/fskills_r3/train_12b) trained cleanly -- loss 1.93->0.93, ~1,360 tok/s/GPU, ~113 GB/GPU reserved vs 91.6 GB allocated planned -- but FS ended RED 5: checkpoint.save_complete misses 10 gemma4_unified vision-embedder tensors renamed on save (FS core gap; the checkpoint itself is complete)"
   validated_on: null
