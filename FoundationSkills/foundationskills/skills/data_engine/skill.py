@@ -34,10 +34,13 @@ from foundationskills.core.provenance import make_provenance, sha256_json
 from foundationskills.core.status import Status
 from foundationskills.skills.data_engine.catalog import discover
 from foundationskills.skills.data_engine.mix import design_mixture
+from foundationskills.skills.data_engine.llm_backend import LLMOpError
 from foundationskills.skills.data_engine.phase2 import PHASE2, Phase2NotImplemented
 from foundationskills.skills.data_engine.pipeline import PipelineError, run_pipeline
 from foundationskills.skills.data_engine.recommend import FORMATS, recommend_pipeline
 from foundationskills.skills.data_engine.report import build_readiness
+
+_LLM_OPS = ("llm_classify", "llm_enhance")
 
 LOCAL_KINDS = {"local_dir", "jsonl", "json", "parquet", "csv", "documents", "image_text"}
 _PREFERENCE_ALGOS = ("dpo", "ipo", "kto", "orpo", "simpo", "cpo", "online_dpo", "iterative_dpo")
@@ -80,6 +83,7 @@ class DataEngineSkill(BaseSkill):
         RuleSpec("DE-IN-004", "a phase-2 op was requested; capability not implemented", Severity.BLOCK, "input"),
         RuleSpec("DE-IN-005", "sft/mm_sft without a chat_template_family or tokenizer", Severity.WARN, "input"),
         RuleSpec("DE-IN-006", "preference dataset requested but FS cannot train the preference family", Severity.WARN, "input"),
+        RuleSpec("DE-IN-007", "an LLM op (llm_classify/llm_enhance) has no usable inference backend", Severity.BLOCK, "input"),
         RuleSpec("DE-HO-001", "readiness verdict is RED", Severity.BLOCK, "handoff"),
         RuleSpec("DE-HO-002", "readiness verdict is UNMEASURED; some checks were not run", Severity.WARN, "handoff"),
         RuleSpec("DE-HO-003", "zero records were written", Severity.BLOCK, "handoff"),
@@ -134,6 +138,18 @@ class DataEngineSkill(BaseSkill):
                             "remove the phase-2 op or implement the phase-2 capability first",
                         )
                     )
+                elif op_name in _LLM_OPS:
+                    backend = ((step or {}).get("config") or {}).get("backend")
+                    kind = backend.get("kind") if isinstance(backend, dict) else None
+                    if not kind or kind == "none":
+                        findings.append(
+                            self.finding(
+                                "DE-IN-007",
+                                f"{op_name}: missing input: config.backend (got {backend!r}); LLM ops have no heuristic fallback",
+                                {"op": op_name, "backend": backend},
+                                "set config.backend, e.g. {kind: openai_compatible, base_url, model} for a vLLM/Kimi endpoint",
+                            )
+                        )
 
         for source in sources:
             kind = str((source or {}).get("kind", ""))
@@ -224,6 +240,9 @@ class DataEngineSkill(BaseSkill):
                 "remove the phase-2 op from the spec",
             )
             return SkillResult(status=Status.REFUSED, payload={}, findings=(finding,), refusal=f"phase-2: {op_name}")
+        except LLMOpError as exc:
+            finding = self.finding("DE-IN-007", str(exc), {}, "fix the LLM backend configuration named in the message")
+            return SkillResult(status=Status.REFUSED, payload={}, findings=(finding,), refusal=str(exc))
         except PipelineError:
             raise  # a measured spec failure: RED via CORE-EXC with the diagnosis below
 
@@ -414,6 +433,23 @@ class DataEngineSkill(BaseSkill):
                         "ops": [
                             {"op": "ingest", "config": {"sources": src("{tmp}/corpus.jsonl", "jsonl")}},
                             {"op": "semantic_dedup", "config": {}},
+                        ],
+                    },
+                },
+                "files": {"corpus.jsonl": one_record},
+            },
+            "DE-IN-007": {
+                "request": {
+                    "target_format": "pretrain",
+                    "sources": src("{tmp}/corpus.jsonl", "jsonl"),
+                    "pipeline": {
+                        "target_format": "pretrain",
+                        "seed": 0,
+                        "tokenizer": None,
+                        "rationale": [],
+                        "ops": [
+                            {"op": "ingest", "config": {"sources": src("{tmp}/corpus.jsonl", "jsonl")}},
+                            {"op": "llm_classify", "config": {"axes": [{"name": "q", "description": "quality", "scale": [0, 5]}]}},
                         ],
                     },
                 },

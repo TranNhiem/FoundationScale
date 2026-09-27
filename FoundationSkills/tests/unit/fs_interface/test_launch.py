@@ -125,3 +125,17 @@ def test_no_submit_runs_argv_directly(tmp_path):
     assert runner.calls[1][0][0] == "python"
     # no sbatch file was written under no-submit
     assert not (tmp_path / "out" / "launch-sft1.sbatch").exists()
+
+
+def test_real_runner_streams_log_to_disk_and_recovers_verdict(tmp_path):
+    import sys
+
+    spec = make_spec(tmp_path)
+    child = "import sys; print('step 1 loss 2.5', flush=True); print('warn', file=sys.stderr); print('[fs:train:done] UNMEASURED: no mfu'); sys.exit(1)"
+    spec["argv"] = [sys.executable, "-c", child]
+    spec["dry_run_argv"] = None
+    result = launch(spec, confirm=plan_hash(spec), submit=False)
+    log = (tmp_path / "out" / "fskills_launch.log").read_text()
+    assert result["log"] == str(tmp_path / "out" / "fskills_launch.log")
+    assert "step 1 loss 2.5" in log and "warn" in log  # stdout and stderr both land in the live log
+    assert result["returncode"] == 95 and result["returncode_raw"] == 1

@@ -196,6 +196,37 @@ def _evaluate_stage_rules(rules: list[dict], ctx: dict) -> tuple[list[dict], lis
     return remaining, fired
 
 
+def _apply_operator_stages(requested: Any, selected: list[dict], rules: list[dict],
+                           fired: list[str], decide: Any) -> list[dict]:
+    """``goal.stages``: the operator's explicit stage set replaces the rule
+    selection. Every disagreement with the rules is logged as an
+    ``operator_override`` decision quoting the rule's reason, never hidden."""
+    if not isinstance(requested, list) or not requested or not all(isinstance(s, str) for s in requested):
+        raise PlanningRefusal(f"missing input: goal.stages must be a non-empty list of stage names, got {requested!r}")
+    unknown = [s for s in requested if s not in _LIFECYCLE_RANK]
+    if unknown:
+        raise PlanningRefusal(f"missing input: goal.stages has unknown stage(s) {unknown}; known: {list(_LIFECYCLE_RANK)}")
+    by_stage = {a["stage"]: a for a in selected}
+    rule_by_id = {str(r.get("id")): r for r in rules}
+    out: list[dict] = []
+    for stage in sorted(dict.fromkeys(requested), key=lambda s: _LIFECYCLE_RANK[s]):
+        if stage in by_stage:
+            out.append(by_stage[stage])
+            continue
+        skip_ids = [f.split(":")[0] for f in fired if f.endswith(f":-{stage}")]
+        why = "; ".join(str(rule_by_id[i].get("because", "")) for i in skip_ids if i in rule_by_id)
+        decide("operator_override", f"+{stage}",
+               f"operator requested {stage} against the stage rules ({', '.join(skip_ids) or 'no rule added it'})"
+               + (f": {why}" if why else ""))
+        out.append({"stage": stage, "name": stage, "rule_id": "operator", "algorithm_hint": None,
+                    "because": f"operator requested {stage} via goal.stages"})
+    for stage, sel in by_stage.items():
+        if stage not in requested:
+            decide("operator_override", f"-{stage}",
+                   f"operator omitted {stage} that rule {sel.get('rule_id', '?')} added: {sel.get('because', '')}")
+    return out
+
+
 def _synthesize_variant(base_model: dict) -> tuple[Any, Any, str | None]:
     """Fallback model description from goal facts. Returns (family, variant, note)."""
     size_b = base_model.get("size_b")
@@ -491,6 +522,8 @@ def plan(
         "preserve_general": preserve_general,
     }
     selected, fired = _evaluate_stage_rules(rules, rule_ctx)
+    if goal.get("stages") is not None:
+        selected = _apply_operator_stages(goal.get("stages"), selected, rules, fired, decide)
     if not selected:
         raise PlanningRefusal(
             "no stage selected: "

@@ -60,6 +60,7 @@ counters and the realized mixture.
 | DE-IN-004 | input | BLOCK | a phase-2 op name appears in the spec → REFUSED `phase-2: <op>` |
 | DE-IN-005 | sft/mm_sft | WARN | chat_template_family or tokenizer missing |
 | DE-IN-006 | input | WARN | preference target while the installed FS cannot run the preference family |
+| DE-IN-007 | input | BLOCK | `llm_classify`/`llm_enhance` without a usable `config.backend` (static), or a backend config error at run time → REFUSED |
 | DE-HO-001 | handoff | BLOCK | readiness verdict is RED |
 | DE-HO-002 | handoff | WARN | readiness verdict is UNMEASURED (null checks listed) |
 | DE-HO-003 | handoff | BLOCK | zero records written |
@@ -81,7 +82,8 @@ readiness_report artifact `checks` for per-rule details.)
 
 ## Failure handling
 - REFUSED: unknown format (DE-IN-002), missing local files (DE-IN-003), no
-  sources (DE-IN-001), phase-2 op (DE-IN-004) — fix the request, not the data.
+  sources (DE-IN-001), phase-2 op (DE-IN-004), LLM op without a backend
+  (DE-IN-007) — fix the request, not the data.
 - RED: readiness failure (DE-HO-001) or empty output (DE-HO-003). Read
   `out_dir/stats.json`: every op reports `dropped` by reason, so find which
   stage ate the records (usually strict `clean`/`quality` thresholds).
@@ -143,11 +145,37 @@ readiness_report artifact `checks` for per-rule details.)
    the emit skill turns this into an `fskills-rl` config for the runnable
    dr_grpo/gspo/dapo family.
 
+## LLM-based ops
+Model-based processing for what heuristics cannot see (semantics, grounding,
+correctness). Both ops call a pluggable backend (`llm_backend.py`):
+`{kind: openai_compatible, base_url, model, api_key_env?, extra_body?, cache_dir?}`
+serves a local vLLM server on GB200 (the corpus-scale default) or the Kimi-K3
+endpoint (small sets only: it is shared and slow). There is no heuristic
+fallback: no backend refuses (DE-IN-007). Responses are cached by content hash,
+calls run through an order-preserving thread pool, `max_calls` caps the spend,
+and every touched record gets `meta.llm` provenance (model, prompt hash, cache hit).
+- `llm_classify` — rubric axes (categorical `labels` or ordinal `scale`) →
+  `meta.llm_labels`. An invalid or failed label is `None` and counted
+  unmeasured, never guessed; `filters` drop by label, never on `None` unless
+  `drop_unmeasured`. `sample.rate` labels a deterministic subset: the annotate
+  half of annotate-then-distill (FineWeb-Edu) for corpus scale.
+- `llm_enhance` — `mode`:
+  - `rephrase` (WRAP / Nemotron-CC), additive by default;
+  - `qa_synth`, document-grounded Q&A → SFT rows;
+  - `reasoning_trace`, kept only when the final answer matches the gold;
+  - `judge`, pointwise 1–5 for SFT, order-swapped pairwise for preference, with
+    position consistency reported.
+
+  Every synthetic output passes a measured grounding check (content-word overlap
+  with its source ≥ `min_overlap`), or it is dropped as `ungrounded`.
+
+Design record and survey: `artifacts/research/llm_data_engine.md`.
+
 ## Phase 2
 Declared (via `data_engine.phase2.PHASE2`) but NOT implemented; selecting any
 of these op names refuses with `phase-2: <name>`:
 - `semantic_dedup` — embedding-based near-dedup.
-- `synthesize` — teacher-model synthetic data generation.
+- `synthesize` — superseded by `llm_enhance`; kept as a refusing name.
 - `toolcall_format` — tool-calling trace normalization (tool_calling goals are
   flagged in mixtures for this reason).
 - `video_ingest` — video → text records (frames + ASR alignment).

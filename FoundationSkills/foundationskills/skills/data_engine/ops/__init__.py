@@ -16,6 +16,8 @@ from foundationskills.skills.data_engine.ops import decontam
 from foundationskills.skills.data_engine.ops import dedup
 from foundationskills.skills.data_engine.ops import format
 from foundationskills.skills.data_engine.ops import ingest
+from foundationskills.skills.data_engine.ops import llm_classify
+from foundationskills.skills.data_engine.ops import llm_enhance
 from foundationskills.skills.data_engine.ops import mix
 from foundationskills.skills.data_engine.ops import quality
 from foundationskills.skills.data_engine.ops import tokenize
@@ -33,4 +35,6 @@ __all__ = [
     "format",
     "tokenize",
     "mix",
+    "llm_classify",
+    "llm_enhance",
 ]

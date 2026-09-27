@@ -1,0 +1,69 @@
+id: gemma4-e4b-domain-cpt-full
+version: 1.0.0
+title: Gemma-4 E4B domain continued pretraining (full fine-tune)
+index:
+  family: gemma4
+  size_b: [3.0, 10.0]
+  arch: dense
+  stage: cpt
+  goal: domain_expert
+  domain: any
+  method: full
+  hardware: [gb200-189gb]
+data:
+  format: cpt
+  min_tokens: 10000000
+  recommended_tokens: 2000000000
+  min_examples: null
+  recommended_examples: null
+  mixture:
+    domain: 0.75
+    general_replay: 0.25
+stages:
+  - name: domain-cpt
+    stage: cpt
+    algorithm: causal_lm
+    hparams:
+      learning_rate: 2.0e-5
+      warmup_ratio: 0.01
+      epochs: 1
+    fs:
+      entry: foundationscale-train
+      args:
+        objective: sft
+        sharding-strategy: fsdp
+        precision: bf16
+        optimizer: adamw_torch_fused
+        per-device-batch-size: 2
+        gradient-accumulation-steps: 8
+        gradient-checkpointing: true
+        learning-rate: 2.0e-5
+        lr-scheduler-type: cosine
+        max-sequence-length: 4096
+        max-grad-norm: 1.0
+        save-interval: 500
+        logging-steps: 10
+        seed: 0
+hardware:
+  min_gpus: 4
+  gpu_mem_gb: 80
+  est_gpu_hours: null
+evaluation:
+  benchmarks: [domain_heldout_ppl, mmlu]
+  success: "held-out domain perplexity down with MMLU within 1 point of the base"
+risks:
+  - "catastrophic forgetting without general replay (keep 15-30%; FinePDFs Textbook slices work as replay)"
+  - "Gemma-4 E4B per-layer embeddings inflate total params (~8B) vs ~4B effective: memory follows total, FLOPs follow active"
+provenance:
+  status: validated
+  evidence:
+    - "Ibrahim et al. 2024, Simple and Scalable Strategies to Continually Pre-train Large Language Models (arXiv:2403.08763): LR rewarm + re-decay, replay"
+    - "FoundationSkills GB200 calibration 2026-09-26: E4B full FT FSDP x4 fits (48 GB at b1, grad ckpt)"
+    - "FoundationSkills validation 2026-09-27: goal.stages=[cpt] -> planned, emitted and launched by fskills launch on 3x GB200 (FSDP, b2 ga8 seq 4096) over a 17.1M-token FinePDFs misaki domain/general mix (75/25); 349 steps, 2.93 epochs, 6,455 s; FS verdict PASS, save gates 4/4; loss 1.87 -> 1.39; ~3,100 tokens/s/GPU; peak 108.4 GiB/GPU (nvidia-smi reserved) vs 84.2 GB planned -- estimator ~22-29% low at b2"
+    - "SCOPE: runs correctly on FoundationScale; loss steps down at each epoch boundary (multi-epoch memorisation on a small corpus) and domain/general eval is NOT yet measured"
+  validated_on:
+    fs_commit: a29a02360ce8230cdb078daf21ac2fb9fb2b0436
+    hardware: gb200-189gb
+    run_id: fskills-cpt-7f82fbc5
+    date: "2026-09-27"
+    run_manifest: /home/hhri-ai/hh28144/Project-Developments/FoundationScale/runs/fskills_r3/train_cpt/fskills-cpt/run_manifest.json

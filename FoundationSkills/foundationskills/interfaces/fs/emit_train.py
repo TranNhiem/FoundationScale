@@ -143,10 +143,15 @@ def _fmt(value: Any) -> str:
     return str(value)
 
 
-def _derive_max_steps(stage: dict[str, Any], hparams: dict[str, Any], dp: int) -> int | None:
+def _derive_max_steps(stage: dict[str, Any], hparams: dict[str, Any], dp: int,
+                      dataset: dict[str, Any] | None = None) -> int | None:
     """Steps = total training tokens / tokens per step. ``hparams.tokens`` (or a
     CPT ``token_budget``) is already a TOTAL; stage data tokens are ONE pass and
-    are multiplied by ``epochs`` (a real plan emitted 1 epoch for a 2-epoch recipe)."""
+    are multiplied by ``epochs`` (a real plan emitted 1 epoch for a 2-epoch recipe).
+
+    With dataset ``num_records``/``num_tokens`` the count is in ROWS: FS consumes
+    one row per sample and never packs across rows, so short rows make a
+    token-derived count overshoot (a real CPT plan asked 4 epochs and got 3)."""
     if hparams.get("max_steps") is not None:
         return int(hparams["max_steps"])
     tokens = hparams.get("tokens") or hparams.get("token_budget")
@@ -160,6 +165,11 @@ def _derive_max_steps(stage: dict[str, Any], hparams: dict[str, Any], dp: int) -
     micro = max(1, int(_hp(hparams, "per-device-batch-size") or 1))
     seq = max(1, int(_hp(hparams, "max-sequence-length") or 2048))
     ga = max(1, int(_hp(hparams, "gradient-accumulation-steps") or 1))
+    records = (dataset or {}).get("num_records")
+    data_tokens = (dataset or {}).get("num_tokens")
+    if records and data_tokens:
+        rows = float(tokens) / float(data_tokens) * float(records)
+        return max(1, math.ceil(rows / (micro * ga * max(1, dp))))
     return max(1, math.ceil(float(tokens) / (micro * seq * ga * max(1, dp))))
 
 
@@ -240,11 +250,15 @@ def emit_train(
             and dataset.get("num_tokens"):
         hparams["tokens"] = int(float(hparams["epochs"]) * int(dataset["num_tokens"]))
         notes.append(f"tokens = epochs {hparams['epochs']} x dataset num_tokens {dataset['num_tokens']:,}")
-    max_steps = _derive_max_steps(stage, hparams, dp)
+    max_steps = _derive_max_steps(stage, hparams, dp, dataset)
     if max_steps is not None:
         pairs.append(("max-steps", max_steps))
         if "max_steps" not in hparams:
-            notes.append(f"max_steps derived from tokens/(micro_batch x seq_len x grad_accum x dp) = {max_steps}")
+            if dataset.get("num_records") and dataset.get("num_tokens"):
+                notes.append(f"max_steps derived in rows: tokens/num_tokens x num_records {dataset['num_records']:,}"
+                             f" / (micro_batch x grad_accum x dp) = {max_steps} (FS does not pack across rows)")
+            else:
+                notes.append(f"max_steps derived from tokens/(micro_batch x seq_len x grad_accum x dp) = {max_steps}")
 
     for flag in _HPARAM_ALIASES:
         value = _hp(hparams, flag)

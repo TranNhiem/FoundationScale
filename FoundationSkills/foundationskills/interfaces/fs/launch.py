@@ -110,10 +110,19 @@ def launch(
         if not argv:
             raise LaunchRefused("launch refused: spec.argv is empty and no sbatch path applies")
         command = shlex.join(argv)
-        completed = runner(argv, capture_output=True, text=True, check=False, **run_kwargs)
+        live_log = _launch_log_path(spec) if runner is subprocess.run else None
+        if live_log is not None:
+            # Stream to disk as the run goes: a multi-hour run captured in memory
+            # is unobservable until it ends (no step, loss or throughput to watch).
+            with live_log.open("w", encoding="utf-8") as fh:
+                completed = runner(argv, stdout=fh, stderr=subprocess.STDOUT, text=True, check=False, **run_kwargs)
+            output = live_log.read_text(encoding="utf-8", errors="replace")
+            log_path: str | None = str(live_log)
+        else:
+            completed = runner(argv, capture_output=True, text=True, check=False, **run_kwargs)
+            output = f"{getattr(completed, 'stdout', '') or ''}{getattr(completed, 'stderr', '') or ''}"
+            log_path = _write_launch_log(spec, output)
         returncode = int(completed.returncode)
-        output = f"{getattr(completed, 'stdout', '') or ''}{getattr(completed, 'stderr', '') or ''}"
-        log_path = _write_launch_log(spec, output)
         verdict = fs_verdict(output)
         extra = {"log": log_path, "tail": output.splitlines()[-40:], "fs_verdict": verdict}
         if verdict is not None and returncode not in (0, 5, 95, 96):
@@ -151,14 +160,25 @@ def fs_verdict(output: str) -> int | None:
     return 5
 
 
-def _write_launch_log(spec: dict[str, Any], output: str) -> str | None:
-    """Keep the full output next to the run (a failure with no log is undiagnosable)."""
+def _launch_log_path(spec: dict[str, Any]) -> Path | None:
+    """``fskills_launch.log`` next to the run, directory created; None when unwritable."""
     target_dir = spec.get("output_dir") or spec.get("cwd")
     if not target_dir:
         return None
     try:
         path = Path(str(target_dir)) / "fskills_launch.log"
         path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+    except OSError:
+        return None
+
+
+def _write_launch_log(spec: dict[str, Any], output: str) -> str | None:
+    """Keep the full output next to the run (a failure with no log is undiagnosable)."""
+    path = _launch_log_path(spec)
+    if path is None:
+        return None
+    try:
         path.write_text(output, encoding="utf-8")
         return str(path)
     except OSError:

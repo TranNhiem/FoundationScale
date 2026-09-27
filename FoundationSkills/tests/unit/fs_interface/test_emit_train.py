@@ -225,3 +225,14 @@ def test_qlora_not_executable(tmp_path):
     spec = call(stage, caps, dataset(tmp_path=tmp_path), tmp_path)
     assert spec["executable"] is False
     assert "qlora" in spec["missing"]
+
+
+def test_max_steps_counts_rows_when_dataset_has_counts():
+    # Real CPT run 2026-09-27: 5,562 rows / 17,131,785 tokens, 4-epoch budget, b2 x ga8 x dp3.
+    # The token formula gave 349 steps = 3.0 epochs of rows; rows give the 4 epochs asked for.
+    from foundationskills.interfaces.fs.emit_train import _derive_max_steps
+
+    hp = {"token_budget": 68_527_140, "per_device_batch_size": 2, "max_sequence_length": 4096,
+          "gradient_accumulation_steps": 8}
+    assert _derive_max_steps({}, dict(hp), 3) == 349
+    assert _derive_max_steps({}, dict(hp), 3, {"num_records": 5562, "num_tokens": 17_131_785}) == 464

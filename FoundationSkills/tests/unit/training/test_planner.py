@@ -228,3 +228,33 @@ def test_fs_refusal_marks_stage_non_executable(patched) -> None:
     payload = planner.plan(_goal(), caps=caps)
     assert all(s["executable"] is False for s in payload["stages"])
     assert all(s["missing"] for s in payload["stages"])
+
+
+def _override_rules() -> list[dict]:
+    return [
+        {"id": "ADD-SFT", "when": {}, "action": "add_stage", "stage": "sft", "algorithm_hint": None, "because": "always"},
+        {"id": "SKIP-CPT", "when": {}, "action": "skip_stage", "stage": "cpt", "algorithm_hint": None, "because": "too little data"},
+    ]
+
+
+def test_goal_stages_overrides_rules_and_logs_why(patched, monkeypatch) -> None:
+    monkeypatch.setattr(planner, "load_stage_rules", _override_rules)
+    payload = planner.plan(_goal(stages=["cpt"]), caps=_fake_caps())
+    assert [s["stage"] for s in payload["stages"]] == ["cpt"]
+    overrides = [d for d in payload["decisions"] if d["step"] == "operator_override"]
+    assert {d["choice"] for d in overrides} == {"+cpt", "-sft"}
+    added = next(d for d in overrides if d["choice"] == "+cpt")
+    assert "SKIP-CPT" in added["because"] and "too little data" in added["because"]
+
+
+def test_goal_stages_in_lifecycle_order_without_overrides(patched, monkeypatch) -> None:
+    monkeypatch.setattr(planner, "load_stage_rules", _override_rules)
+    payload = planner.plan(_goal(stages=["sft", "cpt", "sft"]), caps=_fake_caps())
+    assert [s["stage"] for s in payload["stages"]] == ["cpt", "sft"]
+    assert [d["choice"] for d in payload["decisions"] if d["step"] == "operator_override"] == ["+cpt"]
+
+
+@pytest.mark.parametrize("bad", [[], "cpt", ["cpt", "warmup"], [1]])
+def test_goal_stages_invalid_refuses(patched, bad) -> None:
+    with pytest.raises(PlanningRefusal, match="goal.stages"):
+        planner.plan(_goal(stages=bad), caps=_fake_caps())

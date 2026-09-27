@@ -43,7 +43,7 @@ class VideoTextIngest(Protocol):
 
 PHASE2: dict[str, str] = {
     "semantic_dedup": "embedding-based semantic near-deduplication (needs an embedding backend)",
-    "synthesize": "teacher-model synthetic data generation (needs an inference endpoint)",
+    "synthesize": "superseded by llm_enhance (modes rephrase/qa_synth/reasoning_trace/judge)",
     "toolcall_format": "tool-calling trace normalization to a target tool schema",
     "video_ingest": "video ingestion (frames + ASR transcript alignment) into text records",
 }
