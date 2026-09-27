@@ -284,3 +284,12 @@ def test_lora_rank_reaches_the_memory_estimate(patched, monkeypatch) -> None:
     monkeypatch.setattr(planner, "_recipe_stage_hparams", lambda raw, stage: {"lora_rank": 64})
     planner.plan(_goal(stages=["sft"]), caps=_fake_caps())
     assert seen and set(seen) == {64}
+
+
+def test_lora_cpt_scales_the_full_ft_lr_and_says_why(patched) -> None:
+    payload = planner.plan(_goal(stages=["cpt"], method="lora"), caps=_fake_caps())
+    cpt = next(s for s in payload["stages"] if s["stage"] == "cpt")
+    assert cpt["method"] == "lora"
+    assert cpt["hparams"]["learning_rate"] == pytest.approx(2e-5 * planner.LORA_LR_MULTIPLIER)
+    why = [d for d in payload["decisions"] if d["step"] == "hparams" and "learning_rate" in d["choice"]]
+    assert len(why) == 1 and "full-FT" in why[0]["because"]

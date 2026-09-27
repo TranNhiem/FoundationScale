@@ -50,6 +50,10 @@ PLANNING_STEPS: tuple[str, ...] = (
 )
 
 _METHODS = ("full", "lora", "qlora")
+# Adapters train best at ~10x the full-FT peak LR (Biderman et al. 2024,
+# arXiv:2405.09673; Schulman et al. 2025, "LoRA Without Regret"). The CPT policy's
+# LR table is full-FT; applied unscaled, a LoRA CPT barely moves.
+LORA_LR_MULTIPLIER = 10.0
 _KNOWN_GOALS = ("general_chat", "reasoning", "math", "code", "domain_expert", "tool_calling")
 _FORMAT_BY_STAGE = {"pretrain": "pretrain", "cpt": "cpt", "sft": "sft", "preference": "preference", "rl": "rl"}
 _VERDICT_ORDER = {"ok": 0, "warn": 1, "infeasible": 2}
@@ -669,9 +673,20 @@ def plan(
         else:
             hparams.update(_recipe_stage_hparams(recipe_raw, stage))
         if cpt is not None:
+            cpt_lr = cpt["lr"]
+            recipe_lr = _recipe_stage_hparams(recipe_raw, stage).get("learning_rate") if recipe_raw else None
+            if method in ("lora", "qlora"):
+                if recipe_lr is not None and (recipe_raw.get("index") or {}).get("method") == method:
+                    cpt_lr = float(recipe_lr)
+                    lr_because = f"{method} recipe {recipe_id} sets its own LR {cpt_lr:g}; the full-FT CPT table does not apply"
+                else:
+                    cpt_lr = float(f"{cpt['lr'] * LORA_LR_MULTIPLIER:.6g}")
+                    lr_because = (f"CPT table LR {cpt['lr']:g} is full-FT; {method} trains best at "
+                                  f"~{LORA_LR_MULTIPLIER:g}x (Biderman et al. 2024; Schulman et al. 2025)")
+                decide("hparams", f"{stage}: learning_rate {cpt_lr:g}", lr_because)
             hparams.update(
                 {
-                    "learning_rate": cpt["lr"],
+                    "learning_rate": cpt_lr,
                     "lr_scheduler_type": "cosine",
                     "warmup_ratio": cpt["schedule"]["warmup_ratio"],
                     "min_lr_ratio": cpt["schedule"]["min_lr_ratio"],
