@@ -61,7 +61,7 @@ from foundationscale.rl.interfaces import BatchRefusal, LossOutput
 from foundationscale.rl.prompt_surface import encode_prompts, resolve_prompt_surface
 from foundationscale.rl.registry import lookup_algorithm
 from foundationscale.rl.rewards import MCQLetterReward
-from foundationscale.rl.torch_backend import TensorPolicyLoss
+from foundationscale.rl.torch_backend import TensorPolicyLoss, TensorREINFORCELoss
 
 __all__ = (
     "RLTrainConfig",
@@ -388,6 +388,11 @@ class RLTrainer:
                 "budget is not meaningful; use 0 for the whole batch"
             )
         self.config = config
+        # reinforce_baseline's carried EMA state: None means UNSEEDED (no
+        # batch priced yet), never a baseline of 0.0. The tail seeds it from
+        # the first measured mean return and updates it only AFTER the step
+        # that priced against it. Other families never read this.
+        self._reinforce_baseline: float | None = None
 
     def _resolve_objective(self) -> Any:
         """Build the algorithm's objective instance from the registry entry.
@@ -445,7 +450,16 @@ class RLTrainer:
         # model was loaded and a full group had been generated -- a crash where
         # the contract owes a refusal that names the missing input, and one that
         # arrives only after the expensive part of the step has been paid for.
-        if not hasattr(objective, "advantage_fn"):
+        # reinforce_baseline and reinforce_pp are the two estimator-free
+        # tails (design section 5): one subtracts a carried EMA baseline,
+        # the other folds a k1 penalty into the return and normalises
+        # globally. Neither declares advantage_fn, by design and not by
+        # oversight, so the estimator refusal below is not for them.
+        estimator_free = self.config.algorithm in (
+            "reinforce_baseline",
+            "reinforce_pp",
+        )
+        if not estimator_free and not hasattr(objective, "advantage_fn"):
             raise TrainerRefusal(
                 f"algorithm {self.config.algorithm!r}: 0 of 1 required advantage "
                 f"estimators are declared by its objective "
@@ -454,17 +468,22 @@ class RLTrainer:
                 f"for it to read. The group-relative family runs today; the "
                 f"preference and online families are not wired to this loop."
             )
-        # An active k3 term needs a frozen reference copy. run() now loads
-        # that copy (auto unless reference_policy says otherwise); what
-        # survives here as a refusal is the DECLARED refusal to build one:
-        # reference_policy=False against an objective that needs the term.
+        # An active k3 term needs a frozen reference copy, and so does
+        # reinforce_pp's k1 fold (its declared kl_weight stays 0.0 because
+        # the penalty folds into the return, so the axis does not see it).
+        # run() now loads that copy (auto unless reference_policy says
+        # otherwise); what survives here as a refusal is the DECLARED
+        # refusal to build one: reference_policy=False against an objective
+        # that needs the plane.
         kl_weight = float(getattr(objective, "kl_weight", 0.0))
-        if kl_weight != 0.0 and self.config.reference_policy is False:
+        needs_reference = kl_weight != 0.0 or self.config.algorithm == "reinforce_pp"
+        if needs_reference and self.config.reference_policy is False:
             raise TrainerRefusal(
                 f"algorithm {self.config.algorithm!r} declares kl_weight={kl_weight}; "
                 f"reference_policy=False forbids the 1 of 1 reference policies "
-                f"the k3 term requires, so the term cannot be measured. Set "
-                f"reference_policy to None (auto) or True to load one."
+                f"the k3 term or k1 fold requires, so the term cannot be "
+                f"measured. Set reference_policy to None (auto) or True to "
+                f"load one."
             )
         return objective
 
@@ -647,8 +666,12 @@ class RLTrainer:
 
         objective = self._resolve_objective()
         kl_weight = float(getattr(objective, "kl_weight", 0.0))
+        # reinforce_pp joins the auto rule despite declaring kl_weight 0.0:
+        # its k1 fold reads the reference plane in the trainer tail, where
+        # the kernel's reference axis cannot see it.
+        needs_reference = kl_weight != 0.0 or self.config.algorithm == "reinforce_pp"
         ref_model: Any = None
-        if kl_weight != 0.0 or self.config.reference_policy:
+        if needs_reference or self.config.reference_policy:
             # The frozen reference plane: loaded before any optimizer step so
             # it IS the initial policy -- which is what makes the step-1 k3
             # contribution exactly zero. Only an objective declaring a
@@ -921,6 +944,50 @@ class RLTrainer:
                     dim=0,
                 )
 
+        # Family dispatch (design section 5): the two estimator-free
+        # bindings price straight off these planes and never call
+        # advantage_fn -- one subtracts a carried EMA baseline, the other
+        # folds a k1 penalty into the return and normalises globally. Every
+        # kept scored row is used, so the row gather is the identity on the
+        # kept planes, never a compaction.
+        if self.config.algorithm in ("reinforce_baseline", "reinforce_pp"):
+            keep_all = torch.arange(n_rows, device=device)
+            tail_current = current_logprobs.index_select(0, keep_all)
+            tail_old = old_logprobs.index_select(0, keep_all).detach()
+            tail_mask = response_mask.index_select(0, keep_all).detach()
+            tail_ref: torch.Tensor | None = None
+            if reference_logprobs is not None:
+                tail_ref = reference_logprobs.index_select(0, keep_all)
+            tail_scores = [float(score) for _, score in rows]
+            if self.config.algorithm == "reinforce_baseline":
+                return self._reinforce_baseline_tail(
+                    step=step,
+                    scores=tail_scores,
+                    kept_current=tail_current,
+                    kept_mask=tail_mask,
+                    current_logprobs=current_logprobs,
+                    row_slices=row_slices,
+                    forward_slice=forward_logprob_slice,
+                    use_logprob_micro_batching=use_logprob_micro_batching,
+                    objective=objective,
+                    optimizer=optimizer,
+                )
+            return self._reinforce_pp_tail(
+                step=step,
+                scores=tail_scores,
+                kept_current=tail_current,
+                kept_old=tail_old,
+                kept_mask=tail_mask,
+                kept_ref=tail_ref,
+                current_logprobs=current_logprobs,
+                row_slices=row_slices,
+                forward_slice=forward_logprob_slice,
+                use_logprob_micro_batching=use_logprob_micro_batching,
+                objective=objective,
+                loss_fn=loss_fn,
+                optimizer=optimizer,
+            )
+
         prompt_id_values = [f"row-{index // self.config.group_size}" for index, _ in rows]
         # The estimator reads the PER-TOKEN supervision mask, not a per-row
         # flag: it denominates each response by its own supervised length.
@@ -1067,6 +1134,225 @@ class RLTrainer:
             loss=loss_output,
             rows=len(kept_rows),
             reward_stats=RewardStats.over(tuple(float(rewards[row]) for row in kept_rows)),
+            sync=None,
+        )
+
+    def _reinforce_baseline_tail(
+        self,
+        *,
+        step: int,
+        scores: list[float],
+        kept_current: torch.Tensor,
+        kept_mask: torch.Tensor,
+        current_logprobs: torch.Tensor,
+        row_slices: tuple[tuple[int, int], ...],
+        forward_slice: Callable[[int, int], torch.Tensor],
+        use_logprob_micro_batching: bool,
+        objective: Any,
+        optimizer: Any,
+    ) -> StepReport | None:
+        """REINFORCE tail: subtract the carried EMA baseline from each return.
+
+        WHAT IS CLAIMED: the baseline subtracted is the carried state, or
+        the batch's own mean return on the unseeded first step -- reported
+        through the metric channel, never hidden; the EMA update happens
+        only AFTER the optimiser step it priced; ``rows`` counts every kept
+        row, because nothing compacts; and ``reward_stats`` abstains,
+        because this binding declares ``advantage_fn: False`` and the
+        pairing is graded both ways.
+
+        WHAT IS NOT CLAIMED: that the EMA tracks any optimum.
+        """
+        import torch
+
+        from foundationscale.gates.objective_gates import MetricObservation
+
+        momentum = float(getattr(objective, "baseline_momentum", 0.99))
+        batch_mean = sum(scores) / len(scores)
+        used_baseline = self._reinforce_baseline
+        if used_baseline is None:
+            # Seeding from the first measured mean return, not from a
+            # defaulted 0.0: abstention resolves into a measurement.
+            used_baseline = batch_mean
+        advantages = [score - used_baseline for score in scores]
+        if not any(value != 0.0 for value in advantages):
+            # Every kept return equals the baseline: no stimulus in the
+            # whole batch, no gradient, no claimed step.
+            print(
+                f"UNMEASURED step {step}: every kept return equals the "
+                f"baseline {used_baseline!r} over {len(scores)} used "
+                f"row(s); the REINFORCE surrogate is identically zero, "
+                f"so no gradient exists and no step is claimed.",
+                file=sys.stderr,
+            )
+            return None
+        advantage_tensor = torch.tensor(advantages, dtype=torch.float32, device=kept_current.device)
+        loss_fn = TensorREINFORCELoss(objective=objective)
+        loss_tensor = loss_fn(
+            current_logprobs=kept_current,
+            advantages=advantage_tensor,
+            mask=kept_mask,
+        )
+        optimizer.zero_grad()
+        if use_logprob_micro_batching:
+            _micro_batched_backward(
+                loss_tensor=loss_tensor,
+                current_logprobs=current_logprobs,
+                row_slices=row_slices,
+                forward_slice=forward_slice,
+            )
+        else:
+            loss_tensor.backward()
+        optimizer.step()
+        # The state update happens only after the price: step N reports the
+        # baseline it USED, and the EMA folds in this batch's mean so step
+        # N + 1 subtracts the updated value.
+        state = self._reinforce_baseline
+        self._reinforce_baseline = (
+            batch_mean if state is None else momentum * state + (1.0 - momentum) * batch_mean
+        )
+        measured = float(loss_tensor.detach())
+        # The declared bounded diagnostic: strictly above, so a batch whose
+        # returns all EQUAL the baseline reads 0.0 -- degenerate, truthfully.
+        frac_above = sum(1 for score in scores if score > used_baseline) / len(scores)
+        loss_output = LossOutput(
+            loss=measured,
+            components=_loss_components(
+                objective=objective,
+                total=measured,
+                current_logprobs=kept_current,
+                reference_logprobs=None,
+                mask=kept_mask,
+            ),
+            metrics=(
+                MetricObservation(
+                    name=str(objective.baseline_metric_name),
+                    value=frac_above,
+                ),
+            ),
+        )
+        print(
+            f"[trainer] step {step}: reinforce_baseline "
+            f"baseline_used={used_baseline:.6g} "
+            f"baseline_next={self._reinforce_baseline:.6g}",
+            file=sys.stderr,
+        )
+        return StepReport(
+            step=step,
+            loss=loss_output,
+            rows=len(scores),
+            reward_stats=None,
+            sync=None,
+        )
+
+    def _reinforce_pp_tail(
+        self,
+        *,
+        step: int,
+        scores: list[float],
+        kept_current: torch.Tensor,
+        kept_old: torch.Tensor,
+        kept_mask: torch.Tensor,
+        kept_ref: torch.Tensor | None,
+        current_logprobs: torch.Tensor,
+        row_slices: tuple[tuple[int, int], ...],
+        forward_slice: Callable[[int, int], torch.Tensor],
+        use_logprob_micro_batching: bool,
+        objective: Any,
+        loss_fn: TensorPolicyLoss,
+        optimizer: Any,
+    ) -> StepReport | None:
+        """Reinforce++ tail: k1 fold into the return, GLOBAL z-score, PPO clip.
+
+        WHAT IS CLAIMED: each kept row's penalised return is its scalar
+        reward minus ``kl_beta * sum_supervised(current - reference)`` over
+        DETACHED readings; the normalisation is global over kept rows with
+        population statistics via RewardStats.over; a zero global spread is
+        UNMEASURED, never a manufactured z-score; and the PPO-clipped
+        token-ratio tail is the shared tensor kernel, whose declared axes
+        (token scope, symmetric clip) it reads off the objective itself.
+
+        WHAT IS NOT CLAIMED: any equivalence with a reference Reinforce++
+        implementation, and any comparability of the penalised scale with
+        the raw reward scale.
+        """
+        import torch
+
+        if kept_ref is None:
+            raise TrainerRefusal(
+                "reinforce_pp folds reference log-probabilities into every "
+                "row's return (the k1 penalty) but 0 of 1 reference planes "
+                "are loaded; run() loads one automatically unless "
+                "reference_policy=False refused it upstream"
+            )
+        kl_beta = float(getattr(objective, "kl_beta", 0.04))
+        cur = kept_current.detach()
+        ref_plane = kept_ref.detach()
+        kl_per_row = ((cur - ref_plane) * kept_mask).sum(dim=-1).to(dtype=torch.float32)
+        scores_tensor = torch.tensor(scores, dtype=torch.float32, device=cur.device)
+        # The penalty folds into the RETURN, never a separable loss term:
+        # one folded component is what the objective's declaration states.
+        penalised_list = [float(value) for value in (scores_tensor - kl_beta * kl_per_row).tolist()]
+        stats = RewardStats.over(tuple(penalised_list))
+        if stats.std == 0.0:
+            print(
+                f"UNMEASURED step {step}: global advantage normalisation "
+                f"over {len(scores)} kept row(s) found zero spread in the "
+                f"penalised returns: every z-score would be a manufactured "
+                f"0.0, and a manufactured zero gradient is not a "
+                f"measurement -- no step is claimed.",
+                file=sys.stderr,
+            )
+            return None
+        z_scores = torch.tensor(
+            [(value - stats.mean) / stats.std for value in penalised_list],
+            dtype=torch.float32,
+            device=cur.device,
+        )
+        loss_tensor = loss_fn(
+            current_logprobs=kept_current,
+            old_logprobs=kept_old,
+            advantages=z_scores,
+            mask=kept_mask,
+        )
+        optimizer.zero_grad()
+        if use_logprob_micro_batching:
+            _micro_batched_backward(
+                loss_tensor=loss_tensor,
+                current_logprobs=current_logprobs,
+                row_slices=row_slices,
+                forward_slice=forward_slice,
+            )
+        else:
+            loss_tensor.backward()
+        optimizer.step()
+        measured = float(loss_tensor.detach())
+        loss_output = LossOutput(
+            loss=measured,
+            components=_loss_components(
+                objective=objective,
+                total=measured,
+                current_logprobs=kept_current,
+                reference_logprobs=None,
+                mask=kept_mask,
+            ),
+            metrics=_ratio_and_clip_metrics(
+                objective=objective,
+                current_logprobs=kept_current,
+                old_logprobs=kept_old,
+                mask=kept_mask,
+            ),
+        )
+        print(
+            f"[trainer] step {step}: reinforce_pp "
+            f"penalised_mean={stats.mean:.6g} penalised_std={stats.std:.6g}",
+            file=sys.stderr,
+        )
+        return StepReport(
+            step=step,
+            loss=loss_output,
+            rows=len(scores),
+            reward_stats=None,
             sync=None,
         )
 

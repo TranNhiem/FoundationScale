@@ -51,7 +51,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never executed at runtime
 
 from foundationscale.rl.interfaces import BatchRefusal
 
-__all__ = ("TensorPolicyLoss",)
+__all__ = ("TensorPolicyLoss", "TensorREINFORCELoss")
 
 
 def _require_2d(name: str, tensor: torch.Tensor) -> None:
@@ -336,6 +336,120 @@ class TensorPolicyLoss:
             # current_logprobs requires grad and every reduction returns a
             # 0-dim tensor. Fail closed rather than hand the optimizer a
             # scalar it cannot see.
+            raise BatchRefusal(  # pragma: no cover
+                f"{origin} produced a loss with dim={loss.dim()} and "
+                f"requires_grad={loss.requires_grad}; the optimizer's "
+                f"scalar must be 0-dim and differentiable"
+            )
+        return loss
+
+
+@dataclass(frozen=True, slots=True)
+class TensorREINFORCELoss:
+    """Differentiable evaluation of REINFORCE-with-baseline's surrogate.
+
+    The oracle (``ReinforceBaselineLoss`` in ``policy_gradient.py``) prices
+    ``advantage * current_logprob`` per supervised token and reports the
+    negative supervised-token mean. This kernel is that same expression: no
+    importance ratio, no clipping, no reference term -- the baseline is
+    state the trainer's tail already subtracted, and only
+    ``objective.weight`` is read here. ``TensorPolicyLoss`` is untouched:
+    this is a second kernel because REINFORCE declares a different shape of
+    objective, and forcing it through the PPO clip's no-op case would read
+    as a verified property it is not.
+
+    All inputs are ``torch.Tensor`` of shape ``(rows, tokens)`` except
+    ``advantages``, which is ``(rows,)``: one scalar weight per row,
+    broadcast over tokens. ``current_logprobs`` MUST require grad; every
+    other input is detached here.
+
+    WHAT IS CLAIMED: the returned 0-dim scalar agrees with the oracle's
+    ``LossOutput.loss`` to floating-point tolerance over the same rows;
+    every guard the ratio kernel carries over its inputs has a counterpart
+    here (shape agreement, finiteness, a binary mask, a non-empty
+    supervision denominator), with both sides of every count named; and
+    the gradient lands on ``current_logprobs``. WHAT IS NOT CLAIMED: that
+    the baseline was a good estimate -- the tail owns that trade -- nor
+    any batch-level validation the oracle owns.
+    """
+
+    objective: Any  # ReinforceBaselineLoss; only .weight is read
+
+    def __call__(
+        self,
+        *,
+        current_logprobs: torch.Tensor,
+        advantages: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        # torch is imported HERE, not at module scope, for the same census
+        # reason the ratio kernel's docstring states: module scope under
+        # src/ stays torch-free and this file is declared torch-dependent
+        # at the call.
+        import torch
+
+        origin = type(self.objective).__name__
+        if not isinstance(current_logprobs, torch.Tensor):
+            raise BatchRefusal(
+                f"current_logprobs is {type(current_logprobs).__name__}, "
+                f"not torch.Tensor; 1 of 1 gradient-carrying inputs must "
+                f"be a tensor"
+            )
+        _require_2d("current_logprobs", current_logprobs)
+        _require_finite("current_logprobs", current_logprobs)
+        if not current_logprobs.requires_grad:
+            raise BatchRefusal(
+                f"current_logprobs.requires_grad is False for {origin}; 1 "
+                f"of 1 live inputs carries no gradient, and a loss computed "
+                f"from it can never produce a weight update"
+            )
+        mask_f = mask.detach().to(dtype=current_logprobs.dtype)
+        adv = advantages.detach().to(dtype=current_logprobs.dtype)
+        for name, tensor in (("mask", mask_f), ("advantages", adv)):
+            _require_finite(name, tensor)
+        _require_2d("mask", mask_f)
+        _require_same_shape("current_logprobs", current_logprobs, "mask", mask_f)
+        if adv.dim() != 1:
+            raise BatchRefusal(
+                f"advantages has shape {tuple(advantages.shape)} "
+                f"({advantages.dim()} dims); a (rows,) vector of one "
+                f"scalar weight per batch row is required"
+            )
+        if adv.shape[0] != current_logprobs.shape[0]:
+            raise BatchRefusal(
+                f"advantages has {adv.shape[0]} rows but "
+                f"current_logprobs has {current_logprobs.shape[0]} rows; "
+                f"1 of 1 advantage vectors must carry one weight per "
+                f"batch row"
+            )
+        bad_mask = int(((mask_f != 0.0) & (mask_f != 1.0)).sum())
+        if bad_mask:
+            raise BatchRefusal(
+                f"{bad_mask} of {mask_f.numel()} mask entries are neither "
+                f"0 nor 1; supervision mask entries must be 0 or 1, and a "
+                f"fractional entry cannot state which positions carry "
+                f"gradient"
+            )
+        supervised_total = mask_f.sum()
+        if not bool(supervised_total > 0):
+            raise BatchRefusal(
+                f"0 of {mask_f.numel()} mask entries are supervised for "
+                f"{origin}; the loss is unmeasured on a fully masked "
+                f"batch, never 0.0"
+            )
+        # The oracle's own expression, negated so gradient DESCENT on the
+        # returned value ASCENDS the surrogate -- the same sign convention
+        # TensorPolicyLoss states.
+        weight = float(getattr(self.objective, "weight", 1.0))
+        surrogate = (current_logprobs * adv.unsqueeze(-1) * mask_f).sum() / supervised_total
+        loss = -weight * surrogate
+        if not bool(torch.isfinite(loss)):
+            raise BatchRefusal(
+                f"{origin} produced a non-finite loss ({loss.detach()!r}); "
+                f"inputs were finite, so the overflow arose inside the "
+                f"kernel"
+            )
+        if loss.dim() != 0 or not loss.requires_grad:
             raise BatchRefusal(  # pragma: no cover
                 f"{origin} produced a loss with dim={loss.dim()} and "
                 f"requires_grad={loss.requires_grad}; the optimizer's "

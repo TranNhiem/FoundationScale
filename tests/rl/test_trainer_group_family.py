@@ -320,3 +320,82 @@ def test_loss_components_without_a_reference_leaves_whole_total_on_policy() -> N
     assert components[0].contribution == pytest.approx(0.75, rel=0, abs=0)
     assert components[1].contribution is None
     assert not components[1].observed
+
+
+# --- Part B1: reinforce_baseline and reinforce_pp ----------------------------
+
+
+def test_b1_reinforce_baseline_trains_with_no_reference_and_moves_weights(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _install_fake_host(monkeypatch)
+    trainer = RLTrainer(_config("reinforce_baseline"))
+    reports = trainer.run()
+
+    assert len(reports) == 2, "every step's kept returns straddle the baseline by construction"
+    assert len(loaded) == 1, "reinforce_baseline reads no reference plane: no second load"
+    pristine = _snapshot(_FakeModel())
+    assert any(
+        not torch.equal(value, pristine[name]) for name, value in _snapshot(loaded[0]).items()
+    ), "two measured steps at lr=1e-2 must move the policy"
+    # The declared metric channel reports the fraction of kept returns
+    # strictly above the baseline actually USED. Half the rows score the
+    # gold letter and half do not, and the baseline is their mean, so the
+    # reading is exactly 0.5 -- a real measurement, not a stated constant.
+    assert _named(reports[0].loss.metrics)["reinforce_baseline_frac_above"] == pytest.approx(0.5)
+    # This binding declares advantage_fn False, so reward_stats abstains
+    # rather than posing a statistics object over a plane that compacts
+    # nothing.
+    assert reports[0].reward_stats is None
+    assert trainer._reinforce_baseline is not None
+
+
+def test_b1_reinforce_baseline_ema_is_seeded_measured_and_observable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_host(monkeypatch)
+    trainer = RLTrainer(_config("reinforce_baseline"))
+    assert trainer._reinforce_baseline is None, "unseeded before any step: None, never 0.0"
+    reports = trainer.run()
+    assert len(reports) >= 1
+
+    # The seed is the first batch's OWN mean return; both steps draw the
+    # same two prompts, so their batch means agree and the post-update EMA
+    # m*s + (1 - m)*s holds the seeded value exactly, whatever the momentum.
+    # Across the EMA boundary the fraction-above reading is therefore 0.5 on
+    # step 2 exactly as on step 1 -- the update is observable in the report
+    # channel, not just in private state.
+    assert trainer._reinforce_baseline is not None
+    first = _named(reports[0].loss.metrics)["reinforce_baseline_frac_above"]
+    second = _named(reports[1].loss.metrics)["reinforce_baseline_frac_above"]
+    assert first == pytest.approx(0.5)
+    assert second == pytest.approx(0.5)
+
+
+def test_b1_reinforce_pp_trains_with_a_frozen_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _install_fake_host(monkeypatch)
+    trainer = RLTrainer(_config("reinforce_pp"))
+    reports = trainer.run()
+
+    assert len(reports) >= 1, "the k1 fold is identically zero on step 1; spread persists"
+    assert len(loaded) == 2, "reinforce_pp's k1 fold needs the frozen reference plane"
+    policy, reference = loaded
+    pristine = _snapshot(_FakeModel())
+    for name, value in _snapshot(reference).items():
+        assert torch.equal(value, pristine[name]), f"reference parameter {name} moved"
+    assert any(
+        not torch.equal(value, pristine[name]) for name, value in _snapshot(policy).items()
+    ), "measured steps at lr=1e-2 must move the policy"
+    # Step 1: old and current read off the same weights, so the declared
+    # ratio/clip observability pair is exactly (1.0, 0.0).
+    metrics = _named(reports[0].loss.metrics)
+    assert metrics["ratio_mean"] == 1.0
+    assert metrics["clip_fraction"] == 0.0
+    assert reports[0].reward_stats is None
+
+
+def test_b1_reinforce_pp_with_reference_forbidden_refuses_naming_the_reference() -> None:
+    with pytest.raises(TrainerRefusal, match="reference"):
+        RLTrainer(_config("reinforce_pp", reference_policy=False))._resolve_objective()

@@ -35,13 +35,19 @@ def _objective_of(name: str) -> object | None:
     return getattr(lookup_algorithm(name), "_objective", None)
 
 
+# The REINFORCE pair builds its advantage in the trainer tail (a carried EMA
+# baseline; a k1-folded global z-score), so neither declares advantage_fn and
+# the estimator refusal is deliberately not theirs.
+_ESTIMATOR_FREE = ("reinforce_baseline", "reinforce_pp")
+
+
 def _split_by_estimator() -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Partition the objective-bearing registry entries on ``advantage_fn``."""
     with_fn: list[str] = []
     without_fn: list[str] = []
     for name in available_algorithm_names():
         objective = _objective_of(name)
-        if objective is None:
+        if objective is None or name in _ESTIMATOR_FREE:
             continue
         (with_fn if hasattr(objective, "advantage_fn") else without_fn).append(name)
     return tuple(with_fn), tuple(without_fn)
@@ -71,6 +77,13 @@ def test_objective_without_an_advantage_estimator_is_refused_by_name() -> None:
         assert "advantage" in message
 
 
+def test_the_estimator_free_reinforce_pair_resolves() -> None:
+    """MUST_PASS: the refusal exemption reaches both tail-built bindings."""
+    for name in _ESTIMATOR_FREE:
+        objective = RLTrainer(_config(name))._resolve_objective()
+        assert not hasattr(objective, "advantage_fn"), name
+
+
 def test_the_group_relative_family_still_resolves() -> None:
     """MUST_PASS: the new guard must not refuse an objective that HAS one."""
     with_fn, _ = _split_by_estimator()
@@ -88,6 +101,6 @@ def test_every_objective_bearing_algorithm_is_admitted_or_refused_by_name() -> N
     would report clean coverage over a hole.
     """
     with_fn, without_fn = _split_by_estimator()
-    covered = set(with_fn) | set(without_fn)
+    covered = set(with_fn) | set(without_fn) | set(_ESTIMATOR_FREE)
     bearing = {name for name in available_algorithm_names() if _objective_of(name) is not None}
     assert covered == bearing
