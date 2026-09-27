@@ -499,6 +499,10 @@ class RLTrainer:
     def run(self) -> list[StepReport]:
         """Run the training loop and return one report per completed step."""
 
+        # The EMA baseline is per-run state: a second run() on the same trainer
+        # must seed from its own first batch, not inherit the previous run's value.
+        self._reinforce_baseline = None
+
         # #370: refuse BEFORE any allocation is burned. Greedy decoding makes
         # every completion in a group byte-identical, so their rewards are equal,
         # so the group-relative advantage is identically zero and no gradient
@@ -1355,7 +1359,13 @@ class RLTrainer:
 
         from foundationscale.gates.objective_gates import MetricObservation
 
-        momentum = float(getattr(objective, "baseline_momentum", 0.99))
+        if not hasattr(objective, "baseline_momentum"):
+            # No silent 0.99: the EMA rate is a declared field of the objective.
+            raise TrainerRefusal(
+                f"reinforce_baseline: objective {type(objective).__name__} declares no "
+                "baseline_momentum; refusing to substitute a default EMA rate"
+            )
+        momentum = float(objective.baseline_momentum)
         batch_mean = sum(scores) / len(scores)
         used_baseline = self._reinforce_baseline
         if used_baseline is None:
@@ -1473,7 +1483,13 @@ class RLTrainer:
                 "are loaded; run() loads one automatically unless "
                 "reference_policy=False refused it upstream"
             )
-        kl_beta = float(getattr(objective, "kl_beta", 0.04))
+        if not hasattr(objective, "kl_beta"):
+            # No silent 0.04: the k1 fold strength is a declared field of the objective.
+            raise TrainerRefusal(
+                f"reinforce_pp: objective {type(objective).__name__} declares no kl_beta; "
+                "refusing to substitute a default penalty strength"
+            )
+        kl_beta = float(objective.kl_beta)
         cur = kept_current.detach()
         ref_plane = kept_ref.detach()
         kl_per_row = ((cur - ref_plane) * kept_mask).sum(dim=-1).to(dtype=torch.float32)

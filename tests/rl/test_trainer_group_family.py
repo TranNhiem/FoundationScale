@@ -484,6 +484,72 @@ def test_b1_reinforce_baseline_ema_is_seeded_measured_and_observable(
     assert second == pytest.approx(0.5)
 
 
+class _SteppedMeanReward:
+    """Scores 1, 0, 1, 0 on step 1 and 1, 0, 1, 0.5 on step 2 (four rows a step).
+
+    The two batch means differ (0.5 then 0.625), so the EMA update is
+    distinguishable from a baseline that merely holds its seed.
+    """
+
+    _PLAN = (1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.5)
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def score(self, *, response: str, gold: str) -> float:
+        value = self._PLAN[self.calls % len(self._PLAN)]
+        self.calls += 1
+        return value
+
+
+def test_b1_reinforce_baseline_ema_folds_a_differing_second_batch_mean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_host(monkeypatch)
+    monkeypatch.setattr(trainer_module, "MCQLetterReward", lambda **kwargs: _SteppedMeanReward())
+    trainer = RLTrainer(_config("reinforce_baseline"))
+    reports = trainer.run()
+
+    assert len(reports) == 2
+    momentum = 0.99  # ReinforceBaselineLoss's declared default
+    assert trainer._reinforce_baseline == pytest.approx(momentum * 0.5 + (1.0 - momentum) * 0.625)
+    # Step 2 subtracts the seeded 0.5: rows 1.0, 1.0 and 0.5 are not all
+    # strictly above it, only the two 1.0 rows are.
+    assert _named(reports[1].loss.metrics)["reinforce_baseline_frac_above"] == pytest.approx(0.5)
+
+
+def test_b1_reinforce_baseline_state_resets_at_the_start_of_each_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_host(monkeypatch)
+    trainer = RLTrainer(_config("reinforce_baseline"))
+    trainer._reinforce_baseline = 123.0  # a previous run's leftover EMA
+    trainer.run()
+    # Both steps' batch means are 0.5; an inherited 123.0 would still dominate.
+    assert trainer._reinforce_baseline == pytest.approx(0.5)
+
+
+def test_b1_reinforce_pp_k1_fold_moves_returns_once_policy_leaves_reference(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _install_fake_host(monkeypatch)
+    reports = RLTrainer(_config("reinforce_pp")).run()
+    assert len(reports) == 2
+
+    means = [
+        float(line.split("penalised_mean=")[1].split()[0])
+        for line in capsys.readouterr().err.splitlines()
+        if "reinforce_pp penalised_mean=" in line
+    ]
+    assert len(means) == 2
+    # Positive control: on step 1 the policy IS the reference, the fold is
+    # identically zero and the penalised mean equals the raw mean return 0.5.
+    assert means[0] == pytest.approx(0.5, abs=1e-6)
+    # After one lr=1e-2 update cur != ref, so the k1 fold must shift it.
+    assert abs(means[1] - 0.5) > 1e-6, "the k1 fold left the returns untouched"
+
+
 def test_b1_reinforce_pp_trains_with_a_frozen_reference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
