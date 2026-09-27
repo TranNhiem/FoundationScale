@@ -64,8 +64,15 @@ risks:
   - "Gemma4ClippableLinear lives in the vision tower only; FS scopes adapters to model.language_model (measured on gemma-4-31B)"
   - "reasoning traces truncate at 4096 tokens -- audit truncation_rate before training"
 provenance:
-  status: literature
+  status: validated
   evidence:
     - "Hu et al. 2021, LoRA, arXiv:2106.09685"
     - "Shao et al. 2024, DeepSeekMath, arXiv:2402.03300"
-  validated_on: null
+    - "FoundationSkills validation 2026-09-27: planned, emitted and launched by fskills launch on 3x GB200 (r04dgx03), 30 steps, rank 32, b2 ga8 seq 4096; FS FSDP cannot wrap Gemma-4 31B (Could not find the transformer layer class to wrap), so the planner switches this recipe to DDP via the variant's fs_fsdp flag; FS verdict PASS, save gates PASS 4/4 (2 verified, 2 declared SKIP); loss 2.90 -> 1.07; ~790 tokens/s/GPU; peak 103.1 GB/GPU allocated vs 115.0 GB planned (+12%)"
+    - "SCOPE: runs correctly on FoundationScale; math-benchmark quality NOT yet measured"
+  validated_on:
+    fs_commit: e95bdc30d2d9b6401e6258fb7a5a7a5a5034e6b9
+    hardware: gb200-189gb
+    run_id: fskills-sft-be2be28b
+    date: "2026-09-27"
+    run_manifest: /home/hhri-ai/hh28144/Project-Developments/FoundationScale/runs/fskills_r3/train_31b/fskills-sft/run_manifest.json

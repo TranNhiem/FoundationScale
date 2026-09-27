@@ -121,6 +121,8 @@ variants:
     tied_embeddings: true
     instruct: true
   - id: gemma-4-31B
+    fs_fsdp: false
+    fs_fsdp_evidence: "measured 2026-09-27 on GB200 via fskills launch (r04dgx03, 3 GPUs, LoRA): FS FSDP raised Trainer.train() Exception('Could not find the transformer layer class to wrap in the model.') for gemma-4-31b-it (dense); DDP is used instead"
     hf_id: null
     local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-31B
     size_b: 31.25    # 62.5 GB safetensors / 2 (bf16; name says 31B)
@@ -138,6 +140,8 @@ variants:
     tied_embeddings: true
     instruct: false
   - id: gemma-4-31b-it
+    fs_fsdp: false
+    fs_fsdp_evidence: "measured 2026-09-27 on GB200 via fskills launch (r04dgx03, 3 GPUs, LoRA): FS FSDP raised Trainer.train() Exception('Could not find the transformer layer class to wrap in the model.') for gemma-4-31b-it (dense); DDP is used instead"
     hf_id: null
     local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-31b-it
     size_b: 31.25
