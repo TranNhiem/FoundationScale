@@ -87,4 +87,5 @@ provenance:
   evidence:
     - "Zheng et al. 2025, GSPO, arXiv:2507.18071"
     - "Shao et al. 2024, DeepSeekMath, arXiv:2402.03300"
+    - "SFT STAGE MEASURED 2026-09-27 (recipe not promoted: the RL stage is unrun -- FS RL is 1-GPU, MCQ-reward, no checkpoint): 3x GB200 FSDP LoRA r32, 30 steps, run fskills-sft-61fb9584 at commit 700fe6d; FS PASS, save gates 4/4 (adapter-only, 512/512 lora_ tensors); loss 0.69->0.57; 221 s/step at b2 ga8 seq 4096; MFU 1.4% (21.2 model-TF/s/GPU); peak 51.5 GB/GPU allocated vs 62.1 GB planned (+21%, conservative). FS FSDP wraps qwen3_5 (unlike Gemma-4 31B). Math quality not measured"
   validated_on: null

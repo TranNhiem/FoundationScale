@@ -41,6 +41,7 @@ Scope: FoundationSkills against FoundationScale `origin/main` 77bfa65 (plus this
 | Recipe `gemma4-31b-math-sft-lora` (31b-it, rank 32), FSDP×3 | `fskills launch` (r04dgx03) | **RED 5** from FoundationScale: `Could not find the transformer layer class to wrap in the model` | FS FSDP cannot wrap Gemma-4 31B dense either; the 31B variants now carry `fs_fsdp: false` |
 | Recipe `gemma4-31b-math-sft-lora`, **DDP**×3, 30 steps, over 20,289 medical-reasoning SFT rows | **`fskills launch`** (r04dgx03) | **PASS**; save gates 4/4; run `fskills-sft-be2be28b`, commit `e95bdc3`. **Recipe promoted to `validated`** | loss 2.90 → 1.07; ~790 tokens/s/GPU; 103.1 GB/GPU allocated vs 115.0 planned (+12%) |
 | Recipe `gemma4-12b-general-chat-sft-full` (12B-it, `goal.method=full`), FSDP×4, 30 steps, same SFT rows | **`fskills launch`** (r04dgx06) | **RED 5** from FoundationScale gates `checkpoint.save_complete` → `checkpoint.first_save`. Training itself ran: 30/30 steps. Recipe stays `literature` | loss 1.93 → 0.93; 5,433 tokens/s (~1,360/GPU); no peak-allocated telemetry (the run stopped at the gate); ~113 GB/GPU reserved (nvidia-smi) vs 91.6 GB allocated planned. The checkpoint is complete (677/677 base tensors plus an untied `lm_head`): the gate misses 10 renamed vision-embedder tensors (core gap 13) |
+| Recipe `qwen3.5-27b-math-sft-rl`, **SFT stage** (Qwen3.5-27B base, LoRA r32), FSDP×3, 30 steps, same SFT rows | **`fskills launch`** (r04dgx03) | **PASS**; save gates 4/4 (adapter-only, 512/512 `lora_` tensors); run `fskills-sft-61fb9584`, commit `700fe6d`. Recipe stays `literature` (RL stage unrun) | loss 0.69 → 0.57; 221 s/step; MFU 1.4% (21.2 model-TF/s/GPU); 51.5 GB/GPU allocated vs 62.1 planned (+21%) |
 
 ## 4. Estimator calibration (Gemma-4 on GB200)
 
@@ -51,6 +52,7 @@ Scope: FoundationSkills against FoundationScale `origin/main` 77bfa65 (plus this
 | LoRA, FSDP×4, b4, grad ckpt | 75.8 GB/GPU | 75.9 GB | 0% |
 | full FT, FSDP×3, b2, grad ckpt (held out, CPT 2026-09-27) | 84.2 GB/GPU | 85.9 GB | −2%; reserved 114.4 GB |
 | LoRA r32, **DDP**×3, Gemma-4 31B-it (held out, 2026-09-27) | 115.0 GB/GPU | 103.1 GB | +12% (conservative) |
+| LoRA r32, FSDP×3, Qwen3.5-27B (held out, 2026-09-27) | 62.1 GB/GPU | 51.5 GB | +21% (conservative) |
 | full FT, FSDP b1 grad ckpt, throughput | 2,882 tokens/s/GPU | ~2,900 (from FoundationScale's 69.7 TF/s) | measured MFU point 4.6% |
 
 The logits term (14 bytes per s·b·V element) was fitted to these three points and is pinned by a test. The hardware profile stores **measured MFU points by configuration**: DDP b2 31.8%, FSDP b1 grad ckpt 4.6%, LoRA FSDP b2 1.5%. The estimator uses the nearest point and flags any extrapolation as `derived`.
@@ -88,6 +90,9 @@ All figures are torch **peak allocated** memory. Reserved memory (what nvidia-sm
 | F24 | a mixed dataset came back UNMEASURED (DE-RDY-006: PII never measured on the replay component); a `clean` after `mix` measures both | real data |
 | F25 | the rules chose LoRA for a <50M-token SFT corpus with no way to ask for full FT, so the 12B full-SFT recipe could not be reached; `goal.method` (full/lora/qlora) now overrides and logs an `operator_override` decision | 12B recipe planning |
 | F26 | the memory estimate always assumed LoRA rank 16, whatever the plan's `lora_rank`; the rank now reaches the estimator | 31B rank-32 planning |
+| F27 | a multi-stage recipe (SFT then RL) was indexed by one stage and stage is a hard key, so an SFT query for Qwen3.5-27B skipped `qwen3.5-27b-math-sft-rl` and ported the Gemma-4 31B recipe across families; any stage in the recipe's `stages` now matches | Qwen3.5-27B planning |
+| F28 | `emit` returned PASS with an executable launch spec for a plan stage the planner judged infeasible (Qwen3.5-35B-A3B full CPT: 245.8 GB/GPU on 189 GB); the spec is now non-executable and names the blocking finding (emit rc 5) | Qwen3.5-35B-A3B planning |
+| F29 | the CPT learning-rate table is full-FT and overwrote every CPT stage, so LoRA CPT was planned at 1.5e-5; LoRA/QLoRA now take 10× (Biderman et al. 2024; Schulman et al. 2025) unless a same-method recipe sets its own, logged as an `hparams` decision | Qwen3.5-35B-A3B LoRA CPT |
 
 ## 5b. Knowledge from the FoxBrain campaigns
 
