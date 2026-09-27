@@ -42,6 +42,8 @@ Scope: FoundationSkills against FoundationScale `origin/main` 77bfa65 (plus this
 | Recipe `gemma4-31b-math-sft-lora`, **DDP**×3, 30 steps, over 20,289 medical-reasoning SFT rows | **`fskills launch`** (r04dgx03) | **PASS**; save gates 4/4; run `fskills-sft-be2be28b`, commit `e95bdc3`. **Recipe promoted to `validated`** | loss 2.90 → 1.07; ~790 tokens/s/GPU; 103.1 GB/GPU allocated vs 115.0 planned (+12%) |
 | Recipe `gemma4-12b-general-chat-sft-full` (12B-it, `goal.method=full`), FSDP×4, 30 steps, same SFT rows | **`fskills launch`** (r04dgx06) | **RED 5** from FoundationScale gates `checkpoint.save_complete` → `checkpoint.first_save`. Training itself ran: 30/30 steps. Recipe stays `literature` | loss 1.93 → 0.93; 5,433 tokens/s (~1,360/GPU); no peak-allocated telemetry (the run stopped at the gate); ~113 GB/GPU reserved (nvidia-smi) vs 91.6 GB allocated planned. The checkpoint is complete (677/677 base tensors plus an untied `lm_head`): the gate misses 10 renamed vision-embedder tensors (core gap 13) |
 | Recipe `qwen3.5-27b-math-sft-rl`, **SFT stage** (Qwen3.5-27B base, LoRA r32), FSDP×3, 30 steps, same SFT rows | **`fskills launch`** (r04dgx03) | **PASS**; save gates 4/4 (adapter-only, 512/512 `lora_` tensors); run `fskills-sft-61fb9584`, commit `700fe6d`. Recipe stays `literature` (RL stage unrun) | loss 0.69 → 0.57; 221 s/step; MFU 1.4% (21.2 model-TF/s/GPU); 51.5 GB/GPU allocated vs 62.1 planned (+21%) |
+| Recipe `qwen3.5-35b-a3b-code-cpt` (full FT), FSDP×3 | `fskills plan` → `fskills emit` | **not launched**: planned 245.8 GB/GPU on 189 GB (infeasible); `emit` now refuses it (rc 5, F28) | full FT of the 35B MoE needs ≥2 nodes; no second node was free |
+| Qwen3.5-**35B-A3B MoE** LoRA r16 CPT (the planner's feasible alternative, `goal.method=lora`), FSDP×3, b2 ga1, 30 steps, FinePDFs misaki mix | **`fskills launch`** (r04dgx03) | **PASS**; save gates 4/4 (adapter-only, 320/320 `lora_` tensors); run `fskills-cpt-86e97168`, commit `6a050cd`. FS FSDP wraps `qwen3_5_moe`. Recipe (full FT) stays `literature` | 26 s/step; **MFU 0.37%** (5.5 model-TF/s/GPU); 50.3 GB/GPU allocated vs 61.5 planned (+22%); loss 1.16 → 1.62 with per-step noise at ga1: no learning signal established |
 
 ## 4. Estimator calibration (Gemma-4 on GB200)
 
@@ -53,6 +55,7 @@ Scope: FoundationSkills against FoundationScale `origin/main` 77bfa65 (plus this
 | full FT, FSDP×3, b2, grad ckpt (held out, CPT 2026-09-27) | 84.2 GB/GPU | 85.9 GB | −2%; reserved 114.4 GB |
 | LoRA r32, **DDP**×3, Gemma-4 31B-it (held out, 2026-09-27) | 115.0 GB/GPU | 103.1 GB | +12% (conservative) |
 | LoRA r32, FSDP×3, Qwen3.5-27B (held out, 2026-09-27) | 62.1 GB/GPU | 51.5 GB | +21% (conservative) |
+| LoRA r16, FSDP×3, Qwen3.5-35B-A3B MoE, b2 (held out, 2026-09-27) | 61.5 GB/GPU | 50.3 GB | +22% (conservative) |
 | full FT, FSDP b1 grad ckpt, throughput | 2,882 tokens/s/GPU | ~2,900 (from FoundationScale's 69.7 TF/s) | measured MFU point 4.6% |
 
 The logits term (14 bytes per s·b·V element) was fitted to these three points and is pinned by a test. The hardware profile stores **measured MFU points by configuration**: DDP b2 31.8%, FSDP b1 grad ckpt 4.6%, LoRA FSDP b2 1.5%. The estimator uses the nearest point and flags any extrapolation as `derived`.

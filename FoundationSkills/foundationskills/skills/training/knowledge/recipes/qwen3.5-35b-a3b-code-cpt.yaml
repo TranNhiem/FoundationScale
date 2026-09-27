@@ -68,4 +68,6 @@ provenance:
   evidence:
     - "Ibrahim et al. 2024, Continued Pre-training strategies, arXiv:2403.08763"
     - "Qwen2.5-Coder technical report practice"
+    - "NOT RUNNABLE AS WRITTEN on 1 node (measured plan 2026-09-27): full-FT CPT on 3x GB200 plans at 245.8 GB/GPU (130% of 189 GB); micro-batch 1 still 229 GB. Needs >=2 nodes"
+    - "LoRA MECHANICS MEASURED 2026-09-27 (this full-FT recipe NOT promoted): planner alternative LoRA r16 CPT, 3x GB200 FSDP, b2 ga1 seq 4096, LR 1.5e-4, 30 steps over the FinePDFs misaki mix; run fskills-cpt-86e97168 at commit 6a050cd; FS PASS, save gates 4/4 (adapter-only, 320/320 lora_ tensors); FS FSDP wraps qwen3_5_moe (unlike Gemma-4 26B-A4B); 26 s/step; MFU 0.37% (5.5 model-TF/s/GPU); peak 50.3 GB/GPU allocated vs 61.5 planned (+22%). Loss 1.16->1.62, per-step noise at ga1 -- no learning signal established"
   validated_on: null
