@@ -111,7 +111,7 @@ Megatron-specific lessons are kept there for a future Megatron backend.
 2. RL reward beyond single-letter multiple-choice: free-form, numeric and `\boxed{}` answers.
 3. ~~Preference family not wired~~ **Closed by main e17c1b2** (`PreferenceTrainer`: dpo/ipo/kto/orpo/simpo/cpo, measured by the probe and validated here). The online family (online_dpo, iterative_dpo, raft, best_of_n) is still not runnable.
 4. Multi-GPU RL.
-5. A reference-policy path (grpo/ppo with `kl_weight ≠ 0`).
+5. ~~A reference-policy path~~ **Partly closed by main 146064b**: `grpo` (with `kl_weight ≠ 0`) and `rloo` now run (measured by the probe after the merge); `ppo` and `reinforce_pp` still refuse (their bindings expose no objective for the reference plane). The probe now builds its stub from `RLTrainConfig`'s defaults, so new config fields cannot turn a runnable algorithm into "unmeasured" again.
 6. Assistant-only loss masking for SFT.
 7. PP/EP execution; no Megatron backend.
 8. A dedicated pretrain/CPT objective, and a minimum-LR floor for cosine schedules.

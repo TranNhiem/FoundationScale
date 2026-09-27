@@ -406,10 +406,26 @@ def _probe_rl_runnable(names: tuple[str, ...], errors: list[str]) -> dict[str, s
     if resolve is None:
         errors.append("rl runnability unmeasured: RLTrainer._resolve_objective not found")
         return {}
+    # The stub config carries RLTrainConfig's own defaults: the resolver reads more
+    # than `algorithm` (FS 146064b added reference_policy), and a bare namespace made
+    # grpo "unmeasured" the day it became runnable.
+    defaults: dict[str, Any] = {}
+    try:
+        import dataclasses
+
+        from foundationscale.rl.trainer import RLTrainConfig
+
+        for f in dataclasses.fields(RLTrainConfig):
+            if f.default is not dataclasses.MISSING:
+                defaults[f.name] = f.default
+            elif f.default_factory is not dataclasses.MISSING:  # type: ignore[misc]
+                defaults[f.name] = f.default_factory()  # type: ignore[misc]
+    except Exception:  # noqa: BLE001 - older FS: fall back to the bare stub
+        defaults = {}
     out: dict[str, str | None] = {}
     for name in names:
         try:
-            resolve(types.SimpleNamespace(config=types.SimpleNamespace(algorithm=name)))
+            resolve(types.SimpleNamespace(config=types.SimpleNamespace(**{**defaults, "algorithm": name})))
             out[name] = None
         except TrainerRefusal as exc:
             out[name] = str(exc)
