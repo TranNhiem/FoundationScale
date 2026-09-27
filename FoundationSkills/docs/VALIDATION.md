@@ -1,4 +1,4 @@
-# Validation record (GB200, 2026-09-25 → 2026-09-26)
+# Validation record (GB200, 2026-09-25 → 2026-09-27)
 
 Scope: FoundationSkills against FoundationScale `origin/main` 77bfa65 (plus this branch). The runs used GB200 hold 2495 on r04dgx06, attached with `srun --overlap`, with the holds left intact. Model: Gemma-4 E4B (base and `-it`). The environment was `envs/bench` (torch 2.12, transformers 5.13).
 
@@ -20,6 +20,8 @@ Scope: FoundationSkills against FoundationScale `origin/main` 77bfa65 (plus this
 | CPT | FoundationScale `docs/` (41 documents) as "internal documents" | 41 → 96 chunks, 295k tokens (Gemma-4 tokenizer) | 26 long documents chunked; truncation 0% (was 63%); remaining PII 0 |
 | SFT (reasoning) | FreedomIntelligence/medical-r1-distill-data (22,000) | 22,000 → 20,289 | traces rendered into Gemma-4's thinking channel, 22,000/22,000 **verified**; 1,711 over-length examples dropped and counted; PII false positives 0 (were 73) |
 | RL (MCQ) | allenai/ai2_arc ARC-Challenge (1,119) | 1,119 → 1,118 (1 exact duplicate) | each record parsed by FoundationScale's own `_parse_record` with a gold letter |
+| CPT (domain mix) | FinePDFs misaki (Llama-3.3-70B-classified) domain shards + 2,314 general documents as replay | 5,562 records, 17.1M tokens | token ratio 75/25 hit by setting record weights 0.794/0.206 from the measured tokens per chunk; `clean` after `mix` measures PII on both components |
+| LLM classification (real backend) | 31 FinePDFs misaki documents, `llm_classify` on Kimi-K3 (thinking off) | 31 → 31 labelled | category agrees with the existing Llama-3.3-70B label on 26/31 (84%); edu score within ±1 on 26/31; 0 invalid, 0 errors; 0.09 docs/s, so corpus scale needs local vLLM plus a distilled classifier |
 
 ## 3. FoundationScale runs from FoundationSkills output
 
@@ -35,6 +37,7 @@ Scope: FoundationSkills against FoundationScale `origin/main` 77bfa65 (plus this
 | **Preference (SimPO)** on Gemma-4 E4B-it over 12,857 Intel/orca_dpo_pairs pairs (Data Engine PASS), FS `PreferenceTrainer` (main e17c1b2) | **`fskills launch --measurement-only`** (r04dgx03, 1 GPU) | **10/10 steps measured** (real SimPO loss, accuracy and margin); exit 95 only because a final save was required. Measurement specs now set `save_final=false` | FS confirmed the plan: "SimPOLoss is reference-free; no second model was loaded" and `MasterWeightOptimizer(host-fp32)` |
 | `fskills-rl` Dr.GRPO, E4B base | driver | **REFUSED 96**: base checkpoint has no chat template | expected; this is why stage chaining exists (F4) |
 | `fskills-rl` Dr.GRPO, E4B-it, ARC-Easy MCQ, 6 steps | driver | **UNMEASURED 95**: rewards saturated on 5 of 6 steps; no checkpoint (FoundationScale saves none) | the RL loop runs on GB200: generation, scoring, advantages |
+| **Domain CPT**, recipe `gemma4-e4b-domain-cpt-full`, FSDP×3, b2 ga8 seq 4096, 349 steps (2.93 epochs) over a 17.1M-token FinePDFs misaki mix (75% domain / 25% general replay, Data Engine PASS) | **`fskills launch`** with `goal.stages=[cpt]` (r04dgx03, hold 2483) | **PASS**; save gates 4/4; run `fskills-cpt-7f82fbc5`. **Recipe promoted to `validated`** | loss 1.87 → 1.39, with a step down at each epoch boundary (multi-epoch memorisation on a small corpus; eval not measured); ~3,100 tokens/s/GPU; 85.9 GB/GPU peak allocated vs 84.2 planned |
 
 ## 4. Estimator calibration (Gemma-4 E4B on GB200)
 
@@ -43,9 +46,12 @@ Scope: FoundationSkills against FoundationScale `origin/main` 77bfa65 (plus this
 | full FT, FSDP×4, b1, grad ckpt | 54.2 GB/GPU | 48.3 GB | +12% (38.1 GB before the logits term, F14) |
 | LoRA, FSDP×4, b2, grad ckpt | 41 GB/GPU | 37.7 GB | +9% |
 | LoRA, FSDP×4, b4, grad ckpt | 75.8 GB/GPU | 75.9 GB | 0% |
+| full FT, FSDP×3, b2, grad ckpt (held out, CPT 2026-09-27) | 84.2 GB/GPU | 85.9 GB | −2%; reserved 114.4 GB |
 | full FT, FSDP b1 grad ckpt, throughput | 2,882 tokens/s/GPU | ~2,900 (from FoundationScale's 69.7 TF/s) | measured MFU point 4.6% |
 
 The logits term (14 bytes per s·b·V element) was fitted to these three points and is pinned by a test. The hardware profile stores **measured MFU points by configuration**: DDP b2 31.8%, FSDP b1 grad ckpt 4.6%, LoRA FSDP b2 1.5%. The estimator uses the nearest point and flags any extrapolation as `derived`.
+
+All figures are torch **peak allocated** memory. Reserved memory (what nvidia-smi shows) runs 1.33–1.49× allocated for full-FT FSDP and ~1.06× for LoRA. Compare nvidia-smi against the estimate and it looks ~30% low; that is the allocator cache, not an estimator error.
 
 ## 5. Defects found only by real runs (all fixed; each has a regression test)
 
@@ -72,6 +78,10 @@ The logits term (14 bytes per s·b·V element) was fitted to these three points 
 | — | recommender sent op config keys the ops ignored, so quality measured nothing on 23k records; op configs are now validated | real data |
 | — | the plan estimated grad ckpt and batch it never emitted (63 GB vs 32 GB); the emitted config is now the estimated one; missing sequence length refused (FoundationScale's default is 128) | E2E launch |
 | — | `--adapter-target` emitted per character, and later only the last module | reference scenario |
+| F21 | the planner refused CPT on a 17M-token corpus (stage rule `cpt-too-little-data`) with no way to override it; `goal.stages` now overrides, and every rule it bypasses is logged as an `operator_override` decision | CPT on GB200 |
+| F22 | `max_steps` was derived in tokens, but FoundationScale does not pack across rows, so the run was short of the planned epochs; steps are now counted in rows when the dataset reports its counts | CPT on GB200 |
+| F23 | direct launches kept output in memory, so a multi-hour run showed no progress until it ended; output now streams to `fskills_launch.log` | CPT on GB200 |
+| F24 | a mixed dataset came back UNMEASURED (DE-RDY-006: PII never measured on the replay component); a `clean` after `mix` measures both | real data |
 
 ## 5b. Knowledge from the FoxBrain campaigns
 

@@ -210,6 +210,8 @@ def estimate_memory(
     # fp32 softmax/loss buffer (4) + fp32 grad (4) = ~14 bytes/element. Fitted to
     # three GB200 measurements of Gemma-4 E4B (V=262k, seq 4096, FSDP x4):
     #   full b1: est 54.2 vs 48.3 GB (+12%); LoRA b2: 41 vs 37.7 (+9%); LoRA b4: 75.8 vs 75.9 (0%).
+    # Held out: full b2 FSDP x3 (CPT, 2026-09-27) est 84.2 vs 85.9 GB (-2%). All figures are torch
+    # peak ALLOCATED; reserved is 1.33-1.49x allocated for full-FT FSDP (1.06x for LoRA).
     # Without the term the b1 estimate was 38.1 GB; at 10 B/elem the b4 case was -23%.
     vocab = int(getattr(variant, "vocab", 0) or 0)
     if vocab:

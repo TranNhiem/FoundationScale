@@ -59,7 +59,7 @@ provenance:
   evidence:
     - "Ibrahim et al. 2024, Simple and Scalable Strategies to Continually Pre-train Large Language Models (arXiv:2403.08763): LR rewarm + re-decay, replay"
     - "FoundationSkills GB200 calibration 2026-09-26: E4B full FT FSDP x4 fits (48 GB at b1, grad ckpt)"
-    - "FoundationSkills validation 2026-09-27: goal.stages=[cpt] -> planned, emitted and launched by fskills launch on 3x GB200 (FSDP, b2 ga8 seq 4096) over a 17.1M-token FinePDFs misaki domain/general mix (75/25); 349 steps, 2.93 epochs, 6,455 s; FS verdict PASS, save gates 4/4; loss 1.87 -> 1.39; ~3,100 tokens/s/GPU; peak 108.4 GiB/GPU (nvidia-smi reserved) vs 84.2 GB planned -- estimator ~22-29% low at b2"
+    - "FoundationSkills validation 2026-09-27: goal.stages=[cpt] -> planned, emitted and launched by fskills launch on 3x GB200 (FSDP, b2 ga8 seq 4096) over a 17.1M-token FinePDFs misaki domain/general mix (75/25); 349 steps, 2.93 epochs, 6,455 s; FS verdict PASS, save gates 4/4; loss 1.87 -> 1.39; ~3,100 tokens/s/GPU; peak 85.9 GB/GPU allocated vs 84.2 GB planned (-2%); 114.4 GB reserved -- full-FT FSDP allocator cache runs 1.33-1.49x allocated, keep headroom"
     - "SCOPE: runs correctly on FoundationScale; loss steps down at each epoch boundary (multi-epoch memorisation on a small corpus) and domain/general eval is NOT yet measured"
   validated_on:
     fs_commit: a29a02360ce8230cdb078daf21ac2fb9fb2b0436
