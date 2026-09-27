@@ -322,6 +322,118 @@ def test_loss_components_without_a_reference_leaves_whole_total_on_policy() -> N
     assert not components[1].observed
 
 
+# --- Part B2: the SFT pair (raft, best_of_n) trains through _sft_tail ------
+
+
+class _ConstantReward:
+    """Every completion scores identically, so every group is flat."""
+
+    def score(self, *, response: str, gold: str) -> float:
+        return 1.0
+
+
+def test_b2_raft_trains_two_measured_steps_and_loads_no_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _install_fake_host(monkeypatch)
+    reports = RLTrainer(_config("raft")).run()
+
+    assert len(reports) == 2
+    assert len(loaded) == 1, "raft declares no KL term: no reference may be loaded"
+    pristine = _snapshot(_FakeModel())
+    assert any(
+        not torch.equal(value, pristine[name]) for name, value in _snapshot(loaded[0]).items()
+    ), "two masked-NLL steps at lr=1e-2 must move the policy"
+    for report in reports:
+        # One argmax winner per group; two groups per step by construction.
+        assert report.rows == 2
+        assert report.reward_stats is None
+    metrics = _named(reports[0].loss.metrics)
+    assert metrics["raft_nll_mean"] == pytest.approx(reports[0].loss.loss)
+
+
+def test_b2_best_of_n_selects_argmax_winners_and_loads_no_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _install_fake_host(monkeypatch)
+    reports = RLTrainer(_config("best_of_n")).run()
+
+    assert len(reports) == 2
+    assert len(loaded) == 1, "best_of_n declares no KL term: no reference may be loaded"
+    pristine = _snapshot(_FakeModel())
+    assert any(
+        not torch.equal(value, pristine[name]) for name, value in _snapshot(loaded[0]).items()
+    )
+    first = reports[0]
+    assert first.rows == 2
+    assert first.reward_stats is None
+    metrics = _named(first.loss.metrics)
+    assert "best_of_n_nll_mean" in metrics
+    # Both winners are the letter-A completions, which the reward scores 1.0.
+    assert metrics["best_of_n_winner_reward_mean"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("algorithm", ["raft", "best_of_n"])
+def test_b2_all_flat_groups_are_unmeasured_with_a_named_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    algorithm: str,
+) -> None:
+    _install_fake_host(monkeypatch)
+    monkeypatch.setattr(trainer_module, "MCQLetterReward", lambda **kwargs: _ConstantReward())
+
+    with pytest.raises(TrainerRefusal, match="vacuous"):
+        RLTrainer(_config(algorithm)).run()
+    captured = capsys.readouterr()
+    assert "UNMEASURED step 0" in captured.err
+    assert "every group is flat" in captured.err
+
+
+class _TwoLeadersReward:
+    """Scores rows 1, 1, 0, 0 in call order: every group of four ties at 1.0."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def score(self, *, response: str, gold: str) -> float:
+        self.calls += 1
+        return 1.0 if (self.calls - 1) % 4 < 2 else 0.0
+
+
+@pytest.mark.parametrize("algorithm", ["raft", "best_of_n"])
+def test_b2_tied_leaders_are_all_winners_not_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    algorithm: str,
+) -> None:
+    # Under a binary reward any group with two correct rows ties at its
+    # maximum; dropping such groups would starve the SFT tail, and a
+    # first-row tiebreak would let row order pick the winner.
+    _install_fake_host(monkeypatch)
+    monkeypatch.setattr(trainer_module, "MCQLetterReward", lambda **kwargs: _TwoLeadersReward())
+
+    reports = RLTrainer(_config(algorithm, group_size=4)).run()
+
+    assert len(reports) == 2
+    for report in reports:
+        assert report.rows == 4, "two groups x two tied leaders"
+    assert "have a tied maximum; every tied leader is a winner" in capsys.readouterr().err
+
+
+def test_b2_sft_tail_logprob_micro_batching_matches_the_whole_batch_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_host(monkeypatch)
+    whole = RLTrainer(_config("raft", logprob_micro_batch=0)).run()
+    _install_fake_host(monkeypatch)
+    sliced = RLTrainer(_config("raft", logprob_micro_batch=1)).run()
+
+    assert len(whole) == len(sliced) == 2
+    for left, right in zip(whole, sliced, strict=True):
+        assert left.rows == right.rows
+        assert left.loss.loss == pytest.approx(right.loss.loss, rel=1e-4)
+
+
 # --- Part B1: reinforce_baseline and reinforce_pp ----------------------------
 
 

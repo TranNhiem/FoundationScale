@@ -58,10 +58,15 @@ from foundationscale.rl.advantage import AdvantageRefusal, RewardStats
 from foundationscale.rl.algorithm import StepReport, StepReportRefusal
 from foundationscale.rl.corpus import Sample, load_sharegpt
 from foundationscale.rl.interfaces import BatchRefusal, LossOutput
+from foundationscale.rl.online_objectives import BestOfNLoss, RAFTLoss
 from foundationscale.rl.prompt_surface import encode_prompts, resolve_prompt_surface
 from foundationscale.rl.registry import lookup_algorithm
 from foundationscale.rl.rewards import MCQLetterReward
-from foundationscale.rl.torch_backend import TensorPolicyLoss, TensorREINFORCELoss
+from foundationscale.rl.torch_backend import (
+    TensorMaskedSFTLoss,
+    TensorPolicyLoss,
+    TensorREINFORCELoss,
+)
 
 __all__ = (
     "RLTrainConfig",
@@ -454,10 +459,14 @@ class RLTrainer:
         # tails (design section 5): one subtracts a carried EMA baseline,
         # the other folds a k1 penalty into the return and normalises
         # globally. Neither declares advantage_fn, by design and not by
-        # oversight, so the estimator refusal below is not for them.
+        # oversight, so the estimator refusal below is not for them. The SFT
+        # pair (raft, best_of_n) is estimator-free too: its loss is masked NLL
+        # over the argmax-reward winners of each prompt group (_sft_tail).
         estimator_free = self.config.algorithm in (
             "reinforce_baseline",
             "reinforce_pp",
+            "raft",
+            "best_of_n",
         )
         if not estimator_free and not hasattr(objective, "advantage_fn"):
             raise TrainerRefusal(
@@ -901,6 +910,23 @@ class RLTrainer:
             ).logits
             return _token_logprobs(logits, target_ids.narrow(0, start, width))
 
+        if isinstance(objective, (RAFTLoss, BestOfNLoss)):
+            # The SFT pair has no advantage estimator, no old plane and no
+            # reference plane: route to masked-NLL-on-winners BEFORE any of
+            # those three computations are paid for. Generation, scoring,
+            # abstention dropping and the mask construction above are shared
+            # with the PPO-clip tail.
+            return self._sft_tail(
+                step=step,
+                objective=objective,
+                rows=rows,
+                response_mask=response_mask,
+                forward_slice=forward_logprob_slice,
+                row_slices=row_slices,
+                use_logprob_micro_batching=use_logprob_micro_batching,
+                optimizer=optimizer,
+            )
+
         # Old logprobs are RECOMPUTED under no_grad over the same rows -- the
         # generation scores are never reused: their shapes differ and the bug
         # is silent. When micro-batching, current logprobs are also read
@@ -1134,6 +1160,168 @@ class RLTrainer:
             loss=loss_output,
             rows=len(kept_rows),
             reward_stats=RewardStats.over(tuple(float(rewards[row]) for row in kept_rows)),
+            sync=None,
+        )
+
+    def _sft_tail(
+        self,
+        *,
+        step: int,
+        objective: Any,
+        rows: list[tuple[int, float]],
+        response_mask: torch.Tensor,
+        forward_slice: Callable[[int, int], torch.Tensor],
+        row_slices: tuple[tuple[int, int], ...],
+        use_logprob_micro_batching: bool,
+        optimizer: Any,
+    ) -> StepReport | None:
+        """Masked-NLL tail for the SFT pair (RAFT, best-of-N).
+
+        WHAT IS CLAIMED: the scored rows are grouped by prompt id; each group
+        contributes its argmax-reward members -- and the loss is
+        :class:`TensorMaskedSFTLoss` over those winners. A TIED maximum is
+        neither broken nor dropped: every row at the maximum is a winner,
+        because a first-row tiebreak would smuggle row order into a reward
+        measurement, and dropping the group would discard nearly every group
+        under a binary reward (any group with two correct rows ties). A group
+        whose rows ALL share one reward carries no ranking and is dropped,
+        printed with the count -- the SFT analogue of a zero-advantage group.
+        The gradient travels the same ``forward_slice`` /
+        ``row_slices`` machinery as the PPO-clip tail, so
+        ``logprob_micro_batch`` slices this tail identically. The report's
+        ``rows`` counts winner rows -- at least one per priced group -- and the loss
+        carries the objective's own declared metrics where recoverable (the
+        NLL mean, and for best-of-N the winner reward mean).
+
+        WHAT IS NOT CLAIMED: that any group produced a winner. When every
+        group is flat, the step is UNMEASURED with the reason named, never priced
+        as a zero-loss step. No old-logprob plane and no reference plane are
+        computed: masked NLL has no ratio to anchor, and neither objective
+        declares a KL term, so ``reference_policy=None`` loads no frozen copy
+        here.
+        """
+        import torch
+
+        # Grouped by POSITION, not batch index: `rows` pairs a batch index
+        # with a score, and the log-probability / mask planes are already
+        # narrowed to the scored rows, so the grouping keys must address those
+        # planes positionally.
+        groups: dict[str, list[int]] = {}
+        for position, (index, _score) in enumerate(rows):
+            prompt_id = f"row-{index // self.config.group_size}"
+            groups.setdefault(prompt_id, []).append(position)
+        winner_positions: list[int] = []
+        flat: list[tuple[str, float]] = []
+        tied_groups = 0
+        for prompt_id, positions in groups.items():
+            scores = [rows[position][1] for position in positions]
+            best = max(scores)
+            if min(scores) == best:
+                flat.append((prompt_id, best))
+                continue
+            leaders = [position for position in positions if rows[position][1] == best]
+            tied_groups += len(leaders) > 1
+            winner_positions.extend(leaders)
+        if flat:
+            shown = "; ".join(
+                f"{prompt_id}: all rows at reward {best}"
+                for prompt_id, best in flat[:_MAX_GROUPS_REPORTED]
+            )
+            if len(flat) > _MAX_GROUPS_REPORTED:
+                shown += f"; (+{len(flat) - _MAX_GROUPS_REPORTED} more group(s))"
+            print(
+                f"[trainer] step {step}: {len(flat)} of {len(groups)} group(s) "
+                f"dropped from the SFT tail; every row shares one reward, so "
+                f"there is no ranking to fine-tune on ({shown})",
+                file=sys.stderr,
+            )
+        if tied_groups:
+            print(
+                f"[trainer] step {step}: {tied_groups} of {len(groups)} group(s) "
+                f"have a tied maximum; every tied leader is a winner "
+                f"({len(winner_positions)} winner row(s) in total)",
+                file=sys.stderr,
+            )
+        if not winner_positions:
+            print(
+                f"UNMEASURED step {step}: every group is flat ({len(flat)} of "
+                f"{len(groups)} group(s) dropped); the SFT tail selected 0 "
+                f"winners, no gradient exists to take and no step is claimed.",
+                file=sys.stderr,
+            )
+            return None
+
+        winners = torch.tensor(winner_positions, device=response_mask.device)
+        winner_mask = response_mask.index_select(0, winners).detach()
+        n_rows = int(response_mask.shape[0])
+        if use_logprob_micro_batching:
+            # The same two-pass scheme as the PPO-clip tail: price one
+            # detached batch-shaped leaf, then deliver its gradient through
+            # fresh row-sliced graphs. The only swap is the kernel.
+            with torch.no_grad():
+                current_full = (
+                    torch.cat([forward_slice(start, end) for start, end in row_slices], dim=0)
+                    .detach()
+                    .requires_grad_(True)
+                )
+        else:
+            current_full = forward_slice(0, n_rows).requires_grad_(True)
+        winner_current = current_full.index_select(0, winners)
+        loss_tensor = TensorMaskedSFTLoss(objective=objective)(
+            current_logprobs=winner_current,
+            mask=winner_mask,
+        )
+        optimizer.zero_grad()
+        if use_logprob_micro_batching:
+            _micro_batched_backward(
+                loss_tensor=loss_tensor,
+                current_logprobs=current_full,
+                row_slices=row_slices,
+                forward_slice=forward_slice,
+            )
+        else:
+            loss_tensor.backward()
+        optimizer.step()
+
+        from foundationscale.gates.objective_gates import MetricObservation
+
+        measured = float(loss_tensor.detach())
+        weight = float(getattr(objective, "weight", 1.0))
+        metrics: list[Any] = []
+        nll_metric_name = getattr(objective, "nll_metric_name", None)
+        if isinstance(nll_metric_name, str) and nll_metric_name:
+            # loss == weight * mean per-row NLL by construction of the
+            # kernel, so the objective's declared NLL metric is recoverable
+            # from the measured scalar -- a derivation, not a second pass.
+            metrics.append(MetricObservation(name=nll_metric_name, value=measured / weight))
+        reward_metric_name = getattr(objective, "reward_metric_name", None)
+        if isinstance(reward_metric_name, str) and reward_metric_name:
+            winner_rewards = [rows[position][1] for position in winner_positions]
+            metrics.append(
+                MetricObservation(
+                    name=reward_metric_name,
+                    value=sum(winner_rewards) / len(winner_rewards),
+                )
+            )
+        loss_output = LossOutput(
+            loss=measured,
+            components=_loss_components(
+                objective=objective,
+                total=measured,
+                current_logprobs=winner_current,
+                reference_logprobs=None,
+                mask=winner_mask,
+            ),
+            metrics=tuple(metrics),
+        )
+        return StepReport(
+            step=step,
+            loss=loss_output,
+            rows=len(winner_positions),
+            # The SFT bindings declare advantage_fn False, and verify_step
+            # grades the reward_stats <-> advantage_fn pairing both ways, so
+            # this stays None rather than a pooled summary over survivors.
+            reward_stats=None,
             sync=None,
         )
 

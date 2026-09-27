@@ -37,8 +37,9 @@ def _objective_of(name: str) -> object | None:
 
 # The REINFORCE pair builds its advantage in the trainer tail (a carried EMA
 # baseline; a k1-folded global z-score), so neither declares advantage_fn and
-# the estimator refusal is deliberately not theirs.
-_ESTIMATOR_FREE = ("reinforce_baseline", "reinforce_pp")
+# the estimator refusal is deliberately not theirs. The SFT pair (raft,
+# best_of_n) prices masked NLL over one winner per group and needs none either.
+_ESTIMATOR_FREE = ("reinforce_baseline", "reinforce_pp", "raft", "best_of_n")
 
 
 def _split_by_estimator() -> tuple[tuple[str, ...], tuple[str, ...]]:
