@@ -30,6 +30,7 @@ hash of the full model).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -463,8 +464,9 @@ class MegatronRLTrainer:
 
         def _sum_across_ranks(t: torch.Tensor) -> None:
             on_dev = t.to(device)
-            # dp_cp, not WORLD: TP/PP peers hold the same tokens, so a world sum overcounts.
-            dist.all_reduce(on_dev, group=self.pg.dp_cp)
+            # dp only: TP peers hold the same tokens, and CP ranks all see the full
+            # gathered sequence, so any wider sum overcounts.
+            dist.all_reduce(on_dev, group=self.pg.dp)
             # Only the last PP stage holds losses_reduced; the others contribute zeros.
             if self.pg.pp is not None and self.pg.pp.size() > 1:
                 dist.all_reduce(on_dev, group=self.pg.pp)
@@ -591,7 +593,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"(group_size={args.group_size})"
         )
     per_rank = len(rows) // dp_size
-    with Path(metrics_path).open("a", encoding="utf-8") as fh:
+    import torch.distributed as dist
+
+    # Metrics are already reduced over dp and pp, so one writer suffices.
+    writer = not dist.is_initialized() or dist.get_rank() == 0
+    with contextlib.ExitStack() as stack:
+        fh = stack.enter_context(metrics_path.open("a", encoding="utf-8")) if writer else None
         for step in range(args.steps):
             group_ids = [i // max(1, args.group_size) for i in range(len(rows))]
             advantages = group_relative_advantages([r.reward for r in rows], group_ids)
@@ -612,8 +619,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 declared=declared,
             )
             metrics = trainer.train_step(batch, objective_loss_fn, den)
-            fh.write(json.dumps({"step": step, **metrics}) + "\n")
-            fh.flush()
+            if fh is not None:
+                fh.write(json.dumps({"step": step, **metrics}) + "\n")
+                fh.flush()
     return 0
 
 

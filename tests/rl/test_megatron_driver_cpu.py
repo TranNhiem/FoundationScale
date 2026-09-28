@@ -258,6 +258,27 @@ def test_undo_mcore_loss_average_inverts_the_schedule_scaling() -> None:
         pp_step.undo_mcore_loss_average(share, 0, 1)
 
 
+def test_undo_mcore_loss_average_inverts_the_ddp_average() -> None:
+    # DDP divides the summed grad by the DP x CP group size; the inverted value
+    # after the schedule scaling and that average must give back the share.
+    share = torch.tensor(0.37)
+    for nmb, cp, dp_cp in ((1, 1, 2), (4, 2, 4), (2, 2, 8)):
+        sent = pp_step.undo_mcore_loss_average(share, nmb, cp, dp_cp)
+        assert torch.allclose(sent * cp / nmb / dp_cp, share)
+    with pytest.raises(ValueError):
+        pp_step.undo_mcore_loss_average(share, 1, 1, 0)
+
+
+def test_cp_shard_index_is_a_load_balanced_partition() -> None:
+    assert pp_step.cp_shard_index(8, 2, 0) == [0, 1, 6, 7]
+    assert pp_step.cp_shard_index(8, 2, 1) == [2, 3, 4, 5]
+    for cp in (1, 2, 4):
+        held = [i for r in range(cp) for i in pp_step.cp_shard_index(16 * cp, cp, r)]
+        assert sorted(held) == list(range(16 * cp))
+    with pytest.raises(ValueError):
+        pp_step.cp_shard_index(6, 2, 0)
+
+
 def test_param_hash_sees_an_update_outside_the_first_parameter_slice() -> None:
     # The old probe hashed params[0][:4096]; an embedding whose leading rows no
     # batch touches is exactly that slice, so real updates were invisible.

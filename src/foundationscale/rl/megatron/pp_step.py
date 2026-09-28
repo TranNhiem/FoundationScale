@@ -14,8 +14,9 @@ global denominators (design section 3), and returns
 Each microbatch must contribute its additive share of the batch mean, but
 mcore's schedule multiplies a ``(loss, metrics)`` return by the CP size and
 divides it by ``num_microbatches`` (the ``do_not_average_loss`` opt-out does
-not exist in every mcore release), so :func:`undo_mcore_loss_average`
-pre-applies the inverse and the schedule's effective reduction is a SUM. The
+not exist in every mcore release), and DDP then AVERAGES gradients over the
+DP x CP group, so :func:`undo_mcore_loss_average` pre-applies the inverse of
+both and the effective reduction is a SUM. The
 kernel performs its own internal reduction (token_mean / sequence_mean /
 constant); :func:`rescale_to_global_denominator` multiplies the scalar by
 ``local_denominator / global_denominator`` for the SAME unit the family
@@ -26,9 +27,12 @@ microbatches and DP/CP ranks therefore reproduces the single-batch mean.
 WHAT IS CLAIMED: the metric contract matches mcore 0.15 convention -- the
 returned metrics dict values are 0-dim CUDA-detached tensors, the loss is
 differentiable, and the keys (``loss``, ``ratio_mean``, ``clip_fraction``,
-``tokens``) say what they measure. WHAT IS NOT CLAIMED: anything about CP
-packing/zigzag (rung 1+ plumbing lives in the driver's collate path); VPP
-(refused by ``MegatronLaneConfig.validate``).
+``tokens``) say what they measure. Under CP each rank feeds the model its
+load-balanced pair of sequence chunks (:func:`cp_shard_index`) and the token
+logprobs are all-gathered back to the full sequence before the objective, so
+sequence-level objectives (GSPO ratio, per-sequence means) see every token.
+WHAT IS NOT CLAIMED: packed sequences under CP; VPP (refused by
+``MegatronLaneConfig.validate``).
 
 All megatron imports are lazy (inside functions) so this module imports on a
 plain CPU box.
@@ -36,6 +40,7 @@ plain CPU box.
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -53,6 +58,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "ForwardStepFn",
+    "cp_shard_index",
     "family_of",
     "loss_unit",
     "local_denominator",
@@ -292,22 +298,161 @@ def loss_unit(objective_loss_fn: Any) -> str:
 
 
 def undo_mcore_loss_average(
-    loss: torch.Tensor, num_microbatches: int, cp_size: int
+    loss: torch.Tensor, num_microbatches: int, cp_size: int, dp_cp_size: int = 1
 ) -> torch.Tensor:
-    """Pre-invert mcore's legacy 2-tuple loss scaling (``* cp / num_microbatches``).
+    """Pre-invert mcore's loss scaling (``* cp / num_microbatches``) and DDP's
+    gradient average (``/ dp_cp_size``).
 
     ``forward_step_calc_loss`` multiplies a ``(loss, metrics)`` return by the
-    CP group size and divides it by ``num_microbatches``. The FS loss is
-    already an additive share of the batch-exact global mean, so the inverse
-    is applied here and the schedule's net reduction is a plain sum (the
-    NeMo-RL megatron worker uses the same inversion).
+    CP group size and divides it by ``num_microbatches``; DDP then divides the
+    summed gradient by the DP x CP group size. The FS loss is already an
+    additive share of the batch-exact global mean, so both are inverted here
+    and the net reduction over microbatches and ranks is a plain sum. Measured:
+    without the ``dp_cp_size`` factor a DP=2 step-0 grad_norm read exactly half
+    the 1-GPU value on identical rows.
     """
-    if num_microbatches < 1 or cp_size < 1:
+    if num_microbatches < 1 or cp_size < 1 or dp_cp_size < 1:
         raise ValueError(
-            f"undo_mcore_loss_average needs num_microbatches>=1 and cp_size>=1, "
-            f"got {num_microbatches} and {cp_size}"
+            f"undo_mcore_loss_average needs num_microbatches, cp_size and "
+            f"dp_cp_size >= 1, got {num_microbatches}, {cp_size}, {dp_cp_size}"
         )
-    return loss * (num_microbatches / cp_size)
+    return loss * (num_microbatches * dp_cp_size / cp_size)
+
+
+def cp_shard_index(seq_len: int, cp_size: int, cp_rank: int) -> list[int]:
+    """Positions CP rank ``cp_rank`` holds under mcore's load-balanced split.
+
+    ``seq_len`` (already padded to a multiple of ``2 * cp_size``) is cut into
+    ``2 * cp_size`` equal chunks and rank ``r`` keeps chunks ``r`` and
+    ``2 * cp_size - 1 - r``, the layout TE's causal CP attention expects.
+    """
+    if cp_size < 1 or not 0 <= cp_rank < cp_size or seq_len % (2 * cp_size):
+        raise ValueError(
+            f"cp_shard_index: seq_len={seq_len} must be a multiple of 2*cp_size "
+            f"and 0 <= cp_rank={cp_rank} < cp_size={cp_size}"
+        )
+    chunk = seq_len // (2 * cp_size)
+    first = range(cp_rank * chunk, (cp_rank + 1) * chunk)
+    mirror = 2 * cp_size - 1 - cp_rank
+    return [*first, *range(mirror * chunk, (mirror + 1) * chunk)]
+
+
+@functools.cache
+def _cp_gather_fn() -> Any:
+    """Autograd all-gather of CP-local token logprobs back to full length.
+
+    Every CP rank computes the same full-sequence loss, so backward keeps only
+    this rank's slice of the gradient (no sum); DDP's CP average and the
+    ``cp / num_microbatches`` inversion then yield the exact gradient.
+    """
+    import torch
+    import torch.distributed as dist
+
+    class _GatherCP(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx: Any, local: torch.Tensor, padded_len: int, group: Any) -> torch.Tensor:
+            cp_size, cp_rank = dist.get_world_size(group), dist.get_rank(group)
+            parts = [torch.empty_like(local) for _ in range(cp_size)]
+            dist.all_gather(parts, local.contiguous(), group=group)
+            full = local.new_empty((local.shape[0], padded_len))
+            for rank, part in enumerate(parts):
+                full[:, cp_shard_index(padded_len, cp_size, rank)] = part
+            ctx.own = cp_shard_index(padded_len, cp_size, cp_rank)
+            return full
+
+        @staticmethod
+        def backward(ctx: Any, grad: torch.Tensor) -> tuple[Any, None, None]:
+            return grad[:, ctx.own].contiguous(), None, None
+
+    return _GatherCP
+
+
+def _cp_layout() -> tuple[int, int, Any]:
+    from megatron.core.parallel_state import (
+        get_context_parallel_group,
+        get_context_parallel_rank,
+        get_context_parallel_world_size,
+    )
+
+    cp_size = int(get_context_parallel_world_size())
+    if cp_size == 1:
+        return 1, 0, None
+    return cp_size, int(get_context_parallel_rank()), get_context_parallel_group()
+
+
+def _model_inputs(
+    batch: dict[str, Any], cp_size: int, cp_rank: int
+) -> tuple[torch.Tensor, torch.Tensor, int]:
+    """``(input_ids, position_ids, padded_len)`` this CP rank feeds the model.
+
+    Under CP the right-padded rows are padded further to a multiple of
+    ``2 * cp_size`` (pad positions only attend backwards and carry no loss)
+    and sliced to this rank's load-balanced chunks.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    input_ids = batch["input_ids"]
+    position_ids = _position_ids(batch)
+    seq_len = input_ids.shape[1]
+    if cp_size == 1:
+        return input_ids, position_ids, seq_len
+    padded_len = -(-seq_len // (2 * cp_size)) * (2 * cp_size)
+    extra = padded_len - seq_len
+    input_ids = F.pad(input_ids, (0, extra))
+    tail = position_ids[:, -1:] + torch.arange(1, extra + 1, device=position_ids.device)
+    position_ids = torch.cat((position_ids, tail), dim=1)
+    own = input_ids.new_tensor(cp_shard_index(padded_len, cp_size, cp_rank))
+    return input_ids[:, own], position_ids[:, own], padded_len
+
+
+def _full_token_logprobs(
+    out: torch.Tensor,
+    input_ids: torch.Tensor,
+    cfg: MegatronLaneConfig,
+    cp: tuple[int, int, Any],
+    padded_len: int,
+) -> torch.Tensor:
+    """Next-token logprobs ``[B, S-1]`` over the FULL sequence on every CP rank."""
+    import torch
+    import torch.nn.functional as F
+    from megatron.core.parallel_state import (
+        get_tensor_model_parallel_group,
+        get_tensor_model_parallel_rank,
+        get_tensor_model_parallel_world_size,
+    )
+
+    cp_size, cp_rank, cp_group = cp
+    # Logits arrive [s, b, V/TP] with parallel_output=True; the FS helper takes
+    # [B, S, Vs], so transpose to batch-first here.
+    logits = out.transpose(0, 1).contiguous() if out.shape[0] != input_ids.shape[0] else out
+    targets = _targets_from_input_ids(input_ids)
+    if cp_size == 1:
+        logits = logits[:, :-1, :]
+    else:
+        # Position t scores token t+1; the final and pad positions score a dummy 0.
+        targets = F.pad(targets, (0, padded_len - targets.shape[1]))
+        targets = targets[:, targets.new_tensor(cp_shard_index(padded_len, cp_size, cp_rank))]
+    logits = softcap(logits.to(torch.float32), cfg.softcap)
+    tp_size = int(get_tensor_model_parallel_world_size())
+    check_vocab_shard(
+        shard_rows=logits.shape[-1],
+        tp_size=tp_size,
+        padded_vocab=logits.shape[-1] * tp_size,
+        max_target_id=int(targets.max()) if targets.numel() else 0,
+    )
+    logprobs = vocab_parallel_token_logprobs(
+        logits,
+        targets,
+        tp_group=get_tensor_model_parallel_group(),
+        tp_rank=int(get_tensor_model_parallel_rank()),
+        tp_size=tp_size,
+        chunk_size=None,
+    )
+    if cp_size > 1:
+        logprobs = _cp_gather_fn().apply(logprobs, padded_len, cp_group)
+        logprobs = logprobs[:, : input_ids.shape[1] - 1]
+    return logprobs
 
 
 def make_forward_step(
@@ -340,10 +485,7 @@ def make_forward_step(
         data_iterator: Iterator[dict[str, Any]], model: Any
     ) -> tuple[Any, Callable[..., Any]]:
         from megatron.core.parallel_state import (  # lazy: no megatron on CPU
-            get_context_parallel_world_size,
-            get_tensor_model_parallel_group,
-            get_tensor_model_parallel_rank,
-            get_tensor_model_parallel_world_size,
+            get_data_parallel_world_size,
         )
 
         batch = next(data_iterator)
@@ -353,36 +495,17 @@ def make_forward_step(
             "forward_step(train)",
         )
         input_ids = batch["input_ids"]
+        cp = _cp_layout()
+        model_ids, model_pos, padded_len = _model_inputs(batch, cp[0], cp[1])
         output_tensor = model(
-            input_ids=input_ids,
-            position_ids=_position_ids(batch),
+            input_ids=model_ids,
+            position_ids=model_pos,
             attention_mask=None,
             packed_seq_params=batch.get("packed_seq_params"),
         )
 
         def loss_func(out: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-            # Logits arrive [b, s, V/TP] with parallel_output=True; the FS
-            # helper takes [B, S, Vs], so transpose to batch-first here.
-            logits = out.transpose(0, 1).contiguous() if out.shape[0] != input_ids.shape[0] else out
-            logits = logits[:, :-1, :].to(torch.float32)
-            logits = softcap(logits, cfg.softcap)
-            targets = _targets_from_input_ids(input_ids)
-            tp_size = int(get_tensor_model_parallel_world_size())
-            cp_size = int(get_context_parallel_world_size())
-            check_vocab_shard(
-                shard_rows=logits.shape[-1],
-                tp_size=tp_size,
-                padded_vocab=logits.shape[-1] * tp_size,
-                max_target_id=int(targets.max()) if targets.numel() else 0,
-            )
-            current_logprobs = vocab_parallel_token_logprobs(
-                logits,
-                targets,
-                tp_group=get_tensor_model_parallel_group(),
-                tp_rank=int(get_tensor_model_parallel_rank()),
-                tp_size=tp_size,
-                chunk_size=None,
-            )
+            current_logprobs = _full_token_logprobs(out, input_ids, cfg, cp, padded_len)
             loss_mask = (
                 batch["loss_mask"][:, 1:]
                 if batch["loss_mask"].shape[1] == input_ids.shape[1]
@@ -404,7 +527,12 @@ def make_forward_step(
             metrics = dict(metrics)
             metrics["loss"] = scaled.detach().to(torch.float32)
             return (
-                undo_mcore_loss_average(scaled, num_microbatches, cp_size),
+                undo_mcore_loss_average(
+                    scaled,
+                    num_microbatches,
+                    cp[0],
+                    int(get_data_parallel_world_size(with_context_parallel=True)),
+                ),
                 metrics,
             )
 
@@ -428,35 +556,20 @@ def make_logprob_forward_step(cfg: MegatronLaneConfig) -> ForwardStepFn:
     def forward_step(
         data_iterator: Iterator[dict[str, Any]], model: Any
     ) -> tuple[Any, Callable[..., Any]]:
-        from megatron.core.parallel_state import (
-            get_tensor_model_parallel_group,
-            get_tensor_model_parallel_rank,
-            get_tensor_model_parallel_world_size,
-        )
-
         batch = next(data_iterator)
         _require_batch_columns(batch, ("input_ids",), "forward_step(logprobs)")
         input_ids = batch["input_ids"]
+        cp = _cp_layout()
+        model_ids, model_pos, padded_len = _model_inputs(batch, cp[0], cp[1])
         output_tensor = model(
-            input_ids=input_ids,
-            position_ids=_position_ids(batch),
+            input_ids=model_ids,
+            position_ids=model_pos,
             attention_mask=None,
             packed_seq_params=batch.get("packed_seq_params"),
         )
 
         def collect_fn(out: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-            logits = out.transpose(0, 1).contiguous() if out.shape[0] != input_ids.shape[0] else out
-            logits = logits[:, :-1, :].to(torch.float32)
-            logits = softcap(logits, cfg.softcap)
-            targets = _targets_from_input_ids(input_ids)
-            logprobs = vocab_parallel_token_logprobs(
-                logits,
-                targets,
-                tp_group=get_tensor_model_parallel_group(),
-                tp_rank=int(get_tensor_model_parallel_rank()),
-                tp_size=int(get_tensor_model_parallel_world_size()),
-                chunk_size=None,
-            )
+            logprobs = _full_token_logprobs(out, input_ids, cfg, cp, padded_len)
             logprobs = torch.cat([torch.zeros_like(logprobs[:, :1]), logprobs], dim=1).detach()
             zero = torch.zeros((), dtype=torch.float32, device=logprobs.device)
             return zero, {"logprobs": logprobs}
