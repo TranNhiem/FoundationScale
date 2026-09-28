@@ -302,6 +302,9 @@ class MegatronRLTrainer:
         from megatron.core.process_groups_config import ProcessGroupCollection
 
         if not dist.is_initialized():
+            # Bind before the first collective: unbound ranks all share cuda:0, which NCCL
+            # rejects as "invalid usage" at the optimizer's all_gather_object.
+            torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
             dist.init_process_group(backend="nccl")
         world = dist.get_world_size()
         self.cfg.validate(world)
