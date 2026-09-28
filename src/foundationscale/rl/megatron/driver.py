@@ -485,6 +485,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from transformers import AutoTokenizer
 
     from foundationscale.rl.megatron.normalization import compute_denominators
+    from foundationscale.rl.megatron.pp_step import loss_unit
     from foundationscale.rl.registry import lookup_algorithm
     from foundationscale.rl.torch_backend import TensorPolicyLoss
 
@@ -542,12 +543,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     objective = getattr(lookup_algorithm(args.algorithm), "_objective", None)
-    if objective is None or getattr(objective, "reduction", None) != "token_mean":
-        raise SystemExit(
-            f"--algorithm {args.algorithm!r} does not carry a token_mean objective; "
-            "rung 1 normalizes with token-level global denominators only"
-        )
+    if objective is None:
+        raise SystemExit(f"--algorithm {args.algorithm!r} carries no tensor objective")
     objective_loss_fn = TensorPolicyLoss(objective=objective)
+    unit = loss_unit(objective_loss_fn)
     metrics_path = Path(args.metrics_out)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     with Path(metrics_path).open("a", encoding="utf-8") as fh:
@@ -557,8 +556,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             batch = collate_mock_batch(rows, advantages, tokenizer, args.seq_len, pad_id)
             old_logprobs = trainer.capture_logprobs(batch)[:, 1:]
             batch["old_logprobs"] = old_logprobs.cpu()
+            # dr_grpo divides by declared constants (B_g, L_cap), not a measured count.
+            declared = (float(len(rows)), float(args.seq_len - 1)) if unit == "dr_grpo" else None
             den = compute_denominators(
-                "token", batch["loss_mask"][:, 1:], batch["sample_mask"], group=None
+                unit, batch["loss_mask"][:, 1:], batch["sample_mask"], group=None, declared=declared
             )
             metrics = trainer.train_step(batch, objective_loss_fn, den)
             fh.write(json.dumps({"step": step, **metrics}) + "\n")
