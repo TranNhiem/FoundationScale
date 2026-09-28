@@ -380,14 +380,27 @@ def _cp_layout() -> tuple[int, int, Any]:
     return cp_size, int(get_context_parallel_rank()), get_context_parallel_group()
 
 
+def sp_tp(cfg: MegatronLaneConfig) -> int:
+    return cfg.tp if cfg.sp and cfg.tp > 1 else 1
+
+
+def padded_seq_len(seq_len: int, cp_size: int, sp_tp: int) -> int:
+    """Length every row is padded to: CP load balancing needs ``2 * cp`` chunks
+    and SP reduce-scatters each chunk over TP. PP p2p buffers use this too."""
+    multiple = (2 * cp_size if cp_size > 1 else 1) * sp_tp
+    return -(-seq_len // multiple) * multiple
+
+
 def _model_inputs(
-    batch: dict[str, Any], cp_size: int, cp_rank: int
+    batch: dict[str, Any], cp_size: int, cp_rank: int, sp_tp: int = 1
 ) -> tuple[torch.Tensor, torch.Tensor, int]:
     """``(input_ids, position_ids, padded_len)`` this CP rank feeds the model.
 
-    Under CP the right-padded rows are padded further to a multiple of
-    ``2 * cp_size`` (pad positions only attend backwards and carry no loss)
-    and sliced to this rank's load-balanced chunks.
+    Rows are padded to a multiple of ``2 * cp_size`` under CP times ``sp_tp``
+    (the TP size when sequence parallelism is on: the embedding
+    reduce-scatters dim 0, so each CP chunk must split evenly over TP). Pad
+    positions only attend backwards and carry no loss. Under CP the rows are
+    then sliced to this rank's load-balanced chunks.
     """
     import torch
     import torch.nn.functional as F
@@ -395,13 +408,14 @@ def _model_inputs(
     input_ids = batch["input_ids"]
     position_ids = _position_ids(batch)
     seq_len = input_ids.shape[1]
-    if cp_size == 1:
-        return input_ids, position_ids, seq_len
-    padded_len = -(-seq_len // (2 * cp_size)) * (2 * cp_size)
+    padded_len = padded_seq_len(seq_len, cp_size, sp_tp)
     extra = padded_len - seq_len
-    input_ids = F.pad(input_ids, (0, extra))
-    tail = position_ids[:, -1:] + torch.arange(1, extra + 1, device=position_ids.device)
-    position_ids = torch.cat((position_ids, tail), dim=1)
+    if extra:
+        input_ids = F.pad(input_ids, (0, extra))
+        tail = position_ids[:, -1:] + torch.arange(1, extra + 1, device=position_ids.device)
+        position_ids = torch.cat((position_ids, tail), dim=1)
+    if cp_size == 1:
+        return input_ids, position_ids, padded_len
     own = input_ids.new_tensor(cp_shard_index(padded_len, cp_size, cp_rank))
     return input_ids[:, own], position_ids[:, own], padded_len
 
@@ -428,7 +442,7 @@ def _full_token_logprobs(
     logits = out.transpose(0, 1).contiguous() if out.shape[0] != input_ids.shape[0] else out
     targets = _targets_from_input_ids(input_ids)
     if cp_size == 1:
-        logits = logits[:, :-1, :]
+        logits = logits[:, : input_ids.shape[1] - 1, :]
     else:
         # Position t scores token t+1; the final and pad positions score a dummy 0.
         targets = F.pad(targets, (0, padded_len - targets.shape[1]))
@@ -496,7 +510,7 @@ def make_forward_step(
         )
         input_ids = batch["input_ids"]
         cp = _cp_layout()
-        model_ids, model_pos, padded_len = _model_inputs(batch, cp[0], cp[1])
+        model_ids, model_pos, padded_len = _model_inputs(batch, cp[0], cp[1], sp_tp(cfg))
         output_tensor = model(
             input_ids=model_ids,
             position_ids=model_pos,
@@ -560,7 +574,7 @@ def make_logprob_forward_step(cfg: MegatronLaneConfig) -> ForwardStepFn:
         _require_batch_columns(batch, ("input_ids",), "forward_step(logprobs)")
         input_ids = batch["input_ids"]
         cp = _cp_layout()
-        model_ids, model_pos, padded_len = _model_inputs(batch, cp[0], cp[1])
+        model_ids, model_pos, padded_len = _model_inputs(batch, cp[0], cp[1], sp_tp(cfg))
         output_tensor = model(
             input_ids=model_ids,
             position_ids=model_pos,

@@ -279,6 +279,26 @@ def test_cp_shard_index_is_a_load_balanced_partition() -> None:
         pp_step.cp_shard_index(6, 2, 0)
 
 
+def test_model_inputs_pad_to_tp_under_sequence_parallel() -> None:
+    # SP reduce-scatters the embedding output along the sequence, so an odd
+    # row under TP2+SP tripped mcore's "divisible by tensor parallel size".
+    batch = {"input_ids": torch.arange(1, 8).view(1, 7)}
+    ids, pos, padded = pp_step._model_inputs(batch, 1, 0)
+    assert padded == 7 and ids.shape == (1, 7)
+    ids, pos, padded = pp_step._model_inputs(batch, 1, 0, sp_tp=2)
+    assert padded == 8 and ids[0, -1] == 0 and pos[0].tolist() == list(range(8))
+    for cp in (2, 4):
+        chunks = [pp_step._model_inputs(batch, cp, r, sp_tp=2) for r in range(cp)]
+        assert {c[2] for c in chunks} == {4 * cp}
+        assert all(c[0].shape[1] % 2 == 0 for c in chunks)
+    assert pp_step.sp_tp(SimpleNamespace(tp=2, sp=True)) == 2
+    assert pp_step.sp_tp(SimpleNamespace(tp=2, sp=False)) == 1
+    assert pp_step.sp_tp(SimpleNamespace(tp=1, sp=True)) == 1
+    assert pp_step.padded_seq_len(7, 1, 1) == 7
+    assert pp_step.padded_seq_len(7, 2, 2) == 8
+    assert pp_step.padded_seq_len(9, 2, 2) == 16
+
+
 def test_param_hash_sees_an_update_outside_the_first_parameter_slice() -> None:
     # The old probe hashed params[0][:4096]; an embedding whose leading rows no
     # batch touches is exactly that slice, so real updates were invisible.
@@ -310,3 +330,53 @@ def test_reduce_step_metrics_divides_by_the_global_token_count_once() -> None:
     assert dp["clip_fraction"] == pytest.approx(0.25)
     assert dp["tokens"] == pytest.approx(80.0)
     assert reduce_step_metrics([])["ratio_mean"] == 0.0
+
+
+def test_restore_tp_attributes_marks_only_unmarked_mcore_weights(monkeypatch):
+    """Bridge loads HF weights with perform_initialization off, so mcore-native
+    TP layers carry no tensor_model_parallel flag and the grad norm drops tp
+    rank 1's vocab shard. TE-style weights that already carry it stay as-is."""
+    import sys
+    import types
+
+    class _Weighted(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(4, 2))
+
+    class VocabParallelEmbedding(_Weighted):
+        pass
+
+    class ColumnParallelLinear(_Weighted):
+        pass
+
+    class RowParallelLinear(_Weighted):
+        pass
+
+    layers = types.ModuleType("megatron.core.tensor_parallel.layers")
+    layers.VocabParallelEmbedding = VocabParallelEmbedding
+    layers.ColumnParallelLinear = ColumnParallelLinear
+    layers.RowParallelLinear = RowParallelLinear
+    for name in ("megatron", "megatron.core", "megatron.core.tensor_parallel"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, "megatron.core.tensor_parallel.layers", layers)
+
+    model = torch.nn.Module()
+    model.embedding = VocabParallelEmbedding()
+    model.output_layer = ColumnParallelLinear()
+    model.proj = RowParallelLinear()
+    model.tied = ColumnParallelLinear()
+    model.tied.weight = None
+    model.te = ColumnParallelLinear()
+    model.te.weight.tensor_model_parallel = True
+    model.te.weight.partition_dim = 0
+    model.norm = torch.nn.LayerNorm(2)
+
+    assert driver.restore_tp_attributes([model]) == 3
+    assert model.embedding.weight.tensor_model_parallel is True
+    assert model.embedding.weight.partition_dim == 0
+    assert model.output_layer.weight.partition_dim == 0
+    assert model.proj.weight.partition_dim == 1
+    assert model.proj.weight.partition_stride == 1
+    assert not getattr(model.norm.weight, "tensor_model_parallel", False)
+    assert driver.restore_tp_attributes([model]) == 0

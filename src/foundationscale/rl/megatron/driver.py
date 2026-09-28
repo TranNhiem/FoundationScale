@@ -250,6 +250,66 @@ def reduce_step_metrics(entries: Sequence[Any], all_reduce: Any = None) -> dict[
     }
 
 
+def _maybe_dump_grads(model_list: list[Any]) -> None:
+    """Debug probe: ``MEG_GRAD_DUMP=<prefix>`` writes each rank's per-parameter
+    grad sum-of-squares once, so parallel layouts can be diffed by name."""
+    prefix = os.environ.pop("MEG_GRAD_DUMP", "")
+    if not prefix:
+        return
+    import torch.distributed as dist
+
+    rows = {}
+    for chunk in model_list:
+        for name, p in chunk.named_parameters():
+            g = getattr(p, "main_grad", None)
+            if g is None:
+                g = p.grad
+            rows[name] = {
+                "sumsq": float(g.double().pow(2).sum()) if g is not None else None,
+                "shape": list(p.shape),
+                "tp_sharded": bool(getattr(p, "tensor_model_parallel", False)),
+                "allreduce": bool(getattr(p, "allreduce", True)),
+            }
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    Path(f"{prefix}.rank{rank}.json").write_text(json.dumps(rows))
+
+
+def restore_tp_attributes(model_list: list[Any]) -> int:
+    """Mark mcore-native TP-sharded weights as ``tensor_model_parallel``.
+
+    mcore sets the attribute only inside its ``perform_initialization`` branch,
+    and Bridge disables that when loading HF weights. The vocab-parallel
+    embedding and output layer then read as TP duplicates, so the grad norm
+    (and clipping) counts only tp rank 0's shard: 4.84 vs 5.06 on the tiny MoE
+    at TP2. TE layers set their own attributes and are untouched. Returns the
+    number of weights marked.
+    """
+    from megatron.core.tensor_parallel.layers import (
+        ColumnParallelLinear,
+        RowParallelLinear,
+        VocabParallelEmbedding,
+    )
+
+    marked = 0
+    for chunk in model_list:
+        for module in chunk.modules():
+            if isinstance(module, VocabParallelEmbedding | ColumnParallelLinear):
+                dim = 0
+            elif isinstance(module, RowParallelLinear):
+                dim = 1
+            else:
+                continue
+            weight = getattr(module, "weight", None)
+            if weight is None or getattr(weight, "tensor_model_parallel", False):
+                continue
+            weight.tensor_model_parallel = True
+            weight.partition_dim = dim
+            if not hasattr(weight, "partition_stride"):
+                weight.partition_stride = 1
+            marked += 1
+    return marked
+
+
 def _iter_microbatches(
     batch: dict[str, torch.Tensor], mbs: int
 ) -> Iterator[dict[str, torch.Tensor]]:
@@ -344,6 +404,10 @@ class MegatronRLTrainer:
         model_list = provider.provide_distributed_model(
             ddp_config=ddp_config, wrap_with_ddp=True, bf16=not self.fp32, pg_collection=pg
         )
+        if self.cfg.tp > 1:
+            marked = restore_tp_attributes(model_list)
+            if dist.get_rank() == 0:
+                print(f"[meg] restored tensor_model_parallel on {marked} weights", flush=True)
         optimizer = get_megatron_optimizer(
             OptimizerConfig(
                 optimizer="adam",
@@ -379,7 +443,11 @@ class MegatronRLTrainer:
             raise RuntimeError("capture_logprobs before build()")
         from megatron.core.pipeline_parallel import get_forward_backward_func
 
-        from foundationscale.rl.megatron.pp_step import make_logprob_forward_step
+        from foundationscale.rl.megatron.pp_step import (
+            make_logprob_forward_step,
+            padded_seq_len,
+            sp_tp,
+        )
 
         device = next(self.model.parameters()).device
         mb = [
@@ -391,7 +459,7 @@ class MegatronRLTrainer:
             data_iterator=iter(mb),
             model=self.model,
             num_microbatches=len(mb),
-            seq_length=batch["input_ids"].shape[1],
+            seq_length=padded_seq_len(batch["input_ids"].shape[1], self.cfg.cp, sp_tp(self.cfg)),
             micro_batch_size=self.cfg.mbs,
             forward_only=True,
         )
@@ -431,7 +499,11 @@ class MegatronRLTrainer:
         import torch.distributed as dist
         from megatron.core.pipeline_parallel import get_forward_backward_func
 
-        from foundationscale.rl.megatron.pp_step import make_forward_step
+        from foundationscale.rl.megatron.pp_step import (
+            make_forward_step,
+            padded_seq_len,
+            sp_tp,
+        )
 
         self.model.zero_grad_buffer()
         self.optimizer.zero_grad()
@@ -447,7 +519,7 @@ class MegatronRLTrainer:
             data_iterator=iter(mb),
             model=self.model,
             num_microbatches=len(mb),
-            seq_length=batch["input_ids"].shape[1],
+            seq_length=padded_seq_len(batch["input_ids"].shape[1], self.cfg.cp, sp_tp(self.cfg)),
             micro_batch_size=self.cfg.mbs,
             forward_only=False,
         )
@@ -455,6 +527,7 @@ class MegatronRLTrainer:
 
         model_list = self.model if isinstance(self.model, list) else [self.model]
         finalize_model_grads(model_list, None, pg_collection=self.pg)
+        _maybe_dump_grads(model_list)
         update_ok, grad_norm, _ = self.optimizer.step()
         if update_ok and self.scheduler is not None:
             self.scheduler.step(increment=self.cfg.gbs)
