@@ -235,23 +235,20 @@ class MegatronRLTrainer:
     # -- build -------------------------------------------------------------
 
     def build(self) -> None:
-        """Initialize megatron and build model+optimizer via Megatron-Bridge.
+        """Initialize model parallelism and build model+optimizer via Megatron-Bridge.
 
-        Copies the known-working run_gspo.py call sequence:
-        AutoBridge.from_hf_pretrained -> provider config -> parallelism fields
-        -> initialize_megatron -> ProcessGroupCollection.use_mpu_process_groups
-        -> get_model(pg_collection=pg) -> setup_optimizer.
+        Uses the provider call sequence measured to work in the Bridge container
+        (rung-0 parity probe): AutoBridge.from_hf_pretrained -> to_megatron_provider
+        -> parallelism fields -> finalize -> initialize_model_parallel ->
+        provide_distributed_model (DDP-wrapped) -> get_megatron_optimizer with a
+        distributed optimizer and fp32 masters. The learning rate is constant; the
+        RL loop owns step counting, so no scheduler is built.
         """
         require_megatron("MegatronRLTrainer.build")
         import torch.distributed as dist
         from megatron.bridge import AutoBridge
-        from megatron.bridge.models.model_provider import get_model
-        from megatron.bridge.training.initialize import (
-            initialize_megatron,
-            set_jit_fusion_options,
-        )
-        from megatron.bridge.training.optim import setup_optimizer
-        from megatron.bridge.training.state import GlobalState
+        from megatron.core.distributed import DistributedDataParallelConfig
+        from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
         from megatron.core.process_groups_config import ProcessGroupCollection
 
         if not dist.is_initialized():
@@ -260,7 +257,7 @@ class MegatronRLTrainer:
         self.cfg.validate(world)
 
         torch.manual_seed(self.seed)
-        bridge = AutoBridge.from_hf_pretrained(self.hf_model, trust_remote_code=True)
+        bridge = AutoBridge.from_hf_pretrained(self.hf_model)
         provider = bridge.to_megatron_provider(load_weights=True)
         provider.tensor_model_parallel_size = self.cfg.tp
         provider.pipeline_model_parallel_size = self.cfg.pp
@@ -268,52 +265,40 @@ class MegatronRLTrainer:
         provider.sequence_parallel = bool(self.cfg.sp and self.cfg.tp > 1)
         provider.expert_model_parallel_size = self.cfg.ep
         provider.expert_tensor_parallel_size = self.cfg.etp if self.cfg.etp > 0 else None
+        provider.params_dtype = torch.bfloat16
+        provider.bf16 = True
         provider.finalize()
-
-        cfg = provider.to_config_container() if hasattr(provider, "to_config_container") else None
-        if cfg is None:
-            # Older bridge: provider itself is the config container's model part.
-            raise ImportError(
-                "AutoBridge provider does not expose to_config_container(); "
-                "rungs 0-1 require Megatron-Bridge 0.2.0rc7's container API"
-            )
-        cfg.train.micro_batch_size = self.cfg.mbs
-        cfg.train.global_batch_size = self.cfg.gbs
-        cfg.train.train_iters = 1  # the RL loop owns step counting
-        cfg.optimizer.lr = self.lr
-        cfg.optimizer.min_lr = self.lr
-        cfg.ddp.use_distributed_optimizer = True
-        cfg.ddp.grad_reduce_in_fp32 = True
-        cfg.ddp.average_in_collective = True
-        cfg.ddp.check_for_nan_in_grad = True
-        cfg.dataset = None
-
-        state = GlobalState()
-        state.cfg = cfg
-        initialize_megatron(cfg=cfg)
-        set_jit_fusion_options(cfg.model, cfg.train.micro_batch_size)
+        provider.initialize_model_parallel(seed=self.seed)
         pg = ProcessGroupCollection.use_mpu_process_groups()
-        cfg.model._pg_collection = pg
 
-        model_list = get_model(
-            cfg.model,
-            cfg.ddp,
-            overlap_param_gather_with_optimizer_step=False,
-            use_torch_fsdp2=getattr(cfg.dist, "use_torch_fsdp2", False),
-            data_parallel_random_init=cfg.rng.data_parallel_random_init,
+        ddp_config = DistributedDataParallelConfig(
+            use_distributed_optimizer=True,
+            grad_reduce_in_fp32=True,
+            average_in_collective=False,
+            check_for_nan_in_grad=True,
+        )
+        model_list = provider.provide_distributed_model(
+            ddp_config=ddp_config, wrap_with_ddp=True, bf16=True, pg_collection=pg
+        )
+        optimizer = get_megatron_optimizer(
+            OptimizerConfig(
+                optimizer="adam",
+                lr=self.lr,
+                min_lr=self.lr,
+                weight_decay=0.0,
+                bf16=True,
+                params_dtype=torch.bfloat16,
+                use_distributed_optimizer=True,
+                clip_grad=1.0,
+            ),
+            model_list,
             pg_collection=pg,
         )
-        optimizer, scheduler = setup_optimizer(
-            optimizer_config=cfg.optimizer,
-            scheduler_config=cfg.scheduler,
-            model=model_list,
-            use_gloo_process_groups=cfg.dist.use_gloo_process_groups,
-        )
         self.state, self.model, self.optimizer, self.scheduler, self.pg = (
-            state,
+            provider,
             model_list[0] if len(model_list) == 1 else model_list,
             optimizer,
-            scheduler,
+            None,
             pg,
         )
         self._built = True
@@ -389,7 +374,7 @@ class MegatronRLTrainer:
         model_list = self.model if isinstance(self.model, list) else [self.model]
         finalize_model_grads(model_list, None, pg_collection=self.pg)
         update_ok, grad_norm, _ = self.optimizer.step()
-        if update_ok:
+        if update_ok and self.scheduler is not None:
             self.scheduler.step(increment=self.cfg.gbs)
         for chunk in model_list:
             if hasattr(chunk, "start_param_sync"):
@@ -460,6 +445,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--parity-only", action="store_true")
     ap.add_argument("--parity-rows", type=int, default=8)
     ap.add_argument("--out", default="", help="parity logprob dump path")
+    ap.add_argument(
+        "--algorithm",
+        default="dapo",
+        help="registered token-level objective whose declared axes the loss reads",
+    )
     return ap
 
 
@@ -469,6 +459,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from transformers import AutoTokenizer
 
     from foundationscale.rl.megatron.normalization import compute_denominators
+    from foundationscale.rl.registry import lookup_algorithm
     from foundationscale.rl.torch_backend import TensorPolicyLoss
 
     cfg = MegatronLaneConfig(
@@ -512,8 +503,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
-    objective_loss_fn = TensorPolicyLoss  # bound by the caller's algorithm package
-    _ = objective_loss_fn
+    objective = getattr(lookup_algorithm(args.algorithm), "_objective", None)
+    if objective is None or getattr(objective, "reduction", None) != "token_mean":
+        raise SystemExit(
+            f"--algorithm {args.algorithm!r} does not carry a token_mean objective; "
+            "rung 1 normalizes with token-level global denominators only"
+        )
+    objective_loss_fn = TensorPolicyLoss(objective=objective)
     metrics_path = Path(args.metrics_out)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     with Path(metrics_path).open("a", encoding="utf-8") as fh:
