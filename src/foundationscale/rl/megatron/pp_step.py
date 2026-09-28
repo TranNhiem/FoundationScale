@@ -520,11 +520,15 @@ def make_forward_step(
 
         def loss_func(out: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
             current_logprobs = _full_token_logprobs(out, input_ids, cfg, cp, padded_len)
-            loss_mask = (
-                batch["loss_mask"][:, 1:]
-                if batch["loss_mask"].shape[1] == input_ids.shape[1]
-                else batch["loss_mask"]
-            )
+            width = batch["loss_mask"].shape[1]
+            if width == input_ids.shape[1]:
+                loss_mask = batch["loss_mask"][:, 1:]
+            elif width == input_ids.shape[1] - 1:
+                loss_mask = batch["loss_mask"]
+            else:
+                raise ValueError(
+                    f"loss_mask width {width} matches neither S={input_ids.shape[1]} nor S-1"
+                )
             raw_loss = objective_loss_fn(
                 current_logprobs=current_logprobs,
                 old_logprobs=batch["old_logprobs"],

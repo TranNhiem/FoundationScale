@@ -614,7 +614,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     trainer = MegatronRLTrainer(cfg, args.hf_model, lr=args.lr, seed=args.seed, fp32=args.fp32)
     trainer.build()
-    tokenizer = AutoTokenizer.from_pretrained(args.hf_model, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.hf_model, trust_remote_code=False)
     pad_id = int(
         getattr(tokenizer, "pad_token_id", None) or getattr(tokenizer, "eos_token_id", 0) or 0
     )
@@ -644,6 +644,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             torch.backends.cudnn.allow_tf32 = False
             torch.set_float32_matmul_precision("highest")
         logprobs = trainer.capture_logprobs(batch)
+        import torch.distributed as dist
+
+        # Every rank holds the gathered logprobs; concurrent writers would interleave.
+        if dist.is_initialized() and dist.get_rank() != 0:
+            return 0
         Path(args.out).write_text(
             json.dumps({"input_ids": batch["input_ids"].tolist(), "logprobs": logprobs.tolist()})
             + "\n",
@@ -651,6 +656,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
+    if args.steps < 1:
+        raise SystemExit(f"--steps must be >= 1, got {args.steps}")
     objective = getattr(lookup_algorithm(args.algorithm), "_objective", None)
     if objective is None:
         raise SystemExit(f"--algorithm {args.algorithm!r} carries no tensor objective")
