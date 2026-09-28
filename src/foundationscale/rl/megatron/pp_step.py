@@ -223,6 +223,24 @@ def _require_batch_columns(batch: dict[str, Any], required: tuple[str, ...], own
         )
 
 
+def _position_ids(batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    """Explicit positions; mcore gets ``attention_mask=None`` (causal).
+
+    Rows are RIGHT-padded, so the causal mask alone is exact for every real
+    token: a pad position only ever attends backwards and is masked out of
+    the loss. The batch's HF-style ``[B, S]`` float mask is NOT an mcore
+    attention mask (mcore wants a boolean ``[B, 1, S, S]`` with True =
+    masked), so it is never passed to the model.
+    """
+    input_ids = batch["input_ids"]
+    position_ids = batch.get("position_ids")
+    if position_ids is not None:
+        return position_ids
+    return (
+        torch.arange(input_ids.shape[1], device=input_ids.device).unsqueeze(0).expand_as(input_ids)
+    )
+
+
 def _targets_from_input_ids(input_ids: torch.Tensor) -> torch.Tensor:
     """Next-token targets: prediction at position t scores token t+1."""
     return input_ids[:, 1:].contiguous()
@@ -277,15 +295,11 @@ def make_forward_step(
             "forward_step(train)",
         )
         input_ids = batch["input_ids"]
-        attention_mask = batch.get("attention_mask")
-        position_ids = batch.get("position_ids")
-        packed_seq_params = batch.get("packed_seq_params")
-
         output_tensor = model(
             input_ids=input_ids,
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-            packed_seq_params=packed_seq_params,
+            position_ids=_position_ids(batch),
+            attention_mask=None,
+            packed_seq_params=batch.get("packed_seq_params"),
         )
 
         def loss_func(out: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
@@ -361,8 +375,8 @@ def make_logprob_forward_step(cfg: MegatronLaneConfig) -> ForwardStepFn:
         input_ids = batch["input_ids"]
         output_tensor = model(
             input_ids=input_ids,
-            position_ids=batch.get("position_ids"),
-            attention_mask=batch.get("attention_mask"),
+            position_ids=_position_ids(batch),
+            attention_mask=None,
             packed_seq_params=batch.get("packed_seq_params"),
         )
 
