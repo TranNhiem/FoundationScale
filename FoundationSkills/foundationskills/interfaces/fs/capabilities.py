@@ -420,8 +420,9 @@ def _probe_rl_runnable(names: tuple[str, ...], errors: list[str]) -> dict[str, s
                 defaults[f.name] = f.default
             elif f.default_factory is not dataclasses.MISSING:  # type: ignore[misc]
                 defaults[f.name] = f.default_factory()  # type: ignore[misc]
-    except Exception:  # noqa: BLE001 - older FS: fall back to the bare stub
+    except Exception as exc:  # noqa: BLE001 - older FS: fall back to the bare stub, and say so
         defaults = {}
+        errors.append(f"rl runnability: RLTrainConfig defaults unavailable ({type(exc).__name__}: {exc}); probed with a bare config")
     out: dict[str, str | None] = {}
     for name in names:
         try:

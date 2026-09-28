@@ -111,10 +111,16 @@ def launch(
             raise LaunchRefused("launch refused: spec.argv is empty and no sbatch path applies")
         command = shlex.join(argv)
         live_log = _launch_log_path(spec) if runner is subprocess.run else None
+        fh = None
         if live_log is not None:
+            try:
+                fh = live_log.open("w", encoding="utf-8")
+            except OSError:  # an unwritable log never blocks the run; output is captured instead
+                live_log = None
+        if fh is not None and live_log is not None:
             # Stream to disk as the run goes: a multi-hour run captured in memory
             # is unobservable until it ends (no step, loss or throughput to watch).
-            with live_log.open("w", encoding="utf-8") as fh:
+            with fh:
                 completed = runner(argv, stdout=fh, stderr=subprocess.STDOUT, text=True, check=False, **run_kwargs)
             output = live_log.read_text(encoding="utf-8", errors="replace")
             log_path: str | None = str(live_log)

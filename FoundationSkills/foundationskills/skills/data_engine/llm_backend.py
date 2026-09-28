@@ -460,6 +460,8 @@ class CachedBackend:
             'max_tokens': max_tokens,
             'seed': seed,
             'json_mode': bool(json_mode),
+            # merged into the request body, so it changes the answer (e.g. thinking on/off)
+            'extra_body': getattr(self.inner, 'extra_body', None) or {},
         }
         try:
             encoded = json.dumps(material, sort_keys=True).encode('utf-8')

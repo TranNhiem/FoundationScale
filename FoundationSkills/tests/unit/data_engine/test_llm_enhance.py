@@ -506,3 +506,14 @@ def test_missing_backend_refuses_naming_input():
     with pytest.raises(ValueError, match="config.backend") as excinfo:
         _run({"mode": "rephrase"}, [{"id": "d1", "text": TEXT}])
     assert "llm_enhance: missing input" in str(excinfo.value)
+
+
+def test_budget_exhausted_qa_synth_never_emits_the_source_document():
+    # qa_synth output is a QA stream; a raw document there contaminates the format.
+    payload = json.dumps({"pairs": [{"question": "What do green plants convert?",
+                                     "answer": "They convert sunlight into chemical energy inside green plant leaves."}]})
+    _, cfg = _setup([("Photosynthesis", payload)], mode="qa_synth", n_pairs=1, max_calls=1, workers=1)
+    out, stats = _run(cfg, [{"id": "d1", "text": TEXT}, {"id": "d2", "text": TEXT}])
+    assert [r["id"] for r in out] == ["d1#qa1"]
+    assert stats.dropped["budget_exhausted"] == 1
+    assert stats.extra["budget_exhausted"] is True

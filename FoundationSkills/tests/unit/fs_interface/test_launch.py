@@ -127,6 +127,31 @@ def test_no_submit_runs_argv_directly(tmp_path):
     assert not (tmp_path / "out" / "launch-sft1.sbatch").exists()
 
 
+def test_real_runner_log_is_on_disk_while_the_run_is_still_going(tmp_path):
+    import sys
+
+    spec = make_spec(tmp_path)
+    log = tmp_path / "out" / "fskills_launch.log"
+    child = (f"import time; print('step 1 loss 2.5', flush=True); time.sleep(0.2); "
+             f"print('LIVE' if 'step 1' in open({str(log)!r}).read() else 'BUFFERED')")
+    spec["argv"] = [sys.executable, "-c", child]
+    spec["dry_run_argv"] = None
+    launch(spec, confirm=plan_hash(spec), submit=False)
+    assert "LIVE" in log.read_text()
+
+
+def test_unopenable_launch_log_does_not_block_the_launch(tmp_path):
+    import sys
+
+    spec = make_spec(tmp_path)
+    (tmp_path / "out").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "out" / "fskills_launch.log").mkdir()  # a directory: open("w") raises OSError
+    spec["argv"] = [sys.executable, "-c", "print('[fs:train:done] PASS')"]
+    spec["dry_run_argv"] = None
+    result = launch(spec, confirm=plan_hash(spec), submit=False)
+    assert result["returncode"] == 0 and result["log"] is None
+
+
 def test_real_runner_streams_log_to_disk_and_recovers_verdict(tmp_path):
     import sys
 

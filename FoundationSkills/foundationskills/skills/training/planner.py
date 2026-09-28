@@ -212,7 +212,7 @@ def _evaluate_stage_rules(rules: list[dict], ctx: dict) -> tuple[list[dict], lis
 
 
 def _apply_operator_stages(requested: Any, selected: list[dict], rules: list[dict],
-                           fired: list[str], decide: Any) -> list[dict]:
+                           fired: list[str], decide: Any, stage_order: Any = None) -> list[dict]:
     """``goal.stages``: the operator's explicit stage set replaces the rule
     selection. Every disagreement with the rules is logged as an
     ``operator_override`` decision quoting the rule's reason, never hidden."""
@@ -224,7 +224,9 @@ def _apply_operator_stages(requested: Any, selected: list[dict], rules: list[dic
     by_stage = {a["stage"]: a for a in selected}
     rule_by_id = {str(r.get("id")): r for r in rules}
     out: list[dict] = []
-    for stage in sorted(dict.fromkeys(requested), key=lambda s: _LIFECYCLE_RANK[s]):
+    explicit = [str(s) for s in (stage_order or [])]
+    rank = {name: i for i, name in enumerate(explicit)} if explicit else _LIFECYCLE_RANK
+    for stage in sorted(dict.fromkeys(requested), key=lambda s: (rank.get(s, len(rank)), _LIFECYCLE_RANK[s])):
         if stage in by_stage:
             out.append(by_stage[stage])
             continue
@@ -538,7 +540,8 @@ def plan(
     }
     selected, fired = _evaluate_stage_rules(rules, rule_ctx)
     if goal.get("stages") is not None:
-        selected = _apply_operator_stages(goal.get("stages"), selected, rules, fired, decide)
+        selected = _apply_operator_stages(goal.get("stages"), selected, rules, fired, decide,
+                                          stage_order=goal.get("stage_order"))
     if not selected:
         raise PlanningRefusal(
             "no stage selected: "

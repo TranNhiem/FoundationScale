@@ -312,3 +312,11 @@ def test_stage_gap_blocks_every_alternative_and_is_named() -> None:
 def test_no_stage_gap_leaves_alternatives_alone() -> None:
     alts = [{"change": "micro_batch 2 -> 1", "executable": True, "missing": None}]
     assert planner._gate_alternatives(alts, None) == alts
+
+
+def test_operator_stages_follow_an_explicit_stage_order() -> None:
+    decisions: list = []
+    selected = [{"stage": "sft", "rule_id": "R"}, {"stage": "cpt", "rule_id": "R"}]
+    out = planner._apply_operator_stages(["cpt", "sft"], selected, [], [], lambda *a: decisions.append(a),
+                                         stage_order=["sft", "cpt"])
+    assert [s["stage"] for s in out] == ["sft", "cpt"]

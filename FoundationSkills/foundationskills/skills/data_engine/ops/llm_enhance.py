@@ -9,7 +9,7 @@ Config::
      "field": str,              # default "text": source field of the document modes
      "max_chars": int,          # default 8000; longer inputs truncated (input_truncated)
      "workers": int,            # default 4; concurrent backend calls, order preserved
-     "max_calls": int | null,   # record budget; later records pass through unenhanced
+     "max_calls": int | null,   # record budget; later records pass through unenhanced (qa_synth: dropped as budget_exhausted)
      "temperature": float,      # default 0.0 (0.7 for rephrase when unset)
      "max_tokens": int,         # default 2048
      "seed": int,               # default 0
@@ -626,6 +626,8 @@ def llm_enhance(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iterator[
     def _work(item: tuple[bool, dict]) -> _Outcome:
         allowed, rec = item
         if not allowed:
+            if ctx.mode == "qa_synth":  # converts documents: a raw one in the QA stream is contamination
+                return _Outcome(outputs=[], drops=["budget_exhausted"], budget_skip=True)
             return _Outcome(outputs=[rec], budget_skip=True)  # untouched, no provenance
         return handler(rec, cfg, ctx)
 

@@ -625,3 +625,16 @@ def test_budget_is_thread_safe_under_contention() -> None:
 def test_invalid_budget_refuses_configuration() -> None:
     with pytest.raises(lb.LLMOpError, match='max_calls'):
         lb.budget(-1)
+
+
+def test_cache_key_separates_backends_that_differ_only_in_extra_body(tmp_path) -> None:
+    # extra_body is merged into the request (e.g. enable_thinking); two configs that
+    # differ only there must not share cached answers.
+    thinking, plain = _ScriptBackend([_success()]), _ScriptBackend([_success()])
+    thinking.extra_body = {'chat_template_kwargs': {'enable_thinking': True}}
+    plain.extra_body = {'chat_template_kwargs': {'enable_thinking': False}}
+    msgs = [{'role': 'user', 'content': 'same prompt'}]
+    lb.CachedBackend(thinking, str(tmp_path)).complete(msgs, seed=3)
+    response = lb.CachedBackend(plain, str(tmp_path)).complete(msgs, seed=3)
+    assert response.cache_hit is False
+    assert len(plain.calls) == 1
