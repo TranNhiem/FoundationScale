@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -22,6 +23,7 @@ from foundationscale.rl.megatron.driver import (
     group_relative_advantages,
     load_mock_rollouts,
     param_hash,
+    reduce_step_metrics,
     require_megatron,
 )
 from foundationscale.rl.megatron.pp_step import (
@@ -215,3 +217,75 @@ def test_pp_step_module_importable_without_megatron() -> None:
     assert pp_step.__name__.endswith("pp_step")
     assert callable(pp_step.make_forward_step)
     assert callable(pp_step.make_logprob_forward_step)
+
+
+def test_loss_unit_reads_reduction_off_every_registered_objective() -> None:
+    # The GPU rung-1 run died here: TensorPolicyLoss declares its unit only via
+    # objective.reduction, and make_forward_step looked for a family name.
+    from foundationscale.rl.registry import available_algorithm_names, lookup_algorithm
+    from foundationscale.rl.torch_backend import TensorPolicyLoss
+
+    seen = 0
+    for name in available_algorithm_names():
+        objective = getattr(lookup_algorithm(name), "_objective", None)
+        reduction = getattr(objective, "reduction", None)
+        if reduction not in pp_step._REDUCTION_UNITS:
+            continue
+        unit = pp_step.loss_unit(TensorPolicyLoss(objective=objective))
+        assert unit == pp_step._REDUCTION_UNITS[reduction], name
+        seen += 1
+    assert seen > 0
+
+
+def test_loss_unit_explicit_family_wins_and_undeclared_refuses() -> None:
+    class Declared:
+        family = "gspo"
+        objective = SimpleNamespace(reduction="token_mean")
+
+    assert pp_step.loss_unit(Declared()) == "sequence"
+    with pytest.raises(ValueError, match="normalization unit"):
+        pp_step.loss_unit(SimpleNamespace(objective=SimpleNamespace(reduction=None)))
+
+
+def test_undo_mcore_loss_average_inverts_the_schedule_scaling() -> None:
+    # mcore's forward_step_calc_loss does loss * cp / num_microbatches on a
+    # 2-tuple return; applying it to the inverted value must give back the share.
+    share = torch.tensor(0.37)
+    for nmb, cp in ((1, 1), (4, 1), (8, 2)):
+        sent = pp_step.undo_mcore_loss_average(share, nmb, cp)
+        assert torch.allclose(sent * cp / nmb, share)
+    with pytest.raises(ValueError):
+        pp_step.undo_mcore_loss_average(share, 0, 1)
+
+
+def test_param_hash_sees_an_update_outside_the_first_parameter_slice() -> None:
+    # The old probe hashed params[0][:4096]; an embedding whose leading rows no
+    # batch touches is exactly that slice, so real updates were invisible.
+    # A sample can still miss one sparse embedding row; every dense layer gets
+    # gradient on a real step, which is what the probe must see.
+    model = torch.nn.Sequential(torch.nn.Embedding(1000, 8), torch.nn.Linear(8, 8))
+    before = param_hash(model)
+    with torch.no_grad():
+        model[1].bias.add_(1e-3)
+    assert param_hash(model) != before
+
+
+def test_reduce_step_metrics_divides_by_the_global_token_count_once() -> None:
+    entries = [
+        {"loss": 0.1, "ratio_mean": 1.0, "clip_fraction": 0.0, "tokens": 30.0},
+        {"loss": 0.2, "ratio_mean": 1.0, "clip_fraction": 1.0, "tokens": 10.0},
+    ]
+    out = reduce_step_metrics(entries)
+    assert out["ratio_mean"] == pytest.approx(1.0)
+    assert out["clip_fraction"] == pytest.approx(0.25)
+    assert out["tokens"] == pytest.approx(40.0)
+    assert out["loss"] == pytest.approx(0.3)
+
+    def two_identical_ranks(t: torch.Tensor) -> None:
+        t.mul_(2.0)
+
+    dp = reduce_step_metrics(entries, two_identical_ranks)
+    assert dp["ratio_mean"] == pytest.approx(1.0)
+    assert dp["clip_fraction"] == pytest.approx(0.25)
+    assert dp["tokens"] == pytest.approx(80.0)
+    assert reduce_step_metrics([])["ratio_mean"] == 0.0

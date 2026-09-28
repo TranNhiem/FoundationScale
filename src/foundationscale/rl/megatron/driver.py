@@ -22,9 +22,9 @@ Every heavy import (megatron, bridge, transformers) is lazy, so this module
 imports on a CPU-only box; calling anything that needs megatron without it
 installed raises a named ImportError. One JSON line per step goes to
 ``--metrics-out`` with step, loss, ratio_mean, clip_fraction, grad_norm,
-tokens, and param_hash (rank-local sha256 of a fixed parameter slice, for
-DP-equality checks; it is a SHARED-id equality probe, not a content hash of
-the full model).
+tokens, update_ok, and param_hash (rank-local sha256 of a strided sample of
+every parameter, for DP-equality and movement checks; a sample, not a content
+hash of the full model).
 """
 
 from __future__ import annotations
@@ -52,6 +52,7 @@ __all__ = (
     "load_mock_rollouts",
     "main",
     "param_hash",
+    "reduce_step_metrics",
     "require_megatron",
 )
 
@@ -186,11 +187,15 @@ def collate_mock_batch(
     }
 
 
-def param_hash(model: Any, numel: int = 4096) -> str:
-    """Rank-local sha256 over the first ``numel`` entries of the first
-    parameter, fp32-cast. Used for DP-equality smoke checks ("dpcheck"): it is
-    an equality probe across ranks of the same shard, NOT a full-model hash,
-    and is named as such in the metrics row."""
+def param_hash(model: Any, per_param: int = 64) -> str:
+    """Rank-local sha256 over a strided sample of EVERY parameter, fp32-cast.
+
+    Used for DP-equality and movement smoke checks. A slice of one parameter
+    is blind: the first parameter is the embedding, and its leading rows are
+    token ids no batch touches, so they get zero gradient and never move.
+    Sampling ``per_param`` evenly-strided entries of each parameter sees any
+    update that reaches any parameter. It is still a sample, NOT a full-model
+    hash, and is named as such in the metrics row."""
     params = (
         list(model.parameters())
         if not isinstance(model, (list, tuple))
@@ -198,8 +203,42 @@ def param_hash(model: Any, numel: int = 4096) -> str:
     )
     if not params:
         raise ValueError("param_hash: model exposes 0 parameters")
-    flat = params[0].detach().to(torch.float32).reshape(-1)[:numel].cpu()
-    return hashlib.sha256(flat.numpy().tobytes()).hexdigest()
+    digest = hashlib.sha256()
+    for p in params:
+        flat = p.detach().reshape(-1)
+        stride = max(1, flat.numel() // per_param)
+        digest.update(flat[::stride][:per_param].to(torch.float32).cpu().numpy().tobytes())
+    return digest.hexdigest()
+
+
+def reduce_step_metrics(entries: Sequence[Any], all_reduce: Any = None) -> dict[str, float]:
+    """Token-weighted step metrics from mcore's per-microbatch ``losses_reduced``.
+
+    ``ratio_mean`` and ``clip_fraction`` arrive as per-microbatch means; they
+    are summed token-weighted, all-reduced as SUMS, and divided once by the
+    global token count. ``loss`` is a sum of per-microbatch shares of the
+    global objective. ``all_reduce`` sums a float64 tensor in place (None on
+    a single process)."""
+    sums = [0.0, 0.0, 0.0, 0.0]  # loss, ratio*tokens, clip*tokens, tokens
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        weight = float(entry.get("tokens", 0.0))
+        sums[0] += float(entry.get("loss", 0.0))
+        sums[1] += float(entry.get("ratio_mean", 0.0)) * weight
+        sums[2] += float(entry.get("clip_fraction", 0.0)) * weight
+        sums[3] += weight
+    if all_reduce is not None:
+        reduced = torch.tensor(sums, dtype=torch.float64)
+        all_reduce(reduced)
+        sums = [float(v) for v in reduced]
+    total = sums[3]
+    return {
+        "loss": sums[0],
+        "ratio_mean": sums[1] / total if total > 0.0 else 0.0,
+        "clip_fraction": sums[2] / total if total > 0.0 else 0.0,
+        "tokens": total,
+    }
 
 
 def _iter_microbatches(
@@ -373,14 +412,15 @@ class MegatronRLTrainer:
             for micro in _iter_microbatches(batch, self.cfg.mbs)
         ]
         losses_reduced = get_forward_backward_func()(
-            forward_step_func=make_forward_step(objective_loss_fn, den, self.cfg),
+            forward_step_func=make_forward_step(
+                objective_loss_fn, den, self.cfg, num_microbatches=len(mb)
+            ),
             data_iterator=iter(mb),
             model=self.model,
             num_microbatches=len(mb),
             seq_length=batch["input_ids"].shape[1],
             micro_batch_size=self.cfg.mbs,
             forward_only=False,
-            do_not_average_loss=True,
         )
         from megatron.core.distributed import finalize_model_grads
 
@@ -393,43 +433,15 @@ class MegatronRLTrainer:
             if hasattr(chunk, "start_param_sync"):
                 chunk.start_param_sync(force_sync=True)
 
-        token_scale: dict[str, float] = {
-            "loss": 0.0,
-            "ratio_mean": 0.0,
-            "clip_fraction": 0.0,
-            "tokens": 0.0,
-        }
-        for entry in losses_reduced or []:
-            if not isinstance(entry, dict):
-                continue
-            weight = float(entry.get("tokens", 0.0))
-            token_scale["tokens"] += weight
-            token_scale["loss"] += float(entry.get("loss", 0.0))
-            if weight > 0.0:
-                token_scale["ratio_mean"] += float(entry.get("ratio_mean", 0.0)) * weight
-                token_scale["clip_fraction"] += float(entry.get("clip_fraction", 0.0)) * weight
-        total = token_scale["tokens"]
-        if total > 0.0:
-            token_scale["ratio_mean"] /= total
-            token_scale["clip_fraction"] /= total
-        if dist.is_initialized():
-            reduced = torch.tensor(
-                [
-                    token_scale["loss"],
-                    token_scale["ratio_mean"],
-                    token_scale["clip_fraction"],
-                    total,
-                ],
-                dtype=torch.float64,
-                device=device,
-            )
-            dist.all_reduce(reduced)
-            token_scale["loss"] = float(reduced[0])
-            gtotal = float(reduced[3])
-            token_scale["tokens"] = gtotal
-            if gtotal > 0.0:
-                token_scale["ratio_mean"] = float(reduced[1]) / gtotal
-                token_scale["clip_fraction"] = float(reduced[2]) / gtotal
+        def _sum_across_ranks(t: torch.Tensor) -> None:
+            on_dev = t.to(device)
+            dist.all_reduce(on_dev)
+            t.copy_(on_dev.cpu())
+
+        token_scale: dict[str, Any] = reduce_step_metrics(
+            losses_reduced or [], _sum_across_ranks if dist.is_initialized() else None
+        )
+        token_scale["update_ok"] = bool(update_ok)
         token_scale["grad_norm"] = float(grad_norm or 0.0)
         return {**token_scale, "param_hash": param_hash(self.model)}
 

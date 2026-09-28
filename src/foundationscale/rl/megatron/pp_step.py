@@ -11,8 +11,11 @@ to the FS ``TensorPolicyLoss`` kernel, rescales the scalar by the batch-exact
 global denominators (design section 3), and returns
 ``(loss, metrics_dict)``.
 
-With ``do_not_average_loss=True`` mcore SUMS the per-microbatch losses, so
-each microbatch must contribute its additive share of the batch mean. The
+Each microbatch must contribute its additive share of the batch mean, but
+mcore's schedule multiplies a ``(loss, metrics)`` return by the CP size and
+divides it by ``num_microbatches`` (the ``do_not_average_loss`` opt-out does
+not exist in every mcore release), so :func:`undo_mcore_loss_average`
+pre-applies the inverse and the schedule's effective reduction is a SUM. The
 kernel performs its own internal reduction (token_mean / sequence_mean /
 constant); :func:`rescale_to_global_denominator` multiplies the scalar by
 ``local_denominator / global_denominator`` for the SAME unit the family
@@ -49,9 +52,11 @@ from foundationscale.rl.megatron.normalization import GlobalDenominators
 __all__ = (
     "ForwardStepFn",
     "family_of",
+    "loss_unit",
     "local_denominator",
     "make_forward_step",
     "make_logprob_forward_step",
+    "undo_mcore_loss_average",
     "ratio_and_clip_metrics",
     "rescale_to_global_denominator",
 )
@@ -161,7 +166,7 @@ def rescale_to_global_denominator(
     sample_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Rescale the kernel's internally-reduced scalar so that SUMMING the
-    returned values over microbatches and ranks (mcore ``do_not_average_loss``)
+    returned values over microbatches and ranks (see :func:`undo_mcore_loss_average`)
     yields the batch-exact mean.
 
     The kernel already divided by the LOCAL unit count; multiplying by
@@ -246,10 +251,63 @@ def _targets_from_input_ids(input_ids: torch.Tensor) -> torch.Tensor:
     return input_ids[:, 1:].contiguous()
 
 
+_REDUCTION_UNITS = {"token_mean": "token", "sequence_mean": "sequence", "constant": "dr_grpo"}
+
+
+def loss_unit(objective_loss_fn: Any) -> str:
+    """The global-denominator unit a loss callable declares (design section 3).
+
+    An explicit ``.family`` (or ``.objective.normalization_family`` /
+    ``.loss_family``) wins; otherwise the unit is read off
+    ``.objective.reduction``, the same declaration ``TensorPolicyLoss`` uses
+    to pick its own denominator, so the two cannot price one batch on
+    different units. Refuses when neither is declared.
+    """
+    objective = getattr(objective_loss_fn, "objective", None)
+    family = (
+        getattr(objective_loss_fn, "family", None)
+        or getattr(objective, "normalization_family", None)
+        or getattr(objective, "loss_family", None)
+    )
+    if family is not None:
+        return family_of(str(family))
+    reduction = getattr(objective, "reduction", None)
+    if reduction in _REDUCTION_UNITS:
+        return _REDUCTION_UNITS[reduction]
+    raise ValueError(
+        "make_forward_step could not read a normalization unit off "
+        f"{type(objective_loss_fn).__name__} (looked for .family, "
+        ".objective.normalization_family / .loss_family, and "
+        f".objective.reduction in {sorted(_REDUCTION_UNITS)}; got {reduction!r}); "
+        "design section 3 requires the unit to pick the global denominator"
+    )
+
+
+def undo_mcore_loss_average(
+    loss: torch.Tensor, num_microbatches: int, cp_size: int
+) -> torch.Tensor:
+    """Pre-invert mcore's legacy 2-tuple loss scaling (``* cp / num_microbatches``).
+
+    ``forward_step_calc_loss`` multiplies a ``(loss, metrics)`` return by the
+    CP group size and divides it by ``num_microbatches``. The FS loss is
+    already an additive share of the batch-exact global mean, so the inverse
+    is applied here and the schedule's net reduction is a plain sum (the
+    NeMo-RL megatron worker uses the same inversion).
+    """
+    if num_microbatches < 1 or cp_size < 1:
+        raise ValueError(
+            f"undo_mcore_loss_average needs num_microbatches>=1 and cp_size>=1, "
+            f"got {num_microbatches} and {cp_size}"
+        )
+    return loss * (num_microbatches / cp_size)
+
+
 def make_forward_step(
     objective_loss_fn: Any,
     den: GlobalDenominators,
     cfg: MegatronLaneConfig,
+    *,
+    num_microbatches: int,
 ) -> ForwardStepFn:
     """Build the training forward_step for mcore's forward_backward_func.
 
@@ -259,22 +317,11 @@ def make_forward_step(
     ``advantages``, ``mask``, and optionally ``reference_logprobs`` from the
     microbatch dict. The returned loss_func returns
     ``(rescaled_loss, {"loss", "ratio_mean", "clip_fraction", "tokens"})``
-    with detached 0-dim metric tensors, matching the
-    ``do_not_average_loss=True`` convention.
+    with detached 0-dim metric tensors. ``rescaled_loss`` carries
+    :func:`undo_mcore_loss_average` for ``num_microbatches``; the ``loss``
+    metric is the un-inverted additive share.
     """
-    family = (
-        getattr(objective_loss_fn, "family", None)
-        or getattr(getattr(objective_loss_fn, "objective", None), "normalization_family", None)
-        or getattr(getattr(objective_loss_fn, "objective", None), "loss_family", None)
-    )
-    if family is None:
-        raise ValueError(
-            "make_forward_step could not read a normalization family off "
-            f"{type(objective_loss_fn).__name__} (looked for .family and "
-            f".objective.normalization_family / .loss_family); design section "
-            f"3 requires the family to pick the global denominator unit"
-        )
-    unit = family_of(str(family))
+    unit = loss_unit(objective_loss_fn)
     clip_bounds: tuple[float, float] = tuple(
         getattr(getattr(objective_loss_fn, "objective", None), "clip_bounds", (0.8, 1.2))
     )
@@ -283,6 +330,7 @@ def make_forward_step(
         data_iterator: Iterator[dict[str, Any]], model: Any
     ) -> tuple[Any, Callable[..., Any]]:
         from megatron.core.parallel_state import (  # lazy: no megatron on CPU
+            get_context_parallel_world_size,
             get_tensor_model_parallel_group,
             get_tensor_model_parallel_rank,
             get_tensor_model_parallel_world_size,
@@ -310,6 +358,7 @@ def make_forward_step(
             logits = softcap(logits, cfg.softcap)
             targets = _targets_from_input_ids(input_ids)
             tp_size = int(get_tensor_model_parallel_world_size())
+            cp_size = int(get_context_parallel_world_size())
             check_vocab_shard(
                 shard_rows=logits.shape[-1],
                 tp_size=tp_size,
@@ -344,7 +393,10 @@ def make_forward_step(
             )
             metrics = dict(metrics)
             metrics["loss"] = scaled.detach().to(torch.float32)
-            return scaled, metrics
+            return (
+                undo_mcore_loss_average(scaled, num_microbatches, cp_size),
+                metrics,
+            )
 
         return output_tensor, loss_func
 
