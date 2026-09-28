@@ -219,9 +219,20 @@ class MegatronRLTrainer:
     for rungs 0-1.
     """
 
-    def __init__(self, cfg: MegatronLaneConfig, hf_model: str, *, lr: float, seed: int) -> None:
+    def __init__(
+        self,
+        cfg: MegatronLaneConfig,
+        hf_model: str,
+        *,
+        lr: float,
+        seed: int,
+        fp32: bool = False,
+    ) -> None:
         require_megatron("MegatronRLTrainer.__init__")
         self.cfg = cfg
+        # fp32 weights exist for the parity gate: they separate implementation
+        # error from bf16 rounding. Training runs bf16 with fp32 masters.
+        self.fp32 = fp32
         self.hf_model = hf_model
         self.lr = float(lr)
         self.seed = int(seed)
@@ -265,8 +276,8 @@ class MegatronRLTrainer:
         provider.sequence_parallel = bool(self.cfg.sp and self.cfg.tp > 1)
         provider.expert_model_parallel_size = self.cfg.ep
         provider.expert_tensor_parallel_size = self.cfg.etp if self.cfg.etp > 0 else None
-        provider.params_dtype = torch.bfloat16
-        provider.bf16 = True
+        provider.params_dtype = torch.float32 if self.fp32 else torch.bfloat16
+        provider.bf16 = not self.fp32
         provider.finalize()
         provider.initialize_model_parallel(seed=self.seed)
         pg = ProcessGroupCollection.use_mpu_process_groups()
@@ -278,7 +289,7 @@ class MegatronRLTrainer:
             check_for_nan_in_grad=True,
         )
         model_list = provider.provide_distributed_model(
-            ddp_config=ddp_config, wrap_with_ddp=True, bf16=True, pg_collection=pg
+            ddp_config=ddp_config, wrap_with_ddp=True, bf16=not self.fp32, pg_collection=pg
         )
         optimizer = get_megatron_optimizer(
             OptimizerConfig(
@@ -286,12 +297,14 @@ class MegatronRLTrainer:
                 lr=self.lr,
                 min_lr=self.lr,
                 weight_decay=0.0,
-                bf16=True,
-                params_dtype=torch.bfloat16,
+                bf16=not self.fp32,
+                params_dtype=torch.float32 if self.fp32 else torch.bfloat16,
                 use_distributed_optimizer=True,
                 clip_grad=1.0,
             ),
             model_list,
+            # mcore refuses gloo groups alongside an explicit pg_collection
+            use_gloo_process_groups=False,
             pg_collection=pg,
         )
         self.state, self.model, self.optimizer, self.scheduler, self.pg = (
@@ -444,6 +457,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--metrics-out", required=True)
     ap.add_argument("--parity-only", action="store_true")
     ap.add_argument("--parity-rows", type=int, default=8)
+    ap.add_argument("--fp32", action="store_true", help="fp32 weights (parity gate only)")
     ap.add_argument("--out", default="", help="parity logprob dump path")
     ap.add_argument(
         "--algorithm",
@@ -476,7 +490,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         head_dim=args.head_dim,
         num_experts=args.num_experts,
     )
-    trainer = MegatronRLTrainer(cfg, args.hf_model, lr=args.lr, seed=args.seed)
+    trainer = MegatronRLTrainer(cfg, args.hf_model, lr=args.lr, seed=args.seed, fp32=args.fp32)
     trainer.build()
     tokenizer = AutoTokenizer.from_pretrained(args.hf_model, trust_remote_code=True)
     pad_id = int(
@@ -495,6 +509,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.seq_len,
             pad_id,
         )
+        if args.fp32:
+            # An fp32 gate that silently runs TF32 matmuls measures TF32, not the
+            # implementation: record what the stack had enabled, then force full fp32.
+            print(
+                f"parity fp32: allow_tf32 matmul={torch.backends.cuda.matmul.allow_tf32}"
+                f" cudnn={torch.backends.cudnn.allow_tf32}"
+                f" precision={torch.get_float32_matmul_precision()}",
+                flush=True,
+            )
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.backends.cudnn.allow_tf32 = False
+            torch.set_float32_matmul_precision("highest")
         logprobs = trainer.capture_logprobs(batch)
         Path(args.out).write_text(
             json.dumps({"input_ids": batch["input_ids"].tolist(), "logprobs": logprobs.tolist()})
