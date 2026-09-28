@@ -93,6 +93,21 @@ def _smaller_variant(variant: Variant) -> tuple[_knowledge.Family | None, Varian
     return None, None
 
 
+def _adapter_missing(caps: FSCapabilities | None, stage: str) -> str | None:
+    """RL and preference run on their own FS trainers, which take LoRA only if their
+    config declares an adapter; SFT-family stages use the train CLI's --adapter."""
+    trainer = {"rl": ("RLTrainer", "rl_adapter_support"),
+               "preference": ("PreferenceTrainer", "pref_adapter_support")}.get(stage)
+    if trainer is None:
+        return None
+    name, attr = trainer
+    support = getattr(caps, attr, None) if caps is not None else None
+    if support is True:
+        return None
+    why = "unmeasured" if support is None else "absent from its config"
+    return f"missing: FS {name} adapter/LoRA support ({why})"
+
+
 def _alternatives(
     variant: Variant,
     hardware: Hardware,
@@ -138,7 +153,9 @@ def _alternatives(
             variant, seq_len=seq_len, micro_batch=micro_batch, grad_ckpt=grad_ckpt,
             method="lora", sharding=sharding, world=gpus, tp=tp,
         )
-        alts.append(_alt_entry("switch to LoRA (train low-rank adapters only)", est, mem, executable=True, missing=None))
+        lora_missing = _adapter_missing(caps, stage)
+        alts.append(_alt_entry("switch to LoRA (train low-rank adapters only)", est, mem,
+                               executable=lora_missing is None, missing=lora_missing))
 
     if seq_len > 2048:
         new_seq = max(2048, seq_len // 2)

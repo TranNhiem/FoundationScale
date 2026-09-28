@@ -293,3 +293,22 @@ def test_lora_cpt_scales_the_full_ft_lr_and_says_why(patched) -> None:
     assert cpt["hparams"]["learning_rate"] == pytest.approx(2e-5 * planner.LORA_LR_MULTIPLIER)
     why = [d for d in payload["decisions"] if d["step"] == "hparams" and "learning_rate" in d["choice"]]
     assert len(why) == 1 and "full-FT" in why[0]["because"]
+
+
+def test_stage_gap_blocks_every_alternative_and_is_named() -> None:
+    # An alternative changes a memory knob; it cannot close a capability gap such as
+    # "RLTrainer persists no checkpoint", so it must not read as a way forward.
+    alts = [
+        {"change": "micro_batch 2 -> 1", "executable": True, "missing": None, "verdict": "infeasible"},
+        {"change": "tp=2", "executable": False, "missing": "missing: tp", "verdict": "ok"},
+    ]
+    gated = planner._gate_alternatives(alts, "missing: FS RLTrainer does not persist the trained policy")
+    assert all(a["executable"] is False for a in gated)
+    assert gated[0]["missing"] == "missing: FS RLTrainer does not persist the trained policy"
+    assert gated[1]["missing"] == "missing: tp; missing: FS RLTrainer does not persist the trained policy"
+    assert alts[0]["executable"] is True  # input is not mutated
+
+
+def test_no_stage_gap_leaves_alternatives_alone() -> None:
+    alts = [{"change": "micro_batch 2 -> 1", "executable": True, "missing": None}]
+    assert planner._gate_alternatives(alts, None) == alts

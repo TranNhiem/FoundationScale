@@ -141,3 +141,58 @@ def test_grad_ckpt_alternative_listed_when_base_ran_without_it() -> None:
     assert feas.alternatives[0]["change"] == "enable gradient checkpointing"
     assert feas.alternatives[0]["executable"] is True
     assert feas.alternatives[0]["verdict"] == "infeasible"  # ckpt alone cannot save 112 GB of states
+
+
+def _rl_caps(**over) -> FSCapabilities:
+    base = dict(
+        available=True, fs_version="0.0.0",
+        train_objectives=("sft",), sharding_strategies=("ddp", "fsdp"),
+        backends=("ddp", "fsdp"), executed_axes=("cp",), refused_axes=("pp", "ep", "tp"),
+        axes_measured=True,
+    )
+    base.update(over)
+    return FSCapabilities(**base)
+
+
+def _lora_alt(feas) -> dict:
+    lora = [a for a in feas.alternatives if a["change"].startswith("switch to LoRA")]
+    assert len(lora) == 1
+    return lora[0]
+
+
+def test_lora_alternative_blocked_for_rl_when_trainer_has_no_adapter() -> None:
+    # FS RLTrainer has no LoRA config: offering LoRA as an executable way out of an
+    # infeasible RL stage points the operator at a route FS cannot run.
+    feas = check_feasibility(
+        dense7b(), make_hw(), gpus=1, method="full", seq_len=4096, micro_batch=1, tokens=10**9,
+        caps=_rl_caps(rl_adapter_support=False), stage="rl",
+    )
+    alt = _lora_alt(feas)
+    assert alt["executable"] is False
+    assert "RLTrainer" in alt["missing"] and "adapter" in alt["missing"]
+
+
+def test_lora_alternative_for_rl_is_unmeasured_without_caps() -> None:
+    feas = check_feasibility(
+        dense7b(), make_hw(), gpus=1, method="full", seq_len=4096, micro_batch=1, tokens=10**9,
+        caps=None, stage="rl",
+    )
+    alt = _lora_alt(feas)
+    assert alt["executable"] is False and "unmeasured" in alt["missing"]
+
+
+def test_lora_alternative_for_preference_follows_its_own_trainer() -> None:
+    caps = _rl_caps(rl_adapter_support=False, pref_adapter_support=True)
+    feas = check_feasibility(
+        dense7b(), make_hw(), gpus=1, method="full", seq_len=4096, micro_batch=1, tokens=10**9,
+        caps=caps, stage="preference",
+    )
+    assert _lora_alt(feas)["executable"] is True
+
+
+def test_lora_alternative_for_sft_is_unaffected_by_rl_adapter_support() -> None:
+    feas = check_feasibility(
+        dense7b(), make_hw(), gpus=1, method="full", seq_len=4096, micro_batch=1, tokens=10**9,
+        caps=_rl_caps(rl_adapter_support=False), stage="sft",
+    )
+    assert _lora_alt(feas)["executable"] is True

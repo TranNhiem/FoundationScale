@@ -59,6 +59,17 @@ _FORMAT_BY_STAGE = {"pretrain": "pretrain", "cpt": "cpt", "sft": "sft", "prefere
 _VERDICT_ORDER = {"ok": 0, "warn": 1, "infeasible": 2}
 
 
+def _gate_alternatives(alternatives: list, missing: str | None) -> list:
+    """An alternative changes a memory knob, not a capability: a stage gap blocks it too."""
+    if missing is None:
+        return alternatives
+    return [
+        {**a, "executable": False,
+         "missing": "; ".join(m for m in (a.get("missing"), missing) if m)} if isinstance(a, dict) else a
+        for a in alternatives
+    ]
+
+
 class PlanningRefusal(Exception):
     """The planner refuses: a load-bearing input is missing or no stage applies."""
 
@@ -771,6 +782,7 @@ def plan(
             caps=caps,
             sharding="fsdp",
             tp=1,
+            stage=stage,
         )
         stage_feas = {
             "verdict": _get(feas, "verdict", "warn"),
@@ -781,10 +793,6 @@ def plan(
         for f in stage_feas["findings"]:
             if isinstance(f, dict):
                 feas_findings.append({"stage": stage, **f})
-        for a in stage_feas["alternatives"]:
-            if isinstance(a, dict):
-                feas_alternatives.append({"stage": stage, **a})
-
         # executable from measured capabilities only
         if stage in ("preference", "rl"):
             answer_kind = data_facts.get("answer_kind") if stage == "rl" else None
@@ -801,6 +809,10 @@ def plan(
         if missing is None and algo_sel.get("missing"):
             missing = algo_sel["missing"]
         executable = missing is None
+        stage_feas["alternatives"] = _gate_alternatives(stage_feas["alternatives"], missing)
+        for a in stage_feas["alternatives"]:
+            if isinstance(a, dict):
+                feas_alternatives.append({"stage": stage, **a})
 
         # data handoff
         data_format = _FORMAT_BY_STAGE.get(stage, stage)

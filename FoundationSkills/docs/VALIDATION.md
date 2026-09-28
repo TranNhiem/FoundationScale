@@ -96,6 +96,7 @@ All figures are torch **peak allocated** memory. Reserved memory (what nvidia-sm
 | F27 | a multi-stage recipe (SFT then RL) was indexed by one stage and stage is a hard key, so an SFT query for Qwen3.5-27B skipped `qwen3.5-27b-math-sft-rl` and ported the Gemma-4 31B recipe across families; any stage in the recipe's `stages` now matches | Qwen3.5-27B planning |
 | F28 | `emit` returned PASS with an executable launch spec for a plan stage the planner judged infeasible (Qwen3.5-35B-A3B full CPT: 245.8 GB/GPU on 189 GB); the spec is now non-executable and names the blocking finding (emit rc 5) | Qwen3.5-35B-A3B planning |
 | F29 | the CPT learning-rate table is full-FT and overwrote every CPT stage, so LoRA CPT was planned at 1.5e-5; LoRA/QLoRA now take 10× (Biderman et al. 2024; Schulman et al. 2025) unless a same-method recipe sets its own, logged as an `hparams` decision | Qwen3.5-35B-A3B LoRA CPT |
+| F30 | feasibility alternatives ignored FS capabilities: an infeasible RL stage offered "switch to LoRA" as executable although FS RLTrainer has no adapter config, and every alternative dropped the stage's own gap (no RL checkpoint); that fake way out satisfied TR-PL-002, so the plan exited 0 instead of 5. LoRA alternatives for RL/preference now follow the measured trainer adapter support, and a stage gap blocks every alternative | Qwen3.5-27B SFT→RL (plan only) |
 
 ## 5b. Knowledge from the FoxBrain campaigns
 
