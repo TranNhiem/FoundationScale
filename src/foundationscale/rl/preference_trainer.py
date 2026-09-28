@@ -1334,7 +1334,9 @@ class PreferenceTrainer:
         # receives the same count, the remainder is dropped deterministically,
         # and the global ordering agrees because every rank used the same seed.
         local_offsets = shard_indices(self.config.pairs_per_step, ctx)
-        if len(local_offsets) < self.config.pairs_per_step and is_main(ctx):
+        # Compare the GLOBAL kept count: the per-rank count is always below
+        # pairs_per_step on >1 rank, which made this warn on every even split.
+        if len(local_offsets) * ctx.world_size < self.config.pairs_per_step and is_main(ctx):
             print(
                 f"[preference_trainer] pairs_per_step={self.config.pairs_per_step} "
                 f"is not divisible by world_size={ctx.world_size}; "
