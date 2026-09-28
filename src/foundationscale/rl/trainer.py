@@ -1049,6 +1049,18 @@ class RLTrainer:
         extra_slices = 0
         if ctx.is_distributed:
             extra_slices = max(0, agree_max(len(row_slices), ctx) - len(row_slices))
+            # The PATH must agree too, not just the count: the sliced path
+            # forwards each slice three times (old, current, backward replay)
+            # and the whole-batch path twice (its backward reuses the live
+            # graph). MEASURED on 2x GB200: a rank with 2 kept rows beside a
+            # rank with 8 hung in the first FSDP all-gather after the split.
+            # So if any rank slices, every rank slices; its whole batch is
+            # then one slice.
+            use_logprob_micro_batching = not agree_all(not use_logprob_micro_batching, ctx)
+        # Padding slices sit INSIDE each pass, so every rank issues the same
+        # model sequence (policy, policy, reference) slice by slice.
+        pad_slice = (0, min(1, n_rows))
+        passes = row_slices + (pad_slice,) * extra_slices
 
         def forward_logprob_slice(
             start: int, end: int, *, scorer_model: Any = None
@@ -1096,15 +1108,16 @@ class RLTrainer:
         # below therefore see the same batch-shaped tensors as the
         # whole-batch path; only the way parameter gradients are delivered
         # changes.
+        real = len(row_slices)
         if use_logprob_micro_batching:
             with torch.no_grad():
                 old_logprobs = torch.cat(
-                    [forward_logprob_slice(start, end) for start, end in row_slices],
+                    [forward_logprob_slice(start, end) for start, end in passes][:real],
                     dim=0,
                 )
                 current_logprobs = (
                     torch.cat(
-                        [forward_logprob_slice(start, end) for start, end in row_slices],
+                        [forward_logprob_slice(start, end) for start, end in passes][:real],
                         dim=0,
                     )
                     .detach()
@@ -1127,19 +1140,10 @@ class RLTrainer:
                 reference_logprobs = torch.cat(
                     [
                         forward_logprob_slice(start, end, scorer_model=ref_model)
-                        for start, end in row_slices
-                    ],
+                        for start, end in passes
+                    ][:real],
                     dim=0,
                 )
-
-        if extra_slices:
-            # Align the no_grad forward-pass COUNT with the busiest rank
-            # (old + current passes, plus the reference pass when loaded):
-            # FSDP all-gathers fire in no_grad mode too.
-            passes_per_slice = 3 if ref_model is not None else 2
-            with torch.no_grad():
-                for _ in range(extra_slices * passes_per_slice):
-                    forward_logprob_slice(0, min(1, n_rows))
 
         # Family dispatch (design section 5): the two estimator-free
         # bindings price straight off these planes and never call

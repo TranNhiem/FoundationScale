@@ -43,6 +43,7 @@ class _ParamModel(torch.nn.Module):  # type: ignore[misc]
     def __init__(self) -> None:
         super().__init__()
         self.w = torch.nn.Parameter(torch.tensor(0.5))
+        self.forwards: list[bool] = []  # grad_enabled per forward call
 
     def generate(self, **kwargs: Any) -> Any:
         rows = kwargs["input_ids"].shape[0] * kwargs["num_return_sequences"]
@@ -51,6 +52,7 @@ class _ParamModel(torch.nn.Module):  # type: ignore[misc]
 
     def forward(self, input_ids: Any, attention_mask: Any = None, **kw: Any) -> Any:
         b, w = input_ids.shape
+        self.forwards.append(torch.is_grad_enabled())
         logits = torch.zeros(b, w, 8)
         logits = logits + self.w * torch.arange(8.0)
         return SimpleNamespace(logits=logits)
@@ -83,7 +85,7 @@ def _loss_fn(**kw: Any) -> Any:
 
 
 def _install_fake_world(
-    monkeypatch: pytest.MonkeyPatch, other_rank_votes: bool
+    monkeypatch: pytest.MonkeyPatch, other_rank_votes: bool, peer_slices: int = 0
 ) -> list[tuple[str, Any]]:
     """Record every collective; the peer rank votes ``other_rank_votes``."""
     trace: list[tuple[str, Any]] = []
@@ -94,7 +96,7 @@ def _install_fake_world(
 
     def agree_max(value: int, ctx: Any) -> int:
         trace.append(("agree_max", None))
-        return int(value)
+        return max(int(value), peer_slices)
 
     def all_reduce_sum(value: float, ctx: Any) -> float:
         trace.append(("all_reduce_sum", None))
@@ -106,8 +108,16 @@ def _install_fake_world(
     return trace
 
 
-def _run(decoded: list[str], monkeypatch: pytest.MonkeyPatch, other_rank_votes: bool) -> Any:
-    trace = _install_fake_world(monkeypatch, other_rank_votes)
+def _run(
+    decoded: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    other_rank_votes: bool,
+    *,
+    micro_batch: int = 0,
+    peer_slices: int = 0,
+    model: Any = None,
+) -> Any:
+    trace = _install_fake_world(monkeypatch, other_rank_votes, peer_slices)
     monkeypatch.setattr(
         trainer_mod,
         "encode_prompts",
@@ -124,9 +134,10 @@ def _run(decoded: list[str], monkeypatch: pytest.MonkeyPatch, other_rank_votes: 
             max_steps=1,
             prompts_per_step=2,
             temperature=1.0,
+            logprob_micro_batch=micro_batch,
         )
     )
-    model = _ParamModel()
+    model = model if model is not None else _ParamModel()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.0)
     ctx = dist_mod.DistContext(
         rank=1, world_size=2, local_rank=1, device="cpu", is_distributed=True
@@ -181,3 +192,18 @@ def test_every_rank_null_is_unmeasured(capsys: Any, monkeypatch: pytest.MonkeyPa
     report, trace = _run(NULL, monkeypatch, other_rank_votes=True)
     assert report is None
     assert [name for name, _ in trace] == ["agree_all"]
+
+
+def test_null_rank_issues_the_same_model_forwards_as_a_full_rank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FSDP all-gathers once per forward, so the forward SEQUENCE must match.
+
+    MEASURED origin: a 1-row null rank took the whole-batch path (2 forwards)
+    beside a sliced full rank (3 per slice) and hung 2x GB200 in an all-gather.
+    """
+    full_model, null_model = _ParamModel(), _ParamModel()
+    _run(FULL, monkeypatch, False, micro_batch=1, peer_slices=4, model=full_model)
+    _run(NULL, monkeypatch, False, micro_batch=1, peer_slices=4, model=null_model)
+    assert len(full_model.forwards) == 12, "positive control: 4 slices x 3 passes"
+    assert null_model.forwards == full_model.forwards
