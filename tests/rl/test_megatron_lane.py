@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import socket
 
 import pytest
@@ -203,9 +204,10 @@ def test_lane_config_validate_refusal_matrix() -> None:
         cp_bad_world.validate(6)
 
 
-def test_package_imports_without_megatron_and_lazy_entries_refuse() -> None:
+def test_package_imports_without_megatron() -> None:
     assert megatron_pkg.softcap is softcap
     assert megatron_pkg.MegatronLaneConfig is MegatronLaneConfig
+    # driver and pp_step keep every megatron import inside functions, so the
+    # submodules themselves import on a host with no megatron installed.
     for name in ("driver", "pp_step"):
-        with pytest.raises(ImportError, match=name):
-            getattr(megatron_pkg, name)
+        importlib.import_module(f"foundationscale.rl.megatron.{name}")

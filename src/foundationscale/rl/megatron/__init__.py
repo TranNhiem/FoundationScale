@@ -14,8 +14,6 @@ exist in the rungs 0-1 slice.
 
 from __future__ import annotations
 
-from typing import Any
-
 from foundationscale.rl.megatron.lane_config import (
     TE_CP_SUPPORTED,
     MegatronLaneConfig,
@@ -41,16 +39,3 @@ __all__ = (
     "softcap",
     "vocab_parallel_token_logprobs",
 )
-
-_LAZY_NOT_IN_SLICE = frozenset(("driver", "pp_step"))
-
-
-def __getattr__(name: str) -> Any:
-    if name in _LAZY_NOT_IN_SLICE:
-        raise ImportError(
-            f"foundationscale.rl.megatron.{name} is outside the rungs 0-1 "
-            f"slice; it is imported lazily to keep this package importable "
-            f"with no megatron installed, and must be requested only from a "
-            f"Megatron-Bridge container at the pp/driver rung"
-        )
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
