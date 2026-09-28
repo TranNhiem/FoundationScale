@@ -37,9 +37,7 @@ plain CPU box.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from typing import Any
-
-import torch
+from typing import TYPE_CHECKING, Any
 
 from foundationscale.rl.megatron.lane_config import MegatronLaneConfig
 from foundationscale.rl.megatron.logprobs import (
@@ -48,6 +46,10 @@ from foundationscale.rl.megatron.logprobs import (
     vocab_parallel_token_logprobs,
 )
 from foundationscale.rl.megatron.normalization import GlobalDenominators
+
+if TYPE_CHECKING:
+    import torch
+
 
 __all__ = (
     "ForwardStepFn",
@@ -112,6 +114,8 @@ def local_denominator(
     tokens; sequence/preference microbatches with zero valid rows contribute
     a zero scale, which is additive and correct.
     """
+    import torch
+
     unit = family_of(family)
     mask_f = loss_mask.detach().to(dtype=torch.float64)
     tokens = float(mask_f.sum())
@@ -200,6 +204,8 @@ def ratio_and_clip_metrics(
     values are 0-dim detached fp32 tensors -- the metrics channel must never
     carry autograd state across the PP boundary.
     """
+    import torch
+
     with torch.no_grad():
         mask_f = loss_mask.detach().to(dtype=torch.float32)
         total = mask_f.sum()
@@ -237,6 +243,8 @@ def _position_ids(batch: dict[str, torch.Tensor]) -> torch.Tensor:
     attention mask (mcore wants a boolean ``[B, 1, S, S]`` with True =
     masked), so it is never passed to the model.
     """
+    import torch
+
     input_ids = batch["input_ids"]
     position_ids = batch.get("position_ids")
     if position_ids is not None:
@@ -321,6 +329,8 @@ def make_forward_step(
     :func:`undo_mcore_loss_average` for ``num_microbatches``; the ``loss``
     metric is the un-inverted additive share.
     """
+    import torch
+
     unit = loss_unit(objective_loss_fn)
     clip_bounds: tuple[float, float] = tuple(
         getattr(getattr(objective_loss_fn, "objective", None), "clip_bounds", (0.8, 1.2))
@@ -412,6 +422,8 @@ def make_logprob_forward_step(cfg: MegatronLaneConfig) -> ForwardStepFn:
     with input tokens, and returns ``(zero_scalar, {"logprobs": ...})`` so the
     mcore schedule can collect per-microbatch outputs on the last stage.
     """
+
+    import torch
 
     def forward_step(
         data_iterator: Iterator[dict[str, Any]], model: Any

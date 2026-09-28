@@ -39,6 +39,16 @@ from foundationscale.rl import (
 # below refuses if any ``foundationscale.rl`` module is missing an entry, so
 # the next module to land cannot repeat it.
 TORCH_FREE_MODULES = {
+    "foundationscale.rl.megatron": (
+        "GlobalDenominators",
+        "MegatronLaneConfig",
+        "TE_CP_SUPPORTED",
+        "check_vocab_shard",
+        "compute_denominators",
+        "normalized_loss",
+        "softcap",
+        "vocab_parallel_token_logprobs",
+    ),
     "foundationscale.rl.advantage": (
         "AdvantageConfigRefusal",
         "AdvantageFn",

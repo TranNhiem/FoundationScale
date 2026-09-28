@@ -16,10 +16,11 @@ initialized torch.distributed world and is reduced with SUM.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import torch
-import torch.distributed as dist
+if TYPE_CHECKING:
+    import torch
+
 
 __all__ = (
     "GlobalDenominators",
@@ -64,6 +65,9 @@ def _require_masks(loss_mask: torch.Tensor, sample_mask: torch.Tensor) -> None:
 
 
 def _global_sum(local_value: float, group: Any | None) -> float:
+    import torch
+    import torch.distributed as dist
+
     if group is None:
         return float(local_value)
     if not (dist.is_available() and dist.is_initialized()):
@@ -72,7 +76,10 @@ def _global_sum(local_value: float, group: Any | None) -> float:
             "torch.distributed is not initialized; refusing to guess whether "
             "this rank sees the whole batch"
         )
-    total = torch.tensor(float(local_value), dtype=torch.float64)
+    # NCCL groups reduce only device tensors; gloo accepts CPU.
+    on_cuda = dist.get_backend(group) == "nccl"
+    device = torch.device("cuda", torch.cuda.current_device()) if on_cuda else None
+    total = torch.tensor(float(local_value), dtype=torch.float64, device=device)
     dist.all_reduce(total, op=dist.ReduceOp.SUM, group=group)
     return float(total.item())
 
@@ -85,6 +92,8 @@ def compute_denominators(
     declared: tuple[float, float] | float | None = None,
 ) -> GlobalDenominators:
     """Compute global denominators for one rollout batch before the loop."""
+    import torch
+
     if family not in _FAMILIES:
         raise ValueError(
             f"denominator_family_unknown: family={family!r}; known families are "

@@ -37,11 +37,13 @@ import os
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-
-import torch
+from typing import TYPE_CHECKING, Any
 
 from foundationscale.rl.megatron.lane_config import MegatronLaneConfig
+
+if TYPE_CHECKING:
+    import torch
+
 
 __all__ = (
     "MockRolloutRow",
@@ -154,6 +156,8 @@ def collate_mock_batch(
     Rows longer than ``seq_len`` are right-truncated; the completion mask is
     truncated with them so masks can never exceed the id plane.
     """
+    import torch
+
     if len(rows) != len(advantages):
         raise ValueError(
             f"collate_mock_batch: {len(rows)} rows but {len(advantages)} "
@@ -196,6 +200,8 @@ def param_hash(model: Any, per_param: int = 64) -> str:
     Sampling ``per_param`` evenly-strided entries of each parameter sees any
     update that reaches any parameter. It is still a sample, NOT a full-model
     hash, and is named as such in the metrics row."""
+    import torch
+
     params = (
         list(model.parameters())
         if not isinstance(model, (list, tuple))
@@ -219,6 +225,8 @@ def reduce_step_metrics(entries: Sequence[Any], all_reduce: Any = None) -> dict[
     global token count. ``loss`` is a sum of per-microbatch shares of the
     global objective. ``all_reduce`` sums a float64 tensor in place (None on
     a single process)."""
+    import torch
+
     sums = [0.0, 0.0, 0.0, 0.0]  # loss, ratio*tokens, clip*tokens, tokens
     for entry in entries or []:
         if not isinstance(entry, dict):
@@ -294,6 +302,8 @@ class MegatronRLTrainer:
         distributed optimizer and fp32 masters. The learning rate is constant; the
         RL loop owns step counting, so no scheduler is built.
         """
+        import torch
+
         require_megatron("MegatronRLTrainer.build")
         import torch.distributed as dist
         from megatron.bridge import AutoBridge
@@ -362,6 +372,8 @@ class MegatronRLTrainer:
 
     def capture_logprobs(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         """Old-logprob capture: same forward path as training, forward_only."""
+        import torch
+
         if not self._built:
             raise RuntimeError("capture_logprobs before build()")
         from megatron.core.pipeline_parallel import get_forward_backward_func
@@ -382,14 +394,27 @@ class MegatronRLTrainer:
             micro_batch_size=self.cfg.mbs,
             forward_only=True,
         )
-        chunks = [o["logprobs"] for o in out if isinstance(o, dict) and "logprobs" in o]
-        if not chunks:
-            raise RuntimeError(
-                "logprob capture returned 0 microbatch payloads on the last "
-                "stage; a dropped metrics/collection channel is a refusal, "
-                "not a zero"
-            )
-        return torch.cat(chunks, dim=0)
+        pp_group = self.pg.pp
+        pp_size = pp_group.size() if pp_group is not None else 1
+        is_last_stage = pp_size == 1 or pp_group.rank() == pp_size - 1
+        if is_last_stage:
+            chunks = [o["logprobs"] for o in out if isinstance(o, dict) and "logprobs" in o]
+            if not chunks:
+                raise RuntimeError(
+                    "logprob capture returned 0 microbatch payloads on the last "
+                    "stage; a dropped metrics/collection channel is a refusal, "
+                    "not a zero"
+                )
+            logprobs = torch.cat(chunks, dim=0).float()
+        else:
+            logprobs = torch.empty(batch["input_ids"].shape, dtype=torch.float32, device=device)
+        if pp_size > 1:
+            import torch.distributed as dist
+
+            # Only the last stage computes logits; every stage needs old logprobs in its batch.
+            last = dist.get_global_rank(pp_group, pp_size - 1)
+            dist.broadcast(logprobs, src=last, group=pp_group)
+        return logprobs
 
     # -- train -------------------------------------------------------------
 
@@ -438,7 +463,11 @@ class MegatronRLTrainer:
 
         def _sum_across_ranks(t: torch.Tensor) -> None:
             on_dev = t.to(device)
-            dist.all_reduce(on_dev)
+            # dp_cp, not WORLD: TP/PP peers hold the same tokens, so a world sum overcounts.
+            dist.all_reduce(on_dev, group=self.pg.dp_cp)
+            # Only the last PP stage holds losses_reduced; the others contribute zeros.
+            if self.pg.pp is not None and self.pg.pp.size() > 1:
+                dist.all_reduce(on_dev, group=self.pg.pp)
             t.copy_(on_dev.cpu())
 
         token_scale: dict[str, Any] = reduce_step_metrics(
@@ -483,6 +512,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    import torch
+
     args = build_arg_parser().parse_args(argv)
     require_megatron("driver.main")
     from transformers import AutoTokenizer
@@ -552,17 +583,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     unit = loss_unit(objective_loss_fn)
     metrics_path = Path(args.metrics_out)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    dp_group = trainer.pg.dp
+    dp_size, dp_rank = dp_group.size(), dp_group.rank()
+    if len(rows) % dp_size or (len(rows) // dp_size) % max(1, args.group_size):
+        raise SystemExit(
+            f"{len(rows)} rows do not split into {dp_size} DP shards of whole groups "
+            f"(group_size={args.group_size})"
+        )
+    per_rank = len(rows) // dp_size
     with Path(metrics_path).open("a", encoding="utf-8") as fh:
         for step in range(args.steps):
             group_ids = [i // max(1, args.group_size) for i in range(len(rows))]
             advantages = group_relative_advantages([r.reward for r in rows], group_ids)
-            batch = collate_mock_batch(rows, advantages, tokenizer, args.seq_len, pad_id)
+            # Advantages see whole groups; each DP rank then trains its contiguous slice.
+            lo, hi = dp_rank * per_rank, (dp_rank + 1) * per_rank
+            batch = collate_mock_batch(
+                rows[lo:hi], advantages[lo:hi], tokenizer, args.seq_len, pad_id
+            )
             old_logprobs = trainer.capture_logprobs(batch)[:, 1:]
             batch["old_logprobs"] = old_logprobs.cpu()
             # dr_grpo divides by declared constants (B_g, L_cap), not a measured count.
             declared = (float(len(rows)), float(args.seq_len - 1)) if unit == "dr_grpo" else None
             den = compute_denominators(
-                unit, batch["loss_mask"][:, 1:], batch["sample_mask"], group=None, declared=declared
+                unit,
+                batch["loss_mask"][:, 1:],
+                batch["sample_mask"],
+                group=dp_group,
+                declared=declared,
             )
             metrics = trainer.train_step(batch, objective_loss_fn, den)
             fh.write(json.dumps({"step": step, **metrics}) + "\n")

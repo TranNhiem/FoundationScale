@@ -19,11 +19,12 @@ kernels.
 
 from __future__ import annotations
 
-from typing import Any
+import functools
+from typing import TYPE_CHECKING, Any
 
-import torch
-import torch.distributed as dist
-import torch.nn.functional as F
+if TYPE_CHECKING:
+    import torch
+
 
 __all__ = (
     "check_vocab_shard",
@@ -34,6 +35,8 @@ __all__ = (
 
 def softcap(logits: torch.Tensor, cap: float | None) -> torch.Tensor:
     """Apply ``cap * tanh(logits / cap)``; ``None`` and ``0`` are identity."""
+    import torch
+
     if cap is None:
         return logits
     cap_f = float(cap)
@@ -81,78 +84,94 @@ def check_vocab_shard(
         )
 
 
-@torch.no_grad()
 def _distributed_log_softmax(logits_fp32: torch.Tensor, tp_group: Any) -> torch.Tensor:
     """Stable log-softmax across the TP vocab plane; input must be fp32."""
-    logits_max = torch.amax(logits_fp32, dim=-1, keepdim=True)
-    dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=tp_group)
-    shifted = logits_fp32 - logits_max
-    sum_exp = shifted.exp().sum(dim=-1, keepdim=True)
-    dist.all_reduce(sum_exp, op=dist.ReduceOp.SUM, group=tp_group)
-    return shifted - sum_exp.log()
+    import torch
+    import torch.distributed as dist
+
+    with torch.no_grad():
+        logits_max = torch.amax(logits_fp32, dim=-1, keepdim=True)
+        dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=tp_group)
+        shifted = logits_fp32 - logits_max
+        sum_exp = shifted.exp().sum(dim=-1, keepdim=True)
+        dist.all_reduce(sum_exp, op=dist.ReduceOp.SUM, group=tp_group)
+        return shifted - sum_exp.log()
 
 
-class _ShardVocabTokenLogprobs(torch.autograd.Function):
-    """Differentiable gathered logprob with a vocab plane split across TP."""
+@functools.cache
+def _shard_vocab_fn() -> Any:
+    """Build the autograd Function on first use, so importing needs no torch."""
+    import torch
+    import torch.distributed as dist
 
-    @staticmethod
-    def forward(
-        ctx: Any,
-        logits_shard: torch.Tensor,
-        targets: torch.Tensor,
-        vocab_start: int,
-        vocab_end: int,
-        tp_group: Any,
-        chunk_size: int | None,
-        inference_only: bool,
-    ) -> torch.Tensor:
-        batch, seq_len, shard_rows = logits_shard.shape
-        owned = (targets >= int(vocab_start)) & (targets < int(vocab_end))
-        local_targets = (targets - int(vocab_start)).clamp(min=0, max=shard_rows - 1)
-        step = seq_len if chunk_size is None else int(chunk_size)
-        out_chunks: list[torch.Tensor] = []
-        for start in range(0, seq_len, step):
-            stop = min(seq_len, start + step)
-            lp = _distributed_log_softmax(
-                logits_shard[:, start:stop, :].to(dtype=torch.float32), tp_group
-            )
-            vals = lp.gather(-1, local_targets[:, start:stop].unsqueeze(-1)).squeeze(-1)
-            vals = vals * owned[:, start:stop].to(dtype=vals.dtype)
-            dist.all_reduce(vals, op=dist.ReduceOp.SUM, group=tp_group)
-            out_chunks.append(vals)
-        out = out_chunks[0] if len(out_chunks) == 1 else torch.cat(out_chunks, dim=1)
-        if not inference_only:
-            ctx.save_for_backward(logits_shard, owned, local_targets)
-            ctx.tp_group = tp_group
-            ctx.chunk_size = chunk_size if chunk_size is None else int(chunk_size)
-        return out.contiguous()
+    class _ShardVocabTokenLogprobs(torch.autograd.Function):
+        """Differentiable gathered logprob with a vocab plane split across TP."""
 
-    @staticmethod
-    def backward(ctx: Any, *grad_outputs: torch.Tensor) -> tuple[Any, ...]:
-        (grad_output,) = grad_outputs
-        logits_shard, owned, local_targets = ctx.saved_tensors
-        tp_group = ctx.tp_group
-        chunk_size = ctx.chunk_size
-        batch, seq_len, shard_rows = logits_shard.shape
-        step = seq_len if chunk_size is None else int(chunk_size)
-        grad_chunks: list[torch.Tensor] = []
-        with torch.no_grad():
+        @staticmethod
+        def forward(
+            ctx: Any,
+            logits_shard: torch.Tensor,
+            targets: torch.Tensor,
+            vocab_start: int,
+            vocab_end: int,
+            tp_group: Any,
+            chunk_size: int | None,
+            inference_only: bool,
+        ) -> torch.Tensor:
+            import torch
+
+            batch, seq_len, shard_rows = logits_shard.shape
+            owned = (targets >= int(vocab_start)) & (targets < int(vocab_end))
+            local_targets = (targets - int(vocab_start)).clamp(min=0, max=shard_rows - 1)
+            step = seq_len if chunk_size is None else int(chunk_size)
+            out_chunks: list[torch.Tensor] = []
             for start in range(0, seq_len, step):
                 stop = min(seq_len, start + step)
                 lp = _distributed_log_softmax(
                     logits_shard[:, start:stop, :].to(dtype=torch.float32), tp_group
                 )
-                probs = lp.exp()
-                onehot = F.one_hot(local_targets[:, start:stop], num_classes=shard_rows).to(
-                    dtype=torch.float32
-                )
-                onehot = onehot * owned[:, start:stop].unsqueeze(-1).to(dtype=torch.float32)
-                g = grad_output[:, start:stop].to(dtype=torch.float32).unsqueeze(-1)
-                grad_chunks.append((onehot - probs) * g)
-        grad_input = (
-            grad_chunks[0] if len(grad_chunks) == 1 else torch.cat(grad_chunks, dim=1)
-        ).to(dtype=logits_shard.dtype)
-        return grad_input, None, None, None, None, None, None
+                vals = lp.gather(-1, local_targets[:, start:stop].unsqueeze(-1)).squeeze(-1)
+                vals = vals * owned[:, start:stop].to(dtype=vals.dtype)
+                dist.all_reduce(vals, op=dist.ReduceOp.SUM, group=tp_group)
+                out_chunks.append(vals)
+            out = out_chunks[0] if len(out_chunks) == 1 else torch.cat(out_chunks, dim=1)
+            if not inference_only:
+                ctx.save_for_backward(logits_shard, owned, local_targets)
+                ctx.tp_group = tp_group
+                ctx.chunk_size = chunk_size if chunk_size is None else int(chunk_size)
+            return out.contiguous()
+
+        @staticmethod
+        def backward(ctx: Any, *grad_outputs: torch.Tensor) -> tuple[Any, ...]:
+            import torch
+            import torch.nn.functional as F
+
+            (grad_output,) = grad_outputs
+            logits_shard, owned, local_targets = ctx.saved_tensors
+            tp_group = ctx.tp_group
+            chunk_size = ctx.chunk_size
+            batch, seq_len, shard_rows = logits_shard.shape
+            step = seq_len if chunk_size is None else int(chunk_size)
+            grad_chunks: list[torch.Tensor] = []
+            with torch.no_grad():
+                for start in range(0, seq_len, step):
+                    stop = min(seq_len, start + step)
+                    lp = _distributed_log_softmax(
+                        logits_shard[:, start:stop, :].to(dtype=torch.float32), tp_group
+                    )
+                    probs = lp.exp()
+                    onehot = F.one_hot(local_targets[:, start:stop], num_classes=shard_rows).to(
+                        dtype=torch.float32
+                    )
+                    onehot = onehot * owned[:, start:stop].unsqueeze(-1).to(dtype=torch.float32)
+                    g = grad_output[:, start:stop].to(dtype=torch.float32).unsqueeze(-1)
+                    grad_chunks.append((onehot - probs) * g)
+            grad_input = (
+                grad_chunks[0] if len(grad_chunks) == 1 else torch.cat(grad_chunks, dim=1)
+            ).to(dtype=logits_shard.dtype)
+            return grad_input, None, None, None, None, None, None
+
+    return _ShardVocabTokenLogprobs
 
 
 def vocab_parallel_token_logprobs(
@@ -166,6 +185,8 @@ def vocab_parallel_token_logprobs(
     inference_only: bool = False,
 ) -> torch.Tensor:
     """Return fp32 global-id logprobs ``[B, S]`` from a ``[B, S, Vs]`` shard."""
+    import torch
+
     if logits_shard.dim() != 3:
         raise ValueError(
             f"logprob_layout: logits_shard has shape {tuple(logits_shard.shape)}; "
@@ -203,7 +224,7 @@ def vocab_parallel_token_logprobs(
     shard_rows = int(logits_shard.shape[-1])
     vocab_start = int(tp_rank) * shard_rows
     vocab_end = vocab_start + shard_rows
-    return _ShardVocabTokenLogprobs.apply(
+    return _shard_vocab_fn().apply(
         logits_shard,
         targets_i64,
         vocab_start,
