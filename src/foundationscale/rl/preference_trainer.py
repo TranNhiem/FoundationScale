@@ -49,6 +49,17 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never executed at runtime
 
 from foundationscale.gates.objective_gates import MetricObservation
 from foundationscale.rl.algorithm import StepReport
+from foundationscale.rl.distributed import (
+    all_reduce_mean,
+    all_reduce_sum,
+    destroy,
+    init_distributed,
+    is_main,
+    save_checkpoint,
+    shard_indices,
+    wrap_ddp,
+    wrap_fsdp2,
+)
 from foundationscale.rl.interfaces import LossOutput
 from foundationscale.rl.losses import DPOLoss
 from foundationscale.rl.preference import PreferenceObjective
@@ -168,6 +179,14 @@ class PreferenceTrainConfig:
     logprob_micro_batch: int = 0
     seed: int = 0
     device: str | None = None
+    # Multi-GPU data parallel surface. "none" (default) reproduces the
+    # original single-process behaviour exactly; "ddp" replicates the model;
+    # "fsdp" shards fp32 master parameters via FSDP2 with a bf16 compute
+    # policy (which replaces MasterWeightOptimizer, see distributed.py).
+    sharding: str = "none"
+    save_dir: str | None = None
+    save_every: int = 0  # 0 = only a final save when save_dir is set
+    gradient_checkpointing: bool = False
 
 
 def _record_kind(record: Mapping[str, Any]) -> tuple[bool, bool]:
@@ -396,6 +415,31 @@ class PreferenceTrainer:
                 f"field master_weights={config.master_weights!r}: expected "
                 f"None, True or False; this switch selects the optimiser "
                 f"weight plane"
+            )
+        if config.sharding not in ("none", "ddp", "fsdp"):
+            raise TrainerRefusal(
+                f"field sharding={config.sharding!r}: expected one of "
+                f"'none', 'ddp' or 'fsdp'; an unknown sharding value would "
+                f"silently replicate or mis-shard the policy"
+            )
+        if isinstance(config.save_every, bool) or not isinstance(config.save_every, int):
+            raise TrainerRefusal(f"field save_every={config.save_every!r}: an integer is required")
+        if config.save_every < 0:
+            raise TrainerRefusal(
+                f"field save_every={config.save_every}: 0 is the minimum "
+                f"valid value; a negative cadence names no checkpoint step"
+            )
+        if config.save_dir is not None and (
+            not isinstance(config.save_dir, str) or not config.save_dir.strip()
+        ):
+            raise TrainerRefusal(
+                f"field save_dir={config.save_dir!r}: None or a non-empty "
+                f"string is required; an empty path names no checkpoint root"
+            )
+        if not isinstance(config.gradient_checkpointing, bool):
+            raise TrainerRefusal(
+                f"field gradient_checkpointing={config.gradient_checkpointing!r}: "
+                f"a bool is required"
             )
         if config.kto_reference_point is not None and (
             isinstance(config.kto_reference_point, bool)
@@ -1089,12 +1133,33 @@ class PreferenceTrainer:
                 "through apply_chat_template"
             )
 
-        device = self.config.device
-        if device is None:
-            device = (
-                "mps"
-                if torch.backends.mps.is_available()
-                else ("cuda" if torch.cuda.is_available() else "cpu")
+        ctx = init_distributed(self.config.sharding)
+        if self.config.pairs_per_step < ctx.world_size:
+            # shard_indices would hand every rank ZERO pairs; refuse
+            # identically on every rank rather than train on nothing.
+            destroy(ctx)
+            raise TrainerRefusal(
+                f"pairs_per_step={self.config.pairs_per_step} < world_size="
+                f"{ctx.world_size}: sharding is over pairs, so some rank would "
+                "hold none; raise pairs_per_step to at least the world size"
+            )
+        device: str | None
+        if ctx.is_distributed:
+            device = str(ctx.device)
+        else:
+            device = self.config.device
+            if device is None:
+                device = (
+                    "mps"
+                    if torch.backends.mps.is_available()
+                    else ("cuda" if torch.cuda.is_available() else "cpu")
+                )
+        if ctx.is_distributed and self.config.pairs_per_step < ctx.world_size:
+            raise TrainerRefusal(
+                f"field pairs_per_step={self.config.pairs_per_step}: fewer "
+                f"records than the {ctx.world_size} data-parallel ranks "
+                f"would leave a rank with 0 rows; the preference step "
+                f"denominator must cover every rank"
             )
         torch.manual_seed(self.config.seed)
 
@@ -1149,7 +1214,24 @@ class PreferenceTrainer:
             policy_model: Any = AutoModelForCausalLM.from_pretrained(self.config.model)
         except Exception as exc:  # noqa: BLE001 -- named model-load refusal
             _refuse_exit_96(f"policy model load failed for {self.config.model!r}: {exc}")
-        policy_model.to(device)
+        if self.config.gradient_checkpointing:
+            policy_model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
+        model_config = getattr(policy_model, "config", None)
+        if model_config is not None:
+            model_config.use_cache = False
+        if self.config.sharding == "fsdp":
+            # fp32 cast BEFORE sharding so the sharded parameters are fp32
+            # masters; MixedPrecisionPolicy then casts to bf16 for compute.
+            # This deliberately replaces MasterWeightOptimizer under fsdp.
+            policy_model = policy_model.float()
+            policy_model = wrap_fsdp2(policy_model, ctx)
+        elif self.config.sharding == "ddp":
+            policy_model.to(device)
+            policy_model = wrap_ddp(policy_model, ctx)
+        else:
+            policy_model.to(device)
         policy_model.train()
 
         probe = next(
@@ -1183,9 +1265,16 @@ class PreferenceTrainer:
                     f"reference-anchored, so substituting the policy "
                     f"readings would change its margin"
                 )
-            loaded_reference.to(device)
             loaded_reference.eval()
             loaded_reference.requires_grad_(False)
+            if self.config.sharding == "fsdp":
+                # The reference is sharded too; its no-grad forwards still
+                # all-gather, so every rank must issue the same calls.
+                loaded_reference = loaded_reference.float()
+                loaded_reference = wrap_fsdp2(loaded_reference, ctx)
+            else:
+                # ddp: the reference is a plain replica, never DDP-wrapped.
+                loaded_reference.to(device)
             reference_model = loaded_reference
             print(
                 f"[preference_trainer] reference model loaded for "
@@ -1201,7 +1290,13 @@ class PreferenceTrainer:
                 file=sys.stderr,
             )
 
-        if self.config.master_weights is not None:
+        if self.config.sharding == "fsdp":
+            # MasterWeightOptimizer keeps host fp32 copies of parameters;
+            # under FSDP2 the parameters ARE fp32 sharded DTensors, so host
+            # copies would break the DTensor layout. Plain AdamW is used.
+            use_masters = False
+            master_reason = "fsdp: sharded fp32 DTensor params make AdamW the master-weight path"
+        elif self.config.master_weights is not None:
             use_masters = self.config.master_weights
             master_reason = f"forced by config master_weights={self.config.master_weights}"
         else:
@@ -1235,11 +1330,20 @@ class PreferenceTrainer:
         loss_fn = TensorPreferenceLoss(objective=self._objective)
         reports: list[StepReport] = []
         cursor = 0
-        for step in range(self.config.max_steps):
-            chunk = tuple(
-                shuffled[(cursor + offset) % len(shuffled)]
-                for offset in range(self.config.pairs_per_step)
+        # Prompt indices are sharded, never completion rows: every rank
+        # receives the same count, the remainder is dropped deterministically,
+        # and the global ordering agrees because every rank used the same seed.
+        local_offsets = shard_indices(self.config.pairs_per_step, ctx)
+        if len(local_offsets) < self.config.pairs_per_step and is_main(ctx):
+            print(
+                f"[preference_trainer] pairs_per_step={self.config.pairs_per_step} "
+                f"is not divisible by world_size={ctx.world_size}; "
+                f"{self.config.pairs_per_step - len(local_offsets) * ctx.world_size} "
+                f"record(s) per step are dropped deterministically",
+                file=sys.stderr,
             )
+        for step in range(self.config.max_steps):
+            chunk = tuple(shuffled[(cursor + offset) % len(shuffled)] for offset in local_offsets)
             cursor += self.config.pairs_per_step
             report = self._one_step(
                 step=step,
@@ -1253,6 +1357,33 @@ class PreferenceTrainer:
                 loss_fn=loss_fn,
             )
             reports.append(report)
+            if ctx.is_distributed:
+                # Means are averaged across ranks, counts are summed: every
+                # rank ends the step holding the same global history entry.
+                history_entry = self.history[-1]
+                history_entry["loss"] = all_reduce_mean(float(report.loss.loss), ctx)
+                history_entry["rows"] = int(all_reduce_sum(float(len(chunk)), ctx))
+                if history_entry.get("accuracy") is not None:
+                    history_entry["accuracy"] = all_reduce_mean(
+                        float(history_entry["accuracy"]), ctx
+                    )
+                if history_entry.get("margin") is not None:
+                    history_entry["margin"] = all_reduce_mean(float(history_entry["margin"]), ctx)
+            if (
+                self.config.save_dir is not None
+                and self.config.save_every > 0
+                and (step + 1) % self.config.save_every == 0
+            ):
+                # Collective under fsdp: every rank reaches this call in the
+                # same step because the loop trip count is config-fixed.
+                save_checkpoint(
+                    policy_model,
+                    prompt_surface.surface,
+                    f"{self.config.save_dir}/step_{step + 1}",
+                    ctx,
+                    sharding=self.config.sharding,
+                    step=step + 1,
+                )
         if self.truncated_completion_count:
             print(
                 f"[preference_trainer] truncated "
@@ -1264,4 +1395,15 @@ class PreferenceTrainer:
             attempted=self.config.max_steps,
             measured=len(reports),
         )
+        if self.config.save_dir is not None:
+            save_checkpoint(
+                policy_model,
+                prompt_surface.surface,
+                f"{self.config.save_dir}/final",
+                ctx,
+                sharding=self.config.sharding,
+                step=self.config.max_steps,
+            )
+        # destroy is a no-op unless init_distributed above created a group.
+        destroy(ctx)
         return reports

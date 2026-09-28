@@ -351,6 +351,17 @@ class RLTrainConfig:
     logprob_micro_batch: int = 0
     seed: int = 0
     device: str | None = None
+    # Data-parallel sharding: "none" (default, single process) / "ddp" /
+    # "fsdp" (FSDP2 fully_shard). Defaults preserve the existing single-GPU
+    # behaviour byte-for-byte. "none" refuses to run under torchrun rather
+    # than silently training N replicas.
+    sharding: str = "none"
+    # None keeps the historical behaviour of never saving weights. When set,
+    # checkpoints land at save_dir/step_N every save_every steps (save_every
+    # of 0 means only the final save) and at save_dir/final at the end.
+    save_dir: str | None = None
+    save_every: int = 0
+    gradient_checkpointing: bool = False
 
 
 class RLTrainer:
@@ -391,6 +402,15 @@ class RLTrainer:
             raise ValueError(
                 f"logprob_micro_batch={config.logprob_micro_batch}: a negative row "
                 "budget is not meaningful; use 0 for the whole batch"
+            )
+        if config.sharding not in ("none", "ddp", "fsdp"):
+            raise TrainerRefusal(
+                f"sharding={config.sharding!r}: one of 'none', 'ddp', 'fsdp' is required"
+            )
+        if config.save_every < 0:
+            raise TrainerRefusal(
+                f"save_every={config.save_every}: a negative interval is not "
+                f"meaningful; use 0 for final-only saving"
             )
         self.config = config
         # reinforce_baseline's carried EMA state: None means UNSEEDED (no
@@ -579,8 +599,31 @@ class RLTrainer:
                 "apply_chat_template, never by this package"
             )
 
+        from foundationscale.rl.distributed import (
+            destroy,
+            init_distributed,
+            save_checkpoint,
+            shard_indices,
+            wrap_ddp,
+            wrap_fsdp2,
+        )
+
         torch.manual_seed(self.config.seed)
+        # Process group comes up BEFORE any device movement; "none" under
+        # torchrun is refused inside init_distributed, never replicated.
+        ctx = init_distributed(self.config.sharding)
+        if self.config.prompts_per_step < ctx.world_size:
+            # shard_indices would hand every rank ZERO prompts and each step
+            # would abstain forever; refuse identically on every rank instead.
+            destroy(ctx)
+            raise TrainerRefusal(
+                f"prompts_per_step={self.config.prompts_per_step} < world_size="
+                f"{ctx.world_size}: sharding is over prompts, so some rank would "
+                "hold none; raise prompts_per_step to at least the world size"
+            )
         device = self.config.device
+        if ctx.is_distributed:
+            device = str(ctx.device)
         if device is None:
             device = (
                 "mps"
@@ -630,8 +673,27 @@ class RLTrainer:
             return loaded
 
         model = _load_causal_lm(self.config.model)
-        model.to(device)
-        model.train()
+        if self.config.gradient_checkpointing:
+            model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
+            # Training forwards must not cache; generate() is called with
+            # use_cache=True independently below.
+            model.config.use_cache = False
+        if self.config.sharding == "fsdp":
+            # Load on CPU and shard from there: fully_shard materialises the
+            # per-rank DTensor shards from these tensors, so pre-moving one
+            # full copy to the GPU would only double the peak. wrap_fsdp2
+            # casts to fp32 first -- the sharded params ARE the fp32 masters.
+            model = wrap_fsdp2(model, ctx)
+            model.train()
+        elif self.config.sharding == "ddp":
+            model.to(device)
+            model = wrap_ddp(model, ctx)
+            model.train()
+        else:
+            model.to(device)
+            model.train()
 
         if not getattr(tokenizer, "chat_template", None):
             _refuse_exit_96(
@@ -692,7 +754,14 @@ class RLTrainer:
             # pays this memory; _resolve_objective already refused the
             # needs-one-but-forbidden combination.
             ref_model = _load_causal_lm(self.config.reference_model or self.config.model)
-            ref_model.to(device)
+            if self.config.sharding == "fsdp":
+                # Sharded too: a frozen full-size replica on each rank would
+                # rescale memory exactly the way fsdp exists to prevent. DDP
+                # keeps it plain -- no gradient averaging is wanted over a
+                # frozen model, so no DDP wrapper.
+                ref_model = wrap_fsdp2(ref_model, ctx)
+            else:
+                ref_model.to(device)
             ref_model.eval()
             for parameter in ref_model.parameters():
                 parameter.requires_grad_(False)
@@ -703,7 +772,17 @@ class RLTrainer:
         # throughput and changed checkpoint bytes all look healthy. Selection is
         # EXPLICIT and printed, because a silent choice here IS the defect.
         param_dtype = next(model.parameters()).dtype
-        if self.config.master_weights is not None:
+        if self.config.sharding == "fsdp":
+            # wrap_fsdp2 already cast the sharded DTensors to fp32 and
+            # MixedPrecisionPolicy handles the bf16 compute cast: the
+            # masters ARE the parameters. MasterWeightOptimizer's host-side
+            # copies would break the DTensor plane, so plain AdamW over the
+            # sharded fp32 params is used -- the optimiser still steps fp32
+            # state against fp32 params, which is the whole point of
+            # mastering.
+            use_masters = False
+            master_reason = "fsdp: sharded params are fp32 masters via MixedPrecisionPolicy"
+        elif self.config.master_weights is not None:
             use_masters = self.config.master_weights
             master_reason = f"forced by config master_weights={self.config.master_weights}"
         else:
@@ -738,11 +817,22 @@ class RLTrainer:
         reports: list[StepReport] = []
         cursor = 0
         for step in range(self.config.max_steps):
-            chunk = [
+            global_chunk = [
                 usable[(cursor + offset) % len(usable)]
                 for offset in range(self.config.prompts_per_step)
             ]
             cursor += self.config.prompts_per_step
+            if ctx.is_distributed:
+                # Shard PROMPTS, never completions: all G completions of one
+                # prompt stay on one rank so the group baseline stays local.
+                my_indices = shard_indices(len(global_chunk), ctx)
+                chunk = [global_chunk[i] for i in my_indices]
+                if not chunk:
+                    # More ranks than prompts this step: replicate one prompt
+                    # so generation still returns rows and collectives fire.
+                    chunk = [global_chunk[0]]
+            else:
+                chunk = global_chunk
             report = self._one_step(
                 step=step,
                 chunk=chunk,
@@ -755,10 +845,34 @@ class RLTrainer:
                 optimizer=optimizer,
                 ref_model=ref_model,
                 device=device,
+                ctx=ctx,
             )
             if report is not None:
                 reports.append(report)
+            if (
+                self.config.save_dir is not None
+                and self.config.save_every > 0
+                and (step + 1) % self.config.save_every == 0
+            ):
+                save_checkpoint(
+                    model,
+                    tokenizer,
+                    f"{self.config.save_dir}/step_{step + 1}",
+                    ctx,
+                    sharding=self.config.sharding,
+                    step=step + 1,
+                )
         _refuse_vacuous_run(attempted=self.config.max_steps, measured=len(reports))
+        if self.config.save_dir is not None:
+            save_checkpoint(
+                model,
+                tokenizer,
+                f"{self.config.save_dir}/final",
+                ctx,
+                sharding=self.config.sharding,
+                step=self.config.max_steps,
+            )
+        destroy(ctx)
         return reports
 
     def _one_step(
@@ -775,6 +889,7 @@ class RLTrainer:
         optimizer: Any,
         ref_model: Any | None,
         device: str,
+        ctx: Any = None,
     ) -> StepReport | None:
         """One step over surviving rows, or ``None`` when none survive.
 
@@ -784,6 +899,18 @@ class RLTrainer:
 
         WHAT IS NOT CLAIMED: that any particular step produces a report.
         """
+        from foundationscale.rl.distributed import (
+            DistContext,
+            agree_all,
+            agree_max,
+            all_reduce_sum,
+            generate_kwargs_for,
+        )
+
+        if ctx is None:
+            ctx = DistContext(
+                rank=0, world_size=1, local_rank=0, device=device, is_distributed=False
+            )
         import torch
 
         golds: list[str | None] = [sample.gold for sample in chunk]
@@ -796,7 +923,10 @@ class RLTrainer:
         # modality keys are group-expanded and forwarded to the scorer below.
         prompt_ids = encode_prompts(surface, chunk, device)
         with torch.no_grad():
-            generated = model.generate(
+            # Under DDP the generative path bypasses the wrapper (no_grad --
+            # no grad sharing is wanted during rollout); under fsdp the
+            # wrapper IS the module generate must run on.
+            generated = getattr(model, "module", model).generate(
                 **prompt_ids,
                 max_new_tokens=self.config.max_new_tokens,
                 num_return_sequences=self.config.group_size,
@@ -808,6 +938,10 @@ class RLTrainer:
                 # the very inheritance #370 removed.
                 top_k=self.config.top_k,
                 pad_token_id=tokenizer.pad_token_id,
+                # synced_gpus under fsdp: generate must keep stepping while
+                # ANY rank is still generating, or an early-EOS rank would
+                # deadlock the next all-gather.
+                **generate_kwargs_for(ctx, self.config.sharding),
             )
         prompt_width = prompt_ids["input_ids"].shape[1]
         completions = tokenizer.batch_decode(generated[:, prompt_width:], skip_special_tokens=True)
@@ -820,6 +954,24 @@ class RLTrainer:
             scored = reward.score(response=completion, gold=golds[index // self.config.group_size])
             if scored is not None:
                 rows.append((index, scored))
+        # A NULL rank continues down the identical code path with one dummy
+        # row and a loss multiplied by 0.0, so it issues exactly the same
+        # sequence of collectives as a rank with real rows. Returning early
+        # after one private forward/backward/step deadlocked FSDP: the other
+        # ranks went on to agree_max, the logprob forwards, three more votes,
+        # the sliced backward and the report reductions. MEASURED on 4x GB200.
+        # A null rank votes True at every later "skip?" vote.
+        null_rank = False
+        every_rank_empty = agree_all(not rows, ctx)
+        if not rows and not every_rank_empty:
+            null_rank = True
+            rows = [(0, 0.0)]
+            print(
+                f"[trainer] step {step} rank {ctx.rank}: "
+                "no row survived reward scoring on this rank; others did"
+                " -- participating with zero loss (UNMEASURED here)",
+                file=sys.stderr,
+            )
         if not rows:
             # offered > used == 0: an entirely abstaining step is UNMEASURED.
             print(
@@ -891,6 +1043,12 @@ class RLTrainer:
             if use_logprob_micro_batching
             else ((0, n_rows),)
         )
+        # The micro-slice COUNT must agree across ranks: FSDP's collectives
+        # fire once per sliced forward/backward, so a rank with fewer real
+        # slices pads with zero-weight dummies below.
+        extra_slices = 0
+        if ctx.is_distributed:
+            extra_slices = max(0, agree_max(len(row_slices), ctx) - len(row_slices))
 
         def forward_logprob_slice(
             start: int, end: int, *, scorer_model: Any = None
@@ -974,6 +1132,15 @@ class RLTrainer:
                     dim=0,
                 )
 
+        if extra_slices:
+            # Align the no_grad forward-pass COUNT with the busiest rank
+            # (old + current passes, plus the reference pass when loaded):
+            # FSDP all-gathers fire in no_grad mode too.
+            passes_per_slice = 3 if ref_model is not None else 2
+            with torch.no_grad():
+                for _ in range(extra_slices * passes_per_slice):
+                    forward_logprob_slice(0, min(1, n_rows))
+
         # Family dispatch (design section 5): the two estimator-free
         # bindings price straight off these planes and never call
         # advantage_fn -- one subtracts a carried EMA baseline, the other
@@ -1024,13 +1191,36 @@ class RLTrainer:
         # Handing it a 1-D tensor of ones made every row non-iterable and
         # refused the batch, and the row count it would have implied is not
         # the quantity the estimator needs.
+        advantage: Any = None
+        adv_refusal: str | None = None
         try:
-            advantage = objective.advantage_fn.compute(
-                prompt_ids=tuple(prompt_id_values),
-                rewards=tuple(float(value) for value in rewards.tolist()),
-                mask=tuple(tuple(int(entry) for entry in row) for row in response_mask.tolist()),
-            )
+            if not null_rank:
+                advantage = objective.advantage_fn.compute(
+                    prompt_ids=tuple(prompt_id_values),
+                    rewards=tuple(float(value) for value in rewards.tolist()),
+                    mask=tuple(tuple(int(e) for e in row) for row in response_mask.tolist()),
+                )
         except AdvantageRefusal as exc:
+            adv_refusal = str(exc)
+        # A rank must never skip alone: agree, then act identically. If SOME
+        # ranks have a usable advantage, this rank participates with a
+        # zero-weight dummy so FSDP's collectives stay aligned.
+        every_rank_refused = agree_all(null_rank or adv_refusal is not None, ctx)
+        if adv_refusal is not None and not every_rank_refused and not null_rank:
+            null_rank = True
+            print(
+                f"[trainer] step {step} rank {ctx.rank}: "
+                "advantage refused on this rank; others have a usable advantage"
+                " -- participating with zero loss (UNMEASURED here)",
+                file=sys.stderr,
+            )
+        if every_rank_refused:
+            if null_rank:
+                print(
+                    f"[trainer] step {step}: every rank is null; step UNMEASURED",
+                    file=sys.stderr,
+                )
+                return None
             # The estimator refuses when NO row survives: every group was too
             # small for a baseline once abstentions were dropped. That is a
             # genuine UNMEASURED step, not a crash. Letting the refusal
@@ -1040,7 +1230,7 @@ class RLTrainer:
             # nothing" and continuing.
             print(
                 f"UNMEASURED step {step}: the advantage estimator used 0 of "
-                f"{len(rows)} offered row(s) -- {exc}",
+                f"{len(rows)} offered row(s) -- {adv_refusal}",
                 file=sys.stderr,
             )
             return None
@@ -1049,8 +1239,24 @@ class RLTrainer:
         # for each. Enumerating the record itself treated its fields as
         # advantages. `used < offered` is the estimator's own visible account
         # of what it dropped -- a group too small for a baseline leaves here.
-        kept_rows = list(advantage.rows)
-        if not kept_rows:
+        kept_rows = [0] if null_rank else list(advantage.rows)
+        every_rank_kept_none = agree_all(null_rank or not kept_rows, ctx)
+        if not kept_rows and not every_rank_kept_none:
+            null_rank = True
+            kept_rows = [0]
+            print(
+                f"[trainer] step {step} rank {ctx.rank}: "
+                "the advantage kept no row on this rank; others kept rows"
+                " -- participating with zero loss (UNMEASURED here)",
+                file=sys.stderr,
+            )
+        if every_rank_kept_none:
+            if null_rank:
+                print(
+                    f"[trainer] step {step}: every rank is null; step UNMEASURED",
+                    file=sys.stderr,
+                )
+                return None
             print(
                 f"UNMEASURED step {step}: the advantage estimator kept 0 of "
                 f"{len(rows)} scored row(s); no group was large enough to admit a "
@@ -1059,11 +1265,16 @@ class RLTrainer:
             )
             return None
         keep = torch.tensor(kept_rows, device=device)
-        advantage_tensor = torch.tensor(
-            [list(weights) for weights in advantage.weights],
-            dtype=torch.float32,
-            device=device,
-        ).detach()
+        if null_rank:
+            advantage_tensor = torch.zeros(
+                (1, int(response_mask.shape[1])), dtype=torch.float32, device=device
+            )
+        else:
+            advantage_tensor = torch.tensor(
+                [list(weights) for weights in advantage.weights],
+                dtype=torch.float32,
+                device=device,
+            ).detach()
 
         # A SATURATED step is unmeasured, not a step. When every completion in
         # a group earns the same reward -- all correct or all wrong -- the
@@ -1073,7 +1284,23 @@ class RLTrainer:
         # count: a run that taught nothing, reported as a run that trained.
         # That is this framework's founding failure wearing new clothes, so it
         # is named and skipped rather than counted.
-        if not bool(advantage_tensor.abs().any()):
+        zero_advantage = not bool(advantage_tensor.abs().any())
+        every_rank_zero = agree_all(null_rank or zero_advantage, ctx)
+        if zero_advantage and not every_rank_zero and not null_rank:
+            null_rank = True
+            print(
+                f"[trainer] step {step} rank {ctx.rank}: "
+                "every advantage is zero on this rank; others have signal"
+                " -- participating with zero loss (UNMEASURED here)",
+                file=sys.stderr,
+            )
+        if every_rank_zero:
+            if null_rank:
+                print(
+                    f"[trainer] step {step}: every rank is null; step UNMEASURED",
+                    file=sys.stderr,
+                )
+                return None
             # Reported PER GROUP, because the group is the axis the baseline is
             # formed over and the claim is about variance WITHIN it. Pooling the
             # rewards across groups printed evidence that contradicted the
@@ -1112,6 +1339,10 @@ class RLTrainer:
             mask=kept_mask,
             reference_logprobs=kept_ref,
         )
+        if null_rank:
+            # Mandatory, not cosmetic: with a zero advantage the surrogate is
+            # zero but the KL/reference terms are not.
+            loss_tensor = loss_tensor * 0.0
         optimizer.zero_grad()
         if use_logprob_micro_batching:
             # zero_grad precedes both backward phases. The first fills the
@@ -1126,9 +1357,27 @@ class RLTrainer:
             )
         else:
             loss_tensor.backward()
+        for _ in range(extra_slices):
+            # Padding backward: one collective-matching backward whose
+            # gradient is exactly zero, so the busiest rank's extra slices
+            # do not deadlock the reduce-scatter.
+            lane = forward_logprob_slice(0, min(1, n_rows))
+            (lane.sum() * 0.0).backward()
         optimizer.step()
 
-        measured = float(loss_tensor.detach())
+        # Averaged scalars are reduced MEAN, counts SUM, so every rank holds
+        # the same report; only rank 0's caller-visible stream prints.
+        # A null rank's loss is a zeroed dummy, so it is excluded from the
+        # mean by weight rather than averaged in as a spurious 0.0: the
+        # reported loss is the row-weighted mean over the ranks that measured.
+        local_loss = float(loss_tensor.detach())
+        weight = 0.0 if null_rank else float(len(kept_rows))
+        measured_weight = all_reduce_sum(weight, ctx)
+        measured = (
+            all_reduce_sum(local_loss * weight, ctx) / measured_weight
+            if ctx.is_distributed
+            else local_loss
+        )
         loss_output = LossOutput(
             loss=measured,
             components=_loss_components(
@@ -1162,8 +1411,15 @@ class RLTrainer:
         return StepReport(
             step=step,
             loss=loss_output,
-            rows=len(kept_rows),
-            reward_stats=RewardStats.over(tuple(float(rewards[row]) for row in kept_rows)),
+            # rows stays LOCAL so it matches the local reward_stats count
+            # (StepReport refuses two denominators); a null rank has no local
+            # rows and zero is refused, so it names the peers' measured rows.
+            rows=int(measured_weight) if null_rank else len(kept_rows),
+            reward_stats=(
+                None
+                if null_rank
+                else RewardStats.over(tuple(float(rewards[row]) for row in kept_rows))
+            ),
             sync=None,
         )
 
