@@ -59,6 +59,12 @@ from foundationscale.rl.algorithm import StepReport, StepReportRefusal
 from foundationscale.rl.corpus import Sample, load_sharegpt
 from foundationscale.rl.interfaces import BatchRefusal, LossOutput
 from foundationscale.rl.online_objectives import BestOfNLoss, RAFTLoss
+from foundationscale.rl.online_pref_step import (
+    is_online_pref,
+    maybe_refresh_reference,
+    online_pref_step,
+    refresh_cadence,
+)
 from foundationscale.rl.prompt_surface import encode_prompts, resolve_prompt_surface
 from foundationscale.rl.registry import lookup_algorithm
 from foundationscale.rl.rewards import MCQLetterReward
@@ -362,6 +368,9 @@ class RLTrainConfig:
     save_dir: str | None = None
     save_every: int = 0
     gradient_checkpointing: bool = False
+    # iterative DPO only: copy the policy into the frozen reference every N
+    # steps (0 never refreshes). Online DPO keeps its initial reference.
+    ref_refresh_steps: int = 0
 
 
 class RLTrainer:
@@ -475,6 +484,10 @@ class RLTrainer:
         # model was loaded and a full group had been generated -- a crash where
         # the contract owes a refusal that names the missing input, and one that
         # arrives only after the expensive part of the step has been paid for.
+        if is_online_pref(objective):
+            # Online/iterative DPO price a PAIR mined from the group's own
+            # rewards; online_pref_step owns that loop, not _one_step.
+            return objective
         # reinforce_baseline and reinforce_pp are the two estimator-free
         # tails (design section 5): one subtracts a carried EMA baseline,
         # the other folds a k1 penalty into the return and normalises
@@ -746,7 +759,9 @@ class RLTrainer:
         # the kernel's reference axis cannot see it.
         needs_reference = kl_weight != 0.0 or self.config.algorithm == "reinforce_pp"
         ref_model: Any = None
-        if needs_reference or self.config.reference_policy:
+        online_pref = is_online_pref(objective)
+        refresh_every = refresh_cadence(objective, self.config.ref_refresh_steps)
+        if needs_reference or self.config.reference_policy or online_pref:
             # The frozen reference plane: loaded before any optimizer step so
             # it IS the initial policy -- which is what makes the step-1 k3
             # contribution exactly zero. Only an objective declaring a
@@ -766,7 +781,7 @@ class RLTrainer:
             for parameter in ref_model.parameters():
                 parameter.requires_grad_(False)
         reward = MCQLetterReward(answer_pattern=self.config.answer_pattern)
-        loss_fn = TensorPolicyLoss(objective=objective)
+        loss_fn = None if online_pref else TensorPolicyLoss(objective=objective)
         # #369: bf16 params stepped directly by AdamW at lr=1e-6 discard every
         # sub-ulp update, so the loop trains ~nothing while loss, grad-norm,
         # throughput and changed checkpoint bytes all look healthy. Selection is
@@ -833,20 +848,44 @@ class RLTrainer:
                     chunk = [global_chunk[0]]
             else:
                 chunk = global_chunk
-            report = self._one_step(
-                step=step,
-                chunk=chunk,
-                model=model,
-                tokenizer=tokenizer,
-                surface=prompt_surface,
-                reward=reward,
-                objective=objective,
-                loss_fn=loss_fn,
-                optimizer=optimizer,
-                ref_model=ref_model,
-                device=device,
-                ctx=ctx,
-            )
+            if online_pref:
+                report = online_pref_step(
+                    self,
+                    step=step,
+                    chunk=chunk,
+                    model=model,
+                    tokenizer=tokenizer,
+                    surface=prompt_surface,
+                    reward=reward,
+                    objective=objective,
+                    optimizer=optimizer,
+                    ref_model=ref_model,
+                    device=device,
+                    ctx=ctx,
+                )
+                if maybe_refresh_reference(
+                    step=step, cadence=refresh_every, model=model, ref_model=ref_model
+                ):
+                    print(
+                        f"[trainer] reference refreshed from policy after step {step}",
+                        file=sys.stderr,
+                    )
+            else:
+                assert loss_fn is not None
+                report = self._one_step(
+                    step=step,
+                    chunk=chunk,
+                    model=model,
+                    tokenizer=tokenizer,
+                    surface=prompt_surface,
+                    reward=reward,
+                    objective=objective,
+                    loss_fn=loss_fn,
+                    optimizer=optimizer,
+                    ref_model=ref_model,
+                    device=device,
+                    ctx=ctx,
+                )
             if report is not None:
                 reports.append(report)
             if (

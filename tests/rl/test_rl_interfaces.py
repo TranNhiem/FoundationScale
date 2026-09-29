@@ -158,6 +158,12 @@ TORCH_FREE_MODULES = {
         "OnlineDPOLoss",
         "RAFTLoss",
     ),
+    "foundationscale.rl.online_pref_step": (
+        "is_online_pref",
+        "maybe_refresh_reference",
+        "online_pref_step",
+        "refresh_cadence",
+    ),
     "foundationscale.rl.policy": ("PolicyPair", "PolicyRoleRefusal"),
     "foundationscale.rl.policy_gradient": (
         "RLOOAlgorithm",

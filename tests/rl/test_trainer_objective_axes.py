@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import pytest
 
+from foundationscale.rl.online_pref_step import is_online_pref
 from foundationscale.rl.registry import available_algorithm_names, lookup_algorithm
 from foundationscale.rl.trainer import RLTrainConfig, RLTrainer, TrainerRefusal
 
@@ -48,7 +49,9 @@ def _split_by_estimator() -> tuple[tuple[str, ...], tuple[str, ...]]:
     without_fn: list[str] = []
     for name in available_algorithm_names():
         objective = _objective_of(name)
-        if objective is None or name in _ESTIMATOR_FREE:
+        if objective is None or name in _ESTIMATOR_FREE or is_online_pref(objective):
+            # Online preference objectives train through their own step
+            # (rl/online_pref_step.py), which needs no advantage estimator.
             continue
         (with_fn if hasattr(objective, "advantage_fn") else without_fn).append(name)
     return tuple(with_fn), tuple(without_fn)
@@ -103,5 +106,19 @@ def test_every_objective_bearing_algorithm_is_admitted_or_refused_by_name() -> N
     """
     with_fn, without_fn = _split_by_estimator()
     covered = set(with_fn) | set(without_fn) | set(_ESTIMATOR_FREE)
+    online = {name for name in available_algorithm_names() if is_online_pref(_objective_of(name))}
     bearing = {name for name in available_algorithm_names() if _objective_of(name) is not None}
-    assert covered == bearing
+    assert online, "positive control: online_dpo/iterative_dpo are registered"
+    assert covered | online == bearing
+    assert not covered & online
+
+
+def test_online_preference_objectives_resolve_without_an_estimator() -> None:
+    """Online preference families train through online_pref_step, not the estimator path."""
+    resolved = [
+        RLTrainer(_config(name))._resolve_objective()
+        for name in available_algorithm_names()
+        if is_online_pref(_objective_of(name))
+    ]
+    assert len(resolved) == 2, "positive control: online_dpo and iterative_dpo"
+    assert all(is_online_pref(objective) for objective in resolved)
