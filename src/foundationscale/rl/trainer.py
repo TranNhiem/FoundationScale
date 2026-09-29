@@ -164,6 +164,36 @@ def _micro_batched_backward(
         slice_logp.backward(output_grad[start:end])
 
 
+def _padding_backwards(
+    *, forward_slice: Callable[[int, int], torch.Tensor], extra_slices: int, n_rows: int
+) -> None:
+    """Issue the busiest rank's surplus forward/backward pairs at zero gradient.
+
+    FSDP all-gathers once per forward and reduce-scatters once per backward,
+    so a rank holding fewer micro-batch slices than its busiest peer must
+    still issue one pass per missing slice or the peers deadlock. The
+    gradient of ``sum * 0.0`` is exactly zero, so the step is unchanged.
+    """
+    for _ in range(extra_slices):
+        lane = forward_slice(0, min(1, n_rows))
+        (lane.sum() * 0.0).backward()
+
+
+def _dp_weighted_loss(local_loss: float, weight: float, ctx: Any) -> tuple[float, float]:
+    """Row-weighted mean loss over the ranks that measured, plus that weight.
+
+    A null rank passes ``weight=0.0`` so its zeroed dummy loss is excluded
+    rather than averaged in as a spurious 0.0. Both reductions are issued on
+    every rank in the same order, whatever the local data.
+    """
+    from foundationscale.rl.distributed import all_reduce_sum
+
+    measured_weight = all_reduce_sum(weight, ctx)
+    if not ctx.is_distributed:
+        return local_loss, measured_weight
+    return all_reduce_sum(local_loss * weight, ctx) / measured_weight, measured_weight
+
+
 def _per_group_reward_summary(
     kept_rows: Sequence[int],
     prompt_ids: Sequence[str],
@@ -1138,6 +1168,9 @@ class RLTrainer:
                 row_slices=row_slices,
                 use_logprob_micro_batching=use_logprob_micro_batching,
                 optimizer=optimizer,
+                ctx=ctx,
+                null_rank=null_rank,
+                extra_slices=extra_slices,
             )
 
         # Old logprobs are RECOMPUTED under no_grad over the same rows -- the
@@ -1211,6 +1244,9 @@ class RLTrainer:
                     use_logprob_micro_batching=use_logprob_micro_batching,
                     objective=objective,
                     optimizer=optimizer,
+                    ctx=ctx,
+                    null_rank=null_rank,
+                    extra_slices=extra_slices,
                 )
             return self._reinforce_pp_tail(
                 step=step,
@@ -1226,6 +1262,9 @@ class RLTrainer:
                 objective=objective,
                 loss_fn=loss_fn,
                 optimizer=optimizer,
+                ctx=ctx,
+                null_rank=null_rank,
+                extra_slices=extra_slices,
             )
 
         prompt_id_values = [f"row-{index // self.config.group_size}" for index, _ in rows]
@@ -1477,6 +1516,9 @@ class RLTrainer:
         row_slices: tuple[tuple[int, int], ...],
         use_logprob_micro_batching: bool,
         optimizer: Any,
+        ctx: Any,
+        null_rank: bool,
+        extra_slices: int,
     ) -> StepReport | None:
         """Masked-NLL tail for the SFT pair (RAFT, best-of-N).
 
@@ -1502,8 +1544,15 @@ class RLTrainer:
         computed: masked NLL has no ratio to anchor, and neither objective
         declares a KL term, so ``reference_policy=None`` loads no frozen copy
         here.
+
+        Under data parallelism "no winner" is voted, never acted on alone: a
+        rank without winners (or with no rows at all) still issues the same
+        forwards, backwards and reductions as its peers, at zero loss. Only
+        when EVERY rank is without winners is the step UNMEASURED.
         """
         import torch
+
+        from foundationscale.rl.distributed import agree_all
 
         # Grouped by POSITION, not batch index: `rows` pairs a batch index
         # with a score, and the log-probability / mask planes are already
@@ -1525,7 +1574,7 @@ class RLTrainer:
             leaders = [position for position in positions if rows[position][1] == best]
             tied_groups += len(leaders) > 1
             winner_positions.extend(leaders)
-        if flat:
+        if flat and not null_rank:
             shown = "; ".join(
                 f"{prompt_id}: all rows at reward {best}"
                 for prompt_id, best in flat[:_MAX_GROUPS_REPORTED]
@@ -1538,14 +1587,15 @@ class RLTrainer:
                 f"there is no ranking to fine-tune on ({shown})",
                 file=sys.stderr,
             )
-        if tied_groups:
+        if tied_groups and not null_rank:
             print(
                 f"[trainer] step {step}: {tied_groups} of {len(groups)} group(s) "
                 f"have a tied maximum; every tied leader is a winner "
                 f"({len(winner_positions)} winner row(s) in total)",
                 file=sys.stderr,
             )
-        if not winner_positions:
+        no_winners = null_rank or not winner_positions
+        if agree_all(no_winners, ctx):
             print(
                 f"UNMEASURED step {step}: every group is flat ({len(flat)} of "
                 f"{len(groups)} group(s) dropped); the SFT tail selected 0 "
@@ -1553,6 +1603,15 @@ class RLTrainer:
                 file=sys.stderr,
             )
             return None
+        if no_winners:
+            print(
+                f"[trainer] step {step}: this rank selected 0 winners but a peer "
+                f"did; participating with zero loss (UNMEASURED here)",
+                file=sys.stderr,
+            )
+            # A placeholder winner keeps the kernel's shapes; its loss is
+            # zeroed below, so the gradient is exactly zero.
+            winner_positions = [0]
 
         winners = torch.tensor(winner_positions, device=response_mask.device)
         winner_mask = response_mask.index_select(0, winners).detach()
@@ -1562,10 +1621,12 @@ class RLTrainer:
             # detached batch-shaped leaf, then deliver its gradient through
             # fresh row-sliced graphs. The only swap is the kernel.
             with torch.no_grad():
+                # Padding slices ride inside the pass so every rank issues
+                # the busiest rank's forward count; their rows are dropped.
+                passes = row_slices + ((0, min(1, n_rows)),) * extra_slices
+                sliced = [forward_slice(start, end) for start, end in passes]
                 current_full = (
-                    torch.cat([forward_slice(start, end) for start, end in row_slices], dim=0)
-                    .detach()
-                    .requires_grad_(True)
+                    torch.cat(sliced[: len(row_slices)], dim=0).detach().requires_grad_(True)
                 )
         else:
             current_full = forward_slice(0, n_rows).requires_grad_(True)
@@ -1574,6 +1635,8 @@ class RLTrainer:
             current_logprobs=winner_current,
             mask=winner_mask,
         )
+        if no_winners:
+            loss_tensor = loss_tensor * 0.0
         optimizer.zero_grad()
         if use_logprob_micro_batching:
             _micro_batched_backward(
@@ -1584,11 +1647,16 @@ class RLTrainer:
             )
         else:
             loss_tensor.backward()
+        _padding_backwards(forward_slice=forward_slice, extra_slices=extra_slices, n_rows=n_rows)
         optimizer.step()
 
         from foundationscale.gates.objective_gates import MetricObservation
 
-        measured = float(loss_tensor.detach())
+        measured, measured_weight = _dp_weighted_loss(
+            float(loss_tensor.detach()),
+            0.0 if no_winners else float(len(winner_positions)),
+            ctx,
+        )
         weight = float(getattr(objective, "weight", 1.0))
         metrics: list[Any] = []
         nll_metric_name = getattr(objective, "nll_metric_name", None)
@@ -1598,7 +1666,7 @@ class RLTrainer:
             # from the measured scalar -- a derivation, not a second pass.
             metrics.append(MetricObservation(name=nll_metric_name, value=measured / weight))
         reward_metric_name = getattr(objective, "reward_metric_name", None)
-        if isinstance(reward_metric_name, str) and reward_metric_name:
+        if isinstance(reward_metric_name, str) and reward_metric_name and not no_winners:
             winner_rewards = [rows[position][1] for position in winner_positions]
             metrics.append(
                 MetricObservation(
@@ -1620,7 +1688,9 @@ class RLTrainer:
         return StepReport(
             step=step,
             loss=loss_output,
-            rows=len(winner_positions),
+            # A rank without winners names the peers' measured rows, as the
+            # main path does for a null rank (zero rows is refused).
+            rows=int(measured_weight) if no_winners else len(winner_positions),
             # The SFT bindings declare advantage_fn False, and verify_step
             # grades the reward_stats <-> advantage_fn pairing both ways, so
             # this stays None rather than a pooled summary over survivors.
@@ -1641,6 +1711,9 @@ class RLTrainer:
         use_logprob_micro_batching: bool,
         objective: Any,
         optimizer: Any,
+        ctx: Any,
+        null_rank: bool,
+        extra_slices: int,
     ) -> StepReport | None:
         """REINFORCE tail: subtract the carried EMA baseline from each return.
 
@@ -1652,11 +1725,18 @@ class RLTrainer:
         because this binding declares ``advantage_fn: False`` and the
         pairing is graded both ways.
 
+        Under data parallelism the batch mean is the GLOBAL mean over every
+        rank's rows (a null rank contributes none), so the carried baseline
+        stays identical on every rank; and "zero surrogate" is voted, never
+        acted on alone -- a rank whose advantages are all zero still issues
+        its peers' forwards, backwards and reductions, at zero loss.
+
         WHAT IS NOT CLAIMED: that the EMA tracks any optimum.
         """
         import torch
 
         from foundationscale.gates.objective_gates import MetricObservation
+        from foundationscale.rl.distributed import agree_all, all_reduce_sum
 
         if not hasattr(objective, "baseline_momentum"):
             # No silent 0.99: the EMA rate is a declared field of the objective.
@@ -1665,24 +1745,36 @@ class RLTrainer:
                 "baseline_momentum; refusing to substitute a default EMA rate"
             )
         momentum = float(objective.baseline_momentum)
-        batch_mean = sum(scores) / len(scores)
+        # A null rank's scores are a placeholder, so it contributes nothing.
+        local_n = 0.0 if null_rank else float(len(scores))
+        total_n = all_reduce_sum(local_n, ctx)
+        batch_mean = all_reduce_sum(0.0 if null_rank else sum(scores), ctx) / total_n
         used_baseline = self._reinforce_baseline
         if used_baseline is None:
             # Seeding from the first measured mean return, not from a
             # defaulted 0.0: abstention resolves into a measurement.
             used_baseline = batch_mean
         advantages = [score - used_baseline for score in scores]
-        if not any(value != 0.0 for value in advantages):
+        local_zero = null_rank or not any(value != 0.0 for value in advantages)
+        if agree_all(local_zero, ctx):
             # Every kept return equals the baseline: no stimulus in the
             # whole batch, no gradient, no claimed step.
             print(
                 f"UNMEASURED step {step}: every kept return equals the "
-                f"baseline {used_baseline!r} over {len(scores)} used "
+                f"baseline {used_baseline!r} over {int(total_n)} used "
                 f"row(s); the REINFORCE surrogate is identically zero, "
                 f"so no gradient exists and no step is claimed.",
                 file=sys.stderr,
             )
             return None
+        if local_zero:
+            print(
+                f"[trainer] step {step}: every local return equals the baseline "
+                f"but a peer's does not; participating with zero loss "
+                f"(UNMEASURED here)",
+                file=sys.stderr,
+            )
+            advantages = [0.0] * len(scores)
         advantage_tensor = torch.tensor(advantages, dtype=torch.float32, device=kept_current.device)
         loss_fn = TensorREINFORCELoss(objective=objective)
         loss_tensor = loss_fn(
@@ -1690,6 +1782,8 @@ class RLTrainer:
             advantages=advantage_tensor,
             mask=kept_mask,
         )
+        if local_zero:
+            loss_tensor = loss_tensor * 0.0
         optimizer.zero_grad()
         if use_logprob_micro_batching:
             _micro_batched_backward(
@@ -1700,6 +1794,11 @@ class RLTrainer:
             )
         else:
             loss_tensor.backward()
+        _padding_backwards(
+            forward_slice=forward_slice,
+            extra_slices=extra_slices,
+            n_rows=int(current_logprobs.shape[0]),
+        )
         optimizer.step()
         # The state update happens only after the price: step N reports the
         # baseline it USED, and the EMA folds in this batch's mean so step
@@ -1708,10 +1807,14 @@ class RLTrainer:
         self._reinforce_baseline = (
             batch_mean if state is None else momentum * state + (1.0 - momentum) * batch_mean
         )
-        measured = float(loss_tensor.detach())
+        measured, measured_weight = _dp_weighted_loss(
+            float(loss_tensor.detach()), 0.0 if local_zero else local_n, ctx
+        )
         # The declared bounded diagnostic: strictly above, so a batch whose
         # returns all EQUAL the baseline reads 0.0 -- degenerate, truthfully.
-        frac_above = sum(1 for score in scores if score > used_baseline) / len(scores)
+        # Counted over every rank's real rows, like the baseline itself.
+        local_above = 0.0 if null_rank else float(sum(1 for s in scores if s > used_baseline))
+        frac_above = all_reduce_sum(local_above, ctx) / total_n
         loss_output = LossOutput(
             loss=measured,
             components=_loss_components(
@@ -1737,7 +1840,8 @@ class RLTrainer:
         return StepReport(
             step=step,
             loss=loss_output,
-            rows=len(scores),
+            # A zero-loss rank names the peers' measured rows (zero is refused).
+            rows=int(measured_weight) if local_zero else len(scores),
             reward_stats=None,
             sync=None,
         )
@@ -1758,6 +1862,9 @@ class RLTrainer:
         objective: Any,
         loss_fn: TensorPolicyLoss,
         optimizer: Any,
+        ctx: Any,
+        null_rank: bool,
+        extra_slices: int,
     ) -> StepReport | None:
         """Reinforce++ tail: k1 fold into the return, GLOBAL z-score, PPO clip.
 
@@ -1769,11 +1876,20 @@ class RLTrainer:
         token-ratio tail is the shared tensor kernel, whose declared axes
         (token scope, symmetric clip) it reads off the objective itself.
 
+        Under data parallelism "global" means over every rank's kept rows:
+        the mean and population spread are reduced across ranks (a null rank
+        contributes none), so the zero-spread verdict is collective and a
+        null rank participates at zero loss.
+
         WHAT IS NOT CLAIMED: any equivalence with a reference Reinforce++
         implementation, and any comparability of the penalised scale with
         the raw reward scale.
         """
+        import math
+
         import torch
+
+        from foundationscale.rl.distributed import all_reduce_sum
 
         if kept_ref is None:
             raise TrainerRefusal(
@@ -1796,8 +1912,19 @@ class RLTrainer:
         # The penalty folds into the RETURN, never a separable loss term:
         # one folded component is what the objective's declaration states.
         penalised_list = [float(value) for value in (scores_tensor - kl_beta * kl_per_row).tolist()]
-        stats = RewardStats.over(tuple(penalised_list))
-        if stats.std == 0.0:
+        if ctx.is_distributed:
+            # The same two-pass population formula as RewardStats.over, with
+            # each sum reduced across ranks; the count is the global count.
+            local_n = 0.0 if null_rank else float(len(penalised_list))
+            total_n = all_reduce_sum(local_n, ctx)
+            mean = all_reduce_sum(0.0 if null_rank else sum(penalised_list), ctx) / total_n
+            local_sq = 0.0 if null_rank else sum((v - mean) ** 2 for v in penalised_list)
+            std = math.sqrt(all_reduce_sum(local_sq, ctx) / total_n)
+        else:
+            local_n = float(len(penalised_list))
+            stats = RewardStats.over(tuple(penalised_list))
+            mean, std = stats.mean, stats.std
+        if std == 0.0:
             print(
                 f"UNMEASURED step {step}: global advantage normalisation "
                 f"over {len(scores)} kept row(s) found zero spread in the "
@@ -1808,7 +1935,7 @@ class RLTrainer:
             )
             return None
         z_scores = torch.tensor(
-            [(value - stats.mean) / stats.std for value in penalised_list],
+            [(value - mean) / std for value in penalised_list],
             dtype=torch.float32,
             device=cur.device,
         )
@@ -1818,6 +1945,8 @@ class RLTrainer:
             advantages=z_scores,
             mask=kept_mask,
         )
+        if null_rank:
+            loss_tensor = loss_tensor * 0.0
         optimizer.zero_grad()
         if use_logprob_micro_batching:
             _micro_batched_backward(
@@ -1828,8 +1957,15 @@ class RLTrainer:
             )
         else:
             loss_tensor.backward()
+        _padding_backwards(
+            forward_slice=forward_slice,
+            extra_slices=extra_slices,
+            n_rows=int(current_logprobs.shape[0]),
+        )
         optimizer.step()
-        measured = float(loss_tensor.detach())
+        measured, measured_weight = _dp_weighted_loss(
+            float(loss_tensor.detach()), 0.0 if null_rank else local_n, ctx
+        )
         loss_output = LossOutput(
             loss=measured,
             components=_loss_components(
@@ -1848,13 +1984,13 @@ class RLTrainer:
         )
         print(
             f"[trainer] step {step}: reinforce_pp "
-            f"penalised_mean={stats.mean:.6g} penalised_std={stats.std:.6g}",
+            f"penalised_mean={mean:.6g} penalised_std={std:.6g}",
             file=sys.stderr,
         )
         return StepReport(
             step=step,
             loss=loss_output,
-            rows=len(scores),
+            rows=int(measured_weight) if null_rank else len(scores),
             reward_stats=None,
             sync=None,
         )

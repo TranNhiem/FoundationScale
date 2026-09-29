@@ -31,6 +31,7 @@ from test_trainer_group_family import (  # noqa: E402 (sibling test module, no p
 )
 
 import foundationscale.rl.trainer as trainer_module  # noqa: E402 (torch importorskip first)
+from foundationscale.rl.distributed import DistContext  # noqa: E402 (torch importorskip first)
 from foundationscale.rl.interfaces import BatchRefusal  # noqa: E402 (torch importorskip first)
 from foundationscale.rl.torch_backend import (  # noqa: E402 (torch importorskip first)
     TensorMaskedSFTLoss,
@@ -48,6 +49,14 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 
 # --- shared stubs ------------------------------------------------------------
+
+# The tails take the data-parallel context explicitly; these direct calls are
+# single-process, where every collective is an identity.
+_SOLO: dict[str, Any] = {
+    "ctx": DistContext(rank=0, world_size=1, local_rank=0, device="cpu", is_distributed=False),
+    "null_rank": False,
+    "extra_slices": 0,
+}
 
 
 class _RecordingOptimizer:
@@ -207,6 +216,7 @@ def test_reinforce_baseline_tail_refuses_an_undeclared_momentum() -> None:
             use_logprob_micro_batching=False,
             objective=types.SimpleNamespace(),
             optimizer=_RecordingOptimizer(),
+            **_SOLO,
         )
 
 
@@ -228,6 +238,7 @@ def test_reinforce_baseline_tail_flat_returns_are_unmeasured(
         use_logprob_micro_batching=False,
         objective=_ReinforceBaselineStub(),
         optimizer=_RecordingOptimizer(),
+        **_SOLO,
     )
     assert result is None
     assert "every kept return equals the baseline" in capsys.readouterr().err
@@ -252,6 +263,7 @@ def test_reinforce_baseline_tail_micro_batch_delivers_gradient_through_slices() 
         use_logprob_micro_batching=True,
         objective=_ReinforceBaselineStub(),
         optimizer=optimizer,
+        **_SOLO,
     )
     assert report is not None
     assert report.rows == 3
@@ -281,6 +293,7 @@ def test_reinforce_pp_tail_refuses_a_missing_reference_plane() -> None:
             objective=_ReinforcePPStub(),
             loss_fn=TensorPolicyLoss(objective=_ReinforcePPStub()),
             optimizer=_RecordingOptimizer(),
+            **_SOLO,
         )
 
 
@@ -304,6 +317,7 @@ def test_reinforce_pp_tail_refuses_an_undeclared_kl_beta() -> None:
             objective=types.SimpleNamespace(),
             loss_fn=TensorPolicyLoss(objective=_ReinforcePPStub()),
             optimizer=_RecordingOptimizer(),
+            **_SOLO,
         )
 
 
@@ -329,6 +343,7 @@ def test_reinforce_pp_tail_zero_spread_is_unmeasured(
         objective=_ReinforcePPStub(),
         loss_fn=TensorPolicyLoss(objective=_ReinforcePPStub()),
         optimizer=_RecordingOptimizer(),
+        **_SOLO,
     )
     assert result is None
     assert "zero spread" in capsys.readouterr().err
@@ -355,6 +370,7 @@ def test_reinforce_pp_tail_micro_batch_delivers_gradient_through_slices() -> Non
         objective=_ReinforcePPStub(),
         loss_fn=TensorPolicyLoss(objective=_ReinforcePPStub()),
         optimizer=optimizer,
+        **_SOLO,
     )
     assert report is not None
     assert report.rows == 3
