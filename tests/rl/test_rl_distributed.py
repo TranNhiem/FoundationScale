@@ -274,6 +274,7 @@ def test_fsdp_save_ranks_issue_identical_collectives(
     peer_trace, peer_saved = _run_fsdp_save(monkeypatch, tmp_path, 1, chunk_bytes)
     assert main_trace == peer_trace
     assert main_trace.count("gather:embed.weight") == 1
+    assert main_trace[0] == "save_wait", "the entry wait precedes any rank-0-only work"
     assert main_trace[-1] == "save_wait", "the post-save wait is the long-timeout one"
     assert peer_saved is None
     assert main_saved is not None
@@ -289,10 +290,10 @@ def test_fsdp_save_chunks_bound_the_device_holding(
     # A 1-byte budget flushes after every tensor; a huge one only at the end.
     small, _ = _run_fsdp_save(monkeypatch, tmp_path, 0, 1)
     large, _ = _run_fsdp_save(monkeypatch, tmp_path, 0, 1 << 30)
-    # 3 per-tensor flushes + the empty tail flush + the post-save wait.
-    assert small.count("save_wait") == 5
-    # One tail flush + the post-save wait.
-    assert large.count("save_wait") == 2
+    # Entry wait + 3 per-tensor flushes + the empty tail flush + the post-save wait.
+    assert small.count("save_wait") == 6
+    # Entry wait + one tail flush + the post-save wait.
+    assert large.count("save_wait") == 3
 
 
 @pytest.mark.parametrize("world", [2, 4])

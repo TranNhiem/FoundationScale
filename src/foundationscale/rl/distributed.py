@@ -174,6 +174,11 @@ def barrier(ctx: DistContext) -> None:
 # NCCL watchdog: a 3-rank fsdp run on GB200 hit the 600 s watchdog while
 # rank 0 was between two gathers, and the peers aborted a save rank 0 then
 # finished (#453). Save waits use their own group with a long timeout.
+# NCCL builds that group's communicator lazily, at its first collective, and
+# the build waits on rank 0 under the STORE timeout (600 s), not the group's:
+# a peer whose first save wait lands while rank 0 is busy dies there. So every
+# save opens with an entry wait, reached in lockstep before any rank-0-only
+# work, which builds the communicator while no rank is stalled.
 SAVE_WAIT_TIMEOUT_S = 7200
 # Rank 0 holds at most this many gathered bytes on device before copying
 # them to host inside a save wait. Decided from GLOBAL shapes, so every rank
@@ -506,8 +511,9 @@ def save_checkpoint(
     calls it -- leaves rank 0 holding the full state dict in the model's
     original load dtype (bf16; fp32 sharded masters are the training plane,
     not the artifact), which it saves as a standard ``save_pretrained``
-    directory. A trailing long-timeout save wait means any rank proceeding
-    past this call may load the directory. Every rank returns the same bool.
+    directory. An entry save wait builds the long-timeout group in lockstep;
+    a trailing one means any rank proceeding past this call may load the
+    directory. Every rank returns the same bool.
     """
     import torch
 
@@ -517,6 +523,7 @@ def save_checkpoint(
 
     out = Path(out_dir)
     target = model.module if hasattr(model, "module") else model
+    _save_barrier(ctx)  # entry wait: builds the save group before rank 0 diverges
     if sharding == "fsdp":
         state_dict = _gather_full_state_dict(model, ctx, save_dtype)
         if is_main(ctx):
