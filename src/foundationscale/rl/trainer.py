@@ -65,6 +65,7 @@ from foundationscale.rl.online_pref_step import (
     online_pref_step,
     refresh_cadence,
 )
+from foundationscale.rl.ppo_step import build_value_head, is_ppo, ppo_objective, ppo_step
 from foundationscale.rl.prompt_surface import encode_prompts, resolve_prompt_surface
 from foundationscale.rl.registry import lookup_algorithm
 from foundationscale.rl.rewards import MCQLetterReward
@@ -467,6 +468,11 @@ class RLTrainer:
         WHAT IS NOT CLAIMED: that the objective is tuned.
         """
         algorithm = lookup_algorithm(self.config.algorithm)
+        ppo = ppo_objective(algorithm)
+        if ppo is not None:
+            # PPOAlgorithm carries no ``_objective``: its advantage is temporal
+            # (GAE over a learned value), which ppo_step owns, not _one_step.
+            return ppo
         # Registry factories (gspo_algorithm, dr_grpo_algorithm, dapo_algorithm,
         # the grpo entry) construct a SequencePolicyAlgorithm; its objective is
         # the single source of truth for ratio scope, clip bounds, reduction,
@@ -645,6 +651,7 @@ class RLTrainer:
         from foundationscale.rl.distributed import (
             destroy,
             init_distributed,
+            is_main,
             save_checkpoint,
             shard_indices,
             wrap_ddp,
@@ -811,7 +818,8 @@ class RLTrainer:
             for parameter in ref_model.parameters():
                 parameter.requires_grad_(False)
         reward = MCQLetterReward(answer_pattern=self.config.answer_pattern)
-        loss_fn = None if online_pref else TensorPolicyLoss(objective=objective)
+        use_ppo = is_ppo(objective)
+        loss_fn = None if online_pref or use_ppo else TensorPolicyLoss(objective=objective)
         # #369: bf16 params stepped directly by AdamW at lr=1e-6 discard every
         # sub-ulp update, so the loop trains ~nothing while loss, grad-norm,
         # throughput and changed checkpoint bytes all look healthy. Selection is
@@ -852,6 +860,16 @@ class RLTrainer:
             file=sys.stderr,
         )
 
+        value_head: Any = None
+        value_optimizer: Any = None
+        if use_ppo:
+            # Replicated on every rank (not FSDP-wrapped); ppo_step averages
+            # its grads explicitly so the replicas never drift.
+            value_head = build_value_head(model, device)
+            value_optimizer = torch.optim.AdamW(
+                value_head.parameters(), lr=self.config.learning_rate
+            )
+
         usable = tuple(sample for sample in samples if sample.gold is not None)
         if not usable:
             _refuse_exit_96(
@@ -878,7 +896,24 @@ class RLTrainer:
                     chunk = [global_chunk[0]]
             else:
                 chunk = global_chunk
-            if online_pref:
+            if use_ppo:
+                report = ppo_step(
+                    self,
+                    step=step,
+                    chunk=chunk,
+                    model=model,
+                    tokenizer=tokenizer,
+                    surface=prompt_surface,
+                    reward=reward,
+                    objective=objective,
+                    optimizer=optimizer,
+                    ref_model=ref_model,
+                    device=device,
+                    ctx=ctx,
+                    value_head=value_head,
+                    value_optimizer=value_optimizer,
+                )
+            elif online_pref:
                 report = online_pref_step(
                     self,
                     step=step,
@@ -941,6 +976,9 @@ class RLTrainer:
                 sharding=self.config.sharding,
                 step=self.config.max_steps,
             )
+            if value_head is not None and is_main(ctx):
+                # The critic is replicated, so rank 0's copy is the whole of it.
+                torch.save(value_head.state_dict(), f"{self.config.save_dir}/final/value_head.pt")
         destroy(ctx)
         return reports
 

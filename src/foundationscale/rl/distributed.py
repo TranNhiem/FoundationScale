@@ -258,6 +258,33 @@ def all_reduce_sum(x: float, ctx: DistContext) -> float:
     return float(tensor.item())
 
 
+def all_reduce_grads_mean(module: Any, ctx: DistContext) -> None:
+    """Average a REPLICATED module's gradients across ranks in one collective.
+
+    For modules outside FSDP/DDP (the PPO value head), matching the mean
+    FSDP/DDP apply to the wrapped policy. Every parameter takes
+    part, a missing grad as zeros, so each rank sends the same-shaped buffer
+    whatever its local backward touched.
+    """
+    import torch
+    import torch.distributed as dist
+
+    if not ctx.is_distributed:
+        return
+    params = list(module.parameters())
+    for param in params:
+        if param.grad is None:
+            param.grad = torch.zeros_like(param)
+    flat = torch.cat([param.grad.reshape(-1) for param in params])
+    dist.all_reduce(flat, op=dist.ReduceOp.SUM)
+    flat /= ctx.world_size
+    offset = 0
+    for param in params:
+        count = param.grad.numel()
+        param.grad.copy_(flat[offset : offset + count].view_as(param.grad))
+        offset += count
+
+
 def find_decoder_blocks(model: Any) -> list[Any]:
     """The transformer decoder blocks to FSDP-wrap individually.
 

@@ -165,6 +165,14 @@ TORCH_FREE_MODULES = {
         "refresh_cadence",
     ),
     "foundationscale.rl.policy": ("PolicyPair", "PolicyRoleRefusal"),
+    "foundationscale.rl.ppo_step": (
+        "PPOStepObjective",
+        "build_value_head",
+        "gae",
+        "is_ppo",
+        "ppo_objective",
+        "ppo_step",
+    ),
     "foundationscale.rl.policy_gradient": (
         "RLOOAlgorithm",
         "RLOOPolicyLoss",
