@@ -1,5 +1,23 @@
 # Spec: FoundationSkills eval skill
 
+## Status (2026-09-29)
+
+`eval run` is built (`foundationskills/skills/evaluation/`, skill name `evaluation`). `eval emit`/`hash`/`launch` for a GB200 Slurm job are **not built yet** (next increment). The open questions below were not answered; the build takes these reversible defaults:
+
+- Q1 eval cache: an explicit required path, home-scoped on this estate (e.g. `~/.cache/fskills_eval_hf`); no default, no staging job yet.
+- Q2 chat template: applied only when both sides ship one (assumption 11), as drafted.
+- Q3 benchmarks: always an explicit list; `eval_policy.yaml` ships mmlu, hellaswag, arc_challenge, arc_easy, winogrande and gsm8k with lm-eval 0.4.12's own few-shot conventions. The bands are uncalibrated (Q4).
+- Q7 baseline: the original base model (`--base`, then the manifest's `config.model`).
+
+Deviations from the draft below:
+
+- Added rule EV-IN-005 (invalid policy, benchmark without a policy entry, judge-requiring task, stderr-less metric without an explicit `abs_epsilon`).
+- Added rules EV-HO-002 (skip, RED), EV-HO-003 (unmeasured or limited, WARN) and EV-HO-004 (PASS report missing, altered, limited or null on handoff).
+- Added a `--device` flag, and `tokenizer=<adapter>` for adapters that ship a tokenizer.
+- Unmeasured benchmarks are caught before the run: when a policy entry names a `dataset` that has no hub snapshot or prepared cache under the eval cache, the harness is not started.
+- Test files are prefixed `test_eval_*` (the test dirs have no `__init__.py`, so basenames must be unique).
+- Refusal text is `EV-xx-nnn: missing input: …` (rule id first, then the message).
+
 ## Assumptions
 
 1. `lm-evaluation-harness 0.4.12` is installed and importable in the eval environment, and `lm-eval run --help` exposes the flags verified in `artifacts/research/eval_harness.md` §7. If the version drifts, the skill refuses (exit 96).

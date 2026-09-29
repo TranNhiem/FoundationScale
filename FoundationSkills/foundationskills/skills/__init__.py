@@ -3,7 +3,7 @@
 
 ``register_builtin_skills`` is idempotent (a skill whose name is already in
 the registry is skipped) and lazy (skill modules import only on call). The
-training-skill imports are tolerated with ``ImportError`` so this package
+training/evaluation-skill imports are tolerated with ``ImportError`` so this package
 works during partial checkouts; the data_engine skill is mandatory and its
 import errors propagate.
 """
@@ -33,6 +33,14 @@ def register_builtin_skills(registry: SkillRegistry = REGISTRY) -> list[str]:
 
         if TrainingEmitSkill.name not in registry.names():
             registry.register(TrainingEmitSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.evaluation.skill import EvalSkill
+
+        if EvalSkill.name not in registry.names():
+            registry.register(EvalSkill())
     except ImportError:
         pass
 

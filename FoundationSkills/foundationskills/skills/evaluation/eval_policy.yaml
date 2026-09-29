@@ -1,0 +1,37 @@
+# FoundationSkills eval policy (versioned). Every task here is judge-free and
+# its dataset must be pre-staged in the eval cache (--eval-cache); the skill
+# never downloads. Adding a task or changing a band is an ask-first change:
+# bands below are uncalibrated defaults until base-vs-base noise-floor runs
+# land (SPEC-eval.md open question 4).
+#
+# Regression rule (one-sided): drop > max(abs_epsilon, k * sqrt(se_b^2 + se_c^2)).
+# A metric without a stderr needs an explicit per-task abs_epsilon.
+policy_version: 1
+default:
+  k: 2.0
+  abs_epsilon: 0.01
+tasks:
+  mmlu:
+    metric: "acc,none"
+    num_fewshot: 5
+    dataset: cais/mmlu
+  hellaswag:
+    metric: "acc_norm,none"
+    num_fewshot: 0
+    dataset: Rowan/hellaswag
+  arc_challenge:
+    metric: "acc_norm,none"
+    num_fewshot: 25
+    dataset: allenai/ai2_arc
+  arc_easy:
+    metric: "acc_norm,none"
+    num_fewshot: 0
+    dataset: allenai/ai2_arc
+  winogrande:
+    metric: "acc,none"
+    num_fewshot: 5
+    dataset: allenai/winogrande
+  gsm8k:
+    metric: "exact_match,strict-match"
+    num_fewshot: 5
+    dataset: openai/gsm8k

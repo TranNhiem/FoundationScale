@@ -163,6 +163,24 @@ def _cmd_launch(args: argparse.Namespace) -> int:
     return int(rc) if int(rc) in (0, 5, 95, 96) else 5
 
 
+def _cmd_eval(args: argparse.Namespace) -> int:
+    request: dict[str, Any] = {
+        "benchmarks": [b for b in args.benchmarks.split(",") if b],
+        "policy": args.policy,
+        "eval_cache": args.eval_cache,
+        "out": args.out,
+    }
+    for key in ("checkpoint", "base", "run_manifest", "baseline_cache", "num_fewshot", "seed", "gen_kwargs",
+                "limit", "dtype", "batch_size", "device", "include_path"):
+        value = getattr(args, key)
+        if value is not None:
+            request[key] = value
+    if args.parallelize:
+        request["parallelize"] = True
+    workdir = args.workdir or str(Path(args.out).parent)
+    return _execute("evaluation", request, workdir)
+
+
 def _cmd_hash(args: argparse.Namespace) -> int:
     print(plan_hash(_load_payload(args.spec)))
     return 0
@@ -270,6 +288,30 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--measurement-only", dest="measurement_only", action="store_true",
                    help="run a spec whose only gap is the hand-off (e.g. FS RL saves no checkpoint)")
     p.set_defaults(func=_cmd_launch)
+
+    p = sub.add_parser("eval", help="evaluate a checkpoint against its base (lm-eval, offline)")
+    eval_sub = p.add_subparsers(dest="eval_command", required=True, parser_class=_Parser)
+    p_run = eval_sub.add_parser("run")
+    p_run.add_argument("--checkpoint", default=None)
+    p_run.add_argument("--base", default=None)
+    p_run.add_argument("--run-manifest", dest="run_manifest", default=None)
+    p_run.add_argument("--benchmarks", required=True, help="comma-separated policy task names")
+    p_run.add_argument("--policy", required=True)
+    p_run.add_argument("--eval-cache", dest="eval_cache", required=True,
+                       help="pre-staged offline HF_HOME; nothing is downloaded")
+    p_run.add_argument("--out", required=True, help="path of eval_report.json")
+    p_run.add_argument("--baseline-cache", dest="baseline_cache", default=None)
+    p_run.add_argument("--num-fewshot", dest="num_fewshot", type=int, default=None)
+    p_run.add_argument("--seed", type=int, default=None)
+    p_run.add_argument("--gen-kwargs", dest="gen_kwargs", default=None)
+    p_run.add_argument("--limit", type=int, default=None, help="smoke slice; the verdict can never be PASS")
+    p_run.add_argument("--dtype", default=None)
+    p_run.add_argument("--batch-size", dest="batch_size", default=None)
+    p_run.add_argument("--device", default=None, help="e.g. cuda:0 or cpu (default: the harness's)")
+    p_run.add_argument("--parallelize", action="store_true")
+    p_run.add_argument("--include-path", dest="include_path", default=None)
+    p_run.add_argument("--workdir", default=None)
+    p_run.set_defaults(func=_cmd_eval)
 
     p = sub.add_parser("hash", help="print the confirmation hash of a spec/plan")
     p.add_argument("--spec", required=True)
