@@ -50,6 +50,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never executed at runtime
 from foundationscale.gates.objective_gates import MetricObservation
 from foundationscale.rl.algorithm import StepReport
 from foundationscale.rl.distributed import (
+    DistContext,
+    agree_all,
     all_reduce_mean,
     all_reduce_sum,
     destroy,
@@ -60,7 +62,7 @@ from foundationscale.rl.distributed import (
     wrap_ddp,
     wrap_fsdp2,
 )
-from foundationscale.rl.interfaces import LossOutput
+from foundationscale.rl.interfaces import BatchRefusal, LossOutput
 from foundationscale.rl.losses import DPOLoss
 from foundationscale.rl.preference import PreferenceObjective
 from foundationscale.rl.preference_objectives import (
@@ -875,8 +877,9 @@ class PreferenceTrainer:
         device: str,
         pad_token_id: int,
         loss_fn: TensorPreferenceLoss,
-    ) -> StepReport:
-        """Perform one measured preference step.
+        ctx: DistContext | None = None,
+    ) -> StepReport | None:
+        """Perform one measured preference step, or return None if it is UNMEASURED.
 
         The reference pass and the micro-batched policy pass both price the
         same padded row layout. Metrics are computed before the optimiser
@@ -977,22 +980,44 @@ class PreferenceTrainer:
         else:
             kl_reference_point = None
 
-        loss_tensor = loss_fn(
-            policy_logprobs=policy_logprobs,
-            completion_mask=batch.completion_mask,
-            reference_logprobs=reference_logprobs,
-            kl_reference_point=kl_reference_point,
-            desirable=batch.desirable,
-        )
+        # A loss that refuses its batch (ORPO at p == 1, a non-finite
+        # reading) is decided locally and acted on collectively: a rank-local
+        # raise under FSDP kills or deadlocks every peer (#455).
+        refusal: BatchRefusal | None = None
+        try:
+            loss_tensor = loss_fn(
+                policy_logprobs=policy_logprobs,
+                completion_mask=batch.completion_mask,
+                reference_logprobs=reference_logprobs,
+                kl_reference_point=kl_reference_point,
+                desirable=batch.desirable,
+            )
+            paired_metrics = (
+                preference_metrics(
+                    self._objective,
+                    policy_logprobs,
+                    batch.completion_mask,
+                    reference_logprobs=reference_logprobs,
+                )
+                if self._paired
+                else None
+            )
+        except BatchRefusal as exc:
+            refusal = exc
+        if ctx is not None and not agree_all(refusal is None, ctx):
+            where = f"rank {ctx.rank}: {refusal}" if refusal is not None else "a peer rank"
+            print(
+                f"[preference_trainer] step {step} UNMEASURED: the loss refused "
+                f"its batch on {where}; every rank skips the update",
+                file=sys.stderr,
+            )
+            return None
+        if refusal is not None:
+            raise refusal
 
         metric_values: dict[str, float]
-        if self._paired:
-            metric_values = preference_metrics(
-                self._objective,
-                policy_logprobs,
-                batch.completion_mask,
-                reference_logprobs=reference_logprobs,
-            )
+        if paired_metrics is not None:
+            metric_values = paired_metrics
             if set(metric_values) != {"accuracy", "margin"}:
                 raise TrainerRefusal(
                     "preference_metrics did not return exactly the paired "
@@ -1357,9 +1382,13 @@ class PreferenceTrainer:
                 device=device,
                 pad_token_id=int(pad_token_id),
                 loss_fn=loss_fn,
+                ctx=ctx,
             )
-            reports.append(report)
-            if ctx.is_distributed:
+            if report is not None:
+                # An UNMEASURED step (None) was agreed on every rank, so all
+                # ranks skip these collectives together.
+                reports.append(report)
+            if report is not None and ctx.is_distributed:
                 # Means are averaged across ranks, counts are summed: every
                 # rank ends the step holding the same global history entry.
                 history_entry = self.history[-1]
