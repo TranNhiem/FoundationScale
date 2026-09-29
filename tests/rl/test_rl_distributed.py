@@ -206,6 +206,95 @@ def test_save_checkpoint_world_one_none(tmp_path) -> None:
     assert (out / "tokenizer.json").exists()
 
 
+class _FakeShard:
+    """A DTensor stand-in: global shape via numel/element_size, full_tensor() logs."""
+
+    def __init__(self, full: torch.Tensor, trace: list[str], name: str) -> None:
+        self._full = full
+        self._trace = trace
+        self._name = name
+        self.dtype = full.dtype
+
+    def is_floating_point(self) -> bool:
+        return self._full.is_floating_point()
+
+    def numel(self) -> int:
+        return self._full.numel()
+
+    def element_size(self) -> int:
+        return self._full.element_size()
+
+    def full_tensor(self) -> torch.Tensor:
+        self._trace.append(f"gather:{self._name}")
+        return self._full.clone()
+
+
+def _run_fsdp_save(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rank: int, chunk_bytes: int
+) -> tuple[list[str], dict | None]:
+    import torch.distributed.checkpoint.state_dict as sd_mod
+
+    import foundationscale.rl.distributed as dist_mod
+
+    trace: list[str] = []
+    weights = {
+        "embed.weight": torch.randn(8, 4),
+        "norm.weight": torch.ones(4),
+        "position_ids": torch.arange(4),
+    }
+    # A plain tensor mixed in: replicated buffers are not DTensors.
+    sharded = {
+        k: (_FakeShard(v, trace, k) if k != "position_ids" else v) for k, v in weights.items()
+    }
+    monkeypatch.setattr(sd_mod, "get_model_state_dict", lambda model, options: sharded)
+    monkeypatch.setattr(dist_mod, "_save_barrier", lambda ctx: trace.append("save_wait"))
+    monkeypatch.setattr(dist_mod, "SAVE_GATHER_CHUNK_BYTES", chunk_bytes)
+
+    class _Model:
+        saved: dict | None = None
+
+        def save_pretrained(self, out_dir, state_dict=None, **kwargs) -> None:
+            _Model.saved = state_dict
+
+    model = _Model()
+    ok = save_checkpoint(
+        model, None, str(tmp_path / f"r{rank}"), _ctx(rank=rank, world=3), sharding="fsdp", step=1
+    )
+    assert ok is True
+    return trace, model.saved
+
+
+@pytest.mark.parametrize("chunk_bytes", [1, 64, 1 << 30])
+def test_fsdp_save_ranks_issue_identical_collectives(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, chunk_bytes: int
+) -> None:
+    # S6: flush points come from GLOBAL shapes, so rank 0 (which copies to
+    # host) and a peer (which keeps nothing) issue the same ordered waits.
+    main_trace, main_saved = _run_fsdp_save(monkeypatch, tmp_path, 0, chunk_bytes)
+    peer_trace, peer_saved = _run_fsdp_save(monkeypatch, tmp_path, 1, chunk_bytes)
+    assert main_trace == peer_trace
+    assert main_trace.count("gather:embed.weight") == 1
+    assert main_trace[-1] == "save_wait", "the post-save wait is the long-timeout one"
+    assert peer_saved is None
+    assert main_saved is not None
+    assert list(main_saved) == ["embed.weight", "norm.weight", "position_ids"]
+    assert main_saved["embed.weight"].dtype == torch.bfloat16
+    assert main_saved["norm.weight"].dtype == torch.bfloat16
+    assert main_saved["position_ids"].dtype == torch.int64, "integer tensors keep their dtype"
+
+
+def test_fsdp_save_chunks_bound_the_device_holding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A 1-byte budget flushes after every tensor; a huge one only at the end.
+    small, _ = _run_fsdp_save(monkeypatch, tmp_path, 0, 1)
+    large, _ = _run_fsdp_save(monkeypatch, tmp_path, 0, 1 << 30)
+    # 3 per-tensor flushes + the empty tail flush + the post-save wait.
+    assert small.count("save_wait") == 5
+    # One tail flush + the post-save wait.
+    assert large.count("save_wait") == 2
+
+
 @pytest.mark.parametrize("world", [2, 4])
 def test_fewer_prompts_than_ranks_is_refused(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, world: int

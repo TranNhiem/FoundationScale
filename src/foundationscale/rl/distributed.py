@@ -169,6 +169,87 @@ def barrier(ctx: DistContext) -> None:
         dist.barrier()
 
 
+# Rank 0's host-side save work (device-to-host copies, the safetensors write)
+# runs while its peers wait. That wait must not be bounded by the default
+# NCCL watchdog: a 3-rank fsdp run on GB200 hit the 600 s watchdog while
+# rank 0 was between two gathers, and the peers aborted a save rank 0 then
+# finished (#453). Save waits use their own group with a long timeout.
+SAVE_WAIT_TIMEOUT_S = 7200
+# Rank 0 holds at most this many gathered bytes on device before copying
+# them to host inside a save wait. Decided from GLOBAL shapes, so every rank
+# flushes at the same keys.
+SAVE_GATHER_CHUNK_BYTES = 2 << 30
+_SAVE_WAIT_GROUPS: dict[int, Any] = {}
+
+
+def _save_barrier(ctx: DistContext) -> None:
+    import datetime
+
+    import torch.distributed as dist
+
+    if not ctx.is_distributed:
+        return
+    key = id(dist.group.WORLD)
+    if key not in _SAVE_WAIT_GROUPS:
+        _SAVE_WAIT_GROUPS[key] = dist.new_group(
+            timeout=datetime.timedelta(seconds=SAVE_WAIT_TIMEOUT_S)
+        )
+    dist.barrier(group=_SAVE_WAIT_GROUPS[key])
+
+
+def _gather_full_state_dict(
+    model: Any, ctx: DistContext, save_dtype: torch.dtype
+) -> dict[str, Any]:
+    """Every rank all-gathers each shard in state-dict order; rank 0 alone
+    keeps the result, cast to ``save_dtype`` on device.
+
+    Collective: every rank must call it. Host copies happen only at chunk
+    boundaries, followed by a long-timeout save wait, so no default-group
+    collective is ever pending on a peer while rank 0 copies. Non-main
+    ranks return an empty dict.
+    """
+    import torch
+    from torch.distributed.checkpoint.state_dict import (
+        StateDictOptions,
+        get_model_state_dict,
+    )
+
+    sharded = get_model_state_dict(model, options=StateDictOptions(full_state_dict=False))
+    main = is_main(ctx)
+    gathered: dict[str, Any] = {}
+    pending: list[tuple[str, Any]] = []
+    pending_bytes = 0
+
+    def flush() -> None:
+        if main:
+            for name, tensor in pending:
+                gathered[name] = tensor.cpu()
+        pending.clear()
+        _save_barrier(ctx)
+
+    value: Any
+    for key, value in sharded.items():
+        # Tensor-like by duck type: a DTensor reports GLOBAL numel here.
+        is_tensor = hasattr(value, "numel") and hasattr(value, "is_floating_point")
+        floating = is_tensor and value.is_floating_point()
+        if is_tensor:
+            itemsize = (
+                torch.empty((), dtype=save_dtype).element_size()
+                if floating
+                else value.element_size()
+            )
+            pending_bytes += value.numel() * itemsize
+        full = value.full_tensor() if hasattr(value, "full_tensor") else value
+        if main:
+            pending.append((key, full.to(dtype=save_dtype) if floating else full))
+        del full
+        if pending_bytes >= SAVE_GATHER_CHUNK_BYTES:
+            flush()
+            pending_bytes = 0
+    flush()
+    return gathered
+
+
 def destroy(ctx: DistContext) -> None:
     # Tears down only a group THIS module's init created; a group owned by
     # an outer harness is left standing.
@@ -420,13 +501,13 @@ def save_checkpoint(
 ) -> bool:
     """Write a loadable checkpoint plus an ``fs_rl_checkpoint.json`` marker.
 
-    none/ddp: rank 0 saves the (unwrapped) model directly. fsdp:
-    ``get_model_state_dict(full_state_dict=True, cpu_offload=True)`` is a
-    COLLECTIVE -- every rank calls it -- then rank 0 casts to the model's
+    none/ddp: rank 0 saves the (unwrapped) model directly. fsdp: a
+    COLLECTIVE chunked gather (``_gather_full_state_dict``) -- every rank
+    calls it -- leaves rank 0 holding the full state dict in the model's
     original load dtype (bf16; fp32 sharded masters are the training plane,
-    not the artifact) and saves a standard ``save_pretrained`` directory.
-    A trailing barrier means any rank proceeding past this call may load
-    the directory. Every rank returns the same bool.
+    not the artifact), which it saves as a standard ``save_pretrained``
+    directory. A trailing long-timeout save wait means any rank proceeding
+    past this call may load the directory. Every rank returns the same bool.
     """
     import torch
 
@@ -437,24 +518,10 @@ def save_checkpoint(
     out = Path(out_dir)
     target = model.module if hasattr(model, "module") else model
     if sharding == "fsdp":
-        from torch.distributed.checkpoint.state_dict import (
-            StateDictOptions,
-            get_model_state_dict,
-        )
-
-        options = StateDictOptions(full_state_dict=True, cpu_offload=True)
-        state_dict = get_model_state_dict(model, options=options)
+        state_dict = _gather_full_state_dict(model, ctx, save_dtype)
         if is_main(ctx):
             out.mkdir(parents=True, exist_ok=True)
-            cast = {
-                key: (
-                    value.to(dtype=save_dtype)
-                    if isinstance(value, torch.Tensor) and value.is_floating_point()
-                    else value
-                )
-                for key, value in state_dict.items()
-            }
-            target.save_pretrained(out, state_dict=cast, safe_serialization=True)
+            target.save_pretrained(out, state_dict=state_dict, safe_serialization=True)
     elif is_main(ctx):
         out.mkdir(parents=True, exist_ok=True)
         target.save_pretrained(out, safe_serialization=True)
@@ -476,7 +543,7 @@ def save_checkpoint(
             )
             + "\n"
         )
-    barrier(ctx)
+    _save_barrier(ctx)
     return True
 
 
