@@ -19,6 +19,7 @@ from foundationscale.rl.megatron.lane_config import (
     MegatronLaneConfig,
 )
 from foundationscale.rl.megatron.logprobs import (
+    check_softcap_owner,
     check_vocab_shard,
     softcap,
     vocab_parallel_token_logprobs,
@@ -33,6 +34,7 @@ __all__ = (
     "GlobalDenominators",
     "MegatronLaneConfig",
     "TE_CP_SUPPORTED",
+    "check_softcap_owner",
     "check_vocab_shard",
     "compute_denominators",
     "normalized_loss",

@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from foundationscale.rl.megatron.lane_config import MegatronLaneConfig
+from foundationscale.rl.megatron.logprobs import check_softcap_owner
 
 if TYPE_CHECKING:
     import torch
@@ -383,6 +384,7 @@ class MegatronRLTrainer:
         torch.manual_seed(self.seed)
         bridge = AutoBridge.from_hf_pretrained(self.hf_model)
         provider = bridge.to_megatron_provider(load_weights=True)
+        check_softcap_owner(self.cfg.softcap, getattr(provider, "final_logit_softcapping", None))
         provider.tensor_model_parallel_size = self.cfg.tp
         provider.pipeline_model_parallel_size = self.cfg.pp
         provider.context_parallel_size = self.cfg.cp
@@ -590,6 +592,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     import torch
 
     args = build_arg_parser().parse_args(argv)
+    if args.fp32:
+        # The torch TF32 flags do not reach TE's grouped expert GEMM; only cuBLAS's own
+        # override does, and cuBLAS reads it once, at handle creation. Measured on a
+        # 6-layer Gemma-4 MoE: 0.55 nats max vs HF with the flags off, 1.0e-3 with this.
+        os.environ["NVIDIA_TF32_OVERRIDE"] = "0"
     require_megatron("driver.main")
     from transformers import AutoTokenizer
 

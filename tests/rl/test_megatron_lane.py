@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import socket
 
 import pytest
@@ -13,6 +14,7 @@ import torch.multiprocessing as mp
 import foundationscale.rl.megatron as megatron_pkg
 from foundationscale.rl.megatron.lane_config import MegatronLaneConfig
 from foundationscale.rl.megatron.logprobs import (
+    check_softcap_owner,
     check_vocab_shard,
     softcap,
     vocab_parallel_token_logprobs,
@@ -204,6 +206,14 @@ def test_lane_config_validate_refusal_matrix() -> None:
         cp_bad_world.validate(6)
 
 
+def test_softcap_owner_refuses_double_application() -> None:
+    # Either side absent or zero: exactly one cap is applied, so nothing to refuse.
+    for lane, model in ((None, None), (30.0, None), (None, 30.0), (0.0, 30.0), (30.0, 0.0)):
+        check_softcap_owner(lane, model)
+    with pytest.raises(ValueError, match="softcap_double_application"):
+        check_softcap_owner(30.0, 30.0)
+
+
 def test_package_imports_without_megatron() -> None:
     assert megatron_pkg.softcap is softcap
     assert megatron_pkg.MegatronLaneConfig is MegatronLaneConfig
@@ -211,3 +221,21 @@ def test_package_imports_without_megatron() -> None:
     # submodules themselves import on a host with no megatron installed.
     for name in ("driver", "pp_step"):
         importlib.import_module(f"foundationscale.rl.megatron.{name}")
+
+
+def test_fp32_parity_forces_cublas_tf32_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    from foundationscale.rl.megatron import driver
+
+    class _Stop(Exception):
+        pass
+
+    def _stop(caller: str) -> None:
+        raise _Stop(caller)
+
+    monkeypatch.setattr(driver, "require_megatron", _stop)
+    base = ["--hf-model", "m", "--rollout-jsonl", "r", "--metrics-out", "o"]
+    for argv, expected in ((base, None), ([*base, "--fp32"], "0")):
+        monkeypatch.delenv("NVIDIA_TF32_OVERRIDE", raising=False)
+        with pytest.raises(_Stop):
+            driver.main(argv)
+        assert os.environ.get("NVIDIA_TF32_OVERRIDE") == expected

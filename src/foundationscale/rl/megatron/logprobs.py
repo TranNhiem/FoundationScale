@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 
 __all__ = (
+    "check_softcap_owner",
     "check_vocab_shard",
     "softcap",
     "vocab_parallel_token_logprobs",
@@ -48,6 +49,22 @@ def softcap(logits: torch.Tensor, cap: float | None) -> torch.Tensor:
             f"the logits and changes argmax order, so it is refused"
         )
     return cap_f * torch.tanh(logits / cap_f)
+
+
+def check_softcap_owner(lane_cap: float | None, model_cap: float | None) -> None:
+    """Refuse a softcap the model already applies inside its output layer.
+
+    Megatron-Bridge's Gemma-4 model applies ``final_logit_softcapping`` itself.
+    Capping again in the lane changes every logprob (measured on Gemma-4 E4B:
+    0.84 nats/token mean vs HF, against 4e-5 with the lane cap off).
+    """
+    if not lane_cap or not model_cap:
+        return
+    raise ValueError(
+        f"softcap_double_application: the lane softcap ({float(lane_cap)}) would be "
+        f"applied on top of the model's own final_logit_softcapping "
+        f"({float(model_cap)}); drop --softcap for this model"
+    )
 
 
 def check_vocab_shard(
