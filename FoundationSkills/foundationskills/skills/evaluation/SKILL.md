@@ -40,6 +40,16 @@ The skill never implements a scorer and never downloads data or models.
 Exit codes: 0 PASS, 5 RED (a breach or a skip), 95 UNMEASURED (a benchmark
 could not run, or a limited run), 96 REFUSED (no report is written).
 
+## Running it on GB200
+
+`fskills eval emit ... --gpus N --python <job interpreter> --spec-out spec.json`
+writes an `fs_launch_spec` (entry `fskills-eval`) and prints its confirm hash;
+nothing is submitted. One node only: `--nodes` other than 1 makes the spec
+non-executable, and N > 1 GPUs shard the model with `parallelize` (any
+`device` is dropped). `fskills eval launch --spec spec.json --confirm <hash>`
+is the only submission path; it first runs `eval run --dry-run` (inputs check,
+no report, exit 0 or 96) and refuses to submit if that fails.
+
 ## Scope
 
 LLMs of any family, any training stage, full or adapter checkpoints, on

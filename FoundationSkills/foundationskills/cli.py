@@ -164,21 +164,59 @@ def _cmd_launch(args: argparse.Namespace) -> int:
 
 
 def _cmd_eval(args: argparse.Namespace) -> int:
-    request: dict[str, Any] = {
-        "benchmarks": [b for b in args.benchmarks.split(",") if b],
-        "policy": args.policy,
-        "eval_cache": args.eval_cache,
-        "out": args.out,
-    }
-    for key in ("checkpoint", "base", "run_manifest", "baseline_cache", "num_fewshot", "seed", "gen_kwargs",
-                "limit", "dtype", "batch_size", "device", "include_path"):
-        value = getattr(args, key)
-        if value is not None:
-            request[key] = value
-    if args.parallelize:
-        request["parallelize"] = True
+    request = _eval_request(args)
+    if getattr(args, "dry_run", False):
+        return _eval_dry_run(request)
     workdir = args.workdir or str(Path(args.out).parent)
     return _execute("evaluation", request, workdir)
+
+
+def _eval_request(args: argparse.Namespace) -> dict[str, Any]:
+    request: dict[str, Any] = {"benchmarks": [b for b in args.benchmarks.split(",") if b], "policy": args.policy,
+                               "eval_cache": args.eval_cache, "out": args.out}
+    for key in ("checkpoint", "base", "run_manifest", "baseline_cache", "num_fewshot", "seed", "gen_kwargs",
+                "limit", "dtype", "batch_size", "device", "include_path"):
+        if getattr(args, key) is not None:
+            request[key] = getattr(args, key)
+    if args.parallelize:
+        request["parallelize"] = True
+    return request
+
+
+def _eval_dry_run(request: dict[str, Any]) -> int:
+    """Input checks only (the launch prologue): 0 when the run could start, 96 with the refusal otherwise."""
+    from foundationskills.core.schema import SchemaError, assert_valid
+    from foundationskills.skills.evaluation.skill import EvalSkill
+
+    skill = EvalSkill()
+    try:
+        assert_valid(request, skill.input_schema, "evaluation request")
+    except SchemaError as exc:
+        print(f"[fskills:eval:refuse] invalid request: {str(exc).split('; ', 1)[0]}", file=sys.stderr)
+        return 96
+    blockers = [f for f in skill.check_inputs(request, SkillContext(workdir=Path(request["out"]).parent))
+                if f.severity.name == "BLOCK"]
+    for f in blockers:
+        print(f"[fskills:eval:refuse] {f.rule_id}: {f.message}", file=sys.stderr)
+    if not blockers:
+        print("[fskills:eval:dry-run] inputs PASS")
+    return 96 if blockers else 0
+
+
+def _cmd_eval_emit(args: argparse.Namespace) -> int:
+    from foundationskills.interfaces.fs.emit_eval import emit_eval
+
+    spec = emit_eval(_eval_request(args), nodes=args.nodes, gpus_per_node=args.gpus_per_node,
+                     hardware_id=args.hardware, python=args.python, run_name=args.run_name)
+    target = Path(args.spec_out)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps({"spec": str(target), "executable": spec["executable"], "confirm": plan_hash(spec),
+                      "missing": spec["missing"]}, indent=2, sort_keys=True))
+    if not spec["executable"]:
+        print(f"[fskills:eval:refuse] {spec['missing']}", file=sys.stderr)
+        return 96
+    return 0
 
 
 def _cmd_hash(args: argparse.Namespace) -> int:
@@ -311,7 +349,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--parallelize", action="store_true")
     p_run.add_argument("--include-path", dest="include_path", default=None)
     p_run.add_argument("--workdir", default=None)
+    p_run.add_argument("--dry-run", dest="dry_run", action="store_true",
+                       help="check inputs only (the launch prologue); nothing is evaluated")
     p_run.set_defaults(func=_cmd_eval)
+
+    p_emit = eval_sub.add_parser("emit", help="emit an fs_launch_spec for a Slurm eval job; nothing is submitted")
+    for action in p_run._actions:
+        if action.dest not in ("help", "workdir", "dry_run"):
+            p_emit._add_action(action)
+    p_emit.add_argument("--spec-out", dest="spec_out", required=True, help="path of the fs_eval_launch_spec JSON")
+    p_emit.add_argument("--nodes", type=int, default=1)
+    p_emit.add_argument("--gpus", dest="gpus_per_node", type=int, default=1)
+    p_emit.add_argument("--hardware", default="gb200", help="hardware id; 'local' emits no sbatch")
+    p_emit.add_argument("--python", default="python", help="interpreter the job runs (its lm_eval is version-checked)")
+    p_emit.add_argument("--run-name", dest="run_name", default="fskills-eval")
+    p_emit.set_defaults(func=_cmd_eval_emit)
+
+    p_hash = eval_sub.add_parser("hash", help="print the confirmation hash of an eval spec")
+    p_hash.add_argument("--spec", required=True)
+    p_hash.set_defaults(func=_cmd_hash)
+
+    p_launch = eval_sub.add_parser("launch", help="launch a confirmed eval spec (dry-run first)")
+    p_launch.add_argument("--spec", required=True)
+    p_launch.add_argument("--confirm", default=None)
+    p_launch.add_argument("--no-submit", dest="no_submit", action="store_true")
+    p_launch.set_defaults(func=_cmd_launch)
 
     p = sub.add_parser("hash", help="print the confirmation hash of a spec/plan")
     p.add_argument("--spec", required=True)

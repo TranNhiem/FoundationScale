@@ -1,8 +1,8 @@
 # Spec: FoundationSkills eval skill
 
-## Status (2026-09-29)
+## Status (2026-10-01)
 
-`eval run` is built (`foundationskills/skills/evaluation/`, skill name `evaluation`). `eval emit`/`hash`/`launch` for a GB200 Slurm job are **not built yet** (next increment). The open questions below were not answered; the build takes these reversible defaults:
+`eval run` is built (`foundationskills/skills/evaluation/`, skill name `evaluation`). `eval emit`/`hash`/`launch` and `eval run --dry-run` are built (`foundationskills/interfaces/fs/emit_eval.py`, entry `fskills-eval`): one node only (multi-node is refused), more than one GPU means `parallelize=True`, lm_eval's version is read from the job's `--python`, and `launch` re-runs the inputs check via `--dry-run` before `sbatch`. The open questions below were not answered; the build takes these reversible defaults:
 
 - Q1 eval cache: an explicit required path, home-scoped on this estate (e.g. `~/.cache/fskills_eval_hf`); no default, no staging job yet.
 - Q2 chat template: applied only when both sides ship one (assumption 11), as drafted.
@@ -84,7 +84,8 @@ PYTHONPATH=../src python -m foundationskills.cli eval hash --spec fs_eval_launch
 
 # Emit a GB200 Slurm spec; nothing is submitted.
 PYTHONPATH=../src python -m foundationskills.cli eval emit \
-  --checkpoint ... --benchmarks ... --nodes 1 --gpus 4 --out fs_eval_launch_spec.json
+  --checkpoint ... --benchmarks ... --policy ... --eval-cache ... --out eval_report.json \
+  --gpus 4 --python ~/envs/bench/bin/python --spec-out fs_eval_launch_spec.json
 
 # Submit only with a confirm hash (same flow as training).
 PYTHONPATH=../src python -m foundationskills.cli eval launch --spec fs_eval_launch_spec.json --confirm <sha256>
@@ -122,7 +123,6 @@ foundationskills/skills/evaluation/
   baseline.py         # fingerprint, cache get/put at artifacts/eval/baselines/<base>/<fp>.json
   resolve.py          # adapter_config.json -> base resolution; run-manifest consumption
   report.py           # eval_report.json build + atomic write (tmp + os.replace)
-  emit.py             # fs_launch_spec for the GB200 Slurm eval job (confirm-hash flow)
   eval_policy.yaml    # versioned default policy (policy_version, default band, per-task overrides)
 foundationskills/schemas/artifacts/   # unchanged: eval_report.json already exists
 tests/unit/evaluation/

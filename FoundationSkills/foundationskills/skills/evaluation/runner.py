@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import subprocess
 from dataclasses import dataclass, field
 from importlib import metadata
@@ -146,8 +147,11 @@ def _newest_results(output_path: Path) -> Path | None:
 class SubprocessLmEvalRunner:
     name = "lm-eval"
 
-    def __init__(self, executable: str = "lm-eval", timeout_s: float | None = None) -> None:
-        self.executable = executable
+    def __init__(self, executable: str | None = None, timeout_s: float | None = None) -> None:
+        # The lm-eval next to this interpreter is the one EV-IN-004 version-checked; a bare
+        # "lm-eval" resolves through PATH, which in a Slurm job may be a different install.
+        sibling = Path(sys.executable).with_name("lm-eval")
+        self.executable = executable or (str(sibling) if sibling.exists() else "lm-eval")
         self.timeout_s = timeout_s
 
     def run(self, request: HarnessRequest) -> HarnessOutcome:
