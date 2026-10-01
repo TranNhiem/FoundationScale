@@ -1,3 +1,21 @@
+---
+name: fskills-training
+license: MIT
+description: Turns a training goal (goal_spec, optional readiness_report) into an auditable training_plan
+  of pretrain/cpt/sft/preference/rl stages (full/LoRA/QLoRA), each checkable against measured FoundationScale
+  capabilities; training.emit renders it to fs_launch_spec + sbatch (GB200 IMEX preamble). Includes a
+  diagnose playbook for training failures. Do NOT use for preparing datasets (use fskills-data-engine)
+  or scoring checkpoints (use fskills-evaluation).
+when_to_use:
+- Plan a training run from this goal
+- Which stages do I need for a domain reasoning model?
+- Is LoRA or full tuning the right method for this model on my GPUs?
+- Turn my goal into a plan and a launch spec
+- Why did my training fail / the loss spiked mid-run
+- What does FoundationScale exit code 96 mean?
+- My RL run keeps printing UNMEASURED step N
+- Diagnose this training symptom (OOM, NaN, hang)
+---
 
 # training.planner — FoundationSkills training planning
 

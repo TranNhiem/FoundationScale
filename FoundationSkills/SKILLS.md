@@ -41,7 +41,11 @@ See `docs/ARCHITECTURE.md` ("Adding a skill"). In short:
 1. subclass `BaseSkill`;
 2. declare `consumes`/`produces` artifact types;
 3. declare every rule with a MUST_FIRE fixture;
-4. ship a `SKILL.md` with the standard sections;
-5. register it (in `register_builtin_skills` or through the `foundationskills.skills` entry point).
+4. ship a `SKILL.md` with the standard sections, opening with routing frontmatter
+   (`name` in lowercase-hyphen form, `license`, a `description` that says what it is
+   NOT for, and at least 3 `when_to_use` phrasings);
+5. ship `evals/evals.json`: at least 3 cases that should trigger the skill, one routed
+   to a sibling skill and one no FoundationSkills skill should take;
+6. register it (in `register_builtin_skills` or through the `foundationskills.skills` entry point).
 
 `tests/contract/test_conformance.py` then checks it automatically.

@@ -1,0 +1,128 @@
+[
+  {
+    "id": "fskills-data-engine-positive-001",
+    "question": "I have a directory of internal PDF and HTML manuals — turn them into a CPT corpus for gemma4 with domain manufacturing, and decontaminate against gsm8k.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and recommends a data_pipeline_spec of ingest -> clean -> dedup -> quality -> decontam -> format(cpt) -> tokenize, writing data_pipeline_spec, dataset and readiness_report artifacts.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent accepted kind=documents sources and target_format=cpt",
+      "The agent emitted the three artifacts data_pipeline_spec, dataset and readiness_report, with shards carrying path+sha256+records and fs_columns",
+      "CPT records have the shape {id, text, meta} and DE-RDY-001 checks that the dataset format equals target_format"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-002",
+    "question": "Prepare SFT rows from /data/alpaca.jsonl for gemma4-4b with the gemma4 chat template.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and renders the JSONL into sft rows of {id, messages, text, meta} where text is chat-template-rendered, handing off to training unchanged.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent stated that sft rows are {id, messages, text, meta} with text = chat-template-rendered output",
+      "The agent noted DE-IN-005 warns when chat_template_family or tokenizer is missing for sft/mm_sft",
+      "The agent cited DE-RDY-010 (FS trains over the full rendered text, no assistant-only loss masking) and/or DE-RDY-011 (targets start exactly as the tokenizer's inference prompt)"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-003",
+    "question": "My request came back REFUSED with 'phase-2: semantic_dedup' — what does that mean and what can I use instead?",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and explains that DE-IN-004 BLOCKs a phase-2 op name in the spec with REFUSED `phase-2: <op>`, because semantic_dedup, synthesize, toolcall_format and video_ingest are declared in data_engine.phase2.PHASE2 but not implemented.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent named DE-IN-004 as the rule firing on phase-2 op names and the REFUSED `phase-2: <op>` status",
+      "The agent listed the phase-2 names semantic_dedup, synthesize, toolcall_format, video_ingest as declared but not implemented",
+      "The agent said REFUSED means the request (not the data) must be fixed"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-004",
+    "question": "My pipeline finished but the status is RED and I barely have any shards — how do I find out what deleted my records?",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and points to out_dir/stats.json, where every op reports dropped counters by reason, noting DE-HO-001 (RED on readiness failure) and DE-HO-003 (zero records written is RED and the dataset artifact is skipped).",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent cited DE-HO-001 (readiness verdict RED blocks handoff) and/or DE-HO-003 (zero records written is RED, dataset artifact skipped because an empty shard list is schema-invalid)",
+      "The agent instructed the user to read out_dir/stats.json and its per-op in/out/dropped counters",
+      "The agent noted that losses usually come from strict clean/quality thresholds"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-005",
+    "question": "From the HF dataset openai/gsm8k (main/train) build an RL verifiable math prompt set with gold answers for dr_grpo.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and produces rl records of ShareGPT-style {conversations: [{from, value}...], answer} with fs_columns.gold_key='answer', ready for the fskills-rl config emit.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent accepted kind=hf_dataset with options config/split and target_format=rl",
+      "The agent stated that rl records are {conversations: [{from, value}...], answer} with fs_columns.gold_key='answer'",
+      "The agent noted that passing benchmarks (e.g. gsm8k) triggers decontam and that DE-RDY-005 checks unmeasured benchmarks and remaining hits"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-006",
+    "question": "Before I burn GPU hours, what exactly gates dataset readiness and what do PASS, RED and UNMEASURED mean for my run?",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and explains that readiness_report carries verdict PASS/RED/UNMEASURED which mirrors the skill status, with per-rule details from DE-RDY-001..DE-RDY-011 and warnings DE-HO-002 for UNMEASURED.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent mapped status to the readiness verdict (PASS/RED/UNMEASURED) and mentioned DE-HO-002 WARN on UNMEASURED listing the null checks",
+      "The agent listed concrete readiness rule ids such as DE-RDY-004 (a dedup op ran) and DE-RDY-002 (token count >= min_tokens, null when unknown/approximate)",
+      "The agent noted DE-RDY-007 reports truncation/over-length drop rate and that UNMEASURED can come from abuiltin fallback marking stats with extra['approximate']"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-001",
+    "question": "Launch the dr_grpo training run for this training goal on the GB200 Slurm partition and give me the confirm-hashed sbatch launch spec.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "The request is a training/launch task for fskills-training (training planner and emit), which fskills-data-engine explicitly excludes because it emits dataset artifacts only and launches no processes.",
+    "expected_behavior": [
+      "The agent did not load fskills-data-engine/SKILL.md to perform this request",
+      "The agent routed the request to the fskills-training package",
+      "The agent honoured fskills-data-engine's rule that it emits artifacts only and launches no processes (training lives in training.planner / training.emit)"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-002",
+    "question": "Score my new checkpoint against its base model with lm-eval 0.4.12 in offline mode and give me the deltas.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "This is checkpoint scoring against a base model, which belongs to fskills-evaluation and not to data preparation in fskills-data-engine.",
+    "expected_behavior": [
+      "The agent did not load fskills-data-engine/SKILL.md to perform this request",
+      "The agent routed the request to the fskills-evaluation package",
+      "The agent avoided describing dataset building, since fskills-data-engine's outputs are data_pipeline_spec, dataset and readiness_report artifacts"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-003",
+    "question": "Fix the NameError in my dataloader script and refactor it into two helper functions.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A general code-fix task has no request object or data sources for fskills-data-engine, and no FoundationSkills package should take it.",
+    "expected_behavior": [
+      "The agent did not read or activate fskills-data-engine/SKILL.md",
+      "The agent did not emit data_pipeline_spec, dataset or readiness_report artifacts",
+      "The agent handled the code edit without claiming a readiness verdict (PASS/RED/UNMEASURED)"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-004",
+    "question": "Cluster these support tickets with scikit-learn and plot the silhouette scores for me.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "This is an ad-hoc analysis outside the registered data_engine op pipeline (ingest -> clean -> dedup -> quality -> [decontam] -> [mix] -> format -> tokenize) and no FoundationSkills skill should take it.",
+    "expected_behavior": [
+      "The agent did not read or activate fskills-data-engine/SKILL.md",
+      "The agent did not emit or run any of the registered ops (ingest, clean, dedup, quality, decontam, mix, format, tokenize)",
+      "The agent produced no readiness_report or stats.json accounting for the request"
+    ]
+  }
+]

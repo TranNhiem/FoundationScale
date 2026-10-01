@@ -1,0 +1,121 @@
+[
+  {
+    "id": "fskills-evaluation-positive-001",
+    "question": "My LoRA SFT run finished. Score the checkpoint against its base model on mmlu and gsm8k and write the eval report to artifacts/eval/q27-sft/eval_report.json.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and runs lm-eval 0.4.12 offline against a pre-staged eval cache, emitting an atomic eval_report.json per benchmark with pass/red/skipped/unmeasured status and baseline comparison.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent resolved a base model in the documented order and required the eval_cache directory to exist (EV-IN-002, EV-IN-003)",
+      "The agent wrote eval_report.json atomically with verdict and per-benchmark status fields",
+      "The agent reported exit codes 0 PASS, 5 RED, 95 UNMEASURED, 96 REFUSED"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-002",
+    "question": "Just smoke-test the eval plumbing on arc_easy with --limit 8 examples per task before we do a real run.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and explains that a limited (--limit N) run's verdict is at best UNMEASURED and can never be PASS, that EV-HO-003 (WARN) fires, and that a limited run never seeds the baseline cache.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent stated the verdict of a limited run is at best UNMEASURED (never PASS)",
+      "The agent mentioned EV-HO-003 fires when the run was limited and that a limited run never seeds the baseline cache"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-003",
+    "question": "My eval run was refused with exit code 96 and no report was produced — the metric has no stderr. What is wrong with my policy and how do I fix it?",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and identifies EV-IN-005 (BLOCK): a policy that cannot judge a result — a stderr-less metric without an explicit abs_epsilon — causes REFUSED (exit 96) with no report written; the fix is to add an explicit abs_epsilon for that benchmark.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent cited EV-IN-005 as the BLOCK rule for a stderr-less metric with no explicit abs_epsilon",
+      "The agent stated the run REFUSED with exit 96 and wrote no report"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-004",
+    "question": "The run came back RED (exit 5). Explain the regression band that decides the verdict and what else can make a run RED.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and explains EV-HO-001 (BLOCK: drop > max(abs_epsilon, k*sqrt(se_b^2+se_c^2)), improvements never fail) and EV-HO-002 (a skip — harness completed but reported no metric); both produce RED and exit code 5.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent stated the EV-HO-001 band formula and that improvements never fail",
+      "The agent mentioned EV-HO-002 as the skip case (harness completed, no metric reported) which also yields RED",
+      "The agent tied both cases to exit code 5"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-005",
+    "question": "Emit the eval job for our GB200 node with 4 GPUs and then submit it.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and uses fskills eval emit (writing an fs_launch_spec with entry fskills-eval and printing a confirm hash, submitting nothing) followed by fskills eval launch --confirm <hash> as the only submission path, after eval run --dry-run passes.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent used fskills eval emit with --gpus / --python / --spec-out, stating nothing is submitted at emit time and the confirm hash is printed",
+      "The agent stated the run is one node only ('--nodes' other than 1 makes the spec non-executable) and that >1 GPUs shard the model via parallelize with any device dropped",
+      "The agent stated submission happens only via fskills eval launch --spec --confirm, which first runs eval run --dry-run (exit 0 or 96) and refuses to submit if that fails"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-006",
+    "question": "One of my benchmarks ended with 'missing input: dataset <id> not staged in eval cache <dir>'. What actually happened and what does the report say?",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and explains that a dataset not staged makes the benchmark unmeasured with that message, the harness is not started for it, EV-HO-003 (WARN) fires, and the overall exit code is 95 UNMEASURED.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent stated the benchmark is unmeasured with the message 'missing input: dataset <id> not staged in eval cache <dir>' and that the harness is not started",
+      "The agent mentioned EV-HO-003 (WARN) and exit code 95 UNMEASURED"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-negative-001",
+    "question": "I have a pile of raw textbooks and PDFs; turn them into an FS-ready FoundationSkills training dataset.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Producing an FS-ready dataset from raw data belongs to fskills-data-engine, not the evaluation skill, which only scores checkpoints.",
+    "expected_behavior": [
+      "The agent did not read or activate evaluation/SKILL.md for dataset construction",
+      "The agent routed the request to the fskills-data-engine skill"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-negative-002",
+    "question": "Given this training goal, produce the training plan and hand me the confirm-hashed Slurm launch spec for the job.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Goal -> training_plan -> confirm-hashed Slurm launch spec is fskills-training's job; the evaluation skill's confirm hash applies only to fskills eval emit/launch specs.",
+    "expected_behavior": [
+      "The agent did not read or activate evaluation/SKILL.md for training planning or launch",
+      "The agent routed the request to the fskills-training skill"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-negative-003",
+    "question": "Add a new config field to a TypedDict in our team's plain Python web service and update its unit tests.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A generic code-change task in an unrelated repo is out of scope for every FoundationSkills skill, including evaluation.",
+    "expected_behavior": [
+      "The agent did not read or activate evaluation/SKILL.md",
+      "The agent did not activate any FoundationSkills skill"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-negative-004",
+    "question": "Summarize this meeting transcript into action items for my project team.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Meeting summarization is not checkpoint evaluation, dataset building, or training launching, so no FoundationSkills skill should be triggered.",
+    "expected_behavior": [
+      "The agent did not read or activate evaluation/SKILL.md",
+      "The agent did not activate any FoundationSkills skill"
+    ]
+  }
+]

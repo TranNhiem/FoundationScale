@@ -130,5 +130,5 @@ Every decision is recorded with a `because`. The emitted command **is** the conf
 | Deployment | `checkpoint` | a serving spec (new type via `register_artifact_type`) | after evaluation |
 | Experiment management | every artifact plus FS run manifests | an experiment index | reads `journal.jsonl` and the manifests |
 
-2. Subclass `BaseSkill`, declare `rules` with MUST_FIRE fixtures, write `SKILL.md` with the standard sections, and register it through `register_builtin_skills` or the `foundationskills.skills` entry-point group.
+2. Subclass `BaseSkill`, declare `rules` with MUST_FIRE fixtures, write `SKILL.md` with the standard sections (opening with the Agent Skills frontmatter: `name`, `license`, `description`, `when_to_use`), ship `evals/evals.json` routing cases (positives, a sibling-routed negative, an out-of-scope negative), and register it through `register_builtin_skills` or the `foundationskills.skills` entry-point group.
 3. `plan_chain` and the orchestrator route to it by artifact type. No change to existing skills is needed.

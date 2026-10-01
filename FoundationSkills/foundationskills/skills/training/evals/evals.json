@@ -1,0 +1,122 @@
+[
+  {
+    "id": "fskills-training-positive-001",
+    "question": "I want a manufacturing-domain reasoning model from a Llama-3.1-8B base: ~2B tokens of internal documents plus 20k QA pairs with verifiable answers, 2 nodes x 8 H100, and I want to preserve general capabilities. Plan the training for me.",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the training skill and produces a training_plan with cpt (full, size-band LR) -> sft (LoRA) -> rl stages, choosing dr_grpo and recording the --adapter-target decision because llama3 is not FS-registered.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent produced a training_plan artifact with ordered cpt -> sft -> rl stages and a non-empty `because` plus estimate per stage",
+      "The agent selected dr_grpo for the RL stage because only dr_grpo/gspo/dapo are runnable in FS",
+      "The agent recorded the --adapter-target LoRA decision because the llama3 family is not FS-registered, and/or flagged TR-PL-005 full-sequence loss on the sft stage"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-002",
+    "question": "My pretraining loss jumped up sharply in the middle of an otherwise healthy run and never recovered. How do I diagnose and fix it?",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent uses the skill's diagnose playbook with symptom loss_spike: bad shard / LR too high / bf16 overflow — resume from the pre-spike checkpoint and halve LR or drop the shard.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent keyed the failure to the loss_spike playbook entry",
+      "The agent recommended resuming from before the spike and halving LR or removing the suspect data shard"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-003",
+    "question": "My run keeps going out of GPU memory when I crank the sequence length. What should I change?",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent uses the oom playbook entry: micro-batch 1 plus gradient accumulation, full->lora, halve the sequence length — and never pp/ep because those are refused by FS.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent mapped the symptom to the oom playbook entry",
+      "The agent suggested micro-batch 1 with gradient accumulation, switching full->lora, or halving the sequence length",
+      "The agent stated not to reach for pp>1/ep>1 because those are refused (tp>1/cp>1 execute)"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-004",
+    "question": "My supervised training run just died with exit code 96 and a [fs:train:refuse] line. What does that mean and how do I fix it?",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent uses the fs_refused_96 playbook entry: exit 96 is a REFUSED status and the [fs:train:refuse] line names the missing input to supply.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent keyed the symptom to fs_refused_96 and identified 96 as the REFUSED status code",
+      "The agent told the user to read the [fs:train:refuse] line because it names the missing input"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-005",
+    "question": "My RL run logs 'UNMEASURED step N' over and over and no reward is improving. What's going on?",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent uses the reward_saturation_unmeasured_steps playbook entry: FS prints UNMEASURED step N when all advantages are zero — raise group_size/temperature or use harder prompts.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent matched the symptom to reward_saturation_unmeasured_steps and explained all advantages are zero",
+      "The agent recommended raising group_size or temperature, or using harder prompts"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-006",
+    "question": "Here is my goal_spec plus a readiness report that came back RED. Start planning the stages now so I don't lose time.",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the training skill, fires TR-IN-004 (BLOCK on a RED readiness report) and refuses to plan, telling the user to fix the data first and hand off to data_engine.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent cited TR-IN-004 as firing for a RED readiness report",
+      "The agent refused to emit a training_plan and said to fix the data first / hand off to data_engine"
+    ]
+  },
+  {
+    "id": "fskills-training-negative-007",
+    "question": "Take these raw internal documents and QA pairs and turn them into an FS-ready training dataset with a readiness report.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Data preparation is explicitly the data_engine package's job, so the training skill should not activate.",
+    "expected_behavior": [
+      "The agent did not open training/SKILL.md for this request",
+      "The agent routed the request to fskills-data-engine (raw data -> FS-ready dataset)",
+      "The agent did not emit a training_plan artifact"
+    ]
+  },
+  {
+    "id": "fskills-training-negative-008",
+    "question": "Score my new checkpoint against its base model offline with lm-eval 0.4.12 and give me the delta.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "SKILL.md says not to use this skill to run evals; checkpoint-vs-base scoring belongs to fskills-evaluation.",
+    "expected_behavior": [
+      "The agent did not open training/SKILL.md for this request",
+      "The agent routed the request to fskills-evaluation",
+      "The agent did not produce a training_plan or fs_launch_spec"
+    ]
+  },
+  {
+    "id": "fskills-training-negative-009",
+    "question": "Add a new field to the RL config TypedDict in this repository to control the entropy bonus.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A general code-editing task; no FoundationSkills skill should handle it.",
+    "expected_behavior": [
+      "The agent did not load training/SKILL.md or trigger fskills-training",
+      "The agent did not load any FoundationSkills skill package"
+    ]
+  },
+  {
+    "id": "fskills-training-negative-010",
+    "question": "Review this pull request for off-by-one bugs in the pagination helper and leave comments.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A code-review task outside the FoundationSkills scope (goal -> training_plan -> launch spec, diagnosis at training time).",
+    "expected_behavior": [
+      "The agent did not load training/SKILL.md or trigger fskills-training",
+      "The agent did not invoke diagnose / diagnose_symptom on this request"
+    ]
+  }
+]
