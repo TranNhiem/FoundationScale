@@ -1,4 +1,4 @@
-"""MegatronRLTrainer: the rung-0/1 Megatron-Core RL driver for FoundationScale.
+"""MegatronRLTrainer: the Megatron-Core RL driver for FoundationScale (rungs 0-2).
 
 Runnable inside the Megatron-Bridge container under torchrun::
 
@@ -11,6 +11,15 @@ capture, group-normalized advantages, forward_backward, and the distributed
 optimizer without a generation engine. ``--parity-only`` loads the model,
 computes mcore token logprobs for the rows, and dumps them for an external
 HF comparison script (rung 0's parity gate).
+
+Rung 2 (``--online``) is real on-policy RL: each step the CURRENT policy
+generates (an HF copy on global rank 0, refit from the mcore weights through
+``export_hf_weights``), a verifiable reward scores the completions, and the
+same train step consumes them under any TP/PP/CP/EP/ETP/DP layout. The rollout
+helpers live in :mod:`foundationscale.rl.megatron.online`. On MoE models the
+router's load-balancing loss still produces gradient on a step whose
+advantages are all zero; that is Megatron's configured ``moe_aux_loss_coeff``,
+not a policy update.
 
 Model build follows the known-working Bridge call pattern from
 ``run_gspo.py``: recipe/AutoBridge config -> parallelism fields ->
@@ -350,6 +359,8 @@ class MegatronRLTrainer:
         self.optimizer: Any = None
         self.scheduler: Any = None
         self.pg: Any = None
+        # Kept after build: rung 2 refits its generation copy through export_hf_weights.
+        self.bridge: Any = None
         self._built = False
 
     # -- build -------------------------------------------------------------
@@ -383,6 +394,7 @@ class MegatronRLTrainer:
 
         torch.manual_seed(self.seed)
         bridge = AutoBridge.from_hf_pretrained(self.hf_model)
+        self.bridge = bridge
         provider = bridge.to_megatron_provider(load_weights=True)
         check_softcap_owner(self.cfg.softcap, getattr(provider, "final_logit_softcapping", None))
         provider.tensor_model_parallel_size = self.cfg.tp
@@ -574,7 +586,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--lr", type=float, default=1e-6)
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--group-size", type=int, default=1, help="completions per prompt in mock rows")
-    ap.add_argument("--rollout-jsonl", required=True)
+    ap.add_argument(
+        "--rollout-jsonl", default="", help="mock rollout rows (rungs 0-1); not read by --online"
+    )
+    ap.add_argument(
+        "--online",
+        action="store_true",
+        help="rung 2: the current policy generates and a verifiable reward scores every step",
+    )
+    ap.add_argument("--dataset", default="", help="--online prompt corpus (ShareGPT JSON/JSONL)")
+    ap.add_argument("--gold-key", default=None, help="--online record key holding the gold letter")
+    ap.add_argument(
+        "--answer-pattern", default=None, help="--online regex whose one group is the answer letter"
+    )
+    ap.add_argument("--prompts-per-step", type=int, default=8)
+    ap.add_argument("--max-new-tokens", type=int, default=256)
+    ap.add_argument("--temperature", type=float, default=1.0)
+    ap.add_argument(
+        "--top-p",
+        type=float,
+        default=1.0,
+        help="sampler nucleus; <1.0 biases the gradient, training logprobs are untruncated",
+    )
+    ap.add_argument("--heldout", default="", help="--online greedy held-out corpus")
+    ap.add_argument("--heldout-n", type=int, default=0, help="first N held-out rows; 0 = all")
+    ap.add_argument("--heldout-max-new", type=int, default=0, help="0 = --max-new-tokens")
     ap.add_argument("--metrics-out", required=True)
     ap.add_argument("--parity-only", action="store_true")
     ap.add_argument("--parity-rows", type=int, default=8)
@@ -586,6 +622,149 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="registered token-level objective whose declared axes the loss reads",
     )
     return ap
+
+
+def _run_online(
+    args: argparse.Namespace, trainer: MegatronRLTrainer, tokenizer: Any, pad_id: int
+) -> int:
+    """Rung 2: every step the CURRENT policy generates, a verifiable reward scores, mcore trains.
+
+    Global rank 0 holds an HF copy of the policy, refit from the Megatron weights
+    before each rollout (``export_hf_weights`` is collective, so every rank joins).
+    Rows are broadcast; advantages are computed over the whole batch and each DP rank
+    trains its contiguous slice, exactly as on the mock path. A step whose rows are
+    all abstained or empty is skipped on every rank (the decision is a function of
+    the broadcast rows, so no rank can diverge into a collective the others skip).
+    """
+    import time
+
+    import torch
+    import torch.distributed as dist
+
+    from foundationscale.rl.corpus import load_sharegpt
+    from foundationscale.rl.megatron import online
+    from foundationscale.rl.megatron.normalization import compute_denominators
+    from foundationscale.rl.megatron.pp_step import loss_unit
+    from foundationscale.rl.registry import lookup_algorithm
+    from foundationscale.rl.rewards import MCQLetterReward
+    from foundationscale.rl.torch_backend import TensorPolicyLoss
+
+    if not args.dataset:
+        raise SystemExit("--online requires --dataset")
+    if args.steps < 1:
+        raise SystemExit(f"--steps must be >= 1, got {args.steps}")
+    objective = getattr(lookup_algorithm(args.algorithm), "_objective", None)
+    if objective is None:
+        raise SystemExit(f"--algorithm {args.algorithm!r} carries no tensor objective")
+    objective_loss_fn = TensorPolicyLoss(objective=objective)
+    unit = loss_unit(objective_loss_fn)
+    group_size = max(1, args.group_size)
+    n_rows = args.prompts_per_step * group_size
+    samples = load_sharegpt(args.dataset, gold_key=args.gold_key)
+    heldout = (
+        load_sharegpt(args.heldout, gold_key=args.gold_key, limit=args.heldout_n or None)
+        if args.heldout
+        else ()
+    )
+    reward = MCQLetterReward(answer_pattern=args.answer_pattern)
+    dp_group = trainer.pg.dp
+    dp_size, dp_rank = dp_group.size(), dp_group.rank()
+    writer = not dist.is_initialized() or dist.get_rank() == 0
+    device = torch.device("cuda", torch.cuda.current_device())
+    hf_model: Any = None
+    if writer:
+        from transformers import AutoModelForCausalLM
+
+        hf_model = AutoModelForCausalLM.from_pretrained(args.hf_model, torch_dtype=torch.bfloat16)
+        hf_model.to(device)
+    metrics_path = Path(args.metrics_out)
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    heldout_max_new = args.heldout_max_new or args.max_new_tokens
+
+    def _refit() -> tuple[dict[str, int], float]:
+        t0 = time.perf_counter()
+        stats = online.refit_hf_policy(trainer.bridge, trainer.model, hf_model, is_writer=writer)
+        return stats, time.perf_counter() - t0
+
+    with contextlib.ExitStack() as stack:
+        fh = stack.enter_context(metrics_path.open("a", encoding="utf-8")) if writer else None
+
+        def _heldout(tag: str) -> None:
+            if not heldout or fh is None:
+                return
+            result = online.greedy_heldout(
+                hf_model,
+                tokenizer,
+                heldout,
+                max_new_tokens=heldout_max_new,
+                reward=reward,
+                device=device,
+            )
+            fh.write(json.dumps({"heldout": tag, **result}) + "\n")
+            fh.flush()
+            print(f"HELDOUT_{tag.upper()} {json.dumps(result)}", flush=True)
+
+        # Refit before the PRE eval too: it proves the export path round-trips the
+        # unchanged weights before any training depends on it.
+        stats, refit_s = _refit()
+        _heldout("pre")
+        for step in range(args.steps):
+            if step:
+                stats, refit_s = _refit()
+            t0 = time.perf_counter()
+            rows: list[Any] | None = None
+            if writer:
+                indices = online.sample_prompt_indices(
+                    len(samples), args.prompts_per_step, seed=args.seed, step=step
+                )
+                rows = online.generate_group_rows(
+                    hf_model,
+                    tokenizer,
+                    samples,
+                    indices,
+                    group_size=group_size,
+                    max_new_tokens=args.max_new_tokens,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    reward=reward,
+                    device=device,
+                )
+            all_rows = online.broadcast_rows(rows)
+            gen_s = time.perf_counter() - t0
+            if len(all_rows) != n_rows:
+                raise RuntimeError(f"step {step}: {len(all_rows)} rollout rows, expected {n_rows}")
+            advantages, sample_mask = online.scored_group_advantages(all_rows)
+            record: dict[str, Any] = {
+                "step": step,
+                **online.step_rollout_metrics(all_rows),
+                "refit_s": round(refit_s, 3),
+                "gen_s": round(gen_s, 3),
+                "refit_written": stats["written"],
+                "refit_unwritten": stats["unwritten"],
+            }
+            if not any(m > 0 for m in sample_mask):
+                record["skipped"] = "no scored, non-empty row in the batch"
+            else:
+                lo, hi = online.shard_rows(all_rows, dp_size, dp_rank, group_size)
+                batch = online.collate_token_batch(
+                    all_rows[lo:hi], advantages[lo:hi], sample_mask[lo:hi], args.seq_len, pad_id
+                )
+                batch["old_logprobs"] = trainer.capture_logprobs(batch)[:, 1:].cpu()
+                declared = (float(n_rows), float(args.seq_len - 1)) if unit == "dr_grpo" else None
+                den = compute_denominators(
+                    unit,
+                    batch["loss_mask"][:, 1:],
+                    batch["sample_mask"],
+                    group=dp_group,
+                    declared=declared,
+                )
+                record.update(trainer.train_step(batch, objective_loss_fn, den))
+            if fh is not None:
+                fh.write(json.dumps(record) + "\n")
+                fh.flush()
+        _refit()
+        _heldout("post")
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -626,6 +805,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         getattr(tokenizer, "pad_token_id", None) or getattr(tokenizer, "eos_token_id", 0) or 0
     )
 
+    if args.online:
+        return _run_online(args, trainer, tokenizer, pad_id)
+    if not args.rollout_jsonl:
+        raise SystemExit("--rollout-jsonl is required unless --online")
     rows = load_mock_rollouts(args.rollout_jsonl)
 
     if args.parity_only:

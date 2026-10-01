@@ -1,11 +1,12 @@
-"""Megatron-Core RL lane: rungs 0-1 public surface.
+"""Megatron-Core RL lane: rungs 0-2 public surface.
 
 This package is importable without Megatron-Core, Megatron-Bridge, or a GPU.
 The stable rungs 0-1 pieces -- vocab-parallel token logprobs, global loss
 denominators, and lane config refusal rules -- are re-exported eagerly because
-they are pure torch/python. Pipeline wiring (``pp_step``) and the torchrun
-driver (``driver``) are intentionally lazy: they import megatron/bridge only
-inside functions, and in this slice they refuse by name when touched.
+they are pure torch/python. Pipeline wiring (``pp_step``), the torchrun
+driver (``driver``) and rung 2's rollout helpers (``online``) are intentionally
+lazy: they import megatron/bridge/transformers only inside functions, and refuse
+by name when touched without them.
 
 WHAT IS CLAIMED: importing this package never initializes distributed and
 never imports megatron. WHAT IS NOT CLAIMED: that the pp/driver entrypoints

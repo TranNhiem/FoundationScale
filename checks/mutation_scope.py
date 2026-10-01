@@ -118,6 +118,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "vocab-parallel log-probabilities across TP shards: a wrong shard offset reads "
         "another rank's vocabulary slice, and only a GPU run exercises the body."
     ),
+    "src/foundationscale/rl/megatron/online.py": (
+        "Megatron lane rung 2: scored-group advantages, token-batch collation and the "
+        "fused-expert refit are unit-tested on CPU, but no mutation row yet kills a "
+        "dropped abstention mask or a swapped gate/up expert half."
+    ),
     "src/foundationscale/rl/megatron/normalization.py": (
         "global loss denominators across DP/CP ranks for the Megatron lane: a local "
         "denominator silently rescales the gradient, and no mutation row pins it yet."
