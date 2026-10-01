@@ -518,6 +518,95 @@ def test_b1_reinforce_baseline_ema_folds_a_differing_second_batch_mean(
     assert _named(reports[1].loss.metrics)["reinforce_baseline_frac_above"] == pytest.approx(0.5)
 
 
+class _OneFlatGroupReward:
+    """Scores 1, 1, 1, 0 every step: group 0 is flat at 1.0, group 1 is not."""
+
+    _PLAN = (1.0, 1.0, 1.0, 0.0)
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def score(self, *, response: str, gold: str) -> float:
+        value = self._PLAN[self.calls % len(self._PLAN)]
+        self.calls += 1
+        return value
+
+
+def _record_reinforce_advantages(monkeypatch: pytest.MonkeyPatch) -> list[list[float]]:
+    seen: list[list[float]] = []
+    real = trainer_module.TensorREINFORCELoss
+
+    class _Recording(real):  # type: ignore[misc, valid-type]
+        def __call__(self, **kwargs: Any) -> Any:
+            seen.append([float(value) for value in kwargs["advantages"]])
+            return super().__call__(**kwargs)
+
+    monkeypatch.setattr(trainer_module, "TensorREINFORCELoss", _Recording)
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        # The seeded baseline is the batch mean 0.75, so "keep" prices the
+        # flat all-correct group at +0.25 per row with no within-prompt contrast.
+        ("keep", [0.25, 0.25, 0.25, -0.75]),
+        ("zero", [0.0, 0.0, 0.25, -0.75]),
+    ],
+)
+def test_b1_reinforce_baseline_flat_groups_keep_or_zero(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mode: str,
+    expected: list[float],
+) -> None:
+    _install_fake_host(monkeypatch)
+    monkeypatch.setattr(trainer_module, "MCQLetterReward", lambda **kwargs: _OneFlatGroupReward())
+    seen = _record_reinforce_advantages(monkeypatch)
+    trainer = RLTrainer(_config("reinforce_baseline", max_steps=1, reinforce_flat_groups=mode))
+    reports = trainer.run()
+
+    assert len(reports) == 1
+    assert seen == [pytest.approx(expected)]
+    # The EMA folds in every raw return either way, flat groups included.
+    assert trainer._reinforce_baseline == pytest.approx(0.75)
+    zeroed_line = "reinforce_baseline zeroed 1/2 flat group(s)" in capsys.readouterr().err
+    assert zeroed_line is (mode == "zero")
+
+
+def test_b1_reinforce_baseline_all_flat_groups_zeroed_is_unmeasured(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Group 0 flat at 1.0, group 1 flat at 0.0: "keep" would train on +-0.5,
+    # "zero" leaves no stimulus, so the step is UNMEASURED, not claimed.
+    _install_fake_host(monkeypatch)
+    monkeypatch.setattr(trainer_module, "MCQLetterReward", lambda **kwargs: _ConstantPairsReward())
+    trainer = RLTrainer(_config("reinforce_baseline", max_steps=1, reinforce_flat_groups="zero"))
+    with pytest.raises(TrainerRefusal, match="refused as vacuous"):
+        trainer.run()
+    err = capsys.readouterr().err
+    assert "zeroed 2/2 flat group(s)" in err
+    assert "every kept return equals the baseline" in err
+
+
+class _ConstantPairsReward:
+    _PLAN = (1.0, 1.0, 0.0, 0.0)
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def score(self, *, response: str, gold: str) -> float:
+        value = self._PLAN[self.calls % len(self._PLAN)]
+        self.calls += 1
+        return value
+
+
+def test_reinforce_flat_groups_rejects_an_unknown_mode() -> None:
+    with pytest.raises(TrainerRefusal, match=r"reinforce_flat_groups='drop'"):
+        RLTrainer(_config("reinforce_baseline", reinforce_flat_groups="drop"))
+
+
 def test_b1_reinforce_baseline_state_resets_at_the_start_of_each_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

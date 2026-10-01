@@ -402,6 +402,15 @@ class RLTrainConfig:
     # iterative DPO only: copy the policy into the frozen reference every N
     # steps (0 never refreshes). Online DPO keeps its initial reference.
     ref_refresh_steps: int = 0
+    # reinforce_baseline only: what a FLAT group (every completion of one
+    # prompt scored the same) contributes. "keep" (default, historical) prices
+    # it against the scalar EMA like any row, so a flat group at reward r gets
+    # advantage r - baseline: a correct-everywhere prompt is pushed up and a
+    # wrong-everywhere prompt pushed down with no within-prompt contrast. "zero"
+    # gives a flat group advantage 0, as a per-prompt baseline would (NeMo-RL
+    # GRPO's leave-one-out baseline and DAPO's trivial-group filter both make it
+    # 0). The EMA still folds in every raw return either way.
+    reinforce_flat_groups: str = "keep"
 
 
 class RLTrainer:
@@ -427,6 +436,11 @@ class RLTrainer:
             raise TrainerRefusal(
                 f"group_size={config.group_size}: a group-relative objective needs at "
                 f"least 2 samples per group; 1 of at least 2 supplied"
+            )
+        if config.reinforce_flat_groups not in ("keep", "zero"):
+            raise TrainerRefusal(
+                f"reinforce_flat_groups={config.reinforce_flat_groups!r}: one of "
+                f"'keep' or 'zero' is required"
             )
         if config.max_steps < 1:
             raise TrainerRefusal(
@@ -1274,6 +1288,7 @@ class RLTrainer:
                 return self._reinforce_baseline_tail(
                     step=step,
                     scores=tail_scores,
+                    group_keys=[index // self.config.group_size for index, _ in rows],
                     kept_current=tail_current,
                     kept_mask=tail_mask,
                     current_logprobs=current_logprobs,
@@ -1741,6 +1756,7 @@ class RLTrainer:
         *,
         step: int,
         scores: list[float],
+        group_keys: list[int],
         kept_current: torch.Tensor,
         kept_mask: torch.Tensor,
         current_logprobs: torch.Tensor,
@@ -1754,6 +1770,11 @@ class RLTrainer:
         extra_slices: int,
     ) -> StepReport | None:
         """REINFORCE tail: subtract the carried EMA baseline from each return.
+
+        With ``reinforce_flat_groups="zero"`` a group whose kept returns are
+        all equal gets advantage 0 instead (counted from the kept rows, so a
+        group reduced to one row by abstention is flat too), and the count of
+        zeroed groups is printed every step.
 
         WHAT IS CLAIMED: the baseline subtracted is the carried state, or
         the batch's own mean return on the unseeded first step -- reported
@@ -1793,6 +1814,20 @@ class RLTrainer:
             # defaulted 0.0: abstention resolves into a measurement.
             used_baseline = batch_mean
         advantages = [score - used_baseline for score in scores]
+        if self.config.reinforce_flat_groups == "zero" and not null_rank:
+            group_returns: dict[int, set[float]] = {}
+            for key, score in zip(group_keys, scores, strict=True):
+                group_returns.setdefault(key, set()).add(score)
+            flat = {key for key, values in group_returns.items() if len(values) == 1}
+            advantages = [
+                0.0 if key in flat else value
+                for key, value in zip(group_keys, advantages, strict=True)
+            ]
+            print(
+                f"[trainer] step {step}: reinforce_baseline zeroed "
+                f"{len(flat)}/{len(group_returns)} flat group(s)",
+                file=sys.stderr,
+            )
         local_zero = null_rank or not any(value != 0.0 for value in advantages)
         if agree_all(local_zero, ctx):
             # Every kept return equals the baseline: no stimulus in the

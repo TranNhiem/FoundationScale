@@ -80,6 +80,7 @@ def _rb(
     report = trainer._reinforce_baseline_tail(
         step=0,
         scores=scores,
+        group_keys=list(range(len(scores))),
         kept_current=planes.leaf,
         kept_mask=torch.ones((len(scores), 2)),
         current_logprobs=planes.leaf,

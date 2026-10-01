@@ -208,6 +208,7 @@ def test_reinforce_baseline_tail_refuses_an_undeclared_momentum() -> None:
         trainer._reinforce_baseline_tail(
             step=0,
             scores=[1.0],
+            group_keys=list(range(len([1.0]))),
             kept_current=torch.zeros((1, 1), requires_grad=True),
             kept_mask=torch.ones((1, 1)),
             current_logprobs=torch.zeros((1, 1), requires_grad=True),
@@ -230,6 +231,7 @@ def test_reinforce_baseline_tail_flat_returns_are_unmeasured(
     result = trainer._reinforce_baseline_tail(
         step=3,
         scores=[1.0, 1.0],
+        group_keys=list(range(len([1.0, 1.0]))),
         kept_current=torch.zeros((2, 1), requires_grad=True),
         kept_mask=torch.ones((2, 1)),
         current_logprobs=torch.zeros((2, 1), requires_grad=True),
@@ -255,6 +257,7 @@ def test_reinforce_baseline_tail_micro_batch_delivers_gradient_through_slices() 
     report = trainer._reinforce_baseline_tail(
         step=0,
         scores=[1.0, 0.0, 1.0],
+        group_keys=list(range(len([1.0, 0.0, 1.0]))),
         kept_current=leaf,
         kept_mask=torch.ones((3, 2)),
         current_logprobs=leaf,
