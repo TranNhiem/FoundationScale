@@ -380,3 +380,49 @@ def test_restore_tp_attributes_marks_only_unmarked_mcore_weights(monkeypatch):
     assert model.proj.weight.partition_stride == 1
     assert not getattr(model.norm.weight, "tensor_model_parallel", False)
     assert driver.restore_tp_attributes([model]) == 0
+
+
+def test_objective_loss_or_zero_skips_kernel_on_fully_masked_microbatch() -> None:
+    from foundationscale.rl.megatron.pp_step import objective_loss_or_zero
+
+    calls: list[int] = []
+
+    def kernel(**kwargs: object) -> torch.Tensor:
+        calls.append(1)
+        raise AssertionError("kernel must not see a fully masked microbatch")
+
+    cur = torch.randn(2, 3, requires_grad=True)
+    out = objective_loss_or_zero(
+        kernel,
+        current_logprobs=cur,
+        old_logprobs=torch.zeros(2, 3),
+        advantages=torch.ones(2),
+        mask=torch.zeros(2, 3),
+    )
+    assert calls == []
+    assert out.item() == 0.0
+    out.backward()
+    assert cur.grad is not None and torch.count_nonzero(cur.grad) == 0
+
+
+def test_objective_loss_or_zero_calls_kernel_when_supervised() -> None:
+    from foundationscale.rl.megatron.pp_step import objective_loss_or_zero
+
+    seen: dict[str, object] = {}
+
+    def kernel(**kwargs: object) -> torch.Tensor:
+        seen.update(kwargs)
+        return torch.tensor(1.5)
+
+    mask = torch.tensor([[0.0, 1.0, 0.0]])
+    ref = torch.zeros(1, 3)
+    out = objective_loss_or_zero(
+        kernel,
+        current_logprobs=torch.zeros(1, 3),
+        old_logprobs=torch.zeros(1, 3),
+        advantages=torch.ones(1),
+        mask=mask,
+        reference_logprobs=ref,
+    )
+    assert out.item() == 1.5
+    assert seen["mask"] is mask and seen["reference_logprobs"] is ref

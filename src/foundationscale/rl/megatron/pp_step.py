@@ -195,6 +195,37 @@ def rescale_to_global_denominator(
     return loss * (local / global_value)
 
 
+def objective_loss_or_zero(
+    objective_loss_fn: Any,
+    *,
+    current_logprobs: torch.Tensor,
+    old_logprobs: torch.Tensor,
+    advantages: torch.Tensor,
+    mask: torch.Tensor,
+    reference_logprobs: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Call the objective kernel, or contribute an exact graph-connected zero.
+
+    Under DP sharding one rank's microbatch can hold no supervised token while
+    the global batch does (measured: a qwen3moe EP=2 rung-2 run died at step 14
+    on rank 1 with "0 of 1023 mask entries are supervised"). The kernel rightly
+    refuses to MEASURE a fully masked batch, but this microbatch's additive share
+    of the globally denominated loss is exactly zero, which
+    :func:`rescale_to_global_denominator` already returns for ``local == 0``. A
+    batch with no supervised token anywhere is still refused, by the global
+    denominator.
+    """
+    if not bool(mask.detach().sum() > 0):
+        return current_logprobs.sum() * 0.0
+    return objective_loss_fn(
+        current_logprobs=current_logprobs,
+        old_logprobs=old_logprobs,
+        advantages=advantages,
+        mask=mask,
+        reference_logprobs=reference_logprobs,
+    )
+
+
 def ratio_and_clip_metrics(
     current_logprobs: torch.Tensor,
     old_logprobs: torch.Tensor,
@@ -529,7 +560,8 @@ def make_forward_step(
                 raise ValueError(
                     f"loss_mask width {width} matches neither S={input_ids.shape[1]} nor S-1"
                 )
-            raw_loss = objective_loss_fn(
+            raw_loss = objective_loss_or_zero(
+                objective_loss_fn,
                 current_logprobs=current_logprobs,
                 old_logprobs=batch["old_logprobs"],
                 advantages=batch["advantages"],
