@@ -64,9 +64,12 @@ __all__ = (
     "group_relative_advantages",
     "load_mock_rollouts",
     "main",
+    "needs_reference",
     "param_hash",
     "reduce_step_metrics",
+    "reference_gap",
     "require_megatron",
+    "swapped_parameters",
 )
 
 
@@ -90,6 +93,70 @@ def require_megatron(caller: str) -> None:
             f"lane imports them lazily so CPU tooling can import this module, "
             f"but training cannot proceed without them"
         ) from exc
+
+
+@contextlib.contextmanager
+def swapped_parameters(
+    params: Sequence[torch.Tensor], replacement: Sequence[torch.Tensor]
+) -> Iterator[None]:
+    """Swap ``replacement`` values into ``params`` for the duration of the block.
+
+    The reference run must see the policy's forward with frozen weights: every
+    original is stashed on host first and restored in ``finally``, bit-exactly,
+    so the live policy survives even a body that raises. Count and shape checks
+    run before any parameter is touched -- a partial swap would silently mix
+    frozen and updated weights inside one forward.
+    """
+    import torch
+
+    if len(params) != len(replacement):
+        raise ValueError(
+            f"swapped_parameters: {len(params)} parameters but {len(replacement)} "
+            f"replacements; 1 replacement per parameter is required"
+        )
+    for i, (p, r) in enumerate(zip(params, replacement, strict=True)):
+        if tuple(p.shape) != tuple(r.shape):
+            raise ValueError(
+                f"swapped_parameters: parameter {i} has shape {tuple(p.shape)} but "
+                f"its replacement has shape {tuple(r.shape)}; the frozen reference "
+                f"must match the policy snapshot it replaces"
+            )
+    stashes = [p.detach().to("cpu", copy=True) for p in params]
+    try:
+        with torch.no_grad():
+            for p, r in zip(params, replacement, strict=True):
+                p.data.copy_(r)
+        yield
+    finally:
+        with torch.no_grad():
+            for p, stash in zip(params, stashes, strict=True):
+                p.data.copy_(stash)
+
+
+def needs_reference(objective: Any) -> bool:
+    """True when ``objective`` declares a nonzero KL weight (GRPO's k3 term and
+    friends); only then does the batch need ``reference_logprobs``."""
+    return float(getattr(objective, "kl_weight", 0.0) or 0.0) != 0.0
+
+
+def reference_gap(
+    old_logprobs: torch.Tensor, reference_logprobs: torch.Tensor, mask: torch.Tensor
+) -> float | None:
+    """Masked mean of |old_logprobs - reference_logprobs| over ``mask > 0``.
+
+    Positive control for a KL objective: exactly 0.0 at step 0 (the policy has
+    not moved off the reference), > 0 as soon as it does. An empty mask measures
+    nothing and returns None (logged as null) -- never 0.0, the passing value.
+    Accumulated in float64.
+    """
+    import torch
+
+    kept = mask > 0
+    count = int(kept.sum().item())
+    if count == 0:
+        return None
+    diff = (old_logprobs.to(torch.float64) - reference_logprobs.to(torch.float64)).abs()
+    return float(diff[kept].sum().item() / count)
 
 
 def load_mock_rollouts(path: str | os.PathLike[str]) -> list[MockRolloutRow]:
@@ -362,6 +429,7 @@ class MegatronRLTrainer:
         # Kept after build: rung 2 refits its generation copy through export_hf_weights.
         self.bridge: Any = None
         self._built = False
+        self._reference: list[torch.Tensor] | None = None
 
     # -- build -------------------------------------------------------------
 
@@ -498,6 +566,51 @@ class MegatronRLTrainer:
             last = dist.get_global_rank(pp_group, pp_size - 1)
             dist.broadcast(logprobs, src=last, group=pp_group)
         return logprobs
+
+    # -- reference policy --------------------------------------------------
+
+    def _local_parameters(self) -> list[torch.Tensor]:
+        """Every parameter of this rank's model chunks in a deterministic order:
+        chunk order (``self.model`` may be one module or a chunk list), then
+        ``named_parameters`` order."""
+        chunks = self.model if isinstance(self.model, (list, tuple)) else [self.model]
+        return [p for chunk in chunks for _, p in chunk.named_parameters()]
+
+    def snapshot_reference(self) -> dict[str, int]:
+        """Freeze the initial policy as the reference: this rank's shard only
+        (TP/PP/EP/ETP-local), copied to host. Held on host so it costs no device
+        memory, and frozen -- it scores ``reference_logprobs`` for KL objectives
+        while the policy trains away from it."""
+        if not self._built:
+            raise RuntimeError("snapshot_reference before build()")
+        if self._reference is not None:
+            raise RuntimeError("snapshot_reference: reference policy already frozen")
+        import torch
+
+        frozen: list[torch.Tensor] = []
+        numel = 0
+        for p in self._local_parameters():
+            snap = p.detach().to("cpu", copy=True)
+            if torch.cuda.is_available():
+                snap = snap.pin_memory()
+            frozen.append(snap)
+            numel += snap.numel()
+        self._reference = frozen
+        return {"reference_tensors": len(frozen), "reference_numel": numel}
+
+    def capture_reference_logprobs(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        """Logprobs of ``batch`` under the frozen reference weights.
+
+        Collective (it calls ``capture_logprobs``): EVERY rank must enter this
+        call on every step it is used. The policy weights are swapped to the
+        reference and restored bit-exactly around the forward."""
+        if self._reference is None:
+            raise RuntimeError("capture_reference_logprobs before snapshot_reference()")
+        import torch
+
+        # Read-only scoring: no autograd graph for a forward whose output is detached.
+        with torch.no_grad(), swapped_parameters(self._local_parameters(), self._reference):
+            return self.capture_logprobs(batch)
 
     # -- train -------------------------------------------------------------
 
@@ -670,6 +783,14 @@ def _run_online(
     dp_group = trainer.pg.dp
     dp_size, dp_rank = dp_group.size(), dp_group.rank()
     writer = not dist.is_initialized() or dist.get_rank() == 0
+    if needs_reference(objective):
+        stats = trainer.snapshot_reference()
+        if writer:
+            print(
+                f"[meg] frozen reference: {stats['reference_tensors']} tensors, "
+                f"{stats['reference_numel']} params held on host",
+                flush=True,
+            )
     device = torch.device("cuda", torch.cuda.current_device())
     hf_model: Any = None
     if writer:
@@ -750,6 +871,15 @@ def _run_online(
                     all_rows[lo:hi], advantages[lo:hi], sample_mask[lo:hi], args.seq_len, pad_id
                 )
                 batch["old_logprobs"] = trainer.capture_logprobs(batch)[:, 1:].cpu()
+                if needs_reference(objective):
+                    batch["reference_logprobs"] = trainer.capture_reference_logprobs(batch)[
+                        :, 1:
+                    ].cpu()
+                    record["ref_gap"] = reference_gap(
+                        batch["old_logprobs"],
+                        batch["reference_logprobs"],
+                        batch["loss_mask"][:, 1:],
+                    )
                 declared = (float(n_rows), float(args.seq_len - 1)) if unit == "dr_grpo" else None
                 den = compute_denominators(
                     unit,
@@ -867,6 +997,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Metrics are already reduced over dp and pp, so one writer suffices.
     writer = not dist.is_initialized() or dist.get_rank() == 0
+    if needs_reference(objective):
+        stats = trainer.snapshot_reference()
+        if writer:
+            print(
+                f"[meg] frozen reference: {stats['reference_tensors']} tensors, "
+                f"{stats['reference_numel']} params held on host",
+                flush=True,
+            )
     with contextlib.ExitStack() as stack:
         fh = stack.enter_context(metrics_path.open("a", encoding="utf-8")) if writer else None
         for step in range(args.steps):
@@ -879,6 +1017,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             old_logprobs = trainer.capture_logprobs(batch)[:, 1:]
             batch["old_logprobs"] = old_logprobs.cpu()
+            step_extra: dict[str, Any] = {}
+            if needs_reference(objective):
+                batch["reference_logprobs"] = trainer.capture_reference_logprobs(batch)[:, 1:].cpu()
+                step_extra["ref_gap"] = reference_gap(
+                    batch["old_logprobs"],
+                    batch["reference_logprobs"],
+                    batch["loss_mask"][:, 1:],
+                )
             # dr_grpo divides by declared constants (B_g, L_cap), not a measured count.
             declared = (float(len(rows)), float(args.seq_len - 1)) if unit == "dr_grpo" else None
             den = compute_denominators(
@@ -890,7 +1036,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             metrics = trainer.train_step(batch, objective_loss_fn, den)
             if fh is not None:
-                fh.write(json.dumps({"step": step, **metrics}) + "\n")
+                fh.write(json.dumps({"step": step, **step_extra, **metrics}) + "\n")
                 fh.flush()
     return 0
 
