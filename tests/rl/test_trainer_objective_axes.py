@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import pytest
 
+from foundationscale.rl.online_pref_step import is_online_pref
 from foundationscale.rl.registry import available_algorithm_names, lookup_algorithm
 from foundationscale.rl.trainer import RLTrainConfig, RLTrainer, TrainerRefusal
 
@@ -35,13 +36,22 @@ def _objective_of(name: str) -> object | None:
     return getattr(lookup_algorithm(name), "_objective", None)
 
 
+# The REINFORCE pair builds its advantage in the trainer tail (a carried EMA
+# baseline; a k1-folded global z-score), so neither declares advantage_fn and
+# the estimator refusal is deliberately not theirs. The SFT pair (raft,
+# best_of_n) prices masked NLL over one winner per group and needs none either.
+_ESTIMATOR_FREE = ("reinforce_baseline", "reinforce_pp", "raft", "best_of_n")
+
+
 def _split_by_estimator() -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Partition the objective-bearing registry entries on ``advantage_fn``."""
     with_fn: list[str] = []
     without_fn: list[str] = []
     for name in available_algorithm_names():
         objective = _objective_of(name)
-        if objective is None:
+        if objective is None or name in _ESTIMATOR_FREE or is_online_pref(objective):
+            # Online preference objectives train through their own step
+            # (rl/online_pref_step.py), which needs no advantage estimator.
             continue
         (with_fn if hasattr(objective, "advantage_fn") else without_fn).append(name)
     return tuple(with_fn), tuple(without_fn)
@@ -71,6 +81,13 @@ def test_objective_without_an_advantage_estimator_is_refused_by_name() -> None:
         assert "advantage" in message
 
 
+def test_the_estimator_free_reinforce_pair_resolves() -> None:
+    """MUST_PASS: the refusal exemption reaches both tail-built bindings."""
+    for name in _ESTIMATOR_FREE:
+        objective = RLTrainer(_config(name))._resolve_objective()
+        assert not hasattr(objective, "advantage_fn"), name
+
+
 def test_the_group_relative_family_still_resolves() -> None:
     """MUST_PASS: the new guard must not refuse an objective that HAS one."""
     with_fn, _ = _split_by_estimator()
@@ -88,6 +105,20 @@ def test_every_objective_bearing_algorithm_is_admitted_or_refused_by_name() -> N
     would report clean coverage over a hole.
     """
     with_fn, without_fn = _split_by_estimator()
-    covered = set(with_fn) | set(without_fn)
+    covered = set(with_fn) | set(without_fn) | set(_ESTIMATOR_FREE)
+    online = {name for name in available_algorithm_names() if is_online_pref(_objective_of(name))}
     bearing = {name for name in available_algorithm_names() if _objective_of(name) is not None}
-    assert covered == bearing
+    assert online, "positive control: online_dpo/iterative_dpo are registered"
+    assert covered | online == bearing
+    assert not covered & online
+
+
+def test_online_preference_objectives_resolve_without_an_estimator() -> None:
+    """Online preference families train through online_pref_step, not the estimator path."""
+    resolved = [
+        RLTrainer(_config(name))._resolve_objective()
+        for name in available_algorithm_names()
+        if is_online_pref(_objective_of(name))
+    ]
+    assert len(resolved) == 2, "positive control: online_dpo and iterative_dpo"
+    assert all(is_online_pref(objective) for objective in resolved)

@@ -11,6 +11,7 @@ module so they never touch the loader.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,8 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from foundationscale.rl import preference_trainer as pt  # noqa: E402
+from foundationscale.rl.distributed import DistContext  # noqa: E402
+from foundationscale.rl.interfaces import BatchRefusal  # noqa: E402
 from foundationscale.rl.preference_torch import TensorPreferenceLoss  # noqa: E402
 from foundationscale.rl.preference_trainer import (  # noqa: E402
     PreferenceTrainConfig,
@@ -460,7 +463,9 @@ def _step_fixture(algorithm: str, **overrides: Any) -> tuple[PreferenceTrainer, 
     kwargs: dict[str, Any] = {
         "step": 0,
         "policy_model": model,
-        "reference_model": _TinyCausalLM(),
+        # pi_ref == pi_theta, as at a real step 1: an independently random
+        # reference made the KTO reference point negative for some seeds.
+        "reference_model": copy.deepcopy(model),
         "tokenizer": _FakeTokenizer(),
         "optimizer": torch.optim.AdamW(model.parameters(), lr=1e-3),
         "device": "cpu",
@@ -502,6 +507,70 @@ def test_one_step_refuses_paired_metrics_for_kto(monkeypatch: pytest.MonkeyPatch
     records = ({"prompt": "w1 w2", "completion": "w3", "label": True, "_line": 1},)
     with pytest.raises(TrainerRefusal, match="paired metrics"):
         trainer._one_step(records=records, **kwargs)
+
+
+def _refusing_loss(**_: Any) -> Any:
+    raise BatchRefusal("row 0, side 'chosen': ORPO is undefined on this row")
+
+
+def _two_rank_world(monkeypatch: pytest.MonkeyPatch, *, peer_ok: bool) -> list[bool]:
+    """Fake agree_all for a 2-rank world; records each local vote."""
+    votes: list[bool] = []
+
+    def agree_all(flag: bool, ctx: Any) -> bool:
+        votes.append(bool(flag))
+        return bool(flag) and peer_ok
+
+    monkeypatch.setattr(pt, "agree_all", agree_all)
+    return votes
+
+
+_RANK1 = DistContext(rank=1, world_size=2, local_rank=1, device="cpu", is_distributed=True)
+
+
+def test_one_step_refusing_rank_skips_collectively(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #455: a rank whose loss refuses must not raise alone under FSDP.
+    votes = _two_rank_world(monkeypatch, peer_ok=True)
+    trainer, kwargs = _step_fixture("orpo")
+    before = kwargs["policy_model"].embed.weight.detach().clone()
+    kwargs["loss_fn"] = _refusing_loss
+    report = trainer._one_step(records=(_record(_line=1),), ctx=_RANK1, **kwargs)
+    assert report is None
+    assert votes == [False]
+    assert trainer.history == []
+    assert torch.equal(kwargs["policy_model"].embed.weight, before), "no optimiser step"
+    err = capsys.readouterr().err
+    assert "step 0 UNMEASURED" in err and "rank 1: row 0" in err
+
+
+def test_one_step_healthy_rank_follows_a_refusing_peer(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    votes = _two_rank_world(monkeypatch, peer_ok=False)
+    trainer, kwargs = _step_fixture("orpo")
+    before = kwargs["policy_model"].embed.weight.detach().clone()
+    report = trainer._one_step(records=(_record(_line=1),), ctx=_RANK1, **kwargs)
+    assert report is None
+    assert votes == [True], "the healthy rank voted, then skipped with its peer"
+    assert torch.equal(kwargs["policy_model"].embed.weight, before)
+    assert "on a peer rank" in capsys.readouterr().err
+
+
+def test_one_step_agreed_healthy_step_is_measured(monkeypatch: pytest.MonkeyPatch) -> None:
+    votes = _two_rank_world(monkeypatch, peer_ok=True)
+    trainer, kwargs = _step_fixture("orpo")
+    report = trainer._one_step(records=(_record(_line=1),), ctx=_RANK1, **kwargs)
+    assert report is not None and report.rows == 1
+    assert votes == [True]
+
+
+def test_one_step_without_ctx_still_raises_the_refusal() -> None:
+    trainer, kwargs = _step_fixture("orpo")
+    kwargs["loss_fn"] = _refusing_loss
+    with pytest.raises(BatchRefusal, match="ORPO is undefined"):
+        trainer._one_step(records=(_record(_line=1),), **kwargs)
 
 
 # ---------------------------------------------------------------------------

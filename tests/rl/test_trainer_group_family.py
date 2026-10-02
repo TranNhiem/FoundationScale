@@ -320,3 +320,349 @@ def test_loss_components_without_a_reference_leaves_whole_total_on_policy() -> N
     assert components[0].contribution == pytest.approx(0.75, rel=0, abs=0)
     assert components[1].contribution is None
     assert not components[1].observed
+
+
+# --- Part B2: the SFT pair (raft, best_of_n) trains through _sft_tail ------
+
+
+class _ConstantReward:
+    """Every completion scores identically, so every group is flat."""
+
+    def score(self, *, response: str, gold: str) -> float:
+        return 1.0
+
+
+def test_b2_raft_trains_two_measured_steps_and_loads_no_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _install_fake_host(monkeypatch)
+    reports = RLTrainer(_config("raft")).run()
+
+    assert len(reports) == 2
+    assert len(loaded) == 1, "raft declares no KL term: no reference may be loaded"
+    pristine = _snapshot(_FakeModel())
+    assert any(
+        not torch.equal(value, pristine[name]) for name, value in _snapshot(loaded[0]).items()
+    ), "two masked-NLL steps at lr=1e-2 must move the policy"
+    for report in reports:
+        # One argmax winner per group; two groups per step by construction.
+        assert report.rows == 2
+        assert report.reward_stats is None
+    metrics = _named(reports[0].loss.metrics)
+    assert metrics["raft_nll_mean"] == pytest.approx(reports[0].loss.loss)
+
+
+def test_b2_best_of_n_selects_argmax_winners_and_loads_no_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _install_fake_host(monkeypatch)
+    reports = RLTrainer(_config("best_of_n")).run()
+
+    assert len(reports) == 2
+    assert len(loaded) == 1, "best_of_n declares no KL term: no reference may be loaded"
+    pristine = _snapshot(_FakeModel())
+    assert any(
+        not torch.equal(value, pristine[name]) for name, value in _snapshot(loaded[0]).items()
+    )
+    first = reports[0]
+    assert first.rows == 2
+    assert first.reward_stats is None
+    metrics = _named(first.loss.metrics)
+    assert "best_of_n_nll_mean" in metrics
+    # Both winners are the letter-A completions, which the reward scores 1.0.
+    assert metrics["best_of_n_winner_reward_mean"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("algorithm", ["raft", "best_of_n"])
+def test_b2_all_flat_groups_are_unmeasured_with_a_named_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    algorithm: str,
+) -> None:
+    _install_fake_host(monkeypatch)
+    monkeypatch.setattr(trainer_module, "MCQLetterReward", lambda **kwargs: _ConstantReward())
+
+    with pytest.raises(TrainerRefusal, match="vacuous"):
+        RLTrainer(_config(algorithm)).run()
+    captured = capsys.readouterr()
+    assert "UNMEASURED step 0" in captured.err
+    assert "every group is flat" in captured.err
+
+
+class _TwoLeadersReward:
+    """Scores rows 1, 1, 0, 0 in call order: every group of four ties at 1.0."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def score(self, *, response: str, gold: str) -> float:
+        self.calls += 1
+        return 1.0 if (self.calls - 1) % 4 < 2 else 0.0
+
+
+@pytest.mark.parametrize("algorithm", ["raft", "best_of_n"])
+def test_b2_tied_leaders_are_all_winners_not_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    algorithm: str,
+) -> None:
+    # Under a binary reward any group with two correct rows ties at its
+    # maximum; dropping such groups would starve the SFT tail, and a
+    # first-row tiebreak would let row order pick the winner.
+    _install_fake_host(monkeypatch)
+    monkeypatch.setattr(trainer_module, "MCQLetterReward", lambda **kwargs: _TwoLeadersReward())
+
+    reports = RLTrainer(_config(algorithm, group_size=4)).run()
+
+    assert len(reports) == 2
+    for report in reports:
+        assert report.rows == 4, "two groups x two tied leaders"
+    assert "have a tied maximum; every tied leader is a winner" in capsys.readouterr().err
+
+
+def test_b2_sft_tail_logprob_micro_batching_matches_the_whole_batch_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_host(monkeypatch)
+    whole = RLTrainer(_config("raft", logprob_micro_batch=0)).run()
+    _install_fake_host(monkeypatch)
+    sliced = RLTrainer(_config("raft", logprob_micro_batch=1)).run()
+
+    assert len(whole) == len(sliced) == 2
+    for left, right in zip(whole, sliced, strict=True):
+        assert left.rows == right.rows
+        assert left.loss.loss == pytest.approx(right.loss.loss, rel=1e-4)
+
+
+# --- Part B1: reinforce_baseline and reinforce_pp ----------------------------
+
+
+def test_b1_reinforce_baseline_trains_with_no_reference_and_moves_weights(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _install_fake_host(monkeypatch)
+    trainer = RLTrainer(_config("reinforce_baseline"))
+    reports = trainer.run()
+
+    assert len(reports) == 2, "every step's kept returns straddle the baseline by construction"
+    assert len(loaded) == 1, "reinforce_baseline reads no reference plane: no second load"
+    pristine = _snapshot(_FakeModel())
+    assert any(
+        not torch.equal(value, pristine[name]) for name, value in _snapshot(loaded[0]).items()
+    ), "two measured steps at lr=1e-2 must move the policy"
+    # The declared metric channel reports the fraction of kept returns
+    # strictly above the baseline actually USED. Half the rows score the
+    # gold letter and half do not, and the baseline is their mean, so the
+    # reading is exactly 0.5 -- a real measurement, not a stated constant.
+    assert _named(reports[0].loss.metrics)["reinforce_baseline_frac_above"] == pytest.approx(0.5)
+    # This binding declares advantage_fn False, so reward_stats abstains
+    # rather than posing a statistics object over a plane that compacts
+    # nothing.
+    assert reports[0].reward_stats is None
+    assert trainer._reinforce_baseline is not None
+
+
+def test_b1_reinforce_baseline_ema_is_seeded_measured_and_observable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_host(monkeypatch)
+    trainer = RLTrainer(_config("reinforce_baseline"))
+    assert trainer._reinforce_baseline is None, "unseeded before any step: None, never 0.0"
+    reports = trainer.run()
+    assert len(reports) >= 1
+
+    # The seed is the first batch's OWN mean return; both steps draw the
+    # same two prompts, so their batch means agree and the post-update EMA
+    # m*s + (1 - m)*s holds the seeded value exactly, whatever the momentum.
+    # Across the EMA boundary the fraction-above reading is therefore 0.5 on
+    # step 2 exactly as on step 1 -- the update is observable in the report
+    # channel, not just in private state.
+    assert trainer._reinforce_baseline is not None
+    first = _named(reports[0].loss.metrics)["reinforce_baseline_frac_above"]
+    second = _named(reports[1].loss.metrics)["reinforce_baseline_frac_above"]
+    assert first == pytest.approx(0.5)
+    assert second == pytest.approx(0.5)
+
+
+class _SteppedMeanReward:
+    """Scores 1, 0, 1, 0 on step 1 and 1, 0, 1, 0.5 on step 2 (four rows a step).
+
+    The two batch means differ (0.5 then 0.625), so the EMA update is
+    distinguishable from a baseline that merely holds its seed.
+    """
+
+    _PLAN = (1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.5)
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def score(self, *, response: str, gold: str) -> float:
+        value = self._PLAN[self.calls % len(self._PLAN)]
+        self.calls += 1
+        return value
+
+
+def test_b1_reinforce_baseline_ema_folds_a_differing_second_batch_mean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_host(monkeypatch)
+    monkeypatch.setattr(trainer_module, "MCQLetterReward", lambda **kwargs: _SteppedMeanReward())
+    trainer = RLTrainer(_config("reinforce_baseline"))
+    reports = trainer.run()
+
+    assert len(reports) == 2
+    momentum = 0.99  # ReinforceBaselineLoss's declared default
+    assert trainer._reinforce_baseline == pytest.approx(momentum * 0.5 + (1.0 - momentum) * 0.625)
+    # Step 2 subtracts the seeded 0.5: rows 1.0, 1.0 and 0.5 are not all
+    # strictly above it, only the two 1.0 rows are.
+    assert _named(reports[1].loss.metrics)["reinforce_baseline_frac_above"] == pytest.approx(0.5)
+
+
+class _OneFlatGroupReward:
+    """Scores 1, 1, 1, 0 every step: group 0 is flat at 1.0, group 1 is not."""
+
+    _PLAN = (1.0, 1.0, 1.0, 0.0)
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def score(self, *, response: str, gold: str) -> float:
+        value = self._PLAN[self.calls % len(self._PLAN)]
+        self.calls += 1
+        return value
+
+
+def _record_reinforce_advantages(monkeypatch: pytest.MonkeyPatch) -> list[list[float]]:
+    seen: list[list[float]] = []
+    real = trainer_module.TensorREINFORCELoss
+
+    class _Recording(real):  # type: ignore[misc, valid-type]
+        def __call__(self, **kwargs: Any) -> Any:
+            seen.append([float(value) for value in kwargs["advantages"]])
+            return super().__call__(**kwargs)
+
+    monkeypatch.setattr(trainer_module, "TensorREINFORCELoss", _Recording)
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        # The seeded baseline is the batch mean 0.75, so "keep" prices the
+        # flat all-correct group at +0.25 per row with no within-prompt contrast.
+        ("keep", [0.25, 0.25, 0.25, -0.75]),
+        ("zero", [0.0, 0.0, 0.25, -0.75]),
+    ],
+)
+def test_b1_reinforce_baseline_flat_groups_keep_or_zero(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mode: str,
+    expected: list[float],
+) -> None:
+    _install_fake_host(monkeypatch)
+    monkeypatch.setattr(trainer_module, "MCQLetterReward", lambda **kwargs: _OneFlatGroupReward())
+    seen = _record_reinforce_advantages(monkeypatch)
+    trainer = RLTrainer(_config("reinforce_baseline", max_steps=1, reinforce_flat_groups=mode))
+    reports = trainer.run()
+
+    assert len(reports) == 1
+    assert seen == [pytest.approx(expected)]
+    # The EMA folds in every raw return either way, flat groups included.
+    assert trainer._reinforce_baseline == pytest.approx(0.75)
+    zeroed_line = "reinforce_baseline zeroed 1/2 flat group(s)" in capsys.readouterr().err
+    assert zeroed_line is (mode == "zero")
+
+
+def test_b1_reinforce_baseline_all_flat_groups_zeroed_is_unmeasured(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Group 0 flat at 1.0, group 1 flat at 0.0: "keep" would train on +-0.5,
+    # "zero" leaves no stimulus, so the step is UNMEASURED, not claimed.
+    _install_fake_host(monkeypatch)
+    monkeypatch.setattr(trainer_module, "MCQLetterReward", lambda **kwargs: _ConstantPairsReward())
+    trainer = RLTrainer(_config("reinforce_baseline", max_steps=1, reinforce_flat_groups="zero"))
+    with pytest.raises(TrainerRefusal, match="refused as vacuous"):
+        trainer.run()
+    err = capsys.readouterr().err
+    assert "zeroed 2/2 flat group(s)" in err
+    assert "every kept return equals the baseline" in err
+
+
+class _ConstantPairsReward:
+    _PLAN = (1.0, 1.0, 0.0, 0.0)
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def score(self, *, response: str, gold: str) -> float:
+        value = self._PLAN[self.calls % len(self._PLAN)]
+        self.calls += 1
+        return value
+
+
+def test_reinforce_flat_groups_rejects_an_unknown_mode() -> None:
+    with pytest.raises(TrainerRefusal, match=r"reinforce_flat_groups='drop'"):
+        RLTrainer(_config("reinforce_baseline", reinforce_flat_groups="drop"))
+
+
+def test_b1_reinforce_baseline_state_resets_at_the_start_of_each_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_host(monkeypatch)
+    trainer = RLTrainer(_config("reinforce_baseline"))
+    trainer._reinforce_baseline = 123.0  # a previous run's leftover EMA
+    trainer.run()
+    # Both steps' batch means are 0.5; an inherited 123.0 would still dominate.
+    assert trainer._reinforce_baseline == pytest.approx(0.5)
+
+
+def test_b1_reinforce_pp_k1_fold_moves_returns_once_policy_leaves_reference(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _install_fake_host(monkeypatch)
+    reports = RLTrainer(_config("reinforce_pp")).run()
+    assert len(reports) == 2
+
+    means = [
+        float(line.split("penalised_mean=")[1].split()[0])
+        for line in capsys.readouterr().err.splitlines()
+        if "reinforce_pp penalised_mean=" in line
+    ]
+    assert len(means) == 2
+    # Positive control: on step 1 the policy IS the reference, the fold is
+    # identically zero and the penalised mean equals the raw mean return 0.5.
+    assert means[0] == pytest.approx(0.5, abs=1e-6)
+    # After one lr=1e-2 update cur != ref, so the k1 fold must shift it.
+    assert abs(means[1] - 0.5) > 1e-6, "the k1 fold left the returns untouched"
+
+
+def test_b1_reinforce_pp_trains_with_a_frozen_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _install_fake_host(monkeypatch)
+    trainer = RLTrainer(_config("reinforce_pp"))
+    reports = trainer.run()
+
+    assert len(reports) >= 1, "the k1 fold is identically zero on step 1; spread persists"
+    assert len(loaded) == 2, "reinforce_pp's k1 fold needs the frozen reference plane"
+    policy, reference = loaded
+    pristine = _snapshot(_FakeModel())
+    for name, value in _snapshot(reference).items():
+        assert torch.equal(value, pristine[name]), f"reference parameter {name} moved"
+    assert any(
+        not torch.equal(value, pristine[name]) for name, value in _snapshot(policy).items()
+    ), "measured steps at lr=1e-2 must move the policy"
+    # Step 1: old and current read off the same weights, so the declared
+    # ratio/clip observability pair is exactly (1.0, 0.0).
+    metrics = _named(reports[0].loss.metrics)
+    assert metrics["ratio_mean"] == 1.0
+    assert metrics["clip_fraction"] == 0.0
+    assert reports[0].reward_stats is None
+
+
+def test_b1_reinforce_pp_with_reference_forbidden_refuses_naming_the_reference() -> None:
+    with pytest.raises(TrainerRefusal, match="reference"):
+        RLTrainer(_config("reinforce_pp", reference_policy=False))._resolve_objective()

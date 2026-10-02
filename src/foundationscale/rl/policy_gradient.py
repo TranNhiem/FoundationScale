@@ -1257,6 +1257,7 @@ class ReinforceBaselineAlgorithm:
         "_baseline_momentum",
         "_baseline_state",
         "_next_step",
+        "_objective",
         "_requirements",
         "_requires",
         "_semantics",
@@ -1267,14 +1268,15 @@ class ReinforceBaselineAlgorithm:
     def __init__(self, *, baseline_momentum: float = 0.99) -> None:
         """Construct the declarations and validate the momentum up front.
 
-        WHAT IS CLAIMED: an invalid momentum is refused at construction via
-        a temporary default-parameter loss, mirroring GRPO's constructor
-        discipline -- refusing here costs nothing.
+        WHAT IS CLAIMED: an invalid momentum is refused at construction, and
+        the validating loss is KEPT as this binding's declared objective --
+        the trainer reads its momentum straight off ``_objective``, exactly
+        as GRPO's stored objective is read -- refusing here costs nothing.
 
         WHAT IS NOT CLAIMED: that a later loss carries the same momentum;
         ``setup`` refuses a disagreement between the two declarations.
         """
-        ReinforceBaselineLoss(baseline_momentum=baseline_momentum)
+        self._objective = ReinforceBaselineLoss(baseline_momentum=baseline_momentum)
         # Stored because setup() must compare the loss's declaration against
         # the value THIS object validated. Re-deriving it from a second
         # temporary loss would make one countable have two editions.
@@ -1641,6 +1643,33 @@ class ReinforcePlusPlusLoss:
         """
         return (1.0 - float(self.clip_epsilon), 1.0 + float(self.clip_epsilon))
 
+    # Axis declarations mirroring RLOOPolicyLoss's: restated in the shared
+    # axes vocabulary so the generic tensor kernel can read this objective,
+    # adding no field, no configuration and no behaviour.
+    @property
+    def ratio_scope(self) -> Literal["token", "sequence"]:
+        """Declare Reinforce++'s token-scope importance ratio."""
+        return "token"
+
+    @property
+    def reduction(self) -> Literal["token_mean", "sequence_mean", "constant"]:
+        """Declare Reinforce++'s supervised-token-mean policy denominator."""
+        return "token_mean"
+
+    @property
+    def kl_weight(self) -> float:
+        """Declare no kernel-side KL term; the k1 penalty folds into the return.
+
+        WHAT IS CLAIMED: the kernel's own k3 term stays off. The reference
+        plane is read by the trainer's fold tail on detached readings, never
+        through this axis, so the kernel prices exactly the clipped ratio
+        over the already-penalised z-scores.
+
+        WHAT IS NOT CLAIMED: that no reference exists -- one is loaded for
+        the fold; axis-off is a plumbing statement, not an anchoring one.
+        """
+        return 0.0
+
     @property
     def required_columns(self) -> tuple[str, ...]:
         """Return the batch columns consumed by this loss.
@@ -1918,6 +1947,7 @@ class ReinforcePlusPlusAlgorithm:
 
     __slots__ = (
         "_next_step",
+        "_objective",
         "_requirements",
         "_requires",
         "_semantics",
@@ -1928,14 +1958,16 @@ class ReinforcePlusPlusAlgorithm:
     def __init__(self, *, clip_epsilon: float = 0.2) -> None:
         """Construct Reinforce++'s declarations independently of any loss.
 
-        WHAT IS CLAIMED: an invalid epsilon is refused at construction via a
-        temporary default-parameter loss, mirroring GRPO; ``kl_beta`` is
+        WHAT IS CLAIMED: an invalid epsilon is refused at construction, and
+        the validating loss is KEPT as this binding's declared objective --
+        the trainer reads its declared axes off ``_objective`` -- mirroring
+        GRPO; ``kl_beta`` is
         loss-local configuration, exactly as GRPO's ``kl_weight`` is.
 
         WHAT IS NOT CLAIMED: that a later loss agrees on epsilon; ``setup``
         compares the two semantics declarations field by field.
         """
-        ReinforcePlusPlusLoss(clip_epsilon=clip_epsilon)
+        self._objective = ReinforcePlusPlusLoss(clip_epsilon=clip_epsilon)
         self._semantics = AlgorithmSemantics(
             group_size=None,
             ratio_scope="token",

@@ -39,6 +39,16 @@ from foundationscale.rl import (
 # below refuses if any ``foundationscale.rl`` module is missing an entry, so
 # the next module to land cannot repeat it.
 TORCH_FREE_MODULES = {
+    "foundationscale.rl.megatron": (
+        "GlobalDenominators",
+        "MegatronLaneConfig",
+        "TE_CP_SUPPORTED",
+        "check_vocab_shard",
+        "compute_denominators",
+        "normalized_loss",
+        "softcap",
+        "vocab_parallel_token_logprobs",
+    ),
     "foundationscale.rl.advantage": (
         "AdvantageConfigRefusal",
         "AdvantageFn",
@@ -50,6 +60,24 @@ TORCH_FREE_MODULES = {
         "LeaveOneOutAdvantage",
         "RewardStats",
         "TemporalAdvantageFn",
+    ),
+    "foundationscale.rl.distributed": (
+        "DistContext",
+        "agree_all",
+        "agree_max",
+        "all_reduce_mean",
+        "all_reduce_sum",
+        "barrier",
+        "destroy",
+        "find_decoder_blocks",
+        "generate_kwargs_for",
+        "init_distributed",
+        "is_main",
+        "save_checkpoint",
+        "save_sharded_dcp",
+        "shard_indices",
+        "wrap_ddp",
+        "wrap_fsdp2",
     ),
     "foundationscale.rl.algorithm": (
         "Algorithm",
@@ -130,7 +158,21 @@ TORCH_FREE_MODULES = {
         "OnlineDPOLoss",
         "RAFTLoss",
     ),
+    "foundationscale.rl.online_pref_step": (
+        "is_online_pref",
+        "maybe_refresh_reference",
+        "online_pref_step",
+        "refresh_cadence",
+    ),
     "foundationscale.rl.policy": ("PolicyPair", "PolicyRoleRefusal"),
+    "foundationscale.rl.ppo_step": (
+        "PPOStepObjective",
+        "build_value_head",
+        "gae",
+        "is_ppo",
+        "ppo_objective",
+        "ppo_step",
+    ),
     "foundationscale.rl.policy_gradient": (
         "RLOOAlgorithm",
         "RLOOPolicyLoss",

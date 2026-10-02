@@ -92,6 +92,45 @@ PENDING_ENROLMENT: dict[str, str] = {
         "backward): GPU-run and line-covered, but zero mutation rows, so enrolling "
         "it in MODULE_PATHS now would report a pass over nothing."
     ),
+    "src/foundationscale/rl/distributed.py": (
+        "FSDP/DDP rank agreement (agree_all, agree_max, all_reduce_sum, gradient mean): "
+        "a dropped or reordered collective deadlocks a multi-GPU run, and no mutation "
+        "row yet proves a flipped vote or a skipped reduction would be caught."
+    ),
+    "src/foundationscale/rl/ppo_step.py": (
+        "PPO step under FSDP: value head, GAE recursion, global advantage whitening and "
+        "the null-rank lockstep; GPU-run on 2 ranks, but no mutation row yet kills a "
+        "wrong lam, an unclipped ratio or a skipped value-head gradient mean."
+    ),
+    "src/foundationscale/rl/online_pref_step.py": (
+        "online/iterative DPO step: on-policy pair construction from sampled groups and "
+        "the reference refresh cadence; GPU-run under FSDP and DDP, zero mutation rows."
+    ),
+    "src/foundationscale/rl/megatron/driver.py": (
+        "Megatron RL lane driver: Bridge provider build, rank binding and the mock-rollout "
+        "loop run only under megatron-core on GPUs, so the CPU battery cannot mutate them."
+    ),
+    "src/foundationscale/rl/megatron/lane_config.py": (
+        "Megatron lane config validation: tp/pp/cp/ep/dp product and divisibility "
+        "refusals, line-covered on CPU but with no mutation row over a relaxed bound."
+    ),
+    "src/foundationscale/rl/megatron/logprobs.py": (
+        "vocab-parallel log-probabilities across TP shards: a wrong shard offset reads "
+        "another rank's vocabulary slice, and only a GPU run exercises the body."
+    ),
+    "src/foundationscale/rl/megatron/online.py": (
+        "Megatron lane rung 2: scored-group advantages, token-batch collation and the "
+        "fused-expert refit are unit-tested on CPU, but no mutation row yet kills a "
+        "dropped abstention mask or a swapped gate/up expert half."
+    ),
+    "src/foundationscale/rl/megatron/normalization.py": (
+        "global loss denominators across DP/CP ranks for the Megatron lane: a local "
+        "denominator silently rescales the gradient, and no mutation row pins it yet."
+    ),
+    "src/foundationscale/rl/megatron/pp_step.py": (
+        "pipeline-parallel step: last-stage logprob broadcast and loss-mask width, "
+        "exercised on GPUs under megatron-core, outside the CPU mutation battery."
+    ),
     "src/foundationscale/rl/prompt_surface.py": (
         "#371 routing layer: 100% line-covered by 15 legs, but covered is not "
         "MUTATED -- no row yet proves that silently flipping the surface choice, "
