@@ -17,6 +17,7 @@ __init__.py, so ``tests.rl.``-style imports cannot work there).
 
 from __future__ import annotations
 
+import dataclasses
 import types
 from typing import TYPE_CHECKING, Any
 
@@ -253,7 +254,9 @@ def test_reinforce_baseline_tail_flat_returns_are_unmeasured(
 def test_reinforce_baseline_tail_micro_batch_delivers_gradient_through_slices() -> None:
     param, leaf, row_slices, forward_slice = _micro_planes()
     optimizer = _RecordingOptimizer()
-    trainer = RLTrainer(_config("reinforce_baseline"))
+    # Singleton groups are all flat; "keep" exercises the EMA tail this test pins.
+    config = dataclasses.replace(_config("reinforce_baseline"), reinforce_flat_groups="keep")
+    trainer = RLTrainer(config)
     report = trainer._reinforce_baseline_tail(
         step=0,
         scores=[1.0, 0.0, 1.0],
