@@ -258,6 +258,51 @@ def _cmd_routing_eval(args: argparse.Namespace) -> int:
     return int(report["exit_code"])
 
 
+def _cmd_behaviour_eval(args: argparse.Namespace) -> int:
+    from foundationskills.agent import behaviour_eval as be_
+    from foundationskills.agent.routing_eval import load_index
+    from foundationskills.skills.data_engine.llm_backend import LLMOpError, make_backend
+
+    try:
+        index = load_index()
+        if args.behaviour_command == "render":
+            report = json.loads(Path(args.report).read_text(encoding="utf-8"))
+            for path in be_.write_behaviour(report, index):
+                print(path)
+            return 0
+        agent_cfg: dict[str, Any] = {"kind": "openai_compatible", "base_url": args.agent_base_url,
+                                     "model": args.agent_model, "timeout_s": args.timeout}
+        if args.agent_api_key_env:
+            agent_cfg["api_key_env"] = args.agent_api_key_env
+        if args.agent_extra_body:
+            agent_cfg["extra_body"] = json.loads(args.agent_extra_body)
+        judge_cfg: dict[str, Any] = {"kind": "openai_compatible", "base_url": args.judge_base_url,
+                                     "model": args.judge_model, "timeout_s": args.timeout}
+        if args.judge_api_key_env:
+            judge_cfg["api_key_env"] = args.judge_api_key_env
+        if args.judge_extra_body:
+            judge_cfg["extra_body"] = json.loads(args.judge_extra_body)
+        agent = make_backend(agent_cfg, "behaviour_eval.agent")
+        judge = make_backend(judge_cfg, "behaviour_eval.judge")
+        packages = None
+        if args.packages:
+            packages = tuple(part.strip() for part in args.packages.split(",") if part.strip())
+        report = be_.run_behaviour_eval(index, agent, judge, reps=args.reps, workers=args.workers,
+                                        agent_max_tokens=args.agent_max_tokens, threshold=args.threshold,
+                                        judge_max_tokens=args.judge_max_tokens, packages=packages)
+    except (be_.BehaviourEvalRefused, LLMOpError, OSError, json.JSONDecodeError) as exc:
+        print(f"[fskills:behaviour-eval:refuse] {exc}", file=sys.stderr)
+        return 96
+    be_.write_report(report, Path(args.out))
+    if args.write_behaviour and report["verdict"] != "unmeasured":
+        for path in be_.write_behaviour(report, index):
+            print(path, file=sys.stderr)
+    summary = {arm: report["results"][arm]["item_pass_rate"] for arm in report["arms"]}
+    print(json.dumps({"verdict": report["verdict"], "item_pass_rate": summary, "uplift": report["uplift"],
+                      "reasons": report["reasons"], "report": str(Path(args.out).resolve())}, indent=2))
+    return int(report["exit_code"])
+
+
 def _cmd_recipes(args: argparse.Namespace) -> int:
     from foundationskills.skills.training.knowledge import load_recipes
 
@@ -434,6 +479,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_render = routing_sub.add_parser("render", help="write BENCHMARK.md per package from an existing report")
     p_render.add_argument("--report", required=True)
     p_render.set_defaults(func=_cmd_routing_eval)
+
+    p = sub.add_parser("behaviour-eval", help="measure plan behaviour against each package's SKILL.md")
+    behaviour_sub = p.add_subparsers(dest="behaviour_command", required=True, parser_class=_Parser)
+    p_run = behaviour_sub.add_parser("run", help="ask an agent model to plan every positive eval case and grade it")
+    p_run.add_argument("--agent-base-url", required=True)
+    p_run.add_argument("--agent-model", required=True)
+    p_run.add_argument("--agent-api-key-env", default=None, help="NAME of the env var holding the key (never the key)")
+    p_run.add_argument("--agent-extra-body", default=None, help="JSON merged into each agent request body")
+    p_run.add_argument("--judge-base-url", required=True)
+    p_run.add_argument("--judge-model", required=True)
+    p_run.add_argument("--judge-api-key-env", default=None, help="NAME of the env var holding the key (never the key)")
+    p_run.add_argument("--judge-extra-body", default=None, help="JSON merged into each judge request body")
+    p_run.add_argument("--packages", default=None, help="comma-separated skill names to include")
+    p_run.add_argument("--reps", type=int, default=2)
+    p_run.add_argument("--workers", type=int, default=4)
+    p_run.add_argument("--threshold", type=float, default=0.7)
+    p_run.add_argument("--agent-max-tokens", type=int, default=4096)
+    p_run.add_argument("--judge-max-tokens", type=int, default=2048)
+    p_run.add_argument("--timeout", type=float, default=600.0)
+    p_run.add_argument("--out", required=True)
+    p_run.add_argument("--write-behaviour", action="store_true",
+                       help="write BEHAVIOUR.md per package unless unmeasured")
+    p_run.set_defaults(func=_cmd_behaviour_eval)
+    p_render = behaviour_sub.add_parser("render", help="write BEHAVIOUR.md per package from an existing report")
+    p_render.add_argument("--report", required=True)
+    p_render.set_defaults(func=_cmd_behaviour_eval)
 
     p = sub.add_parser("recipes", help="browse recipe knowledge")
     recipes_sub = p.add_subparsers(dest="recipes_command", required=True, parser_class=_Parser)

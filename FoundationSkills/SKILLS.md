@@ -48,6 +48,10 @@ See `docs/ARCHITECTURE.md` ("Adding a skill"). In short:
    to a sibling skill and one no FoundationSkills skill should take;
    then run `fskills routing-eval run --base-url ... --model ... --write-benchmarks`, which
    measures routing on every package's cases (exit 0/5/95) and regenerates each `BENCHMARK.md`;
+   then run `fskills behaviour-eval run --agent-... --judge-... --write-behaviour` (agent and judge must be
+   different models), which checks each positive case's `expected_behavior` with and without the SKILL.md
+   and regenerates `BEHAVIOUR.md`. It is plan-level (no tool execution), and because the behaviours are
+   written from the SKILL.md, read the without-skill baseline and the uplift, not the with-skill ceiling;
 6. register it (in `register_builtin_skills` or through the `foundationskills.skills` entry point).
 
 `tests/contract/test_conformance.py` then checks it automatically.

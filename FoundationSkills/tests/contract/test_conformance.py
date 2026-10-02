@@ -156,3 +156,20 @@ def test_published_routing_benchmarks_match_the_current_skill_index():
         assert match, f"{package}/BENCHMARK.md is not a generated routing benchmark"
         assert match.group(1) == current, f"{package}/BENCHMARK.md measured index {match.group(1)}, current is {current}"
         assert match.group(2) == evals[package], f"{package}/BENCHMARK.md measured other eval cases; re-run routing-eval"
+
+
+def test_published_behaviour_reports_match_the_current_skill_md_and_evals():
+    """BEHAVIOUR.md grades the whole SKILL.md body against that package's cases, so editing either makes it
+    stale; re-run `fskills behaviour-eval run ... --write-behaviour` rather than keep a stale number."""
+    from foundationskills.agent import routing_eval
+
+    current = {e["package"]: (e["skill_md_sha256"][:12], e["evals_sha256"][:12]) for e in routing_eval.load_index()}
+    for package in PACKAGES:
+        path = importlib.resources.files(package).joinpath("BEHAVIOUR.md")
+        if not path.is_file():
+            continue
+        match = re.search(r"against SKILL\.md ([0-9a-f]{12}) and eval cases ([0-9a-f]{12})",
+                          path.read_text(encoding="utf-8"))
+        assert match, f"{package}/BEHAVIOUR.md is not a generated behaviour report"
+        assert (match.group(1), match.group(2)) == current[package], \
+            f"{package}/BEHAVIOUR.md measured another SKILL.md or eval set; re-run behaviour-eval"
