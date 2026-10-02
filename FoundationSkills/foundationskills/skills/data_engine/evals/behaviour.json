@@ -1,0 +1,509 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fskills-data-engine-oracle-DE-HO-001",
+      "skill": "data_engine",
+      "rule_id": "DE-HO-001",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "readiness verdict is RED",
+      "fixture": {
+        "files": {
+          "corpus.jsonl": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n"
+        },
+        "request": {
+          "requirements": {
+            "min_records": 1000000,
+            "require_decontam": false,
+            "require_dedup": false
+          },
+          "sources": [
+            {
+              "kind": "jsonl",
+              "uri": "{tmp}/corpus.jsonl"
+            }
+          ],
+          "target_format": "cpt"
+        }
+      },
+      "fixture_sha256": "9338a3a7391e145dd995292f5ce117c43ca6698085914cdeb44f3b0203c5c440",
+      "expected_behavior": [
+        "Identifies the problem: readiness verdict is RED",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule DE-HO-001"
+      ],
+      "ground_truth": "data_engine: rule DE-HO-001 (BLOCK, handoff phase) fires: readiness verdict is RED.",
+      "trigger_facts": [
+        {
+          "path": "files.corpus.jsonl",
+          "value": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n",
+          "check": false
+        }
+      ],
+      "question": "I've got a single source staged at `{tmp}/corpus.jsonl`, and I can see `corpus.jsonl = \"{\\\"id\\\": \\\"r1\\\", \\\"text\\\": \\\"hello world from fixture\\\"}\\n\"` — just one record. I want to run data_engine on it as a `jsonl` source and produce a `cpt` dataset, with requirements of `min_records: 1000000`, `require_decontam: false`, and `require_dedup: false`. What's the outcome — the per-op accounting and the readiness report?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-data-engine-oracle-DE-HO-002",
+      "skill": "data_engine",
+      "rule_id": "DE-HO-002",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "readiness verdict is UNMEASURED; some checks were not run",
+      "fixture": {
+        "files": {
+          "corpus.jsonl": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n"
+        },
+        "request": {
+          "pipeline": {
+            "ops": [
+              {
+                "config": {
+                  "sources": [
+                    {
+                      "kind": "jsonl",
+                      "uri": "{tmp}/corpus.jsonl"
+                    }
+                  ]
+                },
+                "op": "ingest"
+              },
+              {
+                "config": {},
+                "op": "dedup"
+              },
+              {
+                "config": {
+                  "target_format": "cpt"
+                },
+                "op": "format"
+              }
+            ],
+            "rationale": [],
+            "seed": 0,
+            "target_format": "cpt",
+            "tokenizer": null
+          },
+          "requirements": {
+            "min_records": 1,
+            "require_decontam": false,
+            "require_dedup": true
+          },
+          "sources": [
+            {
+              "kind": "jsonl",
+              "uri": "{tmp}/corpus.jsonl"
+            }
+          ],
+          "target_format": "cpt"
+        }
+      },
+      "fixture_sha256": "2db04ab28efff15a64c2762f85faeb5cd3c92a5b71e33031955f9b759255bce6",
+      "expected_behavior": [
+        "Identifies the problem: readiness verdict is UNMEASURED; some checks were not run",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule DE-HO-002"
+      ],
+      "ground_truth": "data_engine: rule DE-HO-002 (WARN, handoff phase) fires: readiness verdict is UNMEASURED; some checks were not run.",
+      "trigger_facts": [
+        {
+          "path": "files.corpus.jsonl",
+          "value": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n",
+          "check": false
+        }
+      ],
+      "question": "I've staged a single file, corpus.jsonl, whose contents are exactly {\"id\": \"r1\", \"text\": \"hello world from fixture\"} followed by a newline. I want to run the data engine on it with seed 0 and target format cpt: ingest from the JSONL source at {tmp}/corpus.jsonl, then dedup, then format to cpt, with no tokenizer configured. My requirements are min_records 1, dedup required, and decontamination not required. Please run that pipeline and tell me what the per-op accounting and readiness report come out to.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-data-engine-oracle-DE-HO-003",
+      "skill": "data_engine",
+      "rule_id": "DE-HO-003",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "zero records were written",
+      "fixture": {
+        "files": {
+          "corpus.jsonl": ""
+        },
+        "request": {
+          "sources": [
+            {
+              "kind": "jsonl",
+              "uri": "{tmp}/corpus.jsonl"
+            }
+          ],
+          "target_format": "cpt"
+        }
+      },
+      "fixture_sha256": "dca962a3b22b5b6d6272f8bb882fa79b022b60e1151a0abd4db2c113481bcf4d",
+      "expected_behavior": [
+        "Identifies the problem: zero records were written",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule DE-HO-003"
+      ],
+      "ground_truth": "data_engine: rule DE-HO-003 (BLOCK, handoff phase) fires: zero records were written.",
+      "trigger_facts": [
+        {
+          "path": "files.corpus.jsonl",
+          "value": "(empty file)",
+          "check": true
+        }
+      ],
+      "question": "I've staged corpus.jsonl as an empty file — its contents are literally \"(empty file)\", so there's no JSONL data in it. I want to run data_engine on that source with kind \"jsonl\" at {tmp}/corpus.jsonl and target format \"cpt\". What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-data-engine-oracle-DE-IN-001",
+      "skill": "data_engine",
+      "rule_id": "DE-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "no sources provided (and no explicit pipeline)",
+      "fixture": {
+        "files": {},
+        "request": {
+          "target_format": "cpt"
+        }
+      },
+      "fixture_sha256": "c3c232d0cdf5a7b65bc96c78011015d20c6d5a42f1d428ac8cfbee0f93bf7b1a",
+      "expected_behavior": [
+        "Identifies the problem: no sources provided (and no explicit pipeline)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule DE-IN-001"
+      ],
+      "ground_truth": "data_engine: rule DE-IN-001 (BLOCK, input phase) fires: no sources provided (and no explicit pipeline).",
+      "trigger_facts": [],
+      "question": "I want to run data_engine to turn my raw sources into an FS-ready dataset with target_format \"cpt\", complete with per-op accounting and a measured readiness report. I haven't staged any local files or directories yet, so the inputs so far are empty. Can you tell me what the outcome is?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-data-engine-oracle-DE-IN-002",
+      "skill": "data_engine",
+      "rule_id": "DE-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "unknown target_format",
+      "fixture": {
+        "files": {
+          "corpus.jsonl": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n"
+        },
+        "request": {
+          "sources": [
+            {
+              "kind": "jsonl",
+              "uri": "{tmp}/corpus.jsonl"
+            }
+          ],
+          "target_format": "bogomips"
+        }
+      },
+      "fixture_sha256": "b02fa87df093d833d217daf5521f50f0022368d449326ed10177e071a5a85bab",
+      "expected_behavior": [
+        "Identifies the problem: unknown target_format",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule DE-IN-002"
+      ],
+      "ground_truth": "data_engine: rule DE-IN-002 (BLOCK, input phase) fires: unknown target_format.",
+      "trigger_facts": [
+        {
+          "path": "files.corpus.jsonl",
+          "value": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n",
+          "check": false
+        }
+      ],
+      "question": "I've staged a file named corpus.jsonl containing exactly `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}` followed by a newline. I want to run data_engine on it with a single source of kind `jsonl` at URI `{tmp}/corpus.jsonl`, and I want the output converted to target format `bogomips`, with per-op accounting and a measured readiness report. What's the outcome of that run?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-data-engine-oracle-DE-IN-003",
+      "skill": "data_engine",
+      "rule_id": "DE-IN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "local source uri does not exist",
+      "fixture": {
+        "files": {},
+        "request": {
+          "sources": [
+            {
+              "kind": "jsonl",
+              "uri": "{tmp}/missing.jsonl"
+            }
+          ],
+          "target_format": "cpt"
+        }
+      },
+      "fixture_sha256": "d5d92742f0be0fef592c8136c307eb6131f9989e35e8f293205d52c387486229",
+      "expected_behavior": [
+        "Identifies the problem: local source uri does not exist",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule DE-IN-003"
+      ],
+      "ground_truth": "data_engine: rule DE-IN-003 (BLOCK, input phase) fires: local source uri does not exist.",
+      "trigger_facts": [],
+      "question": "I want to run data_engine on a single JSONL source at `{tmp}/missing.jsonl` and convert it into an FS-ready dataset in `cpt` format. Please pull the raw records from that file, apply the per-op accounting so I can see counts at every step, and give me the measured readiness report at the end. Let me know what the output looks like.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-data-engine-oracle-DE-IN-004",
+      "skill": "data_engine",
+      "rule_id": "DE-IN-004",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "a phase-2 op was requested; capability not implemented",
+      "fixture": {
+        "files": {
+          "corpus.jsonl": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n"
+        },
+        "request": {
+          "pipeline": {
+            "ops": [
+              {
+                "config": {
+                  "sources": [
+                    {
+                      "kind": "jsonl",
+                      "uri": "{tmp}/corpus.jsonl"
+                    }
+                  ]
+                },
+                "op": "ingest"
+              },
+              {
+                "config": {},
+                "op": "semantic_dedup"
+              }
+            ],
+            "rationale": [],
+            "seed": 0,
+            "target_format": "pretrain",
+            "tokenizer": null
+          },
+          "sources": [
+            {
+              "kind": "jsonl",
+              "uri": "{tmp}/corpus.jsonl"
+            }
+          ],
+          "target_format": "pretrain"
+        }
+      },
+      "fixture_sha256": "ddfe7c4ce64eee4c4cfa9c4934fc4c2389bc0e07c13b2f66419997ce25128390",
+      "expected_behavior": [
+        "Identifies the problem: a phase-2 op was requested; capability not implemented",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule DE-IN-004"
+      ],
+      "ground_truth": "data_engine: rule DE-IN-004 (BLOCK, input phase) fires: a phase-2 op was requested; capability not implemented.",
+      "trigger_facts": [
+        {
+          "path": "files.corpus.jsonl",
+          "value": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n",
+          "check": false
+        }
+      ],
+      "question": "I've staged `corpus.jsonl` containing exactly `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}` followed by a newline, and I want to run the data_engine pipeline on it. The pipeline is: `ingest` with config `{\"sources\": [{\"kind\": \"jsonl\", \"uri\": \"{tmp}/corpus.jsonl\"}]}`, then `semantic_dedup` with config `{}`, with `rationale` empty, `seed` 0, `target_format` \"pretrain\", and `tokenizer` null. The top-level `sources` list mirrors that single jsonl source at `{tmp}/corpus.jsonl`, and `target_format` is \"pretrain\". What does the run produce — the per-op accounting and the measured readiness report?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-data-engine-oracle-DE-IN-005",
+      "skill": "data_engine",
+      "rule_id": "DE-IN-005",
+      "severity": "WARN",
+      "phase": "input",
+      "description": "sft/mm_sft without a chat_template_family or tokenizer",
+      "fixture": {
+        "files": {
+          "corpus.jsonl": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n"
+        },
+        "request": {
+          "pipeline": {
+            "ops": [
+              {
+                "config": {
+                  "sources": [
+                    {
+                      "kind": "jsonl",
+                      "uri": "{tmp}/corpus.jsonl"
+                    }
+                  ]
+                },
+                "op": "ingest"
+              },
+              {
+                "config": {
+                  "target_format": "sft"
+                },
+                "op": "format"
+              }
+            ],
+            "rationale": [],
+            "seed": 0,
+            "target_format": "sft",
+            "tokenizer": null
+          },
+          "sources": [
+            {
+              "kind": "jsonl",
+              "uri": "{tmp}/corpus.jsonl"
+            }
+          ],
+          "target_format": "sft"
+        }
+      },
+      "fixture_sha256": "5f200305ca6839de2dc908030e2a43b3d9422e63cb3a1e415be65e8b35e91842",
+      "expected_behavior": [
+        "Identifies the problem: sft/mm_sft without a chat_template_family or tokenizer",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule DE-IN-005"
+      ],
+      "ground_truth": "data_engine: rule DE-IN-005 (WARN, input phase) fires: sft/mm_sft without a chat_template_family or tokenizer.",
+      "trigger_facts": [
+        {
+          "path": "files.corpus.jsonl",
+          "value": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n",
+          "check": false
+        }
+      ],
+      "question": "I've staged a single file, corpus.jsonl, whose contents are `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}`. Please run a pipeline with seed 0 that ingests it from the JSONL source at `{tmp}/corpus.jsonl`, then formats the result to SFT format — no tokenizer. I want the per-op accounting and a measured readiness report at the end. What do I get out of this run?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-data-engine-oracle-DE-IN-006",
+      "skill": "data_engine",
+      "rule_id": "DE-IN-006",
+      "severity": "WARN",
+      "phase": "input",
+      "description": "preference dataset requested but FS cannot train the preference family",
+      "fixture": {
+        "files": {
+          "corpus.jsonl": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n"
+        },
+        "request": {
+          "pipeline": {
+            "ops": [
+              {
+                "config": {
+                  "sources": [
+                    {
+                      "kind": "jsonl",
+                      "uri": "{tmp}/corpus.jsonl"
+                    }
+                  ]
+                },
+                "op": "ingest"
+              },
+              {
+                "config": {
+                  "target_format": "preference"
+                },
+                "op": "format"
+              }
+            ],
+            "rationale": [],
+            "seed": 0,
+            "target_format": "preference",
+            "tokenizer": null
+          },
+          "sources": [
+            {
+              "kind": "jsonl",
+              "uri": "{tmp}/corpus.jsonl"
+            }
+          ],
+          "target_format": "preference"
+        }
+      },
+      "fixture_sha256": "df14c8f1d1a94040991cfb8352a52a42b2d7503701e2c3ea9ecf2ac5fc4c5085",
+      "expected_behavior": [
+        "Identifies the problem: preference dataset requested but FS cannot train the preference family",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule DE-IN-006"
+      ],
+      "ground_truth": "data_engine: rule DE-IN-006 (WARN, input phase) fires: preference dataset requested but FS cannot train the preference family.",
+      "trigger_facts": [
+        {
+          "path": "files.corpus.jsonl",
+          "value": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n",
+          "check": false
+        }
+      ],
+      "question": "I've staged `corpus.jsonl` with exactly one line: `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}`. I want to run the data_engine skill on it with a two-op pipeline: `ingest` pointing at that JSONL source, then `format` with `target_format: \"preference\"`, using `seed: 0` and `tokenizer: null`, with no rationale filled in. What's the outcome — the per-op accounting and the measured readiness report?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-data-engine-oracle-DE-IN-007",
+      "skill": "data_engine",
+      "rule_id": "DE-IN-007",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "an LLM op (llm_classify/llm_enhance) has no usable inference backend",
+      "fixture": {
+        "files": {
+          "corpus.jsonl": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n"
+        },
+        "request": {
+          "pipeline": {
+            "ops": [
+              {
+                "config": {
+                  "sources": [
+                    {
+                      "kind": "jsonl",
+                      "uri": "{tmp}/corpus.jsonl"
+                    }
+                  ]
+                },
+                "op": "ingest"
+              },
+              {
+                "config": {
+                  "axes": [
+                    {
+                      "description": "quality",
+                      "name": "q",
+                      "scale": [
+                        0,
+                        5
+                      ]
+                    }
+                  ]
+                },
+                "op": "llm_classify"
+              }
+            ],
+            "rationale": [],
+            "seed": 0,
+            "target_format": "pretrain",
+            "tokenizer": null
+          },
+          "sources": [
+            {
+              "kind": "jsonl",
+              "uri": "{tmp}/corpus.jsonl"
+            }
+          ],
+          "target_format": "pretrain"
+        }
+      },
+      "fixture_sha256": "3dfc8c914eee32e3aa05cd27f38a5a786d2287c358d0db83326f2138c03673c8",
+      "expected_behavior": [
+        "Identifies the problem: an LLM op (llm_classify/llm_enhance) has no usable inference backend",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule DE-IN-007"
+      ],
+      "ground_truth": "data_engine: rule DE-IN-007 (BLOCK, input phase) fires: an LLM op (llm_classify/llm_enhance) has no usable inference backend.",
+      "trigger_facts": [
+        {
+          "path": "files.corpus.jsonl",
+          "value": "{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\n",
+          "check": false
+        }
+      ],
+      "question": "I've staged corpus.jsonl containing exactly `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}` plus a newline. I want to run a data_engine pipeline with seed 0 and target_format \"pretrain\", starting with an ingest op over one jsonl source at {tmp}/corpus.jsonl, followed by an llm_classify op with a single axis named \"q\" described as \"quality\" on a 0–5 scale. The tokenizer is null and the rationale list is empty. What does the run produce, including the per-op accounting and the readiness report?",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

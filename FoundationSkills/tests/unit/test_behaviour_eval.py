@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from foundationskills.agent import behaviour_eval
+from foundationskills.agent import behaviour_eval, oracle_cases
 from foundationskills.agent.behaviour_eval import (
     AGENT_SYSTEM,
     ARMS,
@@ -484,3 +484,181 @@ def test_a_second_failure_stays_unmeasured(index: list[dict]) -> None:
                                 created=CREATED)
     assert report["calls"][0]["measured"] is False and len(agent.calls) == 2
     assert report["verdict"] == "unmeasured" and report["exit_code"] == 95
+
+
+"""Oracle case-source tests, appended to tests/unit/test_behaviour_eval.py.
+
+The fake payload stands in for ``oracle_cases.load_cases``: two code-grounded cases (an input BLOCK and a
+handoff WARN) with their must-fire fixture, ``expected_behavior``, ``ground_truth`` and LLM-built question.
+Doctrine under test: the oracle source grades every stored case, the report records ``cases: oracle`` and the
+behaviour.json sha per index view, ``write_behaviour`` writes ``BEHAVIOUR_ORACLE.md`` whose header says
+"oracle cases" and whose gated arm grows the per-severity table; an unknown ``cases`` value is refused.
+"""
+
+_FAKE_CASES_SHA = "c" * 64
+
+QUESTION_MISSING_COLUMN = (
+    "Please turn stages/ladder.parquet into out/ladder.parquet keeping only the columns step and wall_time, "
+    "as a parquet table with a monotone int64 step key. The run log at logs/run.json is the source of truth "
+    "for which steps finished, so keep every staged row that has a step value. Write out/report.json next to "
+    "the table when you are done."
+)
+
+QUESTION_SCHEMA_DRIFT = (
+    "Here is what I have so far: out/ladder.parquet was produced by the export step with columns step and "
+    "wall_time, while out/manifest.json lists step, wall_time and peak_mem. Please hand the result on to the "
+    "eval stage: finalise the manifest, record the artifacts and tell me what you would put in the summary. "
+    "The eval stage only consumes parquet plus a manifest."
+)
+
+
+def fake_oracle_cases() -> list[dict]:
+    """A fresh behaviour.json payload: one input BLOCK rule, one handoff WARN rule."""
+    return [
+        {
+            "id": "demo-oracle-DAT-COL",
+            "skill": "data_engine",
+            "rule_id": "DAT-COL",
+            "severity": "BLOCK",
+            "phase": "input",
+            "description": "the requested column is not present in the staged table",
+            "fixture": {"table": "stages/ladder.parquet", "keep": ["step"], "read": {}},
+            "fixture_sha256": "f" * 64,
+            "expected_behavior": [
+                "Identifies the problem: the requested column is not present in the staged table",
+                "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+                "Cites rule DAT-COL",
+            ],
+            "ground_truth": "data_engine: rule DAT-COL (BLOCK, input phase) fires: "
+                            "the requested column is not present in the staged table.",
+            "question": QUESTION_MISSING_COLUMN,
+            "question_model": "fake-question-1",
+        },
+        {
+            "id": "demo-oracle-DAT-DRIFT",
+            "skill": "data_engine",
+            "rule_id": "DAT-DRIFT",
+            "severity": "WARN",
+            "phase": "handoff",
+            "description": "the produced schema drifted from the declared output",
+            "fixture": {"produced": "out/ladder.parquet", "declared": ["step"], "read": {}},
+            "fixture_sha256": "e" * 64,
+            "expected_behavior": [
+                "Identifies the problem: the produced schema drifted from the declared output",
+                "Reports it as a warning that travels with the result, without refusing on this alone",
+                "Cites rule DAT-DRIFT",
+            ],
+            "ground_truth": "data_engine: rule DAT-DRIFT (WARN, handoff phase) fires: "
+                            "the produced schema drifted from the declared output.",
+            "question": QUESTION_SCHEMA_DRIFT,
+            "question_model": "fake-question-1",
+        },
+    ]
+
+
+def load_fake_oracle_cases(_package: str) -> tuple[list[dict], str]:
+    """Stands in for ``oracle_cases.load_cases``: the fake payload and a fixed behaviour.json sha."""
+    return fake_oracle_cases(), _FAKE_CASES_SHA
+
+
+def test_oracle_case_source_grades_every_behaviour_json_case(
+    monkeypatch: pytest.MonkeyPatch, index: list[dict],
+) -> None:
+    monkeypatch.setattr(behaviour_eval, "load_cases", load_fake_oracle_cases)
+    entry = dict(index[0])
+    agent, judge = FakeAgent(), FakeJudge()
+    report = run_behaviour_eval(
+        [entry], agent, judge, cases="oracle", arms=("with_skill",), reps=1, workers=1, created=CREATED,
+    )
+    cases = fake_oracle_cases()
+    assert report["cases"] == "oracle"
+    view = report["index"][0]
+    assert view["cases_sha256"] == _FAKE_CASES_SHA and view["positives"] == 2
+    assert view["evals_sha256"] == entry["evals_sha256"]
+    assert [call["case_id"] for call in report["calls"]] == [case["id"] for case in cases]
+    assert [call["severity"] for call in report["calls"]] == ["BLOCK", "WARN"]
+    assert [call["phase"] for call in report["calls"]] == ["input", "handoff"]
+    assert [call["user"] for call in agent.calls] == [case["question"] for case in cases]
+    assert report["results"]["with_skill"]["item_pass_rate"] == 1.0
+
+
+def test_oracle_report_renders_behaviour_oracle_md_with_a_per_severity_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, index: list[dict],
+) -> None:
+    monkeypatch.setattr(behaviour_eval, "load_cases", load_fake_oracle_cases)
+    entry = dict(index[0])
+    report = run_behaviour_eval(
+        [entry], FakeAgent(), FakeJudge(), cases="oracle", arms=("with_skill",), reps=1, workers=1,
+        threshold=0.7, created=CREATED,
+    )
+    md = render_behaviour_md(report, str(entry["name"]))
+    generated = ("Generated by `fskills behaviour-eval` against SKILL.md "
+                 f"{entry['skill_md_sha256'][:12]} and oracle cases {_FAKE_CASES_SHA[:12]}; do not edit by hand.")
+    assert generated in md
+    assert "| severity/phase | cases | item pass |" in md
+    assert "| BLOCK/input | 1 | 100.0% |" in md
+    assert "| WARN/handoff | 1 | 100.0% |" in md
+
+    def fake_package_dir(package: str) -> Path:
+        target = tmp_path / str(package)
+        target.mkdir()
+        return target
+
+    monkeypatch.setattr(behaviour_eval, "_package_dir", fake_package_dir)
+    (path,) = write_behaviour(report, [entry])
+    assert path.name == "BEHAVIOUR_ORACLE.md"
+    assert md == path.read_text(encoding="utf-8")
+
+
+def test_routing_is_the_default_case_source_and_the_index_keeps_both_shas(index: list[dict]) -> None:
+    entry = make_entry(index, [make_case("be-1", ["writes the artefact"])])
+    report = run_behaviour_eval([entry], FakeAgent(), FakeJudge(), arms=("with_skill",), reps=1, workers=1,
+                                created=CREATED)
+    assert report["cases"] == "routing"
+    assert report["index"][0]["cases_sha256"] == entry["evals_sha256"]
+    assert report["index"][0]["positives"] == 1
+
+
+def test_unknown_case_source_is_refused(index: list[dict]) -> None:
+    entry = make_entry(index, [make_case("be-1", ["writes the artefact"])])
+    with pytest.raises(BehaviourEvalRefused) as excinfo:
+        run_behaviour_eval([entry], FakeAgent(), FakeJudge(), cases="widgets", reps=1, workers=1)
+    assert "widgets" in str(excinfo.value)
+
+
+def test_oracle_case_source_refuses_a_missing_behaviour_json(
+    monkeypatch: pytest.MonkeyPatch, index: list[dict],
+) -> None:
+    def missing(_package: str) -> tuple[list[dict], str]:
+        raise oracle_cases.OracleCasesRefused("load_cases: demo: evals/behaviour.json is missing")
+
+    monkeypatch.setattr(behaviour_eval, "load_cases", missing)
+    entry = dict(index[0])
+    with pytest.raises(BehaviourEvalRefused) as excinfo:
+        run_behaviour_eval([entry], FakeAgent(), FakeJudge(), cases="oracle", reps=1, workers=1, created=CREATED)
+    assert str(entry["package"]) in str(excinfo.value) and "behaviour.json" in str(excinfo.value)
+
+
+def test_resume_reuses_measured_calls_and_reasks_only_the_rest(index: list[dict]) -> None:
+    entry = make_entry(index, [make_case("be-1", ["writes the artefact"]), make_case("be-2", ["writes it"])])
+    flaky = FakeAgent(fail_when=lambda call: "empty response content" if "be-2" in call["user"] else None)
+    first = run_behaviour_eval([entry], flaky, FakeJudge(), arms=("with_skill",), reps=1, workers=1,
+                               created=CREATED)
+    assert first["verdict"] == "unmeasured"
+    agent = FakeAgent()
+    second = run_behaviour_eval([entry], agent, FakeJudge(), arms=("with_skill",), reps=1, workers=1,
+                                created=CREATED, resume=first)
+    assert second["reused_calls"] == 1 and len(agent.calls) == 1 and "be-2" in agent.calls[0]["user"]
+    assert all(call["measured"] for call in second["calls"])
+
+
+def test_resume_refuses_a_report_from_another_run(index: list[dict]) -> None:
+    entry = make_entry(index, [make_case("be-1", ["writes the artefact"])])
+    first = run_behaviour_eval([entry], FakeAgent(), FakeJudge(), arms=("with_skill",), reps=1, workers=1,
+                               created=CREATED)
+    with pytest.raises(BehaviourEvalRefused):
+        run_behaviour_eval([entry], FakeAgent(model="other-agent"), FakeJudge(), arms=("with_skill",), reps=1,
+                           workers=1, created=CREATED, resume=first)
+    with pytest.raises(BehaviourEvalRefused):
+        run_behaviour_eval([entry], FakeAgent(), FakeJudge(), arms=("with_skill",), reps=2, workers=1,
+                           created=CREATED, resume=first)

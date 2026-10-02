@@ -1,0 +1,340 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fskills-evaluation-oracle-EV-HO-001",
+      "skill": "evaluation",
+      "rule_id": "EV-HO-001",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "a benchmark breached its regression tolerance",
+      "fixture": {
+        "expected": "RED with EV-HO-001",
+        "harness": {
+          "baseline": 0.5,
+          "checkpoint": 0.4,
+          "stderr": 0.004
+        },
+        "request": {
+          "base": "base",
+          "benchmarks": [
+            "mmlu"
+          ],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        }
+      },
+      "fixture_sha256": "88b2c94f93c08526bde853bac197c1ba85230f67cb760cec2433f37321350764",
+      "expected_behavior": [
+        "Identifies the problem: a benchmark breached its regression tolerance",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule EV-HO-001"
+      ],
+      "ground_truth": "evaluation: rule EV-HO-001 (BLOCK, handoff phase) fires: a benchmark breached its regression tolerance.",
+      "trigger_facts": [
+        {
+          "path": "harness.baseline",
+          "value": 0.5
+        },
+        {
+          "path": "harness.checkpoint",
+          "value": 0.4
+        },
+        {
+          "path": "harness.stderr",
+          "value": 0.004
+        }
+      ],
+      "question": "I want to evaluate checkpoint `ck` against its base model `base` on `mmlu` using the pinned lm-evaluation-harness, fully offline, with `cache` as the eval cache, `eval_policy.yaml` as the policy, and the verdict written to `eval/eval_report.json`. The harness run I just saw reported baseline = 0.5, checkpoint = 0.4, and stderr = 0.004. Given those numbers and the one-sided stderr-band comparison against the base model, what's the verdict and what ends up in `eval/eval_report.json`?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-HO-002",
+      "skill": "evaluation",
+      "rule_id": "EV-HO-002",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "a configured benchmark was skipped (harness reported no metric)",
+      "fixture": {
+        "expected": "RED with EV-HO-002 (metric absent from results)",
+        "harness": {
+          "baseline": 0.5,
+          "checkpoint": null
+        },
+        "request": {
+          "base": "base",
+          "benchmarks": [
+            "mmlu"
+          ],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        }
+      },
+      "fixture_sha256": "d4d98533dd792136c5071a271a6cc45e0e7d79f25cfcb54db692ef680d53ec0a",
+      "expected_behavior": [
+        "Identifies the problem: a configured benchmark was skipped (harness reported no metric)",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule EV-HO-002"
+      ],
+      "ground_truth": "evaluation: rule EV-HO-002 (BLOCK, handoff phase) fires: a configured benchmark was skipped (harness reported no metric).",
+      "trigger_facts": [
+        {
+          "path": "harness.baseline",
+          "value": 0.5
+        },
+        {
+          "path": "harness.checkpoint",
+          "value": null
+        }
+      ],
+      "question": "I want to evaluate my PEFT adapter checkpoint \"ck\" against its base model \"base\" on the \"mmlu\" benchmark using the pinned lm-evaluation-harness in offline mode, with \"eval_policy.yaml\" as the policy file, \"cache\" as the eval cache, and the verdict written to \"eval/eval_report.json\". The harness run came back with baseline = 0.5 and checkpoint = null. Given those are the numbers I actually observed, what is the outcome of the evaluation?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-HO-003",
+      "skill": "evaluation",
+      "rule_id": "EV-HO-003",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "a benchmark is unmeasured, or the run was limited (smoke) and cannot PASS",
+      "fixture": {
+        "expected": "UNMEASURED with EV-HO-003",
+        "harness": {
+          "baseline": 0.5,
+          "checkpoint": 0.5
+        },
+        "request": {
+          "base": "base",
+          "benchmarks": [
+            "mmlu"
+          ],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "limit": 8,
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        }
+      },
+      "fixture_sha256": "678ce397f8a037d0d65ad14decf0493c329056100cf22edd3c0f10bc520fe93f",
+      "expected_behavior": [
+        "Identifies the problem: a benchmark is unmeasured, or the run was limited (smoke) and cannot PASS",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule EV-HO-003"
+      ],
+      "ground_truth": "evaluation: rule EV-HO-003 (WARN, handoff phase) fires: a benchmark is unmeasured, or the run was limited (smoke) and cannot PASS.",
+      "trigger_facts": [
+        {
+          "path": "harness.baseline",
+          "value": 0.5
+        },
+        {
+          "path": "harness.checkpoint",
+          "value": 0.5
+        }
+      ],
+      "question": "I ran the pinned lm-evaluation-harness offline on model \"ck\" against its base \"base\", using benchmark mmlu with limit 8, eval cache at \"cache\", policy \"eval_policy.yaml\", and output to \"eval/eval_report.json\". The harness result for the baseline is 0.5, and the harness result for the checkpoint is 0.5. Given those two values and the one-sided stderr-band comparison against the base model, what verdict did the eval produce and what does eval_report.json end up containing?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-HO-004",
+      "skill": "evaluation",
+      "rule_id": "EV-HO-004",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "a PASS report is missing on disk, altered, limited, or has a null score",
+      "fixture": {
+        "expected": "RED with EV-HO-004",
+        "request": {
+          "base": "base",
+          "benchmarks": [
+            "mmlu"
+          ],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        },
+        "tamper": "delete report before handoff"
+      },
+      "fixture_sha256": "44829c68b2c34d2e9eb93e815c6ab676653a58f5855d9d23d159d960d48d9ffd",
+      "expected_behavior": [
+        "Identifies the problem: a PASS report is missing on disk, altered, limited, or has a null score",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule EV-HO-004"
+      ],
+      "ground_truth": "evaluation: rule EV-HO-004 (BLOCK, handoff phase) fires: a PASS report is missing on disk, altered, limited, or has a null score.",
+      "trigger_facts": [
+        {
+          "path": "tamper",
+          "value": "delete report before handoff"
+        }
+      ],
+      "question": "I want to run the pinned lm-evaluation-harness fully offline to evaluate checkpoint \"ck\" (PEFT adapter or full) against base model \"base\" on benchmark \"mmlu\", using eval cache \"cache\" and policy file \"eval_policy.yaml\", writing the one-sided stderr-band verdict to \"eval/eval_report.json\". I also want the report deleted before handoff. I observed that what happened to the report is \"delete report before handoff\". What is the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-IN-001",
+      "skill": "evaluation",
+      "rule_id": "EV-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "checkpoint (or the run manifest naming it) missing or not a directory",
+      "fixture": {
+        "expected": "REFUSED naming EV-IN-001",
+        "request": {
+          "base": "base",
+          "benchmarks": [
+            "mmlu"
+          ],
+          "checkpoint": "missing",
+          "eval_cache": "cache",
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        }
+      },
+      "fixture_sha256": "82d8a8883cf2325105e392c547e31b8cd55d3bd225d6d083ac6c6b97495e58e0",
+      "expected_behavior": [
+        "Identifies the problem: checkpoint (or the run manifest naming it) missing or not a directory",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule EV-IN-001"
+      ],
+      "ground_truth": "evaluation: rule EV-IN-001 (BLOCK, input phase) fires: checkpoint (or the run manifest naming it) missing or not a directory.",
+      "trigger_facts": [],
+      "question": "I want to evaluate a checkpoint with the pinned lm-evaluation-harness, fully offline, against its base model, with a one-sided stderr-band verdict written to eval/eval_report.json. The values I'm working with are base \"base\", benchmarks [\"mmlu\"], checkpoint \"missing\", eval_cache \"cache\", out \"eval/eval_report.json\", and policy \"eval_policy.yaml\". I've checked disk and the checkpoint path \"missing\" doesn't resolve to any existing file or directory. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-IN-002",
+      "skill": "evaluation",
+      "rule_id": "EV-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "no resolvable local base model to serve as the baseline",
+      "fixture": {
+        "expected": "REFUSED naming EV-IN-002 (full checkpoint, no base)",
+        "request": {
+          "benchmarks": [
+            "mmlu"
+          ],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        }
+      },
+      "fixture_sha256": "e99eb7b2386a8a3fe7c2a965669a253d745490d3721daee347026929a4483909",
+      "expected_behavior": [
+        "Identifies the problem: no resolvable local base model to serve as the baseline",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule EV-IN-002"
+      ],
+      "ground_truth": "evaluation: rule EV-IN-002 (BLOCK, input phase) fires: no resolvable local base model to serve as the baseline.",
+      "trigger_facts": [],
+      "question": "I want to run the evaluation skill on my checkpoint \"ck\" (it may be a full model or a PEFT adapter) using the pinned lm-evaluation-harness, fully offline. Please evaluate it against its base model on the mmlu benchmark, using \"eval_policy.yaml\" as the policy and \"cache\" as the eval cache. Write the results, including the one-sided stderr-band verdict, to eval/eval_report.json.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-IN-003",
+      "skill": "evaluation",
+      "rule_id": "EV-IN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "eval cache (--eval-cache) missing",
+      "fixture": {
+        "expected": "REFUSED naming EV-IN-003",
+        "request": {
+          "base": "base",
+          "benchmarks": [
+            "mmlu"
+          ],
+          "checkpoint": "ck",
+          "eval_cache": "missing",
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        }
+      },
+      "fixture_sha256": "3f9b3477af49d94df966f7991e56473342e1cba91f4b71c684dc1acee78ec85c",
+      "expected_behavior": [
+        "Identifies the problem: eval cache (--eval-cache) missing",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule EV-IN-003"
+      ],
+      "ground_truth": "evaluation: rule EV-IN-003 (BLOCK, input phase) fires: eval cache (--eval-cache) missing.",
+      "trigger_facts": [],
+      "question": "I want to evaluate the checkpoint `ck` against its base model `base` on `mmlu`, offline with the pinned lm-evaluation-harness, producing a one-sided stderr-band verdict into `eval/eval_report.json` per `eval_policy.yaml`. One thing I already know is that `eval_cache` is `missing` in my setup. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-IN-004",
+      "skill": "evaluation",
+      "rule_id": "EV-IN-004",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "installed lm_eval is absent or not the pinned version",
+      "fixture": {
+        "expected": "REFUSED naming EV-IN-004",
+        "request": {
+          "base": "base",
+          "benchmarks": [
+            "mmlu"
+          ],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        },
+        "version": "0.4.11"
+      },
+      "fixture_sha256": "37262bf238d4dbfa494db313d8667c519a0ac49d97754f8474c784ed472e8db7",
+      "expected_behavior": [
+        "Identifies the problem: installed lm_eval is absent or not the pinned version",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule EV-IN-004"
+      ],
+      "ground_truth": "evaluation: rule EV-IN-004 (BLOCK, input phase) fires: installed lm_eval is absent or not the pinned version.",
+      "trigger_facts": [
+        {
+          "path": "version",
+          "value": "0.4.11"
+        }
+      ],
+      "question": "I want to evaluate my checkpoint `ck` against its base model `base` on `mmlu` using the pinned lm-evaluation-harness, fully offline, with `cache` as the eval cache and the one-sided stderr-band verdict written to `eval/eval_report.json` under the policy in `eval_policy.yaml`. I've confirmed the installed lm_eval version is `0.4.11`, matching the pinned version. Can you run this and tell me what the outcome is?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-IN-005",
+      "skill": "evaluation",
+      "rule_id": "EV-IN-005",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "eval policy invalid, a benchmark has no policy entry, or needs an LLM judge",
+      "fixture": {
+        "expected": "REFUSED naming EV-IN-005",
+        "request": {
+          "base": "base",
+          "benchmarks": [
+            "not_in_policy"
+          ],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        }
+      },
+      "fixture_sha256": "79c59223f55422371bec9280e9a8d1a75f28f1cc5cd94a78c5aff3a8cd510fc6",
+      "expected_behavior": [
+        "Identifies the problem: eval policy invalid, a benchmark has no policy entry, or needs an LLM judge",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule EV-IN-005"
+      ],
+      "ground_truth": "evaluation: rule EV-IN-005 (BLOCK, input phase) fires: eval policy invalid, a benchmark has no policy entry, or needs an LLM judge.",
+      "trigger_facts": [],
+      "question": "Please evaluate the checkpoint at `ck` (PEFT adapter or full, whichever it is) against its base model `base`, running offline with the pinned lm-evaluation-harness and using `cache` as the eval cache. Run the benchmark `not_in_policy`, with the allowed set defined in `eval_policy.yaml`, and apply the one-sided stderr-band verdict against the base model's scores. Write the results to `eval/eval_report.json`.",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

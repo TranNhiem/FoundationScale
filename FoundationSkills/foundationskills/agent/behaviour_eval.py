@@ -2,9 +2,18 @@
 
 This module measures behaviour: once a request is routed to a skill, does the agent do what the skill
 prescribes? It is the FoundationSkills version of NVSkills-Eval's plan-level tier (Tier 3). For every
-POSITIVE routing case (``should_trigger: true``) of each package an agent model answers the case's
-``question`` in two arms and a separate judge model checks every ``expected_behavior`` item against
-the case's ``GROUND TRUTH``.
+case of each package an agent model answers the case's ``question`` in two arms and a separate judge
+model checks every ``expected_behavior`` item against the case's ``GROUND TRUTH``.
+
+Case sources (the ``cases`` argument of :func:`run_behaviour_eval`; both use the same arms and judge):
+
+* ``routing`` -- the POSITIVE routing cases (``should_trigger: true``) of each package's
+  ``evals/evals.json``: the ground truth was written from the ``SKILL.md`` text.
+* ``oracle`` -- every code-grounded case of the package's ``evals/behaviour.json``: one case per declared
+  rule, built from that rule's must-fire fixture (see :mod:`foundationskills.agent.oracle_cases`), so the
+  ground truth comes from the implementation and not the prose. Oracle cases carry ``question``,
+  ``ground_truth`` and ``expected_behavior`` and are never filtered. A report records its source as
+  ``cases`` and each index view records ``cases_sha256``: the sha of the file the cases came from.
 
 Arms (:data:`ARMS`) show what the skill text adds:
 
@@ -36,9 +45,11 @@ Only the gated arm decides the verdict: its overall ``item_pass_rate`` and every
 ``item_pass_rate`` must reach ``threshold``; the other arm is informational (uplift).
 
 Exit codes follow the repo doctrine: ``0`` PASS, ``5`` RED, ``95`` UNMEASURED. Refusals raise
-:class:`BehaviourEvalRefused` whose message names the missing input or precondition, and
-:func:`write_behaviour` refuses an unmeasured run because an unmeasured run must not become a
-published behaviour report. Reports are written as atomic JSON.
+:class:`BehaviourEvalRefused` whose message names the missing input or precondition (including a
+missing or unreadable ``evals/behaviour.json`` on the oracle source, chained from ``OracleCasesRefused``),
+and :func:`write_behaviour` refuses an unmeasured run because an unmeasured run must not become a
+published behaviour report. Reports are written as atomic JSON. :func:`write_behaviour` writes
+``BEHAVIOUR.md`` for routing cases and ``BEHAVIOUR_ORACLE.md`` for oracle cases.
 
 Secrets: this module never prints or stores an API key. The backend reads the key from the
 environment variable named by ``api_key_env`` and only hands it to the endpoint.
@@ -48,11 +59,12 @@ from __future__ import annotations
 import hashlib
 import importlib.resources
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from foundationskills.agent import oracle_cases
 from foundationskills.agent.routing_eval import (
     EXIT_PASS,
     EXIT_RED,
@@ -74,6 +86,9 @@ from foundationskills.skills.data_engine.llm_backend import (
 
 ARMS: tuple[str, ...] = ("with_skill", "without_skill")
 GATED_ARM = "with_skill"
+CASE_SOURCES: tuple[str, ...] = ("routing", "oracle")
+CASE_LABELS: dict[str, str] = {"routing": "eval", "oracle": "oracle"}
+CASE_FILES: dict[str, str] = {"routing": "BEHAVIOUR.md", "oracle": "BEHAVIOUR_ORACLE.md"}
 SCHEMA = "fskills.behaviour_eval/1"
 
 AGENT_SYSTEM = (
@@ -102,6 +117,32 @@ class BehaviourEvalRefused(RoutingEvalRefused):
 
 
 # --- case selection and plan-level limits -------------------------------------------------------
+
+
+def load_cases(package: str) -> tuple[list[dict], str]:
+    """One package's stored oracle cases and its behaviour.json sha256 (a seam for tests)."""
+    return oracle_cases.load_cases(package)
+
+
+def _check_case_source(cases: Any) -> str:
+    source = cases if isinstance(cases, str) else ""
+    if source not in CASE_SOURCES:
+        raise BehaviourEvalRefused(
+            f"run_behaviour_eval: unknown cases source {cases!r}; expected one of {', '.join(CASE_SOURCES)}"
+        )
+    return source
+
+
+def _select_cases(entry: dict, source: str) -> tuple[list[dict], str]:
+    """Return (cases used, cases sha) for one package: evals.json positives, or every oracle case."""
+    package = str(entry["package"])
+    if source != "oracle":
+        return [case for case in entry["evals"] if _is_positive(case)], str(entry["evals_sha256"])
+    try:
+        cases, digest = load_cases(package)
+    except ValueError as exc:
+        raise BehaviourEvalRefused(f"run_behaviour_eval: {package}: no oracle cases: {exc}") from exc
+    return [dict(case) for case in cases], str(digest)
 
 
 def _is_positive(case: dict) -> bool:
@@ -159,6 +200,7 @@ def run_behaviour_eval(
     agent: LLMBackend,
     judge: LLMBackend,
     *,
+    cases: str = "routing",
     arms: Iterable[str] = ARMS,
     reps: int = 2,
     workers: int = 4,
@@ -168,27 +210,43 @@ def run_behaviour_eval(
     threshold: float = 0.7,
     packages: Iterable[str] | None = None,
     created: datetime | str | None = None,
+    resume: Mapping[str, Any] | None = None,
 ) -> dict:
-    """Run the behaviour evaluation over the positive cases and return the report dictionary."""
+    """Run the behaviour evaluation over one case source and return the report dictionary.
+
+    ``resume`` is an earlier report of the SAME run (models, case source, SKILL.md and case hashes, reps); its
+    measured calls are reused and only the unmeasured or missing ones are asked again, so one flaky call on a
+    shared endpoint does not cost a full re-run. Anything that differs is refused, never mixed in."""
+    source = _check_case_source(cases)
     arm_list: tuple[str, ...] = (arms,) if isinstance(arms, str) else tuple(arms)
     _check_run_args(arm_list, reps, workers, threshold)
     _check_self_grading(agent, judge)
     selected = _select_packages(index, packages)
     skill_mds = {str(entry["package"]): _load_skill_md(entry) for entry in selected}
     names = sorted({str(entry["name"]) for entry in selected})
-    jobs: list[tuple[str, dict, dict, int]] = []
-    for arm in arm_list:
-        for entry in selected:
-            for case in entry["evals"]:
-                if _is_positive(case):
-                    for rep in range(reps):
-                        jobs.append((arm, entry, case, rep))
+    chosen: dict[str, list[dict]] = {}
+    views: list[dict] = []
+    for entry in selected:
+        used, cases_sha = _select_cases(entry, source)
+        chosen[str(entry["package"])] = used
+        views.append(_index_view(entry, cases_sha, len(used)))
+    reuse = _reusable_calls(resume, agent, judge, source, reps, views)
+    jobs: list[tuple[str, dict, dict, int]] = [
+        (arm, entry, case, rep)
+        for arm in arm_list
+        for entry in selected
+        for case in chosen[str(entry["package"])]
+        for rep in range(reps)
+    ]
 
     def run_one(job: tuple[str, dict, dict, int]) -> dict:
         arm, entry, case, rep = job
+        kept = reuse.get((arm, str(entry["name"]), str(case["id"]), rep))
+        if kept is not None:
+            return dict(kept, reused=True)
         response, retried = _complete_retrying(
             agent,
-            build_agent_messages(arm, skill_mds[str(entry["package"])], str(case["question"])),
+            build_agent_messages(arm, skill_mds[str(entry["package"])], str(case.get("question") or "")),
             temperature=float(agent_temperature),
             max_tokens=int(agent_max_tokens),
             seed=rep,
@@ -214,15 +272,39 @@ def run_behaviour_eval(
         "judge_max_tokens": judge_max_tokens,
         "threshold": threshold,
         "gated_arm": GATED_ARM,
+        "cases": source,
         "plan_level": True,
-        "index": [_index_view(entry) for entry in selected],
+        "index": views,
         "results": results,
         "uplift": _uplift(results, names),
         "calls": calls,
+        "reused_calls": sum(1 for call in calls if call.get("reused")),
         "verdict": verdict,
         "exit_code": exit_code,
         "reasons": reasons,
     }
+
+
+def _reusable_calls(resume: Mapping[str, Any] | None, agent: LLMBackend, judge: LLMBackend, source: str,
+                    reps: int, views: list[dict]) -> dict[tuple[str, str, str, int], dict]:
+    """Measured calls of ``resume`` keyed by (arm, package name, case id, rep); refuse a different run."""
+    if resume is None:
+        return {}
+    where = "run_behaviour_eval: resume"
+    if resume.get("schema") != SCHEMA:
+        raise BehaviourEvalRefused(f"{where}: not a {SCHEMA} report")
+    for key, now in (("agent_model", str(agent.model)), ("judge_model", str(judge.model)), ("cases", source),
+                     ("reps", reps)):
+        if resume.get(key) != now:
+            raise BehaviourEvalRefused(f"{where}: {key} {resume.get(key)!r} differs from this run's {now!r}")
+    before = {str(v.get("package")): v for v in resume.get("index") or []}
+    for view in views:
+        old = before.get(view["package"]) or {}
+        for key in ("skill_md_sha256", "cases_sha256"):
+            if old.get(key) != view[key]:
+                raise BehaviourEvalRefused(f"{where}: {view['package']} {key} changed since that report")
+    return {(str(c["arm"]), str(c["package"]), str(c["case_id"]), int(c["rep"])): dict(c)
+            for c in resume.get("calls") or [] if c.get("measured")}
 
 
 def _check_run_args(arms: tuple[str, ...], reps: int, workers: int, threshold: float) -> None:
@@ -292,6 +374,8 @@ def _record_call(response: LLMResponse, arm: str, entry: dict, case: dict, rep: 
         "arm": arm,
         "package": str(entry["name"]),
         "case_id": case["id"],
+        "severity": str(case.get("severity") or ""),
+        "phase": str(case.get("phase") or ""),
         "rep": rep,
         "measured": False,
         "items_met": 0,
@@ -320,7 +404,7 @@ def _record_call(response: LLMResponse, arm: str, entry: dict, case: dict, rep: 
         return row
     verdict_response, row["judge_retried"] = _complete_retrying(
         judge,
-        build_judge_messages(str(case["question"]), case.get("ground_truth"), texts, answer),
+        build_judge_messages(str(case.get("question") or ""), case.get("ground_truth"), texts, answer),
         temperature=0.0,
         max_tokens=judge_max_tokens,
         seed=0,
@@ -459,8 +543,9 @@ def write_report(report: dict, path: Path) -> None:
 
 
 def render_behaviour_md(report: dict, package_name: str) -> str:
-    """Render the BEHAVIOUR.md body for one skill package from a run report."""
+    """Render the BEHAVIOUR.md (routing cases) or BEHAVIOUR_ORACLE.md (oracle cases) body for one package."""
     entry, name = _report_entry(report, package_name)
+    source = _report_source(report)
     results: dict[str, dict] = report.get("results") or {}
     rows = [c for c in report.get("calls") or [] if c.get("package") == name]
     gated = [c for c in rows if c.get("arm") == GATED_ARM]
@@ -468,7 +553,7 @@ def render_behaviour_md(report: dict, package_name: str) -> str:
         f"# Behaviour evaluation: {name}",
         "",
         f"Generated by `fskills behaviour-eval` against SKILL.md {str(entry.get('skill_md_sha256') or '')[:12]}"
-        f" and eval cases {str(entry.get('evals_sha256') or '')[:12]}; do not edit by hand.",
+        f" and {CASE_LABELS[source]} cases {_cases_sha(entry)[:12]}; do not edit by hand.",
         "",
         "## Summary",
         "",
@@ -502,6 +587,15 @@ def render_behaviour_md(report: dict, package_name: str) -> str:
     ]
     for case_id in _case_ids(gated):
         lines.append(_case_row(gated, case_id))
+    if source == "oracle":
+        lines += [
+            "",
+            f"## Per-severity (gated arm: {GATED_ARM})",
+            "",
+            "| severity/phase | cases | item pass |",
+            "| --- | --- | --- |",
+        ]
+        lines += _severity_rows(gated)
     return "\n".join(lines) + "\n"
 
 
@@ -511,6 +605,39 @@ def _report_entry(report: dict, package_name: str) -> tuple[dict, str]:
         if wanted in (str(entry.get("name")), str(entry.get("package"))):
             return entry, str(entry.get("name"))
     raise BehaviourEvalRefused(f"render_behaviour_md: {wanted} is not in the report index")
+
+
+def _report_source(report: dict) -> str:
+    """The case source of a stored report; reports from before the key existed were routing runs."""
+    value = report.get("cases")
+    return str(value) if value in CASE_SOURCES else "routing"
+
+
+def _cases_sha(entry: dict) -> str:
+    """The sha of the file the cases came from: behaviour.json (oracle) or evals.json (routing)."""
+    return str(entry.get("cases_sha256") or entry.get("evals_sha256") or "")
+
+
+def _severity_rows(gated: list[dict]) -> list[str]:
+    """Per severity/phase pair of the gated arm: how many cases covered it and their item pass rate."""
+    buckets: dict[tuple[str, str], list[dict]] = {}
+    for row in gated:
+        key = (str(row.get("severity") or "?"), str(row.get("phase") or "?"))
+        buckets.setdefault(key, []).append(row)
+    severity_rank = {"BLOCK": 0, "WARN": 1, "INFO": 2}
+    phase_rank = {"input": 0, "handoff": 1}
+
+    def rank(key: tuple[str, str]) -> tuple[int, int, str, str]:
+        return (severity_rank.get(key[0], 3), phase_rank.get(key[1], 2), key[0], key[1])
+
+    lines: list[str] = []
+    for key in sorted(buckets, key=rank):
+        rows = buckets[key]
+        used = len({str(row.get("case_id")) for row in rows})
+        graded = sum(int(row["items_graded"]) for row in rows if row.get("measured"))
+        met = sum(int(row["items_met"]) for row in rows if row.get("measured"))
+        lines.append(f"| {key[0]}/{key[1]} | {used} | {_pct(met / graded if graded else None)} |")
+    return lines
 
 
 def _case_ids(rows: list[dict]) -> list[str]:
@@ -549,14 +676,15 @@ def _package_ungraded(rows: list[dict]) -> int:
 
 
 def write_behaviour(report: dict, index: list[dict]) -> list[Path]:
-    """Write one BEHAVIOUR.md per package next to its SKILL.md; refuse unmeasured runs."""
+    """Write BEHAVIOUR.md (routing) or BEHAVIOUR_ORACLE.md (oracle) per package; refuse unmeasured runs."""
     if report.get("verdict") == "unmeasured":
         raise BehaviourEvalRefused("write_behaviour: an unmeasured run must not become a published behaviour report")
+    filename = CASE_FILES[_report_source(report)]
     packages = {str(entry["name"]): str(entry["package"]) for entry in index}
     paths: list[Path] = []
     for view in report.get("index") or []:
         name = str(view.get("name"))
-        target = _package_dir(packages.get(name) or str(view.get("package"))) / "BEHAVIOUR.md"
+        target = _package_dir(packages.get(name) or str(view.get("package"))) / filename
         _atomic_write_text(target, render_behaviour_md(report, name))
         paths.append(target)
     return paths
@@ -565,13 +693,14 @@ def write_behaviour(report: dict, index: list[dict]) -> list[Path]:
 # --- small formatting and view helpers ------------------------------------------------------------
 
 
-def _index_view(entry: dict) -> dict:
+def _index_view(entry: dict, cases_sha256: str, positives: int) -> dict:
     return {
         "package": str(entry["package"]),
         "name": str(entry["name"]),
         "skill_md_sha256": str(entry["skill_md_sha256"]),
         "evals_sha256": str(entry["evals_sha256"]),
-        "positives": sum(1 for case in entry["evals"] if _is_positive(case)),
+        "cases_sha256": str(cases_sha256),
+        "positives": int(positives),
     }
 
 

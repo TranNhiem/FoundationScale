@@ -1,0 +1,1209 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fskills-training-oracle-FS-HO-001",
+      "skill": "training.emit",
+      "rule_id": "FS-HO-001",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "a launch spec is non-executable",
+      "fixture": {
+        "capabilities": {
+          "refused_axes": [
+            "pp",
+            "ep"
+          ]
+        },
+        "expected": "PASS carrying a WARN FS-HO-001 for stage 'bad'",
+        "request": {
+          "dataset": {
+            "format": "sft",
+            "fs_columns": {
+              "gold_key": "answer",
+              "image_column": null,
+              "text_column": "text"
+            },
+            "shards": [
+              {
+                "path": "ds/shard-00000.jsonl"
+              }
+            ]
+          },
+          "model": "m",
+          "output_root": "out",
+          "plan": {
+            "stages": [
+              {
+                "algorithm": null,
+                "hparams": {},
+                "method": "full",
+                "name": "sft1",
+                "stage": "sft"
+              },
+              {
+                "algorithm": null,
+                "hparams": {
+                  "pp": 2
+                },
+                "method": "full",
+                "name": "bad",
+                "stage": "sft"
+              }
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "ed171b11c15a4e08aac000562fc291824ca45e3c312bdfe6c6007ab3d32d8df5",
+      "expected_behavior": [
+        "Identifies the problem: a launch spec is non-executable",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule FS-HO-001"
+      ],
+      "ground_truth": "training.emit: rule FS-HO-001 (WARN, handoff phase) fires: a launch spec is non-executable.",
+      "trigger_facts": [
+        {
+          "path": "capabilities.refused_axes[0]",
+          "value": "pp"
+        },
+        {
+          "path": "capabilities.refused_axes[1]",
+          "value": "ep"
+        }
+      ],
+      "question": "I want to emit FS launch specs (and sbatch scripts where a scheduler applies) from this training_plan for model \"m\" with output_root \"out\", on an sft-format dataset with text_column \"text\", gold_key \"answer\", image_column null, and a single shard at ds/shard-00000.jsonl. The plan has two stages: \"sft1\" (stage sft, method full, empty hparams) and \"bad\" (stage sft, method full, hparams {\"pp\": 2}). My cluster's capabilities: refused_axes[0] = \"pp\", and refused_axes[1] = \"ep\". What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-FS-HO-002",
+      "skill": "training.emit",
+      "rule_id": "FS-HO-002",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "all launch specs are non-executable",
+      "fixture": {
+        "capabilities": {
+          "refused_axes": [
+            "pp",
+            "ep"
+          ]
+        },
+        "expected": "RED via handoff BLOCK (all specs non-executable)",
+        "request": {
+          "dataset": {
+            "format": "sft",
+            "fs_columns": {
+              "gold_key": "answer",
+              "image_column": null,
+              "text_column": "text"
+            },
+            "shards": [
+              {
+                "path": "ds/shard-00000.jsonl"
+              }
+            ]
+          },
+          "model": "m",
+          "output_root": "out",
+          "plan": {
+            "stages": [
+              {
+                "algorithm": null,
+                "hparams": {
+                  "pp": 2
+                },
+                "method": "full",
+                "name": "bad",
+                "stage": "sft"
+              }
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "c28e50c4af16d5bae4a1c9cc513742339d556e51244b44ab5b07a2a32aa134cc",
+      "expected_behavior": [
+        "Identifies the problem: all launch specs are non-executable",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule FS-HO-002"
+      ],
+      "ground_truth": "training.emit: rule FS-HO-002 (BLOCK, handoff phase) fires: all launch specs are non-executable.",
+      "trigger_facts": [
+        {
+          "path": "capabilities.refused_axes[0]",
+          "value": "pp"
+        },
+        {
+          "path": "capabilities.refused_axes[1]",
+          "value": "ep"
+        }
+      ],
+      "question": "I want to emit FS launch specs (and sbatch scripts where applicable) from this training_plan for model \"m\" with output_root \"out\": one stage named \"bad\", stage \"sft\", method \"full\", algorithm null, hparams {\"pp\": 2}, over dataset format \"sft\" with fs_columns text_column \"text\", gold_key \"answer\", image_column null and shard ds/shard-00000.jsonl. I've observed that my cluster's capabilities include refused_axes[0] = \"pp\" and refused_axes[1] = \"ep\". Given that, what is the outcome of emitting the launch specs from this plan?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-FS-HO-003",
+      "skill": "training.emit",
+      "rule_id": "FS-HO-003",
+      "severity": "INFO",
+      "phase": "handoff",
+      "description": "an RL spec is single-device (FS RLTrainer runs on one device)",
+      "fixture": {
+        "capabilities": {
+          "rl_runnable": {
+            "dr_grpo": null
+          }
+        },
+        "expected": "PASS carrying an INFO FS-HO-003 (single-device RL)",
+        "request": {
+          "dataset": {
+            "format": "rl",
+            "fs_columns": {
+              "gold_key": "answer",
+              "image_column": null,
+              "text_column": "text"
+            },
+            "shards": [
+              {
+                "path": "ds/shard-00000.jsonl"
+              }
+            ]
+          },
+          "model": "m",
+          "output_root": "out",
+          "plan": {
+            "stages": [
+              {
+                "algorithm": "dr_grpo",
+                "hparams": {},
+                "method": "lora",
+                "name": "rl1",
+                "stage": "rl"
+              }
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "7ddac4fa286df6fa2a0b9a43445ce87c3274a91a98357004743b2db0fe048fa9",
+      "expected_behavior": [
+        "Identifies the problem: an RL spec is single-device (FS RLTrainer runs on one device)",
+        "Records it as information only; it neither blocks nor fails the run",
+        "Cites rule FS-HO-003"
+      ],
+      "ground_truth": "training.emit: rule FS-HO-003 (INFO, handoff phase) fires: an RL spec is single-device (FS RLTrainer runs on one device).",
+      "trigger_facts": [
+        {
+          "path": "capabilities.rl_runnable.dr_grpo",
+          "value": null
+        }
+      ],
+      "question": "I want to emit FS launch specs for my training plan: model \"m\", output root \"out\", RL dataset with shards [\"ds/shard-00000.jsonl\"], fs_columns text_column \"text\", gold_key \"answer\", image_column null, and one stage named \"rl1\" with stage \"rl\", algorithm \"dr_grpo\", method \"lora\", and empty hparams. I've checked my cluster's capabilities and observed that rl_runnable.dr_grpo = null. What is the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-FS-IN-001",
+      "skill": "training.emit",
+      "rule_id": "FS-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "plan has no stages",
+      "fixture": {
+        "expected": "REFUSED naming FS-IN-001",
+        "request": {
+          "model": "m",
+          "output_root": "out",
+          "plan": {
+            "stages": []
+          }
+        }
+      },
+      "fixture_sha256": "5720cb421f19a4d1c59f662d3ca8ba6d739b8b911746d9a7cbf429caf64c77e2",
+      "expected_behavior": [
+        "Identifies the problem: plan has no stages",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FS-IN-001"
+      ],
+      "ground_truth": "training.emit: rule FS-IN-001 (BLOCK, input phase) fires: plan has no stages.",
+      "trigger_facts": [],
+      "question": "I've got a training plan for model `m` with output root `out`, but the plan's `stages` list is empty right now. Can you run `training.emit` on it and show me what FS launch specs (and sbatch scripts, if a scheduler applies) come out? I want to see exactly what gets generated from this plan as-is — just don't launch anything.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-FS-IN-002",
+      "skill": "training.emit",
+      "rule_id": "FS-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "no dataset for a stage that needs one",
+      "fixture": {
+        "expected": "REFUSED naming FS-IN-002 (stage sft1 has no dataset)",
+        "request": {
+          "model": "m",
+          "output_root": "out",
+          "plan": {
+            "stages": [
+              {
+                "algorithm": null,
+                "hparams": {},
+                "method": "full",
+                "name": "sft1",
+                "stage": "sft"
+              }
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "626563479b96474db396bc1e8229930cc34b044f49dd51cb44ef448dcea0b16f",
+      "expected_behavior": [
+        "Identifies the problem: no dataset for a stage that needs one",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FS-IN-002"
+      ],
+      "ground_truth": "training.emit: rule FS-IN-002 (BLOCK, input phase) fires: no dataset for a stage that needs one.",
+      "trigger_facts": [],
+      "question": "I've got a training plan for model \"m\" with output root \"out\" containing a single stage named \"sft1\" — stage \"sft\", method \"full\", empty hparams, and algorithm left unset. Go ahead and emit the FS launch specs and sbatch scripts for it since a scheduler applies here. What do you produce?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-FS-IN-003",
+      "skill": "training.emit",
+      "rule_id": "FS-IN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "FS not importable (capabilities.available is false)",
+      "fixture": {
+        "capabilities": {
+          "available": false
+        },
+        "expected": "REFUSED with 'missing: importable foundationscale'",
+        "request": {
+          "dataset": {
+            "format": "sft",
+            "fs_columns": {
+              "gold_key": "answer",
+              "image_column": null,
+              "text_column": "text"
+            },
+            "shards": [
+              {
+                "path": "ds/shard-00000.jsonl"
+              }
+            ]
+          },
+          "model": "m",
+          "output_root": "out",
+          "plan": {
+            "stages": [
+              {
+                "algorithm": null,
+                "hparams": {},
+                "method": "full",
+                "name": "sft1",
+                "stage": "sft"
+              }
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "97983e9ec8421ba244701135aeb55535d5f3acdad8cd02aadcc4a37642af8dc1",
+      "expected_behavior": [
+        "Identifies the problem: FS not importable (capabilities.available is false)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FS-IN-003"
+      ],
+      "ground_truth": "training.emit: rule FS-IN-003 (BLOCK, input phase) fires: FS not importable (capabilities.available is false).",
+      "trigger_facts": [
+        {
+          "path": "capabilities.available",
+          "value": false
+        }
+      ],
+      "question": "My cluster's capabilities are: available = false. I want FS launch specs emitted (plus sbatch scripts where a scheduler applies) from this training plan — never launched — with model \"m\", output_root \"out\", and a single stage named \"sft1\" with stage \"sft\", method \"full\", algorithm null, and empty hparams. The dataset is format \"sft\" with one shard at ds/shard-00000.jsonl, fs_columns text_column = \"text\", gold_key = \"answer\", image_column = null. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-TR-IN-001",
+      "skill": "training.planner",
+      "rule_id": "TR-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "goal.base_model missing or empty",
+      "fixture": {
+        "request": {
+          "goal": {
+            "base_model": {},
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "H100",
+              "gpus_per_node": 8,
+              "nodes": 1
+            },
+            "objective": "domain reasoning assistant",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "e6ccd5184067c2982195b008351204140d953d597576220b795cb75a32f40e8d",
+      "expected_behavior": [
+        "Identifies the problem: goal.base_model missing or empty",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule TR-IN-001"
+      ],
+      "ground_truth": "training.planner: rule TR-IN-001 (BLOCK, input phase) fires: goal.base_model missing or empty.",
+      "trigger_facts": [],
+      "question": "I want to build a domain reasoning assistant for manufacturing — a domain_expert model with reasoning as the target capability, using my base model as-is (it's unspecified beyond that) while preserving general capabilities. My data is a local directory at file:///data/corpus with roughly 10M tokens, and it does contain instruction-formatted examples. I have one node with 8 H100 GPUs per node (8 GPUs total). Please turn this goal spec into a training_plan, with each stage either executable on the installed FoundationScale or named with the exact missing capability, and tell me what the outcome is.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-TR-IN-002",
+      "skill": "training.planner",
+      "rule_id": "TR-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "goal.objective missing or empty",
+      "fixture": {
+        "request": {
+          "goal": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "some-model",
+              "size_b": 8.0
+            },
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "H100",
+              "gpus_per_node": 8,
+              "nodes": 1
+            },
+            "objective": "",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "e25735f40d9e394caaf102050c186f418a1316e412cd2927219b3f2989f521aa",
+      "expected_behavior": [
+        "Identifies the problem: goal.objective missing or empty",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule TR-IN-002"
+      ],
+      "ground_truth": "training.planner: rule TR-IN-002 (BLOCK, input phase) fires: goal.objective missing or empty.",
+      "trigger_facts": [],
+      "question": "I want to turn this goal_spec into a training plan: base model is a dense \"some-model\" at 8.0B parameters, and I have one data source of kind local_dir at file:///data/corpus with approximately 10,000,000 tokens, where has_instructions is true. The domain is manufacturing, the goal is domain_expert, the objective field is an empty string, preserve_general is true, and target_capabilities is [\"reasoning\"]. The hardware is 1 node with 8 H100 GPUs per node. Please run training.planner on this and tell me what the resulting training_plan is, with each stage either executable on the installed FoundationScale or named with the exact missing capability.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-TR-IN-003",
+      "skill": "training.planner",
+      "rule_id": "TR-IN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "goal.hardware missing (gpu/gpus_per_node/nodes)",
+      "fixture": {
+        "request": {
+          "goal": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "some-model",
+              "size_b": 8.0
+            },
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {},
+            "objective": "domain reasoning assistant",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "640bba6abf511430a4e549de9be67e32f19841eb008171f70a2a246b98b41d41",
+      "expected_behavior": [
+        "Identifies the problem: goal.hardware missing (gpu/gpus_per_node/nodes)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule TR-IN-003"
+      ],
+      "ground_truth": "training.planner: rule TR-IN-003 (BLOCK, input phase) fires: goal.hardware missing (gpu/gpus_per_node/nodes).",
+      "trigger_facts": [],
+      "question": "I want to turn an 8.0B dense base model (\"some-model\") into a domain reasoning assistant for manufacturing — a domain expert with reasoning as the target capability, while preserving general ability. My data is one local directory at file:///data/corpus with roughly 10,000,000 tokens, and it does contain instructions. My hardware field is empty. Can you produce a training plan from this goal spec, with each stage either runnable on the installed FoundationScale or named with the exact capability it needs?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-TR-IN-004",
+      "skill": "training.planner",
+      "rule_id": "TR-IN-004",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "a RED readiness_report was supplied; fix the data first",
+      "fixture": {
+        "request": {
+          "goal": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "some-model",
+              "size_b": 8.0
+            },
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "H100",
+              "gpus_per_node": 8,
+              "nodes": 1
+            },
+            "objective": "domain reasoning assistant",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          },
+          "readiness": {
+            "checks": [],
+            "dataset_id": "ds-red",
+            "stats": {},
+            "verdict": "RED"
+          }
+        }
+      },
+      "fixture_sha256": "d87f5af406d9f8496ceff9f24117cab67dfa22fc102a272fa96875e9e4c87968",
+      "expected_behavior": [
+        "Identifies the problem: a RED readiness_report was supplied; fix the data first",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule TR-IN-004"
+      ],
+      "ground_truth": "training.planner: rule TR-IN-004 (BLOCK, input phase) fires: a RED readiness_report was supplied; fix the data first.",
+      "trigger_facts": [],
+      "question": "I want to turn this goal_spec into a training_plan for a domain reasoning assistant over the manufacturing domain. The base model is \"some-model\", a dense 8.0B parameter model, and my data is a local_dir at file:///data/corpus with approximately 10,000,000 tokens and has_instructions set to true. The hardware I have is 1 node of 8 H100 GPUs per node, I want to preserve general capability while targeting reasoning, with the goal being domain_expert. I also have a readiness_report with dataset_id \"ds-red\", an empty checks list, empty stats, and verdict \"RED\". What's the resulting training_plan and which stages run on the installed FoundationScale?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-TR-PL-001",
+      "skill": "training.planner",
+      "rule_id": "TR-PL-001",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "plan has 0 executable stages on the installed FS",
+      "fixture": {
+        "fake_plan": {
+          "decisions": [],
+          "feasibility": {
+            "alternatives": [],
+            "findings": [],
+            "verdict": "ok"
+          },
+          "goal": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "some-model",
+              "size_b": 8.0
+            },
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "H100",
+              "gpus_per_node": 8,
+              "nodes": 1
+            },
+            "objective": "domain reasoning assistant",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          },
+          "provenance_notes": [],
+          "stages": [
+            {
+              "algorithm": "sft",
+              "because": "chosen because the fixture needs a valid stage",
+              "data": {
+                "format": "sft",
+                "ready": true,
+                "tokens": 1000
+              },
+              "estimate": {
+                "gpu_hours": 1.0,
+                "hours": 0.125,
+                "tokens": 1000
+              },
+              "executable": false,
+              "feasibility": {
+                "alternatives": [],
+                "findings": [],
+                "verdict": "ok"
+              },
+              "hparams": {},
+              "method": "lora",
+              "missing": "missing: sft objective",
+              "name": "sft",
+              "recipe_derived": false,
+              "recipe_id": "recipe-x",
+              "recipe_provenance": "validated",
+              "stage": "sft"
+            }
+          ]
+        },
+        "request": {
+          "goal": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "some-model",
+              "size_b": 8.0
+            },
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "H100",
+              "gpus_per_node": 8,
+              "nodes": 1
+            },
+            "objective": "domain reasoning assistant",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "3386c0acf7a8dc6584859e2cebbe50adbc60358605cf0ce078a309483e8def56",
+      "expected_behavior": [
+        "Identifies the problem: plan has 0 executable stages on the installed FS",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule TR-PL-001"
+      ],
+      "ground_truth": "training.planner: rule TR-PL-001 (WARN, handoff phase) fires: plan has 0 executable stages on the installed FS.",
+      "trigger_facts": [
+        {
+          "path": "fake_plan.stages[0].executable",
+          "value": false
+        },
+        {
+          "path": "fake_plan.stages[0].missing",
+          "value": "missing: sft objective"
+        }
+      ],
+      "question": "I'm running training.planner on a goal_spec for a manufacturing domain_expert: base model some-model (dense, 8.0B), data source file:///data/corpus (local_dir, approx 10,000,000 tokens), data_facts has_instructions = true, objective \"domain reasoning assistant\", preserve_general = true, target_capabilities [\"reasoning\"], hardware 1 node × 8 H100 GPUs. What I observed from the planner's output is stages[0].executable = false, and stages[0].missing = \"missing: sft objective\", with the stage named \"sft\", method \"lora\", algorithm \"sft\", recipe_id \"recipe-x\", recipe_provenance \"validated\", recipe_derived = false, data format \"sft\" with ready = true and tokens = 1000, and estimate gpu_hours = 1.0, hours = 0.125, tokens = 1000. The plan's feasibility verdict is \"ok\" with empty findings and alternatives, and decisions and provenance_notes are both empty. Given the goal and those observed values, what is the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-TR-PL-002",
+      "skill": "training.planner",
+      "rule_id": "TR-PL-002",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "a stage is feasibility-infeasible with no executable feasible alternative",
+      "fixture": {
+        "fake_plan": {
+          "decisions": [],
+          "feasibility": {
+            "alternatives": [],
+            "findings": [],
+            "verdict": "ok"
+          },
+          "goal": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "some-model",
+              "size_b": 8.0
+            },
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "H100",
+              "gpus_per_node": 8,
+              "nodes": 1
+            },
+            "objective": "domain reasoning assistant",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          },
+          "provenance_notes": [],
+          "stages": [
+            {
+              "algorithm": "sft",
+              "because": "chosen because the fixture needs a valid stage",
+              "data": {
+                "format": "sft",
+                "ready": true,
+                "tokens": 1000
+              },
+              "estimate": {
+                "gpu_hours": 1.0,
+                "hours": 0.125,
+                "tokens": 1000
+              },
+              "executable": true,
+              "feasibility": {
+                "alternatives": [
+                  {
+                    "change": "lora",
+                    "executable": false,
+                    "verdict": "infeasible"
+                  }
+                ],
+                "findings": [
+                  {
+                    "symptom": "oom"
+                  }
+                ],
+                "verdict": "infeasible"
+              },
+              "hparams": {},
+              "method": "lora",
+              "missing": null,
+              "name": "sft",
+              "recipe_derived": false,
+              "recipe_id": "recipe-x",
+              "recipe_provenance": "validated",
+              "stage": "sft"
+            }
+          ]
+        },
+        "request": {
+          "goal": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "some-model",
+              "size_b": 8.0
+            },
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "H100",
+              "gpus_per_node": 8,
+              "nodes": 1
+            },
+            "objective": "domain reasoning assistant",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "16455314a5d46c2a48d22313fd7f03217bf50765861b6a31a3e039bd17a0300b",
+      "expected_behavior": [
+        "Identifies the problem: a stage is feasibility-infeasible with no executable feasible alternative",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule TR-PL-002"
+      ],
+      "ground_truth": "training.planner: rule TR-PL-002 (BLOCK, handoff phase) fires: a stage is feasibility-infeasible with no executable feasible alternative.",
+      "trigger_facts": [
+        {
+          "path": "fake_plan.stages[0].feasibility.alternatives[0].change",
+          "value": "lora"
+        },
+        {
+          "path": "fake_plan.stages[0].feasibility.alternatives[0].executable",
+          "value": false
+        },
+        {
+          "path": "fake_plan.stages[0].feasibility.alternatives[0].verdict",
+          "value": "infeasible"
+        },
+        {
+          "path": "fake_plan.stages[0].feasibility.findings[0].symptom",
+          "value": "oom"
+        },
+        {
+          "path": "fake_plan.stages[0].feasibility.verdict",
+          "value": "infeasible"
+        }
+      ],
+      "question": "I'm planning a domain_expert run for a manufacturing domain reasoning assistant on some-model (dense, 8.0B) with 1 node × 8 H100s, one local source at file:///data/corpus (~10,000,000 tokens, has_instructions=true), and preserve_general=true with target capability \"reasoning\". The planner came back with one stage (sft, method \"lora\", recipe_id \"recipe-x\", recipe_provenance \"validated\", recipe_derived=false, data format \"sft\" with ready=true and tokens=1000, estimate gpu_hours=1.0 / hours=0.125 / tokens=1000, executable=true, missing=null). On that stage I observed stages[0].feasibility.verdict = \"infeasible\", stages[0].feasibility.findings[0].symptom = \"oom\", and stages[0].feasibility.alternatives[0].change = \"lora\" with stages[0].feasibility.alternatives[0].executable = false and stages[0].feasibility.alternatives[0].verdict = \"infeasible\". What is the outcome of this plan under training.planner?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-TR-PL-003",
+      "skill": "training.planner",
+      "rule_id": "TR-PL-003",
+      "severity": "INFO",
+      "phase": "handoff",
+      "description": "a stage relies on an unvalidated (literature/community/derived) recipe",
+      "fixture": {
+        "fake_plan": {
+          "decisions": [],
+          "feasibility": {
+            "alternatives": [],
+            "findings": [],
+            "verdict": "ok"
+          },
+          "goal": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "some-model",
+              "size_b": 8.0
+            },
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "H100",
+              "gpus_per_node": 8,
+              "nodes": 1
+            },
+            "objective": "domain reasoning assistant",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          },
+          "provenance_notes": [],
+          "stages": [
+            {
+              "algorithm": "sft",
+              "because": "chosen because the fixture needs a valid stage",
+              "data": {
+                "format": "sft",
+                "ready": true,
+                "tokens": 1000
+              },
+              "estimate": {
+                "gpu_hours": 1.0,
+                "hours": 0.125,
+                "tokens": 1000
+              },
+              "executable": true,
+              "feasibility": {
+                "alternatives": [],
+                "findings": [],
+                "verdict": "ok"
+              },
+              "hparams": {},
+              "method": "lora",
+              "missing": null,
+              "name": "sft",
+              "recipe_derived": false,
+              "recipe_id": "recipe-x",
+              "recipe_provenance": "literature",
+              "stage": "sft"
+            }
+          ]
+        },
+        "request": {
+          "goal": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "some-model",
+              "size_b": 8.0
+            },
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "H100",
+              "gpus_per_node": 8,
+              "nodes": 1
+            },
+            "objective": "domain reasoning assistant",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "88381b312c333ad72a25e109012de1e262e9a13d9c5af0edc390c21be0bb2841",
+      "expected_behavior": [
+        "Identifies the problem: a stage relies on an unvalidated (literature/community/derived) recipe",
+        "Records it as information only; it neither blocks nor fails the run",
+        "Cites rule TR-PL-003"
+      ],
+      "ground_truth": "training.planner: rule TR-PL-003 (INFO, handoff phase) fires: a stage relies on an unvalidated (literature/community/derived) recipe.",
+      "trigger_facts": [
+        {
+          "path": "fake_plan.stages[0].recipe_provenance",
+          "value": "literature"
+        }
+      ],
+      "question": "I'm planning from a goal_spec for a manufacturing domain reasoning assistant on base model \"some-model\" (dense, 8.0B), one local_dir source at file:///data/corpus with ~10,000,000 tokens and has_instructions=true, on 1 node × 8 H100 GPUs, with preserve_general=true and target capability \"reasoning\". A staged plan draft is in hand: one stage named \"sft\" (stage \"sft\", algorithm \"sft\", method \"lora\"), data format \"sft\", ready=true, 1000 tokens, estimate 1000 tokens / 0.125 hours / 1.0 GPU-hours, executable=true, missing=null, recipe_derived=false, recipe_id \"recipe-x\", hparams {}, and feasibility verdict \"ok\" with no findings or alternatives. I've also observed that stages[0].recipe_provenance is \"literature\". What's the outcome for training.planner on this request?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-TR-PL-004",
+      "skill": "training.planner",
+      "rule_id": "TR-PL-004",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "a stage needs data not yet prepared (handoff to data_engine)",
+      "fixture": {
+        "fake_plan": {
+          "decisions": [],
+          "feasibility": {
+            "alternatives": [],
+            "findings": [],
+            "verdict": "ok"
+          },
+          "goal": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "some-model",
+              "size_b": 8.0
+            },
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "H100",
+              "gpus_per_node": 8,
+              "nodes": 1
+            },
+            "objective": "domain reasoning assistant",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          },
+          "provenance_notes": [],
+          "stages": [
+            {
+              "algorithm": "sft",
+              "because": "chosen because the fixture needs a valid stage",
+              "data": {
+                "format": "sft",
+                "handoff": "data_engine",
+                "ready": false,
+                "target_format": "sft",
+                "tokens": 1000
+              },
+              "estimate": {
+                "gpu_hours": 1.0,
+                "hours": 0.125,
+                "tokens": 1000
+              },
+              "executable": true,
+              "feasibility": {
+                "alternatives": [],
+                "findings": [],
+                "verdict": "ok"
+              },
+              "hparams": {},
+              "method": "lora",
+              "missing": null,
+              "name": "sft",
+              "recipe_derived": false,
+              "recipe_id": "recipe-x",
+              "recipe_provenance": "validated",
+              "stage": "sft"
+            }
+          ]
+        },
+        "request": {
+          "goal": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "some-model",
+              "size_b": 8.0
+            },
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "H100",
+              "gpus_per_node": 8,
+              "nodes": 1
+            },
+            "objective": "domain reasoning assistant",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "64333e88bd1b7760be192af3bd92662fcf0f766a2e38793c2cab1deca1208980",
+      "expected_behavior": [
+        "Identifies the problem: a stage needs data not yet prepared (handoff to data_engine)",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule TR-PL-004"
+      ],
+      "ground_truth": "training.planner: rule TR-PL-004 (WARN, handoff phase) fires: a stage needs data not yet prepared (handoff to data_engine).",
+      "trigger_facts": [
+        {
+          "path": "fake_plan.stages[0].data.handoff",
+          "value": "data_engine"
+        },
+        {
+          "path": "fake_plan.stages[0].data.ready",
+          "value": false
+        },
+        {
+          "path": "fake_plan.stages[0].data.target_format",
+          "value": "sft"
+        }
+      ],
+      "question": "I'm running training.planner on a goal_spec for a manufacturing domain reasoning assistant: base model some-model (dense, 8.0B), preserve_general = true, target_capabilities = [\"reasoning\"], one local_dir source at file:///data/corpus with approx_tokens = 10000000, data_facts.has_instructions = true, and hardware of 1 node × 8 H100s per node. The plan I got back has a single SFT stage (method lora, data format sft, tokens 1000, estimate 0.125 hours / 1.0 gpu_hours), and I observed that stages[0].data.handoff = \"data_engine\", stages[0].data.ready = false, and stages[0].data.target_format = \"sft\". Given those observed values, what is the outcome — is that stage executable on the installed FoundationScale, or is it named with the exact missing capability?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-training-oracle-TR-PL-005",
+      "skill": "training.planner",
+      "rule_id": "TR-PL-005",
+      "severity": "INFO",
+      "phase": "handoff",
+      "description": "disclosure: FS SFT trains on the full rendered text (no assistant-only loss masking)",
+      "fixture": {
+        "fake_plan": {
+          "decisions": [],
+          "feasibility": {
+            "alternatives": [],
+            "findings": [],
+            "verdict": "ok"
+          },
+          "goal": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "some-model",
+              "size_b": 8.0
+            },
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "H100",
+              "gpus_per_node": 8,
+              "nodes": 1
+            },
+            "objective": "domain reasoning assistant",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          },
+          "provenance_notes": [],
+          "stages": [
+            {
+              "algorithm": "sft",
+              "because": "chosen because the fixture needs a valid stage",
+              "data": {
+                "format": "sft",
+                "ready": true,
+                "tokens": 1000
+              },
+              "estimate": {
+                "gpu_hours": 1.0,
+                "hours": 0.125,
+                "tokens": 1000
+              },
+              "executable": true,
+              "feasibility": {
+                "alternatives": [],
+                "findings": [],
+                "verdict": "ok"
+              },
+              "hparams": {},
+              "method": "lora",
+              "missing": null,
+              "name": "sft",
+              "recipe_derived": false,
+              "recipe_id": "recipe-x",
+              "recipe_provenance": "validated",
+              "stage": "sft"
+            }
+          ]
+        },
+        "request": {
+          "goal": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "some-model",
+              "size_b": 8.0
+            },
+            "data": {
+              "sources": [
+                {
+                  "approx_tokens": 10000000,
+                  "kind": "local_dir",
+                  "uri": "file:///data/corpus"
+                }
+              ]
+            },
+            "data_facts": {
+              "has_instructions": true
+            },
+            "domain": "manufacturing",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "H100",
+              "gpus_per_node": 8,
+              "nodes": 1
+            },
+            "objective": "domain reasoning assistant",
+            "preserve_general": true,
+            "target_capabilities": [
+              "reasoning"
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "1ecfa28a906f188dc98af189c4d76a9e827a2f91e94bf525acf79e7adcf316c7",
+      "expected_behavior": [
+        "Identifies the problem: disclosure: FS SFT trains on the full rendered text (no assistant-only loss masking)",
+        "Records it as information only; it neither blocks nor fails the run",
+        "Cites rule TR-PL-005"
+      ],
+      "ground_truth": "training.planner: rule TR-PL-005 (INFO, handoff phase) fires: disclosure: FS SFT trains on the full rendered text (no assistant-only loss masking).",
+      "trigger_facts": [],
+      "question": "I want a domain reasoning assistant on a manufacturing domain using base model \"some-model\" (dense, 8.0B), with preserve_general = true and target_capabilities [\"reasoning\"], on 1 node of 8× H100. My data is one local_dir source at file:///data/corpus with approx_tokens 10,000,000, and data_facts has_instructions = true. I've also been handed a plan document that has a single stage: name/stage \"sft\", algorithm \"sft\", method \"lora\", recipe_id \"recipe-x\" with recipe_provenance \"validated\" and recipe_derived false, data format \"sft\" with tokens 1,000 and ready true, estimate of 1,000 tokens / 0.125 hours / 1.0 gpu_hours, executable true, missing null, and the stated reason \"chosen because the fixture needs a valid stage\". Can you run training.planner on my goal_spec and tell me what the resulting training_plan is?",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

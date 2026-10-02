@@ -258,8 +258,18 @@ def _cmd_routing_eval(args: argparse.Namespace) -> int:
     return int(report["exit_code"])
 
 
+"""`fskills behaviour-eval` / `fskills oracle-cases` command functions for foundationskills/cli.py."""
+
+
+def _case_source_of(args: argparse.Namespace) -> str:
+    """The --cases value of the run subcommand ("render" takes the source from the stored report)."""
+    value = getattr(args, "cases", None)
+    return value if isinstance(value, str) and value else "routing"
+
+
 def _cmd_behaviour_eval(args: argparse.Namespace) -> int:
     from foundationskills.agent import behaviour_eval as be_
+    from foundationskills.agent import oracle_cases as oc_
     from foundationskills.agent.routing_eval import load_index
     from foundationskills.skills.data_engine.llm_backend import LLMOpError, make_backend
 
@@ -287,10 +297,13 @@ def _cmd_behaviour_eval(args: argparse.Namespace) -> int:
         packages = None
         if args.packages:
             packages = tuple(part.strip() for part in args.packages.split(",") if part.strip())
-        report = be_.run_behaviour_eval(index, agent, judge, reps=args.reps, workers=args.workers,
-                                        agent_max_tokens=args.agent_max_tokens, threshold=args.threshold,
-                                        judge_max_tokens=args.judge_max_tokens, packages=packages)
-    except (be_.BehaviourEvalRefused, LLMOpError, OSError, json.JSONDecodeError) as exc:
+        resume = json.loads(Path(args.resume).read_text(encoding="utf-8")) if args.resume else None
+        report = be_.run_behaviour_eval(index, agent, judge, cases=_case_source_of(args), reps=args.reps,
+                                        workers=args.workers, agent_max_tokens=args.agent_max_tokens,
+                                        threshold=args.threshold, judge_max_tokens=args.judge_max_tokens,
+                                        packages=packages, resume=resume)
+    except (be_.BehaviourEvalRefused, oc_.OracleCasesRefused, LLMOpError, OSError,
+            json.JSONDecodeError) as exc:
         print(f"[fskills:behaviour-eval:refuse] {exc}", file=sys.stderr)
         return 96
     be_.write_report(report, Path(args.out))
@@ -301,6 +314,48 @@ def _cmd_behaviour_eval(args: argparse.Namespace) -> int:
     print(json.dumps({"verdict": report["verdict"], "item_pass_rate": summary, "uplift": report["uplift"],
                       "reasons": report["reasons"], "report": str(Path(args.out).resolve())}, indent=2))
     return int(report["exit_code"])
+
+
+def _cmd_oracle_cases(args: argparse.Namespace) -> int:
+    from foundationskills.agent import oracle_cases as oc_
+    from foundationskills.agent.routing_eval import load_index
+    from foundationskills.skills.data_engine.llm_backend import LLMOpError, make_backend
+
+    try:
+        packages = [str(entry["package"]) for entry in load_index()]
+        if args.oracle_command == "check":
+            problems: dict[str, list[str]] = {}
+            for package in packages:
+                try:
+                    cases, _digest = oc_.load_cases(package)
+                except oc_.OracleCasesRefused as exc:
+                    problems[package] = [str(exc)]  # a missing file is a problem: this package is not current
+                    continue
+                found = oc_.check_cases(package, cases)
+                if found:
+                    problems[package] = found
+            if not problems:
+                print(json.dumps({"schema": oc_.SCHEMA, "packages": packages, "current": True}, indent=2))
+                return 0
+            for package in sorted(problems):
+                for problem in problems[package]:
+                    print(f"{package}: {problem}")
+            return 5
+        cfg: dict[str, Any] = {"kind": "openai_compatible", "base_url": args.base_url,
+                               "model": args.model, "timeout_s": args.timeout}
+        if args.api_key_env:
+            cfg["api_key_env"] = args.api_key_env
+        if args.extra_body:
+            cfg["extra_body"] = json.loads(args.extra_body)
+        cases_by_package = oc_.build_cases(make_backend(cfg, "oracle_cases"), workers=args.workers)
+        paths = oc_.write_cases(cases_by_package)
+    except (oc_.OracleCasesRefused, LLMOpError, OSError, json.JSONDecodeError) as exc:
+        print(f"[fskills:oracle-cases:refuse] {exc}", file=sys.stderr)
+        return 96
+    print(json.dumps({"schema": oc_.SCHEMA, "model": str(args.model),
+                      "packages": {package: len(cases) for package, cases in sorted(cases_by_package.items())},
+                      "written": [str(path) for path in paths]}, indent=2))
+    return 0
 
 
 def _cmd_recipes(args: argparse.Namespace) -> int:
@@ -492,6 +547,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--judge-api-key-env", default=None, help="NAME of the env var holding the key (never the key)")
     p_run.add_argument("--judge-extra-body", default=None, help="JSON merged into each judge request body")
     p_run.add_argument("--packages", default=None, help="comma-separated skill names to include")
+    p_run.add_argument("--cases", choices=("routing", "oracle"), default="routing",
+                       help="case source: evals.json positives (routing) or evals/behaviour.json (oracle)")
     p_run.add_argument("--reps", type=int, default=2)
     p_run.add_argument("--workers", type=int, default=4)
     p_run.add_argument("--threshold", type=float, default=0.7)
@@ -499,12 +556,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--judge-max-tokens", type=int, default=2048)
     p_run.add_argument("--timeout", type=float, default=600.0)
     p_run.add_argument("--out", required=True)
+    p_run.add_argument("--resume", default=None,
+                       help="earlier report of the same run: reuse its measured calls, re-ask only the rest")
     p_run.add_argument("--write-behaviour", action="store_true",
                        help="write BEHAVIOUR.md per package unless unmeasured")
     p_run.set_defaults(func=_cmd_behaviour_eval)
     p_render = behaviour_sub.add_parser("render", help="write BEHAVIOUR.md per package from an existing report")
     p_render.add_argument("--report", required=True)
     p_render.set_defaults(func=_cmd_behaviour_eval)
+
+    p = sub.add_parser("oracle-cases", help="build and check the code-grounded oracle behaviour cases")
+    oracle_sub = p.add_subparsers(dest="oracle_command", required=True, parser_class=_Parser)
+    p_build = oracle_sub.add_parser("build", help="write evals/behaviour.json for every package")
+    p_build.add_argument("--base-url", required=True)
+    p_build.add_argument("--model", required=True)
+    p_build.add_argument("--api-key-env", default=None, help="NAME of the env var holding the key (never the key)")
+    p_build.add_argument("--extra-body", default=None, help="JSON merged into each request body")
+    p_build.add_argument("--workers", type=int, default=4)
+    p_build.add_argument("--timeout", type=float, default=600.0)
+    p_build.set_defaults(func=_cmd_oracle_cases)
+    p_check = oracle_sub.add_parser("check", help="compare every evals/behaviour.json with the current skeleton")
+    p_check.set_defaults(func=_cmd_oracle_cases)
 
     p = sub.add_parser("recipes", help="browse recipe knowledge")
     recipes_sub = p.add_subparsers(dest="recipes_command", required=True, parser_class=_Parser)

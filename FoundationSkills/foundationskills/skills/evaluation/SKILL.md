@@ -77,6 +77,8 @@ GB200/H100/local. HF backend only (no vLLM, no API backends).
 
 ## Validation rules
 
+Outcome semantics (from `core/contract.py`, the same for every skill): an **input**-phase BLOCK refuses before any work - status REFUSED, exit 96, nothing written. A **handoff**-phase BLOCK does not refuse: the work ran, and the result is RED (exit 5), never PASS. WARN and INFO findings never block; they travel with the result (EV-HO-003 makes the run UNMEASURED, exit 95). Phase by prefix: EV-IN-* rules are input phase, EV-HO-* rules are handoff phase.
+
 | Rule | Severity | Fires when |
 |---|---|---|
 | EV-IN-001 | BLOCK | checkpoint (or the run manifest naming `<output_dir>/final`) is missing |

@@ -173,3 +173,33 @@ def test_published_behaviour_reports_match_the_current_skill_md_and_evals():
         assert match, f"{package}/BEHAVIOUR.md is not a generated behaviour report"
         assert (match.group(1), match.group(2)) == current[package], \
             f"{package}/BEHAVIOUR.md measured another SKILL.md or eval set; re-run behaviour-eval"
+
+
+@pytest.mark.parametrize("package", sorted(PACKAGES))
+def test_oracle_behaviour_cases_match_the_code(package):
+    """evals/behaviour.json is grounded in each rule's must-fire fixture and outcome semantics; a changed rule,
+    fixture or severity makes it stale. Regenerate with `fskills oracle-cases build ...`, never by hand."""
+    from foundationskills.agent import oracle_cases
+
+    path = importlib.resources.files(package).joinpath("evals", "behaviour.json")
+    if not path.is_file():
+        pytest.skip(f"{package} has no oracle behaviour cases yet")
+    cases, _ = oracle_cases.load_cases(package)
+    problems = oracle_cases.check_cases(package, cases)
+    assert not problems, "\n".join(problems)
+
+
+def test_published_oracle_behaviour_reports_match_the_current_skill_md_and_cases():
+    from foundationskills.agent import oracle_cases, routing_eval
+
+    for entry in routing_eval.load_index():
+        package = entry["package"]
+        path = importlib.resources.files(package).joinpath("BEHAVIOUR_ORACLE.md")
+        if not path.is_file():
+            continue
+        _, cases_sha = oracle_cases.load_cases(package)
+        match = re.search(r"against SKILL\.md ([0-9a-f]{12}) and oracle cases ([0-9a-f]{12})",
+                          path.read_text(encoding="utf-8"))
+        assert match, f"{package}/BEHAVIOUR_ORACLE.md is not a generated behaviour report"
+        assert (match.group(1), match.group(2)) == (entry["skill_md_sha256"][:12], cases_sha[:12]), \
+            f"{package}/BEHAVIOUR_ORACLE.md measured another SKILL.md or oracle case set; re-run behaviour-eval"

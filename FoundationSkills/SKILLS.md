@@ -52,6 +52,10 @@ See `docs/ARCHITECTURE.md` ("Adding a skill"). In short:
    different models), which checks each positive case's `expected_behavior` with and without the SKILL.md
    and regenerates `BEHAVIOUR.md`. It is plan-level (no tool execution), and because the behaviours are
    written from the SKILL.md, read the without-skill baseline and the uplift, not the with-skill ceiling;
+   then run `fskills oracle-cases build` (whenever a rule, its MUST_FIRE fixture or its severity changes; a
+   contract test enforces it), which writes code-grounded cases to `evals/behaviour.json`, and
+   `fskills behaviour-eval run --cases oracle ... --write-behaviour`, which checks that the SKILL.md lets an
+   agent predict what the code does (`BEHAVIOUR_ORACLE.md`); `--resume REPORT` re-asks only unmeasured calls;
 6. register it (in `register_builtin_skills` or through the `foundationskills.skills` entry point).
 
 `tests/contract/test_conformance.py` then checks it automatically.

@@ -70,6 +70,9 @@ counters and the realized mixture.
   consults `ctx.capabilities` for the preference-family warning (DE-IN-006).
 
 ## Validation rules
+
+Outcome semantics (from `core/contract.py`, the same for every skill): an **input**-phase BLOCK refuses before any work - status REFUSED, exit 96, nothing written. A **handoff**-phase BLOCK does not refuse: the work ran, and the result is RED (exit 5), never PASS. WARN and INFO findings never block; they travel with the result (DE-HO-002 makes the readiness verdict UNMEASURED).
+
 | Rule id | Phase | Severity | Fires when |
 |---|---|---|---|
 | DE-IN-001 | input | BLOCK | no sources given (and no explicit pipeline) |

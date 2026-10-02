@@ -81,6 +81,8 @@ load-bearing facts from `foundationskills.agent.intake`).
 
 ## Validation rules
 
+Outcome semantics (from `core/contract.py`, the same for every skill): an **input**-phase BLOCK refuses before any work - status REFUSED, exit 96, nothing written. A **handoff**-phase BLOCK does not refuse: the work ran, and the result is RED (exit 5), never PASS. WARN and INFO findings never block; they travel with the result (e.g. FS-HO-003 is an INFO note; the specs still emit).
+
 | rule id | severity | phase | fires when |
 |---|---|---|---|
 | TR-IN-001 | BLOCK | input | `goal.base_model.name_or_path` missing/empty |
