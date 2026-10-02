@@ -110,9 +110,10 @@ def local_denominator(
     * token     -> supervised token count ``T_mb = loss_mask.sum()``
     * sequence  -> valid sequence count ``S_mb`` (rows with >=1 supervised
       token, or ``sample_mask.sum()`` when supplied)
-    * dr_grpo   -> supervised token count (constant-reduction numerator unit;
-      the kernel divided by ``rows * constant_length``, so the local scale
-      uses the same numerator unit against the declared ``B_g``)
+    * dr_grpo   -> microbatch row count ``rows`` (the kernel's ``constant``
+      reduction divides by ``rows * constant_length``, so the local scale is
+      rows against the declared ``B_g``; scaling by supervised TOKENS inflated
+      the loss by tokens/row -- measured: grad_norm tracked response length)
     * preference-> pair count = valid rows (pairs are co-resident per
       microbatch by the section 3 contract)
 
@@ -134,7 +135,7 @@ def local_denominator(
     if unit == "sequence":
         return sequences
     if unit == "dr_grpo":
-        return tokens
+        return float(loss_mask.shape[0])
     return sequences
 
 
@@ -148,6 +149,9 @@ def _read_denominator(den: GlobalDenominators, unit: str) -> float:
         "dr_grpo": ("sequences", "S_g", "B_g", "global_sequences"),
         "preference": ("pairs", "P_g", "sequences", "global_pairs"),
     }
+    if unit == "dr_grpo" and den.details.get("declared_sequences"):
+        # dr_grpo is denominated by the DECLARED batch B_g, not the measured S_g.
+        return float(den.details["declared_sequences"])
     names = candidates[unit]
     for name in names:
         value = getattr(den, name, None)

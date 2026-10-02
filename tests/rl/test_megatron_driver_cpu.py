@@ -426,3 +426,54 @@ def test_objective_loss_or_zero_calls_kernel_when_supervised() -> None:
     )
     assert out.item() == 1.5
     assert seen["mask"] is mask and seen["reference_logprobs"] is ref
+
+
+@pytest.mark.parametrize("algorithm", ["dr_grpo", "grpo"])
+def test_sharded_rescaled_loss_equals_single_process_loss(algorithm: str) -> None:
+    """Splitting a batch across two DP shards, rescaling each shard's kernel
+    output and summing must reproduce the kernel on the whole batch. A dr_grpo
+    rescale keyed on supervised TOKENS inflated the loss by tokens/row (the
+    measured grad_norm tracked response length at ~0.5x on the GB200)."""
+    from foundationscale.rl.megatron.normalization import compute_denominators
+    from foundationscale.rl.registry import lookup_algorithm
+    from foundationscale.rl.torch_backend import TensorPolicyLoss
+
+    torch.manual_seed(0)
+    rows, width = 8, 1024
+    loss_fn = TensorPolicyLoss(objective=lookup_algorithm(algorithm)._objective)
+    unit = pp_step.loss_unit(loss_fn)
+    base = torch.randn(rows, width) * 0.1 - 1.0
+    cur = base.clone().requires_grad_()
+    old = base + torch.randn(rows, width) * 0.01
+    ref = base.clone()
+    adv = torch.randn(rows)
+    lengths = torch.tensor([30, 400, 90, 700, 12, 250, 1000, 60])
+    mask = (torch.arange(width)[None, :] < lengths[:, None]).to(torch.float32)
+    sample = torch.ones(rows)
+
+    full = float(
+        loss_fn(
+            current_logprobs=cur,
+            old_logprobs=old,
+            advantages=adv,
+            mask=mask,
+            reference_logprobs=ref,
+        )
+    )
+    declared = (float(rows), float(width)) if unit == "dr_grpo" else None
+    den = compute_denominators(unit, mask, sample, group=None, declared=declared)
+    total = 0.0
+    for lo, hi in ((0, 3), (3, 8)):
+        raw = loss_fn(
+            current_logprobs=cur[lo:hi],
+            old_logprobs=old[lo:hi],
+            advantages=adv[lo:hi],
+            mask=mask[lo:hi],
+            reference_logprobs=ref[lo:hi],
+        )
+        total += float(
+            pp_step.rescale_to_global_denominator(
+                raw, unit, mask[lo:hi], den, sample_mask=sample[lo:hi]
+            )
+        )
+    assert total == pytest.approx(full, rel=1e-5, abs=1e-7)
