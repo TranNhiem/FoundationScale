@@ -46,6 +46,8 @@ See `docs/ARCHITECTURE.md` ("Adding a skill"). In short:
    NOT for, and at least 3 `when_to_use` phrasings);
 5. ship `evals/evals.json`: at least 3 cases that should trigger the skill, one routed
    to a sibling skill and one no FoundationSkills skill should take;
+   then run `fskills routing-eval run --base-url ... --model ... --write-benchmarks`, which
+   measures routing on every package's cases (exit 0/5/95) and regenerates each `BENCHMARK.md`;
 6. register it (in `register_builtin_skills` or through the `foundationskills.skills` entry point).
 
 `tests/contract/test_conformance.py` then checks it automatically.

@@ -137,3 +137,18 @@ def test_skill_chain_reaches_launch_spec_from_raw_data():
     register_builtin_skills(registry)
     chain = registry.plan_chain({"raw_data_ref", "goal_spec"}, "fs_launch_spec")
     assert chain[-1] == "training.emit" and "data_engine" in chain and "training.planner" in chain
+
+
+def test_published_routing_benchmarks_match_the_current_skill_index():
+    """A BENCHMARK.md measured another index once any frontmatter changes; re-run
+    `fskills routing-eval run ... --write-benchmarks` rather than keep a stale number."""
+    from foundationskills.agent import routing_eval
+
+    current = routing_eval._index_sha256(routing_eval.load_index())[:12]
+    for package in PACKAGES:
+        path = importlib.resources.files(package).joinpath("BENCHMARK.md")
+        if not path.is_file():
+            continue
+        match = re.search(r"against skill index ([0-9a-f]{12})", path.read_text(encoding="utf-8"))
+        assert match, f"{package}/BENCHMARK.md is not a generated routing benchmark"
+        assert match.group(1) == current, f"{package}/BENCHMARK.md measured index {match.group(1)}, current is {current}"

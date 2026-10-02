@@ -224,6 +224,40 @@ def _cmd_hash(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_routing_eval(args: argparse.Namespace) -> int:
+    from foundationskills.agent import routing_eval as re_
+    from foundationskills.skills.data_engine.llm_backend import LLMOpError, make_backend
+
+    try:
+        index = re_.load_index()
+        if args.routing_command == "render":
+            report = json.loads(Path(args.report).read_text(encoding="utf-8"))
+            for path in re_.write_benchmarks(report, index):
+                print(path)
+            return 0
+        cfg: dict[str, Any] = {"kind": "openai_compatible", "base_url": args.base_url, "model": args.model,
+                               "timeout_s": args.timeout}
+        if args.api_key_env:
+            cfg["api_key_env"] = args.api_key_env
+        if args.extra_body:
+            cfg["extra_body"] = json.loads(args.extra_body)
+        backend = make_backend(cfg, "routing_eval")
+        report = re_.run_routing_eval(index, backend, arms=tuple(args.arms.split(",")), reps=args.reps,
+                                      workers=args.workers, temperature=args.temperature,
+                                      max_tokens=args.max_tokens, threshold=args.threshold)
+    except (re_.RoutingEvalRefused, LLMOpError, OSError, json.JSONDecodeError) as exc:
+        print(f"[fskills:routing-eval:refuse] {exc}", file=sys.stderr)
+        return 96
+    re_.write_report(report, Path(args.out))
+    if args.write_benchmarks and report["verdict"] != "unmeasured":
+        for path in re_.write_benchmarks(report, index):
+            print(path, file=sys.stderr)
+    summary = {arm: report["results"][arm]["accuracy"] for arm in report["arms"]}
+    print(json.dumps({"verdict": report["verdict"], "accuracy": summary, "uplift": report["uplift"],
+                      "reasons": report["reasons"], "report": str(Path(args.out).resolve())}, indent=2))
+    return int(report["exit_code"])
+
+
 def _cmd_recipes(args: argparse.Namespace) -> int:
     from foundationskills.skills.training.knowledge import load_recipes
 
@@ -378,6 +412,28 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("hash", help="print the confirmation hash of a spec/plan")
     p.add_argument("--spec", required=True)
     p.set_defaults(func=_cmd_hash)
+
+    p = sub.add_parser("routing-eval", help="measure agent routing to skills on each package's evals/evals.json")
+    routing_sub = p.add_subparsers(dest="routing_command", required=True, parser_class=_Parser)
+    p_run = routing_sub.add_parser("run", help="ask an OpenAI-compatible model to route every eval case")
+    p_run.add_argument("--base-url", required=True)
+    p_run.add_argument("--model", required=True)
+    p_run.add_argument("--api-key-env", default=None, help="NAME of the env var holding the key (never the key)")
+    p_run.add_argument("--extra-body", default=None, help="JSON merged into each request body")
+    p_run.add_argument("--arms", default="full,description,names_only")
+    p_run.add_argument("--reps", type=int, default=3)
+    p_run.add_argument("--workers", type=int, default=4)
+    p_run.add_argument("--temperature", type=float, default=0.6)
+    p_run.add_argument("--max-tokens", type=int, default=2048)
+    p_run.add_argument("--threshold", type=float, default=0.9)
+    p_run.add_argument("--timeout", type=float, default=300.0)
+    p_run.add_argument("--out", required=True)
+    p_run.add_argument("--write-benchmarks", action="store_true",
+                       help="write BENCHMARK.md per package unless unmeasured")
+    p_run.set_defaults(func=_cmd_routing_eval)
+    p_render = routing_sub.add_parser("render", help="write BENCHMARK.md per package from an existing report")
+    p_render.add_argument("--report", required=True)
+    p_render.set_defaults(func=_cmd_routing_eval)
 
     p = sub.add_parser("recipes", help="browse recipe knowledge")
     recipes_sub = p.add_subparsers(dest="recipes_command", required=True, parser_class=_Parser)
