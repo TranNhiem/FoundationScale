@@ -117,5 +117,216 @@
       "The agent did not read or activate evaluation/SKILL.md",
       "The agent did not activate any FoundationSkills skill"
     ]
+  },
+  {
+    "id": "fskills-evaluation-positive-101",
+    "question": "Quick: score runs/q28/final vs gemma4-9b-pt on arc_easy. Cache is staged at ~/.cache/fskills_eval_hf, offline please.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and runs the pinned lm-eval 0.4.12 offline against the staged eval cache, producing an atomic eval_report.json with a PASS/RED/UNMEASURED verdict versus the named base.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent verified the eval_cache directory exists and required an offline environment (HF_*_OFFLINE=1) before invoking the harness",
+      "The agent wrote eval_report.json atomically with per-benchmark status and a base comparison band"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-102",
+    "question": "Before this fine-tune gets promoted, I need to know whether it fell behind where it started on the standard question sets — and every number in the answer must be traceable to a harness version and task hash.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and produces a judge-free checkpoint-vs-base judgment whose results carry provenance (harness version, task hash, few-shot, seed, baseline fingerprint).",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent framed the answer as a promotion verdict (PASS/RED/UNMEASURED) computed against the base model",
+      "The agent stated the report carries provenance fields such as harness version, task hash, seed and baseline fingerprint"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-103",
+    "question": "Please, my trained adapter in runs/adapters/q3 is worse or not than original model? Verdict PASS/RED for benchmarks in our policy file. Also machine say 'missing input: dataset <id> not staged in eval cache' — what meaning this have?",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill to score the adapter against its base and explains that a not-staged dataset makes that benchmark unmeasured (EV-HO-003, exit 95) without starting the harness.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent stated the adapter is judged against its base with the policy's benchmark entries under lm-eval 0.4.12",
+      "The agent explained the not-staged message yields an unmeasured benchmark with EV-HO-003 (WARN) and overall exit code 95 UNMEASURED"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-104",
+    "question": "The SFT job for fs-2712 is done; everything about the model and output dir is captured in runs/fs2712/fskills-sft/run_manifest.json. Take what that file names as the final checkpoint and tell me how it stands against its base on mmlu and gsm8k.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and consumes the FS run_manifest (config.model.value, config.output_dir.value, checkpoint at <output_dir>/final) to score the checkpoint against its resolved base.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent used the run manifest fields config.model and config.output_dir to locate the checkpoint at <output_dir>/final (EV-IN-001 if missing)",
+      "The agent resolved the base model in the documented order (explicit base, then the manifest's config.model, then an adapter's base_model_name_or_path) with EV-IN-002 if none resolves",
+      "The agent produced per-benchmark statuses against mmlu and gsm8k from the policy"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-105",
+    "question": "My eval job ended exit code 95: 2 measured and both pass, 6 unmeasured. What does that exit code tell my CI gate, what do I do about the unmeasured six, and can the checkpoint still get promoted?",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and explains that exit 95 UNMEASURED means some benchmarks could not run (EV-HO-003 WARN) so the verdict cannot be PASS and promotion should wait until they are measured.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent decoded exit code 95 as UNMEASURED and contrasted it with 0 PASS, 5 RED, 96 REFUSED",
+      "The agent cited EV-HO-003 (WARN, a benchmark unmeasured or a limited run) and stated the verdict is at best UNMEASURED",
+      "The agent suggested staging the missing datasets in the eval cache (or inspecting harness.log log tails in harness_dir) to measure the six"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-106",
+    "question": "The job refused before writing anything and the log complains that lm-eval is not 0.4.12. Which validation rule is blocking me and what exactly do I fix?",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and identifies EV-IN-004 (BLOCK: lm_eval absent or not 0.4.12), which yields REFUSED with no report written.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent cited EV-IN-004 as the blocking rule for the harness being absent or having the wrong version",
+      "The agent stated the outcome is REFUSED (exit 96) with no eval_report.json written and the fix is to pin lm-evaluation-harness 0.4.12"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-107",
+    "question": "I measured baselines yesterday and today's run neither reused nor seeded the cache the way I expected. What governs baseline_cache reuse here?",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and explains that a stored baseline is reused only when its fingerprint matches (baseline_provenance cached vs measured) and that a limited run never seeds the baseline cache.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent stated baselines are reused only on a matching stored fingerprint and that each benchmark records baseline_provenance as measured or cached",
+      "The agent mentioned that a limited (--limit) run never seeds the baseline cache"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-110",
+    "question": "GB200 promotion check for the q27 checkpoint — make me the job file only, 2 GPUs on one node, and hand back the hash; don't submit anything. Also, what if I try --nodes 2?",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and uses fskills eval emit to write an executable fs_launch_spec (entry fskills-eval) printing its confirm hash without submitting, noting that --nodes other than 1 makes the spec non-executable.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent used fskills eval emit with --gpus / --python / --spec-out and stated nothing is submitted at emit time and the confirm hash is printed",
+      "The agent stated the run is one node only and --nodes 2 would make the spec non-executable, while 2 GPUs shard the model via parallelize with any device dropped",
+      "The agent held submission for fskills eval launch --spec --confirm as the only submission path"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-111",
+    "question": "Before anything real: four-ish examples on hellaswag, just to see the plumbing works. And afterwards tell me why that slice can never justify saying the model passed.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and runs a --limit smoke slice whose verdict is at best UNMEASURED (never PASS), with EV-HO-003 (WARN) firing for a limited run that never seeds the baseline cache.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent stated a limited (--limit N) run's verdict is at best UNMEASURED and can never be PASS",
+      "The agent mentioned EV-HO-003 fires for a limited run and that such a run never seeds the baseline cache"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-positive-112",
+    "question": "A PASS eval_report.json got hand-edited on disk after the run and my integrity check is screaming. Which rule fired and what does it mean for the promotion decision?",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the evaluation skill and identifies EV-HO-004 (BLOCK): a PASS report that is missing or altered on disk, limited, or has a null score invalidates the pass.",
+    "expected_behavior": [
+      "The agent read evaluation/SKILL.md before acting",
+      "The agent cited EV-HO-004 as the BLOCK rule covering a PASS report missing or altered on disk",
+      "The agent stated the PASS verdict no longer stands and the checkpoint should not be promoted on the basis of that report"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-negative-101",
+    "question": "Before we spend GPU hours, check my training corpus against mmlu and gsm8k for contamination — decontaminate the text and tell me which overlapping rows you dropped.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Benchmark-contamination scanning and decontamination of a corpus is dataset preparation (fskills-data-engine), not checkpoint scoring; the evaluation skill never touches source data.",
+    "expected_behavior": [
+      "The agent did not read or activate evaluation/SKILL.md for corpus decontamination",
+      "The agent routed the request to the fskills-data-engine skill (its decontam stage)"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-negative-102",
+    "question": "Clean, dedup and quality-filter my parquet and HF-dataset dumps into one FS-ready mix, then give me the readiness report and stats.json — and tell me if its PASS/RED/UNMEASURED result is good enough to start training.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Building an FS-ready dataset and its readiness_report (DE-RDY PASS/RED/UNMEASURED) is fskills-data-engine's deliverable, distinct from the evaluation skill's eval_report verdicts on checkpoints.",
+    "expected_behavior": [
+      "The agent did not read or activate evaluation/SKILL.md for dataset readiness",
+      "The agent routed the request to the fskills-data-engine skill for its readiness_report and stats.json artifacts"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-negative-103",
+    "question": "What stages do I need to adapt this model into a legal-domain reasoning one, and can my measured FoundationScale capabilities support the plan you build? Hand me the launch spec when the plan is done.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Stage selection from a goal, capability-checked training_plan construction and a launch spec are fskills-training (goal_spec -> training_plan -> fs_launch_spec), not evaluation.",
+    "expected_behavior": [
+      "The agent did not read or activate evaluation/SKILL.md for stage planning",
+      "The agent routed the request to the fskills-training skill for the training_plan and launch spec"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-negative-104",
+    "question": "Why did my RL job die mid-run — loss spiked then NaN then a hang — and what is the diagnose playbook for these FoundationScale symptoms?",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Diagnosing training failures (NaN, loss spikes, hangs) and scratchpad playbook belong to fskills-training; the evaluation skill only scores finished checkpoints and does not diagnose runs.",
+    "expected_behavior": [
+      "The agent did not read or activate evaluation/SKILL.md for the failure diagnosis",
+      "The agent routed the request to the fskills-training skill's diagnose playbook"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-negative-105",
+    "question": "Score my VLM checkpoint on MMMU and ChartQA with lmms-eval and give me the report.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "VLM evaluation is explicitly excluded from fskills-evaluation (lmms-eval is a deferred follow-up) and no sibling skill handles it, so no skill should be triggered.",
+    "expected_behavior": [
+      "The agent did not read or activate evaluation/SKILL.md for a VLM/lmms-eval benchmark request",
+      "The agent did not activate any FoundationSkills skill and noted the request is out of scope"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-negative-106",
+    "question": "Set up an LLM-as-judge rubric to grade my model's instruction-following and helpfulness on 500 prompts, and give me judge scores per dimension.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "LLM-judged evaluation is explicitly excluded from fskills-evaluation (judge-free benchmarks only) and no sibling skill builds judge rubrics, so no skill applies.",
+    "expected_behavior": [
+      "The agent did not read or activate evaluation/SKILL.md for an LLM-judged evaluation request",
+      "The agent did not activate any FoundationSkills skill"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-negative-107",
+    "question": "Deploy this checkpoint behind a vLLM inference endpoint and measure tokens/sec and latency under load on our A100s.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Serving deployment and throughput benchmarking is out of scope (the evaluation skill is HF-backend only, no vLLM or API backends) and is not training or data work either.",
+    "expected_behavior": [
+      "The agent did not read or activate evaluation/SKILL.md for a serving deployment request",
+      "The agent did not activate any FoundationSkills skill"
+    ]
+  },
+  {
+    "id": "fskills-evaluation-negative-108",
+    "question": "Our Slurm cluster's IB fabric on the GB200 nodes is flapping again — write me an ops runbook for debugging it and check the IMEX daemon logs.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Infrastructure/cluster administration is not checkpoint evaluation, dataset building or training launching, so none of the FoundationSkills skills apply.",
+    "expected_behavior": [
+      "The agent did not read or activate evaluation/SKILL.md for an infra ops request",
+      "The agent did not activate any FoundationSkills skill"
+    ]
   }
 ]

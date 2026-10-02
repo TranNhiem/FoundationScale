@@ -5,7 +5,7 @@ description: 'Turns raw sources (JSONL/JSON/CSV/parquet, txt/html/pdf doc dirs, 
   folders) into FS-ready datasets via data_pipeline_spec streams (ingest->clean->dedup->quality->[decontam]->[mix]->format->tokenize).
   Emits data_pipeline_spec, dataset (JSONL shards w/ path+sha256+records, fs_columns), readiness_report
   (PASS/RED/UNMEASURED), stats.json accounting; REFUSED `phase-2: <op>` / DE-IN, DE-HO, DE-RDY failures.
-  Do NOT use for training launches (fskills-training) or checkpoint evals (fskills-evaluation), nor semantic_dedup/video_ingest/toolcall_format.'
+  Do NOT use for training launches (fskills-training) or checkpoint evals (fskills-evaluation), nor (phase 2, not built) tool-calling trace normalization, video ingest or semantic dedup.'
 when_to_use:
 - Turn these raw PDFs, HTML docs and JSONL files into a CPT corpus for gemma4
 - Build an SFT dataset from my Alpaca-style JSONL with the gemma4 chat template

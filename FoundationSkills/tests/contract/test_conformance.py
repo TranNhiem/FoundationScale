@@ -140,15 +140,19 @@ def test_skill_chain_reaches_launch_spec_from_raw_data():
 
 
 def test_published_routing_benchmarks_match_the_current_skill_index():
-    """A BENCHMARK.md measured another index once any frontmatter changes; re-run
+    """A BENCHMARK.md is stale once any frontmatter or that package's evals.json changes; re-run
     `fskills routing-eval run ... --write-benchmarks` rather than keep a stale number."""
     from foundationskills.agent import routing_eval
 
-    current = routing_eval._index_sha256(routing_eval.load_index())[:12]
+    index = routing_eval.load_index()
+    current = routing_eval._index_sha256(index)[:12]
+    evals = {e["package"]: e["evals_sha256"][:12] for e in index}
     for package in PACKAGES:
         path = importlib.resources.files(package).joinpath("BENCHMARK.md")
         if not path.is_file():
             continue
-        match = re.search(r"against skill index ([0-9a-f]{12})", path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        match = re.search(r"against skill index ([0-9a-f]{12}) and eval cases ([0-9a-f]{12})", text)
         assert match, f"{package}/BENCHMARK.md is not a generated routing benchmark"
         assert match.group(1) == current, f"{package}/BENCHMARK.md measured index {match.group(1)}, current is {current}"
+        assert match.group(2) == evals[package], f"{package}/BENCHMARK.md measured other eval cases; re-run routing-eval"

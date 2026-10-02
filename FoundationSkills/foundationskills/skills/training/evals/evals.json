@@ -118,5 +118,238 @@
       "The agent did not load training/SKILL.md or trigger fskills-training",
       "The agent did not invoke diagnose / diagnose_symptom on this request"
     ]
+  },
+  {
+    "id": "fskills-training-positive-101",
+    "question": "VLM project. Llama-3.2-11B-Vision base, ~800M tokens of image-text pairs plus 5k caption QA, 4x GB200, keep the model usable on plain text. Stages?",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the training skill and produces a training_plan with vlm in scope (llm, vlm), an ordered post-training stage set with method, because and estimate per stage, and a preservation plan (e.g. full/preserve_general with replay or LoRA) plus feasibility verdicts against measured FS capabilities.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent emitted a training_plan artifact whose stages carry algorithm, method, `because`, hparams and estimates",
+      "The agent checked every stage against measured FoundationScale capabilities (registered is not runnable) and named any missing capability",
+      "TheAgent accounted for preserve_general in the stage/method choice rather than silently dropping it"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-102",
+    "question": "We have a Qwen3.5-27B instruct base and we want a legal-reasoning assistant: 400M tokens of case law text, 8k judged prompt/chosen/rejected rows, and 3k prompts with verifiable answers. 8x H100, one node. Please map out the whole recipe — which stages, which algorithms, and how the preference data fits — and tell me what is actually runnable on our FS build.",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent builds a training_plan with cpt/sft (or preference) then rl, using select_algorithm against caps.rl_runnable so only dr_grpo/gspo/dapo get chosen for RL, and marks non-runnable options (e.g. QLoRA) executable:false with alternatives.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent produced a training_plan with ordered stages covering the domain text, the judged preference data and the verifiable prompts",
+      "The agent selected an RL algorithm only from dr_grpo/gspo/dapo per caps.rl_runnable and explained the choice in `because`",
+      "The agent recorded the ten planning-step decisions (at least stage_selection, algorithm_selection, method, estimate, feasibility) in the plan's decisions log"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-103",
+    "question": "Honestly our corpus is still a mess — raw PDFs and question dumps, nothing cleaned. I know quality is supposed to come first, but give me the full run plan anyway and write down exactly what we must hand to the data team before each stage can start.",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent still plans (no RED readiness report is supplied, so TR-IN-004 does not fire), records TR-PL-004 for stages whose data is not prepared and attaches a data_engine handoff with target_format per unready stage.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent produced a training_plan in which unready stages carry {\"handoff\": \"data_engine\", \"target_format\": ...} in their data block",
+      "The agent cited TR-PL-004 (WARN, handoff) for stages needing un-prepared data and did not refuse the whole plan",
+      "The agent did not build the datasets itself (that is fskills-data-engine)"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-104",
+    "question": "Loss become NaN suddenly after few thousand step, run is dead. How to fix, please?",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent keys the symptom to divergence_nan: lower the LR, add gradient clipping, and validate the records for corrupt rows.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent mapped the symptom to the divergence_nan playbook entry",
+      "The agent recommended lowering LR, gradient clipping, and validating the training records"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-105",
+    "question": "Slurm shows the job RUNNING and the GPUs are allocated, but the training log has been frozen for about 40 minutes. Is it actually learning or stuck? How do I judge that on the cluster?",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent uses the hang_no_progress entry: judge by GPU utilization and log mtime, never scheduler state, and look for a dead rank or a DataLoader worker stall.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent keyed the symptom to hang_no_progress and said to judge by GPU util + log mtime, not scheduler state",
+      "The agent suggested checking for a dead rank or a hung DataLoader worker"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-106",
+    "question": "The learning rate printed in my run log doesn't match the number in my training plan at all. Where do I look?",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent uses the lr_not_applied entry: check the warmup arithmetic and whether the scheduler state was resumed from a checkpoint.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent matched the symptom to lr_not_applied",
+      "The agent pointed at warmup arithmetic and scheduler-state resumption as the two things to check"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-107",
+    "question": "Budget question: I have a 13B instruct base, maybe 12M tokens of domain SFT data, and only two A100-40GB cards. Is QLoRA the right call, or should we do something else?",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent answers with the method decision logic: QLoRA is not executable on the installed FS (executable:false with alternatives), so it recommends LoRA (or full if it fits) with a feasibility verdict and memory estimates for the A100 hardware entry.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent stated QLoRA is not executable on the installed FoundationScale and offered LoRA (or full tuning) as the feasible alternative",
+      "The agent grounded the choice in the method/threshold logic (data size versus the full-tuning token threshold) and mappeed 'A100-40GB' to the a100 hardware knowledge entry"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-108",
+    "question": "Our MoE fine-tune is so slow, MFU very low, and also the router distribution looks one-sided with few experts always winning. What to check to find the reason?",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent combines the slow_throughput and moe_router_imbalance playbook entries: dataloader starvation / over-estimated MFU / wrong sharding for the speed, too-small aux loss or over-specialised routing for the imbalance.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent keyed the slowness to slow_throughput (dataloader starvation, over-estimated MFU, wrong sharding)",
+      "The agent keyed the lopsided router to moe_router_imbalance (aux loss too small / over-specialised routing)"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-109",
+    "question": "My agentRL run is going sideways two ways: the policy learned to game our answer checker instead of solving problems, and answer diversity is collapsing to a single template. What's the fix?",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent diagnoses both symptoms via the playbook — reward_hacking (harden answer_pattern, raise group_size) and entropy_collapse (RL LR too high / sampling too narrow).",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent mapped the checker gaming to reward_hacking and recommended hardening the verifier/answer_pattern and raising group_size",
+      "The agent mapped the diversity collapse to entropy_collapse and recommended lowering RL LR or widening sampling"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-110",
+    "question": "The plan is approved. Now turn it into the actual FoundationScale launch spec and give me the sbatch script for our GB200 partition, 2 nodes, with the long-runtime settings we're allowed.",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent uses training.emit to render stage plans into fs_launch_spec payloads plus sbatch with the GB200 IMEX-fabric preamble and the cluster rules (--time=10-00:00:00 --exclude=r01gb200...), applying FS-HO-001..003 to non-executable or single-device specs.",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent rendered fs_launch_spec payloads (and sbatch with the GB200 IMEX preamble, --time=10-00-00:00, --exclude=r01gb200...) via training.emit",
+      "The agent refused or flagged any stage whose spec is non-executable, with `missing` naming the gap (e.g. LoRA adapter needs a merge, FS RL saves no checkpoint), citing FS-HO-001/FS-HO-002 as applicable",
+      "The agent noted the RL spec is single-device and can run measurement-only (fskills launch --measurement-only, FS-HO-003)"
+    ]
+  },
+  {
+    "id": "fskills-training-positive-111",
+    "question": "Be honest with me: one node of 8x A100 40GB, and the team wants to full-parameter fine-tune a 27B instruct model on 30M tokens of domain SFT data. Can this be done, and if not what are my real options?",
+    "expected_skill": "fskills-training",
+    "should_trigger": true,
+    "ground_truth": "The agent runs the feasibility step with memory estimates for the a100 hardware entry: full tuning 27B on 40GB cards does not fit, so the per-stage feasibility verdict fails and the plan lists executable alternatives (e.g. LoRA/QLoRA-with-merge caveat, smaller batch/seq, more GPUs).",
+    "expected_behavior": [
+      "The agent read training/SKILL.md before acting",
+      "The agent produced a feasibility verdict with memory/GPU estimates rather than just saying yes or no",
+      "The agent listed executable feasible alternatives when full tuning is infeasible (method switch such as full->lora, or hardware change)",
+      "The agent avoided pointing at pp>1/ep>1 as the rescue since those are refused by FS"
+    ]
+  },
+  {
+    "id": "fskills-training-negative-101",
+    "question": "The plan says my SFT stage's data isn't ready and gave me a handoff block with a target_format. Take my raw Alpaca-style JSONL and build the FS-ready dataset with the right chat template, and hand me a readiness report.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Executing a data_engine handoff (raw rows -> FS-ready dataset + readiness report) is fskills-data-engine's job, so the training skill should not activate for this request.",
+    "expected_behavior": [
+      "The agent did not open training/SKILL.md for this request",
+      "The agent routed the request to fskills-data-engine",
+      "The agent did not emit a training_plan or call training.emit"
+    ]
+  },
+  {
+    "id": "fskills-training-negative-102",
+    "question": "Training is done and I have this LoRA adapter directory. Emit the confirm-hashed eval job and give me a PASS/RED verdict against the base model offline with lm-eval 0.4.12 before we promote.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Checkpoint-vs-base scoring with pinned lm-eval-harness, eval_report.json and the confirm-hashed fskills-eval launch spec belong to fskills-evaluation, not the training planner.",
+    "expected_behavior": [
+      "The agent did not open training/SKILL.md for this request",
+      "The agent routed the request to fskills-evaluation",
+      "The agent did not produce a training_plan and did not route to training.emit"
+    ]
+  },
+  {
+    "id": "fskills-training-negative-103",
+    "question": "Before the cpt stage launches, clean, dedup and quality-filter these parquet dumps and show me the per-stage drop counts with stats.json accounting.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Dataset pipeline work (clean -> dedup -> quality with per-stage drop counts and stats.json) is the data_engine package's domain; the training skill explicitly excludes data preparation.",
+    "expected_behavior": [
+      "The agent did not open training/SKILL.md for this request",
+      "The agent routed the request to fskills-data-engine and planned a data_pipeline_spec stream",
+      "The agent did not emit a training_plan or plan training stages"
+    ]
+  },
+  {
+    "id": "fskills-training-negative-104",
+    "question": "The SLURM job for the final checkpoint is finished and the loss curves look sane. Score it on mmlu and gsm8k versus the base, fully offline, and write eval_report.json with provenance — also explain any 95/96 status it may return.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Offline benchmark scoring of a checkpoint with pinned harness and eval_report.json is fskills-evaluation's scope; training skill handles planning and training-time diagnosis only.",
+    "expected_behavior": [
+      "The agent did not open training/SKILL.md for this request",
+      "The agent routed the request to fskills-evaluation (pinned lm-evaluation-harness 0.4.12, judge-free tasks)",
+      "The agent did not invoke training diagnose / diagnose_symptom and did not emit a training_plan"
+    ]
+  },
+  {
+    "id": "fskills-training-negative-105",
+    "question": "The IMEX fabric keeps wedging on our GB200 nodes and Slurm marks them down every night. How do I drain them and get the partition healthy again?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Cluster administration and fabric health are outside every FoundationSkills skill (the skill merely plans around the GB200 knowledge entry and its sbatch preamble).",
+    "expected_behavior": [
+      "The agent did not load training/SKILL.md or trigger fskills-training",
+      "The agent did not load any FoundationSkills skill package",
+      "The agent treated this as a cluster-admin / hardware-ops question"
+    ]
+  },
+  {
+    "id": "fskills-training-negative-106",
+    "question": "Now deploy the trained 27B for online inference on our GB200s with vLLM: tune the KV cache, continuous batching and p99 latency for a chat API.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Serving/deployment and inference optimization are not covered by any skill here (training planning, data prep, or checkpoint evals only).",
+    "expected_behavior": [
+      "The agent did not load training/SKILL.md or trigger fskills-training",
+      "The agent did not load any FoundationSkills skill package",
+      "The agent handled this as a serving/infrastructure question"
+    ]
+  },
+  {
+    "id": "fskills-training-negative-107",
+    "question": "In our training repo the tokenizer collate function has an off-by-one on padding; write the fix and add two unit tests for it.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A generic code-editing and testing task; no FoundationSkills skill handles repository code changes.",
+    "expected_behavior": [
+      "The agent did not load training/SKILL.md or trigger fskills-training",
+      "The agent did not load any FoundationSkills skill package",
+      "The agent did not call diagnose / diagnose_symptom"
+    ]
+  },
+  {
+    "id": "fskills-training-negative-108",
+    "question": "Build me a chatbot arena: four deployed policies answer 2k user prompts and GPT-4o judges which reply is better, then rank them with confidence intervals.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "LLM-judged and agentic evaluations are explicitly excluded from fskills-evaluation and are nothing to do with fskills-training's planning/diagnosis scope, so no skill should trigger.",
+    "expected_behavior": [
+      "The agent did not load training/SKILL.md or trigger fskills-training",
+      "The agent did not route to fskills-evaluation (which is judge-free, lm-eval-harness only)",
+      "The agent handled this as a general ML/eval-scheme question or asked for clarification"
+    ]
   }
 ]

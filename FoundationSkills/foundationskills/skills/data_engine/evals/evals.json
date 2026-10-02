@@ -124,5 +124,255 @@
       "The agent did not emit or run any of the registered ops (ingest, clean, dedup, quality, decontam, mix, format, tokenize)",
       "The agent produced no readiness_report or stats.json accounting for the request"
     ]
+  },
+  {
+    "id": "fskills-data-engine-positive-101",
+    "question": "/data/dumps/*.parquet -> cpt corpus for gemma4-4b. Run dedup + quality. Show me the per-op drop counts in stats.json.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and streams the parquet source through ingest -> clean -> dedup -> quality -> format(cpt) -> tokenize, emitting the three artifacts plus out_dir/stats.json with every op's in/out/dropped counters and the realized mixture.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent accepted kind=parquet sources and target_format=cpt, rejecting an unknown target_format instead of guessing (DE-IN-002)",
+      "The agent said per-op accounting goes to out_dir/stats.json with dropped counts by reason, and that dataset shards carry path+sha256+records",
+      "The agent noted cpi/pretrain record shape is {id, text, meta}"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-102",
+    "question": "Step 3 of the training plan I was handed says: {\"handoff\": \"data_engine\", \"target_format\": \"pretrain\"}. The sources are 2TB of raw txt dumps for a 26B run — build the packed tokenized corpus and tell me the token accounting so the planner can size the stages.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine (a training plan handing off to data_engine is an explicit data_engine entry point, not a training task) and runs ingest -> clean -> dedup -> quality -> format(pretrain) -> tokenize(pack), reporting num_tokens (or num_tokens_approx with null when only approximate).",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent recognized the {\"handoff\": \"data_engine\", \"target_format\": ...} payload as an input to this skill rather than routing it to fskills-training",
+      "The agent produced the dataset artifact with shard path+sha256+records and fs_columns, and reported num_tokens as null when only an approximate count exists (num_tokens_approx)",
+      "The agent applied the tokenize stage with packing for the large-scale pretrain corpus and did not launch any training process"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-103",
+    "question": "Please, I am having many folders with pictures and captions, from my product catalog. I want the fine-tuning data for my vision model, gemma4 vlm, format like multimodal sft. When match, clean it up.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and ingests kind=image_text sources into mm_sft records with an added image field and fs_columns.image_column (FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN=image), rendered through the gemma4 chat template.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent accepted kind=image_text sources and target_format=mm_sft for a VLM, noting DE-IN-005 warns when chat_template_family or tokenizer is missing",
+      "The agent said mm_sft rows add image to the sft shape {id, messages, text, meta} and that fs_columns.image_column is what training consumes",
+      "The agent cited DE-RDY-008 (the chat template actually applied, fallback or family mismatch fails) and/or DE-RDY-011 (targets start exactly as the tokenizer's inference prompt)"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-104",
+    "question": "I ran a pairwise judge over my instruction data and saved rows with prompt, the better response and the worse one. Turn those into whatever the RLHF stage actually wants formatted like prompt/chosen/rejected. Also, will my current FoundationScale install even be able to train on this?",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and formats the judged data into preference records {id, prompt, chosen, rejected, meta}, and consults ctx.capabilities to warn (DE-IN-006) when the installed FS cannot run the preference family.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent chose target_format=preference and stated the preference record shape {id, prompt, chosen, rejected, meta}",
+      "The agent cited DE-IN-006 as the WARN when the installed FS cannot run the preference family (capability check at input)",
+      "Theagent did not launch training and did not produce an fs_launch_spec or sbatch script"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-105",
+    "question": "Compliance audit ahead: I need my document corpus redacted for PII and then proof that what remains is under our threshold before any model touches it.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and runs the clean op with strict PII redaction, then reports the DE-RDY-006 readiness check that PII remaining after redaction is <= max_pii_remaining as measured by the clean op.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent applied the clean op (strict PII, doc cleaning) as part of a data_pipeline_spec rather than an ad-hoc scrubbing script",
+      "The agent cited DE-RDY-006 (PII remaining after redaction <= max_pii_remaining, measured by the clean op) as the readiness check"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-106",
+    "question": "Quick audit question: our dataset pipeline skipped dedup entirely and now readiness_report is UNMEASURED with some null check about dedup. Is that a blocker or an oops, and how do I close it?",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and explains DE-RDY-004 (a dedup op ran; failure when require_dedup and none ran) plus DE-HO-002 (UNMEASURED WARN listing the null checks), and recommends rerunning with a dedup op in the spec.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent cited DE-RDY-004 as the readiness check that a dedup op ran, failing when require_dedup is set and none ran",
+      "The agent cited DE-HO-002 as the WARN accompanying an UNMEASURED verdict, listing the null checks",
+      "The agent said UNMEASURED is fixable by rerunning the pipeline with a dedup op in data_pipeline_spec (document+near dedup)"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-107",
+    "question": "Here's a csv of math word problems; the 'answer' column holds the correct final number. I need prompts the RL trainer can verify against, for gspo/dapo-style experiments.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and converts the csv into rl records of ShareGPT-style {conversations: [{from, value}...], answer} with fs_columns.gold_key='answer', ready for an fskills-rl config emit.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent accepted kind=csv sources and target_format=rl",
+      "Theagent stated the rl record shape {conversations: [{from, value}...], answer} and that fs_columns carries gold_key='answer'",
+      "Theagent kept gold answers verifiable rather than generating synthetic answers without a measured grounding check"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-108",
+    "question": "On 2M raw web docs, heuristics gave up. I want model-based quality labels via a rubric — annotate a deterministic subset and filter by the labels. We have a local vLLM server with an OpenAI-compatible API; wire that in and cap the spend.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and selects llm_classify with a pluggable openai_compatible backend (base_url, model, api_key_env, cache_dir), sampling a deterministic subset and filtering on labels while counting invalid labels as unmeasured (DE-IN-007 blocks the op if no usable backend config exists).",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent selected llm_classify with an openai_compatible backend config instead of a heuristic fallback (there is none)",
+      "Theagent stated that invalid or failed labels become None and are counted unmeasured, and that sample.rate annotates a deterministic subset (annotate-then-distill)",
+      "Theagent cited DE-IN-007 as the rule refusing llm_classify/llm_enhance without a usable config.backend"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-109",
+    "question": "We're doing domain CPT on legal PDFs but the model must not forget general chat and reasoning. How do I keep a general replay share in the training data — decide the mix and write it into my dataset plan.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and uses design_mixture(stage=\"cpt\", preserve_general=True, ...) to set the general-replay share, adding a [mix] stage to data_pipeline_spec and reporting the realized mixture in stats.json.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent proposed ingesting kind=documents PDFs with target_format=cpt and a [mix] stage in the op sequence",
+      "The agent named design_mixture as the API for choosing the general-replay share (preserve_general) and recorded the realized mixture in stats.json",
+      "The agent did not plan training stages or a launch spec (that belongs to fskills-training)"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-110",
+    "question": "We recorded customer calls last quarter; speech-to-text already gave us JSONL files of segments (speaker, timestamp, text) for each call. Make fine-tuning dialogue data for the support bot from these transcripts — dedup near-duplicate calls too.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and ingests the transcript JSONL (kind=jsonl) through clean -> dedup -> quality -> format(sft) -> tokenize, treating the audio-derived text as ordinary text records (no video/audio ingest is claimed).",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent ingested the segment JSONL as kind=jsonl text records and did not attempt video_ingest or any audio/ASR op (phase-2, unimplemented)",
+      "The agent ran a dedup op (document+near) for the near-duplicate calls and recorded per-op dropped counters in stats.json"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-111",
+    "question": "My dataset request came back REFUSED and the message names the target format I passed: I used \"chat\". What's actually valid and what do I resend?",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and explains DE-IN-002 (target_format not in the known set blocks the request) and that the valid target_format values are pretrain | cpt | sft | mm_sft | preference | rl, so the request (not the data) must be fixed and resent.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent cited DE-IN-002 as the BLOCKing rule for an unknown target_format",
+      "The agent listed the known target_format set: pretrain, cpt, sft, mm_sft, preference, rl",
+      "The agent said REFUSED means the request must be fixed (it is not a readiness verdict PASS/RED/UNMEASURED)"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-112",
+    "question": "Reviewers always ask whether the training set contains benchmark text. Before our next run on the GB200 cluster, quietly check my raw folder of web dumps for overlap with the benchmarks we report and remove it.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and adds a decontam stage (triggered by passing benchmarks) to the pipeline over the raw dumps, with DE-RDY-005 checking for no unmeasured benchmarks and no remaining hits.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent recognized the contamination-scrub request as data preparation (not checkpoint evaluation) and selected the decontam stage via the benchmarks input",
+      "The agent cited DE-RDY-005 (decontamination ran with no unmeasured benchmarks and no remaining hits)",
+      "The agent noted decontam without benchmark files surfaces as UNMEASURED checks rather than silently passing"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-101",
+    "question": "My CPT job on 8 GB200s ran fine for 3 hours and then the loss went NaN. Diagnose the symptom and give me the mitigation playbook — is it my data?",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "This is a mid-run training failure diagnosis, which fskills-training's diagnose playbook covers; fskills-data-engine does not run training and cannot inspect live job symptoms.",
+    "expected_behavior": [
+      "The agent did not load fskills-data-engine/SKILL.md to perform this request",
+      "The agent routed the request to the fskills-training package's diagnose playbook",
+      "The agent did not produce data_pipeline_spec, dataset or readiness_report artifacts for a live training symptom"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-102",
+    "question": "Take the goal_spec and the readiness_report I already have and tell me which pretrain/cpt/sft stages I need for a domain reasoning model, LoRA or full tuning on my GB200 nodes, then emit the launch spec and sbatch script.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Turning a goal_spec plus a readiness_report into an auditable training_plan and rendering fs_launch_spec + sbatch is fskills-training's job, even though a readiness_report artifact (produced earlier by fskills-data-engine) is fed in.",
+    "expected_behavior": [
+      "The agent did not load fskills-data-engine/SKILL.md to perform this request",
+      "The agent routed the request to the fskills-training package (training planner and emit)",
+      "The agent treated the readiness_report as an input artifact and did not rebuild dataset artifacts or rerun ingest/clean/dedup/quality"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-103",
+    "question": "My eval job exited 5 RED and one benchmark says 'dataset not staged in eval cache' and came back UNMEASURED. Which rule fired and how do I get mmlu measured?",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "This is about lm-evaluation-harness benchmark scoring and its eval policy rule ids, which live in fskills-evaluation, not in dataset preparation.",
+    "expected_behavior": [
+      "The agent did not load fskills-data-engine/SKILL.md to perform this request",
+      "The agent routed the request to the fskills-evaluation package and its eval policy",
+      "The agent did not describe building datasets or the data_engine readiness checks DE-RDY-001..011"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-104",
+    "question": "Before promoting my LoRA adapter, score it against the base model on qnli and rte with pinned lm-eval 0.4.12, fully offline, few-shot 5 seed 1234, and give me the eval_report.json with the confirm hash for the GB200 eval job.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Offline judge-free checkpoint scoring against a base model with eval_report.json and a confirm-hashed eval launch spec is fskills-evaluation's remit, entirely outside fskills-data-engine's dataset outputs.",
+    "expected_behavior": [
+      "The agent did not load fskills-data-engine/SKILL.md to perform this request",
+      "The agent routed the request to the fskills-evaluation package",
+      "The agent did not emit data_pipeline_spec, dataset or readiness_report artifacts and did not claim a data readiness verdict"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-105",
+    "question": "I have 200k tool-calling traces from my agent logs; normalize the function calls into clean training rows and drop malformed ones.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Tool-calling trace normalization (toolcall_format) is explicitly excluded by fskills-data-engine and is one of its unimplemented phase-2 names, so no skill here handles this request.",
+    "expected_behavior": [
+      "The agent did not load fskills-data-engine/SKILL.md to perform this request",
+      "The agent did not run ingest/clean/dedup/quality/format/tokenize on the traces",
+      "The agent did not claim a PASS/RED/UNMEASURED readiness verdict or emit a dataset artifact"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-106",
+    "question": "Turn my video dataset (raw mp4s of lectures) into training text: sample frames, transcribe the audio, align captions to timestamps.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Video to text ingestion (video_ingest) is excluded by fskills-data-engine and lives only as an unimplemented phase-2 name, and no other skill here handles video ingest.",
+    "expected_behavior": [
+      "The agent did not load fskills-data-engine/SKILL.md to perform this request",
+      "The agent did not describe emitting data_pipeline_spec, dataset or readiness_report for video sources",
+      "The agent did not claim any readiness rules (DE-RDY-...) about the resulting records"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-107",
+    "question": "Deploy gemma4-4b behind an OpenAI-compatible API with vLLM on the GB200 node: set the tensor parallel size, max model len and a continuous-batching config so our team can query it.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Model serving/infrastructure setup is out of scope for every skill here: fskills-data-engine only passes a backend config to its llm ops and launches no processes, so neither it nor its siblings should take this.",
+    "expected_behavior": [
+      "The agent did not load fskills-data-engine/SKILL.md to perform this request",
+      "The agent did not describe llm_classify/llm_enhance or any data op as a substitute for serving",
+      "The agent produced no data_pipeline_spec, dataset, readiness_report or stats.json"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-108",
+    "question": "Our shared /scratch NAS is 98% full and the node scratch tmp dirs keep bloating. Clean the quotas per user group and set up lifecycle deletion so ops stops paging us.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Cluster storage administration has no request object, data sources or FoundationSkills package here, and fskills-data-engine's stats.json accounting is not a filesystem cleanup tool.",
+    "expected_behavior": [
+      "The agent did not read or activate fskills-data-engine/SKILL.md",
+      "The agent did not emit data_pipeline_spec, dataset or readiness_report artifacts",
+      "The agent handled the storage administration request without invoking any registered data_engine op (ingest, clean, dedup, quality, decontam, mix, format, tokenize)"
+    ]
   }
 ]
