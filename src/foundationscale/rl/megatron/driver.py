@@ -726,6 +726,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="rung 2: penalty at the --max-new-tokens cap when --overlong-cache > 0",
     )
+    ap.add_argument(
+        "--unparsed-reward",
+        type=float,
+        default=None,
+        help="score a scorer abstention on a prompt with gold as this reward "
+        "(format failure); default keeps it masked as unmeasured",
+    )
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument(
         "--top-p",
@@ -868,10 +875,15 @@ def _run_online(
                 raise RuntimeError(f"step {step}: {len(all_rows)} rollout rows, expected {n_rows}")
             # Shape only the advantages: logged reward stays the scorer's verdict.
             scored_rows = all_rows
+            format_failures = None
+            if args.unparsed_reward is not None:
+                scored_rows, format_failures = online.format_failure_rows(
+                    scored_rows, reward=args.unparsed_reward
+                )
             overlong_penalty = None
             if args.overlong_cache > 0:
                 scored_rows, overlong_penalty = online.overlong_shaped_rows(
-                    all_rows,
+                    scored_rows,
                     max_new_tokens=args.max_new_tokens,
                     cache_tokens=args.overlong_cache,
                     factor=args.overlong_factor,
@@ -887,6 +899,8 @@ def _run_online(
             }
             if overlong_penalty is not None:
                 record["overlong_penalty_mean"] = round(overlong_penalty, 5)
+            if format_failures is not None:
+                record["format_failures"] = format_failures
             if not any(m > 0 for m in sample_mask):
                 record["skipped"] = "no scored, non-empty row in the batch"
             else:

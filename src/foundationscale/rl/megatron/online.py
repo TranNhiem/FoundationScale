@@ -63,6 +63,7 @@ __all__ = (
     "sample_prompt_indices",
     "scored_group_advantages",
     "overlong_shaped_rows",
+    "format_failure_rows",
     "shard_rows",
     "step_rollout_metrics",
 )
@@ -79,7 +80,9 @@ class OnlineRow:
     ``group_size`` completions of one prompt share a value and are normalized
     against each other. ``finished`` records that an EOS was emitted before the
     budget ran out; a budget-truncated completion is the policy talking past
-    its own stop token and is reported, not repaired.
+    its own stop token and is reported, not repaired. ``gold_present`` records
+    that the prompt carried a gold answer, so an abstention on it is the
+    response's failure, not the corpus's (see :func:`format_failure_rows`).
     """
 
     prompt_ids: tuple[int, ...]
@@ -87,6 +90,7 @@ class OnlineRow:
     reward: float | None
     group: int
     finished: bool
+    gold_present: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "prompt_ids", tuple(int(t) for t in self.prompt_ids))
@@ -232,6 +236,33 @@ def overlong_shaped_rows(
         scored += 1
         shaped.append(replace(row, reward=reward + penalty))
     return shaped, penalty_sum / scored if scored else 0.0
+
+
+def format_failure_rows(rows: Sequence[OnlineRow], *, reward: float) -> tuple[list[OnlineRow], int]:
+    """Score an abstention on a prompt WITH gold as a format failure worth ``reward``.
+
+    WHY: a masked row gets no advantage, so under group normalisation an unparsable
+    answer is strictly cheaper than a wrong one -- a wrong answer is pushed down, the
+    unparsable one is left alone. Measured on the Megatron lane (seed 2, 1024-token
+    cap): unparsed rows rose from ~2 to 25 of 64 per step, all of them FINISHED, so
+    the truncation rule in :func:`overlong_shaped_rows` never saw them.
+
+    This is opt-in. The scorer's abstention stays the default verdict because a
+    surface the prompt never declared would otherwise be scored as wrong. Only a
+    caller who declared the answer surface can say "no letter here" is a failure.
+    A row whose prompt has NO gold stays ``None``: nothing could have measured it.
+    Returns NEW rows and the number converted; the input is never touched.
+    """
+
+    out: list[OnlineRow] = []
+    converted = 0
+    for row in rows:
+        if row.reward is None and row.gold_present:
+            out.append(replace(row, reward=float(reward)))
+            converted += 1
+        else:
+            out.append(replace(row))
+    return out, converted
 
 
 def collate_token_batch(
@@ -585,6 +616,7 @@ def generate_group_rows(
                         reward=reward.score(response=response, gold=sample.gold),
                         group=group,
                         finished=finished,
+                        gold_present=sample.gold is not None,
                     )
                 )
     return rows
