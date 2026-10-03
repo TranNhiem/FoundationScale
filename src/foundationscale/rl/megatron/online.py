@@ -181,10 +181,13 @@ def overlong_shaped_rows(
 
     A row with ``finished is False`` pays the same flat ``-factor`` at EVERY length: a
     budget truncation is the same failure described by a token count instead of a
-    length, so it is paid in full, not by the piece. Shaping lands only where a reward
-    was MEASURED -- a scorer abstention stays ``None`` and is kept out of the returned
-    mean, because an unmeasured row must not be handed an invented score nor borrow
-    weight from rows that were actually scored.
+    length, so it is paid in full, not by the piece. Shaping lands only where a verdict
+    was MEASURED. The scorer's abstention on a row that FINISHED stays ``None`` and is
+    kept out of the returned mean: nothing measured it. A TRUNCATED row is different:
+    the sampler measured that it spent the budget without stopping, and that is the
+    verdict, so it scores ``0.0 - factor`` even when the scorer found no answer in it.
+    Leaving it ``None`` masks it out of training, which is what let the length collapse
+    run unopposed: the truncated rows are exactly the ones the scorer cannot parse.
 
     Every row comes back a NEW object (``dataclasses.replace``); the input is never
     touched. ``cache_tokens`` must be a real window: 0 would mean "never penalize",
@@ -218,6 +221,9 @@ def overlong_shaped_rows(
             penalty = 0.0
         else:
             penalty = -(n_tokens - start) / cache_tokens * factor
+        truncated = not row.finished or n_tokens >= max_new_tokens
+        if reward is None and truncated:
+            reward = 0.0  # the truncation is the measured verdict; see docstring
         if reward is None:
             # Unmeasured stays unmeasured: no shaping here may invent a verdict.
             shaped.append(replace(row, reward=None))

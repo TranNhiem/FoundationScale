@@ -55,13 +55,21 @@ def test_factor_scales_the_whole_shape() -> None:
     assert mean == -1.5
 
 
-def test_abstention_stays_none_and_is_excluded_from_mean() -> None:
-    rows = [_row(8, reward=None), _row(0, reward=None, finished=False), _row(8)]
+def test_finished_abstention_stays_none_and_is_excluded_from_mean() -> None:
+    rows = [_row(8, reward=None), _row(3, reward=None), _row(8)]
     out, mean = overlong_shaped_rows(rows, max_new_tokens=10, cache_tokens=4)
     assert out[0].reward is None
     assert out[1].reward is None
     assert out[2].reward == 0.5
     assert mean == -0.5  # only the MEASURED row's penalty: abstention borrows no weight
+
+
+def test_truncated_abstention_is_scored_as_the_full_penalty() -> None:
+    # The scorer cannot parse a cut-off answer; the truncation itself is the verdict.
+    rows = [_row(0, reward=None, finished=False), _row(10, reward=None), _row(8)]
+    out, mean = overlong_shaped_rows(rows, max_new_tokens=10, cache_tokens=4, factor=2.0)
+    assert [r.reward for r in out] == [-2.0, -2.0, 0.0]
+    assert mean == (-2.0 - 2.0 - 1.0) / 3
 
 
 def test_mean_is_mean_over_scored_rows_only() -> None:
