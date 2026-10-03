@@ -61,7 +61,7 @@ rules:
     action: add_stage
     stage: sft
     algorithm_hint: sft
-    because: "tool calling is a format-heavy supervised skill; tool-call example construction is a PHASE-2 data-engine op (toolcall_format) -- flag as REFUSED if not already materialised."
+    because: "tool calling is a format-heavy supervised skill; existing traces are normalised by the data-engine toolcall_format op; synthesizing new traces is PHASE-2 (synthesize) -- flag as REFUSED if no traces are materialised."
   - id: general-chat-instruct-skip-sft
     when: {goal_in: [general_chat], base_is_instruct: true, has_instructions: false}
     action: skip_stage

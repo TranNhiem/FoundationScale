@@ -1,0 +1,100 @@
+# Ideas catalog for auto_research (adapted from NeMo-RL nemo-rl-auto-research exploration ideas).
+# delta values are literals, or "x0.5"/"x2" multiplicative factors resolved against `current`.
+# prior_gain: s|m|l (small/medium/large expected gain), complexity: 1|2|3 (edit cost).
+version: 1
+ideas:
+  - id: lr_down
+    domain: optim
+    applies_when: ["loss diverging", "unstable loss", "loss spikes", "reward falling"]
+    delta: {"optim.lr": "x0.5"}
+    prior_gain: m
+    complexity: 1
+    watch: ["slow convergence", "underfitting", "noisier gradients at small batch"]
+
+  - id: lr_up
+    domain: optim
+    applies_when: ["underfitting", "slow convergence", "loss plateau"]
+    delta: {"optim.lr": "x2"}
+    prior_gain: s
+    complexity: 1
+    watch: ["loss spikes", "reward collapse", "gradient clipping saturation"]
+
+  - id: warmup_up
+    domain: optim
+    applies_when: ["early loss spikes", "unstable start", "early loss diverging"]
+    delta: {"optim.warmup_ratio": "x2"}
+    prior_gain: s
+    complexity: 1
+    watch: ["warmup_ratio growth crowds out real training", "slow early steps"]
+
+  - id: lora_rank_up
+    domain: optim
+    applies_when: ["underfitting", "lora underfitting", "validation gap"]
+    delta: {"lora.rank": "x2"}
+    prior_gain: m
+    complexity: 2
+    watch: ["adapter memory growth", "gap between adapter and full training"]
+
+  - id: train_full
+    domain: train.method
+    applies_when: ["low accuracy", "underfitting", "validation gap"]
+    delta: {"train.method": "full"}
+    prior_gain: l
+    complexity: 3
+    watch: ["memory pressure", "wall time per step", "catastrophic forgetting"]
+
+  - id: train_lora
+    domain: train.method
+    applies_when: ["oom", "memory pressure", "overfitting"]
+    delta: {"train.method": "lora"}
+    prior_gain: s
+    complexity: 1
+    watch: ["accuracy drop versus full training", "adapter underfitting"]
+
+  - id: rl_algo_gspo
+    domain: rl.algorithm
+    applies_when: ["policy collapse", "reward falling", "high reward variance"]
+    delta: {"rl.algorithm": "gspo"}
+    prior_gain: m
+    complexity: 2
+    watch: ["sequence-level credit assignment", "reward variance across groups"]
+
+  - id: rl_algo_dapo
+    domain: rl.algorithm
+    applies_when: ["zero-variance rewards", "reward saturation", "stale rollouts"]
+    delta: {"rl.algorithm": "dapo"}
+    prior_gain: m
+    complexity: 2
+    watch: ["group diversity collapse", "dynamic sampling overhead"]
+
+  - id: rl_group_size_up
+    domain: rl
+    applies_when: ["high reward variance", "noisy rewards", "zero-variance rewards"]
+    delta: {"rl.group_size": "x2"}
+    prior_gain: m
+    complexity: 2
+    watch: ["rollout wall time", "group memory footprint"]
+
+  - id: rl_temperature_down
+    domain: rl
+    applies_when: ["answer-format drift", "noisy rewards", "truncated completions"]
+    delta: {"rl.temperature": "x0.5"}
+    prior_gain: s
+    complexity: 1
+    watch: ["entropy collapse", "exploration starvation"]
+
+  - id: rl_kl_up
+    domain: rl
+    applies_when: ["policy drift", "answer-format drift", "catastrophic forgetting"]
+    delta: {"rl.kl_coef": "x2"}
+    prior_gain: s
+    complexity: 1
+    watch: ["reward under-movement", "policy pinned to the reference"]
+
+  - id: seq_len_up
+    domain: train
+    applies_when: ["truncated completions", "context truncation", "long answers cut"]
+    delta: {"train.seq_len": "x2"}
+    prior_gain: m
+    complexity: 2
+    watch: ["tokens per second", "padding waste", "memory pressure"]

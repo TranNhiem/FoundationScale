@@ -58,7 +58,7 @@ evaluation:
     - bfcl_v3
   success: ">= 70% AST@1 on BFCL v3 single-turn"
 risks:
-  - "tool-call example construction (toolcall_format) is a PHASE-2 data-engine op: the planner must refuse unless tool-call traces are already materialised"
+  - "tool-call traces must be materialised and normalised first (data-engine toolcall_format op); synthesizing new traces is still PHASE-2 (synthesize)"
   - "strict-JSON tool arguments break silently if the rendered text is truncated -- audit truncation_rate"
 provenance:
   status: literature

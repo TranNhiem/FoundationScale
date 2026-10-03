@@ -5,7 +5,9 @@ description: 'Turns raw sources (JSONL/JSON/CSV/parquet, txt/html/pdf doc dirs, 
   folders) into FS-ready datasets via data_pipeline_spec streams (ingest->clean->dedup->quality->[decontam]->[mix]->format->tokenize).
   Emits data_pipeline_spec, dataset (JSONL shards w/ path+sha256+records, fs_columns), readiness_report
   (PASS/RED/UNMEASURED), stats.json accounting; REFUSED `phase-2: <op>` / DE-IN, DE-HO, DE-RDY failures.
-  Do NOT use for training launches (fskills-training) or checkpoint evals (fskills-evaluation), nor (phase 2, not built) tool-calling trace normalization, video ingest or semantic dedup.'
+  Also embedding semantic dedup, tool-calling trace normalization (OpenAI/ShareGPT/Hermes/Glaive/xLAM/Llama-3/Mistral)
+  and video ingest (frames + Whisper ASR). Do NOT use for training launches (fskills-training) or checkpoint evals
+  (fskills-evaluation), nor for synthesizing new examples from nothing (phase 2; use llm_enhance on existing records).'
 when_to_use:
 - Turn these raw PDFs, HTML docs and JSONL files into a CPT corpus for gemma4
 - Build an SFT dataset from my Alpaca-style JSONL with the gemma4 chat template
@@ -15,6 +17,9 @@ when_to_use:
 - Scan my corpus for benchmark contamination before we spend GPU hours
 - Make preference pairs (prompt/chosen/rejected rows) from my judged data
 - Give me a readiness report and stats.json for this dataset — is it PASS, RED or UNMEASURED?
+- Remove paraphrase-level near-duplicates from my SFT set with embeddings, not just MinHash
+- Normalize my Hermes/Glaive/xLAM tool-calling traces into one OpenAI tool_calls schema
+- Turn these lecture videos into frame + transcript records for multimodal SFT
 ---
 
 # Data Engine
@@ -34,8 +39,12 @@ exactly the record shapes `foundationscale-train` / `fskills-rl` consume.
 - A training plan hands you `{"handoff": "data_engine", "target_format": ...}`.
 - You want per-stage drop accounting (`stats.json`) before spending GPU hours.
 
-Do NOT use it for: training itself (training.planner / training.emit), semantic
-dedup, synthetic generation, tool-call normalization or video ingest (phase 2).
+- You need embedding near-dedup (`semantic_dedup`), tool-calling traces in one
+  schema (`toolcall_format`) or video turned into frame+transcript records
+  (`video_ingest`) — see "Semantic, tool-call and video ops" below.
+
+Do NOT use it for: training itself (training.planner / training.emit) or
+synthesizing examples from nothing (`synthesize`, phase 2).
 
 ## Inputs
 Request object (validated against the skill input schema):
@@ -82,6 +91,7 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | DE-IN-005 | sft/mm_sft | WARN | chat_template_family or tokenizer missing |
 | DE-IN-006 | input | WARN | preference target while the installed FS cannot run the preference family |
 | DE-IN-007 | input | BLOCK | `llm_classify`/`llm_enhance` without a usable `config.backend` (static), or a backend config error at run time → REFUSED |
+| DE-IN-008 | input | BLOCK | `semantic_dedup`/`video_ingest` runtime dependency unavailable (encoder not cached, ffmpeg/ffprobe missing, ASR model not cached) — checked offline by the op's `preflight`, or raised at run time → REFUSED; nothing is downloaded |
 | DE-HO-001 | handoff | BLOCK | readiness verdict is RED |
 | DE-HO-002 | handoff | WARN | readiness verdict is UNMEASURED (null checks listed) |
 | DE-HO-003 | handoff | BLOCK | zero records written |
@@ -104,7 +114,8 @@ readiness_report artifact `checks` for per-rule details.)
 ## Failure handling
 - REFUSED: unknown format (DE-IN-002), missing local files (DE-IN-003), no
   sources (DE-IN-001), phase-2 op (DE-IN-004), LLM op without a backend
-  (DE-IN-007) — fix the request, not the data.
+  (DE-IN-007), missing encoder/ffmpeg/ASR model (DE-IN-008) — fix the request
+  or the environment, not the data.
 - RED: readiness failure (DE-HO-001) or empty output (DE-HO-003). Read
   `out_dir/stats.json`: every op reports `dropped` by reason, so find which
   stage ate the records (usually strict `clean`/`quality` thresholds).
@@ -192,11 +203,37 @@ and every touched record gets `meta.llm` provenance (model, prompt hash, cache h
 
 Design record and survey: `artifacts/research/llm_data_engine.md`.
 
+## Semantic, tool-call and video ops
+- `semantic_dedup` — sentence-transformers embeddings (default
+  `all-MiniLM-L6-v2`, `local_files_only`), greedy keep-first: a record is a
+  duplicate iff its cosine similarity to an EARLIER KEPT record is >= `threshold`
+  (default 0.90; no chain collapse). `exact` up to `exact_max` (100k) records,
+  seeded MiniBatchKMeans above (`approximate: true` in stats). Drops count as
+  `semantic_duplicate`; stats carry the model revision, device, a 20-bin
+  similarity histogram, the near-threshold count and example pairs, so the
+  threshold is auditable (cluster-scoped in kmeans mode: `measurement_scope`).
+  Buffers records in memory up to `max_records`.
+- `toolcall_format` — normalizes OpenAI, ShareGPT (`function_call`/
+  `observation`), Hermes, Glaive, xLAM, Llama-3 and Mistral traces into OpenAI
+  `tool_calls` messages plus a top-level `tools` list (JSON-schema parameters);
+  canonical argument JSON, deterministic call ids (id-less dialects pair each
+  tool result with the oldest unanswered call). Arguments are validated
+  against the declared schema; failures drop with a named reason
+  (`bad_arguments_json`, `undeclared_tool_call`, `args_schema_violation`,
+  `result_without_call`, ...), or with `strict: false` are kept and marked.
+- `video_ingest` — ffprobe/ffmpeg uniform frames (`fps`, `max_frames`) cached
+  under `frames_dir`, Whisper ASR through transformers (`asr: none` for frames
+  only), transcript segments aligned to the nearest frame; emits `images` +
+  timestamped `text` (or a user/assistant `messages` pair), optional
+  `chunk_seconds` windows. Drops: `video_missing`, `probe_failed`, `too_long`,
+  `no_frames`, `audio_extract_failed`, `asr_failed`. ASR segments that zlib-compress more than
+  `max_compression_ratio` (default 2.4, Whisper's own threshold) are
+  repetition-loop hallucinations on non-speech audio and are suppressed
+  (`asr_segments_suppressed`).
+Running these on a GPU is a library call, not a launch: no confirm hash; the
+device is recorded in stats.
+
 ## Phase 2
-Declared (via `data_engine.phase2.PHASE2`) but NOT implemented; selecting any
-of these op names refuses with `phase-2: <name>`:
-- `semantic_dedup` — embedding-based near-dedup.
+Declared (via `data_engine.phase2.PHASE2`) but NOT implemented; selecting it
+refuses with `phase-2: <name>`:
 - `synthesize` — superseded by `llm_enhance`; kept as a refusing name.
-- `toolcall_format` — tool-calling trace normalization (tool_calling goals are
-  flagged in mixtures for this reason).
-- `video_ingest` — video → text records (frames + ASR alignment).

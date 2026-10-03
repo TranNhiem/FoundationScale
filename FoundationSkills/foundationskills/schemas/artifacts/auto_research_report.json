@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "description": "Closed auto-research campaign: outcome, per-trial decisions, budgets and the ledger head.",
+  "required": ["campaign", "outcome", "decisions", "budgets", "ledger"],
+  "additionalProperties": true,
+  "properties": {
+    "campaign": {
+      "type": "object",
+      "required": ["id", "spec_hash"],
+      "properties": {"id": {"type": "string", "minLength": 1}, "spec_hash": {"type": "string", "minLength": 64}}
+    },
+    "outcome": {"enum": ["improved", "flat_simplified", "no_gain", "regressed", "unmeasured"]},
+    "decisions": {"type": "object"},
+    "budgets": {"type": "object"},
+    "ledger": {
+      "type": "object",
+      "required": ["count", "head_hash", "verified"],
+      "properties": {"count": {"type": "integer"}, "head_hash": {"type": "string"}, "verified": {"type": "boolean"}}
+    }
+  }
+}

@@ -15,6 +15,7 @@ no findings.
 """
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 from typing import Any
 
@@ -35,12 +36,15 @@ from foundationskills.core.status import Status
 from foundationskills.skills.data_engine.catalog import discover
 from foundationskills.skills.data_engine.mix import design_mixture
 from foundationskills.skills.data_engine.llm_backend import LLMOpError
+from foundationskills.skills.data_engine.ops.base import OpUnavailable
 from foundationskills.skills.data_engine.phase2 import PHASE2, Phase2NotImplemented
 from foundationskills.skills.data_engine.pipeline import PipelineError, run_pipeline
 from foundationskills.skills.data_engine.recommend import FORMATS, recommend_pipeline
 from foundationskills.skills.data_engine.report import build_readiness
 
 _LLM_OPS = ("llm_classify", "llm_enhance")
+# Ops whose module exports preflight(cfg) -> list[str]: offline checks of encoders, binaries, cached models.
+_RUNTIME_OPS = ("semantic_dedup", "video_ingest")
 
 LOCAL_KINDS = {"local_dir", "jsonl", "json", "parquet", "csv", "documents", "image_text"}
 _PREFERENCE_ALGOS = ("dpo", "ipo", "kto", "orpo", "simpo", "cpo", "online_dpo", "iterative_dpo")
@@ -84,6 +88,7 @@ class DataEngineSkill(BaseSkill):
         RuleSpec("DE-IN-005", "sft/mm_sft without a chat_template_family or tokenizer", Severity.WARN, "input"),
         RuleSpec("DE-IN-006", "preference dataset requested but FS cannot train the preference family", Severity.WARN, "input"),
         RuleSpec("DE-IN-007", "an LLM op (llm_classify/llm_enhance) has no usable inference backend", Severity.BLOCK, "input"),
+        RuleSpec("DE-IN-008", "an op's runtime dependency (encoder model, ffmpeg, ASR model) is unavailable", Severity.BLOCK, "input"),
         RuleSpec("DE-HO-001", "readiness verdict is RED", Severity.BLOCK, "handoff"),
         RuleSpec("DE-HO-002", "readiness verdict is UNMEASURED; some checks were not run", Severity.WARN, "handoff"),
         RuleSpec("DE-HO-003", "zero records were written", Severity.BLOCK, "handoff"),
@@ -138,6 +143,18 @@ class DataEngineSkill(BaseSkill):
                             "remove the phase-2 op or implement the phase-2 capability first",
                         )
                     )
+                elif op_name in _RUNTIME_OPS:
+                    cfg = dict((step or {}).get("config") or {})
+                    module = importlib.import_module(f"foundationskills.skills.data_engine.ops.{op_name}")
+                    for problem in module.preflight(cfg):
+                        findings.append(
+                            self.finding(
+                                "DE-IN-008",
+                                f"{op_name}: runtime dependency unavailable: {problem}",
+                                {"op": op_name},
+                                "install/cache the named dependency or point the op config at it; nothing is downloaded",
+                            )
+                        )
                 elif op_name in _LLM_OPS:
                     backend = ((step or {}).get("config") or {}).get("backend")
                     kind = backend.get("kind") if isinstance(backend, dict) else None
@@ -240,6 +257,9 @@ class DataEngineSkill(BaseSkill):
                 "remove the phase-2 op from the spec",
             )
             return SkillResult(status=Status.REFUSED, payload={}, findings=(finding,), refusal=f"phase-2: {op_name}")
+        except OpUnavailable as exc:
+            finding = self.finding("DE-IN-008", str(exc), {}, "install/cache the named dependency")
+            return SkillResult(status=Status.REFUSED, payload={}, findings=(finding,), refusal=str(exc))
         except LLMOpError as exc:
             finding = self.finding("DE-IN-007", str(exc), {}, "fix the LLM backend configuration named in the message")
             return SkillResult(status=Status.REFUSED, payload={}, findings=(finding,), refusal=str(exc))
@@ -432,11 +452,29 @@ class DataEngineSkill(BaseSkill):
                         "rationale": [],
                         "ops": [
                             {"op": "ingest", "config": {"sources": src("{tmp}/corpus.jsonl", "jsonl")}},
-                            {"op": "semantic_dedup", "config": {}},
+                            {"op": "synthesize", "config": {}},
                         ],
                     },
                 },
                 "files": {"corpus.jsonl": one_record},
+            },
+            "DE-IN-008": {
+                "request": {
+                    "target_format": "pretrain",
+                    "sources": src("{tmp}/videos.jsonl", "jsonl"),
+                    "pipeline": {
+                        "target_format": "pretrain",
+                        "seed": 0,
+                        "tokenizer": None,
+                        "rationale": [],
+                        "ops": [
+                            {"op": "ingest", "config": {"sources": src("{tmp}/videos.jsonl", "jsonl")}},
+                            {"op": "video_ingest", "config": {"frames_dir": "{tmp}/frames", "asr": "none",
+                                                              "ffmpeg": "/nonexistent/ffmpeg"}},
+                        ],
+                    },
+                },
+                "files": {"videos.jsonl": json_line('{"id": "v1", "video": "clip.mp4"}')},
             },
             "DE-IN-007": {
                 "request": {

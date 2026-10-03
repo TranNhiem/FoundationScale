@@ -31,7 +31,7 @@ from foundationskills.agent.routing_eval import (
 from foundationskills.skills.data_engine.llm_backend import LLMResponse
 
 CREATED = "2026-10-02T00:00:00Z"
-PACKAGE_NAMES = ("fskills-data-engine", "fskills-evaluation", "fskills-training")
+PACKAGE_NAMES = ("fskills-auto-research", "fskills-data-engine", "fskills-evaluation", "fskills-training")
 HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -114,7 +114,7 @@ def cases(index: list[dict]) -> list[tuple[str, dict]]:
     return [(pkg["name"], case) for pkg in index for case in pkg["evals"]]
 
 
-def test_load_index_finds_three_evaluated_packages(index: list[dict]) -> None:
+def test_load_index_finds_every_evaluated_package(index: list[dict]) -> None:
     names = [pkg["name"] for pkg in index]
     assert names == sorted(PACKAGE_NAMES)
     for pkg in index:
@@ -336,8 +336,8 @@ def test_write_benchmarks_writes_next_to_each_skill_md(
 
     monkeypatch.setattr(routing_eval, "_package_dir", fake_package_dir)
     paths = write_benchmarks(report, index)
-    assert len(paths) == 3
-    assert len(seen) == 3
+    assert len(paths) == len(index)
+    assert len(seen) == len(index)
     assert {path.parent.name for path in paths} == set(seen)
     for package in seen:
         assert (tmp_path / package / "BENCHMARK.md").exists()

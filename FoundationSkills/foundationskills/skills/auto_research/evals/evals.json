@@ -1,0 +1,393 @@
+[
+  {
+    "id": "fskills-auto-research-positive-001",
+    "question": "Validate this auto-research campaign spec before I approve anything — bad axes and budgets must be refused up front.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "The auto-research skill validates the campaign spec (objective metric against the eval policy metrics, base and eval-policy fingerprints, budget, axes, cluster rules) and refuses the bad fields before any ledger write.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Call the auto-research check action on the campaign spec",
+      "Report the invalid spec fields and refuse without writing the ledger",
+      "Return spec_hash, axes and budget for the parts of the spec that are valid"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-002",
+    "question": "Authorise a one-node candidate run for my research campaign and give me its derived launch token.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "auto-research launch validates the launch spec against the campaign axes, budget and cluster rules, appends the authorisation to the hash-chained ledger and returns a per-launch token plus the remaining budget.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Call the auto-research launch action with the launch spec",
+      "Return the derived launch token and the remaining gpu-hour budget"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-003",
+    "question": "Record the trial results I got back and close the research campaign — tell me whether any candidate is a real gain.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "auto-research records immutable trial results and closes with a statistical verdict against the calibrated noise floor and guardrails over the verified ledger, writing the report artifact.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Record the results and decide each candidate against the baseline",
+      "Close with outcome improved, flat_simplified, no_gain, regressed or unmeasured"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-004",
+    "question": "My lr sweep on qwen3-8b keeps hovering at 0.512 val_accuracy with warmup stuck at 0.02 — here are the symptoms and my current knobs, propose the next three hypotheses from the ideas catalog.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "The propose action returns idea cards from the ideas catalog given `current` knob values and `symptoms`, without writing to the ledger beyond the approval envelope.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Call the propose action with current and symptoms and return three idea cards",
+      "State that propose writes nothing to the ledger besides the approval envelope"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-005",
+    "question": "Open my gemma4-4b accuracy campaign and give me the very first run I should do — nothing has been measured on this base model yet.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "The proposer hands out a baseline card first until `baseline_repeats` calibrated baseline results exist, since without a calibrated baseline nothing can be decided later.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Returned a baseline idea card first because baseline_repeats baseline results do not exist yet",
+      "Explained that the baseline repeats calibrate the noise floor before any candidate is judged"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-006",
+    "question": "With three ok baseline repeats at val_accuracy 0.512 / 0.516 / 0.509 and se 0.002 each, tell me what delta my candidate must clear before I believe its +0.004 — and what happens if the floor is uncalibrated.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "The noise floor is the sample std of the baseline repeats (1.4826*MAD when n == 3 if that is larger, else std) and tau = max(noise_floor, noise_floor_rel*|mean ref|, k*sqrt(mean se_ref^2 + mean se_cand^2)); an uncalibrated floor means nothing can be decided.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Computed the noise floor from the three baseline repeats and the tau band with k and noise_floor_rel",
+      "Stated that mean_delta must exceed tau to count as accepted_gain, and that an uncalibrated floor yields an unmeasured verdict"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-007",
+    "question": "My campaign guards on train_loss (lower is better) and peak memory with guard_abs_epsilon 0.01 — when this candidate matched accuracy but its loss went up beyond the band, what verdict do I get, and where do I set the per-guard direction?",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "A guardrail breach forces rejected_regress: drop = gsign*(ref - cand) with gsign following the guard's own direction (max by default, not objective.direction), and a breach is drop > max(guard_abs_epsilon, k*sqrt(se_r^2 + se_c^2)); confirm.guardrail_directions overrides the sign per guard metric.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Explained the guardrail drop formula with the guard's own direction and the max(guard_abs_epsilon, k*sqrt(se_r^2+se_c^2)) threshold",
+      "Said a breach forces rejected_regress regardless of the accuracy match",
+      "Pointed at confirm.guardrail_directions for setting train_loss to min"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-008",
+    "question": "Authorise a cheap screening run for trial 'lr-warm' of my gemma4-4b campaign: it tweaks weight_decay to 0.08, costs 2 gpu-hours and would draw on the reserved budget I set aside.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "Launch validation refuses a delta outside spec.axes (weight_decay is not an axis in this spec) and refuses a non-confirm run that dips into the reserve_frac portion of the gpu-hour budget.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Refused the weight_decay delta because it is outside the approved campaign axes",
+      "Refused the request because a non-confirm run would consume the reserve portion of the budget",
+      "Nothing was appended to the ledger for the refused launch"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-009",
+    "question": "Someone hand-edited chain.jsonl in reports/ar-2026-03-optim/ledger overnight — close the campaign and tell me exactly where the evidence chain is broken.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "Close verifies the hash-chained ledger first; when verification fails the outcome is RED and the report names the first broken seq (AR-HO-003), and the skill never patches or rewrites ledger entries.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Ran ledger verification before deciding any trial and reported the first broken seq",
+      "Closed with a RED outcome because the chain check failed",
+      "Did not attempt to repair or rewrite the ledger contents"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-010",
+    "question": "My LoRA rank-8 candidate on qwen3-8b matched full fine-tuning's val_accuracy within the noise but is far simpler — close the campaign and tell me whether that counts as anything.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "accepted_flat is issued when |mean_delta| <= tau and the candidate is simpler, closing as flat_simplified with the AR-HO-005 info about a flat-but-simpler change.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Compared the candidate to the baseline and found |mean_delta| <= tau",
+      "Returned accepted_flat and an improved-free outcome of flat_simplified because the candidate is simpler",
+      "Reported the flat-but-simpler acceptance as informational only"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-011",
+    "question": "Re-record seed 103 for trial 'lr-down' on my campaign ledger — the val_accuracy in that row is wrong and I want it replaced with 0.551.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "Trial results are immutable and append-only: recording a result for a (trial, seed) pair that already exists is refused (AR-LG-001) and no entry is updated or deleted.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Refused the record because (trial lr-down, seed 103) is already in the ledger",
+      "Stated that results are immutable and the ledger is append-only, never patched"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-012",
+    "question": "Add parallel.fsdp_sharding and train.async to the axes of my auto-research spec so my trials can also vary the sharding and async pipeline.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "Only the measured FoundationSkills knob paths are allowed as axes; parallel.* and train.async are refused as unsupported axes.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Refused parallel.fsdp_sharding and train.async as unsupported axes",
+      "Listed the supported axis knob paths (optim.lr, train.method, rl.algorithm, data.mix, ...) as the alternative"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-013",
+    "question": "The run for trial 'wd-up' seed 101 crashed at step 80 but it printed val_accuracy 0.53 right before dying — record that metric and let it count at close.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "A malformed result, specifically a status=crash record carrying metric values, is refused; crashes are excluded from evidence and only counted as crash_excluded:<trial>:<seed> at close.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Refused the record because a crash result must not carry metric values",
+      "Explained that even properly recorded crashes are excluded from the acceptance statistics and only counted"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-014",
+    "question": "Here is my campaign spec and the hash our research lead signed — but don't put her name in anything. Open the ledger and authorise the first baseline launch.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "The approval envelope is opened by the first action on an empty ledger as campaign_approved{spec_hash, approver}; without an approver recorded the envelope cannot be opened and the request is refused.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Refused to open the envelope because no approver is attached to the first ledger action",
+      "Stated that approver is required on the first action of a ledger alongside the matching campaign_confirm"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-015",
+    "question": "My manager signed the confirm hash for this campaign, but since then I bumped budget.max_runs from 6 to 10 and gpu_hours_total to 40 — keep authorising launches for it.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "campaign_confirm must equal campaign_hash(spec) and the ledger's approved hash is checked on every action; a spec whose hash differs from the approved one is refused and no new launch is authorised.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Recomputed the campaign hash and found it does not match the signed confirm hash",
+      "Refused the launches and explained that a changed ledger-approved hash must be re-approved by a human"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-016",
+    "question": "Authorise trial 'lr-up' for 12 hours on our rally partition, with a command that scancels the old lr-down job on r01dgx02 before training starts.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "Launch validation refuses a wall time other than 10-00:00:00, forbidden commands such as pkill -u / scancel / killall for jobs not in our ledger, and quarantined nodes named in exclude.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Refused the 12-hour wall time because launches must carry time 10-00:00:00",
+      "Refused the scancel-style command and the quarantined node r01dgx02",
+      "Appended nothing to the ledger for the refused launch"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-017",
+    "question": "Authorise candidate 'seq-len' on gemma4-4b with a gpu_hours_est of 32 while my spec caps per-run wall time at 8 hours and my whole budget is 24 gpu-hours.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "Launch validation refuses a gpu_hours_est whose implied wall time exceeds budget.per_run_timeout_h (anything above 240h refuses outright), and budget.max_runs / gpu_hours_total are enforced on every authorisation.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Refused the launch because the estimated gpu-hours imply a wall time over per_run_timeout_h",
+      "Checked the remaining gpu-hour budget and max_runs accounting before authorising"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-018",
+    "question": "Close the qwen3-8b campaign — most trials agree on the eval policy hash, but the lr-down results were scored under a different eval_policy fingerprint than the spec.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "A result whose eval_policy_fingerprint does not match the spec's makes those trials unmeasured at decide time, and load-bearing evidence problems move the close to UNMEASURED rather than a verdict.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Excluded the mismatched-fingerprint results from the acceptance statistics as unmeasured",
+      "Closed with status UNMEASURED if that evidence could change the outcome"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-019",
+    "question": "My confirm repeats were just one screening run with a step cap so it came back limited — use whatever we have and close my campaign anyway.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "A limited (or crashed) run can never become load-bearing evidence: unmeasured is issued when there are fewer than confirm_repeats paired seeds or a limited run backs a trial, and the close becomes UNMEASURED.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Refused to treat the limited screening run as evidence and stated confirm_repeats paired, non-limited seeds are required",
+      "Closed with outcome unmeasured / status UNMEASURED"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-positive-020",
+    "question": "Six attempted trials and 22 gpu-hours in, my crash streak on qwen3-8b hit two in a row — close with stop_reason 'max_crash_streak' and give me the full report with the ledger TSV.",
+    "expected_skill": "fskills-auto-research",
+    "should_trigger": true,
+    "ground_truth": "Close verifies the ledger, decides each candidate against the baseline, writes auto_research_report.json with budgets{planned, used_gpu_hours, runs} (attempted trials count against max_runs) and the derived TSV view seq trial role seed status metric value se.",
+    "expected_behavior": [
+      "The agent read fskills-auto-research/SKILL.md before acting",
+      "Counted attempted trials and used gpu-hours against the planned budget in the report",
+      "Wrote auto_research_report with outcome, recommendation, per-trial decisions, ledger head/verified and the TSV view",
+      "Appended the close entry to the hash-chained ledger"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-negative-101",
+    "question": "Turn these raw JSONL dumps into a deduplicated CPT corpus for gemma4.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Dataset preparation, cleaning and readiness reporting belong to the data engine package, not the campaign loop.",
+    "expected_behavior": [
+      "The agent did not load fskills-auto-research/SKILL.md to perform this request",
+      "Route to the data engine skill",
+      "Do not open a campaign ledger for a dataset build"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-negative-102",
+    "question": "Fix this Python serializer bug and open a pull request.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Ordinary code fixes are not a FoundationSkills skill at all and must not trigger anything.",
+    "expected_behavior": [
+      "The agent did not load fskills-auto-research/SKILL.md to perform this request",
+      "No skill is triggered",
+      "Answer or fix the code directly"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-negative-103",
+    "question": "Plan a single LoRA fine-tune of qwen3-8b on our domain chat set and give me the confirm-hashed sbatch for the GB200 partition.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Planning one training run and emitting its launch spec/sbatch is fskills-training (training planner and training.emit); auto-research explicitly says not to use it for single training runs and submits nothing in M0.",
+    "expected_behavior": [
+      "The agent did not load fskills-auto-research/SKILL.md to perform this request",
+      "Routed the request to the fskills-training package",
+      "Did not open an auto-research ledger or a campaign approval envelope for a single run"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-negative-104",
+    "question": "Score this LoRA adapter against its base gemma4-4b on mmlu and gsm8k with lm-eval 0.4.12 offline and give me a PASS/RED verdict.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Checkpoint scoring against a base model with lm-evaluation-harness and an eval_report verdict belongs to fskills-evaluation, which the auto-research skill excludes (it only consumes recorded metrics and fingerprints).",
+    "expected_behavior": [
+      "The agent did not load fskills-auto-research/SKILL.md to perform this request",
+      "Routed the request to the fskills-evaluation package",
+      "Did not describe a campaign, idea cards or a hash-chained campaign ledger"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-negative-105",
+    "question": "Convert my HF RLHF split into verifiable RL prompts with gold answers and scan them against gsm8k for contamination.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Building FS-ready RL prompt datasets and decontamination scans are data-engine tasks (the dataset handoff), not the auto-research campaign loop.",
+    "expected_behavior": [
+      "The agent did not load fskills-auto-research/SKILL.md to perform this request",
+      "Routed the request to the fskills-data-engine package",
+      "Did not treat decontamination screening as an auto-research trial or result"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-negative-106",
+    "question": "My preference-tuning job OOMed at step 40 and the loss went NaN — diagnose what is wrong with the run.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Training failure symptoms such as OOM, NaN and hangs belong to the fskills-training diagnose playbook; auto-research only records a returned crash as evidence and never diagnoses the run itself.",
+    "expected_behavior": [
+      "The agent did not load fskills-auto-research/SKILL.md to perform this request",
+      "Routed the request to the fskills-training diagnose playbook",
+      "Did not offer campaign decisions or acceptance statistics for a training failure"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-negative-107",
+    "question": "Smoke-test my eval setup with --limit 8 on arc_easy and tell me why a benchmark comes back unmeasured with 'dataset not staged in eval cache'.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Eval smoke tests and eval-cache staging problems are fskills-evaluation concerns; auto-research's UNMEASURED reasons are uncalibrated floor, screening seeds, limited/crashed runs or a fingerprint mismatch.",
+    "expected_behavior": [
+      "The agent did not load fskills-auto-research/SKILL.md to perform this request",
+      "Routed the request to the fskills-evaluation package",
+      "Did not attribute the missing dataset to auto-research's noise floor or seed rules"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-negative-108",
+    "question": "What does FoundationScale exit code 96 mean, and why did my RL run keep printing UNMEASURED step N?",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Explaining FoundationScale exit codes and a running RL job's UNMEASURED steps is the fskills-training diagnose area; auto-research only maps its own close to 0/5/95/96.",
+    "expected_behavior": [
+      "The agent did not load fskills-auto-research/SKILL.md to perform this request",
+      "Routed the request to the fskills-training package",
+      "Did not mix up the campaign close statuses with run-time job exit codes"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-negative-109",
+    "question": "Reseat the fabric cables on the DGX rack and drain two nodes for maintenance on our Slurm cluster.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Cluster and fabric administration is outside every FoundationSkills package, and no skill should be triggered for it.",
+    "expected_behavior": [
+      "The agent did not load fskills-auto-research/SKILL.md to perform this request",
+      "No skill is triggered",
+      "Did not issue scancel/pkill-style commands or write anything to a campaign ledger"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-negative-110",
+    "question": "Serve my fine-tuned gemma4-4b behind an OpenAI-compatible endpoint and load-balance it across the inference fleet.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Inference serving and fleet operations are excluded from the FoundationSkills packages (the training skill explicitly rules them out) and must not trigger anything.",
+    "expected_behavior": [
+      "The agent did not load fskills-auto-research/SKILL.md to perform this request",
+      "No skill is triggered",
+      "Did not describe campaign authorisation or launch tokens for a serving request"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-negative-111",
+    "question": "Normalize my Hermes and xLAM tool-calling traces into one OpenAI tool_calls schema before training.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Tool-calling trace normalization is a documented data-engine capability; auto-research consumes nothing from data artifacts in M0 and performs no dataset work.",
+    "expected_behavior": [
+      "The agent did not load fskills-auto-research/SKILL.md to perform this request",
+      "Routed the request to the fskills-data-engine package",
+      "Did not propose idea cards or open a campaign for the normalization work"
+    ]
+  },
+  {
+    "id": "fskills-auto-research-negative-112",
+    "question": "Rewrite my quarterly research update email in a friendlier tone and shorten it to one screen.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Everyday writing help is not a FoundationSkills task at all; nothing about a campaign, launch authorisation or evidence ledger is involved.",
+    "expected_behavior": [
+      "The agent did not load fskills-auto-research/SKILL.md to perform this request",
+      "No skill is triggered",
+      "The agent simply edited and shortened the email text"
+    ]
+  }
+]

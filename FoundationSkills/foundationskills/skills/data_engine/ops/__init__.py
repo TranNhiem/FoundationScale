@@ -20,7 +20,10 @@ from foundationskills.skills.data_engine.ops import llm_classify
 from foundationskills.skills.data_engine.ops import llm_enhance
 from foundationskills.skills.data_engine.ops import mix
 from foundationskills.skills.data_engine.ops import quality
+from foundationskills.skills.data_engine.ops import semantic_dedup
 from foundationskills.skills.data_engine.ops import tokenize
+from foundationskills.skills.data_engine.ops import toolcall_format
+from foundationskills.skills.data_engine.ops import video_ingest
 
 OPS = base.OPS
 
@@ -37,4 +40,7 @@ __all__ = [
     "mix",
     "llm_classify",
     "llm_enhance",
+    "semantic_dedup",
+    "toolcall_format",
+    "video_ingest",
 ]

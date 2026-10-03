@@ -86,3 +86,7 @@ def counted(records: Iterable[dict], stats: OpStats) -> Iterator[dict]:
     for rec in records:
         stats.records_in += 1
         yield rec
+
+
+class OpUnavailable(RuntimeError):
+    """An op's runtime dependency (encoder, binary, cached model) is missing; the skill refuses (DE-IN-008)."""

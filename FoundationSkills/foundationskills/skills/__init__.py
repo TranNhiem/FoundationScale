@@ -1,11 +1,10 @@
-
 """Built-in skill registration.
 
 ``register_builtin_skills`` is idempotent (a skill whose name is already in
 the registry is skipped) and lazy (skill modules import only on call). The
-training/evaluation-skill imports are tolerated with ``ImportError`` so this package
-works during partial checkouts; the data_engine skill is mandatory and its
-import errors propagate.
+training/evaluation/auto-research skill imports are tolerated with ``ImportError``
+so this package works during partial checkouts; the data_engine skill is
+mandatory and its import errors propagate.
 """
 from __future__ import annotations
 
@@ -41,6 +40,14 @@ def register_builtin_skills(registry: SkillRegistry = REGISTRY) -> list[str]:
 
         if EvalSkill.name not in registry.names():
             registry.register(EvalSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.auto_research.skill import AutoResearchSkill
+
+        if AutoResearchSkill.name not in registry.names():
+            registry.register(AutoResearchSkill())
     except ImportError:
         pass
 

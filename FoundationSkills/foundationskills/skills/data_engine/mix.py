@@ -205,9 +205,9 @@ def design_mixture(
 
     if any(c["name"] in _PHASE2_COMPONENTS for c in components):
         rationale.append(
-            "PHASE-2: synthetic tool-call traces require the 'synthesize' / 'toolcall_format' ops, "
-            "which are not implemented yet (see data_engine.phase2.PHASE2); "
-            "sourcing them hits Phase2NotImplemented."
+            "PHASE-2: synthesizing new tool-call traces requires the 'synthesize' op, which is not "
+            "implemented (see data_engine.phase2.PHASE2); existing traces (OpenAI/ShareGPT/Hermes/Glaive/"
+            "xLAM/Llama-3/Mistral) are normalized and schema-checked by the 'toolcall_format' op."
         )
         for c in components:
             if c["name"] in _PHASE2_COMPONENTS:

@@ -41,7 +41,7 @@
           "check": false
         }
       ],
-      "question": "I've got a single source staged at `{tmp}/corpus.jsonl`, and I can see `corpus.jsonl = \"{\\\"id\\\": \\\"r1\\\", \\\"text\\\": \\\"hello world from fixture\\\"}\\n\"` — just one record. I want to run data_engine on it as a `jsonl` source and produce a `cpt` dataset, with requirements of `min_records: 1000000`, `require_decontam: false`, and `require_dedup: false`. What's the outcome — the per-op accounting and the readiness report?",
+      "question": "I've staged a single file, corpus.jsonl, and its exact contents are `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}` followed by a newline — that's one record total. I want to run data_engine on it with source kind `jsonl` at `{tmp}/corpus.jsonl`, targeting the `cpt` format, with requirements `min_records: 1000000`, `require_decontam: false`, and `require_dedup: false`. What's the outcome — the per-op accounting and the measured readiness report?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -113,7 +113,7 @@
           "check": false
         }
       ],
-      "question": "I've staged a single file, corpus.jsonl, whose contents are exactly {\"id\": \"r1\", \"text\": \"hello world from fixture\"} followed by a newline. I want to run the data engine on it with seed 0 and target format cpt: ingest from the JSONL source at {tmp}/corpus.jsonl, then dedup, then format to cpt, with no tokenizer configured. My requirements are min_records 1, dedup required, and decontamination not required. Please run that pipeline and tell me what the per-op accounting and readiness report come out to.",
+      "question": "I've staged corpus.jsonl with the exact contents \"{\\\"id\\\": \\\"r1\\\", \\\"text\\\": \\\"hello world from fixture\\\"}\\n\". Please run data_engine on it with the source {tmp}/corpus.jsonl (kind jsonl), seed 0, target_format cpt, tokenizer null, and the ops ingest → dedup (empty config) → format (target_format cpt). My requirements are min_records 1, require_dedup true, and require_decontam false. What's the outcome — the per-op record accounting and the readiness report?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -151,7 +151,7 @@
           "check": true
         }
       ],
-      "question": "I've staged corpus.jsonl as an empty file — its contents are literally \"(empty file)\", so there's no JSONL data in it. I want to run data_engine on that source with kind \"jsonl\" at {tmp}/corpus.jsonl and target format \"cpt\". What's the outcome?",
+      "question": "I've staged `corpus.jsonl` at `{tmp}/corpus.jsonl`, but I can see it's an empty file. I'm pointing the `data_engine` skill at that JSONL source with `target_format` set to `cpt`, expecting per-op accounting and a measured readiness report. What's the outcome?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -175,7 +175,7 @@
       ],
       "ground_truth": "data_engine: rule DE-IN-001 (BLOCK, input phase) fires: no sources provided (and no explicit pipeline).",
       "trigger_facts": [],
-      "question": "I want to run data_engine to turn my raw sources into an FS-ready dataset with target_format \"cpt\", complete with per-op accounting and a measured readiness report. I haven't staged any local files or directories yet, so the inputs so far are empty. Can you tell me what the outcome is?",
+      "question": "I want to run data_engine to turn my raw sources into an FS-ready dataset with per-op accounting and a measured readiness report. The target format I need is `cpt`, and I haven't staged any local files, directories, or HF dataset references yet — the file set is empty on my end. Can you take it from here and tell me what the outcome is?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -213,7 +213,7 @@
           "check": false
         }
       ],
-      "question": "I've staged a file named corpus.jsonl containing exactly `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}` followed by a newline. I want to run data_engine on it with a single source of kind `jsonl` at URI `{tmp}/corpus.jsonl`, and I want the output converted to target format `bogomips`, with per-op accounting and a measured readiness report. What's the outcome of that run?",
+      "question": "I've got a single staged file, corpus.jsonl, whose contents are exactly `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}` followed by a newline. I want to run data_engine on it with one JSONL source at `{tmp}/corpus.jsonl` and a target_format of `bogomips`, so I end up with an FS-ready dataset plus full per-op accounting and a measured readiness report. What's the outcome of that run?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -243,7 +243,7 @@
       ],
       "ground_truth": "data_engine: rule DE-IN-003 (BLOCK, input phase) fires: local source uri does not exist.",
       "trigger_facts": [],
-      "question": "I want to run data_engine on a single JSONL source at `{tmp}/missing.jsonl` and convert it into an FS-ready dataset in `cpt` format. Please pull the raw records from that file, apply the per-op accounting so I can see counts at every step, and give me the measured readiness report at the end. Let me know what the output looks like.",
+      "question": "I want to build an FS-ready dataset in `cpt` format from a single JSONL source at `{tmp}/missing.jsonl`. Please run the data_engine pipeline over it with per-op accounting and give me the measured readiness report at the end.",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -273,7 +273,7 @@
               },
               {
                 "config": {},
-                "op": "semantic_dedup"
+                "op": "synthesize"
               }
             ],
             "rationale": [],
@@ -290,7 +290,7 @@
           "target_format": "pretrain"
         }
       },
-      "fixture_sha256": "ddfe7c4ce64eee4c4cfa9c4934fc4c2389bc0e07c13b2f66419997ce25128390",
+      "fixture_sha256": "43ea1ffac8b9e1165ce618f37dfe64d9358a5aa5878761f174dea42b4bc88f98",
       "expected_behavior": [
         "Identifies the problem: a phase-2 op was requested; capability not implemented",
         "Refuses before doing any work (status REFUSED, nothing written) instead of running",
@@ -304,7 +304,7 @@
           "check": false
         }
       ],
-      "question": "I've staged `corpus.jsonl` containing exactly `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}` followed by a newline, and I want to run the data_engine pipeline on it. The pipeline is: `ingest` with config `{\"sources\": [{\"kind\": \"jsonl\", \"uri\": \"{tmp}/corpus.jsonl\"}]}`, then `semantic_dedup` with config `{}`, with `rationale` empty, `seed` 0, `target_format` \"pretrain\", and `tokenizer` null. The top-level `sources` list mirrors that single jsonl source at `{tmp}/corpus.jsonl`, and `target_format` is \"pretrain\". What does the run produce — the per-op accounting and the measured readiness report?",
+      "question": "I've staged a file `corpus.jsonl` containing exactly `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}` followed by a newline. Please run data_engine on a JSONL source at `{tmp}/corpus.jsonl` with seed 0, target format `pretrain`, and tokenizer unset, using a pipeline of `ingest` (configured with that source) followed by `synthesize` with an empty config. What is the resulting FS-ready dataset and the measured readiness report?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -367,7 +367,7 @@
           "check": false
         }
       ],
-      "question": "I've staged a single file, corpus.jsonl, whose contents are `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}`. Please run a pipeline with seed 0 that ingests it from the JSONL source at `{tmp}/corpus.jsonl`, then formats the result to SFT format — no tokenizer. I want the per-op accounting and a measured readiness report at the end. What do I get out of this run?",
+      "question": "I've staged one source file, corpus.jsonl, whose contents are exactly `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}\\n`. I want to run the data_engine pipeline with seed 0 and target_format \"sft\": an ingest op pulling from the jsonl source at `{tmp}/corpus.jsonl`, then a format op with target_format \"sft\", tokenizer null, and an empty rationale list. What does the run produce?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -430,7 +430,7 @@
           "check": false
         }
       ],
-      "question": "I've staged `corpus.jsonl` with exactly one line: `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}`. I want to run the data_engine skill on it with a two-op pipeline: `ingest` pointing at that JSONL source, then `format` with `target_format: \"preference\"`, using `seed: 0` and `tokenizer: null`, with no rationale filled in. What's the outcome — the per-op accounting and the measured readiness report?",
+      "question": "I've staged corpus.jsonl with the content `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}` and I want to run the data_engine pipeline on it: ingest from the JSONL source at {tmp}/corpus.jsonl, then format to preference, with seed 0 and no tokenizer. The target format is preference and the rationale list is empty. What's the resulting FS-ready dataset and the readiness report?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -502,7 +502,72 @@
           "check": false
         }
       ],
-      "question": "I've staged corpus.jsonl containing exactly `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}` plus a newline. I want to run a data_engine pipeline with seed 0 and target_format \"pretrain\", starting with an ingest op over one jsonl source at {tmp}/corpus.jsonl, followed by an llm_classify op with a single axis named \"q\" described as \"quality\" on a 0–5 scale. The tokenizer is null and the rationale list is empty. What does the run produce, including the per-op accounting and the readiness report?",
+      "question": "I've staged a single file, corpus.jsonl, whose full contents are `{\"id\": \"r1\", \"text\": \"hello world from fixture\"}` followed by a newline. I want to run the data engine on it with seed 0, target format `pretrain`, and no tokenizer configured. The pipeline I've put together has two ops: an `ingest` step pulling from a `jsonl` source at `{tmp}/corpus.jsonl`, followed by `llm_classify` with one axis named `q` (description \"quality\") on a 0–5 scale. The request's top-level sources list is the same single jsonl source at `{tmp}/corpus.jsonl`, and the rationale list is empty. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-data-engine-oracle-DE-IN-008",
+      "skill": "data_engine",
+      "rule_id": "DE-IN-008",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "an op's runtime dependency (encoder model, ffmpeg, ASR model) is unavailable",
+      "fixture": {
+        "files": {
+          "videos.jsonl": "{\"id\": \"v1\", \"video\": \"clip.mp4\"}\n"
+        },
+        "request": {
+          "pipeline": {
+            "ops": [
+              {
+                "config": {
+                  "sources": [
+                    {
+                      "kind": "jsonl",
+                      "uri": "{tmp}/videos.jsonl"
+                    }
+                  ]
+                },
+                "op": "ingest"
+              },
+              {
+                "config": {
+                  "asr": "none",
+                  "ffmpeg": "/nonexistent/ffmpeg",
+                  "frames_dir": "{tmp}/frames"
+                },
+                "op": "video_ingest"
+              }
+            ],
+            "rationale": [],
+            "seed": 0,
+            "target_format": "pretrain",
+            "tokenizer": null
+          },
+          "sources": [
+            {
+              "kind": "jsonl",
+              "uri": "{tmp}/videos.jsonl"
+            }
+          ],
+          "target_format": "pretrain"
+        }
+      },
+      "fixture_sha256": "ba4a2c06a2a5657d6fa5f0ae4df70607b41e4129d3bba3766fa0752aa3c368f3",
+      "expected_behavior": [
+        "Identifies the problem: an op's runtime dependency (encoder model, ffmpeg, ASR model) is unavailable",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule DE-IN-008"
+      ],
+      "ground_truth": "data_engine: rule DE-IN-008 (BLOCK, input phase) fires: an op's runtime dependency (encoder model, ffmpeg, ASR model) is unavailable.",
+      "trigger_facts": [
+        {
+          "path": "files.videos.jsonl",
+          "value": "{\"id\": \"v1\", \"video\": \"clip.mp4\"}\n",
+          "check": false
+        }
+      ],
+      "question": "I've got a single staged file, videos.jsonl, holding exactly `{\"id\": \"v1\", \"video\": \"clip.mp4\"}` plus a newline, and I want to run it through the data_engine to get an FS-ready pretrain dataset. The pipeline I've set up is two ops: an `ingest` with a jsonl source pointing at `{tmp}/videos.jsonl`, followed by `video_ingest` configured with `asr: \"none\"`, `ffmpeg: \"/nonexistent/ffmpeg\"`, and `frames_dir: \"{tmp}/frames\"`. Seed is 0, target_format is pretrain, and tokenizer is null. What does the run produce — what's the per-op accounting and the readiness report?",
       "question_model": "mimo-v2.6-pro"
     }
   ]

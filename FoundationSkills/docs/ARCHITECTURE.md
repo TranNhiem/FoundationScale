@@ -102,7 +102,7 @@ ingest → clean → dedup → quality → decontam → [mix] → format → tok
 - **Reasoning traces** are rendered through each family's template and then *verified* to have survived; Gemma-4's template drops them, so they are injected into its thinking channel.
 - The **readiness report** turns every check into passed / failed / not-run. Its verdict is PASS, RED or UNMEASURED.
 
-Phase 2 (`phase2.py`) defines `SemanticDedup`, `SyntheticGenerator`, `ToolCallFormatter` and `VideoTextIngest` as interfaces. Requesting one returns REFUSED `phase-2: <name>`, never a no-op.
+Phase 2 (`phase2.py`) now declares only `SyntheticGenerator` (`synthesize`, superseded by `llm_enhance`); requesting it returns REFUSED `phase-2: synthesize`, never a no-op. `semantic_dedup`, `toolcall_format` and `video_ingest` graduated to real ops; an op whose runtime dependency (encoder, ffmpeg, ASR model) is missing refuses under DE-IN-008.
 
 ## 7. Training skill
 

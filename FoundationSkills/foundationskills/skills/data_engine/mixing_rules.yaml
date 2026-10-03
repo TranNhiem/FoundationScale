@@ -53,7 +53,7 @@ rules:
       phase-2 data (see data_engine.phase2).
     citation: >-
       xLAM function-calling (arXiv:2409.03217); ToolACE (arXiv:2409.00917);
-      PHASE-2: synthetic tool traces require the synthesize/toolcall_format ops.
+      PHASE-2: synthesizing tool traces requires the synthesize op; existing traces go through toolcall_format.
   - id: MIX-SFT-CHAT
     when: {stage_in: [sft], goal_in: [general_chat]}
     components:

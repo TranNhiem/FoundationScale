@@ -149,8 +149,7 @@ def test_published_routing_benchmarks_match_the_current_skill_index():
     evals = {e["package"]: e["evals_sha256"][:12] for e in index}
     for package in PACKAGES:
         path = importlib.resources.files(package).joinpath("BENCHMARK.md")
-        if not path.is_file():
-            continue
+        assert path.is_file(), f"{package} has no {path.name}; a missing report is a failure, not a skip"
         text = path.read_text(encoding="utf-8")
         match = re.search(r"against skill index ([0-9a-f]{12}) and eval cases ([0-9a-f]{12})", text)
         assert match, f"{package}/BENCHMARK.md is not a generated routing benchmark"
@@ -166,8 +165,7 @@ def test_published_behaviour_reports_match_the_current_skill_md_and_evals():
     current = {e["package"]: (e["skill_md_sha256"][:12], e["evals_sha256"][:12]) for e in routing_eval.load_index()}
     for package in PACKAGES:
         path = importlib.resources.files(package).joinpath("BEHAVIOUR.md")
-        if not path.is_file():
-            continue
+        assert path.is_file(), f"{package} has no {path.name}; a missing report is a failure, not a skip"
         match = re.search(r"against SKILL\.md ([0-9a-f]{12}) and eval cases ([0-9a-f]{12})",
                           path.read_text(encoding="utf-8"))
         assert match, f"{package}/BEHAVIOUR.md is not a generated behaviour report"
@@ -182,8 +180,7 @@ def test_oracle_behaviour_cases_match_the_code(package):
     from foundationskills.agent import oracle_cases
 
     path = importlib.resources.files(package).joinpath("evals", "behaviour.json")
-    if not path.is_file():
-        pytest.skip(f"{package} has no oracle behaviour cases yet")
+    assert path.is_file(), f"{package} has no evals/behaviour.json; build it with `fskills oracle-cases build`"
     cases, _ = oracle_cases.load_cases(package)
     problems = oracle_cases.check_cases(package, cases)
     assert not problems, "\n".join(problems)
@@ -195,8 +192,7 @@ def test_published_oracle_behaviour_reports_match_the_current_skill_md_and_cases
     for entry in routing_eval.load_index():
         package = entry["package"]
         path = importlib.resources.files(package).joinpath("BEHAVIOUR_ORACLE.md")
-        if not path.is_file():
-            continue
+        assert path.is_file(), f"{package} has no {path.name}; a missing report is a failure, not a skip"
         _, cases_sha = oracle_cases.load_cases(package)
         match = re.search(r"against SKILL\.md ([0-9a-f]{12}) and oracle cases ([0-9a-f]{12})",
                           path.read_text(encoding="utf-8"))

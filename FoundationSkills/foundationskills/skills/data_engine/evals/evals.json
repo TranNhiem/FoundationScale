@@ -27,14 +27,14 @@
   },
   {
     "id": "fskills-data-engine-positive-003",
-    "question": "My request came back REFUSED with 'phase-2: semantic_dedup' — what does that mean and what can I use instead?",
+    "question": "My request came back REFUSED with 'phase-2: synthesize' — what does that mean and what can I use instead?",
     "expected_skill": "fskills-data-engine",
     "should_trigger": true,
-    "ground_truth": "The agent loads fskills-data-engine and explains that DE-IN-004 BLOCKs a phase-2 op name in the spec with REFUSED `phase-2: <op>`, because semantic_dedup, synthesize, toolcall_format and video_ingest are declared in data_engine.phase2.PHASE2 but not implemented.",
+    "ground_truth": "The agent loads fskills-data-engine and explains that DE-IN-004 BLOCKs a phase-2 op name in the spec with REFUSED `phase-2: <op>`; synthesize is the only name left in data_engine.phase2.PHASE2 and is superseded by llm_enhance (modes rephrase/qa_synth/reasoning_trace/judge).",
     "expected_behavior": [
       "The agent read fskills-data-engine/SKILL.md before acting",
       "The agent named DE-IN-004 as the rule firing on phase-2 op names and the REFUSED `phase-2: <op>` status",
-      "The agent listed the phase-2 names semantic_dedup, synthesize, toolcall_format, video_ingest as declared but not implemented",
+      "The agent pointed to llm_enhance as the implemented replacement for synthesize",
       "The agent said REFUSED means the request (not the data) must be fixed"
     ]
   },
@@ -246,10 +246,10 @@
     "question": "We recorded customer calls last quarter; speech-to-text already gave us JSONL files of segments (speaker, timestamp, text) for each call. Make fine-tuning dialogue data for the support bot from these transcripts — dedup near-duplicate calls too.",
     "expected_skill": "fskills-data-engine",
     "should_trigger": true,
-    "ground_truth": "The agent loads fskills-data-engine and ingests the transcript JSONL (kind=jsonl) through clean -> dedup -> quality -> format(sft) -> tokenize, treating the audio-derived text as ordinary text records (no video/audio ingest is claimed).",
+    "ground_truth": "The agent loads fskills-data-engine and ingests the transcript JSONL (kind=jsonl) through clean -> dedup -> quality -> format(sft) -> tokenize, treating the audio-derived text as ordinary text records (the transcripts are already text, so video_ingest is not needed).",
     "expected_behavior": [
       "The agent read fskills-data-engine/SKILL.md before acting",
-      "The agent ingested the segment JSONL as kind=jsonl text records and did not attempt video_ingest or any audio/ASR op (phase-2, unimplemented)",
+      "The agent ingested the segment JSONL as kind=jsonl text records and did not run video_ingest or any ASR step on already-transcribed text",
       "The agent ran a dedup op (document+near) for the near-duplicate calls and recorded per-op dropped counters in stats.json"
     ]
   },
@@ -328,30 +328,6 @@
     ]
   },
   {
-    "id": "fskills-data-engine-negative-105",
-    "question": "I have 200k tool-calling traces from my agent logs; normalize the function calls into clean training rows and drop malformed ones.",
-    "expected_skill": null,
-    "should_trigger": false,
-    "ground_truth": "Tool-calling trace normalization (toolcall_format) is explicitly excluded by fskills-data-engine and is one of its unimplemented phase-2 names, so no skill here handles this request.",
-    "expected_behavior": [
-      "The agent did not load fskills-data-engine/SKILL.md to perform this request",
-      "The agent did not run ingest/clean/dedup/quality/format/tokenize on the traces",
-      "The agent did not claim a PASS/RED/UNMEASURED readiness verdict or emit a dataset artifact"
-    ]
-  },
-  {
-    "id": "fskills-data-engine-negative-106",
-    "question": "Turn my video dataset (raw mp4s of lectures) into training text: sample frames, transcribe the audio, align captions to timestamps.",
-    "expected_skill": null,
-    "should_trigger": false,
-    "ground_truth": "Video to text ingestion (video_ingest) is excluded by fskills-data-engine and lives only as an unimplemented phase-2 name, and no other skill here handles video ingest.",
-    "expected_behavior": [
-      "The agent did not load fskills-data-engine/SKILL.md to perform this request",
-      "The agent did not describe emitting data_pipeline_spec, dataset or readiness_report for video sources",
-      "The agent did not claim any readiness rules (DE-RDY-...) about the resulting records"
-    ]
-  },
-  {
     "id": "fskills-data-engine-negative-107",
     "question": "Deploy gemma4-4b behind an OpenAI-compatible API with vLLM on the GB200 node: set the tensor parallel size, max model len and a continuous-batching config so our team can query it.",
     "expected_skill": null,
@@ -373,6 +349,52 @@
       "The agent did not read or activate fskills-data-engine/SKILL.md",
       "The agent did not emit data_pipeline_spec, dataset or readiness_report artifacts",
       "The agent handled the storage administration request without invoking any registered data_engine op (ingest, clean, dedup, quality, decontam, mix, format, tokenize)"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-115",
+    "question": "I have 200k tool-calling traces from my agent logs; normalize the function calls into clean training rows and drop malformed ones.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and runs ingest -> toolcall_format (dialect auto-detection, OpenAI tool_calls + tools schema, argument JSON/schema validation) -> dedup -> format -> tokenize, with malformed traces dropped under named reasons in stats.json.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent used the toolcall_format op to normalize the traces into OpenAI tool_calls messages with a tools list",
+      "The agent said malformed traces are dropped with named reasons (e.g. bad_arguments_json, undeclared_tool_call, args_schema_violation) counted in stats.json"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-positive-116",
+    "question": "Turn my video dataset (raw mp4s of lectures) into training text: sample frames, transcribe the audio, align captions to timestamps.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fskills-data-engine and runs ingest -> video_ingest (ffmpeg uniform frames into frames_dir, Whisper ASR via transformers, segments aligned to frame timestamps) -> format(mm_sft) -> tokenize; a missing ffmpeg or uncached ASR model refuses under DE-IN-008.",
+    "expected_behavior": [
+      "The agent read fskills-data-engine/SKILL.md before acting",
+      "The agent used the video_ingest op with a frames_dir and Whisper ASR to produce image + timestamped transcript records",
+      "The agent said a missing ffmpeg/ffprobe or an uncached ASR model refuses with DE-IN-008 rather than skipping"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-113",
+    "question": "Use a teacher model to invent 50k brand-new multi-turn tool-calling conversations from scratch for APIs we haven't written yet.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Synthesizing examples from nothing is the phase-2 `synthesize` name (refused); no skill here generates new tool-calling corpora from scratch.",
+    "expected_behavior": [
+      "The agent did not load fskills-data-engine/SKILL.md to perform this request",
+      "The agent did not claim a pipeline that generates the conversations or a readiness verdict for them"
+    ]
+  },
+  {
+    "id": "fskills-data-engine-negative-114",
+    "question": "Deploy a live Whisper transcription API behind our support phone line so agents see captions in real time.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Serving a real-time ASR endpoint is infrastructure, not dataset preparation; no FoundationSkills skill handles it.",
+    "expected_behavior": [
+      "The agent did not load fskills-data-engine/SKILL.md to perform this request",
+      "The agent did not describe a data_pipeline_spec, dataset or readiness_report for this"
     ]
   }
 ]

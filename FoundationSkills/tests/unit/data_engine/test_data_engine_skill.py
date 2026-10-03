@@ -110,7 +110,7 @@ class TestMustFireFixtures:
         request = _materialize(skill.must_fire_fixtures()["DE-IN-004"], tmp_path)
         result = skill.execute(request, _ctx(tmp_path))
         assert result.status is Status.REFUSED
-        assert "phase-2: semantic_dedup" in result.refusal
+        assert "phase-2: synthesize" in result.refusal
 
 
 class TestSkillRegistration:
@@ -125,7 +125,7 @@ class TestSkillRegistration:
         assert "data_engine" in registry.names()
 
     def test_phase2_names_match(self):
-        assert set(PHASE2) == {"semantic_dedup", "synthesize", "toolcall_format", "video_ingest"}
+        assert set(PHASE2) == {"synthesize"}
 
 
 class TestSkillDoc:

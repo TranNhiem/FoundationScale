@@ -25,6 +25,7 @@ class ArtifactType(str, Enum):
     FS_LAUNCH_SPEC = "fs_launch_spec"
     CHECKPOINT = "checkpoint"
     EVAL_REPORT = "eval_report"
+    AUTO_RESEARCH_REPORT = "auto_research_report"
 
     def __str__(self) -> str:
         return self.value

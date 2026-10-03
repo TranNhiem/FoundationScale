@@ -59,7 +59,7 @@ class TestPipelineWithIsolatedOps:
         assert "ingest" in str(err.value)  # known ops are listed
 
     def test_phase2_op_refuses(self, fake_ops, tmp_path):
-        for name in ("semantic_dedup", "synthesize", "toolcall_format", "video_ingest"):
+        for name in ("synthesize",):
             spec = self._spec([
                 {"op": "ingest", "config": {"texts": ["x"]}},
                 {"op": name, "config": {}},
