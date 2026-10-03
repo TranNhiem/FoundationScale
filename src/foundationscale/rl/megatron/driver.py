@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime
 import hashlib
 import json
 import math
@@ -456,7 +457,11 @@ class MegatronRLTrainer:
             # Bind before the first collective: unbound ranks all share cuda:0, which NCCL
             # rejects as "invalid usage" at the optimizer's all_gather_object.
             torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
-            dist.init_process_group(backend="nccl")
+            # Rank 0 alone generates and runs the held-out eval while every other rank
+            # waits in broadcast_rows; the 10-minute NCCL default killed a 2-GPU run
+            # whose 800-prompt PRE eval outlasted it, so the wait must be bounded by
+            # work, not by the watchdog.
+            dist.init_process_group(backend="nccl", timeout=datetime.timedelta(hours=2))
         world = dist.get_world_size()
         self.cfg.validate(world)
 
@@ -891,6 +896,9 @@ def _run_online(
             advantages, sample_mask = online.scored_group_advantages(scored_rows)
             record: dict[str, Any] = {
                 "step": step,
+                # The scorer's view, before any reshaping: "unparsed" must stay comparable
+                # between runs with and without --unparsed-reward. Trained rows are
+                # scored + format_failures.
                 **online.step_rollout_metrics(all_rows),
                 "refit_s": round(refit_s, 3),
                 "gen_s": round(gen_s, 3),
