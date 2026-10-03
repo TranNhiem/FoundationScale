@@ -714,6 +714,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--prompts-per-step", type=int, default=8)
     ap.add_argument("--max-new-tokens", type=int, default=256)
+    ap.add_argument(
+        "--overlong-cache",
+        type=int,
+        default=0,
+        help="rung 2: soft overlong penalty window in tokens (DAPO); 0 disables shaping",
+    )
+    ap.add_argument(
+        "--overlong-factor",
+        type=float,
+        default=1.0,
+        help="rung 2: penalty at the --max-new-tokens cap when --overlong-cache > 0",
+    )
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument(
         "--top-p",
@@ -854,7 +866,17 @@ def _run_online(
             gen_s = time.perf_counter() - t0
             if len(all_rows) != n_rows:
                 raise RuntimeError(f"step {step}: {len(all_rows)} rollout rows, expected {n_rows}")
-            advantages, sample_mask = online.scored_group_advantages(all_rows)
+            # Shape only the advantages: logged reward stays the scorer's verdict.
+            scored_rows = all_rows
+            overlong_penalty = None
+            if args.overlong_cache > 0:
+                scored_rows, overlong_penalty = online.overlong_shaped_rows(
+                    all_rows,
+                    max_new_tokens=args.max_new_tokens,
+                    cache_tokens=args.overlong_cache,
+                    factor=args.overlong_factor,
+                )
+            advantages, sample_mask = online.scored_group_advantages(scored_rows)
             record: dict[str, Any] = {
                 "step": step,
                 **online.step_rollout_metrics(all_rows),
@@ -863,6 +885,8 @@ def _run_online(
                 "refit_written": stats["written"],
                 "refit_unwritten": stats["unwritten"],
             }
+            if overlong_penalty is not None:
+                record["overlong_penalty_mean"] = round(overlong_penalty, 5)
             if not any(m > 0 for m in sample_mask):
                 record["skipped"] = "no scored, non-empty row in the batch"
             else:

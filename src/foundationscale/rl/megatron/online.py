@@ -44,7 +44,7 @@ import math
 import random
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -62,6 +62,7 @@ __all__ = (
     "render_prompt_ids",
     "sample_prompt_indices",
     "scored_group_advantages",
+    "overlong_shaped_rows",
     "shard_rows",
     "step_rollout_metrics",
 )
@@ -159,6 +160,72 @@ def scored_group_advantages(
             # division-by-zero; eps=0 would make it one.
             advantages[index] = 0.0 if std == 0.0 else (value - mean) / (std + eps)
     return advantages, sample_mask
+
+
+def overlong_shaped_rows(
+    rows: Sequence[OnlineRow],
+    *,
+    max_new_tokens: int,
+    cache_tokens: int,
+    factor: float = 1.0,
+) -> tuple[list[OnlineRow], float]:
+    """Grade the over-long failure on a RAMP instead of a cliff (DAPO soft punishment).
+
+    WHY: a completion that spends the whole ``max_new_tokens`` budget is the policy
+    talking past its own stop token, and a single penalty dropped at the limit is a
+    cliff the policy can only discover by falling off it. The soft shape grades the
+    damage instead -- nothing at or below ``max_new_tokens - cache_tokens``, a LINEAR
+    ramp across the ``cache_tokens`` window, and the flat ``-factor`` once the budget
+    is spent -- so the signal starts before the wall and reaching the wall is never
+    cheap.
+
+    A row with ``finished is False`` pays the same flat ``-factor`` at EVERY length: a
+    budget truncation is the same failure described by a token count instead of a
+    length, so it is paid in full, not by the piece. Shaping lands only where a reward
+    was MEASURED -- a scorer abstention stays ``None`` and is kept out of the returned
+    mean, because an unmeasured row must not be handed an invented score nor borrow
+    weight from rows that were actually scored.
+
+    Every row comes back a NEW object (``dataclasses.replace``); the input is never
+    touched. ``cache_tokens`` must be a real window: 0 would mean "never penalize",
+    which is the CALLER's decision to skip this call, not a value this helper accepts.
+    """
+
+    if max_new_tokens < 1:
+        raise ValueError(
+            f"overlong_shaped_rows: max_new_tokens must be >= 1 (got {max_new_tokens})"
+        )
+    if cache_tokens < 1:
+        raise ValueError(f"overlong_shaped_rows: cache_tokens must be >= 1 (got {cache_tokens})")
+    if cache_tokens > max_new_tokens:
+        raise ValueError(
+            f"overlong_shaped_rows: cache_tokens ({cache_tokens}) must be <= "
+            f"max_new_tokens ({max_new_tokens})"
+        )
+    if factor < 0:
+        raise ValueError(f"overlong_shaped_rows: factor must be >= 0 (got {factor})")
+
+    start = max_new_tokens - cache_tokens
+    shaped: list[OnlineRow] = []
+    penalty_sum = 0.0
+    scored = 0
+    for row in rows:
+        reward = row.reward
+        n_tokens = len(row.completion_ids)
+        if not row.finished or n_tokens >= max_new_tokens:
+            penalty = -factor
+        elif n_tokens <= start:
+            penalty = 0.0
+        else:
+            penalty = -(n_tokens - start) / cache_tokens * factor
+        if reward is None:
+            # Unmeasured stays unmeasured: no shaping here may invent a verdict.
+            shaped.append(replace(row, reward=None))
+            continue
+        penalty_sum += penalty
+        scored += 1
+        shaped.append(replace(row, reward=reward + penalty))
+    return shaped, penalty_sum / scored if scored else 0.0
 
 
 def collate_token_batch(
