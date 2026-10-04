@@ -211,6 +211,15 @@ def test_build_arg_parser_defaults() -> None:
     )
     assert args.tp == 1 and args.pp == 1 and args.cp == 1
     assert args.sp is False and args.parity_only is False
+    assert args.attention_backend is None  # default leaves the provider's choice
+
+
+def test_build_arg_parser_attention_backend_choices() -> None:
+    base = ["--hf-model", "m", "--rollout-jsonl", "r.jsonl", "--metrics-out", "o.jsonl"]
+    args = driver.build_arg_parser().parse_args([*base, "--attention-backend", "unfused"])
+    assert args.attention_backend == "unfused"
+    with pytest.raises(SystemExit):
+        driver.build_arg_parser().parse_args([*base, "--attention-backend", "bogus"])
 
 
 def test_pp_step_module_importable_without_megatron() -> None:
