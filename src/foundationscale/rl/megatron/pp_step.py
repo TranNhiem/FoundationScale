@@ -110,9 +110,10 @@ def local_denominator(
     * token     -> supervised token count ``T_mb = loss_mask.sum()``
     * sequence  -> valid sequence count ``S_mb`` (rows with >=1 supervised
       token, or ``sample_mask.sum()`` when supplied)
-    * dr_grpo   -> supervised token count (constant-reduction numerator unit;
-      the kernel divided by ``rows * constant_length``, so the local scale
-      uses the same numerator unit against the declared ``B_g``)
+    * dr_grpo   -> microbatch row count ``rows`` (the kernel's ``constant``
+      reduction divides by ``rows * constant_length``, so the local scale is
+      rows against the declared ``B_g``; scaling by supervised TOKENS inflated
+      the loss by tokens/row -- measured: grad_norm tracked response length)
     * preference-> pair count = valid rows (pairs are co-resident per
       microbatch by the section 3 contract)
 
@@ -134,7 +135,7 @@ def local_denominator(
     if unit == "sequence":
         return sequences
     if unit == "dr_grpo":
-        return tokens
+        return float(loss_mask.shape[0])
     return sequences
 
 
@@ -148,6 +149,9 @@ def _read_denominator(den: GlobalDenominators, unit: str) -> float:
         "dr_grpo": ("sequences", "S_g", "B_g", "global_sequences"),
         "preference": ("pairs", "P_g", "sequences", "global_pairs"),
     }
+    if unit == "dr_grpo" and den.details.get("declared_sequences"):
+        # dr_grpo is denominated by the DECLARED batch B_g, not the measured S_g.
+        return float(den.details["declared_sequences"])
     names = candidates[unit]
     for name in names:
         value = getattr(den, name, None)
@@ -193,6 +197,37 @@ def rescale_to_global_denominator(
         return loss * 0.0
     global_value = _read_denominator(den, unit)
     return loss * (local / global_value)
+
+
+def objective_loss_or_zero(
+    objective_loss_fn: Any,
+    *,
+    current_logprobs: torch.Tensor,
+    old_logprobs: torch.Tensor,
+    advantages: torch.Tensor,
+    mask: torch.Tensor,
+    reference_logprobs: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Call the objective kernel, or contribute an exact graph-connected zero.
+
+    Under DP sharding one rank's microbatch can hold no supervised token while
+    the global batch does (measured: a qwen3moe EP=2 rung-2 run died at step 14
+    on rank 1 with "0 of 1023 mask entries are supervised"). The kernel rightly
+    refuses to MEASURE a fully masked batch, but this microbatch's additive share
+    of the globally denominated loss is exactly zero, which
+    :func:`rescale_to_global_denominator` already returns for ``local == 0``. A
+    batch with no supervised token anywhere is still refused, by the global
+    denominator.
+    """
+    if not bool(mask.detach().sum() > 0):
+        return current_logprobs.sum() * 0.0
+    return objective_loss_fn(
+        current_logprobs=current_logprobs,
+        old_logprobs=old_logprobs,
+        advantages=advantages,
+        mask=mask,
+        reference_logprobs=reference_logprobs,
+    )
 
 
 def ratio_and_clip_metrics(
@@ -529,7 +564,8 @@ def make_forward_step(
                 raise ValueError(
                     f"loss_mask width {width} matches neither S={input_ids.shape[1]} nor S-1"
                 )
-            raw_loss = objective_loss_fn(
+            raw_loss = objective_loss_or_zero(
+                objective_loss_fn,
                 current_logprobs=current_logprobs,
                 old_logprobs=batch["old_logprobs"],
                 advantages=batch["advantages"],
