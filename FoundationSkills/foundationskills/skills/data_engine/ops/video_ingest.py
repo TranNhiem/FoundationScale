@@ -451,6 +451,7 @@ def _video_ingest_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iter
     extra.setdefault("chunks_emitted", 0)
     extra.setdefault("chunks_extra", 0)
     extra.setdefault("asr_segments_suppressed", 0)
+    extra.setdefault("asr_segments_frameless_window", 0)
     max_ratio = float(cfg.get("max_compression_ratio", _DEFAULT_MAX_COMPRESSION_RATIO))
     extra["ffmpeg_version"] = _ffmpeg_version(ffmpeg)
 
@@ -537,6 +538,7 @@ def _video_ingest_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> Iter
                 lo, hi = j * chunk_seconds, (j + 1) * chunk_seconds
                 unit_frames = [(t, p) for (t, p) in frame_pairs if lo <= t < hi]
                 if not unit_frames:  # windows without a frame emit nothing at all
+                    extra["asr_segments_frameless_window"] += sum(1 for s in segments if lo <= _midpoint(s) < hi)
                     continue
                 unit_segs = [s for s in segments if lo <= _midpoint(s) < hi]
                 units.append((f"{rid}#c{j}", unit_frames, unit_segs))

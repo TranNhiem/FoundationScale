@@ -163,6 +163,7 @@ def _norm_params(raw: Any) -> dict:
         if not isinstance(decl, dict):
             decl = {}
         type_raw = str(decl.get("type", "string")).strip()
+        optional = bool(decl.get("optional")) or "default" in decl or type_raw.lower().endswith("optional")
         type_raw = type_raw.replace(", optional", "").strip()
         json_type = _TYPE_MAP.get(type_raw.lower(), "string")
         prop: dict[str, Any] = {"type": json_type}
@@ -174,7 +175,6 @@ def _norm_params(raw: Any) -> dict:
         if "default" in decl:
             prop["default"] = decl["default"]
         props[name] = prop
-        optional = bool(decl.get("optional")) or "default" in decl or type_raw.lower().endswith("optional")
         if not optional:
             required.append(name)
     return {"type": "object", "properties": props, "required": required}
@@ -193,7 +193,7 @@ def _norm_tool_def(raw: Any) -> dict | None:
     return {"type": "function", "function": {"name": name, "description": str(desc), "parameters": params}}
 
 
-def _norm_tools(raw: Any) -> list[dict]:
+def _norm_tools(raw: Any, ctx: dict | None = None) -> list[dict]:
     parsed = _parse_json(raw) if isinstance(raw, str) else raw
     if isinstance(parsed, dict):
         parsed = [parsed]
@@ -201,10 +201,22 @@ def _norm_tools(raw: Any) -> list[dict]:
         return []
     out: list[dict] = []
     for entry in parsed:
+        if not isinstance(entry, dict):
+            if ctx is not None:
+                ctx["errors"].append("malformed_message")
+            continue
         tool = _norm_tool_def(entry)
         if tool is not None:
             out.append(tool)
     return out
+
+
+def _msg_list(rec: dict) -> Any:
+    """Message list of a record: ``messages``, else the canonical ShareGPT ``conversations`` field."""
+    msgs = rec.get("messages")
+    if msgs is None:
+        return rec.get("conversations")
+    return msgs
 
 
 def _make_call(name: Any, args: Any, call_id: str, ctx: dict | None = None) -> dict:
@@ -222,13 +234,27 @@ def _make_call(name: Any, args: Any, call_id: str, ctx: dict | None = None) -> d
     }
 
 
+def _norm_content(value: Any, ctx: dict) -> str:
+    """Normalise message content: text parts are joined, anything else non-string is a malformed message."""
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    if isinstance(value, list) and all(
+        isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str) for part in value
+    ):
+        return "".join(part["text"] for part in value)
+    ctx["errors"].append("malformed_message")
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # dialect detection + conversion
 # ---------------------------------------------------------------------------
 
 def _detect(rec: dict) -> str | None:
     """First dialect (spec order) that matches ANYWHERE in the record, not the first message that matches."""
-    msgs = rec.get("messages")
+    msgs = _msg_list(rec)
     if isinstance(msgs, list):
         ms = [m for m in msgs if isinstance(m, dict)]
         texts = [m["content"] for m in ms if isinstance(m.get("content"), str)]
@@ -264,14 +290,15 @@ def _detect(rec: dict) -> str | None:
 
 
 def _conv_openai(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
-    tools = _norm_tools(rec.get("tools", rec.get("functions", [])))
+    tools = _norm_tools(rec.get("tools", rec.get("functions", [])), ctx)
     out: list[dict] = []
-    for turn_i, m in enumerate(rec.get("messages") or []):
+    for turn_i, m in enumerate(_msg_list(rec) or []):
         if not isinstance(m, dict):
+            ctx["errors"].append("malformed_message")
             continue
         role = str(m.get("role", "user"))
         content = m.get("content")
-        content = content if isinstance(content, str) else ("" if content is None else str(content))
+        content = _norm_content(content, ctx)
         if role == "assistant":
             calls_raw = m.get("tool_calls")
             if not calls_raw and isinstance(m.get("function_call"), dict):
@@ -280,6 +307,7 @@ def _conv_openai(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
                 calls = []
                 for k, c in enumerate(calls_raw):
                     if not isinstance(c, dict):
+                        ctx["errors"].append("malformed_message")
                         continue
                     fn = c.get("function") if isinstance(c.get("function"), dict) else c
                     cid = str(c.get("id") or _call_id(ctx["rec_id"], turn_i, k, ctx["salt"]))
@@ -303,17 +331,19 @@ def _conv_openai(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
 
 
 def _conv_sharegpt(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
-    tools = _norm_tools(rec.get("tools", []))
+    tools = _norm_tools(rec.get("tools", []), ctx)
     out: list[dict] = []
     pending: list[dict] = []
+    unanswered: list[dict] = []  # announced calls still waiting for their result (one result each, FIFO)
     turn = 0
-    for m in rec.get("messages") or []:
+    for m in _msg_list(rec) or []:
         if not isinstance(m, dict):
+            ctx["errors"].append("malformed_message")
             continue
         frm = str(m.get("from", "human")).lower()
         role = _SHAREGPT_ROLES.get(frm, frm)
         value = m.get("value", m.get("content", ""))
-        value = value if isinstance(value, str) else str(value)
+        value = _norm_content(value, ctx)
         if role == "function_call":
             parsed = _parse_json(value) or {}
             name = parsed.get("name", "")
@@ -323,14 +353,16 @@ def _conv_sharegpt(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
         elif role == "observation":
             if pending:
                 out.append({"role": "assistant", "content": None, "tool_calls": pending})
-                for call in pending:
-                    out.append({"role": "tool", "tool_call_id": call["id"], "content": value})
+                unanswered += pending
                 pending = []
+            if unanswered:
+                out.append({"role": "tool", "tool_call_id": unanswered.pop(0)["id"], "content": value})
             else:
                 out.append({"role": "tool", "tool_call_id": "", "content": value})
         else:
             if pending:
                 out.append({"role": "assistant", "content": None, "tool_calls": pending})
+                unanswered += pending
                 pending = []
             out.append({"role": role, "content": value})
         turn += 1
@@ -340,19 +372,20 @@ def _conv_sharegpt(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
 
 
 def _conv_hermes(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
-    tools: list[dict] = _norm_tools(rec.get("tools", []))
+    tools: list[dict] = _norm_tools(rec.get("tools", []), ctx)
     out: list[dict] = []
     turn = 0
-    for m in rec.get("messages") or []:
+    for m in _msg_list(rec) or []:
         if not isinstance(m, dict):
+            ctx["errors"].append("malformed_message")
             continue
         role = str(m.get("role", "user"))
         content = m.get("content", "")
-        content = content if isinstance(content, str) else str(content)
+        content = _norm_content(content, ctx)
         if not tools and TOOLS_OPEN in content:
             start = content.index(TOOLS_OPEN) + len(TOOLS_OPEN)
             end = content.index(TOOLS_CLOSE, start) if TOOLS_CLOSE in content[start:] else len(content)
-            tools = _norm_tools(content[start:end])
+            tools = _norm_tools(content[start:end], ctx)
             content = (content[: content.index(TOOLS_OPEN)] + content[end + len(TOOLS_CLOSE) :]).strip()
         calls: list[dict] = []
         if TC_OPEN in content:
@@ -406,7 +439,7 @@ def _conv_glaive(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
         blob = system_text.split("functions:", 1)[1].strip()
         parsed = _parse_json(blob)
         if parsed is not None:
-            tools = _norm_tools(parsed)
+            tools = _norm_tools(parsed, ctx)
     out: list[dict] = []
     if system_text:
         head = system_text.split("functions:", 1)[0].strip()
@@ -414,6 +447,7 @@ def _conv_glaive(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
             out.append({"role": "system", "content": head})
     turn = 0
     pending: list[dict] = []
+    unanswered: list[dict] = []  # announced calls still waiting for their result (one result each, FIFO)
     for chunk in _GLAIVE_SPLIT_RE.split(str(rec.get("chat", ""))):
         chunk = chunk.strip()
         if not chunk:
@@ -427,11 +461,13 @@ def _conv_glaive(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
             if marker == "USER:":
                 if pending:
                     out.append({"role": "assistant", "content": None, "tool_calls": pending})
+                    unanswered += pending
                     pending = []
                 out.append({"role": "user", "content": body.strip()})
             elif marker == "ASSISTANT:":
                 if pending:
                     out.append({"role": "assistant", "content": None, "tool_calls": pending})
+                    unanswered += pending
                     pending = []
                 text = body.strip()
                 if text:
@@ -447,9 +483,10 @@ def _conv_glaive(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
             elif marker == "FUNCTION RESPONSE:":
                 if pending:
                     out.append({"role": "assistant", "content": None, "tool_calls": pending})
-                    for call in pending:
-                        out.append({"role": "tool", "tool_call_id": call["id"], "content": body.strip()})
+                    unanswered += pending
                     pending = []
+                if unanswered:
+                    out.append({"role": "tool", "tool_call_id": unanswered.pop(0)["id"], "content": body.strip()})
                 else:
                     out.append({"role": "tool", "tool_call_id": "", "content": body.strip()})
             turn += 1
@@ -459,15 +496,20 @@ def _conv_glaive(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
 
 
 def _conv_xlam(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
-    tools = _norm_tools(rec.get("tools", []))
+    tools = _norm_tools(rec.get("tools", []), ctx)
     out: list[dict] = [{"role": "user", "content": str(rec.get("query", ""))}]
-    answers = _parse_json(rec.get("answers", [])) or []
+    raw_answers = rec.get("answers", [])
+    answers = [] if isinstance(raw_answers, str) and not raw_answers.strip() else _parse_json(raw_answers)
     if isinstance(answers, dict):
         answers = [answers]
+    if not isinstance(answers, list):
+        ctx["errors"].append("malformed_message")
+        return out, tools
     calls: list[dict] = []
     for k, entry in enumerate(answers):
         if not isinstance(entry, dict):
-            continue
+            ctx["errors"].append("malformed_message")
+            return out, tools
         cid = _call_id(ctx["rec_id"], 1, k, ctx["salt"])
         calls.append(_make_call(entry.get("name", ""), entry.get("arguments", "{}"), cid, ctx=ctx))
     if calls:
@@ -478,15 +520,16 @@ def _conv_xlam(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
 
 
 def _conv_llama3(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
-    tools = _norm_tools(rec.get("tools", []))
+    tools = _norm_tools(rec.get("tools", []), ctx)
     out: list[dict] = []
     turn = 0
-    for m in rec.get("messages") or []:
+    for m in _msg_list(rec) or []:
         if not isinstance(m, dict):
+            ctx["errors"].append("malformed_message")
             continue
         role = str(m.get("role", "user"))
         content = m.get("content", "")
-        content = content if isinstance(content, str) else str(content)
+        content = _norm_content(content, ctx)
         if role == "ipython":
             out.append({"role": "tool", "tool_call_id": "", "content": content})
             turn += 1
@@ -513,15 +556,16 @@ def _conv_llama3(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
 
 
 def _conv_mistral(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
-    tools = _norm_tools(rec.get("tools", []))
+    tools = _norm_tools(rec.get("tools", []), ctx)
     out: list[dict] = []
     turn = 0
-    for m in rec.get("messages") or []:
+    for m in _msg_list(rec) or []:
         if not isinstance(m, dict):
+            ctx["errors"].append("malformed_message")
             continue
         role = str(m.get("role", "user"))
         content = m.get("content", "")
-        content = content if isinstance(content, str) else str(content)
+        content = _norm_content(content, ctx)
         if role == "tool":
             out.append({"role": "tool", "tool_call_id": str(m.get("tool_call_id") or ""), "content": content})
             turn += 1
@@ -530,12 +574,16 @@ def _conv_mistral(rec: dict, ctx: dict) -> tuple[list[dict], list[dict]]:
             s = content.index(MISTRAL_CALLS) + len(MISTRAL_CALLS)
             e = content.index(MISTRAL_RESULTS, s) if MISTRAL_RESULTS in content[s:] else len(content)
             blob = content[s:e]
-            parsed = _parse_json(blob) or []
-            if isinstance(parsed, dict):
+            parsed = _parse_json(blob)
+            if parsed is None:
+                ctx["errors"].append("malformed_tool_marker")
+                parsed = []
+            elif isinstance(parsed, dict):
                 parsed = [parsed]
             calls: list[dict] = []
             for k, entry in enumerate(parsed):
                 if not isinstance(entry, dict):
+                    ctx["errors"].append("malformed_message")
                     continue
                 cid = str(entry.get("id") or _call_id(ctx["rec_id"], turn, k, ctx["salt"]))
                 calls.append(_make_call(entry.get("name", ""), entry.get("arguments", entry.get("parameters", "{}")), cid, ctx=ctx))
@@ -584,7 +632,7 @@ def _pair_results(messages: list[dict]) -> None:
     matches no call is paired with the oldest unanswered call: an empty result id
     takes the call's id, an explicit one is kept and the call adopts it (source
     ids survive). With no unanswered call left the result is untouched and later
-    dropped as ``result_without_call``. openai traces are never repaired.
+    dropped as ``result_without_call``. openai traces are repaired only when a result carries no id (legacy calls).
     """
     calls: dict[str, dict] = {}
     pending: list[dict] = []
@@ -707,7 +755,8 @@ def _toolcall_format_op(records: Iterable[dict], cfg: dict, stats: OpStats) -> I
         except Exception:  # noqa: BLE001 - a converter crash is a malformed record
             messages, tools = [], []
             ctx["errors"].append("malformed_tool_marker")
-        if dialect != "openai" and not ctx["errors"]:
+        needs_pair = any(m.get("role") == "tool" and not m.get("tool_call_id") for m in messages)
+        if not ctx["errors"] and (dialect != "openai" or needs_pair):
             _pair_results(messages)
         if ctx["errors"]:
             slug = ctx["errors"][0]

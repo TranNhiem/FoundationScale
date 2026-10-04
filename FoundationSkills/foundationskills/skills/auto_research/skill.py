@@ -276,6 +276,7 @@ class AutoResearchSkill(BaseSkill):
             cards = propose(
                 spec, _safe_list(lambda: ledger.results(campaign)),
                 dict(request.get("current") or {}), list(request.get("symptoms") or []),
+                launches=_safe_list(lambda: ledger.launches(campaign)),
             )
             return SkillResult(Status.PASS, {"cards": cards})
         return self._close(request, ctx, ledger, spec, campaign, spec_hash)
@@ -392,7 +393,12 @@ class AutoResearchSkill(BaseSkill):
         elif outcome == "regressed":
             recommendation = f"keep the baseline; {best_trial} regressed or breached a guardrail"
         elif outcome == "unmeasured":
-            recommendation = "collect more evidence: the noise floor or the paired repeats are missing"
+            if problems:
+                recommendation = (
+                    "restore an intact ledger: chain verification failed; no verdict is trustworthy until it verifies"
+                )
+            else:
+                recommendation = "collect more evidence: the noise floor or the paired repeats are missing"
         else:
             recommendation = "keep the baseline; no candidate beat tau"
 

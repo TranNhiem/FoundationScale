@@ -213,14 +213,21 @@ Design record and survey: `artifacts/research/llm_data_engine.md`.
   similarity histogram, the near-threshold count and example pairs, so the
   threshold is auditable (cluster-scoped in kmeans mode: `measurement_scope`).
   Buffers records in memory up to `max_records`.
-- `toolcall_format` — normalizes OpenAI, ShareGPT (`function_call`/
+- `toolcall_format` — normalizes OpenAI (incl. legacy `function_call` /
+  `role: function`), ShareGPT (`messages` or `conversations`; `function_call`/
   `observation`), Hermes, Glaive, xLAM, Llama-3 and Mistral traces into OpenAI
   `tool_calls` messages plus a top-level `tools` list (JSON-schema parameters);
   canonical argument JSON, deterministic call ids (id-less dialects pair each
-  tool result with the oldest unanswered call). Arguments are validated
+  tool result with the oldest unanswered call, one result per call). Text
+  content-part lists are joined. Arguments are validated
   against the declared schema; failures drop with a named reason
   (`bad_arguments_json`, `undeclared_tool_call`, `args_schema_violation`,
   `result_without_call`, ...), or with `strict: false` are kept and marked.
+  Unparsable or non-object entries (messages, calls, tool definitions, xLAM
+  `answers`, other content types) drop as `malformed_message`; an unparsable
+  call payload after a dialect marker drops as `malformed_tool_marker`.
+  `require_tools` defaults to true: a record without a tools schema drops as
+  `missing_tools_schema`; set `require_tools: false` for plain chat.
 - `video_ingest` — ffprobe/ffmpeg uniform frames (`fps`, `max_frames`) cached
   under `frames_dir`, Whisper ASR through transformers (`asr: none` for frames
   only), transcript segments aligned to the nearest frame; emits `images` +
@@ -229,7 +236,8 @@ Design record and survey: `artifacts/research/llm_data_engine.md`.
   `no_frames`, `audio_extract_failed`, `asr_failed`. ASR segments that zlib-compress more than
   `max_compression_ratio` (default 2.4, Whisper's own threshold) are
   repetition-loop hallucinations on non-speech audio and are suppressed
-  (`asr_segments_suppressed`).
+  (`asr_segments_suppressed`). In chunk mode a window with no sampled frame
+  emits nothing; its segments are counted in `asr_segments_frameless_window`.
 Running these on a GPU is a library call, not a launch: no confirm hash; the
 device is recorded in stats.
 

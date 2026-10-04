@@ -142,7 +142,8 @@ itself - the acceptance statistics and the exit codes (0/5/95/96) are computed f
 Outcome semantics (shared with `core/contract.py`): an **input** BLOCK refuses before any work - status
 REFUSED (exit 96), nothing written. A **handoff** BLOCK never refuses: the work ran and the result is RED
 (exit 5). WARN never blocks but changes the status where noted (AR-HO-004 makes the close UNMEASURED,
-exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSED > UNMEASURED > RED > PASS.
+exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSED > UNMEASURED > RED > PASS, with one exception: a broken ledger
+(AR-HO-003) is RED even when evidence is also missing - no verdict is trustworthy until the chain verifies.
 
 | Rule id | Phase | Severity | Fires when |
 |---|---|---|---|
@@ -177,6 +178,10 @@ gain/flat -> RED (AR-HO-001).
   fingerprint of the spec, and `confirm_repeats` paired seeds per candidate, none of them limited/crashed.
 - Nothing in this skill repairs or rewrites a ledger: entries are append-only. Damage is detected
   (AR-HO-003 names the first broken seq), never patched.
+- Limitations: the hash chain is not anchored outside the ledger file, so it detects edits that do not
+  recompute the chain, not a full rewrite; `gpu_hours_est` is self-declared by the launch request and is
+  checked against the budget, not measured. A guardrail with fewer than 2 paired measurements makes the
+  close UNMEASURED (`guardrail_unmeasured:<name>`), never an accept.
 
 ## FS interface
 - Emits: `auto_research_report` artifact in `ctx.artifacts_dir`.

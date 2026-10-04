@@ -58,7 +58,8 @@ def _symptom_hits(phrases: list[str], symptoms: list[str]) -> int:
 
 
 def evaluate(
-    spec: dict[str, Any], ledger_results: list[dict[str, Any]], current: dict[str, Any], symptoms: list[str]
+    spec: dict[str, Any], ledger_results: list[dict[str, Any]], current: dict[str, Any], symptoms: list[str],
+    launches: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Score every catalog idea; return (live cards, dropped cards) ordered score desc, complexity asc, id asc."""
     results = [dict(r) for r in (ledger_results or [])]
@@ -77,7 +78,7 @@ def evaluate(
 
     seen = {
         sha256_hex(canonical(dict(r["delta"])))
-        for r in results
+        for r in results + [dict(p) for p in (launches or [])]
         if isinstance(r.get("delta"), dict) and r["delta"]
     }
     live: list[tuple[dict[str, Any], int]] = []
@@ -107,7 +108,8 @@ def propose(
     current: dict[str, Any],
     symptoms: list[str],
     k: int = 3,
+    launches: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Top-``k`` live idea cards; pruned ideas are dropped (see evaluate() for the drop reasons)."""
-    live, _dropped = evaluate(spec, ledger_results, current, symptoms)
+    live, _dropped = evaluate(spec, ledger_results, current, symptoms, launches)
     return live[: max(0, int(k))]

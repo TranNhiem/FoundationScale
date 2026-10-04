@@ -71,14 +71,20 @@ def _is_int(value: Any) -> bool:
 
 
 def _is_num(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        float(value)  # an int too large for float() is not a usable number
+    except OverflowError:
+        return False
+    return True
 
 
 def _finite(value: Any, default: float = 0.0) -> float:
     """``float(value)`` when it is a finite number, otherwise ``default`` (never raises)."""
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return number if math.isfinite(number) else default
 
@@ -138,6 +144,12 @@ def check_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     metric = objective.get("metric")
     if not isinstance(metric, str) or not metric or metric not in metrics:
         problems.append(("AR-IN-001", f"objective.metric {metric!r} missing or not in eval_policy.metrics {metrics}"))
+    direction = objective.get("direction")
+    if "direction" in objective and direction not in GUARD_DIRECTIONS:
+        problems.append(
+            ("AR-IN-001", f"objective.direction must be one of "
+                          f"{list(GUARD_DIRECTIONS)} (got {direction!r})")
+        )
     guard_directions = confirm.get("guardrail_directions") or {}
     for name, mode in dict(guard_directions).items():
         if str(mode) not in GUARD_DIRECTIONS:
@@ -183,7 +195,7 @@ def axis_value_fits(axis: dict[str, Any], value: Any) -> bool:
             return _is_int(value) and int(axis["min"]) <= int(value) <= int(axis["max"])
         if declared in {"float", "log_float"}:
             return _is_num(value) and float(axis["min"]) <= float(value) <= float(axis["max"])
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, OverflowError):
         return False
     return False
 

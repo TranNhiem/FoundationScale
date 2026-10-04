@@ -129,9 +129,11 @@ class Ledger:
             if not line.strip():
                 continue
             try:
-                out.append(json.loads(line))
+                entry = json.loads(line)
             except json.JSONDecodeError:
                 continue  # verify() reports malformed lines by their expected seq
+            if isinstance(entry, dict):
+                out.append(entry)  # verify() reports non-object lines
         return out
 
     def payload(self, entry: dict[str, Any]) -> dict[str, Any]:
@@ -190,6 +192,9 @@ class Ledger:
             except json.JSONDecodeError:
                 problems.append(f"seq {expected_seq}: bad JSON line {idx + 1}")
                 break
+            if not isinstance(entry, dict):
+                problems.append(f"seq {expected_seq}: bad JSON line {idx + 1} (not an object)")
+                continue
             seq = entry.get("seq")
             if seq != expected_seq:
                 problems.append(f"seq {expected_seq}: sequence gap (found seq {seq!r})")

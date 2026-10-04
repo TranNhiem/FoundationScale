@@ -113,7 +113,7 @@ def decide(
     for guard in guards:
         gpairs = paired(baseline, candidate, guard)
         if len(gpairs) < 2:
-            reasons.append(f"guardrail_skipped:{guard}")
+            unmeasured.append(f"guardrail_unmeasured:{guard}:{len(gpairs)} pairs")
             continue
         # The drop sign is the GUARD metric's own direction (higher-is-better "max" by default,
         # confirm.guardrail_directions overrides); it is never the objective's outcome sign.
