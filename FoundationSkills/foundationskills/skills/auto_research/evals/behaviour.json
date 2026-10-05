@@ -873,6 +873,167 @@
       "question_model": "mimo-v2.6-pro"
     },
     {
+      "id": "fskills-auto-research-oracle-AR-HO-006",
+      "skill": "auto_research",
+      "rule_id": "AR-HO-006",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "a noise-floor baseline repeat was submitted as a non-eval_only job (decision 3: the floor is eval-only repeats) - status UNMEASURED",
+      "fixture": {
+        "files": {
+          "ledger/chain.jsonl": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"ee24ea0a439b6940646f77bda4d210ae26d31105b614e9d20b0463a1bc6d8407\",\"op\":\"job_submitted\",\"payload_hash\":\"eba8d43ad0a8f3b9d32444579da8d7ab53cfac4c44d0d0d0a18c466b52cfe327\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"fcaeb06fe3b4edc9acff0b31e7e84cd95712fee3fd09faf57f8577ecf316891e\",\"op\":\"trial_result\",\"payload_hash\":\"1534a147c63e739ba320c4213d46cb4642a3a86639a25469b67a27255e58c2d5\",\"prev_hash\":\"ee24ea0a439b6940646f77bda4d210ae26d31105b614e9d20b0463a1bc6d8407\",\"seq\":2,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"04703e89464ae298a8346e021369629dd8f46c2341f760a599c1fbe9a7a46dd9\",\"op\":\"trial_result\",\"payload_hash\":\"4f677831b1ef20369ea5d3c7d05af1c4f02e6efff4603c13333748585cb826dc\",\"prev_hash\":\"fcaeb06fe3b4edc9acff0b31e7e84cd95712fee3fd09faf57f8577ecf316891e\",\"seq\":3,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"78b58d2391e278e77286959add8d9655106385c611d96b2025b9ae074e89e933\",\"op\":\"trial_result\",\"payload_hash\":\"634c7ca2c70966a955dec91b3cf61ab4c4ba6a8c0e88cd5d4a3443685000d387\",\"prev_hash\":\"04703e89464ae298a8346e021369629dd8f46c2341f760a599c1fbe9a7a46dd9\",\"seq\":4,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"4c74d8e135dd748e215d58c59fb0c9d14a979bc24e5d791e80379db140e0401c\",\"op\":\"trial_result\",\"payload_hash\":\"ceb2071dc4cc3ae6d234bb84b0addf84dbe87facfd1e8eee0ed487157fa98d7f\",\"prev_hash\":\"78b58d2391e278e77286959add8d9655106385c611d96b2025b9ae074e89e933\",\"seq\":5,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"81c820e6052011e142e766f95b05fa0179921b7db54cf3ec3df0da7007b1bef3\",\"op\":\"trial_result\",\"payload_hash\":\"1edc86fbedbe4a31da4b53202348817a72ffec9b22db4c44d50391c392336b05\",\"prev_hash\":\"4c74d8e135dd748e215d58c59fb0c9d14a979bc24e5d791e80379db140e0401c\",\"seq\":6,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"00fe975790e2084490a68fa9fe427bf68b414062ab73a37abcc1a621d36b81a2\",\"op\":\"trial_result\",\"payload_hash\":\"e8ca5eeb6f8c544e618a6c0c578c345fa5be074d6af5f80da89cac7a524d474e\",\"prev_hash\":\"81c820e6052011e142e766f95b05fa0179921b7db54cf3ec3df0da7007b1bef3\",\"seq\":7,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "ledger/objects/1534a147c63e739ba320c4213d46cb4642a3a86639a25469b67a27255e58c2d5.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.5}},\"role\":\"baseline\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "ledger/objects/1edc86fbedbe4a31da4b53202348817a72ffec9b22db4c44d50391c392336b05.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.902}},\"role\":\"candidate\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "ledger/objects/4f677831b1ef20369ea5d3c7d05af1c4f02e6efff4603c13333748585cb826dc.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.502}},\"role\":\"baseline\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "ledger/objects/634c7ca2c70966a955dec91b3cf61ab4c4ba6a8c0e88cd5d4a3443685000d387.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.501}},\"role\":\"baseline\",\"seed\":103,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "ledger/objects/ceb2071dc4cc3ae6d234bb84b0addf84dbe87facfd1e8eee0ed487157fa98d7f.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.9}},\"role\":\"candidate\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "ledger/objects/e8ca5eeb6f8c544e618a6c0c578c345fa5be074d6af5f80da89cac7a524d474e.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.901}},\"role\":\"candidate\",\"seed\":103,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "ledger/objects/eba8d43ad0a8f3b9d32444579da8d7ab53cfac4c44d0d0d0a18c466b52cfe327.json": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":8.0,\"job_id\":\"123456\",\"kind\":\"train\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"submitted_at\":1750000000.0,\"trial\":\"baseline\"}"
+        },
+        "request": {
+          "action": "close",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "ledger_dir": "{tmp}/ledger",
+          "stop_reason": "budget exhausted"
+        }
+      },
+      "fixture_sha256": "f4e01761524baa0644177e92189320fdbed003bc772f5a461b939334ca72a898",
+      "expected_behavior": [
+        "Identifies the problem: a noise-floor baseline repeat was submitted as a non-eval_only job (decision 3: the floor is eval-only repeats) - status UNMEASURED",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule AR-HO-006"
+      ],
+      "ground_truth": "auto_research: rule AR-HO-006 (WARN, handoff phase) fires: a noise-floor baseline repeat was submitted as a non-eval_only job (decision 3: the floor is eval-only repeats) - status UNMEASURED.",
+      "trigger_facts": [
+        {
+          "path": "files.ledger/chain.jsonl",
+          "value": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"ee24ea0a439b6940646f77bda4d210ae26d31105b614e9d20b0463a1bc6d8407\",\"op\":\"job_submitted\",\"payload_hash\":\"eba8d43ad0a8f3b9d32444579da8d7ab53cfac4c44d0d0d0a18c466b52cfe327\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"fcaeb06fe3b4edc9acff0b31e7e84cd95712fee3fd09faf57f8577ecf316891e\",\"op\":\"trial_result\",\"payload_hash\":\"1534a147c63e739ba320c4213d46cb4642a3a86639a25469b67a27255e58c2d5\",\"prev_hash\":\"ee24ea0a439b6940646f77bda4d210ae26d31105b614e9d20b0463a1bc6d8407\",\"seq\":2,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"04703e89464ae298a8346e021369629dd8f46c2341f760a599c1fbe9a7a46dd9\",\"op\":\"trial_result\",\"payload_hash\":\"4f677831b1ef20369ea5d3c7d05af1c4f02e6efff4603c13333748585cb826dc\",\"prev_hash\":\"fcaeb06fe3b4edc9acff0b31e7e84cd95712fee3fd09faf57f8577ecf316891e\",\"seq\":3,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"78b58d2391e278e77286959add8d9655106385c611d96b2025b9ae074e89e933\",\"op\":\"trial_result\",\"payload_hash\":\"634c7ca2c70966a955dec91b3cf61ab4c4ba6a8c0e88cd5d4a3443685000d387\",\"prev_hash\":\"04703e89464ae298a8346e021369629dd8f46c2341f760a599c1fbe9a7a46dd9\",\"seq\":4,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"4c74d8e135dd748e215d58c59fb0c9d14a979bc24e5d791e80379db140e0401c\",\"op\":\"trial_result\",\"payload_hash\":\"ceb2071dc4cc3ae6d234bb84b0addf84dbe87facfd1e8eee0ed487157fa98d7f\",\"prev_hash\":\"78b58d2391e278e77286959add8d9655106385c611d96b2025b9ae074e89e933\",\"seq\":5,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"81c820e6052011e142e766f95b05fa0179921b7db54cf3ec3df0da7007b1bef3\",\"op\":\"trial_result\",\"payload_hash\":\"1edc86fbedbe4a31da4b53202348817a72ffec9b22db4c44d50391c392336b05\",\"prev_hash\":\"4c74d8e135dd748e215d58c59fb0c9d14a979bc24e5d791e80379db140e0401c\",\"seq\":6,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"00fe975790e2084490a68fa9fe427bf68b414062ab73a37abcc1a621d36b81a2\",\"op\":\"trial_result\",\"payload_hash\":\"e8ca5eeb6f8c544e618a6c0c578c345fa5be074d6af5f80da89cac7a524d474e\",\"prev_hash\":\"81c820e6052011e142e766f95b05fa0179921b7db54cf3ec3df0da7007b1bef3\",\"seq\":7,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/1534a147c63e739ba320c4213d46cb4642a3a86639a25469b67a27255e58c2d5.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.5}},\"role\":\"baseline\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/1edc86fbedbe4a31da4b53202348817a72ffec9b22db4c44d50391c392336b05.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.902}},\"role\":\"candidate\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/4f677831b1ef20369ea5d3c7d05af1c4f02e6efff4603c13333748585cb826dc.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.502}},\"role\":\"baseline\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/634c7ca2c70966a955dec91b3cf61ab4c4ba6a8c0e88cd5d4a3443685000d387.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.501}},\"role\":\"baseline\",\"seed\":103,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/ceb2071dc4cc3ae6d234bb84b0addf84dbe87facfd1e8eee0ed487157fa98d7f.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.9}},\"role\":\"candidate\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json",
+          "value": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/e8ca5eeb6f8c544e618a6c0c578c345fa5be074d6af5f80da89cac7a524d474e.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.901}},\"role\":\"candidate\",\"seed\":103,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/eba8d43ad0a8f3b9d32444579da8d7ab53cfac4c44d0d0d0a18c466b52cfe327.json",
+          "value": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":8.0,\"job_id\":\"123456\",\"kind\":\"train\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"submitted_at\":1750000000.0,\"trial\":\"baseline\"}",
+          "check": false
+        }
+      ],
+      "question": "Run auto_research for me on campaign \"ar-fixture\" with action \"close\", approver \"arbiter\", campaign_confirm \"{confirm}\", and stop_reason \"budget exhausted\", against ledger_dir \"{tmp}/ledger\". The staged ledger/chain.jsonl already holds 8 entries (seq 0–7) for \"ar-fixture\": campaign_approved at seq 0, job_submitted at seq 1, and trial_result records for \"baseline\" at seqs 2, 3, 4 and for \"t1\" at seqs 5, 6, 7, and I can see the staged object files contain baseline val_accuracy 0.5 (seed 101), 0.502 (seed 102), 0.501 (seed 103) and candidate \"t1\" val_accuracy 0.9 (seed 101), 0.902 (seed 102), 0.901 (seed 103), all with se 0.001, steps 200, status \"ok\", limited false, and eval_policy_fingerprint \"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\". I also see the approval object with approver \"arbiter\" and spec_hash \"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\", and the job_submitted object with job_id \"123456\", gpu_hours_est 8.0, launch_token \"fs-ar-trial-v1-fixture\", submitted_at 1750000000.0, and budget_after hours_left 16.0 / runs_left 2. The campaign_spec is the one in the payload (base gemma4-4b with fingerprint sha256:b2b2…b2b2, axes optim.lr log_float 1e-06–0.001, train.method categorical full/lora, lora.rank int 4–64, objective max val_accuracy on gsm8k, budget 24.0 GPU-hours / 6 runs / 8.0 h timeout / 0.3 reserve, cluster partition \"rally\" max 2 nodes × 8 GPUs excluding \"r01dgx02\" with time \"10-00:00:00\", seeds 101/102/103 with 3 baseline and 3 confirm repeats, confirm noise_floor_rel 0.005, k 2.0, guard_abs_epsilon 0.01, empty guardrails, stopping max_crash_streak 2 and no_gain_streak 3). What does the close produce — the acceptance decision against the calibrated noise floor and the final catalog/ledger outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
       "id": "fskills-auto-research-oracle-AR-IN-001",
       "skill": "auto_research",
       "rule_id": "AR-IN-001",
@@ -1858,6 +2019,161 @@
       "question_model": "mimo-v2.6-pro"
     },
     {
+      "id": "fskills-auto-research-oracle-AR-LN-003",
+      "skill": "auto_research",
+      "rule_id": "AR-LN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "IMEX fabric at submit is not 'ready' (refused or unmeasured); the named reason is carried in the message",
+      "fixture": {
+        "files": {
+          "ledger/chain.jsonl": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"24bc883568c333937d10ece7715f7c9aeb55967f9a317c350d4c85eefb5016aa\",\"op\":\"launch_envelope\",\"payload_hash\":\"02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "ledger/fabric.json": "{\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}",
+          "ledger/objects/02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b.json": "{\"approver\":\"arbiter\",\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"envelope\":{\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"scope\":\"one campaign\"},\"envelope_token\":\"8b6bd61e2aeccbb4a283c2fcd489dac7a07906cd4eeda363f66ce9d5189e655d\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}"
+        },
+        "request": {
+          "action": "submit",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "launch_token": "4eb59d3018e99cc9f41142e20103eaa33562092725ef86be2a65679ff0906abd",
+          "ledger_dir": "{tmp}/ledger",
+          "trial_spec": {
+            "commands": [
+              "uv run train.py --config campaign.yaml"
+            ],
+            "delta": {
+              "optim.lr": 0.0005
+            },
+            "eval_request": {
+              "command": [
+                "eval",
+                "run",
+                "gsm8k"
+              ]
+            },
+            "gpu_hours_est": 4.0,
+            "gpus_per_node": 8,
+            "kind": "eval_only",
+            "nodes": 1,
+            "partition": "rally",
+            "role": "candidate",
+            "seed": 101,
+            "time": "10-00:00:00",
+            "trial": "fabric-gate"
+          }
+        }
+      },
+      "fixture_sha256": "39118caedd77d84a7eb56fb78dcb8a512b0f045e040f262e3418a551537c0475",
+      "expected_behavior": [
+        "Identifies the problem: IMEX fabric at submit is not 'ready' (refused or unmeasured); the named reason is carried in the message",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule AR-LN-003"
+      ],
+      "ground_truth": "auto_research: rule AR-LN-003 (BLOCK, input phase) fires: IMEX fabric at submit is not 'ready' (refused or unmeasured); the named reason is carried in the message.",
+      "trigger_facts": [
+        {
+          "path": "files.ledger/chain.jsonl",
+          "value": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"24bc883568c333937d10ece7715f7c9aeb55967f9a317c350d4c85eefb5016aa\",\"op\":\"launch_envelope\",\"payload_hash\":\"02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "check": false
+        },
+        {
+          "path": "files.ledger/fabric.json",
+          "value": "{\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b.json",
+          "value": "{\"approver\":\"arbiter\",\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"envelope\":{\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"scope\":\"one campaign\"},\"envelope_token\":\"8b6bd61e2aeccbb4a283c2fcd489dac7a07906cd4eeda363f66ce9d5189e655d\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json",
+          "value": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        }
+      ],
+      "question": "I'm running auto_research with action \"submit\", campaign id \"ar-fixture\", approver \"arbiter\", campaign_confirm \"{confirm}\", and launch_token \"4eb59d3018e99cc9f41142e20103eaa33562092725ef86be2a65679ff0906abd\", against ledger_dir \"{tmp}/ledger\". The staged ledger/chain.jsonl already has two entries: seq 0 campaign_approved (hash 5c640a07...75a0, payload dd78b84a...ca221) and seq 1 launch_envelope (hash 24bc8835...16aa, payload 02e2d927...f4b), and the staged ledger/fabric.json shows {\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}. The staged objects show approver \"arbiter\", spec_hash 300d0e9d...fb0b1, envelope_token 8b6bd61e...e655d, and a budget of gpu_hours_total 24.0 / max_runs 6 with scope \"one campaign\". My trial_spec is kind \"eval_only\", role \"candidate\", trial \"fabric-gate\", seed 101, delta {\"optim.lr\": 0.0005}, gpu_hours_est 4.0, nodes 1, gpus_per_node 8, partition \"rally\", time \"10-00:00:00\", commands [\"uv run train.py --config campaign.yaml\"], eval_request command [\"eval\",\"run\",\"gsm8k\"]. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
       "id": "fskills-auto-research-oracle-AR-LN-004",
       "skill": "auto_research",
       "rule_id": "AR-LN-004",
@@ -2093,6 +2409,283 @@
       "ground_truth": "auto_research: rule AR-LN-005 (BLOCK, input phase) fires: gpu_hours_est implies a wall time above per_run_timeout_h.",
       "trigger_facts": [],
       "question": "Please run the `launch` action of the auto_research skill for my campaign `ar-fixture`, with approver `arbiter` and `campaign_confirm` set to `{confirm}`, writing the ledger to `{tmp}/ledger`. The spec is: axes `optim.lr` (log_float, 1e-06 to 0.001), `train.method` (categorical: `full`, `lora`), and `lora.rank` (int, 4 to 64), against base model `gemma4-4b` with fingerprint `sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2`, objective `val_accuracy` (max) on `gsm8k`, eval policy fingerprint `sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1` with metrics `val_accuracy` and `throughput`. Budget is 400.0 GPU-hours total, max_runs 6, per_run_timeout_h 8.0, reserve_frac 0.3; cluster is partition `rally`, time `10-00:00:00`, max_nodes 2, gpus_per_node 8, excluding `r01dgx02`; confirm settings are k 2.0, noise_floor_rel 0.005, guard_abs_epsilon 0.01 with an empty guardrails list; seeds are [101, 102, 103] with baseline_repeats 3 and confirm_repeats 3; stopping is max_crash_streak 2, no_gain_streak 3. The launch spec is trial `t1`, role `candidate`, seed 101, delta `{\"optim.lr\": 0.0005}`, command `uv run train.py --config campaign.yaml`, gpu_hours_est 200.0, nodes 1, gpus_per_node 8, partition `rally`, time `10-00:00:00`. Let me know what the outcome is.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-auto-research-oracle-AR-LN-006",
+      "skill": "auto_research",
+      "rule_id": "AR-LN-006",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "envelope missing or forged, envelope budget != spec budget, the trial token is not derived, or the envelope budget is exhausted (runs or GPU hours)",
+      "fixture": {
+        "files": {
+          "ledger/chain.jsonl": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "ledger/fabric.json": "{\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}",
+          "ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}"
+        },
+        "request": {
+          "action": "submit",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "launch_token": "fs-ar-trial-v1-not-derived",
+          "ledger_dir": "{tmp}/ledger",
+          "trial_spec": {
+            "commands": [
+              "uv run train.py --config campaign.yaml"
+            ],
+            "delta": {
+              "optim.lr": 0.0005
+            },
+            "eval_request": {
+              "command": [
+                "eval",
+                "run",
+                "gsm8k"
+              ]
+            },
+            "gpu_hours_est": 4.0,
+            "gpus_per_node": 8,
+            "kind": "eval_only",
+            "nodes": 1,
+            "partition": "rally",
+            "role": "candidate",
+            "seed": 101,
+            "time": "10-00:00:00",
+            "trial": "need-an-envelope"
+          }
+        }
+      },
+      "fixture_sha256": "d039930b0ac011c329523ed254ffe240925b3b0437a763ebb39db56b3273887b",
+      "expected_behavior": [
+        "Identifies the problem: envelope missing or forged, envelope budget != spec budget, the trial token is not derived, or the envelope budget is exhausted (runs or GPU hours)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule AR-LN-006"
+      ],
+      "ground_truth": "auto_research: rule AR-LN-006 (BLOCK, input phase) fires: envelope missing or forged, envelope budget != spec budget, the trial token is not derived, or the envelope budget is exhausted (runs or GPU hours).",
+      "trigger_facts": [
+        {
+          "path": "files.ledger/chain.jsonl",
+          "value": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "check": false
+        },
+        {
+          "path": "files.ledger/fabric.json",
+          "value": "{\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json",
+          "value": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        }
+      ],
+      "question": "I'm running the auto_research submit action for campaign ar-fixture with the spec I gave you (gemma4-4b base, gsm8k val_accuracy objective, 24 GPU-hours, 6 max runs, seeds 101/102/103, noise floor 0.005, k=2.0), ledger at {tmp}/ledger, approver arbiter, campaign_confirm \"{confirm}\", and the trial spec for trial \"need-an-envelope\" (delta optim.lr=0.0005, kind eval_only, 1 node, 8 GPUs, partition rally, seed 101, 4 GPU-hours est, token fs-ar-trial-v1-not-derived). What I see already in the ledger: chain.jsonl has one entry, seq 0, op campaign_approved, hash 5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0, payload_hash dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221, prev_hash 0000000000000000000000000000000000000000000000000000000000000000, trial \"-\", ts 2026-01-01T00:00:00Z; fabric.json shows master:8081 with state \"refused\", reason \"fabric_refused\", ts 4102444800.0; and object dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json holds approver \"arbiter\" with spec_hash 300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1. What's the outcome of the submit?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-auto-research-oracle-AR-LN-007",
+      "skill": "auto_research",
+      "rule_id": "AR-LN-007",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "cancel names a job id this campaign's ledger never submitted (or requests no job ids)",
+      "fixture": {
+        "files": {
+          "ledger/chain.jsonl": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"f5bb50fe6bd4460aa747ce692d77bc6dfdf1373b9b68138f0e92f8ea7b751b46\",\"op\":\"job_submitted\",\"payload_hash\":\"87d6984f9298de38028f41426e3d5df202bc7a390118900ffa253be035aafacb\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "ledger/objects/87d6984f9298de38028f41426e3d5df202bc7a390118900ffa253be035aafacb.json": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":8.0,\"job_id\":\"123456\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"submitted_at\":1750000000.0,\"trial\":\"baseline\"}",
+          "ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}"
+        },
+        "request": {
+          "action": "cancel",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "job_ids": [
+            "999999"
+          ],
+          "ledger_dir": "{tmp}/ledger",
+          "reason": "operator"
+        }
+      },
+      "fixture_sha256": "0c24624b188284e1ec987f84a737f4abfac9ba8c6027a8bb6df47843b1febd0f",
+      "expected_behavior": [
+        "Identifies the problem: cancel names a job id this campaign's ledger never submitted (or requests no job ids)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule AR-LN-007"
+      ],
+      "ground_truth": "auto_research: rule AR-LN-007 (BLOCK, input phase) fires: cancel names a job id this campaign's ledger never submitted (or requests no job ids).",
+      "trigger_facts": [
+        {
+          "path": "files.ledger/chain.jsonl",
+          "value": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"f5bb50fe6bd4460aa747ce692d77bc6dfdf1373b9b68138f0e92f8ea7b751b46\",\"op\":\"job_submitted\",\"payload_hash\":\"87d6984f9298de38028f41426e3d5df202bc7a390118900ffa253be035aafacb\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/87d6984f9298de38028f41426e3d5df202bc7a390118900ffa253be035aafacb.json",
+          "value": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":8.0,\"job_id\":\"123456\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"submitted_at\":1750000000.0,\"trial\":\"baseline\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json",
+          "value": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        }
+      ],
+      "question": "I'm driving campaign ar-fixture with action \"cancel\" and reason \"operator\", passing job_ids [\"999999\"], approver \"arbiter\", and campaign_confirm \"{confirm}\" against the spec (gemma4-4b base with fingerprint sha256:b2b2..., eval fingerprint sha256:a1a1..., axes optim.lr log_float 1e-06..0.001, train.method categorical [full, lora], lora.rank int 4..64, budget 24.0 GPU-hours / 6 max_runs / 8.0h timeout / 0.3 reserve, cluster rally partition, 8 GPUs per node, max 2 nodes, time \"10-00:00:00\", exclude [\"r01dgx02\"], objective val_accuracy max on gsm8k, seeds 101/102/103 with 3 baseline and 3 confirm repeats, k=2.0, noise_floor_rel=0.005, guard_abs_epsilon=0.01, no_gain_streak 3, max_crash_streak 2), with ledger_dir \"{tmp}/ledger\". I can see the staged ledger/chain.jsonl already holds two entries for ar-fixture: seq 0 campaign_approved (hash 5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0, payload_hash dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221) and seq 1 job_submitted (hash f5bb50fe6bd4460aa747ce692d77bc6dfdf1373b9b68138f0e92f8ea7b751b46, payload_hash 87d6984f9298de38028f41426e3d5df202bc7a390118900ffa253be035aafacb), both timestamped 2026-01-01T00:00:00Z. I also see ledger/objects/87d6984f9298de38028f41426e3d5df202bc7a390118900ffa253be035aafacb.json recording job_id \"123456\", kind \"eval_only\", trial \"baseline\", gpu_hours_est 8.0, launch_token \"fs-ar-trial-v1-fixture\", submitted_at 1750000000.0, budget_after hours_left 16.0 and runs_left 2; and ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json recording approver \"arbiter\" and spec_hash \"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\". What is the outcome?",
       "question_model": "mimo-v2.6-pro"
     }
   ]

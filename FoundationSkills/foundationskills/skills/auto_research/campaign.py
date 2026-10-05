@@ -275,3 +275,59 @@ def check_launch(
             ("AR-LN-005", f"gpu_hours_est {est} implies {est / slots}h wall time > per_run_timeout_h {timeout}")
         )
     return problems
+
+
+# ---- rendered/command scan (G2: gate what actually runs) ------------------
+
+_FOLD = re.compile(r"[^\w+\-]+")  # json punctuation and whitespace all read as one separator
+_EXCLUDE_OPTION = re.compile(r"[\w-]*exclude[\w-]*\s*[=:]?\s*\S*", re.IGNORECASE)
+
+
+def _flatten_text(value: Any, out: list[str]) -> None:
+    """Every string leaf of a nested payload (argv lines, sbatch blocks, opaque requests), in order."""
+    if isinstance(value, str):
+        out.append(value)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _flatten_text(item, out)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            _flatten_text(item, out)
+    elif value is not None:
+        out.append(str(value))
+
+
+def scan_command_text(text: str) -> list[tuple[str, str]]:
+    """AR-LN-004 hits over free command text: an argv line, an sbatch body or ``json.dumps(train_request)``.
+
+    The text is separator/JSON-punctuation folded first so ``["pkill","-u","x"]``, ``["pkill -u x"]`` and
+    ``"pkill -u x"`` all read the same to the SAME forbidden-command patterns ``check_launch`` uses (a
+    command and its JSON serialisation can never disagree about what is refused). Pure: it parses and
+    executes nothing.
+    """
+    folded = _FOLD.sub(" ", str(text or ""))
+    return [
+        ("AR-LN-004", f"AR-LN-004: forbidden command {folded.strip()!r} matches {pattern.pattern}")
+        for pattern in _FORBIDDEN_COMMANDS
+        if pattern.search(folded)
+    ]
+
+
+def scan_rendered(spec: Any, text: str) -> list[tuple[str, str]]:
+    """(rule_id, message) hits over a RENDERED fs_launch_spec (``,``.join(argv) + sbatch): what runs.
+
+    ``spec`` is the rendered fs_launch_spec (its string leaves - the ``" ".join(argv)`` argv included - are
+    scanned) and ``text`` the rendered sbatch body. The render, not the trial_spec, carries what actually
+    runs, so its strings are scanned with the SAME AR-LN-004 forbidden-command patterns and the SAME
+    AR-LN-005 quarantined/excluded node names ``check_launch`` refuses. An ``exclude`` option NAMES the node
+    to skip and is therefore never a hit.
+    """
+    parts: list[str] = []
+    _flatten_text(spec, parts)
+    _flatten_text(text, parts)
+    rendered = _FOLD.sub(" ", " ".join(parts))
+    problems = scan_command_text(rendered)
+    hits = [node for node in EXCLUDED_NODES if node in _EXCLUDE_OPTION.sub(" ", rendered)]
+    if hits:
+        problems.append(("AR-LN-005", f"AR-LN-005: rendered sbatch names quarantined node(s) {hits}"))
+    return problems

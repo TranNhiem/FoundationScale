@@ -6,8 +6,8 @@ description: 'Manages a hash-chained auto-research campaign (M0): validates the 
   human approval envelope (campaign_confirm hash), authorises launches with derived tokens, records immutable
   trial results, proposes ideas from the ideas catalog and closes with statistical acceptance against a
   calibrated noise floor (guardrails, keep/discard/crash TSV view) writing auto_research_report. Do NOT use
-  for single training runs (fskills-training), nor for evaluation alone (fskills-evaluation), nor (M1, not
-  built) for actually submitting jobs to a cluster.'
+  for single training runs (fskills-training), nor for evaluation alone (fskills-evaluation). M1 submits
+  emitted trials (`envelope`/`submit`/`cancel`) behind the envelope budget gate and the IMEX fabric probe.'
 when_to_use:
 - Run an auto research campaign and find a better recipe for val_accuracy on this base model
 - Validate my campaign spec (axes, budget, eval policy) before I sign the approval hash
@@ -25,7 +25,7 @@ trusting a claim the evidence cannot support. The skill validates a `campaign_sp
 approval envelope (`campaign_confirm` = `campaign_hash(spec)`), authorises individual launches with
 derived per-launch tokens, records immutable trial results into an append-only hash-chained ledger,
 proposes concrete hypotheses (idea cards), and closes with a statistical verdict against a calibrated
-noise floor. M0 launches nothing: job submission is M1.
+noise floor. M1 gates every emitted trial behind the campaign envelope budget and the IMEX fabric probe.
 
 ## When to use
 - You have a goal ("improve val_accuracy") and want a measured loop of baseline -> propose -> run ->
@@ -38,11 +38,22 @@ evaluation skill), or for bug fixes/refactors (no FoundationSkills skill should 
 
 ## Inputs
 Request object (all fields optional except those the action needs):
-- `action`: `check | launch | record | propose | close`.
+- `action`: `check | envelope | launch | submit | cancel | record | propose | close`.
 - `campaign_spec`: the campaign spec dict (see below), `campaign_confirm`: its human-approved hash,
   `approver`: the human who approved it (required on the first action of a ledger).
 - `ledger_dir`: campaign ledger directory (chain.jsonl + objects/); defaults to `<workdir>/ledger`.
 - `launch_spec`: one authorised run (launch action), `result`: one trial result (record action).
+- `envelope` (envelope action): `{budget{max_runs, gpu_hours_total} mirroring spec.budget, ...}` - the consented
+  campaign envelope; `trial_spec` (submit action): `{trial, role, kind: train|eval_only, delta, seed, nodes,
+  gpus_per_node, partition, gpu_hours_est, train_request|eval_request}`.
+- `launch_token` (submit): the derived per-trial token `sha256("fs-ar-trial-v1|" + envelope_token + "|" +
+  canonical(trial_spec))`; `job_ids` (cancel): job ids THIS campaign's ledger submitted; `reason`: cancel reason.
+- `fabric_ttl_s` (submit): the IMEX probe cache TTL in seconds (default 300, hard cap 300: the effective TTL is
+  `min(requested, 300)` and a non-finite, negative or non-numeric value falls back to 300). The cache path is
+  **fixed** at `<ledger_dir>/fabric.json` (there is no request field for it), a fresh uncached IMEX probe runs
+  immediately before every submission (and `submit_trial` refuses unless that state is `ready`), a future-dated
+  `refused` entry stays sticky until `fabric.json` is removed (fail closed), while a future-dated `ready` is
+  always re-probed.
 - `current`: current knob values for the proposer, `symptoms`: observed symptoms (propose action).
 - `stop_reason`: why the campaign is being closed (close action).
 
@@ -68,12 +79,14 @@ metrics{name: {value, se}}}`.
   `{campaign{id, spec_hash, approver}, outcome, recommendation, decisions{trial: decide()},
   budgets{planned, used_gpu_hours, runs}, ledger{count, head_hash, verified}, tsv}`.
 - The ledger (`chain.jsonl` + content-addressed `objects/<sha256>.json`) is the evidence:
-  ops `campaign_approved`, `launch_authorised`, `trial_result`, `campaign_closed`, each entry hash-chained
-  over its fields; `verify()` reports the first broken seq; results are never updated or deleted.
+  ops `campaign_approved`, `launch_authorised`, `trial_result`, `campaign_closed`, `launch_envelope`,
+  `job_submitted`, `job_cancelled`, each entry hash-chained over its fields; `verify()` reports the first
+  broken seq; results are never updated or deleted.
 - Status/exit: PASS (0) | RED (5) | UNMEASURED (95) | REFUSED (96).
-- Payload per action: `check` -> `{spec_hash, axes, budget}` (no ledger writes); `launch` ->
-  `{launch_token, budget_left}`; `record` -> `{recorded, ledger}`; `propose` -> `{cards}` (no writes);
-  `close` -> the report contents.
+- Payload per action: `check` -> `{spec_hash, axes, budget}` (no ledger writes); `envelope` ->
+  `{envelope_token}`; `launch` -> `{launch_token, budget_left}`; `submit` -> `{job_id, budget_after}`;
+  `cancel` -> `{cancelled, drops}`; `record` -> `{recorded, ledger}`; `propose` -> `{cards}` (no writes);
+  `close` -> the report contents (`budgets` carry measured/declared/drops from `campaign_usage`).
 
 ## Scope
 - Stages: sft, preference, rl. Model types: llm, vlm. Families: any.
@@ -102,6 +115,16 @@ One human approval hash bounds a whole campaign; every launch gets a derived tok
   action: a different hash is refused (AR-AP-001).
 - `launch_token = sha256("fs-ar-launch-v1|" + confirm + "|" + canonical(launch_spec))`: bound to the
   approved campaign and to that exact launch spec.
+- M1 approval model: one human consent = the campaign envelope token (`fs-ar-envelope-v1` over the approved
+  envelope payload); per-trial tokens are derived (`fs-ar-trial-v1`) and budget-decremented in the ledger
+  (`budget_after`); REFUSED when exhausted (runs or measured GPU hours).
+- G1 + G2 (render gate, defence in depth): the approval gate is re-run inside `run()`'s submit branch before
+  `emit_trial` (a direct `run()` call can never skip it, and an absent/empty envelope token never derives a
+  trial token), and what is actually gated is the RENDER - `emit_trial` forces `train_request.nodes` /
+  `.gpus_per_node` to the trial_spec values (naming each `overrode train_request.<key>`), and the rendered
+  argv + `sbatch` (plus the `json.dumps(train_request/eval_request)` blob at `check_inputs` time) are scanned
+  with the same AR-LN-004 forbidden-command patterns and AR-LN-005 quarantined-node checks before
+  `submit_trial`. 
 
 **May (inside an authorised campaign):** append `launch_authorised` entries whose token the ledger derives;
 record new trial results (new trial/seed pairs); propose ideas from the catalog; record the close verdict;
@@ -116,7 +139,10 @@ itself - the acceptance statistics and the exit codes (0/5/95/96) are computed f
 | Action | Needs | Writes | Returns |
 |---|---|---|---|
 | `check` | `campaign_spec` | nothing | spec_hash, axes, budget |
+| `envelope` | spec + `campaign_confirm` + `approver` + `envelope` | `launch_envelope` | envelope_token |
 | `launch` | spec + `campaign_confirm` + `approver` + `launch_spec` | `launch_authorised` | launch_token, budget_left |
+| `submit` | spec + confirm + `trial_spec` + `launch_token` | `launch_authorised` + `job_submitted` | job_id, budget_after |
+| `cancel` | spec + confirm + `job_ids` + `reason` | `job_cancelled` | cancelled, drops |
 | `record` | spec + confirm + `result` | `trial_result` | recorded key, ledger head |
 | `propose` | spec + confirm + `current` + `symptoms` | approval envelope only | cards |
 | `close` | spec + confirm + recorded results + `stop_reason` | `campaign_closed` + report artifact | report contents |
@@ -124,8 +150,13 @@ itself - the acceptance statistics and the exit codes (0/5/95/96) are computed f
 ## Acceptance statistics
 - Evidence = ok, non-limited results with the metric present, paired by seed; crashes are excluded and
   counted (`crash_excluded:<trial>:<seed>`).
-- Noise floor = sample std of `baseline_repeats` baseline repeats (1.4826*MAD when n == 3 if that is > 0,
-  else std); `None` means the floor is uncalibrated and nothing can be decided.
+- Noise floor = sample std of the **eval-only** `baseline_repeats: 3` noise-floor repeats (M1 submits them as
+  `job_submitted.kind == 'eval_only'` jobs; AR-HO-006 fires when a repeat is a non-eval_only job **or**, once
+  the campaign ledger carries any `launch_envelope` entry, when the repeat's `job_submitted` provenance is
+  unknown - the message names `baseline_provenance_unknown:<trial>`), sample
+  std (1.4826*MAD when n == 3 if that is > 0, else std); `None` means the floor is uncalibrated and nothing
+  can be decided. Ledgers with no `launch_envelope` keep the M0 compat: manual baseline records never fire
+  AR-HO-006.
 - `tau = max(noise_floor, noise_floor_rel * |mean ref|, k * sqrt(mean se_ref^2 + mean se_cand^2))`
   (a missing `se` counts as 0; the sign of `mean_delta` follows `objective.direction`).
 - Verdicts: `accepted_gain` (mean_delta > tau), `accepted_flat` (|mean_delta| <= tau and the candidate is
@@ -158,12 +189,16 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-LN-002 | input | BLOCK | budget.max_runs reached, gpu-hour budget exceeded, or a non-confirm run dips into the reserve |
 | AR-LN-004 | input | BLOCK | time != `10-00:00:00`, forbidden command (pkill -u / scancel / killall), or a quarantined node is named |
 | AR-LN-005 | input | BLOCK | gpu_hours_est implies a wall time above budget.per_run_timeout_h (> 240h refuses) |
+| AR-LN-003 | input | BLOCK | IMEX fabric not `ready` (refused or unmeasured) at submit; the named reason is carried in the message |
+| AR-LN-006 | input | BLOCK | envelope missing or forged, envelope budget != spec budget, the trial token is not derived, or the envelope budget is exhausted (runs or GPU hours) |
+| AR-LN-007 | input | BLOCK | `cancel` names a job id this campaign's ledger never submitted (or requests no job ids) |
 | AR-LG-001 | input | BLOCK | recording would overwrite a (trial, seed) result; results are immutable |
 | AR-HO-001 | handoff | BLOCK | campaign closed with no accepted gain |
 | AR-HO-002 | handoff | BLOCK | best candidate breaches a guardrail band |
 | AR-HO-003 | handoff | BLOCK | ledger chain verification failed (reports the first broken seq) |
 | AR-HO-004 | handoff | WARN | load-bearing evidence missing (uncalibrated noise floor, screening-only seeds, limited or crashed runs) - status UNMEASURED |
 | AR-HO-005 | handoff | INFO | accepted a flat-but-simpler change |
+| AR-HO-006 | handoff | WARN | a noise-floor baseline repeat shipped as a non-eval_only job, or (when the ledger has any `launch_envelope`) its `job_submitted` provenance is unknown (`baseline_provenance_unknown:<trial>`) (decision 3: the floor is eval-only repeats) - status UNMEASURED |
 
 Close outcomes: improved (accepted gain) / flat_simplified / no_gain / regressed / unmeasured, decided in
 that order after the ledger check: ledger broken -> RED (AR-HO-003); unmeasured evidence that could change
@@ -171,16 +206,43 @@ the outcome -> UNMEASURED (AR-HO-004); best candidate guardrail breach -> RED (A
 gain/flat -> RED (AR-HO-001).
 
 ## Failure handling
-- REFUSED (96): fix the request field named in the refusal (spec/confirm/launch/result shape).
+- G1 + G2 (M1 render gate): `run(action="submit")` re-runs the full `_check_submit_request` gate before
+  anything is emitted or submitted - any BLOCK finding returns REFUSED (refusal = the first finding message,
+  findings attached) with `emit_trial`, `submit_trial`, `launch_fn` and the runner never touched, and an
+  absent/empty envelope token can never derive an `fs-ar-trial-v1` token. What actually runs is gated too:
+  the rendered argv + `sbatch` (and, at `check_inputs` time, `json.dumps(train_request/eval_request)`) are
+  scanned with the AR-LN-004 forbidden-command patterns and the AR-LN-005 quarantined-node names
+  (`campaign.scan_command_text` / `campaign.scan_rendered`) - any hit refuses with that rule id, nothing is
+  submitted and nothing is appended to the ledger.
+- REFUSED (96): fix the request field named in the refusal (spec/confirm/envelope/launch/trial/fabric/cancel
+  shape): a refused or unmeasured IMEX fabric (AR-LN-003 - the `sbatch` preamble stays the in-job gate), an
+  envelope or derived token that is missing, forged or exhausted (AR-LN-006: runs or measured GPU hours), and
+  a `cancel` naming a foreign job id (AR-LN-007: foreign ids never reach `scancel`; they are counted as the
+  named drop `refused_foreign_job:<id>`).
 - RED (5): the campaign measured something and it did not accept - read `decisions` in the report and the
   `reasons` lines (`guardrail:<name>`, `mean_delta ... > tau ...`), or AR-HO-003 for a damaged chain.
 - UNMEASURED (95): calibrate first - `baseline_repeats` ok baseline results with the eval policy
   fingerprint of the spec, and `confirm_repeats` paired seeds per candidate, none of them limited/crashed.
+  M1: the floor must come from **eval-only** `baseline_repeats` jobs (AR-HO-006), and a launch that reports no
+  `job_id` is UNMEASURED (`drops: ["no_job_id"]`) and leaves no `job_submitted` entry behind.
+- Measured GPU hours (fallback named drops): `sacct` measurement replaces `gpu_hours_est` per job when it is
+  available and > 0; otherwise the declared `gpu_hours_est` counts with `sacct_unavailable:<id>`, and a job with
+  neither counts 0.0 with `no_accounting:<id>` - one job is never both, and every drop lands in
+  `close.budgets.drops`. A measurement of `<= 0` is **not** a measurement: it falls back to declared/uncounted
+  and drops `sacct_zero:<id>` instead of `sacct_unavailable`. A job entry with no `job_id` is never measured
+  (`measure` is not called for it) and drops `sacct_unavailable:entry:<index>` / `no_accounting:entry:<index>`;
+  a repeated `job_id` is counted once and its later entries drop `duplicate_job:<id>` and no hours. The
+  envelope gate meters the `job_submitted` payloads **plus** one synthetic `{job_id: None, trial, gpu_hours_est}`
+  per `launch_authorised` payload whose trial has no job entry (a budget burn without a job id), and the run
+  count is the ledger launch payloads (`Ledger.launches`) reconciled with those job entries - one run attempt
+  counts once, whatever recorded it.
 - Nothing in this skill repairs or rewrites a ledger: entries are append-only. Damage is detected
   (AR-HO-003 names the first broken seq), never patched.
 - Limitations: the hash chain is not anchored outside the ledger file, so it detects edits that do not
-  recompute the chain, not a full rewrite; `gpu_hours_est` is self-declared by the launch request and is
-  checked against the budget, not measured. A guardrail with fewer than 2 paired measurements makes the
+  recompute the chain, not a full rewrite; `gpu_hours_est` is self-declared at launch and `sacct`-measured
+  hours replace it per job (the fallback is named `sacct_unavailable:<id>` / `no_accounting:<id>` and counted).
+  Fabric TTL cache staleness is bounded by `ttl_s` but is not a run-time proof - the in-script `exit 96`
+  preamble remains the in-job IMEX gate. A guardrail with fewer than 2 paired measurements makes the
   close UNMEASURED (`guardrail_unmeasured:<name>`), never an accept.
 
 ## FS interface
@@ -190,8 +252,9 @@ gain/flat -> RED (AR-HO-001).
   `Ledger` (append/verify/results/launches/tsv_view). No processes are launched.
 
 ## Increments
-- **M0 (now)**: validate, authorise (token), record, propose, decide, close - CPU-only, no submission.
-- **M1**: submission via `training.emit` + IMEX probe; the launch token gates the actual job.
+- **M0 (done)**: validate, authorise (token), record, propose, decide, close - CPU-only, no submission.
+- **M1 (done)**: `envelope`/`submit`/`cancel` via `training.emit` + the IMEX fabric probe + `sacct`-measured
+  GPU hours; the envelope budget and the derived per-trial token gate every `job_submitted`.
 - **M2**: seed/claim management (screening vs confirm repeats as first-class ledger ops).
 - **M3**: pluggable proposer (the ideas catalog stays the deterministic baseline).
 
@@ -233,6 +296,29 @@ gain/flat -> RED (AR-HO-001).
    ```
    `close` returns the report plus the decision per trial and the derived TSV view
    (`seq trial role seed status metric value se`).
+
+4. Consent an envelope, submit one emitted trial (M1), and cancel what was submitted:
+   ```python
+   from foundationskills.skills.auto_research.envelope import envelope_token, trial_launch_token
+
+   env = {"budget": {"max_runs": spec["budget"]["max_runs"],
+                     "gpu_hours_total": spec["budget"]["gpu_hours_total"]}, "scope": "one campaign"}
+   request = {"action": "envelope", "campaign_spec": spec, "campaign_confirm": confirm_hash,
+              "approver": "reviewer", "ledger_dir": ledger_dir, "envelope": env}
+   env_token = execute(request)["envelope_token"]  # one human consent = the campaign envelope token
+
+   trial_spec = {"trial": "lr-down", "role": "candidate", "kind": "eval_only", "delta": {"optim.lr": 5e-4},
+                 "seed": 101, "nodes": 1, "gpus_per_node": 8, "partition": "rally",
+                 "gpu_hours_est": 4.0, "eval_request": {"command": ["eval", "run", "gsm8k"]}}
+   launch_token = trial_launch_token(env_token, trial_spec)  # derived per-trial, budget-decremented
+   request = {"action": "submit", "campaign_spec": spec, "campaign_confirm": confirm_hash,
+              "approver": "reviewer", "ledger_dir": ledger_dir, "trial_spec": trial_spec,
+              "launch_token": launch_token}
+   execute(request)   # -> {"job_id": "4242", "budget_after": {"runs_left": 5, "hours_left": 20.0}}
+   request = {"action": "cancel", "campaign_spec": spec, "campaign_confirm": confirm_hash,
+              "approver": "reviewer", "ledger_dir": ledger_dir, "job_ids": ["4242"], "reason": "operator"}
+   execute(request)   # -> {"cancelled": ["4242"], "drops": []}  (AR-LN-007: foreign ids never reach scancel)
+   ```
 
 ## Attribution
 Adapted from NeMo-RL nemo-rl-auto-research (Apache-2.0): loop shape, stop rules, ideas catalog, TSV view.
