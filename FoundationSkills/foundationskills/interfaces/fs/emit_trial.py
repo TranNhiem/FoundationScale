@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import importlib
 import subprocess
+import sys
 from typing import Any, Callable
 
 from foundationskills.core.orchestrator import plan_hash
@@ -45,6 +46,15 @@ except ImportError:  # pragma: no cover - only when that module is absent
 
 _KINDS = {"eval_only": "eval_request", "train": "train_request"}
 _SBOTIME = "--time=10-00:00:00"
+
+
+def _as_list(value: Any) -> list[str]:
+    """Emitters report ``missing`` as one ``"; "``-joined string; iterating that str yields characters."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [part for part in value.split("; ") if part]
+    return [str(item) for item in value]
 
 
 def _load_emit_train() -> Callable[..., dict[str, Any]] | None:
@@ -110,8 +120,15 @@ def emit_trial(
             train_args[shape_key] = forced
         spec = fn(**train_args)  # train_request is opaque to auto_research beyond the forced shape keys
     else:
+        # The job runs the interpreter that is probed for lm_eval; a bare "python" resolves to
+        # whatever PATH holds on the node, so an unnamed interpreter defaults to this process's own.
+        eval_args = dict(trial_request)
+        python = str(eval_args.pop("python", None) or sys.executable)
+        if "python" not in trial_request:
+            overrides.append(f"python defaulted to {python}")
         spec = emit_eval_fn(
-            trial_request,
+            eval_args,
+            python=python,
             nodes=int(trial_spec.get("nodes") or 1),
             gpus_per_node=int(trial_spec.get("gpus_per_node") or 1),
             hardware_id=hardware_id,
@@ -122,7 +139,7 @@ def emit_trial(
     if isinstance(sbatch, str) and _SBOTIME not in sbatch:
         raise ValueError(f"render bug: sbatch for trial {trial_spec.get('trial')!r} lacks {_SBOTIME}")
 
-    notes = [*overrides, *(str(n) for n in (spec.get("notes") or []))]
+    notes = [*overrides, *_as_list(spec.get("notes"))]
     if overrides:  # the named overrides ride with the render as well as the fact notes
         spec = {**spec, "notes": notes}
     return {
@@ -130,9 +147,9 @@ def emit_trial(
         "trial_spec": trial_spec,
         "confirm": plan_hash(spec),
         "notes": notes,
-        "drops": [str(d) for d in (spec.get("drops") or [])],
+        "drops": _as_list(spec.get("drops")),
         "executable": spec.get("executable") is True,
-        "missing": [str(m) for m in (spec.get("missing") or [])],
+        "missing": _as_list(spec.get("missing")),
     }
 
 

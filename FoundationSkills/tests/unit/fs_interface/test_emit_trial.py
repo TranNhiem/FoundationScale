@@ -127,7 +127,8 @@ class TestEmitTrial:
         fact = emit_trial(request, probe=_version_probe)
         spec = fact["fs_launch_spec"]
         argv = [str(a) for a in spec["argv"]]
-        assert argv[:5] == ["python", "-m", "foundationskills.cli", "eval", "run"]
+        # an unnamed interpreter renders as this process's own, never a PATH-dependent bare "python"
+        assert argv[:5] == [sys.executable, "-m", "foundationskills.cli", "eval", "run"]
         sbatch = str(spec["sbatch"])
         assert "--time=10-00:00:00" in sbatch  # estate wall time, asserted on the render that ships
         assert "/dev/tcp/master/8081" in sbatch  # in-job IMEX probe on gb200 ...
@@ -168,10 +169,11 @@ class TestEmitTrial:
         request = _request(tmp_path, nodes=2, gpus_per_node=4)
         fact = emit_trial(request, hardware_id="gb200", emit_eval_fn=fake_eval, probe=_version_probe)
         assert len(seen) == 1
-        assert seen[0]["request"] is request["trial_spec"]["eval_request"]
+        assert seen[0]["request"] == request["trial_spec"]["eval_request"]  # a copy: "python" is popped
         assert (seen[0]["nodes"], seen[0]["gpus_per_node"], seen[0]["hardware_id"]) == (2, 4, "gb200")
         assert seen[0]["version_probe"] is _version_probe  # probe facts are advisory: they gate nothing here
-        assert fact["notes"] == ["probed lm_eval 0.4.3"] and fact["drops"] == ["skipped:limit"]
+        assert fact["notes"] == [f"python defaulted to {sys.executable}", "probed lm_eval 0.4.3"]
+        assert fact["drops"] == ["skipped:limit"]
         assert fact["executable"] is True
         assert fact["confirm"] == plan_hash(fact["fs_launch_spec"])
 
@@ -253,7 +255,7 @@ class TestEmitTrial:
         fact = emit_trial(_request(tmp_path), hardware_id="local", emit_eval_fn=fake_eval, probe=_version_probe)
         assert fact["fs_launch_spec"]["sbatch"] is None
         assert fact["missing"] == ["lm_eval not importable"] and fact["executable"] is False
-        assert fact["notes"] == ["local run"]
+        assert fact["notes"] == [f"python defaulted to {sys.executable}", "local run"]
 
 
 class TestSubmitTrial:

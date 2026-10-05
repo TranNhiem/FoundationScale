@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import re
+import shlex
 import subprocess
 from typing import Any
 
@@ -55,15 +56,21 @@ def job_gpu_hours(elapsed_raw: str, tres: str) -> float | None:
     return elapsed * gpus / 3600.0
 
 
+_JOB_ID_RE = re.compile(r"^[0-9]+(_[0-9]+)?$")
+
+
 def query_job_gpu_hours(job_id: str, runner: Any = subprocess.run) -> float | None:
     """Measure one job's GPU hours via ``sacct``; ``None`` when unusable.
 
     Nonzero rc, a parse miss and an unavailable sacct all read ``None``: the
     caller falls back to the declared estimate with a named drop.
     """
-    argv = ["sacct", "-n", "-X", "-P", "-j", str(job_id), "--format", "ElapsedRaw,AllocTRES"]
+    if not _JOB_ID_RE.match(str(job_id)):  # the id reaches a shell: anything but a Slurm id is refused
+        return None
+    sacct = ["sacct", "-n", "-X", "-P", "-j", str(job_id), "--format", "ElapsedRaw,AllocTRES"]
     try:
-        result = runner(argv, capture_output=True, text=True, timeout=30)
+        # Slurm on this estate needs a login shell (SLURM_CONF/PATH), like sbatch and scancel.
+        result = runner(["bash", "-lc", shlex.join(sacct)], capture_output=True, text=True, timeout=30)
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
     if getattr(result, "returncode", 1) != 0:

@@ -81,10 +81,16 @@ class TestQueryJobGpuHours:
         assert query_job_gpu_hours("4242", runner=runner) == 2.0
         assert len(runner.calls) == 1
         argv, kwargs = runner.calls[0]
-        assert argv == [
-            "sacct", "-n", "-X", "-P", "-j", "4242", "--format", "ElapsedRaw,AllocTRES",
-        ]
+        # login shell: a bare sacct is not on PATH outside one (found by the M1 live smoke)
+        assert argv == ["bash", "-lc", "sacct -n -X -P -j 4242 --format ElapsedRaw,AllocTRES"]
         assert kwargs == {"capture_output": True, "text": True, "timeout": 30}
+
+    def test_non_slurm_job_id_never_reaches_the_shell(self):
+        runner = _runner("3600|gpu:1\n")
+        for bad in ("4242; rm -rf ~", "$(id)", "", "12 34", "abc"):
+            assert query_job_gpu_hours(bad, runner=runner) is None
+        assert runner.calls == []
+        assert query_job_gpu_hours("4242_3", runner=runner) == 1.0
 
     def test_first_non_empty_line_wins(self):
         runner = _runner("\n\n3600|gpu:1\n7200|gpu:8\n")
