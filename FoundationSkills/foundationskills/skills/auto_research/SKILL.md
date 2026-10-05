@@ -87,6 +87,12 @@ metrics{name: {value, se}}}`.
   `{envelope_token}`; `launch` -> `{launch_token, budget_left}`; `submit` -> `{job_id, budget_after}`;
   `cancel` -> `{cancelled, drops}`; `record` -> `{recorded, ledger}`; `propose` -> `{cards}` (no writes);
   `close` -> the report contents (`budgets` carry measured/declared/drops from `campaign_usage`).
+  A repeated `close` re-reports the sealed chain and never appends a second `campaign_closed`.
+- Render refusals (`submit`, REFUSED before any launch): `sbatch_not_rendered` (a cluster trial with no sbatch
+  would run argv on this host), `sbatch_render_failed:<why>` (train sbatch layering failed),
+  `partition_not_rendered:<p>` (the render dropped `trial_spec.partition`). Train trials get their sbatch layered
+  like `training.emit`; GB200 trials on fewer than 4 GPUs request `--mem-per-gpu` (default 200G) so they do not
+  take the whole node; `eval_request.python` names the eval interpreter (default: the one running the skill).
 
 ## Scope
 - Stages: sft, preference, rl. Model types: llm, vlm. Families: any.

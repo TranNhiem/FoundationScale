@@ -9,6 +9,12 @@ Cluster rules are MEASURED (estate facts, never optional decorations):
   probes the IMEX fabric master ``(exec 3<>/dev/tcp/master/8081)`` and aborts
   with exit 96 when refused, because launching while it is refused drains the
   trays;
+* the partition default is ``DefMemPerNode=UNLIMITED``, so a job without a
+  memory request takes the whole node; a GB200 job using fewer than the
+  node's 4 GPUs therefore requests ``--mem-per-gpu`` (default 200G: measured
+  ``RealMemory=881343`` MB / 4 GPUs, with headroom) so it does not strand the
+  node's other GPUs;
+* ``partition`` is rendered when given (otherwise Slurm's default applies);
 * Slurm command lines on this estate need a login shell -- the submit call in
   ``launch.py`` therefore wraps ``sbatch`` in ``bash -lc``.
 
@@ -25,6 +31,9 @@ import shlex
 from pathlib import Path
 
 _LAUNCHERS = ("torchrun", "python")
+_GB200_GPUS_PER_NODE = 4
+_GB200_MEM_PER_GPU = "200G"
+_MEM_RE = re.compile(r"^[0-9]+[KMGT]?$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 # argv tokens the shell must expand at run time (quoting them would hand
 # torchrun the literal text "$MASTER_ADDR" as its rendezvous endpoint)
@@ -51,6 +60,8 @@ def render_sbatch(
     launcher: str,
     cwd: str | None = None,
     cpus_per_task: int | None = None,
+    partition: str | None = None,
+    mem_per_gpu: str | None = None,
 ) -> str:
     """Return the sbatch script text for one launch.
 
@@ -62,6 +73,12 @@ def render_sbatch(
         raise ValueError(f"launcher must be one of {_LAUNCHERS}, got {launcher!r}")
     if not argv:
         raise ValueError("argv must be non-empty")
+    if partition is not None and not _SAFE_NAME.match(str(partition)):
+        raise ValueError(f"partition {partition!r} must match [A-Za-z0-9._-]+")
+    if mem_per_gpu is None and str(hardware_id).lower().startswith("gb200") and int(gpus_per_node) < _GB200_GPUS_PER_NODE:
+        mem_per_gpu = _GB200_MEM_PER_GPU
+    if mem_per_gpu is not None and not _MEM_RE.match(str(mem_per_gpu)):
+        raise ValueError(f"mem_per_gpu {mem_per_gpu!r} must look like 200G")
     actual = Path(str(argv[0])).name
     if actual != launcher:
         raise ValueError(
@@ -74,6 +91,8 @@ def render_sbatch(
         f"#SBATCH --nodes={int(nodes)}",
         "#SBATCH --ntasks-per-node=1",
         f"#SBATCH --gres=gpu:{int(gpus_per_node)}",
+        *( [f"#SBATCH --partition={partition}"] if partition else [] ),
+        *( [f"#SBATCH --mem-per-gpu={mem_per_gpu}"] if mem_per_gpu else [] ),
         *( [f"#SBATCH --cpus-per-task={int(cpus_per_task)}"] if cpus_per_task else [] ),
         "#SBATCH --time=10-00:00:00",
         "#SBATCH --exclude=r01dgx02",

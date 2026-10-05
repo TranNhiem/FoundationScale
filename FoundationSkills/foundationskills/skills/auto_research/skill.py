@@ -795,10 +795,13 @@ class AutoResearchSkill(BaseSkill):
                 )
             )
         preseal = ledger.head()
-        ledger.append(  # seal the ledger first: the report must describe the sealed chain
-            "campaign_closed", campaign, "-",
-            {"stop_reason": stop_reason, "outcome": outcome, "head_hash": preseal["head_hash"]},
-        )
+        entries = _safe_list(lambda: ledger.entries())
+        already_sealed = bool(entries) and entries[-1].get("op") == "campaign_closed" and entries[-1].get("campaign") == campaign
+        if not already_sealed:  # a repeated close re-reports the sealed chain; it never seals twice
+            ledger.append(  # seal the ledger first: the report must describe the sealed chain
+                "campaign_closed", campaign, "-",
+                {"stop_reason": stop_reason, "outcome": outcome, "head_hash": preseal["head_hash"]},
+            )
         head = ledger.head()
         report = {
             "campaign": {"id": campaign, "spec_hash": spec_hash, "approver": str(request.get("approver") or "")},

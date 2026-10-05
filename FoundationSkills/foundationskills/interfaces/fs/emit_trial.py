@@ -32,6 +32,7 @@ from typing import Any, Callable
 from foundationskills.core.orchestrator import plan_hash
 from foundationskills.interfaces.fs.emit_eval import emit_eval
 from foundationskills.interfaces.fs.launch import LaunchRefused, launch
+from foundationskills.interfaces.fs.sbatch import render_sbatch
 
 __all__ = ("emit_trial", "submit_trial")
 
@@ -133,11 +134,33 @@ def emit_trial(
             gpus_per_node=int(trial_spec.get("gpus_per_node") or 1),
             hardware_id=hardware_id,
             version_probe=probe,
+            partition=str(trial_spec.get("partition") or "") or None,
         )
 
+    partition = str(trial_spec.get("partition") or "")
     sbatch = spec.get("sbatch")
+    if kind == "train" and hardware_id.lower() != "local" and not sbatch and spec.get("argv"):
+        # emit_train leaves the sbatch to its caller (TrainingEmitSkill layers it); do the same here.
+        nodes, gpus = int(trial_spec.get("nodes") or 1), int(trial_spec.get("gpus_per_node") or 1)
+        try:
+            sbatch = render_sbatch(
+                [str(a) for a in spec["argv"]], env=dict(spec.get("env") or {}), hardware_id=hardware_id,
+                nodes=nodes, gpus_per_node=gpus, job_name=str(train_args.get("run_name") or "fskills-trial"),
+                log_dir=str(train_args.get("output_dir") or spec.get("output_dir") or "."),
+                launcher="torchrun" if nodes * gpus > 1 else "python", cwd=spec.get("cwd"),
+                partition=partition or None,
+            )
+        except (ValueError, TypeError) as exc:
+            return _refused(f"sbatch_render_failed:{exc}", trial_spec)
+        spec = {**spec, "sbatch": sbatch}
+    if hardware_id.lower() != "local" and (not isinstance(sbatch, str) or not sbatch.strip()):
+        # launch() runs argv DIRECTLY on this host when there is no sbatch: a cluster trial
+        # without a rendered script would train on the login node, never under Slurm.
+        return _refused("sbatch_not_rendered", trial_spec)
     if isinstance(sbatch, str) and _SBOTIME not in sbatch:
         raise ValueError(f"render bug: sbatch for trial {trial_spec.get('trial')!r} lacks {_SBOTIME}")
+    if isinstance(sbatch, str) and partition and f"#SBATCH --partition={partition}" not in sbatch.splitlines():
+        return _refused(f"partition_not_rendered:{partition}", trial_spec)
 
     notes = [*overrides, *_as_list(spec.get("notes"))]
     if overrides:  # the named overrides ride with the render as well as the fact notes

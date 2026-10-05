@@ -65,6 +65,7 @@ def emit_eval(
     python: str = "python",
     run_name: str = "fskills-eval",
     version_probe=None,
+    partition: str | None = None,
 ) -> dict[str, Any]:
     """Build one fs_launch_spec for an eval job; ``executable`` only on positive evidence."""
     from foundationskills.core.contract import SkillContext
@@ -99,7 +100,8 @@ def emit_eval(
     sbatch = None
     if hardware_id.lower() != "local":
         sbatch = render_sbatch(argv, env=env, hardware_id=hardware_id, nodes=1, gpus_per_node=max(int(gpus_per_node), 1),
-                               job_name=run_name, log_dir=output_dir, launcher="python", cwd=root)
+                               job_name=run_name, log_dir=output_dir, launcher="python", cwd=root,
+                               partition=partition)
     executable = not missing
     return {
         "stage_name": "eval",

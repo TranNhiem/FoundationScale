@@ -249,7 +249,7 @@ def test_g2_train_request_nodes_forced_to_trial_spec_with_note():
 
     def fake_train(**kwargs):
         captured.update(kwargs)
-        return {"argv": ["uv", "run", "train.py"], "sbatch": "--time=10-00:00:00\n",
+        return {"argv": ["uv", "run", "train.py"], "sbatch": "--time=10-00:00:00\n#SBATCH --partition=rally\n",
                 "notes": [], "drops": [], "executable": True, "missing": []}
 
     trial = _trial(kind="train", nodes=1, gpus_per_node=8,

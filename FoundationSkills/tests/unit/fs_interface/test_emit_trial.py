@@ -19,7 +19,8 @@ from foundationskills.interfaces.fs.launch import LaunchRefused, launch
 from foundationskills.interfaces.fs.sbatch import render_sbatch
 
 
-def _sbatch(argv: list[str], *, hardware_id: str = "gb200", nodes: int = 1, gpus_per_node: int = 1) -> str:
+def _sbatch(argv: list[str], *, hardware_id: str = "gb200", nodes: int = 1, gpus_per_node: int = 1,
+            partition: str | None = "batch") -> str:
     """Render with the real renderer: --time and the IMEX preamble are estate rules, never test text."""
     return render_sbatch(
         argv,
@@ -30,6 +31,7 @@ def _sbatch(argv: list[str], *, hardware_id: str = "gb200", nodes: int = 1, gpus
         job_name="fs-trial",
         log_dir="/tmp/fskills/logs",
         launcher=Path(str(argv[0])).name,
+        partition=partition,
     )
 
 
@@ -144,7 +146,8 @@ class TestEmitTrial:
         seen: list[dict] = []
 
         def fake_eval(
-            eval_request, *, nodes=1, gpus_per_node=1, hardware_id="gb200", python="python", version_probe=None
+            eval_request, *, nodes=1, gpus_per_node=1, hardware_id="gb200", python="python", version_probe=None,
+            partition=None,
         ):
             seen.append(
                 {
