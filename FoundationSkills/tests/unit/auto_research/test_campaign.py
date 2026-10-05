@@ -25,7 +25,7 @@ def spec(**overrides):
         "eval_policy": {"fingerprint": FINGER, "metrics": ["val_accuracy"]},
         "base": {"model": "gemma4-4b", "fingerprint": FINGER},
         "confirm": {"k": 2.0, "noise_floor_rel": 0.005, "guardrails": [], "guard_abs_epsilon": 0.01},
-        "seeds": {"baseline_repeats": 3, "confirm_repeats": 3, "seed_list": [1]},
+        "seeds": {"baseline_repeats": 3, "confirm_repeats": 3, "seed_list": [1, 2, 3]},
         "budget": {"gpu_hours_total": 24.0, "max_runs": 6, "per_run_timeout_h": 8.0, "reserve_frac": 0.3},
         "stopping": {"no_gain_streak": 3, "max_crash_streak": 2},
         "axes": [

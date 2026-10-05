@@ -25,6 +25,7 @@ _OPS = (
     "trial_result",
     "job_cancelled",
     "campaign_closed",
+    "claim",
 )
 
 
