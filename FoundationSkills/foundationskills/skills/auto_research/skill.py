@@ -66,11 +66,94 @@ from foundationskills.skills.auto_research.envelope import (
 from foundationskills.skills.auto_research.jobs import JOB_ID_RE, cancel_jobs, owned_job_ids, submitted_jobs
 from foundationskills.skills.auto_research.ledger import Ledger, canonical, ledger_files, sha256_hex
 from foundationskills.skills.auto_research.propose import propose
+from .concurrency import concurrency_check, reserve_check
+from .locks import closing_check
+from .claims import ROOT as CLAIM_ROOT
+from .claims import build_claim, champion, claim_entries, derive_chain, reference_rows
+from .seeds import phase_of, phase_problems, set_status
 
-_ACTIONS = ("check", "launch", "record", "propose", "close", "envelope", "submit", "cancel")
+_ACTIONS = ("check", "launch", "record", "propose", "close", "envelope", "submit", "cancel", "claim")
 _RESULT_ROLES = ("baseline", "candidate", "confirm")
 _RESULT_FIELDS = ("trial", "role", "seed", "status", "limited", "steps", "eval_policy_fingerprint", "metrics")
 _RANK = {"accepted_gain": 4, "accepted_flat": 3, "no_gain": 2, "rejected_regress": 1, "unmeasured": 0}
+
+def _claim_live(entry: dict[str, Any]) -> bool:
+    """An accepted chain entry (derive_chain marks a claim that lost a seed 'downgraded')."""
+    return entry.get("status") == "accepted"
+
+
+def _claim_reference(entry: dict[str, Any], results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The rows a claim was earned against: baseline-role rows at the root, else its reference trial's rows."""
+    ref = entry.get("reference")
+    if ref == CLAIM_ROOT:
+        return [row for row in results if row.get("role") == "baseline"]
+    return [row for row in results if row.get("trial") == ref]
+
+
+def _claim_well_formed(body: dict[str, Any]) -> bool:
+    """A stored claim body as build_claim wrote it: scalar ids, a seed list and a stats mapping."""
+    scalars = all(isinstance(body.get(key), str) and body.get(key) for key in ("claim_id", "prev", "trial", "reference"))
+    seeds = body.get("seeds")
+    return scalars and isinstance(seeds, list) and bool(seeds) and isinstance(body.get("stats", {}), dict)
+
+
+def _decide(spec: dict[str, Any], reference: list[dict[str, Any]], rows: list[dict[str, Any]], metric: str) -> dict[str, Any]:
+    """decide() over reference rows: an unmeasurable comparison reports unmeasured, it never raises."""
+    try:
+        return dict(decide(spec, reference, rows, metric))
+    except (ArithmeticError, ValueError, TypeError, KeyError):
+        return {"verdict": "unmeasured", "mean_delta": None, "tau": None, "n_pairs": 0, "reasons": ["decide_failed"]}
+
+
+def _op_payloads(ledger: Ledger, campaign: str, op: str) -> list[dict[str, Any]]:
+    """Ledger payloads of one op for a campaign in append order (a run carries its trial name)."""
+    payloads: list[dict[str, Any]] = []
+    for entry in _safe_list(lambda: ledger.entries()):
+        if entry.get("op") != op or entry.get("campaign") != campaign:
+            continue
+        try:
+            body = dict(ledger.payload(entry))
+        except (OSError, ValueError, KeyError, TypeError):
+            body = {}
+        if not body.get("trial") and entry.get("trial") and entry.get("trial") != "-":
+            body["trial"] = entry.get("trial")
+        payloads.append(body)
+    return payloads
+
+
+def _claim_must_fire_fixtures() -> dict[str, dict[str, Any]]:
+    """M2 fixtures (pure data): an incomplete confirm set (AR-RS-007) and a broken seed plan (AR-IN-007)."""
+    fix = "arbiter"
+    ar_spec = _spec()
+    ar_campaign = _campaign(ar_spec)
+    ar_ledger: list[tuple[str, str, str, dict[str, Any]]] = [
+        ("campaign_approved", ar_campaign, "-", {"spec_hash": campaign_hash(ar_spec), "approver": fix}),
+        ("launch_envelope", ar_campaign, "-", _env_payload(ar_spec, {"max_runs": 6, "gpu_hours_total": 24.0})),
+    ]
+    for run_seed in (101, 102, 103):
+        ar_ledger.append(("trial_result", ar_campaign, "baseline", _result("baseline", "baseline", run_seed, _val(0.5))))
+    for run_seed in (101, 102):  # only two of the three confirm seeds ran; 103 stays a named gap
+        job = _job_payload(str(700 + run_seed), "t1", kind="eval_only")
+        job.update({"seed": run_seed, "phase": "confirm", "gpu_hours_est": 1.0})
+        ar_ledger.append(("job_submitted", ar_campaign, "t1", job))
+        ar_ledger.append(("trial_result", ar_campaign, "t1", _result("t1", "confirm", run_seed, _val(0.9))))
+    bad_spec = _spec(seeds={"baseline_repeats": 3, "confirm_repeats": 5, "seed_list": [101, 102, 103]})
+    return {
+        "AR-RS-007": {
+            "files": ledger_files(ar_ledger),
+            "request": {
+                "action": "claim", "campaign_spec": ar_spec, "campaign_confirm": "{confirm}",
+                "approver": fix, "ledger_dir": "{tmp}/ledger", "trial": "t1",
+            },
+        },
+        "AR-IN-007": {
+            "request": {
+                "action": "check", "campaign_spec": bad_spec, "campaign_confirm": "{confirm}",
+                "ledger_dir": "{tmp}/ledger",
+            },
+        },
+    }
+
 
 FINGERPRINT = "sha256:" + "a1" * 32
 BASE_FINGERPRINT = "sha256:" + "b2" * 32
@@ -82,6 +165,7 @@ _RECOVERY = {
     "AR-IN-004": "set eval_policy.fingerprint = 'sha256:<64 hex>' of the frozen eval policy",
     "AR-IN-005": "pick axes from campaign.AXIS_PATHS with a matching type/range (UNSUPPORTED_AXES refuse)",
     "AR-IN-006": "record {trial, role, seed, status, limited, steps, eval_policy_fingerprint, metrics}; no crash metrics",
+    "AR-IN-007": "declare seeds.seed_list as distinct positive ints with 1 <= repeats per phase (confirm_repeats <= len(seed_list)), and 0 < cluster.max_in_flight <= budget.max_runs",
     "AR-AP-001": "pass campaign_confirm = the human-approved campaign_hash(spec) and a named approver",
     "AR-LN-001": "keep delta/shape/partition inside spec (base and model are locked campaign fields)",
     "AR-LN-002": "stay inside max_runs/gpu hours and keep the confirm reserve for confirm runs",
@@ -92,6 +176,10 @@ _RECOVERY = {
     "AR-LN-006": "open a launch_envelope mirroring spec.budget, use the derived per-trial launch_token (fs-ar-trial-v1), and stop when runs or measured GPU hours are gone",
     "AR-LN-007": "cancel only job ids this campaign's ledger submitted (job_submitted); foreign ids never reach scancel",
     "AR-HO-006": "submit the noise-floor baseline repeats as kind 'eval_only' (decision 3): candidates keep confirm_repeats",
+    "AR-LG-002": "campaigns never re-open: close is final (check/close stay readable, nothing else runs)",
+    "AR-LN-008": "let a submitted run settle (record its result or cancel it) before submitting again",
+    "AR-LN-009": "keep the run reserve for confirm-phase runs: screen with fewer repeats or confirm first",
+    "AR-RS-007": "claim only a measured, complete confirm set whose decide() verdict is accepted_gain (record the missing seeds first)",
 }
 
 
@@ -151,6 +239,10 @@ class AutoResearchSkill(BaseSkill):
                  Severity.BLOCK, "input"),
         RuleSpec("AR-IN-006", "result payload malformed or a crash result carries metric values",
                  Severity.BLOCK, "input"),
+        RuleSpec("AR-IN-007",
+                 "seed plan invalid: seed_list empty/duplicate/non-int, repeats < 1, confirm_repeats beyond the "
+                 "seed list, or cluster.max_in_flight invalid/above max_runs",
+                 Severity.BLOCK, "input"),
         RuleSpec("AR-AP-001",
                  "campaign_confirm missing or not the hash of the spec (or ledger approved a different hash)",
                  Severity.BLOCK, "input"),
@@ -171,7 +263,17 @@ class AutoResearchSkill(BaseSkill):
                  Severity.BLOCK, "input"),
         RuleSpec("AR-LN-007", "cancel names a job id this campaign's ledger never submitted (or requests no job ids)",
                  Severity.BLOCK, "input"),
+        RuleSpec("AR-LN-008", "in-flight (running or pending) jobs at cluster.max_in_flight; unmeasured stations fail closed",
+                 Severity.BLOCK, "input"),
+        RuleSpec("AR-LN-009", "a baseline/screening submit would spend the run reserve kept for confirm-phase runs",
+                 Severity.BLOCK, "input"),
         RuleSpec("AR-LG-001", "a recorded trial result would be overwritten (results are immutable; record a new trial)",
+                 Severity.BLOCK, "input"),
+        RuleSpec("AR-LG-002", "a mutating action after campaign_closed (close is final: only check/close stay open)",
+                 Severity.BLOCK, "input"),
+        RuleSpec("AR-RS-007",
+                 "claim over an incomplete/unmeasured confirm set (missing, pending, crashed, limited or unpaired "
+                 "seed) or of a decision that is not accepted_gain",
                  Severity.BLOCK, "input"),
         RuleSpec("AR-HO-001", "campaign closed with no accepted gain", Severity.BLOCK, "handoff"),
         RuleSpec("AR-HO-002", "best candidate breaches a guardrail band", Severity.BLOCK, "handoff"),
@@ -204,6 +306,7 @@ class AutoResearchSkill(BaseSkill):
         fabric_probe: Callable[..., dict[str, Any]] | None = None,
         measure: Callable[[str], float | None] | None = None,
         clock: Callable[[], float] | None = None,
+        state_fn: Callable[[str], str | None] | None = None,
     ) -> None:
         """Injectable connectors (None -> the real implementation; tests never see Slurm or sockets)."""
         super().__init__()
@@ -212,6 +315,7 @@ class AutoResearchSkill(BaseSkill):
         self._fabric_probe: Callable[..., dict[str, Any]] = fabric_probe if fabric_probe is not None else probe_fabric
         self._measure: Callable[[str], float | None] = measure if measure is not None else query_job_gpu_hours
         self._clock: Callable[[], float] = clock if clock is not None else time.time
+        self._state_fn: Callable[[str], str | None] | None = state_fn
 
     @staticmethod
     def _ledger_dir(request: dict[str, Any], ctx: SkillContext) -> Path:
@@ -244,6 +348,14 @@ class AutoResearchSkill(BaseSkill):
         for rule_id, message in check_spec(spec):
             findings.append(self.finding(rule_id, message, {"spec": spec.get("id")}, _RECOVERY[rule_id]))
         ledger = self._ledger(request, ctx)
+        # AR-LG-002 (M2): close is final - locks.closing_check owns the read-only allowlist (check/close),
+        # and the refusal lands BEFORE the action-specific checks so nothing else is ever appended.
+        closed = closing_check(_safe_list(lambda: ledger.entries()), _campaign(spec), action)
+        if closed:
+            return findings + [
+                self.finding(rule_id, message, {"campaign": _campaign(spec), "action": action}, _RECOVERY[rule_id])
+                for rule_id, message in closed
+            ]
         if action != "check":
             findings.extend(self._check_approval(request, spec, ledger))
         if action == "launch":
@@ -256,6 +368,8 @@ class AutoResearchSkill(BaseSkill):
             findings.extend(self._check_submit_request(request, spec, ledger, ctx))
         if action == "cancel":
             findings.extend(self._check_cancel_request(request, spec, ledger))
+        if action == "claim":
+            findings.extend(self._check_claim_request(request, spec, ledger))
         return findings
 
     def _check_approval(self, request: dict[str, Any], spec: dict[str, Any], ledger: Ledger) -> list[Finding]:
@@ -381,6 +495,24 @@ class AutoResearchSkill(BaseSkill):
                 continue
             for rule_id, message in scan_command_text(json.dumps(block, sort_keys=True)):
                 findings.append(self.finding(rule_id, message, {**target, "request": request_key}, _RECOVERY[rule_id]))
+        # M2 run-slot gates (A2/A3): the phase derives from the role alone, the in-flight queue comes from
+        # THIS campaign's job_submitted payloads (ledger-derived and fail closed; ``state_fn`` only refines
+        # what is live) and the run reserve is AR-LN-009's alone (the GPU-hours reserve stays AR-LN-002).
+        for rule_id, message in phase_problems(trial_spec, spec):
+            findings.append(self.finding(rule_id, message, dict(target), _RECOVERY[rule_id]))
+        submitted = submitted_jobs(ledger, campaign)
+        results = _safe_list(lambda: ledger.results(campaign))
+        cancelled_ids = _cancelled_job_ids(
+            [
+                self._payload(ledger, entry)
+                for entry in ledger.entries()
+                if entry.get("op") == "job_cancelled" and entry.get("campaign") == campaign
+            ]
+        )
+        for rule_id, message in concurrency_check(spec, submitted, results, cancelled_ids, self._state_fn):
+            findings.append(self.finding(rule_id, message, dict(target), _RECOVERY[rule_id]))
+        for rule_id, message in reserve_check(spec, phase_of(trial_spec.get("role")), launches):
+            findings.append(self.finding(rule_id, message, dict(target), _RECOVERY[rule_id]))
         state = self._fabric_state(request, ctx)
         if launch_blocking(str(state.get("state") or "unmeasured")):
             findings.append(
@@ -465,6 +597,96 @@ class AutoResearchSkill(BaseSkill):
 
     # ---- run ---------------------------------------------------------------
 
+    # ---- M2 claims (A6: claims are explicit; close never writes them) ------
+
+    def _claim_context(self, spec: dict[str, Any], ledger: Ledger) -> dict[str, Any]:
+        """Ledger-derived claim chain: results, run provenance, the chain, its drops and the reference rows."""
+        campaign = _campaign(spec)
+        results = _safe_list(lambda: ledger.results(campaign))
+        job_entries = _op_payloads(ledger, campaign, "job_submitted")
+        results_by_key: dict[tuple[Any, Any], dict[str, Any]] = {}
+        for row in results:
+            results_by_key[(row.get("trial"), row.get("seed"))] = row
+            if row.get("role") == "baseline":
+                results_by_key[("baseline", row.get("seed"))] = row
+        claims, malformed = [], []
+        for index, body in enumerate(_op_payloads(ledger, campaign, "claim")):
+            if _claim_well_formed(body):
+                claims.append(body)
+            else:  # never re-link or re-hash a body the ledger did not store intact
+                malformed.append(f"claim_malformed:{index}")
+        chain, drops = derive_chain(claim_entries(claims), results_by_key)
+        drops = [*malformed, *drops]
+        return {
+            "campaign": campaign,
+            "results": results,
+            "jobs": job_entries,
+            "results_by_key": results_by_key,
+            "claims": claims,
+            "chain": chain,
+            "drops": drops,
+            "ref": reference_rows(chain, results),
+        }
+
+    def _claim_inputs(self, request: dict[str, Any], spec: dict[str, Any], ledger: Ledger) -> dict[str, Any]:
+        """Shared claim inputs (check and run recompute them): the confirm set, its decision, the chain link."""
+        trial = str(request.get("trial") or "")
+        state = self._claim_context(spec, ledger)
+        confirm_rows = [row for row in state["results"] if row.get("trial") == trial and row.get("role") == "confirm"]
+        status = set_status(spec, trial, state["results"], state["jobs"], state["ref"], phase="confirm")
+        metric = str(dict(spec.get("objective") or {}).get("metric") or "")
+        decision = _decide(spec, list(state["ref"]), confirm_rows, metric)
+        state.update({"trial": trial, "confirm_rows": confirm_rows, "status": status, "decision": decision})
+        return state
+
+    def _check_claim_request(self, request: dict[str, Any], spec: dict[str, Any], ledger: Ledger) -> list[Finding]:
+        """AR-RS-007: claim one explicit earned gain over a complete, measured confirm set."""
+        trial = str(request.get("trial") or "")
+        if not trial:
+            return [self.finding("AR-RS-007", "claim_trial_missing", {"trial": trial}, _RECOVERY["AR-RS-007"])]
+        data = self._claim_inputs(request, spec, ledger)
+        chain = list(data["chain"])
+        if any(_claim_live(entry) and str(entry.get("trial") or "") == trial for entry in chain):
+            return [
+                self.finding(
+                    "AR-RS-007", "claim_exists:" + trial,
+                    {"trial": trial, "claims": [str(entry.get("claim_id") or "") for entry in chain]},
+                    _RECOVERY["AR-RS-007"],
+                )
+            ]
+        status = dict(data["status"])
+        if not status.get("complete"):
+            return [
+                self.finding(
+                    "AR-RS-007", "claim_set_incomplete:" + trial,
+                    {"trial": trial, "drops": list(status.get("drops") or []), "status": status},
+                    _RECOVERY["AR-RS-007"],
+                )
+            ]
+        if str(data["decision"].get("verdict") or "") != "accepted_gain":
+            return [
+                self.finding(
+                    "AR-RS-007", "claim_no_gain:" + trial,
+                    {"trial": trial, "decision": data["decision"]},
+                    _RECOVERY["AR-RS-007"],
+                )
+            ]
+        return []
+
+    def _claim(self, request: dict[str, Any], ledger: Ledger, campaign: str) -> SkillResult:
+        """One explicit ``claim`` op per earned gain, chained to the current champion claim."""
+        spec = dict(request.get("campaign_spec") or {})
+        data = self._claim_inputs(request, spec, ledger)
+        trial = str(data["trial"])
+        top = champion(list(data["chain"]))
+        prev = str(top.get("claim_id") or CLAIM_ROOT)
+        claim = build_claim(spec, trial, data["decision"], data["status"], prev)
+        if not claim:
+            return SkillResult(Status.REFUSED, {"refused": "claim_no_gain:" + trial, "trial": trial})
+        ledger.append("claim", campaign, trial, dict(claim))
+        chain, _ = derive_chain(claim_entries([*data["claims"], dict(claim)]), data["results_by_key"])
+        return SkillResult(Status.PASS, {"claim_id": claim["claim_id"], "champion": champion(chain), "prev": prev})
+
     def run(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
         action = str(request.get("action") or "check")
         spec = dict(request.get("campaign_spec") or {})
@@ -495,6 +717,8 @@ class AutoResearchSkill(BaseSkill):
             return self._cancel(request, ledger, campaign)
         if action == "record":
             return self._record(request, ledger, campaign)
+        if action == "claim":
+            return self._claim(request, ledger, campaign)
         if action == "propose":
             cards = propose(
                 spec, _safe_list(lambda: ledger.results(campaign)),
@@ -647,6 +871,8 @@ class AutoResearchSkill(BaseSkill):
             {
                 "trial": trial,
                 "job_id": job_id,
+                "seed": trial_spec.get("seed"),
+                "phase": phase_of(trial_spec.get("role")),
                 "launch_token": expected_token,
                 "kind": str(trial_spec.get("kind") or ""),
                 "gpu_hours_est": float(trial_spec.get("gpu_hours_est") or 0.0),
@@ -682,11 +908,24 @@ class AutoResearchSkill(BaseSkill):
         launches = _safe_list(lambda: ledger.launches(campaign))
         metric = str(dict(spec.get("objective") or {}).get("metric") or "")
         baseline = [row for row in results if row.get("role") == "baseline"]
+        claims_state = self._claim_context(spec, ledger)
+        chain = list(claims_state["chain"])
+        chain_drops = list(claims_state["drops"])
+        reference = list(claims_state["ref"])
         grouped: dict[str, list[dict[str, Any]]] = {}
         for row in results:
             if row.get("role") != "baseline":
                 grouped.setdefault(str(row.get("trial") or "?"), []).append(row)
-        decisions = {trial: decide(spec, baseline, rows, metric) for trial, rows in sorted(grouped.items())}
+        earned = {str(entry.get("trial")): _claim_reference(entry, results) for entry in chain if _claim_live(entry)}
+        decisions = {
+            trial: _decide(spec, earned.get(trial, reference), rows, metric) for trial, rows in sorted(grouped.items())
+        }
+        claimed_gains = {str(entry.get("trial") or "") for entry in chain}  # A6: a downgraded claim is still a claim
+        unclaimed_gains = sorted(
+            trial for trial, decision in decisions.items()
+            if decision.get("verdict") == "accepted_gain" and trial not in claimed_gains
+        )
+        chain_champion = champion(chain)
         floor = noise_floor(baseline, metric, int(dict(spec.get("seeds") or {}).get("baseline_repeats", 3)))
         gains = [d for d in decisions.values() if d["verdict"] == "accepted_gain"]
         flats = [d for d in decisions.values() if d["verdict"] == "accepted_flat"]
@@ -705,7 +944,7 @@ class AutoResearchSkill(BaseSkill):
             "measured_gpu_hours": measured,
             "declared_gpu_hours": declared,
             "per_job": per_job,
-            "drops": list(usage.get("drops") or []),
+            "drops": [*list(usage.get("drops") or []), *chain_drops],
             "runs": len(launches),
         }
         ho006 = _baseline_non_eval_trials(
@@ -721,7 +960,7 @@ class AutoResearchSkill(BaseSkill):
                     {"problems": problems}, "restore an intact ledger; entries and objects are immutable",
                 )
             )
-        elif ho006:
+        elif chain_drops or ho006:
             outcome, status = "unmeasured", Status.UNMEASURED
         elif (not gains and any(v == "unmeasured" for v in verdicts.values())) or floor is None:
             outcome, status = "unmeasured", Status.UNMEASURED
@@ -774,6 +1013,12 @@ class AutoResearchSkill(BaseSkill):
                 recommendation = (
                     "restore an intact ledger: chain verification failed; no verdict is trustworthy until it verifies"
                 )
+            elif chain_drops:
+                recommendation = (
+                    "re-run the claimed gains before adopting anything (downgraded "
+                    + ", ".join(chain_drops)
+                    + ")"
+                )
             elif ho006:
                 recommendation = (
                     "resubmit the noise-floor baseline repeats as kind 'eval_only' jobs (decision 3): "
@@ -784,6 +1029,16 @@ class AutoResearchSkill(BaseSkill):
         else:
             recommendation = "keep the baseline; no candidate beat tau"
 
+        for drop in chain_drops:
+            dropped = str(drop).split(":", 1)[1] if ":" in str(drop) else str(drop)
+            findings.append(
+                self.finding(
+                    "AR-HO-004",
+                    "claim " + dropped + " downgraded at close: " + str(drop) + " (a claimed gain lost its evidence)",
+                    {"drop": drop, "claims": chain},
+                    "record (or re-run) the lost seed result and claim the gain again",
+                )
+            )
         if ho006:
             findings.append(
                 self.finding(
@@ -809,6 +1064,10 @@ class AutoResearchSkill(BaseSkill):
             "recommendation": recommendation,
             "decisions": decisions,
             "budgets": budgets,
+            "champion": chain_champion,
+            "claims": chain,
+            "unclaimed_gains": unclaimed_gains,
+            "drops": list(budgets.get("drops") or []),
             "ledger": {"count": head["count"], "head_hash": head["head_hash"], "verified": not problems},
             "tsv": _safe_text(lambda: ledger.tsv_view(campaign)),
         }
@@ -825,6 +1084,10 @@ class AutoResearchSkill(BaseSkill):
             "best": best_trial,
             "decisions": decisions,
             "budgets": budgets,
+            "champion": chain_champion,
+            "claims": chain,
+            "unclaimed_gains": unclaimed_gains,
+            "drops": list(budgets.get("drops") or []),
             "ledger": report["ledger"],
             "tsv": report["tsv"],
         }
@@ -909,6 +1172,35 @@ class AutoResearchSkill(BaseSkill):
             *ar_approval,
             ("job_submitted", ar_campaign, "-", _job_payload("123456", "baseline", kind="eval_only")),
         ]
+        # M2 fixtures (pure data): one closed campaign (close is final) and two guarded submits over ONE
+        # consented envelope. The sticky future-dated REFUSAL fabric cache is reused so the submit fixtures
+        # co-fire AR-LN-003 exactly like the M1 ones (a cache hit: no socket opens). The budget is the
+        # spec default (max_runs 6, reserve_frac 0.3 -> ceil(1.8) = 2 reserved runs), and its hours are
+        # kept small enough that AR-LN-002's hour check stays out of the way.
+        ar_m2_spec = _spec()
+        ar_m2 = _campaign(ar_m2_spec)
+        ar_m2_env = _env_payload(ar_m2_spec, {"max_runs": 6, "gpu_hours_total": 24.0})
+        ar_m2_trial = _trial_payload(kind="eval_only", trial="m2-screen")
+        ar_m2_trial.update({"role": "candidate", "seed": 105, "gpu_hours_est": 1.0})
+        ar_m2_jobs: list[tuple[str, str, str, dict[str, Any]]] = []
+        ar_m2_done: list[tuple[str, str, str, dict[str, Any]]] = []
+        for run_seed in (101, 102, 103, 104):
+            job = _job_payload(str(200 + run_seed), "m2-screened", kind="eval_only")
+            job.update({"seed": run_seed, "phase": "screening", "gpu_hours_est": 1.0})
+            ar_m2_jobs.append(("job_submitted", ar_m2, "m2-screened", job))
+            # every screened run has its trial_result: resolved terminal (and still ONE used run slot)
+            ar_m2_done.append(
+                ("trial_result", ar_m2, "m2-screened", _result("m2-screened", "candidate", run_seed, _val(0.4)))
+            )
+        ar_cap_spec = _spec()
+        ar_cap_spec["cluster"] = {**(ar_cap_spec.get("cluster") or {}), "max_in_flight": 1, "max_nodes": 2}
+        ar_cap = _campaign(ar_cap_spec)
+        ar_cap_env = _env_payload(ar_cap_spec, {"max_runs": 6, "gpu_hours_total": 24.0})
+        ar_cap_trial = _trial_payload(kind="eval_only", trial="trial-b")
+        ar_cap_trial.update({"role": "candidate", "seed": 105, "gpu_hours_est": 1.0})
+        ar_cap_job = _job_payload("111", "m2-held", kind="eval_only")
+        ar_cap_job.update({"seed": 101, "phase": "confirm", "gpu_hours_est": 1.0})
+        ar_m2_fabric = {"ledger/fabric.json": _fabric_cache("refused", 4102444800.0, "fabric_refused")}
         ar_ho006_rows = [*_BASELINE_ROWS, _result("t1", "candidate", 101, _val(0.9)),
                          _result("t1", "candidate", 102, _val(0.902)), _result("t1", "candidate", 103, _val(0.901))]
         ar_ho006_ledger = [
@@ -1069,6 +1361,49 @@ class AutoResearchSkill(BaseSkill):
                     "approver": fix, "ledger_dir": "{tmp}/ledger", "stop_reason": "budget exhausted",
                 },
             },
+            "AR-LG-002": {
+                "files": ledger_files([
+                    ("campaign_approved", ar_m2, "-", {"spec_hash": campaign_hash(ar_m2_spec), "approver": fix}),
+                    ("campaign_closed", ar_m2, "-", {"reason": "budget exhausted", "decided": "unmeasured"}),
+                ]),
+                "request": {
+                    "action": "envelope", "campaign_spec": ar_m2_spec, "campaign_confirm": "{confirm}",
+                    "approver": fix, "ledger_dir": "{tmp}/ledger",
+                    "envelope": {"budget": {"max_runs": 6, "gpu_hours_total": 24.0}, "scope": "one campaign"},
+                },
+            },
+            "AR-LN-008": {
+                "files": {
+                    **ledger_files([
+                        ("campaign_approved", ar_cap, "-", {"spec_hash": campaign_hash(ar_cap_spec), "approver": fix}),
+                        ("launch_envelope", ar_cap, "-", ar_cap_env),
+                        ("job_submitted", ar_cap, "m2-held", ar_cap_job),
+                    ]),
+                    **ar_m2_fabric,
+                },
+                "request": {
+                    "action": "submit", "campaign_spec": ar_cap_spec, "campaign_confirm": "{confirm}",
+                    "approver": fix, "ledger_dir": "{tmp}/ledger", "trial_spec": ar_cap_trial,
+                    "launch_token": trial_launch_token(ar_cap_env["envelope_token"], ar_cap_trial),
+                },
+            },
+            "AR-LN-009": {
+                "files": {
+                    **ledger_files([
+                        ("campaign_approved", ar_m2, "-", {"spec_hash": campaign_hash(ar_m2_spec), "approver": fix}),
+                        ("launch_envelope", ar_m2, "-", ar_m2_env),
+                        *ar_m2_jobs,
+                        *ar_m2_done,
+                    ]),
+                    **ar_m2_fabric,
+                },
+                "request": {
+                    "action": "submit", "campaign_spec": ar_m2_spec, "campaign_confirm": "{confirm}",
+                    "approver": fix, "ledger_dir": "{tmp}/ledger", "trial_spec": ar_m2_trial,
+                    "launch_token": trial_launch_token(ar_m2_env["envelope_token"], ar_m2_trial),
+                },
+            },
+            **_claim_must_fire_fixtures(),
         }
 
 
@@ -1248,19 +1583,55 @@ def _run_trial(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _cancelled_job_ids(payloads: list[dict[str, Any]]) -> list[str]:
+    """Job ids named by this campaign's ``job_cancelled`` payloads (a single ``job_id`` or a ``job_ids`` list)."""
+    ids: list[str] = []
+    rows: list[Any]
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        rows = payload.get("job_ids")
+        if isinstance(rows, (list, tuple)):
+            for item in rows:
+                if isinstance(item, dict):
+                    item = item.get("job_id")
+                if isinstance(item, (str, int)):
+                    ids.append(str(item))
+        single = payload.get("job_id")
+        if isinstance(single, (str, int)):
+            ids.append(str(single))
+    return _ordered_unique(ids)
+
+
+def _run_key(payload: dict[str, Any]) -> tuple[Any, ...] | None:
+    """The run identity of a payload: ``(trial, seed)`` when the row names a seed, else the trial alone.
+
+    A row without a seed keeps the trial-only key, so M0/M1 ledger rows reconcile exactly as before,
+    while a multi-seed confirm set of ONE trial stays one run per seed (task 6, F1).
+    """
+    trial = _run_trial(payload)
+    if trial is None:
+        return None
+    seed = payload.get("seed")
+    spec = payload.get("launch_spec")
+    if seed is None and isinstance(spec, dict):  # launch_authorised rows carry the seed in launch_spec
+        seed = spec.get("seed")
+    return (trial, seed) if seed is not None else (trial,)
+
+
 def _dedup_runs(groups: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """One row per run across the given payload groups (reconciled by trial: the first row wins), F1."""
+    """One row per run across the given payload groups (reconciled by (trial, seed): first row wins), F1."""
     merged: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen: set[tuple[Any, ...]] = set()
     for group in groups:
         for payload in group:
             if not isinstance(payload, dict):
                 continue
-            trial = _run_trial(payload)
-            if trial is not None:
-                if trial in seen:
+            key = _run_key(payload)
+            if key is not None:
+                if key in seen:
                     continue
-                seen.add(trial)
+                seen.add(key)
             merged.append(dict(payload))
     return merged
 

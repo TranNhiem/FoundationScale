@@ -151,7 +151,34 @@ itself - the acceptance statistics and the exit codes (0/5/95/96) are computed f
 | `cancel` | spec + confirm + `job_ids` + `reason` | `job_cancelled` | cancelled, drops |
 | `record` | spec + confirm + `result` | `trial_result` | recorded key, ledger head |
 | `propose` | spec + confirm + `current` + `symptoms` | approval envelope only | cards |
-| `close` | spec + confirm + recorded results + `stop_reason` | `campaign_closed` + report artifact | report contents |
+| `claim` | spec + confirm + `trial` | `claim` | claim_id, champion, prev |
+| `close` | spec + confirm + recorded results + `stop_reason` | `campaign_closed` + report artifact | report contents (champion, claims, unclaimed_gains) |
+
+Once `campaign_closed` is on the ledger every action except `check` and `close` is refused (AR-LG-002) and a repeated `close` is idempotent.
+
+## Seeds, claims and concurrency (M2)
+- The seed phase is derived from the trial role (`baseline` -> `baseline`, `candidate` -> `screening`,
+  `confirm` -> `confirm`); `seeds.seed_list` (distinct positive ints) plus per-phase repeats validate as
+  AR-IN-007 (1 <= repeats per phase, `confirm_repeats` <= len(seed_list)); `phase_unknown:<role>` and
+  `seed_not_in_seed_list:<seed>` are AR-LN-001.
+- `job_submitted` carries `seed` and the derived `phase`; runs are deduplicated by (trial, seed).
+- In-flight cap: a submitted run holds a slot of `cluster.max_in_flight` until the ledger settles it (a
+  `trial_result` for its (trial, seed) or its job among `cancelled_ids`); states read from squeue via an
+  injected `state_fn` - a job missing from a successful squeue reads `terminal`, an unknown state fails
+  closed as `in_flight_unmeasured:<n>` (the count is `None`, never 0) (AR-LN-008).
+- Run reserve: `budget.reserve_frac` in [0,1) (default 0.3, `ceil(reserve_frac * max_runs)` run slots) is
+  kept for confirm-phase runs; a baseline/screening submit that would spend it is refused
+  `reserve_locked_for_confirm:runs` (AR-LN-009) - run slots only, the gpu-hour reserve stays AR-LN-002.
+- Claims are explicit only: the `claim` action appends exactly one `claim` op, `prev` = the champion's
+  claim_id or `baseline`, `claim_id` = `sha256:<hex>` over the canonical body. The claim rules: a complete
+  measured confirm set, `accepted_gain` against the current champion's reference rows, one live claim per
+  trial (AR-RS-007).
+- `close` re-derives the chain from ledger evidence and never writes claims: it reports `champion` (last
+  surviving accepted claim, else the `baseline` root), `claims` (the derived chain with each status) and
+  `unclaimed_gains` (sorted trials decided `accepted_gain` with no claim).
+- A claim that lost a seed result is downgraded (drop `claim_downgraded:<claim_id>` + AR-HO-004, UNMEASURED)
+  without cascading: at close a claimed trial is decided against the rows it was claimed against, every
+  other trial against the champion's rows (baseline rows while the chain roots at `baseline`).
 
 ## Acceptance statistics
 - Evidence = ok, non-limited results with the metric present, paired by seed; crashes are excluded and
@@ -190,6 +217,7 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-IN-004 | input | BLOCK | eval_policy.fingerprint missing or malformed |
 | AR-IN-005 | input | BLOCK | axis key outside AXIS_PATHS (or in UNSUPPORTED_AXES) or range/values invalid for its kind |
 | AR-IN-006 | input | BLOCK | result payload malformed, or a crash record carries metric values |
+| AR-IN-007 | input | BLOCK | seed plan invalid (seed_list empty/duplicate/non-int, repeats < 1, confirm_repeats beyond the seed list, or `cluster.max_in_flight` invalid/above `budget.max_runs`) |
 | AR-AP-001 | input | BLOCK | campaign_confirm missing/wrong hash, ledger approved a different hash, or no approver to open the envelope |
 | AR-LN-001 | input | BLOCK | delta outside spec.axes, nodes/gpus/partition outside spec.cluster, or a `base`/`model` override |
 | AR-LN-002 | input | BLOCK | budget.max_runs reached, gpu-hour budget exceeded, or a non-confirm run dips into the reserve |
@@ -198,11 +226,15 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-LN-003 | input | BLOCK | IMEX fabric not `ready` (refused or unmeasured) at submit; the named reason is carried in the message |
 | AR-LN-006 | input | BLOCK | envelope missing or forged, envelope budget != spec budget, the trial token is not derived, or the envelope budget is exhausted (runs or GPU hours) |
 | AR-LN-007 | input | BLOCK | `cancel` names a job id this campaign's ledger never submitted (or requests no job ids) |
+| AR-LN-008 | input | BLOCK | in-flight (running or pending) jobs at `cluster.max_in_flight`; unmeasured job states fail closed (`in_flight_unmeasured:<n>`) |
+| AR-LN-009 | input | BLOCK | a baseline/screening submit would spend the run reserve kept for confirm-phase runs (`reserve_locked_for_confirm:runs`) |
 | AR-LG-001 | input | BLOCK | recording would overwrite a (trial, seed) result; results are immutable |
+| AR-LG-002 | input | BLOCK | a mutating action after `campaign_closed` (close is final: only `check`/`close` stay open) |
+| AR-RS-007 | input | BLOCK | claim over an incomplete/unmeasured confirm set (missing, pending, crashed, limited or unpaired seed) or of a decision that is not `accepted_gain` |
 | AR-HO-001 | handoff | BLOCK | campaign closed with no accepted gain |
 | AR-HO-002 | handoff | BLOCK | best candidate breaches a guardrail band |
 | AR-HO-003 | handoff | BLOCK | ledger chain verification failed (reports the first broken seq) |
-| AR-HO-004 | handoff | WARN | load-bearing evidence missing (uncalibrated noise floor, screening-only seeds, limited or crashed runs) - status UNMEASURED |
+| AR-HO-004 | handoff | WARN | load-bearing evidence missing (uncalibrated noise floor, screening-only seeds, limited or crashed runs) or a claim downgraded at close (`claim_downgraded:<claim_id>`) - status UNMEASURED |
 | AR-HO-005 | handoff | INFO | accepted a flat-but-simpler change |
 | AR-HO-006 | handoff | WARN | a noise-floor baseline repeat shipped as a non-eval_only job, or (when the ledger has any `launch_envelope`) its `job_submitted` provenance is unknown (`baseline_provenance_unknown:<trial>`) (decision 3: the floor is eval-only repeats) - status UNMEASURED |
 
@@ -249,19 +281,21 @@ gain/flat -> RED (AR-HO-001).
   hours replace it per job (the fallback is named `sacct_unavailable:<id>` / `no_accounting:<id>` and counted).
   Fabric TTL cache staleness is bounded by `ttl_s` but is not a run-time proof - the in-script `exit 96`
   preamble remains the in-job IMEX gate. A guardrail with fewer than 2 paired measurements makes the
-  close UNMEASURED (`guardrail_unmeasured:<name>`), never an accept.
+  close UNMEASURED (`guardrail_unmeasured:<name>`), never an accept. Ledger anchoring (Q5) and approver
+  binding (Q6) remain open (amendment A5).
 
 ## FS interface
 - Emits: `auto_research_report` artifact in `ctx.artifacts_dir`.
 - Consumes: nothing from FS artifacts in M0 (`consumes: ()`).
 - APIs: `campaign_hash`, `launch_token`, `check_spec`, `check_launch`, `noise_floor`, `decide`, `propose`,
-  `Ledger` (append/verify/results/launches/tsv_view). No processes are launched.
+  `squeue.job_states`, the claims/seeds/concurrency/locks helpers,
+  `Ledger` (append/verify/results/launches/tsv_view). `squeue` is read-only. No processes are launched.
 
 ## Increments
 - **M0 (done)**: validate, authorise (token), record, propose, decide, close - CPU-only, no submission.
 - **M1 (done)**: `envelope`/`submit`/`cancel` via `training.emit` + the IMEX fabric probe + `sacct`-measured
   GPU hours; the envelope budget and the derived per-trial token gate every `job_submitted`.
-- **M2**: seed/claim management (screening vs confirm repeats as first-class ledger ops).
+- **M2 (done)**: seed phases, the explicit claim chain, the in-flight cap + confirm run reserve, the close lock.
 - **M3**: pluggable proposer (the ideas catalog stays the deterministic baseline).
 
 ## Worked examples
