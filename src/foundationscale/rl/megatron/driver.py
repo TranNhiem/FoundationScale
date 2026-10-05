@@ -413,12 +413,16 @@ class MegatronRLTrainer:
         lr: float,
         seed: int,
         fp32: bool = False,
+        attention_backend: str | None = None,
     ) -> None:
         require_megatron("MegatronRLTrainer.__init__")
         self.cfg = cfg
         # fp32 weights exist for the parity gate: they separate implementation
         # error from bf16 rounding. Training runs bf16 with fp32 masters.
         self.fp32 = fp32
+        # TE's fused-attention backward has aborted (SIGABRT) late in long RL runs;
+        # Megatron refuses NVTE_* env overrides, so the backend is chosen here.
+        self.attention_backend = attention_backend
         self.hf_model = hf_model
         self.lr = float(lr)
         self.seed = int(seed)
@@ -478,6 +482,12 @@ class MegatronRLTrainer:
         provider.expert_tensor_parallel_size = self.cfg.etp if self.cfg.etp > 0 else None
         provider.params_dtype = torch.float32 if self.fp32 else torch.bfloat16
         provider.bf16 = not self.fp32
+        if self.attention_backend is not None:
+            from megatron.core.transformer.enums import AttnBackend
+
+            provider.attention_backend = AttnBackend[self.attention_backend]
+        if dist.get_rank() == 0:
+            print(f"attention_backend={getattr(provider, 'attention_backend', None)}", flush=True)
         provider.finalize()
         provider.initialize_model_parallel(seed=self.seed)
         pg = ProcessGroupCollection.use_mpu_process_groups()
@@ -752,6 +762,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--parity-only", action="store_true")
     ap.add_argument("--parity-rows", type=int, default=8)
     ap.add_argument("--fp32", action="store_true", help="fp32 weights (parity gate only)")
+    ap.add_argument(
+        "--attention-backend",
+        choices=["flash", "fused", "unfused", "local", "auto"],
+        default=None,
+        help="Megatron AttnBackend; default leaves the provider's choice",
+    )
     ap.add_argument("--out", default="", help="parity logprob dump path")
     ap.add_argument(
         "--algorithm",
@@ -974,7 +990,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         head_dim=args.head_dim,
         num_experts=args.num_experts,
     )
-    trainer = MegatronRLTrainer(cfg, args.hf_model, lr=args.lr, seed=args.seed, fp32=args.fp32)
+    trainer = MegatronRLTrainer(
+        cfg,
+        args.hf_model,
+        lr=args.lr,
+        seed=args.seed,
+        fp32=args.fp32,
+        attention_backend=args.attention_backend,
+    )
     trainer.build()
     tokenizer = AutoTokenizer.from_pretrained(args.hf_model, trust_remote_code=False)
     pad_id = int(
