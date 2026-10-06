@@ -222,6 +222,13 @@ def test_build_arg_parser_attention_backend_choices() -> None:
         driver.build_arg_parser().parse_args([*base, "--attention-backend", "bogus"])
 
 
+def test_build_arg_parser_offload_rollout_model_is_opt_in() -> None:
+    base = ["--hf-model", "m", "--rollout-jsonl", "r.jsonl", "--metrics-out", "o.jsonl"]
+    assert driver.build_arg_parser().parse_args(base).offload_rollout_model is False
+    args = driver.build_arg_parser().parse_args([*base, "--offload-rollout-model"])
+    assert args.offload_rollout_model is True
+
+
 def test_pp_step_module_importable_without_megatron() -> None:
     assert pp_step.__name__.endswith("pp_step")
     assert callable(pp_step.make_forward_step)

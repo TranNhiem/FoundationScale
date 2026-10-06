@@ -707,6 +707,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--mbs", type=int, default=1)
     ap.add_argument("--gbs", type=int, default=8)
     ap.add_argument("--seq-len", type=int, default=4096)
+    ap.add_argument(
+        "--offload-rollout-model",
+        action="store_true",
+        help="move rank 0's HF rollout copy to host during each train step",
+    )
     ap.add_argument("--head-dim", type=int, default=128)
     ap.add_argument("--num-experts", type=int, default=0)
     ap.add_argument("--softcap", type=float, default=None)
@@ -844,6 +849,8 @@ def _run_online(
 
     def _refit() -> tuple[dict[str, int], float]:
         t0 = time.perf_counter()
+        if args.offload_rollout_model and hf_model is not None:
+            hf_model.to(device)
         stats = online.refit_hf_policy(trainer.bridge, trainer.model, hf_model, is_writer=writer)
         return stats, time.perf_counter() - t0
 
@@ -892,6 +899,11 @@ def _run_online(
                 )
             all_rows = online.broadcast_rows(rows)
             gen_s = time.perf_counter() - t0
+            # Rank 0's rollout copy is idle during the train step; park it on host
+            # so its ~2 bytes/param do not sit on top of the step's activation peak.
+            if args.offload_rollout_model and hf_model is not None:
+                hf_model.to("cpu")
+                torch.cuda.empty_cache()
             if len(all_rows) != n_rows:
                 raise RuntimeError(f"step {step}: {len(all_rows)} rollout rows, expected {n_rows}")
             # Shape only the advantages: logged reward stays the scorer's verdict.
