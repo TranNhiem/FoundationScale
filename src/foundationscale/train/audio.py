@@ -25,7 +25,10 @@ Three rules hold here:
   not a row lost           checked against expected, refusals ACCOUNTED per reason,
                             and zero rows checked is VACUOUS rather than a pass.
 
-torch, numpy, soundfile and transformers are unreachable from here at import time.
+torch, numpy, soundfile and transformers are unreachable from here at import time
+(stdlib is not -- ``ctypes`` and ``multiprocessing`` load here, backing
+SharedAudioCoverage's counters that must survive the DataLoader worker processes
+that write them).
 The train package must import under a bare interpreter -- the verification plane runs
 on boxes the training stack does not -- so numpy and soundfile enter inside the
 functions that decode and never at module load.
@@ -33,7 +36,9 @@ functions that decode and never at module load.
 
 from __future__ import annotations
 
+import ctypes
 import math
+import multiprocessing
 import numbers
 import os
 from collections.abc import Mapping, Sequence
@@ -53,6 +58,7 @@ __all__ = [
     "AudioFamily",
     "AudioLoadError",
     "AudioProcessor",
+    "SharedAudioCoverage",
     "audio_placeholder_counts",
     "audio_support_refusal",
     "load_audio",
@@ -459,6 +465,25 @@ class AudioCoverage:
         """One refused row: counted in its bucket, never dropped from the total."""
         self.refused[reason] = self.refused.get(reason, 0) + 1
 
+    def add_expected(self, n: int = 1) -> None:
+        """Count ``n`` more rows the run declares it will collate. Plain increments.
+
+        The write half of the surface this class shares with
+        :class:`SharedAudioCoverage`, where arithmetic cannot ride a property
+        (``rows_expected += 1`` is exactly how counts stayed per-process). Here
+        the method is a thin increment: one interface, two storage backends, so
+        a caller that tracks coverage needs no branch over which class it holds.
+        """
+        self.rows_expected += n
+
+    def add_placeholder_verified(self, n: int = 1) -> None:
+        """Count ``n`` more rows whose placeholder count matched the processor's own."""
+        self.placeholder_rows_verified += n
+
+    def add_placeholder_unmeasured(self, n: int = 1) -> None:
+        """Count ``n`` more rows with no processor count to compare placeholders with."""
+        self.placeholder_rows_unmeasured += n
+
     def verdict(self) -> str:
         """VACUOUS / UNDERCOVERED / OVERCOVERED / COVERED for what has been counted.
 
@@ -508,6 +533,267 @@ class AudioCoverage:
             "placeholder_rows_unmeasured": self.placeholder_rows_unmeasured,
             "verdict": self.verdict(),
         }
+
+
+def _shared_coverage_context() -> Any:
+    """The multiprocessing context SharedAudioCoverage makes its shared counters under.
+
+    The DEFAULT context, because that is the one a DataLoader starts its workers with
+    unless told otherwise (fork on Linux before Python 3.14, forkserver after, spawn
+    on macOS), and shared ctypes and locks may only reach a process started under the
+    same context. They travel as process START arguments -- the collate_fn a
+    DataLoader hands each worker at creation -- the one channel multiprocessing allows
+    for them. Measured: a fork-context lock handed to a spawn-started DataLoader worker
+    raises "A SemLock created in a fork context is being shared with a process in a
+    spawn context".
+    """
+    return multiprocessing.get_context()
+
+
+def _coverage_verdict(rows_checked: int, rows_expected: int, refused_total: int) -> str:
+    """VACUOUS / UNDERCOVERED / OVERCOVERED / COVERED over three totals. Pure.
+
+    :meth:`AudioCoverage.verdict`'s four comparisons spelled as a function of
+    three numbers, so :class:`SharedAudioCoverage` can compute a verdict from ONE
+    locked snapshot instead of re-reading counters a worker may move between
+    reads. AudioCoverage keeps its own inline body (other code owns that class);
+    ``test_audio_shared_coverage`` pins one manifest equal to the other's, which
+    is what makes "the same semantics" a measurement rather than a claim.
+    """
+    if rows_checked == 0:
+        return "VACUOUS"
+    if rows_checked + refused_total < rows_expected:
+        return "UNDERCOVERED"
+    if rows_checked + refused_total > rows_expected:
+        return "OVERCOVERED"
+    return "COVERED"
+
+
+class SharedAudioCoverage:
+    """:class:`AudioCoverage` whose counters live in multiprocessing shared memory. Same surface.
+
+    MEASURED defect (GB200, 2026-10-06): with ``--dataloader-num-workers 4`` the
+    collator runs in DataLoader WORKER processes, where a plain AudioCoverage is
+    a per-process COPY -- ``rows_expected += 1`` in a worker updates only that
+    worker's copy, the main process reads rows_checked=0, the speech gates
+    report VACUOUS and the run ends RED. Zero workers passed only because there
+    happened to be one copy to count in.
+
+    So every counter is a ``multiprocessing`` shared-memory object made ONCE in
+    the constructor, and every update takes ONE shared lock. Locking rule: the
+    intervals callers observe are several fields wide (``record_ok`` writes
+    ``rows_checked`` and ``seconds_total`` together) and without a single lock
+    two children can interleave halves of two updates and publish counts no row
+    produced. That lock is ``multiprocessing.Lock`` -- NOT re-entrant -- so no
+    update may call another one from inside its ``with``.
+
+    Why nothing must be shipped by hand: a DataLoader hands its ``collate_fn``,
+    and therefore the closure holding this object, to its workers AT WORKER
+    CREATION. Under ``fork`` the mapping is inherited verbatim; under ``spawn``
+    the same objects ride the process start arguments -- the single channel
+    multiprocessing lets shared ctypes and locks travel ("should only be shared
+    between processes through inheritance" is what queue pickling answers).
+    Both spellings ARE inheritance; a plain attribute is the one thing
+    inheritance does not share, because it points at a box each process copied.
+
+    Surface is AudioCoverage's as callers read it -- the manifest keys, the
+    values and the verdict are the same contract (``test_audio_shared_coverage``
+    pins one class's manifest equal to the other's) -- with the writable fields'
+    arithmetic moved to ``add_expected``/``add_placeholder_verified``/
+    ``add_placeholder_unmeasured``: a property cannot be ``+=``-ed, and that
+    assignment is exactly the write that used to stay per-process.
+    """
+
+    def __init__(self, rows_expected: int = 0) -> None:
+        ctx = _shared_coverage_context()
+        # ONE lock for every update, always taken BEFORE any counter is touched
+        # (see the class docstring: it is not re-entrant and the caller-visible
+        # intervals are multi-field).
+        self._lock: Any = ctx.Lock()
+        self._rows_expected: Any = ctx.Value(ctypes.c_long, int(rows_expected))
+        self._rows_checked: Any = ctx.Value(ctypes.c_long, 0)
+        self._seconds_total: Any = ctx.Value(ctypes.c_double, 0.0)
+        # A c_long cannot hold None; -1 IS the None sentinel and the property
+        # below is its only reader -- a leaked sentinel would claim the run
+        # trained at a sampling rate of -1, a number no measurement produced.
+        self._sampling_rate: Any = ctx.Value(ctypes.c_long, -1)
+        self._placeholder_rows_verified: Any = ctx.Value(ctypes.c_long, 0)
+        self._placeholder_rows_unmeasured: Any = ctx.Value(ctypes.c_long, 0)
+        # Refusals as one c_long Array INDEXED by AUDIO_LOAD_REASONS: the reason
+        # vocabulary is closed, so a fixed shape covers every bucket
+        # (multiprocessing offers no shared dict whose updates would be atomic
+        # under this lock) and no near-miss spelling can open a second invisible
+        # one -- record_refused raises for a reason outside the vocabulary, the
+        # same check AudioLoadError applies at construction.
+        self._refused: Any = ctx.Array(ctypes.c_long, len(AUDIO_LOAD_REASONS))
+        self._refused_index: dict[str, int] = {
+            reason: index for index, reason in enumerate(AUDIO_LOAD_REASONS)
+        }
+
+    # Single-field readers below take NO lock: their Value/Array slot is
+    # self-synchronising, and only these readers may be called from inside a
+    # lock-holding method (as_manifest does) without deadlocking on the one
+    # non-re-entrant lock.
+
+    @property
+    def rows_expected(self) -> int:
+        """Rows declared to exist -- read-only on purpose; add_expected() is the write."""
+        return int(self._rows_expected.value)
+
+    @property
+    def rows_checked(self) -> int:
+        """Rows measured and accepted (record_ok), as a plain int."""
+        return int(self._rows_checked.value)
+
+    @property
+    def seconds_total(self) -> float:
+        """Waveform seconds the checked rows contributed (record_ok), as a plain float."""
+        return float(self._seconds_total.value)
+
+    @property
+    def sampling_rate(self) -> int | None:
+        """The rate the run was measured at, or None -- the -1 sentinel never returns."""
+        raw = int(self._sampling_rate.value)
+        return None if raw < 0 else raw
+
+    @property
+    def refused(self) -> dict[str, int]:
+        """Refusals per reason; uncounted buckets stay absent, as in AudioCoverage's map.
+
+        A SNAPSHOT on purpose (the word is the contract): the caller keeps this
+        and counts keep moving in the workers, so it must be a copy -- the
+        manifest is copied and computed once for the same reason.
+        """
+        with self._lock:
+            return {
+                reason: int(self._refused[index])
+                for reason, index in self._refused_index.items()
+                if self._refused[index]
+            }
+
+    @property
+    def placeholder_rows_verified(self) -> int:
+        """Rows whose placeholder count was measured against the processor's own prediction."""
+        return int(self._placeholder_rows_verified.value)
+
+    @property
+    def placeholder_rows_unmeasured(self) -> int:
+        """Rows with no processor count to compare placeholders with (UNMEASURED, reported)."""
+        return int(self._placeholder_rows_unmeasured.value)
+
+    def record_ok(self, duration_s: float) -> None:
+        """One accepted row: counted, with the seconds it contributed to the manifest.
+
+        The pair is written under one lock so a reader never sees the row
+        counted without its seconds, nor seconds without the row.
+        """
+        with self._lock:
+            self._rows_checked.value = int(self._rows_checked.value) + 1
+            self._seconds_total.value = float(self._seconds_total.value) + float(duration_s)
+
+    def record_refused(self, reason: str) -> None:
+        """One refused row: counted in its bucket, never dropped from the total.
+
+        A reason outside AUDIO_LOAD_REASONS raises BEFORE anything is counted:
+        the Array has one slot per vocabulary token and an unknown reason has no
+        slot to count in, so accepting it would lose the row from the manifest.
+        """
+        index = self._refused_index.get(reason)
+        if index is None:
+            raise ValueError(
+                f"audio load reason {reason!r} is not one of {list(AUDIO_LOAD_REASONS)}; "
+                "the manifest merges refusals by this token, so a near-miss spelling "
+                "splits into a bucket nobody can total"
+            )
+        with self._lock:
+            self._refused[index] = int(self._refused[index]) + 1
+
+    def add_expected(self, n: int = 1) -> None:
+        """Count ``n`` more rows the run declares it will collate. Atomic increment.
+
+        The write half of the surface this class shares with
+        :class:`AudioCoverage` -- see that class's method for why the interface
+        is arithmetic, and the class docstring for why it is not a property.
+        """
+        with self._lock:
+            self._rows_expected.value = int(self._rows_expected.value) + int(n)
+
+    def add_placeholder_verified(self, n: int = 1) -> None:
+        """Count ``n`` more rows whose placeholder count matched the processor's own."""
+        with self._lock:
+            self._placeholder_rows_verified.value = int(
+                self._placeholder_rows_verified.value
+            ) + int(n)
+
+    def add_placeholder_unmeasured(self, n: int = 1) -> None:
+        """Count ``n`` more rows with no processor count to compare placeholders with."""
+        with self._lock:
+            self._placeholder_rows_unmeasured.value = int(
+                self._placeholder_rows_unmeasured.value
+            ) + int(n)
+
+    def verdict(self) -> str:
+        """VACUOUS / UNDERCOVERED / OVERCOVERED / COVERED for what has been counted.
+
+        0 rows CHECKED is VACUOUS before anything else -- a batch of drops
+        measures the decoder's refusals and nothing about the path the audio
+        would have taken. One locked read so the three totals agree.
+        """
+        with self._lock:
+            return _coverage_verdict(
+                int(self._rows_checked.value),
+                int(self._rows_expected.value),
+                sum(int(self._refused[i]) for i in range(len(AUDIO_LOAD_REASONS))),
+            )
+
+    def reset(self) -> None:
+        """Zero every count in place, keeping the OBJECT (workers hold a reference to it).
+
+        AudioCoverage.reset's purpose -- a construction-time survival probe must
+        not count -- with its one extra rule: a DataLoader's workers inherited
+        THIS instance, so a fresh one in the parent would leave them tallying
+        into the old one and the manifest would drift out of the object the
+        gates read.
+        """
+        with self._lock:
+            self._rows_expected.value = 0
+            self._rows_checked.value = 0
+            self._seconds_total.value = 0.0
+            self._sampling_rate.value = -1
+            self._placeholder_rows_verified.value = 0
+            self._placeholder_rows_unmeasured.value = 0
+            for index in range(len(AUDIO_LOAD_REASONS)):
+                self._refused[index] = 0
+
+    def as_manifest(self) -> dict[str, object]:
+        """JSON-ready snapshot of the counts -- AudioCoverage.as_manifest's keys verbatim.
+
+        ONE locked snapshot for every field (a worker may keep counting while the
+        caller reads) and plain builtins in the document: a manifest row that
+        drifts as the loader continues is a manifest row that contradicts
+        itself, and a ctypes handle in JSON is not a measurement.
+        """
+        with self._lock:
+            rows_expected = self.rows_expected
+            rows_checked = self.rows_checked
+            seconds_total = self.seconds_total
+            refused = {
+                reason: int(self._refused[index])
+                for reason, index in self._refused_index.items()
+                if self._refused[index]
+            }
+            rows_refused = sum(refused.values())
+            return {
+                "rows_expected": rows_expected,
+                "rows_checked": rows_checked,
+                "rows_refused": rows_refused,
+                "seconds_total": seconds_total,
+                "sampling_rate": self.sampling_rate,
+                "refused": dict(refused),
+                "placeholder_rows_verified": self.placeholder_rows_verified,
+                "placeholder_rows_unmeasured": self.placeholder_rows_unmeasured,
+                "verdict": _coverage_verdict(rows_checked, rows_expected, rows_refused),
+            }
 
 
 def audio_placeholder_counts(
@@ -735,7 +1021,9 @@ def train_audio_collator_or_refuse(
         drop probe.
 
     The returned object is callable on rows -> batch dict and exposes
-    ``.coverage: AudioCoverage`` updated per row.
+    ``.coverage`` updated per row -- a :class:`SharedAudioCoverage` (same
+    surface as ``AudioCoverage``, counters in shared memory), so the counts a
+    DataLoader's workers record are the counts the main process's gates read.
     """
     if surface.kind != "processor":
         _audio_refuse_exit_96(
@@ -749,8 +1037,12 @@ def train_audio_collator_or_refuse(
     # rows_expected grows with rows seen so the invariant
     #   rows_expected == rows_checked + sum(refused.values())
     # is preserved across batches -- keeping the manifest countable regardless
-    # of how many times the collator is invoked.
-    coverage = AudioCoverage(rows_expected=0)
+    # of how many times the collator is invoked -- and it grows through
+    # SharedAudioCoverage's SHARED counters: a DataLoader runs THIS closure in
+    # its worker processes, where a plain AudioCoverage is a per-worker copy and
+    # the main process's gates would read rows_checked=0 (the measured
+    # --dataloader-num-workers 4 failure, 2026-10-06).
+    coverage = SharedAudioCoverage(rows_expected=0)
     user_field, answer_field = text_fields
 
     def collate(rows: Sequence[Any]) -> dict[str, Any]:
@@ -761,7 +1053,7 @@ def train_audio_collator_or_refuse(
         for index, raw_row in enumerate(rows):
             row = raw_row if isinstance(raw_row, dict) else vars(raw_row)
             row_id = f"train-row[{index}]"
-            coverage.rows_expected += 1
+            coverage.add_expected()
             value = row.get(audio_column)
             try:
                 wave, duration = load_audio(
@@ -867,7 +1159,7 @@ def train_audio_collator_or_refuse(
             row_id = f"train-row[{index}]"
             actual = int((input_ids[index] == audio_token_id).sum())
             if not callable_expected:
-                coverage.placeholder_rows_unmeasured += 1
+                coverage.add_placeholder_unmeasured()
                 continue
             # Signature measured on transformers 5.5.0 (processing_gemma4.py):
             # _compute_audio_num_tokens(audio_waveform, sampling_rate) -> int.
@@ -882,7 +1174,7 @@ def train_audio_collator_or_refuse(
                     "refusing to train against a sequence the family does not "
                     "recognise."
                 )
-            coverage.placeholder_rows_verified += 1
+            coverage.add_placeholder_verified()
 
         # Prompt boundary. Row i's prompt is `prompt_batch[i]`'s un-padded
         # length -- everything after it in `input_ids[i]` is the assistant
