@@ -107,7 +107,7 @@ class TestActionsEndToEnd:
         approved = [e for e in Ledger(tmp_path / "ledger").entries() if e["op"] == "campaign_approved"]
         assert len(approved) == 1 and approved[0]["seq"] == 0
 
-    def test_propose_returns_cards_without_writes(self, tmp_path):
+    def test_propose_returns_cards_and_writes_one_proposal(self, tmp_path):
         skill = AutoResearchSkill()
         _stage(tmp_path, _spec(), _baseline_rows())
         request = _request(tmp_path, action="propose", current={"optim.lr": 1e-3}, symptoms=["loss diverging"])
@@ -115,7 +115,7 @@ class TestActionsEndToEnd:
         assert result.status is Status.PASS
         assert result.payload["cards"] and result.payload["cards"][0]["idea"] == "lr_down"
         ops = [e["op"] for e in Ledger(tmp_path / "ledger").entries()]
-        assert ops == ["campaign_approved"] + ["trial_result"] * 3  # propose never writes
+        assert ops == ["campaign_approved"] + ["trial_result"] * 3 + ["proposal"]
 
     def test_close_reports_improved_with_a_report_artifact(self, tmp_path):
         skill = AutoResearchSkill()

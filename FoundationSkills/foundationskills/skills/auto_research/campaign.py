@@ -42,6 +42,10 @@ AXIS_CATEGORIES: dict[str, tuple[str, ...]] = {
     "rl.algorithm": ("dr_grpo", "gspo", "dapo"),
 }
 
+# M3 proposer block (AR-IN-008): which proposer may suggest axes and its floor rows.
+PROPOSER_NAMES = ("catalog", "optuna")
+_PROPOSER_KEYS = {"name", "min_rows", "require_model", "seed"}
+
 UNSUPPORTED_AXES: dict[str, str] = {
     "parallel.tp": "tensor parallelism is planned, not a tunable axis in the measured FS",
     "parallel.pp": "pipeline parallelism is planned, not a tunable axis in the measured FS",
@@ -200,6 +204,35 @@ def _check_seeds(spec: dict[str, Any]) -> list[tuple[str, str]]:
     return problems
 
 
+# ---- M3 proposer config (AR-IN-008) ---------------------------------------
+
+
+def check_proposer_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
+    """AR-IN-008: optional proposer block shape (values only); absent/None -> no findings."""
+    raw = spec.get("proposer")
+    if raw is None:
+        return []  # absent (or None): every key takes its downstream default
+    if not isinstance(raw, dict):
+        return [("AR-IN-008", f"proposer must be a mapping (got {type(raw).__name__})")]
+    problems: list[tuple[str, str]] = []
+    name = raw.get("name")
+    if name is not None and (not isinstance(name, str) or name not in PROPOSER_NAMES):
+        problems.append(("AR-IN-008", f"proposer.name {name!r} not in {list(PROPOSER_NAMES)}"))
+    min_rows = raw.get("min_rows")
+    if min_rows is not None and (not _is_int(min_rows) or int(min_rows) < 1):
+        problems.append(("AR-IN-008", f"proposer.min_rows must be an int >= 1 (got {min_rows!r})"))
+    require_model = raw.get("require_model")
+    if require_model is not None and not isinstance(require_model, bool):
+        problems.append(("AR-IN-008", f"proposer.require_model must be a bool (got {require_model!r})"))
+    seed = raw.get("seed")
+    if seed is not None and not _is_int(seed):
+        problems.append(("AR-IN-008", f"proposer.seed must be an int (got {seed!r})"))
+    extra = {str(k) for k in set(raw) - _PROPOSER_KEYS}
+    if extra:
+        problems.append(("AR-IN-008", f"proposer has unknown key(s) {sorted(extra)}"))
+    return problems
+
+
 def check_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     """(rule_id, message) problems in the campaign spec; [] means the spec is launchable."""
     problems: list[tuple[str, str]] = []
@@ -264,6 +297,7 @@ def check_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     # AR-IN-007 (M2): run-cap and seed-plan shape, in the same (rule_id, message) finding shape.
     problems.extend(_check_max_in_flight(spec, runs))
     problems.extend(_check_seeds(spec))
+    problems.extend(check_proposer_spec(spec))
     return problems
 
 

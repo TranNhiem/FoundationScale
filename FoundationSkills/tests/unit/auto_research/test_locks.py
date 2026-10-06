@@ -36,8 +36,8 @@ def _closed() -> list[dict]:
     )
 
 
-def test_mutating_actions_are_the_six_m2_actions():
-    assert MUTATING_ACTIONS == ("envelope", "launch", "submit", "cancel", "record", "claim")
+def test_mutating_actions_are_the_m2_actions_plus_m3_propose():
+    assert MUTATING_ACTIONS == ("envelope", "launch", "submit", "cancel", "record", "claim", "propose")
 
 
 def test_not_closed_before_the_campaign_closed_entry():
@@ -57,7 +57,7 @@ def test_closed_after_the_campaign_closed_entry_and_scoped_to_its_campaign():
 
 def test_every_mutating_action_after_close_is_ar_lg_002_campaign_closed():
     entries = _closed()
-    assert [closing_check(entries, CAMPAIGN, action) for action in MUTATING_ACTIONS] == [FINDING] * 6
+    assert [closing_check(entries, CAMPAIGN, action) for action in MUTATING_ACTIONS] == [FINDING] * 7
 
 
 def test_read_only_actions_after_close_stay_open():
