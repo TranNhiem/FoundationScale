@@ -7,6 +7,7 @@ returned ``provenance`` pins who actually spoke (name/version/seed/rows_digest).
 """
 from __future__ import annotations
 
+import copy
 import statistics
 from typing import Any
 
@@ -18,7 +19,7 @@ from foundationskills.skills.auto_research.ledger import canonical, sha256_hex
 DEFAULT_PROPOSER = "catalog"
 DEFAULT_MIN_ROWS = 10
 DEFAULT_K = 3
-KNOWN_PROPOSERS = ("catalog", "optuna")
+KNOWN_PROPOSERS = ("catalog", "optuna", "optuna-cma")
 
 
 def proposer_config(spec: dict[str, Any]) -> dict[str, Any]:
@@ -37,6 +38,7 @@ class CatalogProposer:
 
     name = "catalog"
     version = "1"
+    package_version = "builtin"
 
     def __init__(self, seed: int = 0) -> None:
         self.seed = seed
@@ -64,7 +66,14 @@ def _optuna_factory(seed: int):  # pragma: no cover - one-line lazy hop to the o
     return OptunaProposer(seed=seed)
 
 
-REGISTRY: dict[str, Any] = {"catalog": CatalogProposer, "optuna": _optuna_factory}
+def _optuna_cma_factory(seed: int):  # pragma: no cover - one-line lazy hop to the optional extra
+    """Lazy Optuna CMA-ES adapter (``proposers_optuna`` with its ``cmaes`` sampler)."""
+    from foundationskills.skills.auto_research.proposers_optuna import OptunaProposer
+
+    return OptunaProposer(seed=seed, sampler="cmaes")
+
+
+REGISTRY: dict[str, Any] = {"catalog": CatalogProposer, "optuna": _optuna_factory, "optuna-cma": _optuna_cma_factory}
 
 
 def get_proposer(name: str, seed: int = 0, registry: dict[str, Any] | None = None):
@@ -78,6 +87,11 @@ def get_proposer(name: str, seed: int = 0, registry: dict[str, Any] | None = Non
         return factory(seed)
     except ImportError:
         return None
+
+
+def package_version(proposer: Any) -> str | None:
+    """The recorded package version of a built proposer (C4); None when it records none."""
+    return getattr(proposer, "package_version", None)
 
 
 # ---- parameter recovery (B6) ------------------------------------------------
@@ -268,6 +282,7 @@ def select(
     provenance: dict[str, Any] = {
         "requested": cfg["name"],
         "proposer": {"name": CatalogProposer.name, "version": CatalogProposer.version},
+        "package_version": CatalogProposer.package_version,
         "seed": cfg["seed"],
         "rows_digest": _digest_or_none(spec, results, launches, current, symptoms),
         "k": k,
@@ -320,6 +335,7 @@ def select(
     drops = list(dict.fromkeys(drops))
     if reason is None and live:
         provenance["proposer"] = dict(who)
+        provenance["package_version"] = package_version(proposer)
         return list(live), drops, provenance
     reason = reason or "no_model_cards"
     drops.append(f"proposer_fallback_catalog:{reason}")
@@ -358,3 +374,72 @@ def replay(
         return canonical(fresh) == canonical(cards)
     except Exception:
         return False
+
+
+def reverify(
+    spec: dict[str, Any], proposal: Any, results: Any, launches: Any, *, registry: dict[str, Any] | None = None,
+) -> tuple[str, str | None]:
+    """Close-time replay re-check (C6) over one recorded ``proposal``: (status, reason) - never raises."""
+    try:
+        return _reverify(spec, proposal, results, launches, registry)
+    except Exception:
+        return "unmeasured", "legacy_proposal"  # junk is a declined claim, never a crash
+
+
+def _reverify(
+    spec: dict[str, Any], proposal: Any, results: Any, launches: Any, registry: dict[str, Any] | None,
+) -> tuple[str, str | None]:
+    """The C6 checks in record order: legacy -> recorded -> prefix -> rebuild -> re-propose."""
+    if not isinstance(proposal, dict):
+        return "unmeasured", "legacy_proposal"                       # 1. not a record at all
+    inputs = proposal.get("replay_inputs")
+    if not isinstance(inputs, dict):
+        return "unmeasured", "legacy_proposal"                       # 1. missing/None replay_inputs: an M3 proposal
+    if proposal.get("replay_status") != "byte_identical":
+        return "unmeasured", "recorded_unmeasured"                   # 2. the record itself was never measured
+    for raw_count in (inputs.get("results_count"), inputs.get("launches_count")):
+        if not isinstance(raw_count, int) or isinstance(raw_count, bool) or raw_count < 0:
+            return "unmeasured", "legacy_proposal"
+    results_count, launches_count = inputs["results_count"], inputs["launches_count"]
+    results_prefix = list(results or ())
+    launches_prefix = list(launches or ())
+    if len(results_prefix) < results_count or len(launches_prefix) < launches_count:
+        return "unmeasured", "ledger_prefix_missing"                 # 3. the append-only ledger lost its prefix
+    who = proposal.get("proposer")
+    name = who.get("name") if isinstance(who, dict) else None
+    seed = proposal.get("seed")
+    if not isinstance(name, str) or "k" not in proposal or "cards" not in proposal:
+        return "unmeasured", "legacy_proposal"
+    if not isinstance(seed, int) or isinstance(seed, bool):
+        return "unmeasured", "legacy_proposal"                       # a seedless record cannot pin the draw: never default it
+    k = proposal["k"]
+    if not isinstance(k, int) or isinstance(k, bool) or k < 0:
+        return "unmeasured", "legacy_proposal"                       # select() records a sanitised int k: anything else is junk
+    try:
+        rebuilt = get_proposer(name, seed, registry)                 # a missing extra (ImportError) is None
+    except Exception:
+        return "unmeasured", "model_error"                           # a present but broken extra is not a missing one
+    if rebuilt is None:
+        return "unmeasured", f"extra_missing:{name}"                 # 5. the proposer itself is gone
+    if package_version(rebuilt) != proposal.get("package_version"):
+        return "unmeasured", f"version_changed:{name}"               # 5. a rebuild would be a different build
+    try:  # a broken extra is an unmeasured claim (C6 step 6), never a crash
+        fresh, _rebuilt_drops = rebuilt.propose(
+            spec,
+            results_prefix[:results_count],
+            launches_prefix[:launches_count],
+            copy.deepcopy(inputs.get("current")),                   # the ledger record is never handed out by reference
+            copy.deepcopy(inputs.get("symptoms")),
+            k=k,
+        )
+    except Exception:
+        return "unmeasured", "model_error"                           # 6. the rebuild cannot speak any more
+    if name == DEFAULT_PROPOSER:
+        cards = fresh or []                                          # the catalog: compare the raw output
+    else:
+        cards = [card for card in (fresh or []) if _card_in_axes(spec, card)]  # only the live cards were recorded
+    try:
+        same = canonical(cards) == canonical(proposal["cards"])
+    except (TypeError, ValueError):
+        return "unmeasured", "model_error"                           # 6. uncomparable fresh cards are not evidence
+    return ("byte_identical", None) if same else ("drifted", None)

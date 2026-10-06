@@ -1034,6 +1034,131 @@
       "question_model": "mimo-v2.6-pro"
     },
     {
+      "id": "fskills-auto-research-oracle-AR-HO-007",
+      "skill": "auto_research",
+      "rule_id": "AR-HO-007",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "a recorded proposal does not replay byte-identically at close (search provenance drifted)",
+      "fixture": {
+        "files": {
+          "ledger/chain.jsonl": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"8149667afc4cd98debd8865913bcc5c8f6fed1119e205fd619380f0ea6df9803\",\"op\":\"proposal\",\"payload_hash\":\"9280366dce20c8aed8e793e4e8af578fad926930a054408be03f23fabd695360\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "ledger/objects/9280366dce20c8aed8e793e4e8af578fad926930a054408be03f23fabd695360.json": "{\"cards\":[{\"delta\":{},\"idea\":\"tampered\",\"reason\":\"tampered\",\"score\":null}],\"drops\":[],\"fallback\":null,\"k\":3,\"package_version\":\"builtin\",\"proposer\":{\"name\":\"catalog\",\"version\":\"1\"},\"replay_inputs\":{\"current\":{},\"launches_count\":0,\"results_count\":0,\"symptoms\":[]},\"replay_status\":\"byte_identical\",\"requested\":3,\"rows_digest\":null,\"seed\":0,\"stats\":{\"dropped\":0,\"out\":1}}",
+          "ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}"
+        },
+        "request": {
+          "action": "close",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "ledger_dir": "{tmp}/ledger",
+          "stop_reason": "budget exhausted"
+        }
+      },
+      "fixture_sha256": "3692ad7994fa2069fbad10f064cafeecee0b7444625676a1a5d907ac5dafa679",
+      "expected_behavior": [
+        "Identifies the problem: a recorded proposal does not replay byte-identically at close (search provenance drifted)",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule AR-HO-007"
+      ],
+      "ground_truth": "auto_research: rule AR-HO-007 (BLOCK, handoff phase) fires: a recorded proposal does not replay byte-identically at close (search provenance drifted).",
+      "trigger_facts": [
+        {
+          "path": "files.ledger/chain.jsonl",
+          "value": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"8149667afc4cd98debd8865913bcc5c8f6fed1119e205fd619380f0ea6df9803\",\"op\":\"proposal\",\"payload_hash\":\"9280366dce20c8aed8e793e4e8af578fad926930a054408be03f23fabd695360\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/9280366dce20c8aed8e793e4e8af578fad926930a054408be03f23fabd695360.json",
+          "value": "{\"cards\":[{\"delta\":{},\"idea\":\"tampered\",\"reason\":\"tampered\",\"score\":null}],\"drops\":[],\"fallback\":null,\"k\":3,\"package_version\":\"builtin\",\"proposer\":{\"name\":\"catalog\",\"version\":\"1\"},\"replay_inputs\":{\"current\":{},\"launches_count\":0,\"results_count\":0,\"symptoms\":[]},\"replay_status\":\"byte_identical\",\"requested\":3,\"rows_digest\":null,\"seed\":0,\"stats\":{\"dropped\":0,\"out\":1}}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json",
+          "value": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        }
+      ],
+      "question": "I'm closing out the ar-fixture campaign with the spec covering optim.lr from 1e-06 to 0.001 as log_float, train.method in {full, lora}, and lora.rank from 4 to 64 as int, against base gemma4-4b with fingerprint sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 and eval fingerprint sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 on val_accuracy and throughput, with objective gsm8k val_accuracy maximised, budget 24.0 GPU-hours total with max_runs 6, per_run_timeout_h 8.0, reserve_frac 0.3, cluster partition rally with gpus_per_node 8, max_nodes 2, time 10-00:00:00, exclude r01dgx02, seeds 101/102/103 with baseline_repeats 3 and confirm_repeats 3, stopping max_crash_streak 2 and no_gain_streak 3, and confirm k 2.0 with noise_floor_rel 0.005 and guard_abs_epsilon 0.01; the stop_reason is \"budget exhausted\", the approver is arbiter, campaign_confirm is {confirm}, and ledger_dir is {tmp}/ledger. In ledger/chain.jsonl I see seq 0 with hash 5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0, op campaign_approved, payload_hash dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221, prev_hash 0000000000000000000000000000000000000000000000000000000000000000, ts 2026-01-01T00:00:00Z, and seq 1 with hash 8149667afc4cd98debd8865913bcc5c8f6fed1119e205fd619380f0ea6df9803, op proposal, payload_hash 9280366dce20c8aed8e793e4e8af578fad926930a054408be03f23fabd695360, prev_hash 5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0, ts 2026-01-01T00:00:00Z. In ledger/objects/9280366dce20c8aed8e793e4e8af578fad926930a054408be03f23fabd695360.json I see k 3, requested 3, seed 0, proposer catalog version 1, package_version builtin, replay_status byte_identical, replay_inputs with launches_count 0, results_count 0 and empty symptoms, stats dropped 0 and out 1, and one card with idea \"tampered\", reason \"tampered\", empty delta and null score. In ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json I see approver arbiter and spec_hash 300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1. What is the outcome of the close action?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
       "id": "fskills-auto-research-oracle-AR-IN-001",
       "skill": "auto_research",
       "rule_id": "AR-IN-001",
@@ -3545,6 +3670,113 @@
         }
       ],
       "question": "I want to run a propose step for campaign ar-fixture with approver arbiter and campaign_confirm \"{confirm}\", current config {\"optim.lr\": 0.001}, ledger_dir \"{tmp}/ledger\", and no symptoms. The campaign spec is base gemma4-4b with fingerprint sha256:b2b2…b2b2, axes optim.lr (log_float 1e-06..0.001), train.method (full/lora), lora.rank (int 4..64), objective val_accuracy on gsm8k (max), eval_policy fingerprint sha256:a1a1…a1a1 over [val_accuracy, throughput], budget 24.0 GPU-hours with max_runs 6, per_run_timeout_h 8.0, reserve_frac 0.3, cluster partition rally, time 10-00:00:00, 8 GPUs/node, max_nodes 2, excluding r01dgx02, seeds 101-103 with baseline_repeats 3 and confirm_repeats 3, proposer optuna with min_rows 10 and require_model true, stopping max_crash_streak 2 and no_gain_streak 3, and confirm k=2.0, noise_floor_rel 0.005, guard_abs_epsilon 0.01, empty guardrails.\n\nI've already staged ledger/chain.jsonl with 6 entries: seq 0 campaign_approved (hash b0c30eda…c85e, payload 182ba7d8…9d53, approver arbiter, spec_hash efdf7235…4ef0), then seq 1–3 trial_result baselines (payloads 1534a147…c2d5 seed 101 val_accuracy 0.5, dc5cf56d…7624 seed 102 val_accuracy 0.5, ffe6291e…e29a seed 103 val_accuracy 0.5), and seq 4–5 trial_result candidates (e5269e7c…cc38 t1 delta {\"optim.lr\": 0.0005} seed 101 val_accuracy 0.9, b60a9248…c9f5a t2 delta {\"optim.lr\": 0.0002} seed 101 val_accuracy 0.8), all at ts 2026-01-01T00:00:00Z with steps 200, se 0.001, status ok, limited false, and eval_policy_fingerprint sha256:a1a1…a1a1. What does the auto_research propose step return on this state?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-auto-research-oracle-AR-PR-002",
+      "skill": "auto_research",
+      "rule_id": "AR-PR-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "the optuna-cma proposer cannot hold a categorical axis (refused, never dropped)",
+      "fixture": {
+        "files": {},
+        "request": {
+          "action": "check",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "proposer": {
+              "name": "optuna-cma"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "ledger_dir": "{tmp}/ledger"
+        }
+      },
+      "fixture_sha256": "aad3c057e637f61cb0210a568bd282e28d4b026cef87dd83eef0ec1250d83fac",
+      "expected_behavior": [
+        "Identifies the problem: the optuna-cma proposer cannot hold a categorical axis (refused, never dropped)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule AR-PR-002"
+      ],
+      "ground_truth": "auto_research: rule AR-PR-002 (BLOCK, input phase) fires: the optuna-cma proposer cannot hold a categorical axis (refused, never dropped).",
+      "trigger_facts": [],
+      "question": "I want to run a check on campaign \"ar-fixture\" with the arbiter as approver and campaign_confirm \"{confirm}\", against ledger dir \"{tmp}/ledger\". The spec I have is: base model gemma4-4b with fingerprint sha256:b2b2...b2b2, eval policy fingerprint sha256:a1a1...a1a1 with metrics val_accuracy and throughput, objective val_accuracy on gsm8k maximized, proposer optuna-cma. Axes are optim.lr as log_float from 1e-06 to 0.001, train.method categorical over full/lora, and lora.rank as int from 4 to 64; budget is 24.0 GPU-hours total, max_runs 6, per_run_timeout_h 8.0, reserve_frac 0.3; cluster is partition rally, time 10-00:00:00, max_nodes 2 with 8 GPUs per node, excluding r01dgx02. Seeds are baseline_repeats 3, confirm_repeats 3, seed_list [101, 102, 103]; stopping is max_crash_streak 2 and no_gain_streak 3; the confirm block has k 2.0, noise_floor_rel 0.005, guard_abs_epsilon 0.01, and no guardrails. What does the check come back with?",
       "question_model": "mimo-v2.6-pro"
     },
     {

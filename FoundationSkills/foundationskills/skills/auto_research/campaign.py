@@ -43,7 +43,7 @@ AXIS_CATEGORIES: dict[str, tuple[str, ...]] = {
 }
 
 # M3 proposer block (AR-IN-008): which proposer may suggest axes and its floor rows.
-PROPOSER_NAMES = ("catalog", "optuna")
+PROPOSER_NAMES = ("catalog", "optuna", "optuna-cma")
 _PROPOSER_KEYS = {"name", "min_rows", "require_model", "seed"}
 
 UNSUPPORTED_AXES: dict[str, str] = {
@@ -230,6 +230,10 @@ def check_proposer_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     extra = {str(k) for k in set(raw) - _PROPOSER_KEYS}
     if extra:
         problems.append(("AR-IN-008", f"proposer has unknown key(s) {sorted(extra)}"))
+    if name == "optuna-cma":  # AR-PR-002 (C3): CMA-ES is numeric-only - a categorical axis REFUSES, never drops
+        for axis in spec.get("axes") or []:
+            if isinstance(axis, dict) and axis.get("type") == "categorical":
+                problems.append(("AR-PR-002", f"proposer_axis_unsupported:optuna-cma:{axis.get('key')}"))
     return problems
 
 

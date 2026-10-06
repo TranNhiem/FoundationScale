@@ -31,15 +31,22 @@ def _fits_all(axes: dict[str, dict[str, Any]], delta: dict[str, Any]) -> bool:
 
 
 class OptunaProposer:
-    """TPE proposer: one fresh in-memory study per call over told rows (seeded, byte-replayable)."""
+    """Optuna proposer (TPE or CMA-ES): one fresh in-memory study per call over told rows (byte-replayable)."""
 
     name = 'optuna'
+    SAMPLERS = ('tpe', 'cmaes')
 
-    def __init__(self, seed: int = 0, optuna_module: Any = None) -> None:
+    def __init__(self, seed: int = 0, optuna_module: Any = None, sampler: str = 'tpe') -> None:
+        if sampler not in self.SAMPLERS:
+            raise ValueError(f'unknown sampler: {sampler!r}')
         module = self._load() if optuna_module is None else optuna_module
         self.seed = seed
+        self.sampler = sampler
         self._optuna = module
+        self.name = 'optuna-cma' if sampler == 'cmaes' else 'optuna'
         self.version = str(getattr(module, '__version__', None) or 'unknown')
+        raw_version = getattr(module, '__version__', None)
+        self.package_version = None if raw_version is None else str(raw_version)
         self._quiet_logs()
 
     @staticmethod
@@ -90,6 +97,12 @@ class OptunaProposer:
         objective = spec.get('objective') if isinstance(spec.get('objective'), dict) else {}
         return 'minimize' if objective.get('direction') == 'min' else 'maximize'
 
+    def _build_sampler(self) -> Any:
+        """The seeded sampler (C2): ``CmaEsSampler`` for ``cmaes``, ``TPESampler`` otherwise."""
+        samplers = self._optuna.samplers
+        build = samplers.CmaEsSampler if self.sampler == 'cmaes' else samplers.TPESampler
+        return build(seed=self.seed)
+
     def _ask(self, study: Any, dists: dict[str, Any]) -> dict[str, Any]:
         """One sampled assignment over ``dists`` (B5: the FULL assignment, attributed as such)."""
         trial = study.ask(dists)
@@ -113,9 +126,10 @@ class OptunaProposer:
         drops = {str(drop) for drop in row_drops}
         dists = self.distributions(spec)
         axes = _axes(spec)
+        drops.update(f"model_axis_skipped:{key}" for key in axes if key not in dists)  # named + counted, never silent
         study = self._optuna.create_study(
             direction=self._direction(spec),
-            sampler=self._optuna.samplers.TPESampler(seed=self.seed),
+            sampler=self._build_sampler(),
         )
         told = 0
         for row in rows:
@@ -141,12 +155,12 @@ class OptunaProposer:
                     kept = draw
                     break
             if kept is None:
-                drops.add(f'model_out_of_axes:optuna:{i}')
+                drops.add(f'model_out_of_axes:{self.name}:{i}')
                 continue
             cards.append({
                 'idea': f'optuna:{i}',
                 'delta': dict(kept),
                 'score': None,
-                'reason': f'tpe seed={self.seed} told {told} row(s)',
+                'reason': f'{self.sampler} seed={self.seed} told {told} row(s)',
             })
         return cards, sorted(drops)
