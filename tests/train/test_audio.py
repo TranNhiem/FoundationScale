@@ -535,6 +535,8 @@ def test_the_manifest_names_its_keys_and_is_json_ready() -> None:
         "seconds_total",
         "sampling_rate",
         "refused",
+        "placeholder_rows_verified",
+        "placeholder_rows_unmeasured",
         "verdict",
     }
     json.dumps(manifest)

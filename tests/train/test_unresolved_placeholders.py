@@ -190,10 +190,12 @@ def test_the_image_arm_scans_with_image_resolved() -> None:
 
     An omni corpus can carry pixels AND a folded '<video>'. The image arm passes
     image_declared=True, which resolves '<image>' (the collator loads pixels for
-    it) while leaving video and audio reportable.
+    it) while leaving video and audio reportable. The speech plane shares the arm:
+    each placeholder is resolved only when its own column is declared.
     """
     source = Path(inspect.getsourcefile(_unresolved_placeholder_notice)).read_text()
-    assert "_unresolved_placeholder_notice(_img_texts, image_declared=True)" in source
+    assert "image_declared=IMAGE_COLUMN is not None," in source
+    assert "audio_declared=AUDIO_COLUMN is not None," in source
 
 
 def test_the_notice_is_wired_into_the_text_only_arm() -> None:

@@ -46,7 +46,9 @@ if TYPE_CHECKING:  # never executed at runtime: the import contract above forbid
 
 __all__ = [
     "AUDIO_COLUMN_ENV",
+    "AUDIO_FEATURES_KEY",
     "AUDIO_LOAD_REASONS",
+    "AudioCollator",
     "AudioCoverage",
     "AudioFamily",
     "AudioLoadError",
@@ -56,6 +58,8 @@ __all__ = [
     "load_audio",
     "max_audio_seconds",
     "placeholder_mismatches",
+    "refuse_if_audio_features_dropped",
+    "train_audio_collator_or_refuse",
 ]
 
 
@@ -439,6 +443,12 @@ class AudioCoverage:
     seconds_total: float = 0.0
     sampling_rate: int | None = None
     refused: dict[str, int] = field(default_factory=dict)
+    # Per-row placeholder verification against the processor's own token count:
+    # rows where it was measured, and rows where the processor offers no count to
+    # compare with. The second number is UNMEASURED, and it is reported, not folded
+    # into the first.
+    placeholder_rows_verified: int = 0
+    placeholder_rows_unmeasured: int = 0
 
     def record_ok(self, duration_s: float) -> None:
         """One accepted row: counted, with the seconds it contributed to the manifest."""
@@ -479,6 +489,8 @@ class AudioCoverage:
             "seconds_total": self.seconds_total,
             "sampling_rate": self.sampling_rate,
             "refused": dict(self.refused),
+            "placeholder_rows_verified": self.placeholder_rows_verified,
+            "placeholder_rows_unmeasured": self.placeholder_rows_unmeasured,
             "verdict": self.verdict(),
         }
 
@@ -521,3 +533,408 @@ def placeholder_mismatches(
         )
         if placeholders != length
     ]
+
+
+# ---------------------------------------------------------------------------
+# The TRAIN plane's audio carrier -- the pixel collator's direct twin
+# (rl.prompt_surface.train_image_collator_or_refuse and
+# rl.prompt_surface.refuse_if_pixel_column_dropped), widened to sound per
+# #P1-SLICE2. Same doctrine: exit 96, never a fallback; per-row loader
+# verification; the DECLARED modality key is checked on the batch the model
+# would actually receive, because a declared axis that is not executed is a
+# refusal, not a pass.
+# ---------------------------------------------------------------------------
+
+AUDIO_FEATURES_KEY = "input_features"
+"""The key the audio tower consumes.
+
+Named ONCE here so the collator and the drop probe must agree on the spelling
+by import, not by re-typing. MEASURED on gemma-4 (P0, GB200,
+transformers 5.5.0): apply_chat_template(return_dict=True) emits exactly this
+key for the audio tower's log-mel features [B, T, 128], plus input_features_mask
+[B, T].
+"""
+
+
+def _audio_refuse_exit_96(message: str) -> None:
+    """The one loud refusal mechanism -- mirror of rl.prompt_surface._refuse_exit_96.
+
+    Duplicated (rather than imported) to keep rl/prompt_surface.py untouched and
+    to keep the "bare interpreter" import contract of this module simple. The
+    MECHANISM is identical to the one refuse_if_pixel_column_dropped raises, per
+    the shared contract: a stderr line prefixed "REFUSAL (exit 96):" then
+    SystemExit(96). Never asserts, never returns, never falls back.
+    """
+    import sys  # stdlib; the module keeps its top-level imports minimal
+
+    print(f"REFUSAL (exit 96): {message}", file=sys.stderr)
+    raise SystemExit(96)
+
+
+def resolve_audio_surface(model_id: str) -> Any:
+    """The processor surface for a declared audio column; AutoProcessor is REQUIRED.
+
+    Same rule as the image arm's ``rl.prompt_surface.resolve_prompt_surface`` --
+    a processor that fails to load is a refusal (96), never a downgrade to a
+    tokenizer, because a tokenizer would encode the text and drop the waveform
+    with no signal. It is a separate function only so that the refusal names the
+    axis that was actually declared: that function's messages say "corpus carries
+    images", and on an audio run that wording would point the operator at the
+    wrong column.
+    """
+    from foundationscale.rl.prompt_surface import PromptSurface  # noqa: PLC0415
+
+    try:
+        from transformers import AutoProcessor  # noqa: PLC0415
+    except ImportError:
+        _audio_refuse_exit_96(
+            f"{AUDIO_COLUMN_ENV} is declared but transformers is absent; AutoProcessor "
+            "cannot be imported and no tokenizer fallback is permitted (it would "
+            "train on the text and drop the audio)"
+        )
+    try:
+        processor = AutoProcessor.from_pretrained(model_id)
+    except Exception as exc:  # noqa: BLE001 - any load failure is the same refusal
+        _audio_refuse_exit_96(
+            f"{AUDIO_COLUMN_ENV} is declared but AutoProcessor failed to load for "
+            f"{model_id!r}: {exc!r}. Refusing rather than downgrading to a tokenizer, "
+            "which would train on the text and drop the audio"
+        )
+    return PromptSurface(
+        kind="processor",
+        surface=processor,
+        reason=(
+            f"processor path: corpus carries audio; AutoProcessor loaded for "
+            f"{model_id!r} ({type(processor).__name__})"
+        ),
+        supports_images=False,
+    )
+
+
+class AudioCollator(Protocol):
+    """The TRAIN loop's audio collator surface: rows -> batch dict, with coverage.
+
+    Exposed as a Protocol (not a class) so a caller can pass any duck-typed
+    callable carrying ``coverage`` -- tests build their own fakes, and the
+    closure returned by ``train_audio_collator_or_refuse`` satisfies the shape
+    at runtime via ``setattr``. ``coverage`` is updated PER ROW as the collator
+    sees rows, so a verifier can read the manifest of what this collator
+    processed without reaching into the function that produced the batch.
+    """
+
+    coverage: AudioCoverage
+
+    def __call__(
+        self, rows: Sequence[Any]
+    ) -> dict[str, Any]: ...  # pragma: no cover -- protocol shape only
+
+
+def refuse_if_audio_features_dropped(
+    batch_keys: Any, audio_column: str, feature_key: str = AUDIO_FEATURES_KEY
+) -> None:
+    """REFUSE (96) when a collator's output batch lost the audio feature column.
+
+    The direct analog of ``rl.prompt_surface.refuse_if_pixel_column_dropped``
+    (see its docstring: #371/#410/#422's class -- a declared axis that is not
+    executed is a refusal). The mechanism is the SAME exit-96 mechanism: a
+    stderr message naming the DECLARED column AND the dropped key so an
+    operator can tell which axis vanished, then SystemExit(96). A batch that
+    carries ``feature_key`` is allowed -- this probe is specifically about the
+    silent drop of the declared modality, not a blanket end-to-end check.
+    """
+    keys = {str(k) for k in batch_keys}
+    if feature_key not in keys:
+        _audio_refuse_exit_96(
+            f"audio column {audio_column!r} is DECLARED, but the batch the model would "
+            f"actually receive has keys {sorted(keys)}: the audio feature column "
+            f"{feature_key!r} was DROPPED between the dataset and the forward. "
+            "That is the silent-drop defect (#371/#410, and #422's class -- a declared "
+            "axis that is not executed is a refusal, not a pass). The run is refused; "
+            "it never trains text-only under an audio label."
+        )
+
+
+def train_audio_collator_or_refuse(
+    surface: Any,
+    *,
+    audio_column: str,
+    max_length: int,
+    text_fields: tuple[str, str] = ("text", "answer"),
+) -> AudioCollator:
+    """Build the audio TRAIN collator; refuse (96) at CONSTRUCTION if the surface cannot carry it.
+
+    ``surface`` is an ``rl.prompt_surface.PromptSurface`` (typed ``Any`` here to
+    keep this module importable under a bare interpreter AND to keep
+    rl/prompt_surface.py untouched). The image collator's twin -- same loader
+    refusal pattern, same label-mask-clone discipline, same "declared column"
+    drop probe -- widened from one text cell to the P1 audio contract:
+
+      * user prompt + assistant target come from the SAME row the image
+        collator reads, via the pair ``text_fields=(prompt_field, answer_field)``.
+        The user slot's default, ``text``, matches
+        ``rl.prompt_surface.train_image_collator_or_refuse.text_column``
+        default; the answer slot is added because audio SFT supervises an
+        assistant target alone (P0: "only the assistant transcript is
+        supervised: [28, 19, 47, 39] tokens; prompt and audio positions are
+        -100"), which the image collator -- a causal-LM objective over
+        input_ids -- does not need.
+      * one row -> one (waveform, duration) via ``load_audio``; an
+        ``AudioLoadError`` becomes an exit-96 refusal naming the row, the
+        reason and the DECLARED column. Strict mode only: tolerating bad rows
+        silently is the defect being fixed. No resampling, no truncation.
+      * ``apply_chat_template`` on the FULL message list (user with one
+        ``{"type": "audio"}`` block and one ``{"type": "text"}`` block, then an
+        assistant turn), producing ``input_ids``, ``attention_mask``,
+        ``input_features [B, T, 128]`` and ``input_features_mask [B, T]``
+        in ONE call (P0 measured on gemma-4 + GB200).
+      * labels mask (a) the prompt up to the assistant-turn boundary -- the
+        boundary is recovered from a SECOND tokenizer-only
+        ``apply_chat_template`` call on the prompt-only message list
+        (``add_generation_prompt=True``), whose un-padded length is exactly the
+        number of prompt tokens that precede the assistant target; (b) any
+        position with ``attention_mask == 0`` (pad, both padding sides -- the
+        prompt's first-attended position is located per-row via ``argmax`` on
+        the attention mask, so left- and right-padded batches both behave);
+        (c) every ``audio_token_id`` position, since a placeholder is a valid
+        INPUT slot for tower output and never a valid generation target (the
+        #450 lesson measured at 73.6% of label positions on one family).
+      * PER-ROW, when the processor declares ``_compute_audio_num_tokens``, the
+        count of ``audio_token_id`` in that row's ``input_ids`` must EQUAL the
+        value the processor's own prediction function returns for that row's
+        waveform length. A mismatch means the processor and the model pair are
+        out of contract (P0 measured these equal on gemma-4 -- 147/121/312/248
+        on both sides), and the run refuses at 96. When the function is
+        ABSENT, the check is silently skipped -- not reported as pass -- for
+        the same reason ``max_audio_seconds`` returns ``None`` (UNMEASURED)
+        rather than a guessed cap.
+      * an encoded batch wider than ``max_length`` REFUSES. NO truncation on
+        this path: truncating audio placeholders drops measured sound between
+        the loader and the forward -- the silent-drop defect one layer down.
+        Same doctrine as
+        ``rl.prompt_surface._refuse_if_image_batch_exceeds_declared_window``,
+        but bounded by the caller's declared budget rather than a model's
+        window.
+      * a batch whose ``apply_chat_template`` output is MISSING
+        ``input_features`` is refused on the way out via
+        ``refuse_if_audio_features_dropped`` -- the audio twin of the pixel
+        drop probe.
+
+    The returned object is callable on rows -> batch dict and exposes
+    ``.coverage: AudioCoverage`` updated per row.
+    """
+    if surface.kind != "processor":
+        _audio_refuse_exit_96(
+            f"a train-time audio collator was requested for column "
+            f"{audio_column!r} but the resolved surface is {surface.kind!r}: "
+            "encoding audio through a tokenizer is the silent-drop defect one "
+            "layer up (the waveform would never reach the audio tower and no "
+            "signal would say so), so this refuses rather than collates"
+        )
+    processor = surface.surface
+    # rows_expected grows with rows seen so the invariant
+    #   rows_expected == rows_checked + sum(refused.values())
+    # is preserved across batches -- keeping the manifest countable regardless
+    # of how many times the collator is invoked.
+    coverage = AudioCoverage(rows_expected=0)
+    user_field, answer_field = text_fields
+
+    def collate(rows: Sequence[Any]) -> dict[str, Any]:
+        full_convos: list[list[dict[str, Any]]] = []
+        prompt_convos: list[list[dict[str, Any]]] = []
+        waves: list[Any] = []
+        durations: list[float] = []
+        for index, raw_row in enumerate(rows):
+            row = raw_row if isinstance(raw_row, dict) else vars(raw_row)
+            row_id = f"train-row[{index}]"
+            coverage.rows_expected += 1
+            value = row.get(audio_column)
+            try:
+                wave, duration = load_audio(
+                    value,
+                    target_sr=processor.feature_extractor.sampling_rate,
+                    row_id=row_id,
+                    max_seconds=max_audio_seconds(processor),
+                )
+            except AudioLoadError as exc:
+                # Strict mode: one bad row is a REFUSED RUN, never a silently
+                # shorter batch. The message names the row id, the reason from
+                # AUDIO_LOAD_REASONS and the DECLARED column so the operator
+                # can fix the corpus without guessing which axis was in play.
+                _audio_refuse_exit_96(
+                    f"audio column {audio_column!r} row {row_id!r} refused by the "
+                    f"loader: reason={exc.reason!r}, source={value!r}. Strict mode "
+                    "does not drop rows silently (that is the defect being fixed); "
+                    "fix the corpus or the loader, or narrow the audio column"
+                )
+            user_text = str(row.get(user_field, ""))
+            answer_text = str(row.get(answer_field, ""))
+            # MEASURED (P0, GB200, transformers 5.5.0):
+            #   processor.apply_chat_template(
+            #       messages, tokenize=True, return_dict=True,
+            #       return_tensors="pt", padding=True)
+            # accepts [{"type":"audio","audio": <float32 @ 16 kHz>},
+            #          {"type":"text","text": ...}] on a user turn followed by
+            # an assistant turn, and returns input_ids / attention_mask /
+            # input_features [B,T,128] / input_features_mask [B,T] in ONE call.
+            # No separate feature-extractor pass: a second call risks the
+            # silent-drop class of bug this plane keeps finding.
+            user_msg: dict[str, Any] = {
+                "role": "user",
+                "content": [
+                    {"type": "audio", "audio": wave},
+                    {"type": "text", "text": user_text},
+                ],
+            }
+            answer_msg: dict[str, Any] = {
+                "role": "assistant",
+                "content": [{"type": "text", "text": answer_text}],
+            }
+            full_convos.append([user_msg, answer_msg])
+            prompt_convos.append([user_msg])
+            waves.append(wave)
+            durations.append(duration)
+
+        if not full_convos:
+            return {}
+
+        full_batch = processor.apply_chat_template(
+            full_convos,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            padding=True,
+        )
+        input_ids = full_batch["input_ids"]
+        width = int(input_ids.shape[-1])
+        if width > max_length:
+            # NO truncation on the audio path: truncating a batch that carries
+            # audio placeholders drops measured sound from the training input,
+            # the silent-drop defect one layer down (same doctrine as
+            # prompt_surface._refuse_if_image_batch_exceeds_declared_window,
+            # but bounded here by the caller's declared max_length budget).
+            # Refuse, naming BOTH numbers, never corrupt.
+            _audio_refuse_exit_96(
+                f"audio column {audio_column!r}: batch encoded to {width} tokens "
+                f"wider than the declared max_length={max_length}. The audio path "
+                "does not truncate -- truncating audio placeholders drops measured "
+                "sound from the training input, the silent-drop defect. Reduce the "
+                "audio length per row, the text fields, or the max_length budget; "
+                "this refuses rather than corrupts."
+            )
+
+        audio_token_id = getattr(processor, "audio_token_id", None)
+        if audio_token_id is None:
+            _audio_refuse_exit_96(
+                f"audio column {audio_column!r} put audio in the batch, but the "
+                "processor declares no audio_token_id. Without it the placeholder "
+                "positions cannot be counted (for verification) or masked out of "
+                "the labels (for supervision), and training would optimise the "
+                "model to emit placeholder tokens as text -- the objective would "
+                "be mostly not the task. Refusing rather than training against "
+                "an objective we cannot verify."
+            )
+
+        # PER-ROW placeholder verification. Gemma-4's
+        # _compute_audio_num_tokens(len(wave)) is the processor's OWN prediction
+        # of how many audio placeholder tokens the template inserted for this
+        # waveform. If the ACTUAL count in input_ids disagrees, the processor
+        # and the model pair are out of contract and the batch cannot be
+        # trusted to line up with the tower's valid output length (P0 measured
+        # these equal on gemma-4: 147/121/312/248 on both sides).
+        # When the method is ABSENT the row is counted as UNMEASURED on the
+        # coverage record -- not skipped silently and not reported as a pass.
+        expected_count_fn: Any = getattr(processor, "_compute_audio_num_tokens", None)
+        callable_expected = callable(expected_count_fn)
+        for index, wave in enumerate(waves):
+            row_id = f"train-row[{index}]"
+            actual = int((input_ids[index] == audio_token_id).sum())
+            if not callable_expected:
+                coverage.placeholder_rows_unmeasured += 1
+                continue
+            # Signature measured on transformers 5.5.0 (processing_gemma4.py):
+            # _compute_audio_num_tokens(audio_waveform, sampling_rate) -> int.
+            expected = int(expected_count_fn(wave, int(processor.feature_extractor.sampling_rate)))
+            if actual != expected:
+                _audio_refuse_exit_96(
+                    f"audio column {audio_column!r} row {row_id!r}: "
+                    f"apply_chat_template produced {actual} audio placeholders, but "
+                    "the processor's own _compute_audio_num_tokens(<"
+                    f"{len(wave)} samples>) expects {expected}. The processor and the model "
+                    "pair are out of contract (P0 measured these equal on gemma-4); "
+                    "refusing to train against a sequence the family does not "
+                    "recognise."
+                )
+            coverage.placeholder_rows_verified += 1
+
+        # Prompt boundary. Row i's prompt is `prompt_batch[i]`'s un-padded
+        # length -- everything after it in `input_ids[i]` is the assistant
+        # target. Two apply_chat_template calls per batch (prompt-only with
+        # add_generation_prompt=True and full with the default) instead of one
+        # because the single-call alternative has no portable way to recover
+        # the boundary index without guessing token-ids or offsets. The prompt
+        # and full renderings share a prefix by the chat-template contract
+        # (a template that renders the user turn differently once an assistant
+        # turn follows would metastasise labels silently -- an assumption this
+        # plan refuses to make without a check).
+        prompt_batch = processor.apply_chat_template(
+            prompt_convos,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            padding=True,
+            add_generation_prompt=True,
+        )
+        prompt_attention = prompt_batch.get("attention_mask")
+        if prompt_attention is None:
+            _audio_refuse_exit_96(
+                f"audio column {audio_column!r}: the prompt-only tokenize produced "
+                "no attention_mask, so the row's prompt length cannot be recovered "
+                "and the label mask would mark the wrong tokens as supervised. "
+                "Refusing rather than supervising the prompt by accident."
+            )
+        prompt_lens = [int(prompt_attention[i].sum()) for i in range(len(prompt_attention))]
+
+        # Labels: clone so an in-place causal-shift cannot corrupt input_ids,
+        # then mask (a) the prompt (whose slice includes the audio placeholders
+        # and the assistant-turn opener), (b) any position with attention_mask
+        # == 0 (pad; deliberately mask-based rather than pad-id equality since
+        # gemma-4's pad id is 0 and 0 is a legal content id -- the #450 lesson),
+        # (c) every audio_token_id, since a placeholder is a valid INPUT slot
+        # but never a valid TARGET.
+        labels = input_ids.clone()
+        attention_mask = full_batch.get("attention_mask")
+        if attention_mask is None:
+            _audio_refuse_exit_96(
+                f"audio column {audio_column!r}: the full tokenize produced no "
+                "attention_mask, so padding cannot be masked out of the labels and "
+                "the model would be trained to EMIT pad tokens. Refusing rather "
+                "than training against an objective that is not the task."
+            )
+        for index, prompt_len in enumerate(prompt_lens):
+            # The prompt slice starts at the first ATTENDED position so this is
+            # correct for right-padded and left-padded batches alike (HF's
+            # training default is right, but a left-padded caller is not a
+            # silent-corruption case).
+            first_attended = int(attention_mask[index].argmax())
+            labels[index, first_attended : first_attended + prompt_len] = -100
+        labels[attention_mask == 0] = -100
+        labels[labels == audio_token_id] = -100
+        full_batch["labels"] = labels
+
+        # Last gate before returning: if the processor quietly dropped
+        # input_features (a text-only encode sneaking in, a stub forgetting the
+        # key), the run must not train text-only under an audio label. Same
+        # idea as refuse_if_pixel_column_dropped on the image plane.
+        refuse_if_audio_features_dropped(full_batch.keys(), audio_column)
+
+        for duration in durations:
+            coverage.record_ok(duration)
+        return dict(full_batch)
+
+    # Functions cannot nominally carry an attribute per PEP 544; at runtime,
+    # assigning .coverage on the callable and duck typing
+    # satisfies AudioCollator. The `# type: ignore` markers say so to the
+    # type-checker without polluting the AudioCollator protocol with callable
+    # implementation details.
+    collate.coverage = coverage  # type: ignore[attr-defined]
+    return collate  # type: ignore[return-value]

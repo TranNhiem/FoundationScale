@@ -201,6 +201,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "sequences pre-GPU blocking, save-gate callback adjudication, missing-extra "
         "refusal, and the 0/5/95/96 exit-code contract"
     ),
+    "src/foundationscale/train/audio.py": (
+        "speech-plane audio contract: when a declared audio column is accepted, strict "
+        "waveform loading with named refusals, per-row placeholder verification, and "
+        "the checked-vs-expected audio row coverage verdict"
+    ),
     "tools/count_census_modules.py": (
         "is the production LoRA census denominator and accepts wrapped versus bare "
         "payload shapes and record forms"

@@ -31,6 +31,13 @@ THE CONTROLS ARE THE POINT, and there are three kinds:
                               message was about the wrong thing, so an
                               assertion on the exit alone would have passed the
                               defect. The message must name the modality.
+
+Audio left the refused table with the speech plane (docs/research/speech.md
+P1): a declared audio column is now accepted when the family and processor can
+carry it and refused (96) with the missing piece named otherwise -- that
+refusal lives in train/audio.py and is tested in tests/train/test_audio.py. The
+history above stays as written, because it is why the audio refusal now names
+what is missing. Video is still refused here.
 """
 
 from __future__ import annotations
@@ -46,15 +53,21 @@ VIDEO_VAR = "FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN"
 # --- the declaration detector ------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("var", "modality"),
-    [(AUDIO_VAR, "audio"), (VIDEO_VAR, "video")],
-)
-def test_declared_modality_is_detected(var: str, modality: str) -> None:
-    """Declaring either axis is seen, and reported with the variable that did it."""
-    got = loop._declared_untrainable_modality({var: "waveform"})
-    assert got is not None, f"{var} was declared and nothing noticed -- the #490 defect"
-    assert got == (modality, var, "waveform")
+def test_declared_video_is_detected() -> None:
+    """Declaring video is seen, and reported with the variable that did it."""
+    got = loop._declared_untrainable_modality({VIDEO_VAR: "frames"})
+    assert got is not None, f"{VIDEO_VAR} was declared and nothing noticed -- the #490 defect"
+    assert got == ("video", VIDEO_VAR, "frames")
+
+
+def test_declared_audio_is_no_longer_refused_at_the_declaration() -> None:
+    """The speech plane's change, pinned: audio is decided later, with the processor.
+
+    MUST_PASS for the new rule. A regression that put audio back in the table would
+    refuse every speech run before the family check could accept it.
+    """
+    assert loop._declared_untrainable_modality({AUDIO_VAR: "waveform"}) is None
+    assert all(modality != "audio" for modality, _ in loop.UNTRAINABLE_MODALITIES)
 
 
 def test_nothing_declared_is_silent() -> None:
@@ -97,7 +110,9 @@ def test_both_declared_reports_a_fixed_modality_first() -> None:
     """
     got = loop._declared_untrainable_modality({AUDIO_VAR: "a", VIDEO_VAR: "v"})
     assert got is not None
-    assert got[0] == "audio"
+    # Audio is no longer in the table, so video is what a mixed declaration
+    # reports -- and it still refuses, which is what keeps the pair from training.
+    assert got[0] == "video"
 
 
 # --- the wording, which is half of what was wrong ----------------------------

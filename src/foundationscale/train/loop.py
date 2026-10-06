@@ -357,8 +357,12 @@ MARKERS: tuple[str, ...] = tuple(
 # #490: the modalities this training plane can be TOLD about but cannot TRAIN.
 # Ordered, and the order is the reporting order when someone declares both --
 # an arbitrary but FIXED choice, so the refusal text is reproducible.
+#
+# Audio left this table with the speech plane (docs/research/speech.md P1): a
+# declared audio column is now ACCEPTED when the family declares an audio tower
+# and the processor can carry audio, and refused (96) with the missing piece
+# named otherwise -- see train/audio.py::audio_support_refusal. Video stays.
 UNTRAINABLE_MODALITIES: tuple[tuple[str, str], ...] = (
-    ("audio", "FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN"),
     ("video", "FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN"),
 )
 
@@ -398,7 +402,9 @@ def _family_config_mapping(model: Any) -> Mapping[str, Any]:
     return {}
 
 
-def _dormant_modality_towers(model: Any, *, family: Any, image_declared: bool) -> list[str]:
+def _dormant_modality_towers(
+    model: Any, *, family: Any, image_declared: bool, audio_declared: bool = False
+) -> list[str]:
     """Towers PRESENT on ``model`` that this run's declaration cannot exercise.
 
     Keyed on the DECLARATION and on the loaded module tree -- never on the data,
@@ -434,6 +440,8 @@ def _dormant_modality_towers(model: Any, *, family: Any, image_declared: bool) -
     if family is None:
         return []
     exercised = {"image"} if image_declared else set()
+    if audio_declared:
+        exercised.add("audio")
     dormant: list[str] = []
     for path, modality in family.towers:
         if modality is None or modality in exercised:
@@ -550,7 +558,44 @@ def _text_column_or_none(split: Any) -> Sequence[str] | None:
     return column
 
 
-def _unresolved_placeholder_notice(texts: Sequence[str], *, image_declared: bool) -> str | None:
+def _audio_declaration_conflict(
+    *, audio_column: str | None, image_column: str | None, cp: int
+) -> str | None:
+    """Why a declared audio column cannot run in THIS configuration, or None.
+
+    Pure, and decided before the model or the corpus is touched, so the refusal
+    costs nothing and cannot be confounded by an unloadable input. The family and
+    processor checks come later (train/audio.py::audio_support_refusal) because
+    they need the loaded processor; these two need only the declaration.
+
+    * Audio together with images: the two collators each own the whole batch and
+      no arm composes them, so one of the two columns would be dropped without a
+      word -- the T1-22 shape. One non-text modality per run in this release.
+    * cp > 1: the audio collator does not pad to a multiple of 2*cp, and context
+      parallelism cannot split a sequence that does not divide (same rule as the
+      image arm).
+    """
+    if audio_column is None:
+        return None
+    if image_column is not None:
+        return (
+            f"both an audio column ({audio_column!r}) and an image column "
+            f"({image_column!r}) are declared: no collator composes the two, so one "
+            "would be dropped silently. One non-text modality per run in this "
+            "release; declare one of them. Refusing (96)"
+        )
+    if cp > 1:
+        return (
+            f"cp={cp} with an audio column ({audio_column!r}): the audio collator "
+            f"does not pad to a multiple of 2*cp={2 * cp}, and context parallelism "
+            "cannot split a sequence that does not divide. Refusing (96)"
+        )
+    return None
+
+
+def _unresolved_placeholder_notice(
+    texts: Sequence[str], *, image_declared: bool, audio_declared: bool = False
+) -> str | None:
     """Name modality placeholders left dangling in the text, or None if clean.
 
     _dropped_column_notice above catches the T1-22 defect only while the
@@ -575,6 +620,8 @@ def _unresolved_placeholder_notice(texts: Sequence[str], *, image_declared: bool
     nobody says is not a warning.
     """
     resolved = {"image"} if image_declared else set()
+    if audio_declared:
+        resolved.add("audio")
     total = len(texts)
     counted = [
         (modality, token, hits)
@@ -4402,6 +4449,24 @@ def _train(cfg: TrainConfig) -> int:
             extra={"exit": EXIT_REFUSE, f"{_modality}_column": _declared},
         )
         return EXIT_REFUSE
+    # Speech plane: an audio column is declared the same way as an image column,
+    # on an environment variable with no default; absent leaves the text and
+    # image arms byte-identical. Whether the family and processor can carry it
+    # is decided once they are loaded, below.
+    from foundationscale.train.audio import AUDIO_COLUMN_ENV  # noqa: PLC0415
+
+    AUDIO_COLUMN = _os.environ.get(AUDIO_COLUMN_ENV) or None
+    _audio_conflict = _audio_declaration_conflict(
+        audio_column=AUDIO_COLUMN, image_column=IMAGE_COLUMN, cp=cfg.cp
+    )
+    if _audio_conflict is not None:
+        _mark(Step.REFUSE, _audio_conflict)
+        _emit_manifest(
+            cfg,
+            stage="refused",
+            extra={"exit": EXIT_REFUSE, "audio_column": AUDIO_COLUMN, "cp": cfg.cp},
+        )
+        return EXIT_REFUSE
     # attn_implementation binds at MODEL CONSTRUCTION, not on TrainingArguments
     # -- no such knob exists there, so it rides from_pretrained. The contract is
     # the same one the TrainingArguments introspection below enforces (#342: a
@@ -4515,7 +4580,14 @@ def _train(cfg: TrainConfig) -> int:
         # byte-identical to the pre-#410 plane, and that covers how it FAILS.
         # Pinned by test_train_returns_red_when_model_dir_is_unconstructible.
         prompt_surface: Any = None
-        if IMAGE_COLUMN is None:
+        if AUDIO_COLUMN is not None:
+            # Declared audio: AutoProcessor is REQUIRED, exactly as for images,
+            # and the refusal names the audio column (train/audio.py).
+            from foundationscale.train.audio import resolve_audio_surface  # noqa: PLC0415
+
+            prompt_surface = resolve_audio_surface(cfg.model)
+            tokenizer = getattr(prompt_surface.surface, "tokenizer", prompt_surface.surface)
+        elif IMAGE_COLUMN is None:
             tokenizer = AutoTokenizer.from_pretrained(cfg.model)
         else:
             # Declared images: AutoProcessor is REQUIRED and its absence
@@ -4632,7 +4704,7 @@ def _train(cfg: TrainConfig) -> int:
                 "the thin path requires a 'text' column",
             )
             return EXIT_REFUSE
-        if IMAGE_COLUMN is None:
+        if IMAGE_COLUMN is None and AUDIO_COLUMN is None:
             # #490: say what is being dropped. A console line only -- the arm
             # below stays byte-identical, which is what makes it safe to add
             # here rather than folding it into the map().
@@ -4676,12 +4748,17 @@ def _train(cfg: TrainConfig) -> int:
                 remove_columns=columns,
             )
         else:
-            if IMAGE_COLUMN not in columns:
+            # Exactly one of the two is declared here: _audio_declaration_conflict
+            # refused the pair before the model was built.
+            _media_kind, _media_column = (
+                ("audio", AUDIO_COLUMN) if AUDIO_COLUMN is not None else ("image", IMAGE_COLUMN)
+            )
+            if _media_column not in columns:
                 # A declared axis that is not in the data is a REFUSAL, never
                 # a quiet text-only train (#410 follows #422's rule).
                 _mark(
                     Step.REFUSE,
-                    f"image column {IMAGE_COLUMN!r} is declared but dataset "
+                    f"{_media_kind} column {_media_column!r} is declared but dataset "
                     f"{cfg.dataset!r} split {split!r} has columns {columns}. "
                     "Training anyway would run text-only under a multimodal "
                     "label -- the silent-drop defect this plane now refuses",
@@ -4689,7 +4766,7 @@ def _train(cfg: TrainConfig) -> int:
                 _emit_manifest(
                     cfg,
                     stage="refused",
-                    extra={"exit": EXIT_REFUSE, "image_column": IMAGE_COLUMN},
+                    extra={"exit": EXIT_REFUSE, f"{_media_kind}_column": _media_column},
                 )
                 return EXIT_REFUSE
             # IMAGE ARM: rows stay RAW ({text, image paths}). Encoding --
@@ -4704,7 +4781,11 @@ def _train(cfg: TrainConfig) -> int:
             # below loads pixels for it, so reporting it would be false.
             _img_texts = _text_column_or_none(raw[split])
             if _img_texts is not None:
-                _dangling = _unresolved_placeholder_notice(_img_texts, image_declared=True)
+                _dangling = _unresolved_placeholder_notice(
+                    _img_texts,
+                    image_declared=IMAGE_COLUMN is not None,
+                    audio_declared=AUDIO_COLUMN is not None,
+                )
                 if _dangling is not None:
                     _mark(Step.DATA, _dangling)
             tokenized = raw[split]
@@ -4978,8 +5059,27 @@ def _train(cfg: TrainConfig) -> int:
     # untrained towers should say so, because "trained a multimodal model" and
     # "carried two thirds of one unchanged" are different claims.
     _family = resolve_family(_family_config_mapping(model))
+    if AUDIO_COLUMN is not None:
+        # The declaration-only checks ran before the model was built; these need
+        # the resolved family and the loaded processor. A family with no audio
+        # tower, or a processor that cannot place audio tokens, is a REFUSAL --
+        # training on would fit the text and leave the waveform unread.
+        from foundationscale.train.audio import audio_support_refusal  # noqa: PLC0415
+
+        _audio_refusal = audio_support_refusal(_family, prompt_surface.surface)
+        if _audio_refusal is not None:
+            _mark(Step.REFUSE, _audio_refusal)
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={"exit": EXIT_REFUSE, "audio_column": AUDIO_COLUMN},
+            )
+            return EXIT_REFUSE
     _dormant_towers = _dormant_modality_towers(
-        model, family=_family, image_declared=IMAGE_COLUMN is not None
+        model,
+        family=_family,
+        image_declared=IMAGE_COLUMN is not None,
+        audio_declared=AUDIO_COLUMN is not None,
     )
     if _family is None:
         # Deliberately NOT a refusal. Dormancy is unknowable for an unregistered
@@ -5001,7 +5101,8 @@ def _train(cfg: TrainConfig) -> int:
             Step.VALIDATED,
             f"[   ok] modality.dormant_towers: {', '.join(_dormant_towers)} "
             f"present on the checkpoint but not exercised by this run's "
-            f"declaration (image_column={IMAGE_COLUMN!r}); DDP told to expect "
+            f"declaration (image_column={IMAGE_COLUMN!r}, audio_column="
+            f"{AUDIO_COLUMN!r}); DDP told to expect "
             "unused parameters. Their weights are CARRIED, not trained",
         )
     # The declared precision is wired into the flags EXPLICITLY (1b). fp32 sets
@@ -5402,6 +5503,24 @@ def _train(cfg: TrainConfig) -> int:
         # Trainer's default strips dataset columns its model signature does
         # not name -- with this collator the raw image column must SURVIVE to
         # collate time, so the stripping is disabled for the image arm only.
+        kwargs["remove_unused_columns"] = False
+    if AUDIO_COLUMN is not None:
+        from foundationscale.train.audio import (  # noqa: PLC0415
+            refuse_if_audio_features_dropped,
+            train_audio_collator_or_refuse,
+        )
+
+        data_collator = train_audio_collator_or_refuse(
+            prompt_surface,
+            audio_column=AUDIO_COLUMN,
+            max_length=cfg.max_sequence_length,
+        )
+        # The image arm's POSITIVE survival proof, for audio: collate real rows
+        # before a step is paid for, and refuse (96) -- naming the column -- if
+        # input_features is not in the batch the model would receive.
+        probe_rows = [tokenized[i] for i in range(min(2, len(tokenized)))]
+        refuse_if_audio_features_dropped(data_collator(probe_rows).keys(), AUDIO_COLUMN)
+        # Same reason as images: the raw audio column must survive to collate time.
         kwargs["remove_unused_columns"] = False
     try:
         args = _TrainingArguments(**kwargs)
