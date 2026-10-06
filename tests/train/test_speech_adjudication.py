@@ -161,30 +161,34 @@ def test_vision_moved_while_dormant_is_red() -> None:
     assert res.blocking
 
 
-def test_adapter_skips_movement_and_is_unmeasured_only_when_gates_pass() -> None:
-    """MUST_FIRE — adapter run refuses the measurement but coverage must still adjudicate first."""
-    res = adjudicate_speech(
+def test_adapter_judges_exercised_towers_and_marks_the_dormant_control_not_applicable() -> None:
+    """MUST_PASS/MUST_FIRE — an adapter run still proves the audio tower moved.
+
+    peft freezes every non-target parameter and the adapter save carries only what
+    trained, so the dormant control is NOT_APPLICABLE (a note, no exit effect) while
+    the exercised tower is judged as in a full fine-tune.
+    """
+    moved = adjudicate_speech(
         coverage_manifest=_healthy_manifest(),
         base_digests={"audio.tower.w": "float32:aa"},
         saved_digests={"audio.tower.w": "float32:bb"},
-        towers=[("audio.tower", True)],
+        towers=[("vision.proj", False), ("audio.tower", True)],
         adapter="lora",
     )
-    assert res.exit_code == EXIT_UNMEASURED
-    assert len(res.unmeasured) == 1
-    assert "NOT_ESTABLISHED" in res.unmeasured[0]
-    assert all(r.gate_id != "speech.tower_movement" for r in res.results)
+    assert moved.exit_code == EXIT_PASS, moved.render_lines()
+    assert [r.gate_id for r in moved.results].count("speech.tower_movement") == 1
+    assert len(moved.notes) == 1 and "NOT_APPLICABLE" in moved.notes[0]
+    assert moved.unmeasured == ()
+    assert any(line.startswith("[n/a] speech:") for line in moved.render_lines())
 
-    bad_manifest = _healthy_manifest()
-    bad_manifest.update(rows_checked=0, placeholder_rows_verified=0, placeholder_rows_unmeasured=0)
-    bad = adjudicate_speech(
-        coverage_manifest=bad_manifest,
+    frozen = adjudicate_speech(
+        coverage_manifest=_healthy_manifest(),
         base_digests={"audio.tower.w": "float32:aa"},
-        saved_digests={"audio.tower.w": "float32:bb"},
-        towers=[("audio.tower", True)],
+        saved_digests={"audio.tower.w": "float32:aa"},
+        towers=[("vision.proj", False), ("audio.tower", True)],
         adapter="lora",
     )
-    assert bad.exit_code == EXIT_RED
+    assert frozen.exit_code == EXIT_RED, "an adapter run that froze the audio tower must fail"
 
 
 def test_dtype_mismatch_is_unmeasured_not_movement() -> None:
@@ -236,18 +240,20 @@ def test_render_lines_and_manifest_shapes() -> None:
         adapter=None,
     )
     manifest = res.as_manifest()
-    assert set(manifest) == {"gates", "unmeasured"}
+    assert set(manifest) == {"gates", "unmeasured", "notes"}
     assert len(manifest["gates"]) == 2
     assert isinstance(manifest["unmeasured"], list)
     for g in manifest["gates"]:
         assert set(g) == {"gate_id", "verdict", "checked", "expected", "unit", "detail"}
         assert isinstance(g["verdict"], str)
 
+    # One line per gate, then one per abstention (an unprinted abstention is a gap).
     lines = res.render_lines()
-    assert len(lines) == len(manifest["gates"])
-    for line, row in zip(lines, manifest["gates"], strict=True):
+    gate_lines, rest = lines[: len(manifest["gates"])], lines[len(manifest["gates"]) :]
+    for line, row in zip(gate_lines, manifest["gates"], strict=True):
         assert row["gate_id"] in line
         assert f"{row['checked']}/{row['expected']}" in line
+    assert rest == [f"[UNMEASURED] speech: {reason}" for reason in manifest["unmeasured"]]
 
 
 def test_fold_red_outranks_pass_and_unmeasured_moves_only_pass() -> None:
@@ -264,8 +270,8 @@ def test_fold_red_outranks_pass_and_unmeasured_moves_only_pass() -> None:
     assert fold_speech_verdict(EXIT_PASS, "PASS", EXIT_PASS) == (EXIT_PASS, "PASS")
 
 
-def test_capture_judges_every_modality_tower_and_skips_digests_for_adapters() -> None:
-    """MUST_PASS — audio towers exercised, the rest the dormant control; adapters get none."""
+def test_capture_judges_every_modality_tower() -> None:
+    """MUST_PASS — audio towers exercised, the rest the dormant control."""
     from types import SimpleNamespace
 
     from foundationscale.train.speech_adjudication import capture_speech_inputs
@@ -277,12 +283,28 @@ def test_capture_judges_every_modality_tower_and_skips_digests_for_adapters() ->
         calls.append(1)
         return [("m.audio.w", _bf16_tensor(seed=1)), ("m.vision.w", _bf16_tensor(seed=2))]
 
-    towers, base = capture_speech_inputs(family, items, None)
+    towers, base = capture_speech_inputs(family, items)
     assert towers == [("m.vision", False), ("m.audio", True)]
     assert base is not None and set(base) == {"m.audio.w", "m.vision.w"}
-    towers, base = capture_speech_inputs(family, items, "lora")
-    assert base is None and len(calls) == 1, "an adapter run must not walk the state dict"
-    assert capture_speech_inputs(None, items, None) == ([], None)
+    assert capture_speech_inputs(None, items) == ([], None)
+
+
+def test_peft_names_canonicalise_to_the_base_names() -> None:
+    """MUST_PASS — measured peft 0.18.1 spellings map back to the loaded names."""
+    from foundationscale.train.speech_adjudication import (
+        canonical_param_name,
+        digests_from_named_tensors,
+    )
+
+    assert canonical_param_name("base_model.model.m.audio.w") == "m.audio.w"
+    assert canonical_param_name("base_model.model.m.audio.original_module.w") == "m.audio.w"
+    assert canonical_param_name("base_model.model.m.audio.modules_to_save.default.w") is None
+    assert canonical_param_name("m.audio.w") == "m.audio.w"
+    wrapped = [
+        ("base_model.model.m.audio.original_module.w", _bf16_tensor(seed=1)),
+        ("base_model.model.m.audio.modules_to_save.default.w", _bf16_tensor(seed=1)),
+    ]
+    assert set(digests_from_named_tensors(wrapped, ["m.audio"])) == {"m.audio.w"}
 
 
 def test_final_adjudication_reads_the_save_and_abstains_without_safetensors(
@@ -317,3 +339,53 @@ def test_final_adjudication_reads_the_save_and_abstains_without_safetensors(
     assert ok.exit_code == EXIT_PASS, ok.render_lines()
     dcp = run_final_speech_adjudication(final_dir=tmp_path, has_safetensors=False, **kwargs)
     assert dcp.exit_code == EXIT_UNMEASURED
+
+
+def test_reading_a_missing_save_directory_raises_rather_than_reading_nothing(
+    tmp_path: Path,
+) -> None:
+    """MUST_FIRE — a lost checkpoint must not read as "nothing to compare"."""
+    import pytest
+
+    from foundationscale.train.speech_adjudication import digests_from_safetensors_dir
+
+    with pytest.raises(FileNotFoundError):
+        digests_from_safetensors_dir(tmp_path / "absent", ["m.audio"])
+
+
+def test_saved_modules_to_save_copies_are_skipped_and_peft_names_canonicalised(
+    tmp_path: Path,
+) -> None:
+    """MUST_PASS — an adapter save is read under the base names, each parameter once."""
+    from safetensors.torch import save_file
+
+    from foundationscale.train.speech_adjudication import digests_from_safetensors_dir
+
+    save_file(
+        {
+            "base_model.model.m.audio.w": _bf16_tensor(seed=1),
+            "base_model.model.m.audio.modules_to_save.default.w": _bf16_tensor(seed=2),
+        },
+        str(tmp_path / "adapter_model.safetensors"),
+    )
+    assert set(digests_from_safetensors_dir(tmp_path, ["m.audio"])) == {"m.audio.w"}
+
+
+def test_capture_with_no_modality_towers_takes_no_digests() -> None:
+    """MUST_PASS — a family with only out-of-scope towers has nothing to judge."""
+    from types import SimpleNamespace
+
+    from foundationscale.train.speech_adjudication import capture_speech_inputs
+
+    family = SimpleNamespace(towers=(("mtp", None),))
+    assert capture_speech_inputs(family, lambda: []) == ([], None)
+
+
+def test_dtype_tag_keeps_a_non_torch_dtype_name_verbatim() -> None:
+    """MUST_PASS — only the "torch." prefix is dropped from the tag."""
+    from types import SimpleNamespace
+
+    from foundationscale.train.speech_adjudication import _dtype_name
+
+    assert _dtype_name(SimpleNamespace(dtype="float8_e4m3")) == "float8_e4m3"
+    assert _dtype_name(_bf16_tensor(seed=0)) == "bfloat16"

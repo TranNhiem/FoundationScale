@@ -221,3 +221,17 @@ def test_unregistered_family_yields_no_dormancy_claim() -> None:
     assert (
         _dormant_modality_towers(_Nested(visual=_Leaf()), family=None, image_declared=False) == []
     )
+
+
+def test_adapter_full_train_outside_every_modality_tower_is_rejected() -> None:
+    """A full-train module must belong to a modality tower; anything else is a typo or a leak."""
+    with pytest.raises(ValueError, match="adapter_full_train"):
+        FamilySpec(
+            name="stray",
+            model_types=("stray",),
+            language_prefixes=("model.language_model",),
+            towers=(("model.audio_tower", "audio"), ("mtp", None)),
+            adapter_leaf_modules=("q_proj",),
+            expert_count_path=(),
+            adapter_full_train=("mtp.head",),
+        )

@@ -620,3 +620,22 @@ def test_reset_zeroes_every_count_and_keeps_the_object() -> None:
     cov.reset()
     assert same is cov
     assert cov.as_manifest() == AudioCoverage(rows_expected=0).as_manifest()
+
+
+def test_full_train_modules_come_from_the_family_and_only_from_audio_towers() -> None:
+    """The measured declaration is used as-is; another modality's modules are not audio's."""
+    from foundationscale.families.registry import REGISTRY
+    from foundationscale.train.audio import audio_full_train_modules
+
+    gemma4 = next(spec for spec in REGISTRY if spec.name == "gemma4")
+    assert audio_full_train_modules(gemma4) == [
+        "model.audio_tower",
+        "model.embed_audio.embedding_projection",
+    ]
+    mixed = SimpleNamespace(
+        towers=(("v.tower", "image"), ("a.tower", "audio")),
+        adapter_full_train=("v.tower", "a.tower.proj"),
+    )
+    assert audio_full_train_modules(mixed) == ["a.tower.proj"]
+    assert audio_full_train_modules(SimpleNamespace(towers=(("a.tower", "audio"),))) == []
+    assert audio_full_train_modules(None) == []

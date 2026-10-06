@@ -90,6 +90,27 @@ def _digest_dtype(digest: str) -> str:
     return digest.split(":", 1)[0]
 
 
+_PEFT_ROOT = "base_model.model."
+
+
+def canonical_param_name(name: str) -> str | None:
+    """The base-model name for a parameter, through peft's wrapping; None for a trainable copy.
+
+    Measured on peft 0.18.1 with ``modules_to_save``: the wrapped model names the
+    frozen original ``base_model.model.<name with .original_module inserted>`` and the
+    trainable copy ``...modules_to_save.default...``, and ``save_pretrained`` writes the
+    copy as plain ``base_model.model.<name>``. Mapping all of them back to ``<name>``
+    is what lets an adapter run's save be compared with the model as loaded. The copy
+    is skipped at capture time (it is byte-identical to the original until training
+    starts), so each base name is digested exactly once.
+    """
+    if ".modules_to_save." in name:
+        return None
+    if name.startswith(_PEFT_ROOT):
+        name = name[len(_PEFT_ROOT) :]
+    return name.replace(".original_module.", ".")
+
+
 def _under_prefixes(name: str, prefixes: Sequence[str]) -> bool:
     """True when ``name`` sits under some prefix as a whole dotted segment.
 
@@ -114,8 +135,9 @@ def digests_from_named_tensors(
     sides must name parameters identically.
     """
     out: dict[str, str] = {}
-    for name, value in named:
-        if _under_prefixes(name, prefixes):
+    for raw, value in named:
+        name = canonical_param_name(raw)
+        if name is not None and _under_prefixes(name, prefixes):
             out[name] = tensor_digest(value)
     return out
 
@@ -153,16 +175,22 @@ def digests_from_safetensors_dir(
     for path in sorted(directory.glob("*.safetensors")):
         with safetensors.safe_open(str(path), framework="pt") as shard:
             for key in sorted(shard.keys()):
-                previous = first_seen.get(key)
+                # Keyed on the CANONICAL name, so a full save and an adapter save
+                # both carrying one parameter (under two spellings) is caught as
+                # the ambiguity it is, not silently resolved by file order.
+                name = canonical_param_name(key)
+                if name is None:
+                    continue
+                previous = first_seen.get(name)
                 if previous is not None:
                     raise ValueError(
-                        f"ambiguous shard layout: {key!r} is present in both "
+                        f"ambiguous shard layout: {name!r} is present in both "
                         f"{previous!r} and {path.name!r} — a key living in two "
                         "shards has no single digest"
                     )
-                first_seen[key] = path.name
-                if _under_prefixes(key, prefixes):
-                    out[key] = tensor_digest(shard.get_tensor(key))
+                first_seen[name] = path.name
+                if _under_prefixes(name, prefixes):
+                    out[name] = tensor_digest(shard.get_tensor(key))
     return out
 
 
@@ -209,6 +237,10 @@ class SpeechAdjudication:
 
     results: tuple[GateResult, ...]
     unmeasured: tuple[str, ...] = ()
+    # NOT_APPLICABLE abstentions: checks that cannot apply to this run by
+    # construction (they leave the denominator and do not move the exit code),
+    # recorded so the reader sees what was not checked and why.
+    notes: tuple[str, ...] = ()
 
     @property
     def blocking(self) -> bool:
@@ -247,7 +279,7 @@ class SpeechAdjudication:
             }
             for r in self.results
         ]
-        return {"gates": gates, "unmeasured": list(self.unmeasured)}
+        return {"gates": gates, "unmeasured": list(self.unmeasured), "notes": list(self.notes)}
 
     def render_lines(self) -> list[str]:
         """One line per gate result:
@@ -267,6 +299,10 @@ class SpeechAdjudication:
                 f"{r.coverage.checked}/{r.coverage.expected} {r.coverage.unit} "
                 f"-- {r.detail}"
             )
+        # An abstention nobody prints is a gap in the record: each unmeasured
+        # reason and each NOT_APPLICABLE note gets its own line.
+        lines.extend(f"[UNMEASURED] speech: {reason}" for reason in self.unmeasured)
+        lines.extend(f"[n/a] speech: {note}" for note in self.notes)
         return lines
 
 
@@ -343,13 +379,22 @@ def adjudicate_speech(
         )
     )
 
+    notes: list[str] = []
     if adapter is not None:
-        unmeasured.append(
-            "adapter run: the saved checkpoint carries adapter weights, so "
-            "base-vs-saved tower digests are not comparable (tower movement is "
-            "NOT_ESTABLISHED)"
-        )
-    elif base_digests is None or saved_digests is None:
+        # An adapter run saves only what trained: the adapter and the
+        # modules_to_save copies of the exercised towers. peft freezes every other
+        # parameter by construction, so the dormant-tower control cannot fail and
+        # the frozen towers are not in the save to compare -- NOT_APPLICABLE, not
+        # unmeasured. The exercised towers are still judged.
+        dormant = [prefix for prefix, exercised in towers if not exercised]
+        towers = [(prefix, exercised) for prefix, exercised in towers if exercised]
+        if dormant:
+            notes.append(
+                f"adapter run: dormant-tower control for {', '.join(dormant)} is "
+                "NOT_APPLICABLE -- peft freezes every non-target parameter by "
+                "construction, and the adapter checkpoint does not carry frozen towers"
+            )
+    if base_digests is None or saved_digests is None:
         # Names the absent side so the operator knows which half of the pair to
         # rebuild — "digests unavailable" alone does not say what to fix.
         missing = [
@@ -392,7 +437,9 @@ def adjudicate_speech(
                     )
                 )
 
-    return SpeechAdjudication(results=tuple(results), unmeasured=tuple(unmeasured))
+    return SpeechAdjudication(
+        results=tuple(results), unmeasured=tuple(unmeasured), notes=tuple(notes)
+    )
 
 
 SUPERSEDE_NOTE = (
@@ -402,20 +449,20 @@ SUPERSEDE_NOTE = (
 
 
 def capture_speech_inputs(
-    family: Any, state_items: Callable[[], Iterable[tuple[str, Any]]], adapter: str | None
+    family: Any, state_items: Callable[[], Iterable[tuple[str, Any]]]
 ) -> tuple[list[tuple[str, bool]], dict[str, str] | None]:
     """The towers to judge and their as-loaded digests, taken BEFORE a step is run.
 
     Every modality tower the family declares is judged: the audio ones as exercised,
     the rest as the dormant negative control. ``state_items`` is called only when a
     digest is needed (it is ``model.state_dict().items`` in the plane, and walking it
-    is not free). An adapter run gets no base digests: its save carries adapter
-    weights, so the comparison would not be like for like.
+    is not free). Adapter runs are digested too: names are canonicalised through
+    peft's wrapping (:func:`canonical_param_name`), so they compare with the save.
     """
     if family is None:
         return [], None
     towers = [(prefix, modality == "audio") for prefix, modality in family.towers if modality]
-    if adapter is not None or not towers:
+    if not towers:
         return towers, None
     return towers, digests_from_named_tensors(state_items(), [prefix for prefix, _ in towers])
 
@@ -436,7 +483,7 @@ def run_final_speech_adjudication(
     """
     saved = (
         digests_from_safetensors_dir(final_dir, [prefix for prefix, _ in towers])
-        if has_safetensors and adapter is None and towers
+        if has_safetensors and towers
         else None
     )
     return adjudicate_speech(

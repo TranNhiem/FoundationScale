@@ -96,6 +96,18 @@ class FamilySpec:
     model that has 128 experts and silently concludes the model is dense. May be
     empty for a family that never declares experts."""
 
+    adapter_full_train: tuple[str, ...] = ()
+    """Modules trained IN FULL under an adapter (peft ``modules_to_save``) when their
+    tower's modality is declared -- the speech plane trains the audio tower in full and
+    LoRA on the language model. Each entry must sit under a modality tower AND be a
+    module the family calls with a POSITIONAL input: peft 0.18.1's modules_to_save
+    wrapper forwards exactly one positional argument, and a keyword call fails with
+    ``forward() missing 1 required positional argument: 'x'`` (measured on GB200 for
+    Gemma-4, whose audio projector root and audio attention are both called by
+    keyword). Which modules qualify is therefore a measured property of the family,
+    not derivable from the module tree. Empty means not measured: an adapter run that
+    declares the modality refuses rather than guessing."""
+
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("FamilySpec.name must be non-empty")
@@ -124,6 +136,14 @@ class FamilySpec:
                     f"modality {modality!r}; known modalities are "
                     f"{sorted(KNOWN_MODALITIES)}. Use None for a submodule that is "
                     "merely out of adapter scope rather than exercised by a modality"
+                )
+        modality_towers = [prefix for prefix, modality in self.towers if modality]
+        for module in self.adapter_full_train:
+            if not any(module == t or module.startswith(t + ".") for t in modality_towers):
+                raise ValueError(
+                    f"FamilySpec {self.name!r} declares adapter_full_train module "
+                    f"{module!r} outside every modality tower {modality_towers}: only a "
+                    "tower's own modules can be trained in full for its modality"
                 )
         # A language prefix that is a prefix of a tower prefix (or the reverse)
         # makes scoping ambiguous: a module could be simultaneously in and out of
@@ -178,6 +198,10 @@ REGISTRY: tuple[FamilySpec, ...] = (
             # and the tower-movement gate alike.
             ("model.embed_audio", "audio"),
         ),
+        # Measured on GB200 (peft 0.18.1): the audio tower root is called
+        # positionally, embed_audio by keyword -- so its one parameter-owning
+        # child is the wrap point.
+        adapter_full_train=("model.audio_tower", "model.embed_audio.embedding_projection"),
         adapter_leaf_modules=(
             "q_proj",
             "k_proj",

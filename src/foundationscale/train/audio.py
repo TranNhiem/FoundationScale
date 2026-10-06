@@ -959,3 +959,20 @@ def train_audio_collator_or_refuse(
     # implementation details.
     collate.coverage = coverage  # type: ignore[attr-defined]
     return collate  # type: ignore[return-value]
+
+
+def audio_full_train_modules(family: Any) -> list[str]:
+    """The family's measured full-train modules that belong to its AUDIO towers.
+
+    Read from ``FamilySpec.adapter_full_train`` (see its docstring for why this is a
+    measured, per-family declaration). An empty result means the family has not
+    measured it, and the caller refuses an adapter run that declares audio.
+    """
+    if family is None:
+        return []
+    audio_towers = [prefix for prefix, modality in family.towers if modality == "audio"]
+    return [
+        module
+        for module in getattr(family, "adapter_full_train", ())
+        if any(module == t or module.startswith(t + ".") for t in audio_towers)
+    ]

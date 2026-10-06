@@ -4905,6 +4905,45 @@ def _train(cfg: TrainConfig) -> int:
                 )
                 return EXIT_REFUSE
             lora_config["target_modules"] = list(plan.targets)
+            if AUDIO_COLUMN is not None:
+                # Speech plane: LoRA on the language model, the audio towers trained
+                # IN FULL (peft modules_to_save) -- the SALM shape. Without this peft
+                # freezes every non-target parameter, and a declared audio column
+                # would train a run whose audio tower never moved. Which modules can
+                # be wrapped is the family's MEASURED declaration (FamilySpec.
+                # adapter_full_train); none declared refuses rather than guesses.
+                from foundationscale.train.audio import (  # noqa: PLC0415
+                    audio_full_train_modules,
+                )
+
+                _full_train = audio_full_train_modules(
+                    resolve_family(_family_config_mapping(model))
+                )
+                if not _full_train:
+                    _mark(
+                        Step.REFUSE,
+                        f"adapter='lora' with audio_column={AUDIO_COLUMN!r}: this family "
+                        "declares no adapter_full_train modules for its audio towers, so "
+                        "an adapter run cannot train them (peft would freeze them). Run a "
+                        "full fine-tune, or measure and register the family's wrap points",
+                    )
+                    _emit_manifest(
+                        cfg,
+                        stage="refused",
+                        extra={
+                            "exit": EXIT_REFUSE,
+                            "adapter": "lora",
+                            "audio_column": AUDIO_COLUMN,
+                        },
+                    )
+                    return EXIT_REFUSE
+                lora_config["modules_to_save"] = _full_train
+                _mark(
+                    Step.ADAPTER,
+                    f"adapter='lora' with audio_column={AUDIO_COLUMN!r}: "
+                    f"{', '.join(_full_train)} train in full (peft modules_to_save); "
+                    "LoRA covers the language model",
+                )
             if cfg.adapter_dropout is not None:
                 lora_config["lora_dropout"] = cfg.adapter_dropout
             try:
@@ -5087,7 +5126,7 @@ def _train(cfg: TrainConfig) -> int:
         )
 
         _speech_towers, _speech_base_digests = capture_speech_inputs(
-            _family, lambda: model.state_dict().items(), cfg.adapter
+            _family, lambda: model.state_dict().items()
         )
     _dormant_towers = _dormant_modality_towers(
         model,
