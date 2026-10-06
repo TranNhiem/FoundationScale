@@ -271,6 +271,11 @@ Exit criteria (falsifiable): AudioTowerMovementGate reads greater than 0 moved t
 
 Files touched: `docs/research/evidence/speech-p3-asr-sft.json` (new); `docs/VERIFICATION_MATRIX.md` (0 of 751 row gains its positive control sibling); `docs/STATUS.md`; run config consumed by `src/foundationscale/train/loop.py` (env `FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN` and `speech` extra). No source change expected; any source change here reopens phase sign-off.
 
+Status (2026-10-06): **P1 and P2 DONE** (`validation_campaigns/speech_p1`, `speech_p2`, `speech_t4`).
+**P3 DONE, PASS**: held-out dev-clean WER 3.83% base -> 2.42% full fine-tune / 2.73% LoRA
+(`validation_campaigns/speech_p3`). P3 also found and fixed a framework defect: HF `Trainer()` sets
+`use_cache=False`, which corrupts the training forward of KV-sharing models (Gemma-4-E4B).
+
 ### P4, more families and Lane B
 
 Goal: generalize Lane A and open Lane B.
