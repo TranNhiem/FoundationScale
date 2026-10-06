@@ -243,8 +243,12 @@ REGISTRY: tuple[FamilySpec, ...] = (
     ),
     # Speech families (P4). Module names measured on the real checkpoints with
     # transformers 5.5 (whisper-large-v3, parakeet-ctc-1.1b, Qwen2-Audio-7B-Instruct).
-    # adapter_full_train is left EMPTY on all three: their LoRA wrap points are not
-    # measured yet, so an adapter run that declares audio refuses rather than guesses.
+    # adapter_full_train: whisper and qwen2_audio call their audio modules with a
+    # positional input (modeling_whisper `self.encoder(input_features, ...)`,
+    # modeling_qwen2_audio `self.audio_tower(input_features, ...)` /
+    # `self.multi_modal_projector(feature)`), so the roots are the wrap points --
+    # confirmed by LoRA runs on GB200 (validation_campaigns/speech_p5). parakeet_ctc
+    # stays EMPTY (not measured): an adapter run that declares audio refuses.
     FamilySpec(
         name="whisper",
         model_types=("whisper",),
@@ -253,6 +257,7 @@ REGISTRY: tuple[FamilySpec, ...] = (
         towers=(("model.encoder", "audio"),),
         adapter_leaf_modules=("q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"),
         expert_count_path=(),
+        adapter_full_train=("model.encoder",),
     ),
     FamilySpec(
         name="parakeet_ctc",
@@ -280,6 +285,7 @@ REGISTRY: tuple[FamilySpec, ...] = (
             "down_proj",
         ),
         expert_count_path=("text_config", "num_experts"),
+        adapter_full_train=("audio_tower", "multi_modal_projector"),
     ),
 )
 

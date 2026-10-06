@@ -639,3 +639,28 @@ def test_full_train_modules_come_from_the_family_and_only_from_audio_towers() ->
     assert audio_full_train_modules(mixed) == ["a.tower.proj"]
     assert audio_full_train_modules(SimpleNamespace(towers=(("a.tower", "audio"),))) == []
     assert audio_full_train_modules(None) == []
+
+
+def test_full_train_modules_for_the_measured_speech_families() -> None:
+    """Whisper and Qwen2-Audio wrap their audio roots; Parakeet is unmeasured (refuses)."""
+    from foundationscale.families.registry import REGISTRY
+    from foundationscale.train.audio import audio_full_train_modules
+
+    by_name = {spec.name: spec for spec in REGISTRY}
+    assert audio_full_train_modules(by_name["whisper"]) == ["model.encoder"]
+    assert audio_full_train_modules(by_name["qwen2_audio"]) == [
+        "audio_tower",
+        "multi_modal_projector",
+    ]
+    assert audio_full_train_modules(by_name["parakeet_ctc"]) == []
+
+
+def test_qwen2_audio_placeholder_formula_matches_the_processor() -> None:
+    """The copied formula: frames -> stride-2 conv -> stride-2 pool (transformers 5.5)."""
+    from foundationscale.train.audio import _MASK_LENGTH_TOKEN_FORMULAS, _qwen2_audio_tokens
+
+    assert _MASK_LENGTH_TOKEN_FORMULAS["Qwen2AudioProcessor"] is _qwen2_audio_tokens
+    # 3000 frames (a full 30 s window) -> 1500 after the conv -> 750 tokens.
+    assert _qwen2_audio_tokens(3000) == 750
+    assert _qwen2_audio_tokens(1001) == 250  # 1001 -> 501 -> 250
+    assert _qwen2_audio_tokens(1) == 0  # (1 - 2) // 2 floors to -1

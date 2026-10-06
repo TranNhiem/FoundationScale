@@ -872,6 +872,22 @@ def _audio_refuse_exit_96(message: str) -> None:
     raise SystemExit(96)
 
 
+def _qwen2_audio_tokens(mask_length: int) -> int:
+    """Audio tokens Qwen2AudioProcessor inserts for a clip with ``mask_length`` feature frames.
+
+    Copied from transformers 5.5 processing_qwen2_audio.py, where it decides how many
+    ``<|AUDIO|>`` tokens to expand: a conv stride of 2 then a pooling stride of 2.
+    """
+    input_length = (mask_length - 1) // 2 + 1
+    return (input_length - 2) // 2 + 1
+
+
+# Processors that expose no per-clip count helper but expand placeholders by a fixed
+# formula over the batch's feature attention mask. A DECLARED table, keyed by
+# processor class: a family not listed here keeps the honest UNMEASURED abstention.
+_MASK_LENGTH_TOKEN_FORMULAS: dict[str, Any] = {"Qwen2AudioProcessor": _qwen2_audio_tokens}
+
+
 def resolve_audio_surface(model_id: str) -> Any:
     """The processor surface for a declared audio column; AutoProcessor is REQUIRED.
 
@@ -1155,15 +1171,28 @@ def train_audio_collator_or_refuse(
         # coverage record -- not skipped silently and not reported as a pass.
         expected_count_fn: Any = getattr(processor, "_compute_audio_num_tokens", None)
         callable_expected = callable(expected_count_fn)
+        mask_formula = _MASK_LENGTH_TOKEN_FORMULAS.get(type(processor).__name__)
+        feature_mask = full_batch.get("feature_attention_mask")
+        mask_lengths = (
+            [int(v) for v in feature_mask.sum(-1).tolist()]
+            if mask_formula is not None and feature_mask is not None
+            else None
+        )
         for index, wave in enumerate(waves):
             row_id = f"train-row[{index}]"
             actual = int((input_ids[index] == audio_token_id).sum())
-            if not callable_expected:
+            if callable_expected:
+                # Signature measured on transformers 5.5.0 (processing_gemma4.py):
+                # _compute_audio_num_tokens(audio_waveform, sampling_rate) -> int.
+                expected = int(
+                    expected_count_fn(wave, int(processor.feature_extractor.sampling_rate))
+                )
+            elif mask_formula is not None and mask_lengths is not None:
+                # The processor's own expansion formula over this batch's feature mask.
+                expected = mask_formula(mask_lengths[index])
+            else:
                 coverage.add_placeholder_unmeasured()
                 continue
-            # Signature measured on transformers 5.5.0 (processing_gemma4.py):
-            # _compute_audio_num_tokens(audio_waveform, sampling_rate) -> int.
-            expected = int(expected_count_fn(wave, int(processor.feature_extractor.sampling_rate)))
             if actual != expected:
                 _audio_refuse_exit_96(
                     f"audio column {audio_column!r} row {row_id!r}: "
