@@ -558,6 +558,22 @@ def _text_column_or_none(split: Any) -> Sequence[str] | None:
     return column
 
 
+def _kv_shared_layer_count(config: Any) -> int:
+    """How many decoder layers reuse another layer's key/value states, from the config.
+
+    Measured on GB200 with Gemma-4-E4B (``num_kv_shared_layers=18`` of 42): the forward
+    pass is only correct with ``use_cache`` on. With ``config.use_cache=False`` -- which
+    ``transformers.Trainer.__init__`` sets, as a memory saving -- the loss on a batch the
+    model transcribes at ~4% WER rose from 0.912 to 13.941, so every training step
+    optimised a corrupted forward while generation (which re-enables the cache) looked
+    healthy. A non-int or absent field reads as 0: no sharing declared.
+    """
+    get_text = getattr(config, "get_text_config", None)
+    text = get_text() if callable(get_text) else config
+    value = getattr(text, "num_kv_shared_layers", 0)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
 def _audio_declaration_conflict(
     *, audio_column: str | None, image_column: str | None, cp: int
 ) -> str | None:
@@ -5196,6 +5212,22 @@ def _train(cfg: TrainConfig) -> int:
         kwargs["gradient_accumulation_steps"] = cfg.gradient_accumulation_steps
     if cfg.max_grad_norm is not None:
         kwargs["max_grad_norm"] = cfg.max_grad_norm
+    if cfg.gradient_checkpointing and _kv_shared_layer_count(getattr(model, "config", None)):
+        # HF turns the cache off under gradient checkpointing, and a KV-sharing
+        # model's forward is only correct with it on (_kv_shared_layer_count).
+        # Refuse rather than train a corrupted forward that still looks healthy.
+        _mark(
+            Step.REFUSE,
+            "gradient_checkpointing=True on a model whose decoder layers share "
+            "key/value states: checkpointing disables the cache, and this forward is "
+            "only correct with it on. Refusing (96); train without checkpointing",
+        )
+        _emit_manifest(
+            cfg,
+            stage="refused",
+            extra={"exit": EXIT_REFUSE, "gradient_checkpointing": True},
+        )
+        return EXIT_REFUSE
     if cfg.gradient_checkpointing is not None:
         kwargs["gradient_checkpointing"] = cfg.gradient_checkpointing
     if cfg.lr_scheduler_type is not None:
@@ -5729,6 +5761,20 @@ def _train(cfg: TrainConfig) -> int:
             data_collator=data_collator,
             callbacks=callbacks,
         )
+        # Trainer.__init__ just set config.use_cache=False. On a KV-sharing model
+        # that corrupts the training forward (see _kv_shared_layer_count), so the
+        # cache is pinned back on here, AFTER the constructor that turned it off.
+        _kv_shared = _kv_shared_layer_count(getattr(model, "config", None))
+        if _kv_shared:
+            model.config.use_cache = True
+            _text_config = model.config.get_text_config()
+            _text_config.use_cache = True
+            _mark(
+                Step.VALIDATED,
+                f"[   ok] kv_sharing: {_kv_shared} decoder layer(s) reuse another layer's "
+                "key/value states, and the forward is only correct with the cache on; "
+                "Trainer() had set use_cache=False, pinned back to True",
+            )
     except ImportError as exc:
         missing = getattr(exc, "name", None) or str(exc)
         _mark(

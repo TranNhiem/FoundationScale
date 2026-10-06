@@ -37,6 +37,7 @@ from typing import Any
 import pytest
 import torch
 
+from foundationscale.train import loop
 from foundationscale.train.loop import (
     EXIT_RED,
     EXIT_REFUSE,
@@ -456,3 +457,54 @@ def test_no_modalities_declared_is_not_refused_for_audio(
                     f"wanted the control run's manifest to carry NO audio "
                     f"refusal language, but found {needle!r} in:\n{text}"
                 )
+
+
+# --- KV sharing (Gemma-4 E-series): the forward needs the cache on -------------------
+
+
+def test_kv_shared_layer_count_reads_the_text_config() -> None:
+    """MUST_PASS/MUST_FIRE: declared sharing is read through get_text_config; junk reads 0."""
+    from types import SimpleNamespace
+
+    text = SimpleNamespace(num_kv_shared_layers=18)
+    composite = SimpleNamespace(get_text_config=lambda: text)
+    assert loop._kv_shared_layer_count(composite) == 18
+    assert loop._kv_shared_layer_count(SimpleNamespace(num_kv_shared_layers=3)) == 3
+    for value in (0, None, True, "18", -2):
+        assert loop._kv_shared_layer_count(SimpleNamespace(num_kv_shared_layers=value)) == 0
+    assert loop._kv_shared_layer_count(None) == 0
+
+
+def test_gradient_checkpointing_on_a_kv_shared_model_refuses(
+    cfg: TrainConfig, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """MUST_FIRE: checkpointing turns the cache off, which corrupts a KV-shared forward."""
+    monkeypatch.delenv(_IMAGE_ENV, raising=False)
+    monkeypatch.delenv(_AUDIO_ENV, raising=False)
+    monkeypatch.setattr(loop, "_kv_shared_layer_count", lambda config: 2)
+    verdict = train(dataclasses.replace(cfg, gradient_checkpointing=True))
+    assert verdict == EXIT_REFUSE
+    assert "share key/value states" in capsys.readouterr().out
+
+
+def test_kv_shared_model_gets_use_cache_pinned_back_on_after_trainer_init(
+    cfg: TrainConfig, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """MUST_PASS: Trainer() sets use_cache=False; a KV-shared model trains with it True."""
+    from transformers import Trainer as _Trainer
+
+    monkeypatch.delenv(_IMAGE_ENV, raising=False)
+    monkeypatch.delenv(_AUDIO_ENV, raising=False)
+    monkeypatch.setattr(loop, "_kv_shared_layer_count", lambda config: 2)
+    seen: list[object] = []
+    original_train = _Trainer.train
+
+    def spy_train(self: Any, *a: Any, **kw: Any) -> Any:
+        seen.append(self.model.config.use_cache)
+        return original_train(self, *a, **kw)
+
+    monkeypatch.setattr(_Trainer, "train", spy_train)
+    verdict = train(cfg)
+    assert verdict != EXIT_REFUSE
+    assert seen == [True], f"use_cache when training started: {seen}"
+    assert "kv_sharing: 2 decoder layer(s)" in capsys.readouterr().out
