@@ -280,6 +280,11 @@ Status (2026-10-06): **P4 DONE** (`validation_campaigns/speech_p4`): Whisper-lar
 and Qwen2-Audio-7B train through `train()` via model-kind dispatch (`train/speech_kinds.py`); Whisper
 2.13% -> 1.47%, Qwen2-Audio 35.5% -> 1.62%, Parakeet 1.66% -> 1.67% (no headroom in-domain).
 
+Status (2026-10-06): **P5 DONE** (`validation_campaigns/speech_p5`): out-of-domain WER on VoxPopuli,
+AMI and Earnings-22 for all four models (LibriSpeech-only fine-tuning moves OOD WER little; AMI
+improves for all four), LoRA wrap points measured and registered for Whisper and Qwen2-Audio, and a
+real Qwen2-Audio placeholder check (248/248 verified). Canary: design note `speech_canary.md`.
+
 ### P4, more families and Lane B
 
 Goal: generalize Lane A and open Lane B.
