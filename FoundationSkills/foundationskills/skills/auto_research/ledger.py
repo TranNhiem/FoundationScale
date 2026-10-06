@@ -17,7 +17,16 @@ from typing import Any
 
 GENESIS = "0" * 64
 _HASH_FIELDS = ("seq", "ts", "op", "campaign", "trial", "payload_hash", "prev_hash")
-_OPS = ("campaign_approved", "launch_authorised", "trial_result", "campaign_closed")
+_OPS = (
+    "campaign_approved",
+    "launch_envelope",
+    "launch_authorised",
+    "job_submitted",
+    "trial_result",
+    "job_cancelled",
+    "campaign_closed",
+    "claim",
+)
 
 
 def canonical(obj: Any) -> bytes:

@@ -132,6 +132,74 @@ def _check_axis(axis: dict[str, Any]) -> list[tuple[str, str]]:
     return problems
 
 
+# ---- M2 spec shims (AR-IN-007) -------------------------------------------
+#
+# Inline here on purpose: campaign.check_spec owns AR-IN-007 (seeds.py has no spec validator).
+# Inspected: M1's check_spec below covered NO seed fields at all - AR-IN-002 is base,
+# AR-IN-003 is budget, AR-IN-004 is the eval fingerprint, AR-IN-005 is axes - so no existing rule
+# already covers these cases and nothing is left double-reported. Requiredness of seeds.seed_list /
+# seeds.confirm_repeats stays on the AR-IN required-field rule ("required, already").
+
+
+def _check_max_in_flight(spec: dict[str, Any], max_runs: Any) -> list[tuple[str, str]]:
+    """AR-IN-007: ``cluster.max_in_flight`` is optional, but binds as an int >= 1 <= ``budget.max_runs``."""
+    raw_cluster = spec.get("cluster")
+    cluster = dict(raw_cluster) if isinstance(raw_cluster, dict) else {}
+    value = cluster.get("max_in_flight")
+    if value is None:
+        return []  # absent (or None): the cap resolves to cluster.max_nodes downstream
+    if not _is_int(value) or int(value) < 1:
+        return [("AR-IN-007", f"max_in_flight_invalid: cluster.max_in_flight must be an int >= 1 (got {value!r})")]
+    if _is_int(max_runs) and int(value) > int(max_runs):
+        return [
+            ("AR-IN-007", f"max_in_flight_over_max_runs: cluster.max_in_flight {value} > budget.max_runs {max_runs}")
+        ]
+    return []
+
+
+def _check_seeds(spec: dict[str, Any]) -> list[tuple[str, str]]:
+    """AR-IN-007 seed-plan shape: unique-int ``seed_list`` + both repeat counters (values only, see above)."""
+    seeds = spec.get("seeds")
+    if seeds is None:
+        return []  # no seeds block: the AR-IN required-field rule owns the absence
+    if not isinstance(seeds, dict):
+        return [("AR-IN-007", f"seed_plan_invalid: seeds must be an object (got {seeds!r})")]
+    problems: list[tuple[str, str]] = []
+    raw_list = seeds.get("seed_list")
+    if raw_list is not None and not isinstance(raw_list, (list, tuple)):
+        problems.append(
+            ("AR-IN-007", f"seed_list_invalid: seeds.seed_list must be a list of unique ints (got {raw_list!r})")
+        )
+        raw_list = None
+    values = list(raw_list or [])
+    if raw_list is not None and not values:
+        problems.append(("AR-IN-007", "seed_list_empty: seeds.seed_list must be a non-empty list"))
+    junk = [s for s in values if not _is_int(s)]
+    if junk:
+        problems.append(("AR-IN-007", f"seed_list_nonint: seeds.seed_list must hold ints, not bools (got {junk!r})"))
+    ints = [s for s in values if _is_int(s)]
+    dupes = sorted({s for s in ints if ints.count(s) > 1})
+    if dupes:
+        problems.append(("AR-IN-007", f"seed_list_duplicate: seeds.seed_list repeats {dupes}"))
+    confirm = seeds.get("confirm_repeats")
+    if confirm is not None:
+        if not _is_int(confirm) or int(confirm) < 1:
+            problems.append(
+                ("AR-IN-007", f"confirm_repeats_invalid: seeds.confirm_repeats must be an int >= 1 (got {confirm!r})")
+            )
+        elif values and int(confirm) > len(values):
+            problems.append(
+                ("AR-IN-007",
+                 f"confirm_repeats_over_seed_list: seeds.confirm_repeats {confirm} > len(seed_list) {len(values)}")
+            )
+    screening = seeds.get("screening_repeats")
+    if screening is not None and (not _is_int(screening) or int(screening) < 1):
+        problems.append(
+            ("AR-IN-007", f"screening_repeats_invalid: seeds.screening_repeats must be an int >= 1 (got {screening!r})")
+        )
+    return problems
+
+
 def check_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     """(rule_id, message) problems in the campaign spec; [] means the spec is launchable."""
     problems: list[tuple[str, str]] = []
@@ -164,6 +232,19 @@ def check_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     hours, runs = budget.get("gpu_hours_total"), budget.get("max_runs")
     if not _is_num(hours) or float(hours) <= 0 or not _is_int(runs) or int(runs) <= 0:
         problems.append(("AR-IN-003", f"budget.gpu_hours_total/max_runs must be > 0 (got {hours!r}, {runs!r})"))
+    reserve_frac_raw = budget.get("reserve_frac")
+    if reserve_frac_raw is not None:
+        # Present: must be a finite non-bool number strictly in [0, 1). Absent is fine (default 0.3 downstream).
+        frac_ok = (
+            _is_num(reserve_frac_raw)
+            and math.isfinite(float(reserve_frac_raw))
+            and 0.0 <= float(reserve_frac_raw) < 1.0
+        )
+        if not frac_ok:
+            problems.append((
+                "AR-IN-003",
+                f"reserve_frac_out_of_range: budget.reserve_frac must be in [0, 1) (got {reserve_frac_raw!r})",
+            ))
     if not SHA256_REF.match(str(eval_policy.get("fingerprint") or "")):
         problems.append(("AR-IN-004", f"eval_policy.fingerprint malformed: {eval_policy.get('fingerprint')!r}"))
     for axis in (spec.get("axes") or []):
@@ -180,6 +261,9 @@ def check_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     missing = [node for node in EXCLUDED_NODES if node not in excluded]
     if missing:
         problems.append(("AR-LN-004", f"cluster.exclude must contain quarantined node(s) {missing}"))
+    # AR-IN-007 (M2): run-cap and seed-plan shape, in the same (rule_id, message) finding shape.
+    problems.extend(_check_max_in_flight(spec, runs))
+    problems.extend(_check_seeds(spec))
     return problems
 
 
@@ -274,4 +358,60 @@ def check_launch(
         problems.append(
             ("AR-LN-005", f"gpu_hours_est {est} implies {est / slots}h wall time > per_run_timeout_h {timeout}")
         )
+    return problems
+
+
+# ---- rendered/command scan (G2: gate what actually runs) ------------------
+
+_FOLD = re.compile(r"[^\w+\-]+")  # json punctuation and whitespace all read as one separator
+_EXCLUDE_OPTION = re.compile(r"[\w-]*exclude[\w-]*\s*[=:]?\s*\S*", re.IGNORECASE)
+
+
+def _flatten_text(value: Any, out: list[str]) -> None:
+    """Every string leaf of a nested payload (argv lines, sbatch blocks, opaque requests), in order."""
+    if isinstance(value, str):
+        out.append(value)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _flatten_text(item, out)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            _flatten_text(item, out)
+    elif value is not None:
+        out.append(str(value))
+
+
+def scan_command_text(text: str) -> list[tuple[str, str]]:
+    """AR-LN-004 hits over free command text: an argv line, an sbatch body or ``json.dumps(train_request)``.
+
+    The text is separator/JSON-punctuation folded first so ``["pkill","-u","x"]``, ``["pkill -u x"]`` and
+    ``"pkill -u x"`` all read the same to the SAME forbidden-command patterns ``check_launch`` uses (a
+    command and its JSON serialisation can never disagree about what is refused). Pure: it parses and
+    executes nothing.
+    """
+    folded = _FOLD.sub(" ", str(text or ""))
+    return [
+        ("AR-LN-004", f"AR-LN-004: forbidden command {folded.strip()!r} matches {pattern.pattern}")
+        for pattern in _FORBIDDEN_COMMANDS
+        if pattern.search(folded)
+    ]
+
+
+def scan_rendered(spec: Any, text: str) -> list[tuple[str, str]]:
+    """(rule_id, message) hits over a RENDERED fs_launch_spec (``,``.join(argv) + sbatch): what runs.
+
+    ``spec`` is the rendered fs_launch_spec (its string leaves - the ``" ".join(argv)`` argv included - are
+    scanned) and ``text`` the rendered sbatch body. The render, not the trial_spec, carries what actually
+    runs, so its strings are scanned with the SAME AR-LN-004 forbidden-command patterns and the SAME
+    AR-LN-005 quarantined/excluded node names ``check_launch`` refuses. An ``exclude`` option NAMES the node
+    to skip and is therefore never a hit.
+    """
+    parts: list[str] = []
+    _flatten_text(spec, parts)
+    _flatten_text(text, parts)
+    rendered = _FOLD.sub(" ", " ".join(parts))
+    problems = scan_command_text(rendered)
+    hits = [node for node in EXCLUDED_NODES if node in _EXCLUDE_OPTION.sub(" ", rendered)]
+    if hits:
+        problems.append(("AR-LN-005", f"AR-LN-005: rendered sbatch names quarantined node(s) {hits}"))
     return problems

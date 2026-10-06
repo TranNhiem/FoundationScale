@@ -873,6 +873,167 @@
       "question_model": "mimo-v2.6-pro"
     },
     {
+      "id": "fskills-auto-research-oracle-AR-HO-006",
+      "skill": "auto_research",
+      "rule_id": "AR-HO-006",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "a noise-floor baseline repeat was submitted as a non-eval_only job (decision 3: the floor is eval-only repeats) - status UNMEASURED",
+      "fixture": {
+        "files": {
+          "ledger/chain.jsonl": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"ee24ea0a439b6940646f77bda4d210ae26d31105b614e9d20b0463a1bc6d8407\",\"op\":\"job_submitted\",\"payload_hash\":\"eba8d43ad0a8f3b9d32444579da8d7ab53cfac4c44d0d0d0a18c466b52cfe327\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"fcaeb06fe3b4edc9acff0b31e7e84cd95712fee3fd09faf57f8577ecf316891e\",\"op\":\"trial_result\",\"payload_hash\":\"1534a147c63e739ba320c4213d46cb4642a3a86639a25469b67a27255e58c2d5\",\"prev_hash\":\"ee24ea0a439b6940646f77bda4d210ae26d31105b614e9d20b0463a1bc6d8407\",\"seq\":2,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"04703e89464ae298a8346e021369629dd8f46c2341f760a599c1fbe9a7a46dd9\",\"op\":\"trial_result\",\"payload_hash\":\"4f677831b1ef20369ea5d3c7d05af1c4f02e6efff4603c13333748585cb826dc\",\"prev_hash\":\"fcaeb06fe3b4edc9acff0b31e7e84cd95712fee3fd09faf57f8577ecf316891e\",\"seq\":3,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"78b58d2391e278e77286959add8d9655106385c611d96b2025b9ae074e89e933\",\"op\":\"trial_result\",\"payload_hash\":\"634c7ca2c70966a955dec91b3cf61ab4c4ba6a8c0e88cd5d4a3443685000d387\",\"prev_hash\":\"04703e89464ae298a8346e021369629dd8f46c2341f760a599c1fbe9a7a46dd9\",\"seq\":4,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"4c74d8e135dd748e215d58c59fb0c9d14a979bc24e5d791e80379db140e0401c\",\"op\":\"trial_result\",\"payload_hash\":\"ceb2071dc4cc3ae6d234bb84b0addf84dbe87facfd1e8eee0ed487157fa98d7f\",\"prev_hash\":\"78b58d2391e278e77286959add8d9655106385c611d96b2025b9ae074e89e933\",\"seq\":5,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"81c820e6052011e142e766f95b05fa0179921b7db54cf3ec3df0da7007b1bef3\",\"op\":\"trial_result\",\"payload_hash\":\"1edc86fbedbe4a31da4b53202348817a72ffec9b22db4c44d50391c392336b05\",\"prev_hash\":\"4c74d8e135dd748e215d58c59fb0c9d14a979bc24e5d791e80379db140e0401c\",\"seq\":6,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"00fe975790e2084490a68fa9fe427bf68b414062ab73a37abcc1a621d36b81a2\",\"op\":\"trial_result\",\"payload_hash\":\"e8ca5eeb6f8c544e618a6c0c578c345fa5be074d6af5f80da89cac7a524d474e\",\"prev_hash\":\"81c820e6052011e142e766f95b05fa0179921b7db54cf3ec3df0da7007b1bef3\",\"seq\":7,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "ledger/objects/1534a147c63e739ba320c4213d46cb4642a3a86639a25469b67a27255e58c2d5.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.5}},\"role\":\"baseline\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "ledger/objects/1edc86fbedbe4a31da4b53202348817a72ffec9b22db4c44d50391c392336b05.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.902}},\"role\":\"candidate\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "ledger/objects/4f677831b1ef20369ea5d3c7d05af1c4f02e6efff4603c13333748585cb826dc.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.502}},\"role\":\"baseline\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "ledger/objects/634c7ca2c70966a955dec91b3cf61ab4c4ba6a8c0e88cd5d4a3443685000d387.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.501}},\"role\":\"baseline\",\"seed\":103,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "ledger/objects/ceb2071dc4cc3ae6d234bb84b0addf84dbe87facfd1e8eee0ed487157fa98d7f.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.9}},\"role\":\"candidate\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "ledger/objects/e8ca5eeb6f8c544e618a6c0c578c345fa5be074d6af5f80da89cac7a524d474e.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.901}},\"role\":\"candidate\",\"seed\":103,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "ledger/objects/eba8d43ad0a8f3b9d32444579da8d7ab53cfac4c44d0d0d0a18c466b52cfe327.json": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":8.0,\"job_id\":\"123456\",\"kind\":\"train\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"submitted_at\":1750000000.0,\"trial\":\"baseline\"}"
+        },
+        "request": {
+          "action": "close",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "ledger_dir": "{tmp}/ledger",
+          "stop_reason": "budget exhausted"
+        }
+      },
+      "fixture_sha256": "f4e01761524baa0644177e92189320fdbed003bc772f5a461b939334ca72a898",
+      "expected_behavior": [
+        "Identifies the problem: a noise-floor baseline repeat was submitted as a non-eval_only job (decision 3: the floor is eval-only repeats) - status UNMEASURED",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule AR-HO-006"
+      ],
+      "ground_truth": "auto_research: rule AR-HO-006 (WARN, handoff phase) fires: a noise-floor baseline repeat was submitted as a non-eval_only job (decision 3: the floor is eval-only repeats) - status UNMEASURED.",
+      "trigger_facts": [
+        {
+          "path": "files.ledger/chain.jsonl",
+          "value": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"ee24ea0a439b6940646f77bda4d210ae26d31105b614e9d20b0463a1bc6d8407\",\"op\":\"job_submitted\",\"payload_hash\":\"eba8d43ad0a8f3b9d32444579da8d7ab53cfac4c44d0d0d0a18c466b52cfe327\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"fcaeb06fe3b4edc9acff0b31e7e84cd95712fee3fd09faf57f8577ecf316891e\",\"op\":\"trial_result\",\"payload_hash\":\"1534a147c63e739ba320c4213d46cb4642a3a86639a25469b67a27255e58c2d5\",\"prev_hash\":\"ee24ea0a439b6940646f77bda4d210ae26d31105b614e9d20b0463a1bc6d8407\",\"seq\":2,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"04703e89464ae298a8346e021369629dd8f46c2341f760a599c1fbe9a7a46dd9\",\"op\":\"trial_result\",\"payload_hash\":\"4f677831b1ef20369ea5d3c7d05af1c4f02e6efff4603c13333748585cb826dc\",\"prev_hash\":\"fcaeb06fe3b4edc9acff0b31e7e84cd95712fee3fd09faf57f8577ecf316891e\",\"seq\":3,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"78b58d2391e278e77286959add8d9655106385c611d96b2025b9ae074e89e933\",\"op\":\"trial_result\",\"payload_hash\":\"634c7ca2c70966a955dec91b3cf61ab4c4ba6a8c0e88cd5d4a3443685000d387\",\"prev_hash\":\"04703e89464ae298a8346e021369629dd8f46c2341f760a599c1fbe9a7a46dd9\",\"seq\":4,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"4c74d8e135dd748e215d58c59fb0c9d14a979bc24e5d791e80379db140e0401c\",\"op\":\"trial_result\",\"payload_hash\":\"ceb2071dc4cc3ae6d234bb84b0addf84dbe87facfd1e8eee0ed487157fa98d7f\",\"prev_hash\":\"78b58d2391e278e77286959add8d9655106385c611d96b2025b9ae074e89e933\",\"seq\":5,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"81c820e6052011e142e766f95b05fa0179921b7db54cf3ec3df0da7007b1bef3\",\"op\":\"trial_result\",\"payload_hash\":\"1edc86fbedbe4a31da4b53202348817a72ffec9b22db4c44d50391c392336b05\",\"prev_hash\":\"4c74d8e135dd748e215d58c59fb0c9d14a979bc24e5d791e80379db140e0401c\",\"seq\":6,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"00fe975790e2084490a68fa9fe427bf68b414062ab73a37abcc1a621d36b81a2\",\"op\":\"trial_result\",\"payload_hash\":\"e8ca5eeb6f8c544e618a6c0c578c345fa5be074d6af5f80da89cac7a524d474e\",\"prev_hash\":\"81c820e6052011e142e766f95b05fa0179921b7db54cf3ec3df0da7007b1bef3\",\"seq\":7,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/1534a147c63e739ba320c4213d46cb4642a3a86639a25469b67a27255e58c2d5.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.5}},\"role\":\"baseline\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/1edc86fbedbe4a31da4b53202348817a72ffec9b22db4c44d50391c392336b05.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.902}},\"role\":\"candidate\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/4f677831b1ef20369ea5d3c7d05af1c4f02e6efff4603c13333748585cb826dc.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.502}},\"role\":\"baseline\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/634c7ca2c70966a955dec91b3cf61ab4c4ba6a8c0e88cd5d4a3443685000d387.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.501}},\"role\":\"baseline\",\"seed\":103,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/ceb2071dc4cc3ae6d234bb84b0addf84dbe87facfd1e8eee0ed487157fa98d7f.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.9}},\"role\":\"candidate\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json",
+          "value": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/e8ca5eeb6f8c544e618a6c0c578c345fa5be074d6af5f80da89cac7a524d474e.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.901}},\"role\":\"candidate\",\"seed\":103,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/eba8d43ad0a8f3b9d32444579da8d7ab53cfac4c44d0d0d0a18c466b52cfe327.json",
+          "value": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":8.0,\"job_id\":\"123456\",\"kind\":\"train\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"submitted_at\":1750000000.0,\"trial\":\"baseline\"}",
+          "check": false
+        }
+      ],
+      "question": "Run auto_research for me on campaign \"ar-fixture\" with action \"close\", approver \"arbiter\", campaign_confirm \"{confirm}\", and stop_reason \"budget exhausted\", against ledger_dir \"{tmp}/ledger\". The staged ledger/chain.jsonl already holds 8 entries (seq 0–7) for \"ar-fixture\": campaign_approved at seq 0, job_submitted at seq 1, and trial_result records for \"baseline\" at seqs 2, 3, 4 and for \"t1\" at seqs 5, 6, 7, and I can see the staged object files contain baseline val_accuracy 0.5 (seed 101), 0.502 (seed 102), 0.501 (seed 103) and candidate \"t1\" val_accuracy 0.9 (seed 101), 0.902 (seed 102), 0.901 (seed 103), all with se 0.001, steps 200, status \"ok\", limited false, and eval_policy_fingerprint \"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\". I also see the approval object with approver \"arbiter\" and spec_hash \"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\", and the job_submitted object with job_id \"123456\", gpu_hours_est 8.0, launch_token \"fs-ar-trial-v1-fixture\", submitted_at 1750000000.0, and budget_after hours_left 16.0 / runs_left 2. The campaign_spec is the one in the payload (base gemma4-4b with fingerprint sha256:b2b2…b2b2, axes optim.lr log_float 1e-06–0.001, train.method categorical full/lora, lora.rank int 4–64, objective max val_accuracy on gsm8k, budget 24.0 GPU-hours / 6 runs / 8.0 h timeout / 0.3 reserve, cluster partition \"rally\" max 2 nodes × 8 GPUs excluding \"r01dgx02\" with time \"10-00:00:00\", seeds 101/102/103 with 3 baseline and 3 confirm repeats, confirm noise_floor_rel 0.005, k 2.0, guard_abs_epsilon 0.01, empty guardrails, stopping max_crash_streak 2 and no_gain_streak 3). What does the close produce — the acceptance decision against the calibrated noise floor and the final catalog/ledger outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
       "id": "fskills-auto-research-oracle-AR-IN-001",
       "skill": "auto_research",
       "rule_id": "AR-IN-001",
@@ -1481,6 +1642,108 @@
       "question_model": "mimo-v2.6-pro"
     },
     {
+      "id": "fskills-auto-research-oracle-AR-IN-007",
+      "skill": "auto_research",
+      "rule_id": "AR-IN-007",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "seed plan invalid: seed_list empty/duplicate/non-int, repeats < 1, confirm_repeats beyond the seed list, or cluster.max_in_flight invalid/above max_runs",
+      "fixture": {
+        "request": {
+          "action": "check",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 5,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "ledger_dir": "{tmp}/ledger"
+        }
+      },
+      "fixture_sha256": "8e2ca6cf6bf9564f0ecc90284b443b8ca134a8f64efba191e6ce5d33ea4f702a",
+      "expected_behavior": [
+        "Identifies the problem: seed plan invalid: seed_list empty/duplicate/non-int, repeats < 1, confirm_repeats beyond the seed list, or cluster.max_in_flight invalid/above max_runs",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule AR-IN-007"
+      ],
+      "ground_truth": "auto_research: rule AR-IN-007 (BLOCK, input phase) fires: seed plan invalid: seed_list empty/duplicate/non-int, repeats < 1, confirm_repeats beyond the seed list, or cluster.max_in_flight invalid/above max_runs.",
+      "trigger_facts": [],
+      "question": "I want to run the \"check\" action for campaign id \"ar-fixture\" with my campaign_confirm value \"{confirm}\" and ledger dir \"{tmp}/ledger\". The spec has axes optim.lr (log_float, 1e-06 to 0.001), train.method (categorical: full, lora), and lora.rank (int, 4 to 64), base gemma4-4b with fingerprint sha256:b2b2...b2, and eval_policy fingerprint sha256:a1a1...a1 with metrics val_accuracy and throughput.\n\nBudget is 24.0 GPU-hours total, max_runs 6, per_run_timeout_h 8.0, reserve_frac 0.3; cluster is partition \"rally\", 2 nodes of 8 GPUs, time \"10-00:00:00\", excluding r01dgx02. Objective is max val_accuracy on gsm8k, seeds are [101, 102, 103] with baseline_repeats 3 and confirm_repeats 5, stopping at no_gain_streak 3 or max_crash_streak 2, and confirm thresholds are k 2.0, noise_floor_rel 0.005, guard_abs_epsilon 0.01 with no guardrails.\n\nWhat does the check return?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
       "id": "fskills-auto-research-oracle-AR-LG-001",
       "skill": "auto_research",
       "rule_id": "AR-LG-001",
@@ -1617,6 +1880,137 @@
         }
       ],
       "question": "I'm driving the auto_research campaign `ar-fixture` and want to run the `record` action with approver `arbiter`, `campaign_confirm` = `{confirm}`, and `ledger_dir` = `{tmp}/ledger`. The campaign spec is: base model `gemma4-4b` with fingerprint `sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2`; axes `optim.lr` log_float 1e-06..0.001, `train.method` categorical [\"full\",\"lora\"], `lora.rank` int 4..64; budget gpu_hours_total 24.0, max_runs 6, per_run_timeout_h 8.0, reserve_frac 0.3; cluster partition `rally`, time `10-00:00:00`, max_nodes 2, gpus_per_node 8, exclude [\"r01dgx02\"]; objective metric `val_accuracy`, direction `max`, benchmarks [\"gsm8k\"]; eval_policy fingerprint `sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1`, metrics [\"val_accuracy\",\"throughput\"]; seeds baseline_repeats 3, confirm_repeats 3, seed_list [101,102,103]; confirm k 2.0, noise_floor_rel 0.005, guard_abs_epsilon 0.01, guardrails []; stopping max_crash_streak 2, no_gain_streak 3. The result I'm recording is trial `t1`, role `candidate`, seed 101, steps 200, status `ok`, limited false, eval_policy_fingerprint `sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1`, metrics `val_accuracy` value 0.51 with se 0.001. I can see the staged `ledger/chain.jsonl` already contains `{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",...,\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}` and `{\"campaign\":\"ar-fixture\",\"hash\":\"6bc20e8b16e304fdaade6880d738d6613ca7002ee204a0137fb685e0027cf83c\",\"op\":\"trial_result\",...,\"payload_hash\":\"f375f9cfa715492b005d8dbc9ebe9302683b319214d053ed9ad04e9889525f18\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}`, and the staged object `ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json` is `{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}` while `ledger/objects/f375f9cfa715492b005d8dbc9ebe9302683b319214d053ed9ad04e9889525f18.json` is `{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.5}},\"role\":\"candidate\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}`. What's the outcome of this record action?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-auto-research-oracle-AR-LG-002",
+      "skill": "auto_research",
+      "rule_id": "AR-LG-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "a mutating action after campaign_closed (close is final: only check/close stay open)",
+      "fixture": {
+        "files": {
+          "ledger/chain.jsonl": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"45099d0a93317b931127f542eed3b4a282d7dbbd718714339451690dc014f42b\",\"op\":\"campaign_closed\",\"payload_hash\":\"40fa9b94dab03fc8159bd22f5ae08138d1be5a19c6560a87c3467fa1d457dbb4\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "ledger/objects/40fa9b94dab03fc8159bd22f5ae08138d1be5a19c6560a87c3467fa1d457dbb4.json": "{\"decided\":\"unmeasured\",\"reason\":\"budget exhausted\"}",
+          "ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}"
+        },
+        "request": {
+          "action": "envelope",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "envelope": {
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6
+            },
+            "scope": "one campaign"
+          },
+          "ledger_dir": "{tmp}/ledger"
+        }
+      },
+      "fixture_sha256": "c2c19fe5eaca6aba5421ac4416ef683133bf9b3716006ec08f9f517cc4b6f96c",
+      "expected_behavior": [
+        "Identifies the problem: a mutating action after campaign_closed (close is final: only check/close stay open)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule AR-LG-002"
+      ],
+      "ground_truth": "auto_research: rule AR-LG-002 (BLOCK, input phase) fires: a mutating action after campaign_closed (close is final: only check/close stay open).",
+      "trigger_facts": [
+        {
+          "path": "files.ledger/chain.jsonl",
+          "value": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"45099d0a93317b931127f542eed3b4a282d7dbbd718714339451690dc014f42b\",\"op\":\"campaign_closed\",\"payload_hash\":\"40fa9b94dab03fc8159bd22f5ae08138d1be5a19c6560a87c3467fa1d457dbb4\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/40fa9b94dab03fc8159bd22f5ae08138d1be5a19c6560a87c3467fa1d457dbb4.json",
+          "value": "{\"decided\":\"unmeasured\",\"reason\":\"budget exhausted\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json",
+          "value": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        }
+      ],
+      "question": "I want to run the auto_research skill with action \"envelope\" and campaign_confirm \"{confirm}\" against the campaign spec in the payload (id ar-fixture, base gemma4-4b with fingerprint sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2, objective max val_accuracy on gsm8k, axes optim.lr log_float 1e-06..0.001, train.method categorical full/lora, lora.rank int 4..64, budget gpu_hours_total 24.0 / max_runs 6 / per_run_timeout_h 8.0 / reserve_frac 0.3, cluster partition rally, gpus_per_node 8, max_nodes 2, time 10-00:00:00, exclude r01dgx02, confirm guard_abs_epsilon 0.01, k 2.0, noise_floor_rel 0.005, seeds baseline_repeats 3, confirm_repeats 3, seed_list 101/102/103, stopping max_crash_streak 2, no_gain_streak 3), with envelope budget gpu_hours_total 24.0, max_runs 6, scope \"one campaign\", approver \"arbiter\", ledger_dir \"{tmp}/ledger\".\n\nI already see staged ledger/chain.jsonl containing exactly two records: seq 0 campaign_approved with hash 5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0, payload_hash dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221, prev_hash 0000000000000000000000000000000000000000000000000000000000000000, trial \"-\", ts 2026-01-01T00:00:00Z, and seq 1 campaign_closed with hash 45099d0a93317b931127f542eed3b4a282d7dbbd718714339451690dc014f42b, payload_hash 40fa9b94dab03fc8159bd22f5ae08138d1be5a19c6560a87c3467fa1d457dbb4, prev_hash 5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0, trial \"-\", ts 2026-01-01T00:00:00Z.\n\nI also see staged ledger/objects/40fa9b94dab03fc8159bd22f5ae08138d1be5a19c6560a87c3467fa1d457dbb4.json = {\"decided\":\"unmeasured\",\"reason\":\"budget exhausted\"} and staged ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json = {\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}.\n\nGiven all of that, what exactly comes out of this envelope step — what token or artifact do I get back, and what does the ledger look like afterwards?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -1858,6 +2252,161 @@
       "question_model": "mimo-v2.6-pro"
     },
     {
+      "id": "fskills-auto-research-oracle-AR-LN-003",
+      "skill": "auto_research",
+      "rule_id": "AR-LN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "IMEX fabric at submit is not 'ready' (refused or unmeasured); the named reason is carried in the message",
+      "fixture": {
+        "files": {
+          "ledger/chain.jsonl": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"24bc883568c333937d10ece7715f7c9aeb55967f9a317c350d4c85eefb5016aa\",\"op\":\"launch_envelope\",\"payload_hash\":\"02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "ledger/fabric.json": "{\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}",
+          "ledger/objects/02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b.json": "{\"approver\":\"arbiter\",\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"envelope\":{\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"scope\":\"one campaign\"},\"envelope_token\":\"8b6bd61e2aeccbb4a283c2fcd489dac7a07906cd4eeda363f66ce9d5189e655d\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}"
+        },
+        "request": {
+          "action": "submit",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "launch_token": "4eb59d3018e99cc9f41142e20103eaa33562092725ef86be2a65679ff0906abd",
+          "ledger_dir": "{tmp}/ledger",
+          "trial_spec": {
+            "commands": [
+              "uv run train.py --config campaign.yaml"
+            ],
+            "delta": {
+              "optim.lr": 0.0005
+            },
+            "eval_request": {
+              "command": [
+                "eval",
+                "run",
+                "gsm8k"
+              ]
+            },
+            "gpu_hours_est": 4.0,
+            "gpus_per_node": 8,
+            "kind": "eval_only",
+            "nodes": 1,
+            "partition": "rally",
+            "role": "candidate",
+            "seed": 101,
+            "time": "10-00:00:00",
+            "trial": "fabric-gate"
+          }
+        }
+      },
+      "fixture_sha256": "39118caedd77d84a7eb56fb78dcb8a512b0f045e040f262e3418a551537c0475",
+      "expected_behavior": [
+        "Identifies the problem: IMEX fabric at submit is not 'ready' (refused or unmeasured); the named reason is carried in the message",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule AR-LN-003"
+      ],
+      "ground_truth": "auto_research: rule AR-LN-003 (BLOCK, input phase) fires: IMEX fabric at submit is not 'ready' (refused or unmeasured); the named reason is carried in the message.",
+      "trigger_facts": [
+        {
+          "path": "files.ledger/chain.jsonl",
+          "value": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"24bc883568c333937d10ece7715f7c9aeb55967f9a317c350d4c85eefb5016aa\",\"op\":\"launch_envelope\",\"payload_hash\":\"02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "check": false
+        },
+        {
+          "path": "files.ledger/fabric.json",
+          "value": "{\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b.json",
+          "value": "{\"approver\":\"arbiter\",\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"envelope\":{\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"scope\":\"one campaign\"},\"envelope_token\":\"8b6bd61e2aeccbb4a283c2fcd489dac7a07906cd4eeda363f66ce9d5189e655d\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json",
+          "value": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        }
+      ],
+      "question": "I'm running auto_research with action \"submit\", campaign id \"ar-fixture\", approver \"arbiter\", campaign_confirm \"{confirm}\", and launch_token \"4eb59d3018e99cc9f41142e20103eaa33562092725ef86be2a65679ff0906abd\", against ledger_dir \"{tmp}/ledger\". The staged ledger/chain.jsonl already has two entries: seq 0 campaign_approved (hash 5c640a07...75a0, payload dd78b84a...ca221) and seq 1 launch_envelope (hash 24bc8835...16aa, payload 02e2d927...f4b), and the staged ledger/fabric.json shows {\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}. The staged objects show approver \"arbiter\", spec_hash 300d0e9d...fb0b1, envelope_token 8b6bd61e...e655d, and a budget of gpu_hours_total 24.0 / max_runs 6 with scope \"one campaign\". My trial_spec is kind \"eval_only\", role \"candidate\", trial \"fabric-gate\", seed 101, delta {\"optim.lr\": 0.0005}, gpu_hours_est 4.0, nodes 1, gpus_per_node 8, partition \"rally\", time \"10-00:00:00\", commands [\"uv run train.py --config campaign.yaml\"], eval_request command [\"eval\",\"run\",\"gsm8k\"]. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
       "id": "fskills-auto-research-oracle-AR-LN-004",
       "skill": "auto_research",
       "rule_id": "AR-LN-004",
@@ -2093,6 +2642,815 @@
       "ground_truth": "auto_research: rule AR-LN-005 (BLOCK, input phase) fires: gpu_hours_est implies a wall time above per_run_timeout_h.",
       "trigger_facts": [],
       "question": "Please run the `launch` action of the auto_research skill for my campaign `ar-fixture`, with approver `arbiter` and `campaign_confirm` set to `{confirm}`, writing the ledger to `{tmp}/ledger`. The spec is: axes `optim.lr` (log_float, 1e-06 to 0.001), `train.method` (categorical: `full`, `lora`), and `lora.rank` (int, 4 to 64), against base model `gemma4-4b` with fingerprint `sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2`, objective `val_accuracy` (max) on `gsm8k`, eval policy fingerprint `sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1` with metrics `val_accuracy` and `throughput`. Budget is 400.0 GPU-hours total, max_runs 6, per_run_timeout_h 8.0, reserve_frac 0.3; cluster is partition `rally`, time `10-00:00:00`, max_nodes 2, gpus_per_node 8, excluding `r01dgx02`; confirm settings are k 2.0, noise_floor_rel 0.005, guard_abs_epsilon 0.01 with an empty guardrails list; seeds are [101, 102, 103] with baseline_repeats 3 and confirm_repeats 3; stopping is max_crash_streak 2, no_gain_streak 3. The launch spec is trial `t1`, role `candidate`, seed 101, delta `{\"optim.lr\": 0.0005}`, command `uv run train.py --config campaign.yaml`, gpu_hours_est 200.0, nodes 1, gpus_per_node 8, partition `rally`, time `10-00:00:00`. Let me know what the outcome is.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-auto-research-oracle-AR-LN-006",
+      "skill": "auto_research",
+      "rule_id": "AR-LN-006",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "envelope missing or forged, envelope budget != spec budget, the trial token is not derived, or the envelope budget is exhausted (runs or GPU hours)",
+      "fixture": {
+        "files": {
+          "ledger/chain.jsonl": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "ledger/fabric.json": "{\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}",
+          "ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}"
+        },
+        "request": {
+          "action": "submit",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "launch_token": "fs-ar-trial-v1-not-derived",
+          "ledger_dir": "{tmp}/ledger",
+          "trial_spec": {
+            "commands": [
+              "uv run train.py --config campaign.yaml"
+            ],
+            "delta": {
+              "optim.lr": 0.0005
+            },
+            "eval_request": {
+              "command": [
+                "eval",
+                "run",
+                "gsm8k"
+              ]
+            },
+            "gpu_hours_est": 4.0,
+            "gpus_per_node": 8,
+            "kind": "eval_only",
+            "nodes": 1,
+            "partition": "rally",
+            "role": "candidate",
+            "seed": 101,
+            "time": "10-00:00:00",
+            "trial": "need-an-envelope"
+          }
+        }
+      },
+      "fixture_sha256": "d039930b0ac011c329523ed254ffe240925b3b0437a763ebb39db56b3273887b",
+      "expected_behavior": [
+        "Identifies the problem: envelope missing or forged, envelope budget != spec budget, the trial token is not derived, or the envelope budget is exhausted (runs or GPU hours)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule AR-LN-006"
+      ],
+      "ground_truth": "auto_research: rule AR-LN-006 (BLOCK, input phase) fires: envelope missing or forged, envelope budget != spec budget, the trial token is not derived, or the envelope budget is exhausted (runs or GPU hours).",
+      "trigger_facts": [
+        {
+          "path": "files.ledger/chain.jsonl",
+          "value": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "check": false
+        },
+        {
+          "path": "files.ledger/fabric.json",
+          "value": "{\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json",
+          "value": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        }
+      ],
+      "question": "I'm running the auto_research submit action for campaign ar-fixture with the spec I gave you (gemma4-4b base, gsm8k val_accuracy objective, 24 GPU-hours, 6 max runs, seeds 101/102/103, noise floor 0.005, k=2.0), ledger at {tmp}/ledger, approver arbiter, campaign_confirm \"{confirm}\", and the trial spec for trial \"need-an-envelope\" (delta optim.lr=0.0005, kind eval_only, 1 node, 8 GPUs, partition rally, seed 101, 4 GPU-hours est, token fs-ar-trial-v1-not-derived). What I see already in the ledger: chain.jsonl has one entry, seq 0, op campaign_approved, hash 5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0, payload_hash dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221, prev_hash 0000000000000000000000000000000000000000000000000000000000000000, trial \"-\", ts 2026-01-01T00:00:00Z; fabric.json shows master:8081 with state \"refused\", reason \"fabric_refused\", ts 4102444800.0; and object dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json holds approver \"arbiter\" with spec_hash 300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1. What's the outcome of the submit?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-auto-research-oracle-AR-LN-007",
+      "skill": "auto_research",
+      "rule_id": "AR-LN-007",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "cancel names a job id this campaign's ledger never submitted (or requests no job ids)",
+      "fixture": {
+        "files": {
+          "ledger/chain.jsonl": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"f5bb50fe6bd4460aa747ce692d77bc6dfdf1373b9b68138f0e92f8ea7b751b46\",\"op\":\"job_submitted\",\"payload_hash\":\"87d6984f9298de38028f41426e3d5df202bc7a390118900ffa253be035aafacb\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "ledger/objects/87d6984f9298de38028f41426e3d5df202bc7a390118900ffa253be035aafacb.json": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":8.0,\"job_id\":\"123456\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"submitted_at\":1750000000.0,\"trial\":\"baseline\"}",
+          "ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}"
+        },
+        "request": {
+          "action": "cancel",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "job_ids": [
+            "999999"
+          ],
+          "ledger_dir": "{tmp}/ledger",
+          "reason": "operator"
+        }
+      },
+      "fixture_sha256": "0c24624b188284e1ec987f84a737f4abfac9ba8c6027a8bb6df47843b1febd0f",
+      "expected_behavior": [
+        "Identifies the problem: cancel names a job id this campaign's ledger never submitted (or requests no job ids)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule AR-LN-007"
+      ],
+      "ground_truth": "auto_research: rule AR-LN-007 (BLOCK, input phase) fires: cancel names a job id this campaign's ledger never submitted (or requests no job ids).",
+      "trigger_facts": [
+        {
+          "path": "files.ledger/chain.jsonl",
+          "value": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"f5bb50fe6bd4460aa747ce692d77bc6dfdf1373b9b68138f0e92f8ea7b751b46\",\"op\":\"job_submitted\",\"payload_hash\":\"87d6984f9298de38028f41426e3d5df202bc7a390118900ffa253be035aafacb\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/87d6984f9298de38028f41426e3d5df202bc7a390118900ffa253be035aafacb.json",
+          "value": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":8.0,\"job_id\":\"123456\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"submitted_at\":1750000000.0,\"trial\":\"baseline\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json",
+          "value": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        }
+      ],
+      "question": "I'm driving campaign ar-fixture with action \"cancel\" and reason \"operator\", passing job_ids [\"999999\"], approver \"arbiter\", and campaign_confirm \"{confirm}\" against the spec (gemma4-4b base with fingerprint sha256:b2b2..., eval fingerprint sha256:a1a1..., axes optim.lr log_float 1e-06..0.001, train.method categorical [full, lora], lora.rank int 4..64, budget 24.0 GPU-hours / 6 max_runs / 8.0h timeout / 0.3 reserve, cluster rally partition, 8 GPUs per node, max 2 nodes, time \"10-00:00:00\", exclude [\"r01dgx02\"], objective val_accuracy max on gsm8k, seeds 101/102/103 with 3 baseline and 3 confirm repeats, k=2.0, noise_floor_rel=0.005, guard_abs_epsilon=0.01, no_gain_streak 3, max_crash_streak 2), with ledger_dir \"{tmp}/ledger\". I can see the staged ledger/chain.jsonl already holds two entries for ar-fixture: seq 0 campaign_approved (hash 5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0, payload_hash dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221) and seq 1 job_submitted (hash f5bb50fe6bd4460aa747ce692d77bc6dfdf1373b9b68138f0e92f8ea7b751b46, payload_hash 87d6984f9298de38028f41426e3d5df202bc7a390118900ffa253be035aafacb), both timestamped 2026-01-01T00:00:00Z. I also see ledger/objects/87d6984f9298de38028f41426e3d5df202bc7a390118900ffa253be035aafacb.json recording job_id \"123456\", kind \"eval_only\", trial \"baseline\", gpu_hours_est 8.0, launch_token \"fs-ar-trial-v1-fixture\", submitted_at 1750000000.0, budget_after hours_left 16.0 and runs_left 2; and ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json recording approver \"arbiter\" and spec_hash \"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\". What is the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-auto-research-oracle-AR-LN-008",
+      "skill": "auto_research",
+      "rule_id": "AR-LN-008",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "in-flight (running or pending) jobs at cluster.max_in_flight; unmeasured stations fail closed",
+      "fixture": {
+        "files": {
+          "ledger/chain.jsonl": "{\"campaign\":\"ar-fixture\",\"hash\":\"93ed6a3389962b7d9d87d8c5f5241278a6ec9a88f7366319cb3027ef65af94d0\",\"op\":\"campaign_approved\",\"payload_hash\":\"242ba748f3eb3bfdb40f899f76bfe19fa4622ba7aaea26693975f4944216b27b\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"4c943ab78c97b6d0bb1f625af88fbd85f7987aed98f0c338469d0e948cb26273\",\"op\":\"launch_envelope\",\"payload_hash\":\"0bc50106adbfd4d4b8beedb953f0ef003037c3d8cb45586f554c161a203fd022\",\"prev_hash\":\"93ed6a3389962b7d9d87d8c5f5241278a6ec9a88f7366319cb3027ef65af94d0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"7a2370f0f831bbe2e3cb1e10f13a0d74f0714262202e56c7c220cbf1615ce1fd\",\"op\":\"job_submitted\",\"payload_hash\":\"bc600fd4073c78e0ed6e0825749741161d1d9450d44f0149275ef62562131c58\",\"prev_hash\":\"4c943ab78c97b6d0bb1f625af88fbd85f7987aed98f0c338469d0e948cb26273\",\"seq\":2,\"trial\":\"m2-held\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "ledger/fabric.json": "{\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}",
+          "ledger/objects/0bc50106adbfd4d4b8beedb953f0ef003037c3d8cb45586f554c161a203fd022.json": "{\"approver\":\"arbiter\",\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"envelope\":{\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"scope\":\"one campaign\"},\"envelope_token\":\"9f044e69347dd350b258b1c7472553616ce79ae061b5d5bc716d98d4ac5c8339\",\"spec_hash\":\"fb9cd9e4274617092343a6e45b4b9a0fcf66bfb42e5980874efdde6e5876d59e\"}",
+          "ledger/objects/242ba748f3eb3bfdb40f899f76bfe19fa4622ba7aaea26693975f4944216b27b.json": "{\"approver\":\"arbiter\",\"spec_hash\":\"fb9cd9e4274617092343a6e45b4b9a0fcf66bfb42e5980874efdde6e5876d59e\"}",
+          "ledger/objects/bc600fd4073c78e0ed6e0825749741161d1d9450d44f0149275ef62562131c58.json": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"111\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"confirm\",\"seed\":101,\"submitted_at\":1750000000.0,\"trial\":\"m2-held\"}"
+        },
+        "request": {
+          "action": "submit",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_in_flight": 1,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "launch_token": "534c2302f06cf741447cdc4446414430379da44e844eebceaebcbcc309bcde3a",
+          "ledger_dir": "{tmp}/ledger",
+          "trial_spec": {
+            "commands": [
+              "uv run train.py --config campaign.yaml"
+            ],
+            "delta": {
+              "optim.lr": 0.0005
+            },
+            "eval_request": {
+              "command": [
+                "eval",
+                "run",
+                "gsm8k"
+              ]
+            },
+            "gpu_hours_est": 1.0,
+            "gpus_per_node": 8,
+            "kind": "eval_only",
+            "nodes": 1,
+            "partition": "rally",
+            "role": "candidate",
+            "seed": 105,
+            "time": "10-00:00:00",
+            "trial": "trial-b"
+          }
+        }
+      },
+      "fixture_sha256": "6b7c38407d6f69c20dc4210383143f13aa974c51af8090be8dd29dca77b924a9",
+      "expected_behavior": [
+        "Identifies the problem: in-flight (running or pending) jobs at cluster.max_in_flight; unmeasured stations fail closed",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule AR-LN-008"
+      ],
+      "ground_truth": "auto_research: rule AR-LN-008 (BLOCK, input phase) fires: in-flight (running or pending) jobs at cluster.max_in_flight; unmeasured stations fail closed.",
+      "trigger_facts": [
+        {
+          "path": "files.ledger/chain.jsonl",
+          "value": "{\"campaign\":\"ar-fixture\",\"hash\":\"93ed6a3389962b7d9d87d8c5f5241278a6ec9a88f7366319cb3027ef65af94d0\",\"op\":\"campaign_approved\",\"payload_hash\":\"242ba748f3eb3bfdb40f899f76bfe19fa4622ba7aaea26693975f4944216b27b\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"4c943ab78c97b6d0bb1f625af88fbd85f7987aed98f0c338469d0e948cb26273\",\"op\":\"launch_envelope\",\"payload_hash\":\"0bc50106adbfd4d4b8beedb953f0ef003037c3d8cb45586f554c161a203fd022\",\"prev_hash\":\"93ed6a3389962b7d9d87d8c5f5241278a6ec9a88f7366319cb3027ef65af94d0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"7a2370f0f831bbe2e3cb1e10f13a0d74f0714262202e56c7c220cbf1615ce1fd\",\"op\":\"job_submitted\",\"payload_hash\":\"bc600fd4073c78e0ed6e0825749741161d1d9450d44f0149275ef62562131c58\",\"prev_hash\":\"4c943ab78c97b6d0bb1f625af88fbd85f7987aed98f0c338469d0e948cb26273\",\"seq\":2,\"trial\":\"m2-held\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "check": false
+        },
+        {
+          "path": "files.ledger/fabric.json",
+          "value": "{\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/0bc50106adbfd4d4b8beedb953f0ef003037c3d8cb45586f554c161a203fd022.json",
+          "value": "{\"approver\":\"arbiter\",\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"envelope\":{\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"scope\":\"one campaign\"},\"envelope_token\":\"9f044e69347dd350b258b1c7472553616ce79ae061b5d5bc716d98d4ac5c8339\",\"spec_hash\":\"fb9cd9e4274617092343a6e45b4b9a0fcf66bfb42e5980874efdde6e5876d59e\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/242ba748f3eb3bfdb40f899f76bfe19fa4622ba7aaea26693975f4944216b27b.json",
+          "value": "{\"approver\":\"arbiter\",\"spec_hash\":\"fb9cd9e4274617092343a6e45b4b9a0fcf66bfb42e5980874efdde6e5876d59e\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/bc600fd4073c78e0ed6e0825749741161d1d9450d44f0149275ef62562131c58.json",
+          "value": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"111\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"confirm\",\"seed\":101,\"submitted_at\":1750000000.0,\"trial\":\"m2-held\"}",
+          "check": false
+        }
+      ],
+      "question": "I'm running the auto_research skill with action \"submit\", approver \"arbiter\", campaign_confirm \"{confirm}\", launch_token \"534c2302f06cf741447cdc4446414430379da44e844eebceaebcbcc309bcde3a\", ledger_dir \"{tmp}/ledger\", and the campaign_spec id \"ar-fixture\" (base gemma4-4b with fingerprint sha256:b2b2…b2b2, objective val_accuracy max on gsm8k, budget gpu_hours_total 24.0 / max_runs 6 / per_run_timeout_h 8.0 / reserve_frac 0.3, confirm k 2.0 with noise_floor_rel 0.005 and guard_abs_epsilon 0.01, seeds 101/102/103 with baseline_repeats 3 and confirm_repeats 3), plus trial_spec trial \"trial-b\", role \"candidate\", kind \"eval_only\", seed 105, delta {\"optim.lr\": 0.0005}, gpu_hours_est 1.0, nodes 1, gpus_per_node 8, partition \"rally\", time \"10-00:00:00\", commands [\"uv run train.py --config campaign.yaml\"], eval_request command [\"eval\",\"run\",\"gsm8k\"].\n\nI've already observed these staged files in the ledger: chain.jsonl has three records — seq 0 campaign_approved (hash 93ed6a3389962b7d9d87d8c5f5241278a6ec9a88f7366319cb3027ef65af94d0, payload_hash 242ba748f3eb3bfdb40f899f76bfe19fa4622ba7aaea26693975f4944216b27b, prev_hash 0000000000000000000000000000000000000000000000000000000000000000), seq 1 launch_envelope (hash 4c943ab78c97b6d0bb1f625af88fbd85f7987aed98f0c338469d0e948cb26273, payload_hash 0bc50106adbfd4d4b8beedb953f0ef003037c3d8cb45586f554c161a203fd022), and seq 2 job_submitted for trial \"m2-held\" (hash 7a2370f0f831bbe2e3cb1e10f13a0d74f0714262202e56c7c220cbf1615ce1fd, payload_hash bc600fd4073c78e0ed6e0825749741161d1d9450d44f0149275ef62562131c58), all at ts 2026-01-01T00:00:00Z; fabric.json shows \"master:8081\" with state \"refused\", reason \"fabric_refused\", ts 4102444800.0; objects/0bc50106…json has approver \"arbiter\", envelope_token 9f044e69347dd350b258b1c7472553616ce79ae061b5d5bc716d98d4ac5c8339, spec_hash fb9cd9e4274617092343a6e45b4b9a0fcf66bfb42e5980874efdde6e5876d59e, budget gpu_hours_total 24.0 / max_runs 6 with envelope scope \"one campaign\"; objects/242ba748…json is the campaign_approved record with the same spec_hash; and objects/bc600fd4…json records job_id \"111\", launch_token \"fs-ar-trial-v1-fixture\", phase \"confirm\", seed 101, gpu_hours_est 1.0, submitted_at 1750000000.0, and budget_after hours_left 16.0 / runs_left 2.\n\nGiven all of that, what is the outcome of this submit?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-auto-research-oracle-AR-LN-009",
+      "skill": "auto_research",
+      "rule_id": "AR-LN-009",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "a baseline/screening submit would spend the run reserve kept for confirm-phase runs",
+      "fixture": {
+        "files": {
+          "ledger/chain.jsonl": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"24bc883568c333937d10ece7715f7c9aeb55967f9a317c350d4c85eefb5016aa\",\"op\":\"launch_envelope\",\"payload_hash\":\"02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"ff97e42da91b5a4a5f645ba109647845b0230b43abe0cb574959f7f617187e08\",\"op\":\"job_submitted\",\"payload_hash\":\"38743331dd008809076d73c197b1179b3dc58d4ec24224e6a2d26876181d8a5f\",\"prev_hash\":\"24bc883568c333937d10ece7715f7c9aeb55967f9a317c350d4c85eefb5016aa\",\"seq\":2,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"031243d04ee7045f4c993064eea3da152e435ab5c25da0695e808d08f3a0c904\",\"op\":\"job_submitted\",\"payload_hash\":\"01e0b2ccf7b3136c730c7e73091e871aa2a04d450a48c702e8747a77aa6cd2ba\",\"prev_hash\":\"ff97e42da91b5a4a5f645ba109647845b0230b43abe0cb574959f7f617187e08\",\"seq\":3,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"6c26cb25f2b3118210b77900c8e2d1e4be552b610777c7399275cb89987782bf\",\"op\":\"job_submitted\",\"payload_hash\":\"5b57fe6737b03e5d13c10baa1037f6a9666796f2235c606f96fd85a612861cf0\",\"prev_hash\":\"031243d04ee7045f4c993064eea3da152e435ab5c25da0695e808d08f3a0c904\",\"seq\":4,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"1722c5400b0b887cf19a47b91e74fd3caf7c61056b11da4d091c37374c8906b1\",\"op\":\"job_submitted\",\"payload_hash\":\"cffa486383a23c80ae5e60f3b324fb0d50fe1fd7400c74788a35507254f3785b\",\"prev_hash\":\"6c26cb25f2b3118210b77900c8e2d1e4be552b610777c7399275cb89987782bf\",\"seq\":5,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"7f2efd9d54273f59d1d22a9ae1b8009e3f8823c8470132587f1eceac867572e7\",\"op\":\"trial_result\",\"payload_hash\":\"8d9655b69783a9da6f3019c42aca7a9d154f499ba3cfc6cf372acef16e0c6da3\",\"prev_hash\":\"1722c5400b0b887cf19a47b91e74fd3caf7c61056b11da4d091c37374c8906b1\",\"seq\":6,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"306b2f4ced8c9ede4c4ed1695f9e2f8b3f11b0ec7c9eb260282082ddc002c5dc\",\"op\":\"trial_result\",\"payload_hash\":\"86f70775518fb82e16ea0fb1915a0be27ec57004c856bb0636ee48b4e9fe2571\",\"prev_hash\":\"7f2efd9d54273f59d1d22a9ae1b8009e3f8823c8470132587f1eceac867572e7\",\"seq\":7,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"83a0618b084ba042cb98a52c1680ab5504d8ee3df16ab244c998f45f9c0aec9b\",\"op\":\"trial_result\",\"payload_hash\":\"6ae6a62918abaea48e5c7ea41f43e1c80bb06c346e8cc1e9d4c952345740932e\",\"prev_hash\":\"306b2f4ced8c9ede4c4ed1695f9e2f8b3f11b0ec7c9eb260282082ddc002c5dc\",\"seq\":8,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"ca7fb0620d071669abc1df4c94d73fc8feac977fb0b7c751eaf4ea574326d936\",\"op\":\"trial_result\",\"payload_hash\":\"8b696f9bf09a72ae23c7cca4723493f14d77436ff47c7892cc66bd0883f68f59\",\"prev_hash\":\"83a0618b084ba042cb98a52c1680ab5504d8ee3df16ab244c998f45f9c0aec9b\",\"seq\":9,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "ledger/fabric.json": "{\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}",
+          "ledger/objects/01e0b2ccf7b3136c730c7e73091e871aa2a04d450a48c702e8747a77aa6cd2ba.json": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"302\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"screening\",\"seed\":102,\"submitted_at\":1750000000.0,\"trial\":\"m2-screened\"}",
+          "ledger/objects/02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b.json": "{\"approver\":\"arbiter\",\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"envelope\":{\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"scope\":\"one campaign\"},\"envelope_token\":\"8b6bd61e2aeccbb4a283c2fcd489dac7a07906cd4eeda363f66ce9d5189e655d\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "ledger/objects/38743331dd008809076d73c197b1179b3dc58d4ec24224e6a2d26876181d8a5f.json": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"301\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"screening\",\"seed\":101,\"submitted_at\":1750000000.0,\"trial\":\"m2-screened\"}",
+          "ledger/objects/5b57fe6737b03e5d13c10baa1037f6a9666796f2235c606f96fd85a612861cf0.json": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"303\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"screening\",\"seed\":103,\"submitted_at\":1750000000.0,\"trial\":\"m2-screened\"}",
+          "ledger/objects/6ae6a62918abaea48e5c7ea41f43e1c80bb06c346e8cc1e9d4c952345740932e.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.4}},\"role\":\"candidate\",\"seed\":103,\"status\":\"ok\",\"steps\":200,\"trial\":\"m2-screened\"}",
+          "ledger/objects/86f70775518fb82e16ea0fb1915a0be27ec57004c856bb0636ee48b4e9fe2571.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.4}},\"role\":\"candidate\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"m2-screened\"}",
+          "ledger/objects/8b696f9bf09a72ae23c7cca4723493f14d77436ff47c7892cc66bd0883f68f59.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.4}},\"role\":\"candidate\",\"seed\":104,\"status\":\"ok\",\"steps\":200,\"trial\":\"m2-screened\"}",
+          "ledger/objects/8d9655b69783a9da6f3019c42aca7a9d154f499ba3cfc6cf372acef16e0c6da3.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.4}},\"role\":\"candidate\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"m2-screened\"}",
+          "ledger/objects/cffa486383a23c80ae5e60f3b324fb0d50fe1fd7400c74788a35507254f3785b.json": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"304\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"screening\",\"seed\":104,\"submitted_at\":1750000000.0,\"trial\":\"m2-screened\"}",
+          "ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}"
+        },
+        "request": {
+          "action": "submit",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "launch_token": "f7c5730b5d95b35bceb8a30b3d1196c48c23835b82d0887f0b570821f287f788",
+          "ledger_dir": "{tmp}/ledger",
+          "trial_spec": {
+            "commands": [
+              "uv run train.py --config campaign.yaml"
+            ],
+            "delta": {
+              "optim.lr": 0.0005
+            },
+            "eval_request": {
+              "command": [
+                "eval",
+                "run",
+                "gsm8k"
+              ]
+            },
+            "gpu_hours_est": 1.0,
+            "gpus_per_node": 8,
+            "kind": "eval_only",
+            "nodes": 1,
+            "partition": "rally",
+            "role": "candidate",
+            "seed": 105,
+            "time": "10-00:00:00",
+            "trial": "m2-screen"
+          }
+        }
+      },
+      "fixture_sha256": "38634b1f241f51b6c71d43dbbb136508ee6aea1f9210ed56825557d10772c114",
+      "expected_behavior": [
+        "Identifies the problem: a baseline/screening submit would spend the run reserve kept for confirm-phase runs",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule AR-LN-009"
+      ],
+      "ground_truth": "auto_research: rule AR-LN-009 (BLOCK, input phase) fires: a baseline/screening submit would spend the run reserve kept for confirm-phase runs.",
+      "trigger_facts": [
+        {
+          "path": "files.ledger/chain.jsonl",
+          "value": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"24bc883568c333937d10ece7715f7c9aeb55967f9a317c350d4c85eefb5016aa\",\"op\":\"launch_envelope\",\"payload_hash\":\"02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"ff97e42da91b5a4a5f645ba109647845b0230b43abe0cb574959f7f617187e08\",\"op\":\"job_submitted\",\"payload_hash\":\"38743331dd008809076d73c197b1179b3dc58d4ec24224e6a2d26876181d8a5f\",\"prev_hash\":\"24bc883568c333937d10ece7715f7c9aeb55967f9a317c350d4c85eefb5016aa\",\"seq\":2,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"031243d04ee7045f4c993064eea3da152e435ab5c25da0695e808d08f3a0c904\",\"op\":\"job_submitted\",\"payload_hash\":\"01e0b2ccf7b3136c730c7e73091e871aa2a04d450a48c702e8747a77aa6cd2ba\",\"prev_hash\":\"ff97e42da91b5a4a5f645ba109647845b0230b43abe0cb574959f7f617187e08\",\"seq\":3,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"6c26cb25f2b3118210b77900c8e2d1e4be552b610777c7399275cb89987782bf\",\"op\":\"job_submitted\",\"payload_hash\":\"5b57fe6737b03e5d13c10baa1037f6a9666796f2235c606f96fd85a612861cf0\",\"prev_hash\":\"031243d04ee7045f4c993064eea3da152e435ab5c25da0695e808d08f3a0c904\",\"seq\":4,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"1722c5400b0b887cf19a47b91e74fd3caf7c61056b11da4d091c37374c8906b1\",\"op\":\"job_submitted\",\"payload_hash\":\"cffa486383a23c80ae5e60f3b324fb0d50fe1fd7400c74788a35507254f3785b\",\"prev_hash\":\"6c26cb25f2b3118210b77900c8e2d1e4be552b610777c7399275cb89987782bf\",\"seq\":5,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"7f2efd9d54273f59d1d22a9ae1b8009e3f8823c8470132587f1eceac867572e7\",\"op\":\"trial_result\",\"payload_hash\":\"8d9655b69783a9da6f3019c42aca7a9d154f499ba3cfc6cf372acef16e0c6da3\",\"prev_hash\":\"1722c5400b0b887cf19a47b91e74fd3caf7c61056b11da4d091c37374c8906b1\",\"seq\":6,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"306b2f4ced8c9ede4c4ed1695f9e2f8b3f11b0ec7c9eb260282082ddc002c5dc\",\"op\":\"trial_result\",\"payload_hash\":\"86f70775518fb82e16ea0fb1915a0be27ec57004c856bb0636ee48b4e9fe2571\",\"prev_hash\":\"7f2efd9d54273f59d1d22a9ae1b8009e3f8823c8470132587f1eceac867572e7\",\"seq\":7,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"83a0618b084ba042cb98a52c1680ab5504d8ee3df16ab244c998f45f9c0aec9b\",\"op\":\"trial_result\",\"payload_hash\":\"6ae6a62918abaea48e5c7ea41f43e1c80bb06c346e8cc1e9d4c952345740932e\",\"prev_hash\":\"306b2f4ced8c9ede4c4ed1695f9e2f8b3f11b0ec7c9eb260282082ddc002c5dc\",\"seq\":8,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"ca7fb0620d071669abc1df4c94d73fc8feac977fb0b7c751eaf4ea574326d936\",\"op\":\"trial_result\",\"payload_hash\":\"8b696f9bf09a72ae23c7cca4723493f14d77436ff47c7892cc66bd0883f68f59\",\"prev_hash\":\"83a0618b084ba042cb98a52c1680ab5504d8ee3df16ab244c998f45f9c0aec9b\",\"seq\":9,\"trial\":\"m2-screened\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "check": false
+        },
+        {
+          "path": "files.ledger/fabric.json",
+          "value": "{\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/01e0b2ccf7b3136c730c7e73091e871aa2a04d450a48c702e8747a77aa6cd2ba.json",
+          "value": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"302\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"screening\",\"seed\":102,\"submitted_at\":1750000000.0,\"trial\":\"m2-screened\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b.json",
+          "value": "{\"approver\":\"arbiter\",\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"envelope\":{\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"scope\":\"one campaign\"},\"envelope_token\":\"8b6bd61e2aeccbb4a283c2fcd489dac7a07906cd4eeda363f66ce9d5189e655d\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/38743331dd008809076d73c197b1179b3dc58d4ec24224e6a2d26876181d8a5f.json",
+          "value": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"301\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"screening\",\"seed\":101,\"submitted_at\":1750000000.0,\"trial\":\"m2-screened\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/5b57fe6737b03e5d13c10baa1037f6a9666796f2235c606f96fd85a612861cf0.json",
+          "value": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"303\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"screening\",\"seed\":103,\"submitted_at\":1750000000.0,\"trial\":\"m2-screened\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/6ae6a62918abaea48e5c7ea41f43e1c80bb06c346e8cc1e9d4c952345740932e.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.4}},\"role\":\"candidate\",\"seed\":103,\"status\":\"ok\",\"steps\":200,\"trial\":\"m2-screened\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/86f70775518fb82e16ea0fb1915a0be27ec57004c856bb0636ee48b4e9fe2571.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.4}},\"role\":\"candidate\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"m2-screened\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/8b696f9bf09a72ae23c7cca4723493f14d77436ff47c7892cc66bd0883f68f59.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.4}},\"role\":\"candidate\",\"seed\":104,\"status\":\"ok\",\"steps\":200,\"trial\":\"m2-screened\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/8d9655b69783a9da6f3019c42aca7a9d154f499ba3cfc6cf372acef16e0c6da3.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.4}},\"role\":\"candidate\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"m2-screened\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/cffa486383a23c80ae5e60f3b324fb0d50fe1fd7400c74788a35507254f3785b.json",
+          "value": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"304\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"screening\",\"seed\":104,\"submitted_at\":1750000000.0,\"trial\":\"m2-screened\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json",
+          "value": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        }
+      ],
+      "question": "I'm driving campaign `ar-fixture` (base `gemma4-4b`, fingerprint `sha256:b2b2…b2b2`, objective max `val_accuracy` on `gsm8k`, budget `gpu_hours_total: 24.0` / `max_runs: 6` / `per_run_timeout_h: 8.0` / `reserve_frac: 0.3`, cluster `rally` with `gpus_per_node: 8`, `max_nodes: 2`, `time: 10-00:00:00`, excluding `r01dgx02`, seeds `101/102/103` with `baseline_repeats: 3` and `confirm_repeats: 3`, confirm `noise_floor_rel: 0.005`, `k: 2.0`, `guard_abs_epsilon: 0.01`, empty `guardrails`, stopping `max_crash_streak: 2` / `no_gain_streak: 3`), and I want to submit a new trial `m2-screen` (delta `optim.lr: 0.0005`, `kind: eval_only`, `role: candidate`, `seed: 105`, `nodes: 1`, `gpus_per_node: 8`, `time: 10-00:00:00`, `gpu_hours_est: 1.0`, command `uv run train.py --config campaign.yaml`, eval command `eval run gsm8k`) with `approver: arbiter`, `campaign_confirm: {confirm}`, `launch_token: f7c5730b5d95b35bceb8a30b3d1196c48c23835b82d0887f0b570821f287f788`, `ledger_dir: {tmp}/ledger`. Here's what I already see staged: `ledger/chain.jsonl` holds 10 entries (seq 0 `campaign_approved` hash `5c640a07…`, seq 1 `launch_envelope` hash `24bc8835…`, seq 2–5 `job_submitted` for trial `m2-screened` seeds 101–104 hashes `ff97e42d…`/`031243d0…`/`6c26cb25…`/`1722c540…`, seq 6–9 `trial_result` hashes `7f2efd9d…`/`306b2f4c…`/`83a0618b…`/`ca7fb062…`, all `ts: 2026-01-01T00:00:00Z`); `ledger/fabric.json` says `{\"master:8081\": {\"reason\": \"fabric_refused\", \"state\": \"refused\", \"ts\": 4102444800.0}}`; the approval object `dd78b84a…` records `approver: arbiter`, `spec_hash: 300d0e9d…`; the envelope object `02e2d927…` records `approver: arbiter`, `budget: {gpu_hours_total: 24.0, max_runs: 6}`, `envelope: {budget: {gpu_hours_total: 24.0, max_runs: 6}, scope: \"one campaign\"}`, `envelope_token: 8b6bd61e…`, `spec_hash: 300d0e9d…`; the four submission objects (`38743331…` seed 101 job 301, `01e0b2cc…` seed 102 job 302, `5b57fe67…` seed 103 job 303, `cffa4863…` seed 104 job 304) all show `gpu_hours_est: 1.0`, `kind: eval_only`, `phase: screening`, `trial: m2-screened`, `submitted_at: 1750000000.0`, `launch_token: fs-ar-trial-v1-fixture`, `budget_after: {hours_left: 16.0, runs_left: 2}`; and the four result objects (`8d9655b6…` seed 101, `86f70775…` seed 102, `6ae6a629…` seed 103, `8b696f9b…` seed 104) each show `status: ok`, `role: candidate`, `steps: 200`, `limited: false`, `metrics.val_accuracy: {value: 0.4, se: 0.001}`, `eval_policy_fingerprint: sha256:a1a1…a1a1`, `trial: m2-screened`. What's the outcome of submitting `m2-screen` with `seed: 105`?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-auto-research-oracle-AR-RS-007",
+      "skill": "auto_research",
+      "rule_id": "AR-RS-007",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "claim over an incomplete/unmeasured confirm set (missing, pending, crashed, limited or unpaired seed) or of a decision that is not accepted_gain",
+      "fixture": {
+        "files": {
+          "ledger/chain.jsonl": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"24bc883568c333937d10ece7715f7c9aeb55967f9a317c350d4c85eefb5016aa\",\"op\":\"launch_envelope\",\"payload_hash\":\"02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"1508d437586cac0108eb131486d75c8e8f79c9e987e75c0bca174fc74b62ffc7\",\"op\":\"trial_result\",\"payload_hash\":\"1534a147c63e739ba320c4213d46cb4642a3a86639a25469b67a27255e58c2d5\",\"prev_hash\":\"24bc883568c333937d10ece7715f7c9aeb55967f9a317c350d4c85eefb5016aa\",\"seq\":2,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"521264913c0c62c8b8f7a47910beb79f8b083d48e95681af067da38d046aeb0d\",\"op\":\"trial_result\",\"payload_hash\":\"dc5cf56d2677e1db05cb8597db68cce216590945b7408ceaf1fe504a6faa7624\",\"prev_hash\":\"1508d437586cac0108eb131486d75c8e8f79c9e987e75c0bca174fc74b62ffc7\",\"seq\":3,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"f7aceeb96eecdbb0e4fa05fe685dce8203bec9f27a6dce626b67e7be55a8105d\",\"op\":\"trial_result\",\"payload_hash\":\"ffe6291ee6ccf1eb260a7a3bcc92ca10935f54aeeafe60b13547496a32a8e29a\",\"prev_hash\":\"521264913c0c62c8b8f7a47910beb79f8b083d48e95681af067da38d046aeb0d\",\"seq\":4,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"8acdebf0a48c9d23d481e940356bf9a54961e8f914e9a2ce79cd72fd901d39e0\",\"op\":\"job_submitted\",\"payload_hash\":\"01cab09d638964b94b996836e7c24ddd412768957d25be0f192f24379903ea7c\",\"prev_hash\":\"f7aceeb96eecdbb0e4fa05fe685dce8203bec9f27a6dce626b67e7be55a8105d\",\"seq\":5,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"61bfb6ae07afee59e33f96fa9d66fb46f3117be866db63a03c467f70dca91d17\",\"op\":\"trial_result\",\"payload_hash\":\"9afb9bd143f3c025b1ab52908c78955e262a383949d13fec21b2c5e683043e99\",\"prev_hash\":\"8acdebf0a48c9d23d481e940356bf9a54961e8f914e9a2ce79cd72fd901d39e0\",\"seq\":6,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"5c44e6324143eaa36320c17a28cd72c28201764d1e0f040c5e5020b282c7bbea\",\"op\":\"job_submitted\",\"payload_hash\":\"934ccbebcf38466570ff828c26ebbc96a45e44c80fcb4e1f0152b5aadf514517\",\"prev_hash\":\"61bfb6ae07afee59e33f96fa9d66fb46f3117be866db63a03c467f70dca91d17\",\"seq\":7,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"0a3f0b8403409ca67021faadb65a4c89f23f90c44e21f268b5a66a4a70350378\",\"op\":\"trial_result\",\"payload_hash\":\"ebe372e2727d225635210f81df8ce028988a0031418d468bd71eebdf23ca3768\",\"prev_hash\":\"5c44e6324143eaa36320c17a28cd72c28201764d1e0f040c5e5020b282c7bbea\",\"seq\":8,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "ledger/objects/01cab09d638964b94b996836e7c24ddd412768957d25be0f192f24379903ea7c.json": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"801\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"confirm\",\"seed\":101,\"submitted_at\":1750000000.0,\"trial\":\"t1\"}",
+          "ledger/objects/02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b.json": "{\"approver\":\"arbiter\",\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"envelope\":{\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"scope\":\"one campaign\"},\"envelope_token\":\"8b6bd61e2aeccbb4a283c2fcd489dac7a07906cd4eeda363f66ce9d5189e655d\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "ledger/objects/1534a147c63e739ba320c4213d46cb4642a3a86639a25469b67a27255e58c2d5.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.5}},\"role\":\"baseline\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "ledger/objects/934ccbebcf38466570ff828c26ebbc96a45e44c80fcb4e1f0152b5aadf514517.json": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"802\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"confirm\",\"seed\":102,\"submitted_at\":1750000000.0,\"trial\":\"t1\"}",
+          "ledger/objects/9afb9bd143f3c025b1ab52908c78955e262a383949d13fec21b2c5e683043e99.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.9}},\"role\":\"confirm\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "ledger/objects/dc5cf56d2677e1db05cb8597db68cce216590945b7408ceaf1fe504a6faa7624.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.5}},\"role\":\"baseline\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "ledger/objects/ebe372e2727d225635210f81df8ce028988a0031418d468bd71eebdf23ca3768.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.9}},\"role\":\"confirm\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "ledger/objects/ffe6291ee6ccf1eb260a7a3bcc92ca10935f54aeeafe60b13547496a32a8e29a.json": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.5}},\"role\":\"baseline\",\"seed\":103,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}"
+        },
+        "request": {
+          "action": "claim",
+          "approver": "arbiter",
+          "campaign_confirm": "{confirm}",
+          "campaign_spec": {
+            "axes": [
+              {
+                "key": "optim.lr",
+                "max": 0.001,
+                "min": 1e-06,
+                "type": "log_float"
+              },
+              {
+                "key": "train.method",
+                "type": "categorical",
+                "values": [
+                  "full",
+                  "lora"
+                ]
+              },
+              {
+                "key": "lora.rank",
+                "max": 64,
+                "min": 4,
+                "type": "int"
+              }
+            ],
+            "base": {
+              "fingerprint": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+              "model": "gemma4-4b"
+            },
+            "budget": {
+              "gpu_hours_total": 24.0,
+              "max_runs": 6,
+              "per_run_timeout_h": 8.0,
+              "reserve_frac": 0.3
+            },
+            "cluster": {
+              "exclude": [
+                "r01dgx02"
+              ],
+              "gpus_per_node": 8,
+              "max_nodes": 2,
+              "partition": "rally",
+              "time": "10-00:00:00"
+            },
+            "confirm": {
+              "guard_abs_epsilon": 0.01,
+              "guardrails": [],
+              "k": 2.0,
+              "noise_floor_rel": 0.005
+            },
+            "eval_policy": {
+              "fingerprint": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "metrics": [
+                "val_accuracy",
+                "throughput"
+              ]
+            },
+            "id": "ar-fixture",
+            "objective": {
+              "benchmarks": [
+                "gsm8k"
+              ],
+              "direction": "max",
+              "metric": "val_accuracy"
+            },
+            "seeds": {
+              "baseline_repeats": 3,
+              "confirm_repeats": 3,
+              "seed_list": [
+                101,
+                102,
+                103
+              ]
+            },
+            "stopping": {
+              "max_crash_streak": 2,
+              "no_gain_streak": 3
+            }
+          },
+          "ledger_dir": "{tmp}/ledger",
+          "trial": "t1"
+        }
+      },
+      "fixture_sha256": "4e3942c1733370cc246d48b142fc2b9097934e7e317fcb8e61ff5bbdbc7e7c7f",
+      "expected_behavior": [
+        "Identifies the problem: claim over an incomplete/unmeasured confirm set (missing, pending, crashed, limited or unpaired seed) or of a decision that is not accepted_gain",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule AR-RS-007"
+      ],
+      "ground_truth": "auto_research: rule AR-RS-007 (BLOCK, input phase) fires: claim over an incomplete/unmeasured confirm set (missing, pending, crashed, limited or unpaired seed) or of a decision that is not accepted_gain.",
+      "trigger_facts": [
+        {
+          "path": "files.ledger/chain.jsonl",
+          "value": "{\"campaign\":\"ar-fixture\",\"hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"op\":\"campaign_approved\",\"payload_hash\":\"dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":0,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"24bc883568c333937d10ece7715f7c9aeb55967f9a317c350d4c85eefb5016aa\",\"op\":\"launch_envelope\",\"payload_hash\":\"02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b\",\"prev_hash\":\"5c640a07b46168d5f4f23768e55c3740d1f0234be2a7bf42b40d2ddb9cd075a0\",\"seq\":1,\"trial\":\"-\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"1508d437586cac0108eb131486d75c8e8f79c9e987e75c0bca174fc74b62ffc7\",\"op\":\"trial_result\",\"payload_hash\":\"1534a147c63e739ba320c4213d46cb4642a3a86639a25469b67a27255e58c2d5\",\"prev_hash\":\"24bc883568c333937d10ece7715f7c9aeb55967f9a317c350d4c85eefb5016aa\",\"seq\":2,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"521264913c0c62c8b8f7a47910beb79f8b083d48e95681af067da38d046aeb0d\",\"op\":\"trial_result\",\"payload_hash\":\"dc5cf56d2677e1db05cb8597db68cce216590945b7408ceaf1fe504a6faa7624\",\"prev_hash\":\"1508d437586cac0108eb131486d75c8e8f79c9e987e75c0bca174fc74b62ffc7\",\"seq\":3,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"f7aceeb96eecdbb0e4fa05fe685dce8203bec9f27a6dce626b67e7be55a8105d\",\"op\":\"trial_result\",\"payload_hash\":\"ffe6291ee6ccf1eb260a7a3bcc92ca10935f54aeeafe60b13547496a32a8e29a\",\"prev_hash\":\"521264913c0c62c8b8f7a47910beb79f8b083d48e95681af067da38d046aeb0d\",\"seq\":4,\"trial\":\"baseline\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"8acdebf0a48c9d23d481e940356bf9a54961e8f914e9a2ce79cd72fd901d39e0\",\"op\":\"job_submitted\",\"payload_hash\":\"01cab09d638964b94b996836e7c24ddd412768957d25be0f192f24379903ea7c\",\"prev_hash\":\"f7aceeb96eecdbb0e4fa05fe685dce8203bec9f27a6dce626b67e7be55a8105d\",\"seq\":5,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"61bfb6ae07afee59e33f96fa9d66fb46f3117be866db63a03c467f70dca91d17\",\"op\":\"trial_result\",\"payload_hash\":\"9afb9bd143f3c025b1ab52908c78955e262a383949d13fec21b2c5e683043e99\",\"prev_hash\":\"8acdebf0a48c9d23d481e940356bf9a54961e8f914e9a2ce79cd72fd901d39e0\",\"seq\":6,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"5c44e6324143eaa36320c17a28cd72c28201764d1e0f040c5e5020b282c7bbea\",\"op\":\"job_submitted\",\"payload_hash\":\"934ccbebcf38466570ff828c26ebbc96a45e44c80fcb4e1f0152b5aadf514517\",\"prev_hash\":\"61bfb6ae07afee59e33f96fa9d66fb46f3117be866db63a03c467f70dca91d17\",\"seq\":7,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n{\"campaign\":\"ar-fixture\",\"hash\":\"0a3f0b8403409ca67021faadb65a4c89f23f90c44e21f268b5a66a4a70350378\",\"op\":\"trial_result\",\"payload_hash\":\"ebe372e2727d225635210f81df8ce028988a0031418d468bd71eebdf23ca3768\",\"prev_hash\":\"5c44e6324143eaa36320c17a28cd72c28201764d1e0f040c5e5020b282c7bbea\",\"seq\":8,\"trial\":\"t1\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/01cab09d638964b94b996836e7c24ddd412768957d25be0f192f24379903ea7c.json",
+          "value": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"801\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"confirm\",\"seed\":101,\"submitted_at\":1750000000.0,\"trial\":\"t1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/02e2d927d4dfe3869e77092582cba027610e5af6450612eea708afc9c2184f4b.json",
+          "value": "{\"approver\":\"arbiter\",\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"envelope\":{\"budget\":{\"gpu_hours_total\":24.0,\"max_runs\":6},\"scope\":\"one campaign\"},\"envelope_token\":\"8b6bd61e2aeccbb4a283c2fcd489dac7a07906cd4eeda363f66ce9d5189e655d\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/1534a147c63e739ba320c4213d46cb4642a3a86639a25469b67a27255e58c2d5.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.5}},\"role\":\"baseline\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/934ccbebcf38466570ff828c26ebbc96a45e44c80fcb4e1f0152b5aadf514517.json",
+          "value": "{\"budget_after\":{\"hours_left\":16.0,\"runs_left\":2},\"gpu_hours_est\":1.0,\"job_id\":\"802\",\"kind\":\"eval_only\",\"launch_token\":\"fs-ar-trial-v1-fixture\",\"phase\":\"confirm\",\"seed\":102,\"submitted_at\":1750000000.0,\"trial\":\"t1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/9afb9bd143f3c025b1ab52908c78955e262a383949d13fec21b2c5e683043e99.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.9}},\"role\":\"confirm\",\"seed\":101,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/dc5cf56d2677e1db05cb8597db68cce216590945b7408ceaf1fe504a6faa7624.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.5}},\"role\":\"baseline\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/dd78b84a87d57694dedd5bcafa3b0c271a7a09709ef01478a51a39b7b54ca221.json",
+          "value": "{\"approver\":\"arbiter\",\"spec_hash\":\"300d0e9d0218af6a91f9334f464ff790d2f30f8828d413c2daa0e707b69fb0b1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/ebe372e2727d225635210f81df8ce028988a0031418d468bd71eebdf23ca3768.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.9}},\"role\":\"confirm\",\"seed\":102,\"status\":\"ok\",\"steps\":200,\"trial\":\"t1\"}",
+          "check": false
+        },
+        {
+          "path": "files.ledger/objects/ffe6291ee6ccf1eb260a7a3bcc92ca10935f54aeeafe60b13547496a32a8e29a.json",
+          "value": "{\"eval_policy_fingerprint\":\"sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\",\"limited\":false,\"metrics\":{\"val_accuracy\":{\"se\":0.001,\"value\":0.5}},\"role\":\"baseline\",\"seed\":103,\"status\":\"ok\",\"steps\":200,\"trial\":\"baseline\"}",
+          "check": false
+        }
+      ],
+      "question": "I'm running the auto_research claim action for campaign ar-fixture with the given spec and campaign_confirm placeholder, operating on the staged ledger files I observed at ledger/chain.jsonl and the nine ledger/objects files with their exact contents (campaign_approved seq 0, launch_envelope seq 1, three baseline trial_results, two job_submitted and two t1 trial_results, and the object payloads including budget_after hours_left 16.0 runs_left 2, envelope_token 8b6bd61e..., val_accuracy 0.5 baseline / 0.9 confirm, etc.). What's the outcome of the claim — what does the campaign return after validating the spec, opening the approval envelope, authorising the t1 launches, and closing against the calibrated noise floor?",
       "question_model": "mimo-v2.6-pro"
     }
   ]
