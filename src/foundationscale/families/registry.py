@@ -241,6 +241,46 @@ REGISTRY: tuple[FamilySpec, ...] = (
         ),
         expert_count_path=("text_config", "num_experts"),
     ),
+    # Speech families (P4). Module names measured on the real checkpoints with
+    # transformers 5.5 (whisper-large-v3, parakeet-ctc-1.1b, Qwen2-Audio-7B-Instruct).
+    # adapter_full_train is left EMPTY on all three: their LoRA wrap points are not
+    # measured yet, so an adapter run that declares audio refuses rather than guesses.
+    FamilySpec(
+        name="whisper",
+        model_types=("whisper",),
+        # Encoder-decoder: the decoder is the text side, the encoder hears the audio.
+        language_prefixes=("model.decoder",),
+        towers=(("model.encoder", "audio"),),
+        adapter_leaf_modules=("q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"),
+        expert_count_path=(),
+    ),
+    FamilySpec(
+        name="parakeet_ctc",
+        model_types=("parakeet_ctc",),
+        # A CTC model has no language model: the ctc_head maps encoder frames to
+        # tokens and is the only non-encoder module.
+        language_prefixes=("ctc_head",),
+        towers=(("encoder", "audio"),),
+        adapter_leaf_modules=("ctc_head",),
+        expert_count_path=(),
+    ),
+    FamilySpec(
+        name="qwen2_audio",
+        model_types=("qwen2_audio",),
+        # No "model." prefix on this checkpoint: the three roots are top-level.
+        language_prefixes=("language_model",),
+        towers=(("audio_tower", "audio"), ("multi_modal_projector", "audio")),
+        adapter_leaf_modules=(
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ),
+        expert_count_path=("text_config", "num_experts"),
+    ),
 )
 
 

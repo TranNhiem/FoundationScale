@@ -313,8 +313,14 @@ def adjudicate_speech(
     saved_digests: Mapping[str, str] | None,
     towers: Sequence[tuple[str, bool]],
     adapter: str | None,
+    placeholder_applicable: bool = True,
 ) -> SpeechAdjudication:
     """Adjudicate one speech checkpoint at SAVE: verdicts plus why anything is absent.
+
+    ``placeholder_applicable=False`` for the seq2seq and ctc kinds: their batches carry no
+    audio placeholder tokens (the audio enters as encoder features), so the placeholder
+    gate has nothing to compare and is recorded as a NOT_APPLICABLE note instead of a
+    denominator mismatch.
 
     Result order:
 
@@ -369,17 +375,25 @@ def adjudicate_speech(
             )
         )
     )
-    results.append(
-        AudioPlaceholderCoverageGate().run(
-            AudioPlaceholderContext(
-                rows_checked=rows_checked,
-                placeholder_rows_verified=int(coverage_manifest["placeholder_rows_verified"]),
-                placeholder_rows_unmeasured=int(coverage_manifest["placeholder_rows_unmeasured"]),
+    notes: list[str] = []
+    if placeholder_applicable:
+        results.append(
+            AudioPlaceholderCoverageGate().run(
+                AudioPlaceholderContext(
+                    rows_checked=rows_checked,
+                    placeholder_rows_verified=int(coverage_manifest["placeholder_rows_verified"]),
+                    placeholder_rows_unmeasured=int(
+                        coverage_manifest["placeholder_rows_unmeasured"]
+                    ),
+                )
             )
         )
-    )
+    else:
+        notes.append(
+            "placeholder coverage is NOT_APPLICABLE for this model kind: the audio enters "
+            "as encoder features, so the batch carries no audio placeholder tokens"
+        )
 
-    notes: list[str] = []
     if adapter is not None:
         # An adapter run saves only what trained: the adapter and the
         # modules_to_save copies of the exercised towers. peft freezes every other
@@ -475,6 +489,7 @@ def run_final_speech_adjudication(
     base_digests: Mapping[str, str] | None,
     towers: Sequence[tuple[str, bool]],
     adapter: str | None,
+    placeholder_applicable: bool = True,
 ) -> SpeechAdjudication:
     """Read the final save's tower digests (safetensors layout only) and adjudicate.
 
@@ -492,6 +507,7 @@ def run_final_speech_adjudication(
         saved_digests=saved,
         towers=towers,
         adapter=adapter,
+        placeholder_applicable=placeholder_applicable,
     )
 
 

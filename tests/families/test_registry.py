@@ -203,9 +203,11 @@ def test_tower_prefixes_may_be_empty_because_some_families_have_no_towers() -> N
     assert spec.tower_prefixes == ()
 
 
-def test_registry_declares_the_two_families_measured_on_this_estate() -> None:
+def test_registry_declares_the_families_measured_on_this_estate() -> None:
+    # Two vision/omni LLM families plus the three speech families of P4, each
+    # registered from a measured checkpoint.
     names = {spec.name for spec in REGISTRY}
-    assert names == {"gemma4", "qwen3.5"}
+    assert names == {"gemma4", "qwen3.5", "whisper", "parakeet_ctc", "qwen2_audio"}
 
 
 def test_gemma4_declares_an_audio_tower_and_qwen_does_not() -> None:
@@ -220,5 +222,9 @@ def test_gemma4_declares_an_audio_tower_and_qwen_does_not() -> None:
 def test_expert_count_path_is_nested_not_flat() -> None:
     # A flat config.get("num_experts") reads None on every MoE checkpoint here
     # and concludes the model is dense.
+    # Empty is allowed (and documented) only for a family that never declares
+    # experts -- the encoder-decoder and CTC speech families have no text_config.
     for spec in REGISTRY:
-        assert spec.expert_count_path == ("text_config", "num_experts")
+        assert spec.expert_count_path in (("text_config", "num_experts"), ())
+    never_moe = {spec.name for spec in REGISTRY if not spec.expert_count_path}
+    assert never_moe == {"whisper", "parakeet_ctc"}

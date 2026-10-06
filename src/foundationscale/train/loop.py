@@ -1602,7 +1602,15 @@ def _histogram_from_entries(entries: list[tuple[str, str]]) -> dict[str, int] | 
     dict from here would be a measured zero over an unmeasured set.
     """
     counts: dict[str, int] = {}
-    for _, dtype in entries:
+    for name, dtype in entries:
+        # BatchNorm step counters are int64 BUFFERS, not weights: they carry no
+        # floating-point precision, so counting them would read every conv/BN model
+        # as disagreeing with its declared precision. Measured on parakeet-ctc-1.1b:
+        # 42 I64 `*.num_batches_tracked` tensors turned a healthy bf16 save RED. The
+        # exemption is by NAME and dtype together -- an int8 WEIGHT in a bf16 run is a
+        # real disagreement and must still count.
+        if dtype == "I64" and name.endswith(".num_batches_tracked"):
+            continue
         counts[dtype] = counts.get(dtype, 0) + 1
     return counts or None
 
@@ -4472,6 +4480,9 @@ def _train(cfg: TrainConfig) -> int:
     from foundationscale.train.audio import AUDIO_COLUMN_ENV  # noqa: PLC0415
 
     AUDIO_COLUMN = _os.environ.get(AUDIO_COLUMN_ENV) or None
+    # Set where the model is loaded (speech_kinds.speech_model_kind); None means
+    # either no audio column or a checkpoint that is not a known speech kind.
+    _speech_kind: str | None = None
     _audio_conflict = _audio_declaration_conflict(
         audio_column=AUDIO_COLUMN, image_column=IMAGE_COLUMN, cp=cfg.cp
     )
@@ -4614,7 +4625,27 @@ def _train(cfg: TrainConfig) -> int:
             prompt_surface = resolve_prompt_surface(cfg.model, needs_images=True)
             tokenizer = getattr(prompt_surface.surface, "tokenizer", prompt_surface.surface)
         try:
-            model = AutoModelForCausalLM.from_pretrained(cfg.model, **model_kwargs)
+            if AUDIO_COLUMN is not None:
+                # Speech plane: the model KIND decides the class. AutoModelForCausalLM
+                # builds a decoder-only WhisperForCausalLM on a Whisper config and
+                # raises for CTC and Qwen2-Audio checkpoints (measured, transformers
+                # 5.5). An unknown kind loads causally and is refused at the support
+                # check below, naming the model type.
+                from transformers import AutoConfig  # noqa: PLC0415
+
+                from foundationscale.train.speech_kinds import (  # noqa: PLC0415
+                    load_speech_model,
+                    speech_model_kind,
+                )
+
+                _speech_kind = speech_model_kind(AutoConfig.from_pretrained(cfg.model))
+                model = (
+                    load_speech_model(_speech_kind, cfg.model, **model_kwargs)
+                    if _speech_kind is not None
+                    else AutoModelForCausalLM.from_pretrained(cfg.model, **model_kwargs)
+                )
+            else:
+                model = AutoModelForCausalLM.from_pretrained(cfg.model, **model_kwargs)
         except (ValueError, TypeError, ImportError) as exc:
             if cfg.attn_implementation is None and cfg.precision is None:
                 raise
@@ -5119,9 +5150,9 @@ def _train(cfg: TrainConfig) -> int:
         # the resolved family and the loaded processor. A family with no audio
         # tower, or a processor that cannot place audio tokens, is a REFUSAL --
         # training on would fit the text and leave the waveform unread.
-        from foundationscale.train.audio import audio_support_refusal  # noqa: PLC0415
+        from foundationscale.train.speech_kinds import speech_plane_refusal  # noqa: PLC0415
 
-        _audio_refusal = audio_support_refusal(_family, prompt_surface.surface)
+        _audio_refusal = speech_plane_refusal(_speech_kind, _family, prompt_surface.surface)
         if _audio_refusal is not None:
             _mark(Step.REFUSE, _audio_refusal)
             _emit_manifest(
@@ -5142,8 +5173,26 @@ def _train(cfg: TrainConfig) -> int:
         )
 
         _speech_towers, _speech_base_digests = capture_speech_inputs(
-            _family, lambda: model.state_dict().items()
+            # PARAMETERS, not the state_dict: buffers such as BatchNorm running
+            # statistics change in train mode without any weight training, which
+            # would let an untrained tower read as "moved" (measured on
+            # parakeet-ctc-1.1b, whose conformer convs carry BatchNorm).
+            _family,
+            lambda: model.named_parameters(),
         )
+    if AUDIO_COLUMN is not None:
+        from foundationscale.train.speech_kinds import (  # noqa: PLC0415
+            freeze_batchnorm_statistics,
+        )
+
+        _frozen_bn = freeze_batchnorm_statistics(model)
+        if _frozen_bn:
+            _mark(
+                Step.VALIDATED,
+                f"[   ok] speech.batchnorm: {_frozen_bn} BatchNorm layer(s) keep their stored "
+                "running statistics during training (affine weights still train): small, "
+                "zero-padded audio batches otherwise corrupt them (measured on parakeet-ctc)",
+            )
     _dormant_towers = _dormant_modality_towers(
         model,
         family=_family,
@@ -5592,13 +5641,16 @@ def _train(cfg: TrainConfig) -> int:
     if AUDIO_COLUMN is not None:
         from foundationscale.train.audio import (  # noqa: PLC0415
             refuse_if_audio_features_dropped,
-            train_audio_collator_or_refuse,
         )
+        from foundationscale.train.speech_kinds import build_speech_collator  # noqa: PLC0415
 
-        data_collator = train_audio_collator_or_refuse(
+        data_collator = build_speech_collator(
+            _speech_kind or "audio_llm",
             prompt_surface,
             audio_column=AUDIO_COLUMN,
             max_length=cfg.max_sequence_length,
+            model_config=model.config,
+            language=_os.environ.get("FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE") or None,
         )
         # The image arm's POSITIVE survival proof, for audio: collate real rows
         # before a step is paid for, and refuse (96) -- naming the column -- if
@@ -6213,6 +6265,7 @@ def _train(cfg: TrainConfig) -> int:
             base_digests=_speech_base_digests,
             towers=_speech_towers,
             adapter=cfg.adapter,
+            placeholder_applicable=_speech_kind == "audio_llm",
         )
         # The speech gates are registered on SAVE so the controls walk certifies
         # them, which also lists them as SKIP in the generic save sweeps; the note

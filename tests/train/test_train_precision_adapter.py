@@ -1136,3 +1136,24 @@ def test_declare_checkpoint_basis_message_moves_with_the_adapter_count(
         scopes.add(scope)
     assert len(bases) == 2  # the count is load-bearing in the dense basis
     assert len(scopes) == 2  # and in the adapter-scope note
+
+
+def test_batchnorm_step_counters_do_not_count_as_a_precision_disagreement() -> None:
+    """MUST_PASS/MUST_FIRE: BN `num_batches_tracked` I64 buffers are exempt; an I64 weight is not.
+
+    Measured on parakeet-ctc-1.1b: 42 such buffers turned a healthy bf16 save RED.
+    """
+    from foundationscale.train.loop import _histogram_from_entries
+
+    entries = [
+        ("encoder.layers.0.conv.batch_norm.weight", "BF16"),
+        ("encoder.layers.0.conv.batch_norm.num_batches_tracked", "I64"),
+    ]
+    assert _histogram_from_entries(entries) == {"BF16": 1}
+    # Name AND dtype together: an integer tensor that is not a BN counter still counts.
+    assert _histogram_from_entries([*entries, ("encoder.q_proj.weight", "I64")]) == {
+        "BF16": 1,
+        "I64": 1,
+    }
+    # Only counters -> nothing precision-bearing was measured -> None, never {}.
+    assert _histogram_from_entries([entries[1]]) is None

@@ -210,6 +210,10 @@ PENDING_ENROLMENT: dict[str, str] = {
         "dtype-tagged tensor digests, safetensors digest reading, and the fold of speech "
         "gate verdicts into the run exit code (RED outranks PASS, abstention moves PASS)"
     ),
+    "src/foundationscale/train/speech_kinds.py": (
+        "speech model-kind dispatch (audio_llm / seq2seq / ctc): the loader class per kind, "
+        "per-kind processor refusals, Whisper prompt-prefix verification and CTC blank padding"
+    ),
     "src/foundationscale/train/speech_metrics.py": (
         "transcript normalisation and Levenshtein word/character error counting with the "
         "micro-averaged corpus rate and its checked-vs-expected utterance verdict"
