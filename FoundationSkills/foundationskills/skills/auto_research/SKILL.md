@@ -67,6 +67,8 @@ Axes are the measured FoundationSkills knobs (`optim.lr`, `optim.warmup_ratio`, 
 `train.method` full|lora, `lora.rank`, `lora.alpha`, `train.seq_len`, `train.global_batch`,
 `train.micro_batch`, `train.max_steps`, `train.epochs`, `rl.algorithm` dr_grpo|gspo|dapo, `rl.group_size`,
 `rl.temperature`, `rl.kl_coef`, `data.mix`); `parallel.*` and `train.async` are refused (UNSUPPORTED_AXES).
+- Optional block `proposer{name: catalog (default) | optuna, min_rows: 10 (>= 1), require_model: false,
+  seed: 0}`: selects the (M3) proposer and is part of the spec hash; validated by AR-IN-008.
 
 Launch spec shape: `{trial, role(baseline|candidate|confirm), seed, delta{path: value}, nodes, gpus_per_node,
 partition, time, gpu_hours_est, commands[]}`.
@@ -80,12 +82,15 @@ metrics{name: {value, se}}}`.
   budgets{planned, used_gpu_hours, runs}, ledger{count, head_hash, verified}, tsv}`.
 - The ledger (`chain.jsonl` + content-addressed `objects/<sha256>.json`) is the evidence:
   ops `campaign_approved`, `launch_authorised`, `trial_result`, `campaign_closed`, `launch_envelope`,
-  `job_submitted`, `job_cancelled`, each entry hash-chained over its fields; `verify()` reports the first
+  `job_submitted`, `job_cancelled`, `proposal` (exactly one per `propose` call; payload keys `proposer`,
+  `requested`, `seed`, `rows_digest`, `k`, `fallback`, `cards`, `drops`, `stats`), each entry hash-chained over
+  its fields; `verify()` reports the first
   broken seq; results are never updated or deleted.
 - Status/exit: PASS (0) | RED (5) | UNMEASURED (95) | REFUSED (96).
 - Payload per action: `check` -> `{spec_hash, axes, budget}` (no ledger writes); `envelope` ->
   `{envelope_token}`; `launch` -> `{launch_token, budget_left}`; `submit` -> `{job_id, budget_after}`;
-  `cancel` -> `{cancelled, drops}`; `record` -> `{recorded, ledger}`; `propose` -> `{cards}` (no writes);
+  `cancel` -> `{cancelled, drops}`; `record` -> `{recorded, ledger}`; `propose` ->
+  `{cards, drops, proposer, requested, rows_digest, seed, fallback, dropped}` (writes one `proposal` op);
   `close` -> the report contents (`budgets` carry measured/declared/drops from `campaign_usage`).
   A repeated `close` re-reports the sealed chain and never appends a second `campaign_closed`.
 - Render refusals (`submit`, REFUSED before any launch): `sbatch_not_rendered` (a cluster trial with no sbatch
@@ -150,7 +155,7 @@ itself - the acceptance statistics and the exit codes (0/5/95/96) are computed f
 | `submit` | spec + confirm + `trial_spec` + `launch_token` | `launch_authorised` + `job_submitted` | job_id, budget_after |
 | `cancel` | spec + confirm + `job_ids` + `reason` | `job_cancelled` | cancelled, drops |
 | `record` | spec + confirm + `result` | `trial_result` | recorded key, ledger head |
-| `propose` | spec + confirm + `current` + `symptoms` | approval envelope only | cards |
+| `propose` | spec + confirm + `current` + `symptoms` | `proposal` | cards, drops, proposer, requested, rows_digest, seed, fallback, dropped |
 | `claim` | spec + confirm + `trial` | `claim` | claim_id, champion, prev |
 | `close` | spec + confirm + recorded results + `stop_reason` | `campaign_closed` + report artifact | report contents (champion, claims, unclaimed_gains) |
 
@@ -179,6 +184,29 @@ Once `campaign_closed` is on the ledger every action except `check` and `close` 
 - A claim that lost a seed result is downgraded (drop `claim_downgraded:<claim_id>` + AR-HO-004, UNMEASURED)
   without cascading: at close a claimed trial is decided against the rows it was claimed against, every
   other trial against the champion's rows (baseline rows while the chain roots at `baseline`).
+
+## Proposers (M3)
+- The ideas catalog (`propose.py`, untouched) is the deterministic default and the regression oracle
+  (byte-identical to the M0 ranking), and the mandatory fallback.
+- A model proposer (optuna: TPE) is a lazily imported optional extra, never installed by default; it is
+  eligible only with >= `proposer.min_rows` model rows, the extra importable and >= 1 axis (`eligible()`:
+  known name, row count, extra imports, one axis).
+- A model row (B2): a non-baseline trial with a measured result and recoverable axis parameters; noise-floor
+  repeats never count. Parameters come from the result `delta` else the latest launch payload (B6),
+  restricted to `spec.axes`.
+- The told value is the trial's mean measured objective (direction from `objective.direction`; `None` is never
+  told).
+- Each optuna card is a full assignment over `spec.axes` with `score: None` (B5); model cards outside the axes
+  drop `model_out_of_axes:<idea>`, never clamped.
+- `select` re-runs a FRESH proposer over the same inputs and requires byte-identical cards.
+- Non-strict failure falls back to the catalog with the counted drop `proposer_fallback_catalog:<reason>`;
+  reasons: `below_min_rows:<n>/<m>`, `extra_missing:<name>`, `no_axes`, `model_error`, `no_model_cards`, `unverified`.
+- With `require_model` set the same conditions are REFUSED (AR-PR-001: `proposer_unavailable:<reason>` or
+  `proposer_unverified:<name>`) and nothing is appended.
+- `rows_digest` ("sha256:<hex>") pins spec axes/objective/proposer config + results + launches + `current` +
+  `symptoms` (`None` when unmeasurable).
+- A card is a suggestion: it reaches a run only through `submit` and every M1/M2 gate. The proposer config is
+  part of the spec hash: switching proposer mid-campaign fails `campaign_confirm`.
 
 ## Acceptance statistics
 - Evidence = ok, non-limited results with the metric present, paired by seed; crashes are excluded and
@@ -218,6 +246,7 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-IN-005 | input | BLOCK | axis key outside AXIS_PATHS (or in UNSUPPORTED_AXES) or range/values invalid for its kind |
 | AR-IN-006 | input | BLOCK | result payload malformed, or a crash record carries metric values |
 | AR-IN-007 | input | BLOCK | seed plan invalid (seed_list empty/duplicate/non-int, repeats < 1, confirm_repeats beyond the seed list, or `cluster.max_in_flight` invalid/above `budget.max_runs`) |
+| AR-IN-008 | input | BLOCK | proposer config invalid (name outside `catalog`/`optuna`, `min_rows` < 1, `require_model` not a bool, `seed` not an int, unknown keys) |
 | AR-AP-001 | input | BLOCK | campaign_confirm missing/wrong hash, ledger approved a different hash, or no approver to open the envelope |
 | AR-LN-001 | input | BLOCK | delta outside spec.axes, nodes/gpus/partition outside spec.cluster, or a `base`/`model` override |
 | AR-LN-002 | input | BLOCK | budget.max_runs reached, gpu-hour budget exceeded, or a non-confirm run dips into the reserve |
@@ -231,6 +260,7 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-LG-001 | input | BLOCK | recording would overwrite a (trial, seed) result; results are immutable |
 | AR-LG-002 | input | BLOCK | a mutating action after `campaign_closed` (close is final: only `check`/`close` stay open) |
 | AR-RS-007 | input | BLOCK | claim over an incomplete/unmeasured confirm set (missing, pending, crashed, limited or unpaired seed) or of a decision that is not `accepted_gain` |
+| AR-PR-001 | input | BLOCK | `proposer.require_model` set and the model proposer is unavailable (below `min_rows`, extra missing, no axes, model error, no in-axes cards) or its replay is not byte-identical |
 | AR-HO-001 | handoff | BLOCK | campaign closed with no accepted gain |
 | AR-HO-002 | handoff | BLOCK | best candidate breaches a guardrail band |
 | AR-HO-003 | handoff | BLOCK | ledger chain verification failed (reports the first broken seq) |
@@ -257,6 +287,11 @@ gain/flat -> RED (AR-HO-001).
   envelope or derived token that is missing, forged or exhausted (AR-LN-006: runs or measured GPU hours), and
   a `cancel` naming a foreign job id (AR-LN-007: foreign ids never reach `scancel`; they are counted as the
   named drop `refused_foreign_job:<id>`).
+- REFUSED (96): an invalid `proposer` block (AR-IN-008: fix the spec's `proposer` block); with `require_model`
+  set, a model proposer that is unavailable (`proposer_unavailable:<reason>`) or whose fresh re-proposal is not
+  byte-identical (`proposer_unverified:<name>`) is refused (AR-PR-001, nothing appended). Without
+  `require_model` those same conditions never crash: the catalog speaks (mandatory fallback) and the drop
+  `proposer_fallback_catalog:<reason>` is counted.
 - RED (5): the campaign measured something and it did not accept - read `decisions` in the report and the
   `reasons` lines (`guardrail:<name>`, `mean_delta ... > tau ...`), or AR-HO-003 for a damaged chain.
 - UNMEASURED (95): calibrate first - `baseline_repeats` ok baseline results with the eval policy
@@ -282,12 +317,15 @@ gain/flat -> RED (AR-HO-001).
   Fabric TTL cache staleness is bounded by `ttl_s` but is not a run-time proof - the in-script `exit 96`
   preamble remains the in-job IMEX gate. A guardrail with fewer than 2 paired measurements makes the
   close UNMEASURED (`guardrail_unmeasured:<name>`), never an accept. Ledger anchoring (Q5) and approver
-  binding (Q6) remain open (amendment A5).
+  binding (Q6) remain open (amendment A5). A model card is a suggestion, not evidence (it reaches a run only
+  through `submit` and the M1/M2 gates); TPE determinism holds per optuna version + seed only (the replay is
+  checked at propose time, not at close); optuna card attribution to a single idea is weaker (a card is a full
+  assignment over `spec.axes`, B5).
 
 ## FS interface
 - Emits: `auto_research_report` artifact in `ctx.artifacts_dir`.
 - Consumes: nothing from FS artifacts in M0 (`consumes: ()`).
-- APIs: `campaign_hash`, `launch_token`, `check_spec`, `check_launch`, `noise_floor`, `decide`, `propose`,
+- APIs: `campaign_hash`, `launch_token`, `check_spec`, `check_launch`, `noise_floor`, `decide`, `propose`, `proposers.select`, `proposers.replay`,
   `squeue.job_states`, the claims/seeds/concurrency/locks helpers,
   `Ledger` (append/verify/results/launches/tsv_view). `squeue` is read-only. No processes are launched.
 
@@ -296,7 +334,10 @@ gain/flat -> RED (AR-HO-001).
 - **M1 (done)**: `envelope`/`submit`/`cancel` via `training.emit` + the IMEX fabric probe + `sacct`-measured
   GPU hours; the envelope budget and the derived per-trial token gate every `job_submitted`.
 - **M2 (done)**: seed phases, the explicit claim chain, the in-flight cap + confirm run reserve, the close lock.
-- **M3**: pluggable proposer (the ideas catalog stays the deterministic baseline).
+- **M3 (done)**: pluggable proposer (`proposer` config block via AR-IN-008, one `proposal` op per `propose`,
+  deterministic catalog default + optional optuna TPE extra, mandatory catalog fallback / AR-PR-001 strict mode).
+- **M4 (pending)**: Ray Tune/Vizier/CMA adapters, ledgered `symptom_log`, close-time replay re-verification,
+  multi-objective.
 
 ## Worked examples
 1. Validate a campaign before signing anything:

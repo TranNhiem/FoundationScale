@@ -26,6 +26,7 @@ _OPS = (
     "job_cancelled",
     "campaign_closed",
     "claim",
+    "proposal",
 )
 
 
@@ -166,6 +167,13 @@ class Ledger:
             self.payload(e)
             for e in self.entries()
             if e.get("op") == "launch_authorised" and e.get("campaign") == campaign
+        ]
+
+    def proposals(self, campaign: str) -> list[dict[str, Any]]:
+        return [
+            self.payload(e)
+            for e in self.entries()
+            if e.get("op") == "proposal" and e.get("campaign") == campaign
         ]
 
     def tsv_view(self, campaign: str) -> str:

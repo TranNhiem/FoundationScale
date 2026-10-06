@@ -66,6 +66,7 @@ from foundationskills.skills.auto_research.envelope import (
 from foundationskills.skills.auto_research.jobs import JOB_ID_RE, cancel_jobs, owned_job_ids, submitted_jobs
 from foundationskills.skills.auto_research.ledger import Ledger, canonical, ledger_files, sha256_hex
 from foundationskills.skills.auto_research.propose import propose
+from .proposers import DEFAULT_K, proposer_config, select
 from .concurrency import concurrency_check, reserve_check
 from .locks import closing_check
 from .claims import ROOT as CLAIM_ROOT
@@ -180,6 +181,8 @@ _RECOVERY = {
     "AR-LN-008": "let a submitted run settle (record its result or cancel it) before submitting again",
     "AR-LN-009": "keep the run reserve for confirm-phase runs: screen with fewer repeats or confirm first",
     "AR-RS-007": "claim only a measured, complete confirm set whose decide() verdict is accepted_gain (record the missing seeds first)",
+    "AR-IN-008": "fix the campaign spec's proposer block (name catalog|optuna, min_rows int >= 1, require_model bool, seed int)",
+    "AR-PR-001": "record more measured trials, install the optional proposer extra, or drop proposer.require_model to fall back to the catalog",
 }
 
 
@@ -243,6 +246,10 @@ class AutoResearchSkill(BaseSkill):
                  "seed plan invalid: seed_list empty/duplicate/non-int, repeats < 1, confirm_repeats beyond the "
                  "seed list, or cluster.max_in_flight invalid/above max_runs",
                  Severity.BLOCK, "input"),
+        RuleSpec("AR-IN-008",
+                 "proposer config invalid (name outside catalog|optuna, min_rows < 1, require_model not a bool, "
+                 "seed not an int, unknown keys)",
+                 Severity.BLOCK, "input"),
         RuleSpec("AR-AP-001",
                  "campaign_confirm missing or not the hash of the spec (or ledger approved a different hash)",
                  Severity.BLOCK, "input"),
@@ -263,7 +270,7 @@ class AutoResearchSkill(BaseSkill):
                  Severity.BLOCK, "input"),
         RuleSpec("AR-LN-007", "cancel names a job id this campaign's ledger never submitted (or requests no job ids)",
                  Severity.BLOCK, "input"),
-        RuleSpec("AR-LN-008", "in-flight (running or pending) jobs at cluster.max_in_flight; unmeasured stations fail closed",
+        RuleSpec("AR-LN-008", "in-flight (running or pending) jobs at cluster.max_in_flight; unmeasured job states fail closed",
                  Severity.BLOCK, "input"),
         RuleSpec("AR-LN-009", "a baseline/screening submit would spend the run reserve kept for confirm-phase runs",
                  Severity.BLOCK, "input"),
@@ -274,6 +281,10 @@ class AutoResearchSkill(BaseSkill):
         RuleSpec("AR-RS-007",
                  "claim over an incomplete/unmeasured confirm set (missing, pending, crashed, limited or unpaired "
                  "seed) or of a decision that is not accepted_gain",
+                 Severity.BLOCK, "input"),
+        RuleSpec("AR-PR-001",
+                 "proposer.require_model set and the model proposer is unavailable (below min_rows, extra missing, "
+                 "no axes, model error, no in-axes cards) or its replay is not byte-identical",
                  Severity.BLOCK, "input"),
         RuleSpec("AR-HO-001", "campaign closed with no accepted gain", Severity.BLOCK, "handoff"),
         RuleSpec("AR-HO-002", "best candidate breaches a guardrail band", Severity.BLOCK, "handoff"),
@@ -307,8 +318,13 @@ class AutoResearchSkill(BaseSkill):
         measure: Callable[[str], float | None] | None = None,
         clock: Callable[[], float] | None = None,
         state_fn: Callable[[str], str | None] | None = None,
+        proposer_registry: dict[str, Callable[..., Any]] | None = None,
     ) -> None:
-        """Injectable connectors (None -> the real implementation; tests never see Slurm or sockets)."""
+        """Injectable connectors (None -> the real implementation; tests never see Slurm or sockets).
+
+        Tests inject stub proposers; MUST_FIRE fixtures never do (``proposer_registry`` is a test-only
+        override of the optional model proposer registry; None -> ``proposers.REGISTRY``).
+        """
         super().__init__()
         self._runner: Callable[..., Any] = runner if runner is not None else subprocess.run
         self._launch_fn: Callable[..., dict[str, Any]] = launch_fn if launch_fn is not None else fs_launch
@@ -316,6 +332,7 @@ class AutoResearchSkill(BaseSkill):
         self._measure: Callable[[str], float | None] = measure if measure is not None else query_job_gpu_hours
         self._clock: Callable[[], float] = clock if clock is not None else time.time
         self._state_fn: Callable[[str], str | None] | None = state_fn
+        self._proposer_registry: dict[str, Callable[..., Any]] | None = proposer_registry
 
     @staticmethod
     def _ledger_dir(request: dict[str, Any], ctx: SkillContext) -> Path:
@@ -370,6 +387,8 @@ class AutoResearchSkill(BaseSkill):
             findings.extend(self._check_cancel_request(request, spec, ledger))
         if action == "claim":
             findings.extend(self._check_claim_request(request, spec, ledger))
+        if action == "propose":
+            findings.extend(self._check_propose_request(request, spec, ledger))
         return findings
 
     def _check_approval(self, request: dict[str, Any], spec: dict[str, Any], ledger: Ledger) -> list[Finding]:
@@ -673,6 +692,49 @@ class AutoResearchSkill(BaseSkill):
             ]
         return []
 
+    def _check_propose_request(self, request: dict[str, Any], spec: dict[str, Any], ledger: Ledger) -> list[Finding]:
+        """AR-PR-001 (B3): ``proposer.require_model`` refuses instead of falling back to the catalog.
+
+        An invalid proposer block (AR-IN-008, already reported by ``check_spec``), the catalog proposer
+        and the non-strict default stay inert here: the model is chosen lazily in ``run`` and its
+        failures are counted ``proposer_fallback_catalog:<reason>`` drops. Strict mode runs the selection
+        right now and refuses the request - before the single ``proposal`` op could ever be appended.
+        """
+        if any(rule_id == "AR-IN-008" for rule_id, _ in check_spec(spec)):
+            return []
+        cfg = proposer_config(spec)
+        if not cfg["require_model"] or cfg["name"] == "catalog":
+            return []
+        campaign = _campaign(spec)
+        _cards, drops, provenance = select(
+            spec,
+            _safe_list(lambda: ledger.results(campaign)),
+            _safe_list(lambda: ledger.launches(campaign)),
+            dict(request.get("current") or {}),
+            list(request.get("symptoms") or []),
+            k=DEFAULT_K,
+            registry=self._proposer_registry,
+        )
+        return self._strict_proposer_findings(cfg, drops, provenance)
+
+    def _strict_proposer_findings(
+        self, cfg: dict[str, Any], drops: list[str], provenance: dict[str, Any]
+    ) -> list[Finding]:
+        """AR-PR-001 for a strict model proposer whose selection fell back ([] otherwise)."""
+        fallback = provenance.get("fallback")
+        if not cfg["require_model"] or cfg["name"] == "catalog" or fallback is None:
+            return []
+        message = (
+            f"proposer_unverified:{cfg['name']}"
+            if fallback == "unverified"
+            else f"proposer_unavailable:{fallback}"
+        )
+        return [
+            self.finding(
+                "AR-PR-001", message, {"proposer": cfg["name"], "drops": drops}, _RECOVERY["AR-PR-001"],
+            )
+        ]
+
     def _claim(self, request: dict[str, Any], ledger: Ledger, campaign: str) -> SkillResult:
         """One explicit ``claim`` op per earned gain, chained to the current champion claim."""
         spec = dict(request.get("campaign_spec") or {})
@@ -720,12 +782,51 @@ class AutoResearchSkill(BaseSkill):
         if action == "claim":
             return self._claim(request, ledger, campaign)
         if action == "propose":
-            cards = propose(
-                spec, _safe_list(lambda: ledger.results(campaign)),
-                dict(request.get("current") or {}), list(request.get("symptoms") or []),
-                launches=_safe_list(lambda: ledger.launches(campaign)),
+            cards, drops, provenance = select(
+                spec,
+                _safe_list(lambda: ledger.results(campaign)),
+                _safe_list(lambda: ledger.launches(campaign)),
+                dict(request.get("current") or {}),
+                list(request.get("symptoms") or []),
+                k=DEFAULT_K,
+                registry=self._proposer_registry,
             )
-            return SkillResult(Status.PASS, {"cards": cards})
+            strict = self._strict_proposer_findings(proposer_config(spec), drops, provenance)
+            if strict:  # the model can change between check and run: re-assert, append nothing
+                message = _finding_message(strict[0])
+                return SkillResult(Status.REFUSED, {"refused": message, "drops": drops}, (), tuple(strict),
+                                   refusal=message)
+            ledger.append(  # B1: EXACTLY one proposal op per propose call (propose is mutating)
+                "proposal", campaign, "-",
+                {
+                    "proposer": provenance["proposer"],
+                    "requested": provenance["requested"],
+                    "seed": provenance["seed"],
+                    "rows_digest": provenance["rows_digest"],
+                    "k": provenance["k"],
+                    "fallback": provenance["fallback"],
+                    "cards": cards,
+                    "drops": drops,
+                    "stats": {"out": len(cards), "dropped": len(drops)},
+                },
+            )
+            by_reason: dict[str, int] = {}
+            for drop in drops:
+                reason = str(drop).split(":", 1)[0]
+                by_reason[reason] = by_reason.get(reason, 0) + 1
+            return SkillResult(
+                Status.PASS,
+                {
+                    "cards": cards,
+                    "drops": drops,
+                    "proposer": provenance["proposer"],
+                    "requested": provenance["requested"],
+                    "rows_digest": provenance["rows_digest"],
+                    "seed": provenance["seed"],
+                    "fallback": provenance["fallback"],
+                    "dropped": {"total": len(drops), "by_reason": dict(sorted(by_reason.items()))},
+                },
+            )
         return self._close(request, ctx, ledger, spec, campaign, spec_hash)
 
     def _launch(
@@ -1208,6 +1309,21 @@ class AutoResearchSkill(BaseSkill):
             ("job_submitted", ar_campaign, "-", _job_payload("123456", "baseline", kind="train")),
             *(("trial_result", ar_campaign, str(row.get("trial") or "-"), dict(row)) for row in ar_ho006_rows),
         ]
+        # M3 fixtures (pure data): an invalid proposer block (AR-IN-008) and a strict model gate over
+        # exactly TWO counted model rows (AR-PR-001) - B2 counts model rows only, so the three
+        # noise-floor baseline repeats never rescue min_rows 10 whatever the optional extra does.
+        ar_pr_spec = _spec(proposer={"name": "optuna", "require_model": True, "min_rows": 10})
+        ar_pr_campaign = _campaign(ar_pr_spec)
+        ar_pr_ledger: list[tuple[str, str, str, dict[str, Any]]] = [
+            ("campaign_approved", ar_pr_campaign, "-", {"spec_hash": campaign_hash(ar_pr_spec), "approver": fix}),
+            *[("trial_result", ar_pr_campaign, "baseline",
+               _result("baseline", "baseline", run_seed, _val(0.5)))
+              for run_seed in (101, 102, 103)],
+            ("trial_result", ar_pr_campaign, "t1",
+             _result("t1", "candidate", 101, _val(0.9), delta={"optim.lr": 5e-4})),
+            ("trial_result", ar_pr_campaign, "t2",
+             _result("t2", "candidate", 101, _val(0.8), delta={"optim.lr": 2e-4})),
+        ]
         guard = _spec(confirm={"k": 2.0, "noise_floor_rel": 0.005,
                                "guardrails": ["throughput"], "guard_abs_epsilon": 0.01})
         flat_rows = [*_BASELINE_ROWS,
@@ -1401,6 +1517,17 @@ class AutoResearchSkill(BaseSkill):
                     "action": "submit", "campaign_spec": ar_m2_spec, "campaign_confirm": "{confirm}",
                     "approver": fix, "ledger_dir": "{tmp}/ledger", "trial_spec": ar_m2_trial,
                     "launch_token": trial_launch_token(ar_m2_env["envelope_token"], ar_m2_trial),
+                },
+            },
+            "AR-IN-008": {
+                "request": {"action": "check", "campaign_spec": _spec(proposer={"name": "vizier", "min_rows": 0})}
+            },
+            "AR-PR-001": {
+                "files": ledger_files(ar_pr_ledger),
+                "request": {
+                    "action": "propose", "campaign_spec": ar_pr_spec, "campaign_confirm": "{confirm}",
+                    "approver": fix, "ledger_dir": "{tmp}/ledger",
+                    "current": {"optim.lr": 1e-3}, "symptoms": [],
                 },
             },
             **_claim_must_fire_fixtures(),
