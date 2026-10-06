@@ -108,6 +108,13 @@ train = [
     # dependency list written by reading source is a claim, and only executing
     # the path measures it. The first real train() run found two more (#225).
     "accelerate>=1.1",
+    # soundfile, for the audio arm (train/audio.py). The thin plane decodes a
+    # declared audio column itself, strictly, before the processor sees it --
+    # the processor accepts arrays, not files -- and refuses a row it cannot
+    # read rather than dropping it. Its wheels bundle libsndfile (flac, wav,
+    # ogg), so there is no system dependency. Imported function-locally, like
+    # PIL above: a text-only run never loads it.
+    "soundfile>=0.12",
 ]
 all = [
     # `all` must mean all, or it is a name that lies. CI does NOT install this —
