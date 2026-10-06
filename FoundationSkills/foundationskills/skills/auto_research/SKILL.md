@@ -67,7 +67,7 @@ Axes are the measured FoundationSkills knobs (`optim.lr`, `optim.warmup_ratio`, 
 `train.method` full|lora, `lora.rank`, `lora.alpha`, `train.seq_len`, `train.global_batch`,
 `train.micro_batch`, `train.max_steps`, `train.epochs`, `rl.algorithm` dr_grpo|gspo|dapo, `rl.group_size`,
 `rl.temperature`, `rl.kl_coef`, `data.mix`); `parallel.*` and `train.async` are refused (UNSUPPORTED_AXES).
-- Optional block `proposer{name: catalog (default) | optuna, min_rows: 10 (>= 1), require_model: false,
+- Optional block `proposer{name: catalog (default) | optuna | optuna-cma, min_rows: 10 (>= 1), require_model: false,
   seed: 0}`: selects the (M3) proposer and is part of the spec hash; validated by AR-IN-008.
 
 Launch spec shape: `{trial, role(baseline|candidate|confirm), seed, delta{path: value}, nodes, gpus_per_node,
@@ -79,19 +79,23 @@ metrics{name: {value, se}}}`.
 ## Outputs
 - Artifacts: `auto_research_report` (`auto_research_report.json`) with
   `{campaign{id, spec_hash, approver}, outcome, recommendation, decisions{trial: decide()},
-  budgets{planned, used_gpu_hours, runs}, ledger{count, head_hash, verified}, tsv}`.
+  budgets{planned, used_gpu_hours, runs}, ledger{count, head_hash, verified}, tsv,
+  proposals{checked, byte_identical, drifted:[i], unmeasured}}`.
 - The ledger (`chain.jsonl` + content-addressed `objects/<sha256>.json`) is the evidence:
   ops `campaign_approved`, `launch_authorised`, `trial_result`, `campaign_closed`, `launch_envelope`,
   `job_submitted`, `job_cancelled`, `proposal` (exactly one per `propose` call; payload keys `proposer`,
-  `requested`, `seed`, `rows_digest`, `k`, `fallback`, `cards`, `drops`, `stats`), each entry hash-chained over
+  `requested`, `seed`, `rows_digest`, `k`, `fallback`, `cards`, `drops`, `stats`, `replay_inputs` ({current,
+  symptoms, results_count, launches_count}, or None when not canonicalisable), `package_version`, `replay_status`
+  (byte_identical|unmeasured)), each entry hash-chained over
   its fields; `verify()` reports the first
   broken seq; results are never updated or deleted.
 - Status/exit: PASS (0) | RED (5) | UNMEASURED (95) | REFUSED (96).
 - Payload per action: `check` -> `{spec_hash, axes, budget}` (no ledger writes); `envelope` ->
   `{envelope_token}`; `launch` -> `{launch_token, budget_left}`; `submit` -> `{job_id, budget_after}`;
   `cancel` -> `{cancelled, drops}`; `record` -> `{recorded, ledger}`; `propose` ->
-  `{cards, drops, proposer, requested, rows_digest, seed, fallback, dropped}` (writes one `proposal` op);
-  `close` -> the report contents (`budgets` carry measured/declared/drops from `campaign_usage`).
+  `{cards, drops, proposer, requested, rows_digest, seed, fallback, dropped, replay_status}` (writes one `proposal` op);
+  `close` -> the report contents (`budgets` carry measured/declared/drops from `campaign_usage`; `proposals` carries
+  `{checked, byte_identical, drifted:[i], unmeasured}`).
   A repeated `close` re-reports the sealed chain and never appends a second `campaign_closed`.
 - Render refusals (`submit`, REFUSED before any launch): `sbatch_not_rendered` (a cluster trial with no sbatch
   would run argv on this host), `sbatch_render_failed:<why>` (train sbatch layering failed),
@@ -185,7 +189,7 @@ Once `campaign_closed` is on the ledger every action except `check` and `close` 
   without cascading: at close a claimed trial is decided against the rows it was claimed against, every
   other trial against the champion's rows (baseline rows while the chain roots at `baseline`).
 
-## Proposers (M3)
+## Proposers (M3, M4)
 - The ideas catalog (`propose.py`, untouched) is the deterministic default and the regression oracle
   (byte-identical to the M0 ranking), and the mandatory fallback.
 - A model proposer (optuna: TPE) is a lazily imported optional extra, never installed by default; it is
@@ -207,6 +211,12 @@ Once `campaign_closed` is on the ledger every action except `check` and `close` 
   `symptoms` (`None` when unmeasurable).
 - A card is a suggestion: it reaches a run only through `submit` and every M1/M2 gate. The proposer config is
   part of the spec hash: switching proposer mid-campaign fails `campaign_confirm`.
+- `optuna-cma` = Optuna `CmaEsSampler(seed)` behind the same lazy extra (numeric-only): a `categorical` axis is REFUSED by AR-PR-002 (`proposer_axis_unsupported:optuna-cma:<key>`) at check time, never dropped; an axis the installed optuna cannot build is the counted drop `model_axis_skipped:<key>`.
+- `select` provenance records `package_version` ("builtin" for the catalog incl. fallback) and every proposal records the replay inputs so it can be replayed from the ledger alone.
+- Close re-runs every recorded proposal over its ledger prefix (`reverify`); a drift fires AR-HO-007 and turns the status RED with the outcome unchanged and the
+  recommendation prefixed "investigate proposal replay drift before adopting: ".
+- A replay that cannot be checked is the counted drop `proposal_replay_unmeasured:<reason>:<i>` (reasons: `legacy_proposal`, `recorded_unmeasured`, `ledger_prefix_missing`, `extra_missing:<name>`, `version_changed:<name>`, `model_error`, `chain_unverified`) and is never a pass.
+- A changed optuna version is `version_changed` (unmeasured), not drift: cross-version identity is not claimed. The test registry injection (`registry=`) is test-only.
 
 ## Acceptance statistics
 - Evidence = ok, non-limited results with the metric present, paired by seed; crashes are excluded and
@@ -246,7 +256,7 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-IN-005 | input | BLOCK | axis key outside AXIS_PATHS (or in UNSUPPORTED_AXES) or range/values invalid for its kind |
 | AR-IN-006 | input | BLOCK | result payload malformed, or a crash record carries metric values |
 | AR-IN-007 | input | BLOCK | seed plan invalid (seed_list empty/duplicate/non-int, repeats < 1, confirm_repeats beyond the seed list, or `cluster.max_in_flight` invalid/above `budget.max_runs`) |
-| AR-IN-008 | input | BLOCK | proposer config invalid (name outside `catalog`/`optuna`, `min_rows` < 1, `require_model` not a bool, `seed` not an int, unknown keys) |
+| AR-IN-008 | input | BLOCK | proposer config invalid (name outside `catalog`/`optuna`/`optuna-cma`, `min_rows` < 1, `require_model` not a bool, `seed` not an int, unknown keys) |
 | AR-AP-001 | input | BLOCK | campaign_confirm missing/wrong hash, ledger approved a different hash, or no approver to open the envelope |
 | AR-LN-001 | input | BLOCK | delta outside spec.axes, nodes/gpus/partition outside spec.cluster, or a `base`/`model` override |
 | AR-LN-002 | input | BLOCK | budget.max_runs reached, gpu-hour budget exceeded, or a non-confirm run dips into the reserve |
@@ -261,12 +271,14 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-LG-002 | input | BLOCK | a mutating action after `campaign_closed` (close is final: only `check`/`close` stay open) |
 | AR-RS-007 | input | BLOCK | claim over an incomplete/unmeasured confirm set (missing, pending, crashed, limited or unpaired seed) or of a decision that is not `accepted_gain` |
 | AR-PR-001 | input | BLOCK | `proposer.require_model` set and the model proposer is unavailable (below `min_rows`, extra missing, no axes, model error, no in-axes cards) or its replay is not byte-identical |
+| AR-PR-002 | input | BLOCK | the optuna-cma proposer cannot hold a categorical axis (refused, never dropped) |
 | AR-HO-001 | handoff | BLOCK | campaign closed with no accepted gain |
 | AR-HO-002 | handoff | BLOCK | best candidate breaches a guardrail band |
 | AR-HO-003 | handoff | BLOCK | ledger chain verification failed (reports the first broken seq) |
 | AR-HO-004 | handoff | WARN | load-bearing evidence missing (uncalibrated noise floor, screening-only seeds, limited or crashed runs) or a claim downgraded at close (`claim_downgraded:<claim_id>`) - status UNMEASURED |
 | AR-HO-005 | handoff | INFO | accepted a flat-but-simpler change |
 | AR-HO-006 | handoff | WARN | a noise-floor baseline repeat shipped as a non-eval_only job, or (when the ledger has any `launch_envelope`) its `job_submitted` provenance is unknown (`baseline_provenance_unknown:<trial>`) (decision 3: the floor is eval-only repeats) - status UNMEASURED |
+| AR-HO-007 | handoff | BLOCK | a recorded proposal does not replay byte-identically at close (search provenance drifted) |
 
 Close outcomes: improved (accepted gain) / flat_simplified / no_gain / regressed / unmeasured, decided in
 that order after the ledger check: ledger broken -> RED (AR-HO-003); unmeasured evidence that could change
@@ -291,9 +303,17 @@ gain/flat -> RED (AR-HO-001).
   set, a model proposer that is unavailable (`proposer_unavailable:<reason>`) or whose fresh re-proposal is not
   byte-identical (`proposer_unverified:<name>`) is refused (AR-PR-001, nothing appended). Without
   `require_model` those same conditions never crash: the catalog speaks (mandatory fallback) and the drop
-  `proposer_fallback_catalog:<reason>` is counted.
+  `proposer_fallback_catalog:<reason>` is counted. An `optuna-cma` axis of `type == "categorical"` is refused at
+  check time (AR-PR-002: `proposer_axis_unsupported:optuna-cma:<key>`, one per categorical axis in axis order) -
+  the axis is never dropped: use `optuna` (TPE holds categorical axes) or remove the categorical axes.
 - RED (5): the campaign measured something and it did not accept - read `decisions` in the report and the
-  `reasons` lines (`guardrail:<name>`, `mean_delta ... > tau ...`), or AR-HO-003 for a damaged chain.
+  `reasons` lines (`guardrail:<name>`, `mean_delta ... > tau ...`), or AR-HO-003 for a damaged chain. A recorded
+  proposal that does not replay byte-identically at close (AR-HO-007) turns the status RED with `outcome`
+  unchanged and the recommendation prefixed "investigate proposal replay drift before adopting: ".
+- Replay unmeasured: a close-time re-check that cannot run is the counted drop
+  `proposal_replay_unmeasured:<reason>:<i>` (reasons: `legacy_proposal`, `recorded_unmeasured`,
+  `ledger_prefix_missing`, `extra_missing:<name>`, `version_changed:<name>`, `model_error`, `chain_unverified`) -
+  a declined claim, never a pass, and it does not change the status.
 - UNMEASURED (95): calibrate first - `baseline_repeats` ok baseline results with the eval policy
   fingerprint of the spec, and `confirm_repeats` paired seeds per candidate, none of them limited/crashed.
   M1: the floor must come from **eval-only** `baseline_repeats` jobs (AR-HO-006), and a launch that reports no
@@ -319,13 +339,15 @@ gain/flat -> RED (AR-HO-001).
   close UNMEASURED (`guardrail_unmeasured:<name>`), never an accept. Ledger anchoring (Q5) and approver
   binding (Q6) remain open (amendment A5). A model card is a suggestion, not evidence (it reaches a run only
   through `submit` and the M1/M2 gates); TPE determinism holds per optuna version + seed only (the replay is
-  checked at propose time, not at close); optuna card attribution to a single idea is weaker (a card is a full
-  assignment over `spec.axes`, B5).
+  checked at propose time and re-checked at close - the re-check proves reproducibility under the installed optuna
+  version only); optuna card attribution to a single idea is weaker (a card is a full
+  assignment over `spec.axes`, B5). Optuna is not installed by default: model replays on a host without the extra
+  are unmeasured (`extra_missing`), not passes.
 
 ## FS interface
 - Emits: `auto_research_report` artifact in `ctx.artifacts_dir`.
 - Consumes: nothing from FS artifacts in M0 (`consumes: ()`).
-- APIs: `campaign_hash`, `launch_token`, `check_spec`, `check_launch`, `noise_floor`, `decide`, `propose`, `proposers.select`, `proposers.replay`,
+- APIs: `campaign_hash`, `launch_token`, `check_spec`, `check_launch`, `noise_floor`, `decide`, `propose`, `proposers.select`, `proposers.replay`, `proposers.reverify`, `proposers.package_version`,
   `squeue.job_states`, the claims/seeds/concurrency/locks helpers,
   `Ledger` (append/verify/results/launches/tsv_view). `squeue` is read-only. No processes are launched.
 
@@ -336,8 +358,11 @@ gain/flat -> RED (AR-HO-001).
 - **M2 (done)**: seed phases, the explicit claim chain, the in-flight cap + confirm run reserve, the close lock.
 - **M3 (done)**: pluggable proposer (`proposer` config block via AR-IN-008, one `proposal` op per `propose`,
   deterministic catalog default + optional optuna TPE extra, mandatory catalog fallback / AR-PR-001 strict mode).
-- **M4 (pending)**: Ray Tune/Vizier/CMA adapters, ledgered `symptom_log`, close-time replay re-verification,
-  multi-objective.
+- **M4 (done)**: `optuna-cma` + AR-PR-002 (categorical axes refused at check time), the ledgered replay record
+  (`replay_inputs`, `package_version`, `replay_status`) on every `proposal`, and the close-time re-check
+  (`proposers.reverify`) + AR-HO-007 drift escalation.
+- **M5 (pending)**: multi-objective, LLM proposer (needs its own provenance design); Ray Tune / Vizier stay
+  reference-only.
 
 ## Worked examples
 1. Validate a campaign before signing anything:

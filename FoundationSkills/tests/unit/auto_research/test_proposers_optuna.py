@@ -249,7 +249,8 @@ class TestAddTrial:
         ]
         cards, drops = EmptyDists(seed=0, optuna_module=fake).propose(SPEC, rows, [], CURRENT, SYMPTOMS, k=0)
         assert cards == []
-        assert drops == ['model_row_no_params:t1', 'model_row_no_params:t2']
+        axes_skipped = [f"model_axis_skipped:{a['key']}" for a in SPEC["axes"]]  # EmptyDists builds none
+        assert drops == sorted([*axes_skipped, "model_row_no_params:t1", "model_row_no_params:t2"])
         assert fake.studies[0].add_trial_calls == [] and fake.studies[0].ask_calls == []
 
 

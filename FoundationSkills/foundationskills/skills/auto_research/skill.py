@@ -66,7 +66,7 @@ from foundationskills.skills.auto_research.envelope import (
 from foundationskills.skills.auto_research.jobs import JOB_ID_RE, cancel_jobs, owned_job_ids, submitted_jobs
 from foundationskills.skills.auto_research.ledger import Ledger, canonical, ledger_files, sha256_hex
 from foundationskills.skills.auto_research.propose import propose
-from .proposers import DEFAULT_K, proposer_config, select
+from .proposers import DEFAULT_K, proposer_config, reverify, select
 from .concurrency import concurrency_check, reserve_check
 from .locks import closing_check
 from .claims import ROOT as CLAIM_ROOT
@@ -177,12 +177,14 @@ _RECOVERY = {
     "AR-LN-006": "open a launch_envelope mirroring spec.budget, use the derived per-trial launch_token (fs-ar-trial-v1), and stop when runs or measured GPU hours are gone",
     "AR-LN-007": "cancel only job ids this campaign's ledger submitted (job_submitted); foreign ids never reach scancel",
     "AR-HO-006": "submit the noise-floor baseline repeats as kind 'eval_only' (decision 3): candidates keep confirm_repeats",
+    "AR-HO-007": "re-run propose on the same ledger with the pinned proposer version; treat the drifted cards as unaudited suggestions",
     "AR-LG-002": "campaigns never re-open: close is final (check/close stay readable, nothing else runs)",
     "AR-LN-008": "let a submitted run settle (record its result or cancel it) before submitting again",
     "AR-LN-009": "keep the run reserve for confirm-phase runs: screen with fewer repeats or confirm first",
     "AR-RS-007": "claim only a measured, complete confirm set whose decide() verdict is accepted_gain (record the missing seeds first)",
-    "AR-IN-008": "fix the campaign spec's proposer block (name catalog|optuna, min_rows int >= 1, require_model bool, seed int)",
+    "AR-IN-008": "fix the campaign spec's proposer block (name catalog|optuna|optuna-cma, min_rows int >= 1, require_model bool, seed int)",
     "AR-PR-001": "record more measured trials, install the optional proposer extra, or drop proposer.require_model to fall back to the catalog",
+    "AR-PR-002": "use proposer optuna (TPE holds categorical axes) or remove the categorical axes",
 }
 
 
@@ -286,6 +288,9 @@ class AutoResearchSkill(BaseSkill):
                  "proposer.require_model set and the model proposer is unavailable (below min_rows, extra missing, "
                  "no axes, model error, no in-axes cards) or its replay is not byte-identical",
                  Severity.BLOCK, "input"),
+        RuleSpec("AR-PR-002",
+                 "the optuna-cma proposer cannot hold a categorical axis (refused, never dropped)",
+                 Severity.BLOCK, "input"),
         RuleSpec("AR-HO-001", "campaign closed with no accepted gain", Severity.BLOCK, "handoff"),
         RuleSpec("AR-HO-002", "best candidate breaches a guardrail band", Severity.BLOCK, "handoff"),
         RuleSpec("AR-HO-003", "ledger chain verification failed", Severity.BLOCK, "handoff"),
@@ -295,6 +300,8 @@ class AutoResearchSkill(BaseSkill):
         RuleSpec("AR-HO-006",
                  "a noise-floor baseline repeat was submitted as a non-eval_only job (decision 3: the floor is eval-only repeats) - status UNMEASURED",
                  Severity.WARN, "handoff"),
+        RuleSpec("AR-HO-007", "a recorded proposal does not replay byte-identically at close (search provenance drifted)",
+                 Severity.BLOCK, "handoff"),
     )
     fs_interface = FSInterface(
         entries=(),
@@ -782,20 +789,31 @@ class AutoResearchSkill(BaseSkill):
         if action == "claim":
             return self._claim(request, ledger, campaign)
         if action == "propose":
+            results = _safe_list(lambda: ledger.results(campaign))
+            launches = _safe_list(lambda: ledger.launches(campaign))
+            current = dict(request.get("current") or {})
+            symptoms = list(request.get("symptoms") or [])
             cards, drops, provenance = select(
-                spec,
-                _safe_list(lambda: ledger.results(campaign)),
-                _safe_list(lambda: ledger.launches(campaign)),
-                dict(request.get("current") or {}),
-                list(request.get("symptoms") or []),
-                k=DEFAULT_K,
-                registry=self._proposer_registry,
+                spec, results, launches, current, symptoms, k=DEFAULT_K, registry=self._proposer_registry,
             )
             strict = self._strict_proposer_findings(proposer_config(spec), drops, provenance)
             if strict:  # the model can change between check and run: re-assert, append nothing
                 message = _finding_message(strict[0])
                 return SkillResult(Status.REFUSED, {"refused": message, "drops": drops}, (), tuple(strict),
                                    refusal=message)
+            version = provenance.get("package_version")
+            try:  # C5: the replay record is NEVER faked - a hole is recorded as a hole
+                canonical({"current": current, "symptoms": symptoms})
+            except (TypeError, ValueError):
+                replay_inputs = None
+            else:
+                replay_inputs = {
+                    "current": current,
+                    "symptoms": symptoms,
+                    "results_count": len(results),
+                    "launches_count": len(launches),
+                }
+            replay_status = "byte_identical" if replay_inputs is not None and version is not None else "unmeasured"
             ledger.append(  # B1: EXACTLY one proposal op per propose call (propose is mutating)
                 "proposal", campaign, "-",
                 {
@@ -808,6 +826,9 @@ class AutoResearchSkill(BaseSkill):
                     "cards": cards,
                     "drops": drops,
                     "stats": {"out": len(cards), "dropped": len(drops)},
+                    "replay_inputs": replay_inputs,
+                    "package_version": version,
+                    "replay_status": replay_status,
                 },
             )
             by_reason: dict[str, int] = {}
@@ -824,6 +845,7 @@ class AutoResearchSkill(BaseSkill):
                     "rows_digest": provenance["rows_digest"],
                     "seed": provenance["seed"],
                     "fallback": provenance["fallback"],
+                    "replay_status": replay_status,
                     "dropped": {"total": len(drops), "by_reason": dict(sorted(by_reason.items()))},
                 },
             )
@@ -1150,6 +1172,43 @@ class AutoResearchSkill(BaseSkill):
                     _RECOVERY["AR-HO-006"],
                 )
             )
+        # C7 close-time replay re-check (AR-HO-007): every recorded proposal, in 0-based ledger order.
+        records = _safe_list(lambda: ledger.proposals(campaign))
+        drifted: list[int] = []
+        replay_drops: list[str] = []
+        byte_identical = unmeasured = 0
+        for i, record in enumerate(records):
+            if problems:
+                verdict, reason = "unmeasured", "chain_unverified"  # AR-HO-003 keeps precedence (C7)
+            else:
+                verdict, reason = reverify(spec, record, results, launches, registry=self._proposer_registry)
+            if verdict == "byte_identical":
+                byte_identical += 1
+            elif verdict == "drifted":
+                drifted.append(i)
+            else:
+                unmeasured += 1
+                replay_drops.append(f"proposal_replay_unmeasured:{reason or 'legacy_proposal'}:{i}")
+        budgets["drops"].extend(replay_drops)  # both the report and the payload read budgets["drops"] (C7)
+        replay_report = {
+            "checked": len(records),
+            "byte_identical": byte_identical,
+            "drifted": list(drifted),
+            "unmeasured": unmeasured,
+        }
+        if drifted:  # one AR-HO-007 at RED (unless already RED): the outcome is never moved (C7)
+            status = Status.RED
+            recommendation = "investigate proposal replay drift before adopting: " + recommendation
+            findings.append(
+                self.finding(
+                    "AR-HO-007",
+                    "proposal replay drifted at close: proposal(s) "
+                    + ", ".join(str(i) for i in drifted)
+                    + " (search provenance is not reproducible)",
+                    {"proposals": replay_report},
+                    _RECOVERY["AR-HO-007"],
+                )
+            )
         preseal = ledger.head()
         entries = _safe_list(lambda: ledger.entries())
         already_sealed = bool(entries) and entries[-1].get("op") == "campaign_closed" and entries[-1].get("campaign") == campaign
@@ -1169,6 +1228,7 @@ class AutoResearchSkill(BaseSkill):
             "claims": chain,
             "unclaimed_gains": unclaimed_gains,
             "drops": list(budgets.get("drops") or []),
+            "proposals": replay_report,
             "ledger": {"count": head["count"], "head_hash": head["head_hash"], "verified": not problems},
             "tsv": _safe_text(lambda: ledger.tsv_view(campaign)),
         }
@@ -1189,6 +1249,7 @@ class AutoResearchSkill(BaseSkill):
             "claims": chain,
             "unclaimed_gains": unclaimed_gains,
             "drops": list(budgets.get("drops") or []),
+            "proposals": replay_report,
             "ledger": report["ledger"],
             "tsv": report["tsv"],
         }
@@ -1304,6 +1365,21 @@ class AutoResearchSkill(BaseSkill):
         ar_m2_fabric = {"ledger/fabric.json": _fabric_cache("refused", 4102444800.0, "fabric_refused")}
         ar_ho006_rows = [*_BASELINE_ROWS, _result("t1", "candidate", 101, _val(0.9)),
                          _result("t1", "candidate", 102, _val(0.902)), _result("t1", "candidate", 103, _val(0.901))]
+        ar_ho007_proposal = {
+            "proposer": {"name": "catalog", "version": "1"},
+            "requested": 3,
+            "seed": 0,
+            "rows_digest": None,
+            "k": 3,
+            "fallback": None,
+            "cards": [{"idea": "tampered", "delta": {}, "score": None, "reason": "tampered"}],
+            "drops": [],
+            "stats": {"out": 1, "dropped": 0},
+            "package_version": "builtin",
+            "replay_status": "byte_identical",
+            "replay_inputs": {"current": {}, "symptoms": [], "results_count": 0, "launches_count": 0},
+        }
+        ar_ho007_ledger = [*ar_approval, ("proposal", ar_campaign, "-", ar_ho007_proposal)]
         ar_ho006_ledger = [
             *ar_approval,
             ("job_submitted", ar_campaign, "-", _job_payload("123456", "baseline", kind="train")),
@@ -1477,6 +1553,13 @@ class AutoResearchSkill(BaseSkill):
                     "approver": fix, "ledger_dir": "{tmp}/ledger", "stop_reason": "budget exhausted",
                 },
             },
+            "AR-HO-007": {
+                "files": ledger_files(ar_ho007_ledger),
+                "request": {
+                    "action": "close", "campaign_spec": ar_spec, "campaign_confirm": "{confirm}",
+                    "approver": fix, "ledger_dir": "{tmp}/ledger", "stop_reason": "budget exhausted",
+                },
+            },
             "AR-LG-002": {
                 "files": ledger_files([
                     ("campaign_approved", ar_m2, "-", {"spec_hash": campaign_hash(ar_m2_spec), "approver": fix}),
@@ -1528,6 +1611,13 @@ class AutoResearchSkill(BaseSkill):
                     "action": "propose", "campaign_spec": ar_pr_spec, "campaign_confirm": "{confirm}",
                     "approver": fix, "ledger_dir": "{tmp}/ledger",
                     "current": {"optim.lr": 1e-3}, "symptoms": [],
+                },
+            },
+            "AR-PR-002": {
+                "files": {},
+                "request": {  # a check request: optuna-cma refuses the fixture spec's categorical axis (C3)
+                    "action": "check", "campaign_spec": _spec(proposer={"name": "optuna-cma"}),
+                    "campaign_confirm": "{confirm}", "approver": fix, "ledger_dir": "{tmp}/ledger",
                 },
             },
             **_claim_must_fire_fixtures(),

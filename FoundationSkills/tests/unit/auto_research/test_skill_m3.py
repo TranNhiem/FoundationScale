@@ -38,8 +38,9 @@ except ImportError:  # pragma: no cover - a flat (non-package) test layout
         _stage,
     )
 
-# The documented proposal payload key set (no budget keys, no run counts).
-PROPOSAL_KEYS = {"proposer", "requested", "seed", "rows_digest", "k", "fallback", "cards", "drops", "stats"}
+# The documented proposal payload key set (no budget keys, no run counts; M4/C5 adds the replay record).
+PROPOSAL_KEYS = {"proposer", "requested", "seed", "rows_digest", "k", "fallback", "cards", "drops", "stats",
+                 "replay_inputs", "package_version", "replay_status"}
 
 
 # ---- model stubs (tests inject them through proposer_registry; fixtures never do) ----
