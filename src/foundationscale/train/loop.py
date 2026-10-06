@@ -5075,6 +5075,20 @@ def _train(cfg: TrainConfig) -> int:
                 extra={"exit": EXIT_REFUSE, "audio_column": AUDIO_COLUMN},
             )
             return EXIT_REFUSE
+    # Speech adjudication inputs, captured BEFORE a step is taken: which modality
+    # towers this family carries (the audio ones exercised, the rest the dormant
+    # negative control), and a per-parameter digest of each as loaded. The final
+    # save is compared against these after training (speech_adjudication).
+    _speech_towers: list[tuple[str, bool]] = []
+    _speech_base_digests: dict[str, str] | None = None
+    if AUDIO_COLUMN is not None:
+        from foundationscale.train.speech_adjudication import (  # noqa: PLC0415
+            capture_speech_inputs,
+        )
+
+        _speech_towers, _speech_base_digests = capture_speech_inputs(
+            _family, lambda: model.state_dict().items(), cfg.adapter
+        )
     _dormant_towers = _dormant_modality_towers(
         model,
         family=_family,
@@ -5520,6 +5534,9 @@ def _train(cfg: TrainConfig) -> int:
         # input_features is not in the batch the model would receive.
         probe_rows = [tokenized[i] for i in range(min(2, len(tokenized)))]
         refuse_if_audio_features_dropped(data_collator(probe_rows).keys(), AUDIO_COLUMN)
+        # The probe rows proved the path, they did not train: drop them from the
+        # coverage record so the manifest counts training rows only.
+        data_collator.coverage.reset()
         # Same reason as images: the raw audio column must survive to collate time.
         kwargs["remove_unused_columns"] = False
     try:
@@ -6092,6 +6109,33 @@ def _train(cfg: TrainConfig) -> int:
             "UNMEASURED: the run trained and saved, but no training log ever "
             "carried a loss, so the objective gates had nothing to read"
         )
+    # Speech plane: the audio gates judge the run that actually happened -- every
+    # declared audio row loaded or counted, placeholders verified, the audio towers
+    # moved and the undeclared ones did not. Like the objective backstop above, a
+    # blocking verdict outranks a PASS and an abstention only moves a PASS.
+    speech_manifest: str | None = None
+    if AUDIO_COLUMN is not None:
+        from foundationscale.train.speech_adjudication import (  # noqa: PLC0415
+            SUPERSEDE_NOTE,
+            fold_speech_verdict,
+            run_final_speech_adjudication,
+        )
+
+        speech = run_final_speech_adjudication(
+            final_dir=Path(final_dir),
+            has_safetensors=bool(shards),
+            coverage_manifest=data_collator.coverage.as_manifest(),
+            base_digests=_speech_base_digests,
+            towers=_speech_towers,
+            adapter=cfg.adapter,
+        )
+        # The speech gates are registered on SAVE so the controls walk certifies
+        # them, which also lists them as SKIP in the generic save sweeps; the note
+        # says this is where they run with their contexts.
+        for line in (SUPERSEDE_NOTE, *speech.render_lines()):
+            _mark(Step.ADJUDICATE, line)
+        speech_manifest = json.dumps(speech.as_manifest(), sort_keys=True)
+        rc, done = fold_speech_verdict(rc, done, speech.exit_code)
     # Declared precision and the OBSERVED dtype histogram are SEPARATE keys
     # (1d): the whole point is that a reader can see when they disagreed,
     # which requires neither to be collapsed into the other. The histogram is
@@ -6108,6 +6152,8 @@ def _train(cfg: TrainConfig) -> int:
         ),
         "precision_verdict": agreement.status if agreement is not None else None,
     }
+    if speech_manifest is not None:
+        done_extra["speech_gates"] = speech_manifest
     _emit_manifest(
         cfg,
         stage="done",

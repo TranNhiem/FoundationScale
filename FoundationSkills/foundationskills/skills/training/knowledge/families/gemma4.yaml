@@ -225,7 +225,8 @@ quirks:
     Measured on gemma-4-31B: the vision tower carries {q,k,v,o,gate,up,down}_proj
     as Gemma4ClippableLinear subclasses, which FS 'type(m) is Linear' adapter
     targeting rejects; FS scopes adapters to model.language_model and excludes
-    model.vision_tower / model.audio_tower / model.embed_vision. A tower-blind
+    model.vision_tower / model.audio_tower / model.embed_vision /
+    model.embed_audio. A tower-blind
     leaf-name matcher would crash in peft.
   - >-
     Interleaved attention (layer_types): sliding-window attention with window

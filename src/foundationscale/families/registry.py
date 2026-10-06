@@ -172,6 +172,11 @@ REGISTRY: tuple[FamilySpec, ...] = (
             ("model.vision_tower", "image"),
             ("model.audio_tower", "audio"),
             ("model.embed_vision", "image"),
+            # The audio projector, embed_vision's audio twin. Measured on E4B: it
+            # moves when audio trains (1 of 1) and is unused when it does not,
+            # so it belongs to the audio modality for dormancy, adapter scope
+            # and the tower-movement gate alike.
+            ("model.embed_audio", "audio"),
         ),
         adapter_leaf_modules=(
             "q_proj",

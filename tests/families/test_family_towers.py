@@ -95,6 +95,7 @@ def test_tower_prefixes_still_returns_every_prefix_including_mtp() -> None:
         "model.vision_tower",
         "model.audio_tower",
         "model.embed_vision",
+        "model.embed_audio",
     )
 
 

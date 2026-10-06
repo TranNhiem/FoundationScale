@@ -117,14 +117,16 @@ class _FakeAudioProcessor:
         tokenize: bool,
         return_dict: bool,
         return_tensors: str,
-        padding: bool,
+        processor_kwargs: dict[str, Any],
         add_generation_prompt: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        # The collator must route padding the way transformers 5.5 asks, not loose.
+        assert processor_kwargs == {"padding": True}
+        assert "padding" not in kwargs
         assert tokenize is True
         assert return_dict is True
         assert return_tensors == "pt"
-        assert padding is True
         self.received_convos.append(messages)
         convos = messages
         per_row_ids: list[list[int]] = []

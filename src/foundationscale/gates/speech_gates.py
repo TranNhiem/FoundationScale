@@ -1,0 +1,675 @@
+"""Speech gates: audio-row coverage, placeholder coverage, and tower movement at SAVE.
+
+Three gates auditing a speech training job's checkpoint at :attr:`Lifecycle.SAVE`:
+
+* :class:`AudioRowCoverageGate` — every declared audio row was either loaded into
+  the artifact or refused-and-counted (and any refusal leaking into the save under
+  strict handling is a defect that blocks).
+* :class:`AudioPlaceholderCoverageGate` — placeholder-audio rows have had their
+  placeholder markers verified against a count where the processor offers one,
+  with a declared ``NOT_ESTABLISHED`` abstention where it does not (never silently
+  PASSing over unmeasured rows).
+* :class:`TowerMovementGate` — the speech tower's trainable parameters (everything
+  under ``tower_prefix`` that is not a runtime buffer) actually moved off their base
+  digests iff the run declared them exercised; the dormant negative control
+  (``exercised=False``) requires the inverse.
+
+Registration at import time is doctrine (mirroring ``checkpoint_gates.py``): the
+``@register`` class decorator adds each gate to the process-wide :data:`REGISTRY`,
+so ``foundationscale-controls`` and other consumers see these gates the moment the
+module is imported. No torch / numpy is imported here — gates must run on a bare
+stdlib interpreter.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any, ClassVar
+
+from .core import (
+    AbstentionKind,
+    Control,
+    ControlKind,
+    Coverage,
+    Gate,
+    GateResult,
+    Lifecycle,
+    register,
+)
+
+
+@dataclass(frozen=True)
+class AudioRowCoverageContext:
+    """Census of the audio rows the save was expected to contain.
+
+    The denominator ``rows_expected`` must come from outside the artifact (the
+    training manifest or dataloader config — a corrupt save could claim any
+    number of rows, which is exactly the audited disaster the framework names).
+    ``rows_checked`` counts rows actually loaded from the artifact. ``rows_refused``
+    counts rows refused during load; ``refused`` maps each refusal reason to its
+    count. In strict handling the loader refuses at load time and the save should
+    never contain a refused row, so a non-zero ``rows_refused`` reaching this gate
+    is a smoking gun that tolerant handling leaked into the strict path.
+    """
+
+    rows_expected: int
+    rows_checked: int
+    rows_refused: int
+    refused: Mapping[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AudioPlaceholderContext:
+    """Placeholder-audio verification census across the rows the save covered.
+
+    ``rows_checked`` is the row count for this save; ``placeholder_rows_verified``
+    is how many rows' placeholder markers were actually checked against a
+    placeholder count offered by the processor (or trivially carry nothing to
+    check); ``placeholder_rows_unmeasured`` is how many rows the processor offered
+    no count for and hence could not be verified against.
+
+    The accounting invariant ``verified + unmeasured == rows_checked`` is the
+    gate's denominator hygiene: a caller whose counts do not add up to the row
+    census is a miscounted denominator and must block before any PASS can be
+    claimed.
+    """
+
+    rows_checked: int
+    placeholder_rows_verified: int
+    placeholder_rows_unmeasured: int
+
+
+@dataclass(frozen=True)
+class TowerMovementContext:
+    """Digest census of the tower's trainable parameters across a save.
+
+    ``base_digests`` is the pre-training (substitute base) state keyed by
+    fully-qualified parameter name; ``saved_digests`` is the state carried into
+    the checkpoint. ``tower_prefix`` scopes the measurement to one tower (e.g.
+    ``"speech.tower"``). Parameters whose last dotted component is one of
+    ``buffer_suffixes`` (``input_min`` / ``input_max`` / ``output_min`` /
+    ``output_max`` by default) are quantization-stat runtime buffers and are
+    excluded from the movement measurement: counting them as movement would
+    fabricate the very signal the gate exists to check.
+
+    ``exercised`` is the run's declaration: ``True`` means the tower was meant to
+    be updated during training (so at least one trainable parameter must have
+    moved by save); ``False`` is the dormant negative control (nothing may have
+    moved).
+    """
+
+    tower_prefix: str
+    base_digests: Mapping[str, str]
+    saved_digests: Mapping[str, str]
+    buffer_suffixes: tuple[str, ...] = (
+        "input_min",
+        "input_max",
+        "output_min",
+        "output_max",
+    )
+    exercised: bool = True
+
+
+@register
+class AudioRowCoverageGate(Gate):
+    """Every expected audio row was either loaded or refused-and-counted.
+
+    Defect class: a save that silently drops audio rows, or a strict-mode loader
+    that quietly tolerates row-level refusals that should have blocked the job at
+    load. Coverage counts every row the artifact either accepted or refused; the
+    denominator is the run's external ``rows_expected`` so a save cannot inflate
+    its own row count to make the check pass.
+
+    ``rows_checked == 0`` yields ``VACUOUS`` (blocking) — no attestation is
+    possible over zero loaded rows. A non-zero ``rows_refused`` reaching the
+    gate under strict handling is a leak that must ``FAIL`` with the reasons
+    named; strict handling refuses at load, so a refusal that arrives here means
+    tolerant handling leaked in.
+
+    Because ``docs/CUSTOM_GATES.md`` mandates the ``Coverage.unit`` string be
+    ``"plural, lowercase"``, this module uses ``"audio rows"`` / ``"tower
+    parameters"`` (plural) rather than the singular shapes the prose spec wrote
+    informally.
+    """
+
+    id: ClassVar[str] = "speech.audio_row_coverage"
+    description: ClassVar[str] = (
+        "Every audio row the run declared is accounted for at save: either "
+        "loaded into the artifact or refused-and-counted (and any refusal "
+        "under strict handling is a leak that must block)"
+    )
+    events: ClassVar[tuple[Lifecycle, ...]] = (Lifecycle.SAVE,)
+    context_type: ClassVar[type | None] = AudioRowCoverageContext
+
+    def check(self, ctx: Any) -> GateResult:
+        c = ctx
+        rows_expected = c.rows_expected
+        rows_checked = c.rows_checked
+        rows_refused = c.rows_refused
+        refused = dict(c.refused) if c.refused else {}
+
+        # The per-spec Coverage formula (checked = loaded + refused, expected =
+        # manifest). This exact formula serves the two branches that actually
+        # measure data (refusals-found FAIL and the general pass/under/over
+        # chain). The rows_checked==0 branch deliberately overrides it to
+        # Coverage.none: forcing checked=0 is the only way to make the
+        # framework's ok() downgrade yield the mandated VACUOUS verdict even
+        # when rows_refused>0 (since the formula would produce checked>0 in
+        # that case and ok() would downgrade to UNDERCOVERED / OVERCOVERED /
+        # PASS instead of VACUOUS). Refusals still surface in evidence.
+        coverage = Coverage(
+            checked=rows_checked + rows_refused,
+            unit="audio rows",
+            expected=rows_expected,
+        )
+
+        if rows_checked == 0:
+            # "rows_checked == 0 -> VACUOUS (blocks)" is an absolute rule of
+            # this gate: zero loaded rows means no attestation is possible no
+            # matter how many refusals preceded them. The spec slot for this
+            # case is first; the refusal-leak FAIL branch below casts a wider
+            # (rows_checked > 0, rows_refused > 0) net because rows_checked == 0
+            # already returned. Returning through self.ok over zero coverage
+            # routes this to Verdict.VACUOUS via the framework's downgrade
+            # chain — the only sanctioned way to produce VACUOUS without
+            # hand-assembling GateResult.
+            return self.ok(
+                f"no audio row was loaded (0 of {rows_expected} expected; "
+                f"{rows_refused} refused) — nothing to attest about",
+                Coverage.none("audio rows"),
+                evidence={
+                    "rows_expected": rows_expected,
+                    "rows_refused": rows_refused,
+                    "refused": refused,
+                },
+            )
+
+        if rows_refused > 0:
+            # Strict handling refuses at load; a refusal that reaches this gate
+            # means the loader tolerated instead of blocking. The leak is named
+            # and must FAIL with the reasons surfaced so the caller can see
+            # which row-level failure slipped through.
+            return self.fail(
+                f"{rows_refused} of {rows_expected} audio rows were refused "
+                f"under strict-mode handling ({refused}) — strict mode refuses "
+                "at load, so a refused count reaching the save means tolerant "
+                "handling leaked in",
+                coverage,
+                evidence={
+                    "rows_refused": rows_refused,
+                    "refused": refused,
+                    "rows_checked": rows_checked,
+                },
+            )
+
+        # rows_refused == 0 and rows_checked > 0 here. Coverage reduces to
+        # (rows_checked, ..., rows_expected) since rows_refused == 0; the
+        # framework's self.ok() downgrade resolves shortfall (UNDERCOVERED) or
+        # overage (OVERCOVERED) and blocks in both cases. The clean pass state
+        # is rows_checked == rows_expected with zero refusals.
+        return self.ok(
+            f"{rows_checked} of {rows_expected} expected audio rows loaded (no refusals)",
+            coverage,
+        )
+
+    def controls(self) -> list[Control]:
+        return [
+            Control(
+                name="no-rows-loaded",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: AudioRowCoverageContext(
+                    rows_expected=5,
+                    rows_checked=0,
+                    rows_refused=0,
+                    refused={},
+                ),
+                note="0 rows loaded against 5 expected: must block as VACUOUS "
+                "with zero coverage (no attestation over zero loaded rows)",
+            ),
+            Control(
+                name="strict-refusal-leaked",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: AudioRowCoverageContext(
+                    rows_expected=5,
+                    rows_checked=3,
+                    rows_refused=2,
+                    refused={"decoder_failure": 2},
+                ),
+                note="2 rows refused under strict handling that should have "
+                "blocked at load: must FAIL and name 'decoder_failure' as the "
+                "leaked tolerant-handling reason",
+            ),
+            Control(
+                name="undercover-row-count",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: AudioRowCoverageContext(
+                    rows_expected=5,
+                    rows_checked=3,
+                    rows_refused=0,
+                    refused={},
+                ),
+                note="3 of 5 rows loaded without refusals: shortfall of 2 must "
+                "block as UNDERCOVERED (framework downgrade over Coverage(3,5))",
+            ),
+            Control(
+                name="all-rows-loaded",
+                kind=ControlKind.MUST_PASS,
+                make_ctx=lambda: AudioRowCoverageContext(
+                    rows_expected=5,
+                    rows_checked=5,
+                    rows_refused=0,
+                    refused={},
+                ),
+                note="5 of 5 rows loaded and 0 refused: the clean pass state",
+            ),
+        ]
+
+
+@register
+class AudioPlaceholderCoverageGate(Gate):
+    """Placeholder rows have had their placeholder markers verified or counted.
+
+    Defect class: a save hiding placeholder audio behind fabricated "verified"
+    claims it never actually measured, or a placeholder accounting that does not
+    add up to the row census it claims to describe. The framework's doctrine
+    requires any claim to carry its own coverage: if the processor offers no
+    placeholder count to verify against (every row unmeasured), the gate must
+    STAY SILENT via a declared ``AbstentionKind.NOT_ESTABLISHED`` skip — it is
+    forbidden to PASS over rows it could not adjudicate. If the accounting
+    itself does not add up (``verified + unmeasured != rows_checked``), the
+    denominator is malformed and must FAIL before any ratio is computed.
+    """
+
+    id: ClassVar[str] = "speech.audio_placeholder_coverage"
+    description: ClassVar[str] = (
+        "Every audio row's placeholder marker is verified at save: either "
+        "actually checked against a placeholder count (verified) or counted "
+        "as unmeasured behind a declared NOT_ESTABLISHED abstention — never "
+        "silently PASSing over rows the processor could not verify"
+    )
+    events: ClassVar[tuple[Lifecycle, ...]] = (Lifecycle.SAVE,)
+    context_type: ClassVar[type | None] = AudioPlaceholderContext
+
+    def check(self, ctx: Any) -> GateResult:
+        c = ctx
+        rows_checked = c.rows_checked
+        verified = c.placeholder_rows_verified
+        unmeasured = c.placeholder_rows_unmeasured
+
+        # Denominator hygiene first: if the placeholder accounting does not add
+        # up to the row census, the Coverage denominator this gate would report
+        # is itself false, and no subsequent ratio computed over the two could
+        # be trusted. Route through fail() — always blocks and never softens.
+        if verified + unmeasured != rows_checked:
+            return self.fail(
+                f"denominator mismatch: {verified} placeholder rows verified "
+                f"+ {unmeasured} unmeasured = {verified + unmeasured} but "
+                f"rows_checked declares {rows_checked} — the placeholder "
+                "accounting does not add up to the row census",
+                Coverage(
+                    checked=verified,
+                    unit="audio rows",
+                    expected=rows_checked,
+                ),
+                evidence={
+                    "rows_checked": rows_checked,
+                    "placeholder_rows_verified": verified,
+                    "placeholder_rows_unmeasured": unmeasured,
+                },
+            )
+
+        if rows_checked == 0:
+            # Nothing to verify over zero rows. The denominator check above
+            # already confirmed 0 verified + 0 unmeasured == 0; returning
+            # through self.ok over Coverage.none() routes to VACUOUS via the
+            # framework's enforced downgrade.
+            return self.ok(
+                "no rows were sent through placeholder measurement for this "
+                "save — nothing to attest about",
+                Coverage.none("audio rows"),
+            )
+
+        if unmeasured == rows_checked:
+            # rows_checked > 0 here (the ==0 case routed above to VACUOUS).
+            # Every row is unmeasured and the processor offers no placeholder
+            # count to verify against. Take the declared NOT_ESTABLISHED
+            # abstention — never PASS over entirely unmeasured rows.
+            return self.skip(
+                "the processor offers no placeholder count to verify against: "
+                f"all {rows_checked} rows are rows the gate cannot adjudicate "
+                "— NOT_ESTABLISHED",
+                kind=AbstentionKind.NOT_ESTABLISHED,
+            )
+
+        # Mixed state (some verified, some unmeasured) or fully verified: totals
+        # already add up (checked above). Coverage is (verified, ..., rows_checked);
+        # the framework's self.ok() downgrade handles shortfall as UNDERCOVERED
+        # (verified < rows_checked blocks) and full coverage as PASS (verified ==
+        # rows_checked).
+        return self.ok(
+            f"{verified} of {rows_checked} audio row placeholder markers "
+            f"verified ({unmeasured} unmeasured)",
+            Coverage(
+                checked=verified,
+                unit="audio rows",
+                expected=rows_checked,
+            ),
+        )
+
+    def controls(self) -> list[Control]:
+        return [
+            Control(
+                name="denominator-mismatch",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: AudioPlaceholderContext(
+                    rows_checked=10,
+                    placeholder_rows_verified=5,
+                    placeholder_rows_unmeasured=2,
+                ),
+                note="5+2=7 but rows_checked declares 10: placeholder accounting "
+                "does not add up to the row census; must FAIL and name the "
+                "mismatch before any ratio is computed",
+            ),
+            Control(
+                name="zero-rows-vacuous",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: AudioPlaceholderContext(
+                    rows_checked=0,
+                    placeholder_rows_verified=0,
+                    placeholder_rows_unmeasured=0,
+                ),
+                note="0 rows and the addition holds trivially (0+0==0): must "
+                "still block as VACUOUS — no attestation over zero rows",
+            ),
+            Control(
+                name="partial-unmeasured-undercovered",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: AudioPlaceholderContext(
+                    rows_checked=5,
+                    placeholder_rows_verified=3,
+                    placeholder_rows_unmeasured=2,
+                ),
+                note="3 of 5 rows verified, 2 unmeasured and totals add: must "
+                "block as UNDERCOVERED — partial evidence is not full evidence "
+                "when the framework does not declare a sample",
+            ),
+            Control(
+                name="all-unmeasured-NOT_ESTABLISHED",
+                kind=ControlKind.MUST_PASS,
+                make_ctx=lambda: AudioPlaceholderContext(
+                    rows_checked=5,
+                    placeholder_rows_verified=0,
+                    placeholder_rows_unmeasured=5,
+                ),
+                note="0 of 5 rows verified because the processor offers no "
+                "placeholder count to verify against: the gate must take its "
+                "declared NOT_ESTABLISHED abstention and must not PASS over "
+                "entirely unmeasured rows",
+                expect_skip=(
+                    "the processor offers no placeholder count to verify "
+                    "against: every row is unmeasured and cannot be "
+                    "adjudicated — NOT_ESTABLISHED is the correct abstention"
+                ),
+            ),
+            Control(
+                name="all-verified-PASS",
+                kind=ControlKind.MUST_PASS,
+                make_ctx=lambda: AudioPlaceholderContext(
+                    rows_checked=5,
+                    placeholder_rows_verified=5,
+                    placeholder_rows_unmeasured=0,
+                ),
+                note="5 of 5 placeholder markers verified, 0 unmeasured: the "
+                "clean pass state (this is the MUST_PASS fixture set's required "
+                "affirmative healthy-input pass)",
+            ),
+        ]
+
+
+@register
+class TowerMovementGate(Gate):
+    """The tower's trainable parameters moved off their base digests as declared.
+
+    Defect class: a save that writes the speech tower byte-for-byte unchanged
+    into the checkpoint while the run declared the tower exercised for training
+    (the update silently did not happen), or conversely a dormant negative
+    control that mutated despite declaring no training. Runtime buffers (last
+    dotted component in ``buffer_suffixes``) are excluded from the movement
+    measurement: they track quantization stats, not training, and counting them
+    as movement would fabricate the exact signal the gate exists to verify.
+
+    Parameters = keys under ``tower_prefix`` whose last dotted component is NOT
+    a buffer suffix. Coverage counts params present in both ``base_digests`` and
+    ``saved_digests``; ``expected`` is the full base parameter count, so any
+    parameter missing from the saved map is UNDERCOVERED (or VACUOUS if checked
+    drops to 0 — every base param missing at once) and must block.
+
+    When ``exercised=True``, at least one parameter must have moved (digest must
+    differ between base and saved) by the time of save or the run's claim is
+    false ("declared exercised, carried unchanged"). When ``exercised=False``
+    (the dormant negative control), NO parameter may have moved — any movement
+    is a contradiction of the declaration and must block.
+    """
+
+    id: ClassVar[str] = "speech.tower_movement"
+    description: ClassVar[str] = (
+        "The speech tower's trainable parameters actually moved off their base "
+        "digests at save iff the run declared them exercised (and the converse "
+        "for the dormant negative control: nothing moves when the tower is "
+        "declared not-exercised)"
+    )
+    events: ClassVar[tuple[Lifecycle, ...]] = (Lifecycle.SAVE,)
+    context_type: ClassVar[type | None] = TowerMovementContext
+
+    def check(self, ctx: Any) -> GateResult:
+        pre = ctx.tower_prefix
+        base = dict(ctx.base_digests)
+        saved = dict(ctx.saved_digests)
+        buffer_suffixes = set(ctx.buffer_suffixes)
+        exercised = ctx.exercised
+
+        def _is_param(k: str) -> bool:
+            # A whole dotted segment, so "model.audio_tower" does not claim a
+            # sibling such as "model.audio_tower_proj".
+            if not k.startswith(pre + "."):
+                return False
+            last = k.rsplit(".", 1)[-1]
+            return last not in buffer_suffixes
+
+        base_params = sorted(k for k in base if _is_param(k))
+        saved_params = {k for k in saved if _is_param(k)}
+
+        if not base_params:
+            # No trainable parameters found under the prefix in the base (or
+            # only buffers). Nothing to attest about; returning through self.ok
+            # over zero coverage routes this to VACUOUS via the framework's
+            # enforced downgrade.
+            return self.ok(
+                f"no trainable parameters found under tower_prefix {pre!r} in "
+                "the base (after excluding runtime buffers) — nothing to "
+                "attest about for tower movement",
+                Coverage.none("tower parameters"),
+                evidence={
+                    "tower_prefix": pre,
+                    "base_key_count": len(base),
+                    "buffer_suffixes": sorted(buffer_suffixes),
+                },
+            )
+
+        both = [k for k in base_params if k in saved_params]
+        missing_in_saved = [k for k in base_params if k not in saved_params]
+
+        # Expected = the gate's external denominator (# trainable params in
+        # base). Checked = # params present in BOTH maps — params dropped from
+        # the save are a shortfall and must block (framework downgrade of
+        # self.ok: UNDERCOVERED when 0 < checked < expected, VACUOUS when
+        # checked == 0).
+        coverage = Coverage(
+            checked=len(both),
+            unit="tower parameters",
+            expected=len(base_params),
+        )
+
+        if missing_in_saved:
+            # Base params absent from the saved digest map. The framework's
+            # self.ok() downgrade handles the shortfall verdict (UNDERCOVERED
+            # when some params made it, VACUOUS when every base param is
+            # missing at once — both blocking). Route through ok() so the
+            # enforced downgrade applies.
+            return self.ok(
+                f"{len(missing_in_saved)} of {len(base_params)} tower "
+                f"parameters under {pre!r} missing from the saved digest map: "
+                f"{missing_in_saved[:8]}",
+                coverage,
+                evidence={
+                    "missing_in_saved": missing_in_saved[:16],
+                    "missing_total": len(missing_in_saved),
+                    "tower_prefix": pre,
+                },
+            )
+
+        # Every base param made it into the saved map: the two maps agree on
+        # the same set of trainable parameters. Now measure movement.
+        moved = [k for k in both if base[k] != saved[k]]
+        unchanged = [k for k in both if base[k] == saved[k]]
+        total = len(both)
+
+        if exercised:
+            if moved:
+                # Spec: "PASS iff moved (digest differs) > 0; report moved/total
+                # in the message."
+                return self.ok(
+                    f"{len(moved)} of {total} tower parameters moved from base "
+                    "to saved — declared exercised, and at least one moved",
+                    coverage,
+                    evidence={
+                        "moved_sample": moved[:8],
+                        "moved_total": len(moved),
+                    },
+                )
+            # "FAIL when 0 moved ('declared exercised, carried unchanged')."
+            return self.fail(
+                f"declared exercised but 0 of {total} tower parameters moved — "
+                "every trainable parameter carried unchanged from base to saved",
+                coverage,
+                evidence={
+                    "unchanged_sample": unchanged[:8],
+                    "unchanged_total": len(unchanged),
+                    "exercised": True,
+                },
+            )
+
+        # Not exercised — the dormant negative control. "PASS iff moved == 0";
+        # "FAIL if any moved."
+        if moved:
+            return self.fail(
+                f"dormant negative control (exercised=False) but {len(moved)} "
+                f"of {total} tower parameters moved — the tower was declared "
+                "not-exercised yet its parameters changed digests",
+                coverage,
+                evidence={
+                    "moved_sample": moved[:8],
+                    "moved_total": len(moved),
+                    "exercised": False,
+                },
+            )
+        return self.ok(
+            f"dormant negative control (exercised=False): 0 of {total} tower "
+            "parameters moved — as declared",
+            coverage,
+        )
+
+    def controls(self) -> list[Control]:
+        def _single_digest_pair(
+            base_digest: str,
+            saved_digest: str,
+            *,
+            exercised: bool,
+        ) -> TowerMovementContext:
+            return TowerMovementContext(
+                tower_prefix="speech.tower",
+                base_digests={"speech.tower.encoder.w": base_digest},
+                saved_digests={"speech.tower.encoder.w": saved_digest},
+                exercised=exercised,
+            )
+
+        return [
+            Control(
+                name="no-tower-params-vacuous",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: TowerMovementContext(
+                    tower_prefix="speech.tower",
+                    base_digests={},
+                    saved_digests={},
+                ),
+                note="no parameters under tower_prefix at all: cannot attest "
+                "movement, must block as VACUOUS with zero coverage",
+            ),
+            Control(
+                name="missing-in-saved-undercovered",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: TowerMovementContext(
+                    tower_prefix="speech.tower",
+                    base_digests={
+                        "speech.tower.encoder.w": "abc",
+                        "speech.tower.encoder.b": "def",
+                        "speech.tower.decoder.w": "ghi",
+                    },
+                    saved_digests={
+                        # encoder.b and decoder.w absent entirely.
+                        "speech.tower.encoder.w": "abc",
+                    },
+                    exercised=True,
+                ),
+                note="3 tower params in base, 1 in saved: 2 missing must block "
+                "as UNDERCOVERED (framework downgrade over Coverage(1,3))",
+            ),
+            Control(
+                name="exercised-but-unchanged",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: _single_digest_pair(
+                    "same-digest",
+                    "same-digest",
+                    exercised=True,
+                ),
+                note="declared exercised=True but every parameter carried the "
+                "identical digest from base to saved: must FAIL naming "
+                "'declared exercised, carried unchanged'",
+            ),
+            Control(
+                name="dormant-but-moved",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: _single_digest_pair(
+                    "base-digest",
+                    "different-digest",
+                    exercised=False,
+                ),
+                note="declared exercised=False (dormant negative control) but a "
+                "parameter digest changed: must FAIL",
+            ),
+            Control(
+                name="exercised-and-moved",
+                kind=ControlKind.MUST_PASS,
+                make_ctx=lambda: _single_digest_pair(
+                    "base-digest",
+                    "different-digest",
+                    exercised=True,
+                ),
+                note="declared exercised=True and at least one parameter moved: "
+                "the clean affirmative pass state under exercised=True",
+            ),
+            Control(
+                name="dormant-and-static",
+                kind=ControlKind.MUST_PASS,
+                make_ctx=lambda: _single_digest_pair(
+                    "same-digest",
+                    "same-digest",
+                    exercised=False,
+                ),
+                note="declared exercised=False and no parameter moved: the "
+                "clean pass state under the dormant negative control (still "
+                "affirms healthy input — the gate accepts a correctly-static "
+                "untrained tower)",
+            ),
+        ]

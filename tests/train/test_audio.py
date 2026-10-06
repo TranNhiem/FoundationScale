@@ -607,3 +607,16 @@ def test_the_module_imports_under_a_bare_interpreter_with_no_heavy_stack() -> No
         check=False,
     )
     assert done.returncode == 0, f"child stdout={done.stdout!r} stderr={done.stderr!r}"
+
+
+def test_reset_zeroes_every_count_and_keeps_the_object() -> None:
+    """The survival probe's rows must leave no trace in the training-row record."""
+    cov = AudioCoverage(rows_expected=2, sampling_rate=16000)
+    cov.record_ok(1.0)
+    cov.record_refused("too_long")
+    cov.placeholder_rows_verified = 1
+    cov.placeholder_rows_unmeasured = 1
+    same = cov
+    cov.reset()
+    assert same is cov
+    assert cov.as_manifest() == AudioCoverage(rows_expected=0).as_manifest()

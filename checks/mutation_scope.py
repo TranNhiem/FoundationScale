@@ -201,6 +201,19 @@ PENDING_ENROLMENT: dict[str, str] = {
         "sequences pre-GPU blocking, save-gate callback adjudication, missing-extra "
         "refusal, and the 0/5/95/96 exit-code contract"
     ),
+    "src/foundationscale/gates/speech_gates.py": (
+        "speech-plane save gates: audio row coverage, per-row placeholder coverage with "
+        "its NOT_ESTABLISHED abstention, and base-vs-saved tower movement with the "
+        "dormant-tower negative control"
+    ),
+    "src/foundationscale/train/speech_adjudication.py": (
+        "dtype-tagged tensor digests, safetensors digest reading, and the fold of speech "
+        "gate verdicts into the run exit code (RED outranks PASS, abstention moves PASS)"
+    ),
+    "src/foundationscale/train/speech_metrics.py": (
+        "transcript normalisation and Levenshtein word/character error counting with the "
+        "micro-averaged corpus rate and its checked-vs-expected utterance verdict"
+    ),
     "src/foundationscale/train/audio.py": (
         "speech-plane audio contract: when a declared audio column is accepted, strict "
         "waveform loading with named refusals, per-row placeholder verification, and "

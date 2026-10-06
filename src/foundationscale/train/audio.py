@@ -475,6 +475,21 @@ class AudioCoverage:
             return "OVERCOVERED"
         return "COVERED"
 
+    def reset(self) -> None:
+        """Zero every count, keeping the object (the collator holds a reference to it).
+
+        For the construction-time survival probe: those rows are collated to prove
+        input_features reaches the batch, not to train, and counting them would
+        report two rows the run never trained on.
+        """
+        self.rows_expected = 0
+        self.rows_checked = 0
+        self.seconds_total = 0.0
+        self.sampling_rate = None
+        self.refused = {}
+        self.placeholder_rows_verified = 0
+        self.placeholder_rows_unmeasured = 0
+
     def as_manifest(self) -> dict[str, object]:
         """JSON-ready snapshot of the counts, keys stable as contract.
 
@@ -771,7 +786,7 @@ def train_audio_collator_or_refuse(
             # MEASURED (P0, GB200, transformers 5.5.0):
             #   processor.apply_chat_template(
             #       messages, tokenize=True, return_dict=True,
-            #       return_tensors="pt", padding=True)
+            #       return_tensors="pt", processor_kwargs={"padding": True})
             # accepts [{"type":"audio","audio": <float32 @ 16 kHz>},
             #          {"type":"text","text": ...}] on a user turn followed by
             # an assistant turn, and returns input_ids / attention_mask /
@@ -802,7 +817,10 @@ def train_audio_collator_or_refuse(
             tokenize=True,
             return_dict=True,
             return_tensors="pt",
-            padding=True,
+            # transformers 5.5 routes processor arguments through
+            # processor_kwargs; passed loose they still apply, after a warning
+            # on every batch.
+            processor_kwargs={"padding": True},
         )
         input_ids = full_batch["input_ids"]
         width = int(input_ids.shape[-1])
@@ -881,7 +899,10 @@ def train_audio_collator_or_refuse(
             tokenize=True,
             return_dict=True,
             return_tensors="pt",
-            padding=True,
+            # transformers 5.5 routes processor arguments through
+            # processor_kwargs; passed loose they still apply, after a warning
+            # on every batch.
+            processor_kwargs={"padding": True},
             add_generation_prompt=True,
         )
         prompt_attention = prompt_batch.get("attention_mask")
