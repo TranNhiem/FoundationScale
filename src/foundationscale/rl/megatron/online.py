@@ -631,6 +631,7 @@ def greedy_heldout(
     reward: Any,
     device: Any,
     batch_size: int = 16,
+    loose_reward: Any = None,
 ) -> dict[str, float | int]:
     """Greedy decode every held-out sample; report verdict and truncation counts.
 
@@ -647,6 +648,14 @@ def greedy_heldout(
     (``correct / (n - unparsed)``) is reported beside it. ``correct`` counts
     verdicts equal to the scorer's declared ``correct`` value (``MCQLetterReward``
     scores 1.0/0.0), not merely positive ones.
+
+    ``unparsed_truncated`` counts unparsed rows that ALSO hit the budget, so an
+    abstention that ran out of tokens is told apart from a finished reply in the
+    wrong format. ``loose_reward`` is an optional second scorer over the SAME
+    decodes (typically a wider declared answer surface); when given, its
+    ``loose_correct``/``loose_unparsed``/``loose_accuracy`` sit beside the strict
+    numbers, so a strict-regex artifact shows as the gap between the two rather
+    than as a change in the model.
     """
     import torch
 
@@ -675,6 +684,10 @@ def greedy_heldout(
     correct_value = float(getattr(reward, "correct", 1.0))
     unparsed = 0
     truncated = 0
+    unparsed_truncated = 0
+    loose_correct = 0
+    loose_unparsed = 0
+    loose_value = float(getattr(loose_reward, "correct", 1.0))
     completion_tokens = 0
     try:
         tokenizer.padding_side = "left"
@@ -712,20 +725,36 @@ def greedy_heldout(
                         truncated += 1
                     if verdict is None:
                         unparsed += 1
+                        if not finished:
+                            unparsed_truncated += 1
                     elif verdict == correct_value:
                         correct += 1
+                    if loose_reward is not None:
+                        loose = loose_reward.score(
+                            response=response, gold=samples[start + offset].gold
+                        )
+                        if loose is None:
+                            loose_unparsed += 1
+                        elif loose == loose_value:
+                            loose_correct += 1
     finally:
         tokenizer.padding_side = previous_side
     parsed = n_rows - unparsed
-    return {
+    result: dict[str, float | int] = {
         "n": n_rows,
         "correct": correct,
         "unparsed": unparsed,
         "truncated": truncated,
+        "unparsed_truncated": unparsed_truncated,
         "accuracy": (correct / n_rows) if n_rows else 0.0,
         "parsed_accuracy": (correct / parsed) if parsed else 0.0,
         "mean_completion_tokens": (completion_tokens / n_rows) if n_rows else 0.0,
     }
+    if loose_reward is not None:
+        result["loose_correct"] = loose_correct
+        result["loose_unparsed"] = loose_unparsed
+        result["loose_accuracy"] = (loose_correct / n_rows) if n_rows else 0.0
+    return result
 
 
 def broadcast_rows(rows: list[OnlineRow] | None, *, src: int = 0) -> list[OnlineRow]:

@@ -545,12 +545,63 @@ def test_greedy_heldout_left_pads_batches_and_reports_truncation() -> None:
         "correct": 1,
         "unparsed": 1,
         "truncated": 1,
+        "unparsed_truncated": 1,  # row 3 abstained AND ran out of budget
         "accuracy": pytest.approx(1.0 / 3.0),
         "parsed_accuracy": 0.5,
         "mean_completion_tokens": pytest.approx(7.0 / 3.0),
     }
     # completions kept: [2] then [5,5,2] then [4,4,4] (row 3 has no EOS in budget)
     assert tokenizer.decodes == [[2], [5, 5, 2], [4, 4, 4]]
+
+
+def test_greedy_heldout_loose_reward_scores_the_same_decodes_beside_strict() -> None:
+    import torch
+
+    tokenizer = _FakeTokenizer(
+        eos_id=2,
+        pad_id=0,
+        rendered={"q1": [10], "q2": [10, 11], "q3": [10, 11, 12]},
+        as_dict=True,
+    )
+    model = _FakeGenerate([torch.tensor([[5, 2, 0], [6, 2, 0], [7, 7, 7]])])
+    samples = [
+        _FakeSample((("user", "q1"),), "A"),
+        _FakeSample((("user", "q2"),), "B"),
+        _FakeSample((("user", "q3"),), "C"),
+    ]
+    strict = _FakeReward([1.0, None, None])
+    loose = _FakeReward([1.0, 1.0, 0.0])
+    metrics = greedy_heldout(
+        model,
+        tokenizer,
+        samples,
+        max_new_tokens=3,
+        reward=strict,
+        device="cpu",
+        batch_size=4,
+        loose_reward=loose,
+    )
+    assert [call for call in loose.calls] == [call for call in strict.calls]
+    assert metrics["correct"] == 1 and metrics["unparsed"] == 2
+    assert metrics["unparsed_truncated"] == 1  # only row 3 lacks an EOS
+    assert metrics["loose_correct"] == 2 and metrics["loose_unparsed"] == 0
+    assert metrics["loose_accuracy"] == pytest.approx(2.0 / 3.0)
+
+
+def test_greedy_heldout_without_loose_reward_emits_no_loose_keys() -> None:
+    import torch
+
+    tokenizer = _FakeTokenizer(eos_id=2, pad_id=0, rendered={"q1": [10]}, as_dict=True)
+    model = _FakeGenerate([torch.tensor([[5, 2]])])
+    metrics = greedy_heldout(
+        model,
+        tokenizer,
+        [_FakeSample((("user", "q1"),), "A")],
+        max_new_tokens=2,
+        reward=_FakeReward([1.0]),
+        device="cpu",
+    )
+    assert not any(key.startswith("loose_") for key in metrics)
 
 
 # -- torch-free import contract ---------------------------------------------

@@ -763,6 +763,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--heldout", default="", help="--online greedy held-out corpus")
     ap.add_argument("--heldout-n", type=int, default=0, help="first N held-out rows; 0 = all")
     ap.add_argument("--heldout-max-new", type=int, default=0, help="0 = --max-new-tokens")
+    ap.add_argument(
+        "--heldout-loose-pattern",
+        default=None,
+        help="--online held-out: second, wider answer regex (one group = the letter) "
+        "scored beside the strict one; absent = strict only",
+    )
     ap.add_argument("--metrics-out", required=True)
     ap.add_argument("--parity-only", action="store_true")
     ap.add_argument("--parity-rows", type=int, default=8)
@@ -825,6 +831,11 @@ def _run_online(
         else ()
     )
     reward = MCQLetterReward(answer_pattern=args.answer_pattern)
+    loose_reward = (
+        MCQLetterReward(answer_pattern=args.heldout_loose_pattern)
+        if args.heldout_loose_pattern
+        else None
+    )
     dp_group = trainer.pg.dp
     dp_size, dp_rank = dp_group.size(), dp_group.rank()
     writer = not dist.is_initialized() or dist.get_rank() == 0
@@ -867,6 +878,7 @@ def _run_online(
                 max_new_tokens=heldout_max_new,
                 reward=reward,
                 device=device,
+                loose_reward=loose_reward,
             )
             fh.write(json.dumps({"heldout": tag, **result}) + "\n")
             fh.flush()

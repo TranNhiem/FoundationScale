@@ -229,6 +229,14 @@ def test_build_arg_parser_offload_rollout_model_is_opt_in() -> None:
     assert args.offload_rollout_model is True
 
 
+def test_build_arg_parser_heldout_loose_pattern_is_opt_in() -> None:
+    base = ["--hf-model", "m", "--rollout-jsonl", "r.jsonl", "--metrics-out", "o.jsonl"]
+    assert driver.build_arg_parser().parse_args(base).heldout_loose_pattern is None
+    pattern = r"([A-D])"
+    args = driver.build_arg_parser().parse_args([*base, "--heldout-loose-pattern", pattern])
+    assert args.heldout_loose_pattern == pattern
+
+
 def test_pp_step_module_importable_without_megatron() -> None:
     assert pp_step.__name__.endswith("pp_step")
     assert callable(pp_step.make_forward_step)
