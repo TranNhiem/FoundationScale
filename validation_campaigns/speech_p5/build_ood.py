@@ -53,7 +53,10 @@ def build(name: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for i, rec in enumerate(table.to_pylist()):
-        wave, sr = sf.read(io.BytesIO(rec["audio"]["bytes"]), dtype="float32", always_2d=False)
+        wave, sr = sf.read(io.BytesIO(rec["audio"]["bytes"]), dtype="float32", always_2d=True)
+        # Mono, like the training manifests: some sets (Earnings-22) ship stereo, and NeMo's
+        # lhotse loader refuses multi-channel input (FoundationScale's loader mixes down).
+        wave = wave.mean(axis=1)
         dur = len(wave) / sr
         text = (rec[text_col] or "").strip()
         if sr != 16000 or not (1.0 <= dur <= 25.0) or not text:

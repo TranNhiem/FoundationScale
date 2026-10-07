@@ -1,6 +1,9 @@
 # NVIDIA Canary in FoundationScale: design note
 
-Status: proposal, not built. Written 2026-10-06 after P4 (`validation_campaigns/speech_p4`).
+Status: first milestone BUILT and measured 2026-10-07 (`validation_campaigns/speech_canary`): NeMo 3.1
+environment, zero-shot Canary WER scored by FoundationScale, NeMo fine-tune, FoundationScale adjudication.
+Open: LibriSpeech-only fine-tuning regresses Canary on short conversational clips (see the evidence).
+Written 2026-10-06 after P4 (`validation_campaigns/speech_p4`).
 
 ## The constraint
 
