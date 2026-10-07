@@ -44,7 +44,7 @@ from foundationskills.interfaces.fs.fabric import (
 )
 from foundationskills.interfaces.fs.launch import LaunchRefused, launch as fs_launch
 from foundationskills.interfaces.fs.sacct import query_job_gpu_hours
-from foundationskills.skills.auto_research.accept import decide, noise_floor
+from foundationskills.skills.auto_research.accept import decide, decide_multi, frontier, noise_floor
 from foundationskills.skills.auto_research.accounting import campaign_usage
 from foundationskills.skills.auto_research.campaign import (
     campaign_hash,
@@ -76,7 +76,7 @@ from .seeds import phase_of, phase_problems, set_status
 _ACTIONS = ("check", "launch", "record", "propose", "close", "envelope", "submit", "cancel", "claim")
 _RESULT_ROLES = ("baseline", "candidate", "confirm")
 _RESULT_FIELDS = ("trial", "role", "seed", "status", "limited", "steps", "eval_policy_fingerprint", "metrics")
-_RANK = {"accepted_gain": 4, "accepted_flat": 3, "no_gain": 2, "rejected_regress": 1, "unmeasured": 0}
+_RANK = {"accepted_gain": 4, "accepted_flat": 3, "tradeoff": 2, "no_gain": 2, "rejected_regress": 1, "unmeasured": 0}
 
 def _claim_live(entry: dict[str, Any]) -> bool:
     """An accepted chain entry (derive_chain marks a claim that lost a seed 'downgraded')."""
@@ -99,8 +99,13 @@ def _claim_well_formed(body: dict[str, Any]) -> bool:
 
 
 def _decide(spec: dict[str, Any], reference: list[dict[str, Any]], rows: list[dict[str, Any]], metric: str) -> dict[str, Any]:
-    """decide() over reference rows: an unmeasurable comparison reports unmeasured, it never raises."""
+    """decide() over reference rows: an unmeasurable comparison reports unmeasured, it never raises.
+
+    A spec carrying ``objectives`` (M5a) decides through decide_multi; without it the M4 path is untouched.
+    """
     try:
+        if spec.get("objectives"):
+            return dict(decide_multi(spec, reference, rows))
         return dict(decide(spec, reference, rows, metric))
     except (ArithmeticError, ValueError, TypeError, KeyError):
         return {"verdict": "unmeasured", "mean_delta": None, "tau": None, "n_pairs": 0, "reasons": ["decide_failed"]}
@@ -156,6 +161,51 @@ def _claim_must_fire_fixtures() -> dict[str, dict[str, Any]]:
     }
 
 
+def _multi_objective_must_fire_fixtures() -> dict[str, dict[str, Any]]:
+    """M5a fixtures (pure data): a mismatched objectives[0] (AR-IN-009), a claimed trade-off (AR-RS-008), a disclosed
+    trade-off at close (AR-HO-008). The trade-off wins val_accuracy (+0.4) and loses throughput (-50, tau ~2.8)."""
+    fix = "arbiter"
+    objectives = [{"metric": "val_accuracy", "direction": "max"}, {"metric": "throughput", "direction": "max"}]
+    mo_spec = _spec(objectives=objectives)
+    bad_spec = _spec(objectives=[{"metric": "val_accuracy", "direction": "min"}, objectives[1]])
+    campaign = _campaign(mo_spec)
+    baseline = [_result("baseline", "baseline", s, _val_throughput(0.5 + 0.001 * i, 100.0 + i))
+                for i, s in enumerate((101, 102, 103))]
+    claim_ledger: list[tuple[str, str, str, dict[str, Any]]] = [
+        ("campaign_approved", campaign, "-", {"spec_hash": campaign_hash(mo_spec), "approver": fix}),
+        ("launch_envelope", campaign, "-", _env_payload(mo_spec, {"max_runs": 6, "gpu_hours_total": 24.0})),
+        *[("trial_result", campaign, "baseline", row) for row in baseline],
+    ]
+    for run_seed in (101, 102, 103):
+        job = _job_payload(str(800 + run_seed), "t1", kind="eval_only")
+        job.update({"seed": run_seed, "phase": "confirm", "gpu_hours_est": 1.0})
+        claim_ledger.append(("job_submitted", campaign, "t1", job))
+        claim_ledger.append(("trial_result", campaign, "t1", _result("t1", "confirm", run_seed, _val_throughput(0.9, 50.0))))
+    close_rows = [*baseline, *[_result("t1", "candidate", s, _val_throughput(0.9, 50.0)) for s in (101, 102, 103)]]
+    return {
+        "AR-IN-009": {
+            "request": {
+                "action": "check", "campaign_spec": bad_spec, "campaign_confirm": "{confirm}",
+                "ledger_dir": "{tmp}/ledger",
+            },
+        },
+        "AR-RS-008": {
+            "files": ledger_files(claim_ledger),
+            "request": {
+                "action": "claim", "campaign_spec": mo_spec, "campaign_confirm": "{confirm}",
+                "approver": fix, "ledger_dir": "{tmp}/ledger", "trial": "t1",
+            },
+        },
+        "AR-HO-008": {
+            **_stage(mo_spec, close_rows),
+            "request": {
+                "action": "close", "campaign_spec": mo_spec, "campaign_confirm": "{confirm}", "approver": fix,
+                "ledger_dir": "{tmp}/ledger", "stop_reason": "budget exhausted",
+            },
+        },
+    }
+
+
 FINGERPRINT = "sha256:" + "a1" * 32
 BASE_FINGERPRINT = "sha256:" + "b2" * 32
 
@@ -184,6 +234,9 @@ _RECOVERY = {
     "AR-RS-007": "claim only a measured, complete confirm set whose decide() verdict is accepted_gain (record the missing seeds first)",
     "AR-IN-008": "fix the campaign spec's proposer block (name catalog|optuna|optuna-cma, min_rows int >= 1, require_model bool, seed int)",
     "AR-PR-001": "record more measured trials, install the optional proposer extra, or drop proposer.require_model to fall back to the catalog",
+    "AR-IN-009": "declare 2-4 objectives as {metric, direction}: objectives[0] equal to objective, distinct metrics from eval_policy.metrics, none listed in confirm.guardrails",
+    "AR-RS-008": "claim only a candidate that wins on >= 1 objective by more than tau and loses on none; trade-offs are reported, never claimed",
+    "AR-HO-008": "arbitrate the listed trade-offs by hand: promote one only through a new campaign spec (new campaign_confirm)",
     "AR-PR-002": "use proposer optuna (TPE holds categorical axes) or remove the categorical axes",
 }
 
@@ -284,6 +337,14 @@ class AutoResearchSkill(BaseSkill):
                  "claim over an incomplete/unmeasured confirm set (missing, pending, crashed, limited or unpaired "
                  "seed) or of a decision that is not accepted_gain",
                  Severity.BLOCK, "input"),
+        RuleSpec("AR-RS-008",
+                 "claim on a multi-objective campaign whose decision is not accepted_gain (a trade-off, tie, "
+                 "regression or unmeasured objective never dominates the reference)",
+                 Severity.BLOCK, "input"),
+        RuleSpec("AR-IN-009",
+                 "spec.objectives invalid (2-4 {metric, direction} entries, objectives[0] = objective, distinct metrics "
+                 "inside eval_policy.metrics, none a guardrail)",
+                 Severity.BLOCK, "input"),
         RuleSpec("AR-PR-001",
                  "proposer.require_model set and the model proposer is unavailable (below min_rows, extra missing, "
                  "no axes, model error, no in-axes cards) or its replay is not byte-identical",
@@ -302,6 +363,8 @@ class AutoResearchSkill(BaseSkill):
                  Severity.WARN, "handoff"),
         RuleSpec("AR-HO-007", "a recorded proposal does not replay byte-identically at close (search provenance drifted)",
                  Severity.BLOCK, "handoff"),
+        RuleSpec("AR-HO-008", "multi-objective trade-offs disclosed at close (never claimed; no accepted gain)",
+                 Severity.INFO, "handoff"),
     )
     fs_interface = FSInterface(
         entries=(),
@@ -689,7 +752,16 @@ class AutoResearchSkill(BaseSkill):
                     _RECOVERY["AR-RS-007"],
                 )
             ]
-        if str(data["decision"].get("verdict") or "") != "accepted_gain":
+        verdict = str(data["decision"].get("verdict") or "")
+        if spec.get("objectives") and verdict != "accepted_gain":  # M5a: only weak-Pareto dominance is claimable
+            return [
+                self.finding(
+                    "AR-RS-008", "claim_refused_not_dominating:" + trial,
+                    {"trial": trial, "decision": data["decision"]},
+                    _RECOVERY["AR-RS-008"],
+                )
+            ]
+        if verdict != "accepted_gain":
             return [
                 self.finding(
                     "AR-RS-007", "claim_no_gain:" + trial,
@@ -1053,6 +1125,7 @@ class AutoResearchSkill(BaseSkill):
         gains = [d for d in decisions.values() if d["verdict"] == "accepted_gain"]
         flats = [d for d in decisions.values() if d["verdict"] == "accepted_flat"]
         regressions = [d for d in decisions.values() if d["verdict"] == "rejected_regress"]
+        tradeoffs = sorted(trial for trial, d in decisions.items() if d["verdict"] == "tradeoff")
         top = _top_candidate(decisions)
         best_trial, best = top if top else (None, None)
 
@@ -1107,7 +1180,7 @@ class AutoResearchSkill(BaseSkill):
                 )
             )
         elif not gains and not flats:
-            outcome = "regressed" if regressions else "no_gain"
+            outcome = "regressed" if regressions and not tradeoffs else "no_gain"  # a trade-off is not a regression
             status = Status.RED
             findings.append(
                 self.finding(
@@ -1149,8 +1222,17 @@ class AutoResearchSkill(BaseSkill):
                 )
             else:
                 recommendation = "collect more evidence: the noise floor or the paired repeats are missing"
+        elif tradeoffs:
+            recommendation = "keep the baseline; trade-offs only (never claimed): " + ", ".join(tradeoffs)
         else:
             recommendation = "keep the baseline; no candidate beat tau"
+        if tradeoffs and not gains and not problems:
+            findings.append(
+                self.finding(
+                    "AR-HO-008", "trade-off candidate(s) disclosed, not claimed: " + ", ".join(tradeoffs),
+                    {"tradeoffs": tradeoffs, "verdicts": verdicts}, _RECOVERY["AR-HO-008"],
+                )
+            )
 
         for drop in chain_drops:
             dropped = str(drop).split(":", 1)[1] if ":" in str(drop) else str(drop)
@@ -1232,6 +1314,13 @@ class AutoResearchSkill(BaseSkill):
             "ledger": {"count": head["count"], "head_hash": head["head_hash"], "verified": not problems},
             "tsv": _safe_text(lambda: ledger.tsv_view(campaign)),
         }
+        if spec.get("objectives"):  # M5a additive keys; an objective-only report stays byte-identical
+            entries_front, excluded = frontier(decisions)
+            report["objectives"] = [
+                {"metric": o.get("metric"), "direction": o.get("direction")} for o in spec.get("objectives") or []
+            ]
+            report["tradeoffs"] = tradeoffs
+            report["frontier"] = {"entries": entries_front, "excluded": excluded, "order": "presentation_only"}
         tags = {"campaign": campaign, "spec_hash": spec_hash}
         stamp = make_provenance(self.name, self.version, tags)
         ctx.artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -1253,6 +1342,9 @@ class AutoResearchSkill(BaseSkill):
             "ledger": report["ledger"],
             "tsv": report["tsv"],
         }
+        for key in ("objectives", "tradeoffs", "frontier"):
+            if key in report:
+                payload[key] = report[key]
         return SkillResult(status, payload, artifacts, tuple(findings), provenance=stamp)
 
     # ---- handoff / diagnosis / fixtures ------------------------------------
@@ -1621,6 +1713,7 @@ class AutoResearchSkill(BaseSkill):
                 },
             },
             **_claim_must_fire_fixtures(),
+            **_multi_objective_must_fire_fixtures(),
         }
 
 
