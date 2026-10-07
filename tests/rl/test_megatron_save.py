@@ -122,3 +122,43 @@ def test_config_values_equal_to_their_default_are_attributed_to_the_default(
     assert manifest.config["steps"].source == "cli"
     assert manifest.config["lr"].source == "default"
     assert manifest.config["save_dir"].source == "default"
+
+
+def _adjudicate(tmp_path: Path, model: Any, names: Any, *, unwritten: int = 0) -> Any:
+    from foundationscale.rl.megatron.save import save_and_adjudicate
+
+    return save_and_adjudicate(
+        model,
+        None,
+        tmp_path / "step_000003",
+        tag="step_000003",
+        step=3,
+        first=True,
+        unwritten=unwritten,
+        declared_names=names,
+        run_id="unit",
+        topology=_TOPOLOGY,
+        config={"steps": 6},
+    )
+
+
+def test_save_and_adjudicate_records_per_gate_verdicts_on_an_accepted_save(
+    tmp_path: Path,
+) -> None:
+    model = _tiny_llama()
+    record, refusal = _adjudicate(tmp_path, model, model.state_dict())
+    assert refusal == "" and record["ok"] is True
+    assert record["gates"]["checkpoint.save_complete"] == "PASS"
+    assert record["gates"]["checkpoint.first_save"] == "PASS"
+
+
+def test_save_and_adjudicate_refuses_unwritten_refit_before_writing(tmp_path: Path) -> None:
+    model = _tiny_llama()
+    record, refusal = _adjudicate(tmp_path, model, model.state_dict(), unwritten=2)
+    assert "2 HF tensor(s) unwritten" in refusal and record["ok"] is False
+    assert not (tmp_path / "step_000003").exists()
+
+
+def test_save_and_adjudicate_returns_an_exception_as_a_refusal(tmp_path: Path) -> None:
+    record, refusal = _adjudicate(tmp_path, _tiny_llama(), [])
+    assert refusal.startswith("ValueError:") and record["refusal"] == refusal

@@ -29,6 +29,7 @@ from typing import Any
 __all__ = [
     "MANIFEST_NAME",
     "run_policy_save_gates",
+    "save_and_adjudicate",
     "save_policy_checkpoint",
 ]
 
@@ -157,3 +158,62 @@ def run_policy_save_gates(out_dir: str | os.PathLike[str], *, first: bool) -> An
     event = Lifecycle.FIRST_SAVE if first else Lifecycle.SAVE
     ctx = CheckpointGateContext.from_path(Path(out_dir))
     return run_event(REGISTRY, event, ctx, missing_ctx="report-skip")
+
+
+def save_and_adjudicate(
+    hf_model: Any,
+    tokenizer: Any,
+    out_dir: str | os.PathLike[str],
+    *,
+    tag: str,
+    step: int,
+    first: bool,
+    unwritten: int,
+    declared_names: Iterable[str],
+    run_id: str,
+    topology: Mapping[str, int],
+    config: Mapping[str, object],
+    defaults: Mapping[str, object] | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Writer-side save step: write, adjudicate, and return ``(record, refusal)``.
+
+    ``refusal`` is ``""`` for an accepted save and a reason otherwise; nothing is
+    raised, because the caller must first hand the verdict to every rank (a raise
+    on the writer alone leaves the peers blocked in the next collective). The
+    record is the metrics line: tag, step, path, per-gate verdicts and ``ok``.
+
+    ``unwritten`` is the refit's count of HF tensors the export never refreshed.
+    The declared set is the refit's own write list, so it cannot see such a
+    tensor; a non-zero count is therefore refused here, before any bytes are
+    written -- it would ship an initial value under a trained name.
+    """
+    path = Path(out_dir)
+    record: dict[str, Any] = {"save": tag, "step": step, "path": str(path)}
+    refusal = ""
+    try:
+        if unwritten:
+            refusal = (
+                f"refit left {unwritten} HF tensor(s) unwritten; saving would ship stale "
+                "weights under a trained name"
+            )
+        else:
+            save_policy_checkpoint(
+                hf_model,
+                tokenizer,
+                path,
+                declared_names=declared_names,
+                run_id=run_id,
+                topology=topology,
+                config=config,
+                defaults=defaults,
+            )
+            report = run_policy_save_gates(path, first=first)
+            record["gates"] = {r.gate_id: r.verdict.value for r in report.results}
+            if not report.ok:
+                refusal = f"save gates refused {path}:\n{report}"
+    except Exception as exc:  # noqa: BLE001 -- returned, then raised on every rank
+        refusal = f"{type(exc).__name__}: {exc}"
+    record["ok"] = not refusal
+    if refusal:
+        record["refusal"] = refusal
+    return record, refusal

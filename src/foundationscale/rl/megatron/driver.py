@@ -818,7 +818,7 @@ def _run_online(
     from foundationscale.rl.megatron import online
     from foundationscale.rl.megatron.normalization import compute_denominators
     from foundationscale.rl.megatron.pp_step import loss_unit
-    from foundationscale.rl.megatron.save import run_policy_save_gates, save_policy_checkpoint
+    from foundationscale.rl.megatron.save import save_and_adjudicate
     from foundationscale.rl.registry import lookup_algorithm
     from foundationscale.rl.rewards import MCQLetterReward
     from foundationscale.rl.torch_backend import TensorPolicyLoss
@@ -913,48 +913,31 @@ def _run_online(
                 return
             refusal = ""
             if fh is not None:
-                path = Path(args.save_dir) / tag
-                record: dict[str, Any] = {"save": tag, "step": step, "path": str(path)}
-                try:
-                    if unwritten:
-                        # A tensor the export never refreshed would ship at its
-                        # initial value; the declared set cannot see it (it is the
-                        # refit's own write list), so it is refused here instead.
-                        refusal = (
-                            f"refit left {unwritten} HF tensor(s) unwritten; saving would "
-                            "ship stale weights under a trained name"
-                        )
-                    else:
-                        world = dist.get_world_size() if dist.is_initialized() else 1
-                        local = int(os.environ.get("LOCAL_WORLD_SIZE", str(world)))
-                        cfg = trainer.cfg
-                        save_policy_checkpoint(
-                            hf_model,
-                            tokenizer,
-                            path,
-                            declared_names=exported,
-                            run_id=metrics_path.stem,
-                            topology={
-                                "nodes": max(1, world // max(1, local)),
-                                "gpus_per_node": min(world, local),
-                                "tensor_parallel": cfg.tp,
-                                "pipeline_parallel": cfg.pp,
-                                "data_parallel": max(1, world // (cfg.tp * cfg.pp * cfg.cp)),
-                                "expert_parallel": cfg.ep,
-                                "context_parallel": cfg.cp,
-                            },
-                            config=vars(args),
-                            defaults={k: defaults_parser.get_default(k) for k in vars(args)},
-                        )
-                        report = run_policy_save_gates(path, first=saves_done == 0)
-                        record["gates"] = {r.gate_id: r.verdict.value for r in report.results}
-                        if not report.ok:
-                            refusal = f"save gates refused {path}:\n{report}"
-                except Exception as exc:  # noqa: BLE001 -- broadcast, then raised everywhere
-                    refusal = f"{type(exc).__name__}: {exc}"
-                record["ok"] = not refusal
-                if refusal:
-                    record["refusal"] = refusal
+                world = dist.get_world_size() if dist.is_initialized() else 1
+                local = int(os.environ.get("LOCAL_WORLD_SIZE", str(world)))
+                cfg = trainer.cfg
+                record, refusal = save_and_adjudicate(
+                    hf_model,
+                    tokenizer,
+                    Path(args.save_dir) / tag,
+                    tag=tag,
+                    step=step,
+                    first=saves_done == 0,
+                    unwritten=unwritten,
+                    declared_names=exported,
+                    run_id=metrics_path.stem,
+                    topology={
+                        "nodes": max(1, world // max(1, local)),
+                        "gpus_per_node": min(world, local),
+                        "tensor_parallel": cfg.tp,
+                        "pipeline_parallel": cfg.pp,
+                        "data_parallel": max(1, world // (cfg.tp * cfg.pp * cfg.cp)),
+                        "expert_parallel": cfg.ep,
+                        "context_parallel": cfg.cp,
+                    },
+                    config=vars(args),
+                    defaults={k: defaults_parser.get_default(k) for k in vars(args)},
+                )
                 fh.write(json.dumps(record) + "\n")
                 fh.flush()
                 print(f"SAVE_{tag.upper()} {json.dumps(record)}", flush=True)
