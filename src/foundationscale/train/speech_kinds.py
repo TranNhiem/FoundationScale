@@ -863,3 +863,105 @@ def freeze_batchnorm_statistics(model: Any) -> int:
             module.register_forward_pre_hook(_keep_inference_stats)
             count += 1
     return count
+
+
+GROUP_BY_DURATION_ENV = "FOUNDATIONSCALE_TRAIN_AUDIO_GROUP_BY_DURATION"
+
+
+def group_by_duration_settings(
+    declared: str | None, columns: Sequence[str]
+) -> dict[str, str] | str | None:
+    """TrainingArguments for duration-grouped batches, a refusal string, or None (undeclared).
+
+    Declared, never implicit: grouping changes which rows share a batch, so it is opt-in via
+    ``FOUNDATIONSCALE_TRAIN_AUDIO_GROUP_BY_DURATION`` and uses the manifest's own measured
+    ``duration`` column (transformers 5.5 ``train_sampling_strategy="group_by_length"``). Audio
+    batches pad to their longest clip, so grouping similar durations cuts padded frames. A
+    declaration on a dataset without the column refuses rather than grouping by nothing.
+    """
+    if not declared:
+        return None
+    if "duration" not in columns:
+        return (
+            f"{GROUP_BY_DURATION_ENV} is declared but the dataset has no 'duration' column "
+            f"(columns {list(columns)}); grouping needs each row's measured length. Refusing (96)"
+        )
+    return {"train_sampling_strategy": "group_by_length", "length_column_name": "duration"}
+
+
+def apply_group_by_duration(
+    training_kwargs: dict[str, Any], environ: Mapping[str, str], columns: Sequence[str]
+) -> str | None:
+    """Apply the declared duration grouping to ``training_kwargs`` in place.
+
+    Returns a refusal string (the caller refuses 96), an announcement line when grouping was
+    applied, or None when it was not declared. Kept here so the train loop holds one call.
+    """
+    settings = group_by_duration_settings(environ.get(GROUP_BY_DURATION_ENV), columns)
+    if settings is None or isinstance(settings, str):
+        return settings
+    training_kwargs.update(settings)
+    return (
+        "[   ok] speech.group_by_duration: batches group rows of similar measured "
+        "duration (declared), so each pads to a closer longest clip"
+    )
+
+
+def full_train_announcement(audio_column: str, modules: Sequence[str], family: Any) -> str:
+    """The line announcing what trains in full and where LoRA attaches, for an adapter run."""
+    scope = list(getattr(family, "adapter_scope_prefixes", ()) or ())
+    return (
+        f"adapter='lora' with audio_column={audio_column!r}: {', '.join(modules)} train in "
+        f"full (peft modules_to_save); LoRA covers the declared adapter scope {scope}"
+    )
+
+
+def lora_audio_plan(family: Any, audio_column: str) -> tuple[list[str], str]:
+    """For a LoRA run that declares audio: ``(full_train_modules, line)``.
+
+    Non-empty modules: ``line`` is the announcement and the caller sets peft
+    ``modules_to_save``. Empty modules: ``line`` is the refusal (96) -- the family declares no
+    measured wrap points, so peft would freeze its audio towers and the run would train text.
+    """
+    from foundationscale.train.audio import audio_full_train_modules  # noqa: PLC0415
+
+    modules = audio_full_train_modules(family)
+    if not modules:
+        return [], (
+            f"adapter='lora' with audio_column={audio_column!r}: this family declares no "
+            "adapter_full_train modules for its audio towers, so an adapter run cannot train "
+            "them (peft would freeze them). Run a full fine-tune, or measure and register the "
+            "family's wrap points"
+        )
+    return modules, full_train_announcement(audio_column, modules, family)
+
+
+def build_speech_collator_checked(
+    kind: str,
+    surface: Any,
+    probe_rows: Sequence[Any],
+    *,
+    audio_column: str,
+    max_length: int,
+    model_config: Any,
+    language: str | None,
+) -> Any:
+    """Build the collator, prove input_features reaches a real batch, then reset coverage.
+
+    The survival probe collates real rows before a step is paid for and refuses (96) --
+    naming the column -- if ``input_features`` is not in the batch; the probe rows proved the
+    path and did not train, so the coverage record is reset to count training rows only.
+    """
+    from foundationscale.train.audio import refuse_if_audio_features_dropped  # noqa: PLC0415
+
+    collator = build_speech_collator(
+        kind,
+        surface,
+        audio_column=audio_column,
+        max_length=max_length,
+        model_config=model_config,
+        language=language,
+    )
+    refuse_if_audio_features_dropped(collator(list(probe_rows)).keys(), audio_column)
+    collator.coverage.reset()
+    return collator

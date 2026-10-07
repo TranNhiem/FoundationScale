@@ -463,7 +463,9 @@ SUPERSEDE_NOTE = (
 
 
 def capture_speech_inputs(
-    family: Any, state_items: Callable[[], Iterable[tuple[str, Any]]]
+    family: Any,
+    state_items: Callable[[], Iterable[tuple[str, Any]]],
+    full_train: Sequence[str] | None = None,
 ) -> tuple[list[tuple[str, bool]], dict[str, str] | None]:
     """The towers to judge and their as-loaded digests, taken BEFORE a step is run.
 
@@ -476,6 +478,11 @@ def capture_speech_inputs(
     if family is None:
         return [], None
     towers = [(prefix, modality == "audio") for prefix, modality in family.towers if modality]
+    if full_train:
+        # Adapter run: only the declared full-train modules are saved whole (peft
+        # modules_to_save), so THEY are what must move; LoRA-wrapped layers keep their base
+        # weights frozen and absent from the save. Non-audio towers stay the dormant control.
+        towers = [(module, True) for module in full_train] + [t for t in towers if not t[1]]
     if not towers:
         return towers, None
     return towers, digests_from_named_tensors(state_items(), [prefix for prefix, _ in towers])
@@ -526,3 +533,58 @@ def fold_speech_verdict(rc: int, done: str, speech_exit: int) -> tuple[int, str]
             "could not be run (see the speech lines above)"
         )
     return rc, done
+
+
+def prepare_speech_run(
+    model: Any, family: Any, full_train: Sequence[str] | None
+) -> tuple[list[tuple[str, bool]], dict[str, str] | None, str | None]:
+    """Before training: freeze BatchNorm statistics and capture the tower digests.
+
+    Returns ``(towers, base_digests, batchnorm_announcement_or_None)`` so the train loop
+    holds one call. The BatchNorm freeze is measured necessary on parakeet-ctc-1.1b (see
+    ``speech_kinds.freeze_batchnorm_statistics``); digests come from parameters only.
+    """
+    from foundationscale.train.speech_kinds import freeze_batchnorm_statistics  # noqa: PLC0415
+
+    frozen = freeze_batchnorm_statistics(model)
+    line = (
+        f"[   ok] speech.batchnorm: {frozen} BatchNorm layer(s) keep their stored running "
+        "statistics during training (affine weights still train): small, zero-padded audio "
+        "batches otherwise corrupt them (measured on parakeet-ctc)"
+        if frozen
+        else None
+    )
+    towers, base = capture_speech_inputs(family, lambda: model.named_parameters(), full_train)
+    return towers, base, line
+
+
+def finish_speech_run(
+    *,
+    rc: int,
+    done: str,
+    final_dir: Path,
+    has_safetensors: bool,
+    coverage_manifest: Mapping[str, Any],
+    base_digests: Mapping[str, str] | None,
+    towers: Sequence[tuple[str, bool]],
+    adapter: str | None,
+    placeholder_applicable: bool,
+) -> tuple[int, str, list[str], str]:
+    """After the final save: adjudicate, fold into the run verdict, and render.
+
+    Returns ``(rc, done, lines_to_print, manifest_json)``.
+    """
+    import json  # noqa: PLC0415
+
+    speech = run_final_speech_adjudication(
+        final_dir=final_dir,
+        has_safetensors=has_safetensors,
+        coverage_manifest=coverage_manifest,
+        base_digests=base_digests,
+        towers=towers,
+        adapter=adapter,
+        placeholder_applicable=placeholder_applicable,
+    )
+    rc, done = fold_speech_verdict(rc, done, speech.exit_code)
+    lines = [SUPERSEDE_NOTE, *speech.render_lines()]
+    return rc, done, lines, json.dumps(speech.as_manifest(), sort_keys=True)

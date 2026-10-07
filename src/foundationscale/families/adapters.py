@@ -136,7 +136,7 @@ def select_adapter_modules(
             # and a tower prefix where one contains the other. Without that
             # invariant a nested tower would be excluded from the numerator and
             # counted in the denominator, i.e. a gap no declaration could close.
-            language = _under(name, spec.language_prefixes)
+            language = _under(name, spec.adapter_scope_prefixes)
             if language is not None:
                 key = _layer_key(name)
                 if key is not None and is_adaptable(module):
@@ -144,14 +144,17 @@ def select_adapter_modules(
             continue
         matched_leaf_count += 1
 
-        tower = _under(name, spec.tower_prefixes)
+        # A declared adapter scope inside a tower (FamilySpec.adapter_prefixes) is the explicit
+        # opt-in that lets the adapter reach it; every other tower module stays excluded.
+        in_scope = _under(name, spec.adapter_scope_prefixes) is not None
+        tower = None if in_scope else _under(name, spec.tower_prefixes)
         if tower is not None:
             bucket = excluded_by_tower.setdefault(tower, {})
             type_name = type(module).__name__
             bucket[type_name] = bucket.get(type_name, 0) + 1
             continue
 
-        language = _under(name, spec.language_prefixes)
+        language = _under(name, spec.adapter_scope_prefixes)
         if language is None:
             # Matched the leaf name but sits outside every declared scope. This
             # is its own population: it means the family's prefixes are
@@ -199,7 +202,7 @@ def select_adapter_modules(
             f"adapter scope: selected {selected_under[language]} module(s) under "
             f"{language!r} for family {spec.name!r}"
         )
-    for language in sorted(spec.language_prefixes):
+    for language in sorted(spec.adapter_scope_prefixes):
         positions = adaptable_positions.get(language, set())
         if not positions:
             # "0 of 0" would print a vacuous completeness claim; an unindexed

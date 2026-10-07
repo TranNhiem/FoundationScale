@@ -235,3 +235,58 @@ def test_adapter_full_train_outside_every_modality_tower_is_rejected() -> None:
             expert_count_path=(),
             adapter_full_train=("mtp.head",),
         )
+
+
+def test_declared_adapter_scope_inside_a_tower_is_selected_and_others_stay_excluded() -> None:
+    """A CTC-style spec: adapters reach encoder-layer Linears only because it declares them."""
+    import torch
+
+    from foundationscale.families.adapters import select_adapter_modules
+
+    spec = FamilySpec(
+        name="ctc_like",
+        model_types=("ctc_like",),
+        language_prefixes=("ctc_head",),
+        towers=(("encoder", "audio"),),
+        adapter_leaf_modules=("q_proj", "linear1"),
+        expert_count_path=(),
+        adapter_prefixes=("encoder.layers",),
+    )
+    modules = [
+        ("encoder.layers.0.self_attn.q_proj", torch.nn.Linear(2, 2)),
+        ("encoder.layers.0.feed_forward1.linear1", torch.nn.Linear(2, 2)),
+        ("encoder.subsampling.q_proj", torch.nn.Linear(2, 2)),  # tower, outside the scope
+        ("ctc_head", torch.nn.Conv1d(2, 2, 1)),
+    ]
+    selected, lines = select_adapter_modules(modules, spec, lambda m: type(m) is torch.nn.Linear)
+    assert selected == (
+        "encoder.layers.0.self_attn.q_proj",
+        "encoder.layers.0.feed_forward1.linear1",
+    )
+    assert any("EXCLUDED 1 module(s) under 'encoder'" in line for line in lines)
+
+
+def test_without_adapter_prefixes_towers_stay_excluded() -> None:
+    """The default is unchanged: no declared scope means adapters stay on the language side."""
+    spec = FamilySpec(
+        name="plain",
+        model_types=("plain",),
+        language_prefixes=("lm",),
+        towers=(("encoder", "audio"),),
+        adapter_leaf_modules=("q_proj",),
+        expert_count_path=(),
+    )
+    assert spec.adapter_scope_prefixes == ("lm",)
+
+
+def test_adapter_prefix_outside_every_declared_prefix_is_rejected() -> None:
+    with pytest.raises(ValueError, match="adapter prefix"):
+        FamilySpec(
+            name="stray_scope",
+            model_types=("stray_scope",),
+            language_prefixes=("lm",),
+            towers=(("encoder", "audio"),),
+            adapter_leaf_modules=("q_proj",),
+            expert_count_path=(),
+            adapter_prefixes=("decoder.layers",),
+        )
