@@ -55,6 +55,7 @@ def save_policy_checkpoint(
     run_id: str,
     topology: Mapping[str, int],
     config: Mapping[str, object],
+    defaults: Mapping[str, object] | None = None,
 ) -> Path:
     """Write the HF policy, its tokenizer and a run manifest under ``out_dir``.
 
@@ -69,6 +70,14 @@ def save_policy_checkpoint(
     ``data_parallel``, ``expert_parallel``, ``context_parallel``) explicitly --
     the two ``Topology`` classes in this repo share field names for different
     quantities, so nothing is splatted from one into the other.
+
+    ``config`` is recorded key by key; a value equal to its entry in ``defaults``
+    is attributed ``source="default"``, anything else ``"cli"``, so the manifest
+    does not present an untouched default as an operator's choice. ``None``
+    values are recorded too (as ``"None"``): an unset knob is a fact about the run.
+
+    A directory that already holds a run manifest is refused: overwriting it
+    would replace one run's provenance with another's under the same path.
     """
     import dataclasses
 
@@ -96,6 +105,11 @@ def save_policy_checkpoint(
     expert_basis, _notes = _declare_checkpoint(hf_model)
     declared = dataclasses.replace(expert_basis, declared_fqns=tuple(names))
     out = Path(out_dir)
+    if (out / MANIFEST_NAME).exists():
+        raise FileExistsError(
+            f"save_policy_checkpoint: {out / MANIFEST_NAME} already exists; refusing to "
+            "overwrite another save's weights and provenance"
+        )
     out.mkdir(parents=True, exist_ok=True)
     hf_model.save_pretrained(out, safe_serialization=True)
     if callable(getattr(tokenizer, "save_pretrained", None)):
@@ -106,7 +120,13 @@ def save_policy_checkpoint(
         attempt=1,
         code=capture_code_provenance(Path.cwd(), entrypoint=sys.argv[0]),
         config={
-            str(key): EffectiveValue(key=str(key), value=str(value), source="cli")
+            str(key): EffectiveValue(
+                key=str(key),
+                value=str(value),
+                source="default"
+                if defaults is not None and key in defaults and defaults[key] == value
+                else "cli",
+            )
             for key, value in config.items()
         },
         environment=capture_environment(),

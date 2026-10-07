@@ -901,41 +901,70 @@ def _run_online(
             fh.flush()
             print(f"HELDOUT_{tag.upper()} {json.dumps(result)}", flush=True)
 
-        def _save(tag: str, step: int) -> None:
-            # Called right after a refit, so the writer's HF copy IS the current
-            # policy; the refit was the collective, and nothing here is one.
+        defaults_parser = build_arg_parser()
+
+        def _save(tag: str, step: int, unwritten: int) -> None:
+            # Called on EVERY rank right after a refit, so the writer's HF copy IS
+            # the current policy. Only the writer writes and adjudicates; the verdict
+            # is then broadcast, so a refusal stops every rank together instead of
+            # leaving the peers blocked in the next collective while rank 0 unwinds.
             nonlocal saves_done
-            if not args.save_dir or fh is None:
+            if not args.save_dir:
                 return
-            path = Path(args.save_dir) / tag
-            world = dist.get_world_size() if dist.is_initialized() else 1
-            local = int(os.environ.get("LOCAL_WORLD_SIZE", str(world)))
-            cfg = trainer.cfg
-            save_policy_checkpoint(
-                hf_model,
-                tokenizer,
-                path,
-                declared_names=exported,
-                run_id=metrics_path.stem,
-                topology={
-                    "nodes": max(1, world // max(1, local)),
-                    "gpus_per_node": min(world, local),
-                    "tensor_parallel": cfg.tp,
-                    "pipeline_parallel": cfg.pp,
-                    "data_parallel": max(1, world // (cfg.tp * cfg.pp * cfg.cp)),
-                    "expert_parallel": cfg.ep,
-                    "context_parallel": cfg.cp,
-                },
-                config={key: value for key, value in vars(args).items() if value is not None},
-            )
-            report = run_policy_save_gates(path, first=saves_done == 0)
+            refusal = ""
+            if fh is not None:
+                path = Path(args.save_dir) / tag
+                record: dict[str, Any] = {"save": tag, "step": step, "path": str(path)}
+                try:
+                    if unwritten:
+                        # A tensor the export never refreshed would ship at its
+                        # initial value; the declared set cannot see it (it is the
+                        # refit's own write list), so it is refused here instead.
+                        refusal = (
+                            f"refit left {unwritten} HF tensor(s) unwritten; saving would "
+                            "ship stale weights under a trained name"
+                        )
+                    else:
+                        world = dist.get_world_size() if dist.is_initialized() else 1
+                        local = int(os.environ.get("LOCAL_WORLD_SIZE", str(world)))
+                        cfg = trainer.cfg
+                        save_policy_checkpoint(
+                            hf_model,
+                            tokenizer,
+                            path,
+                            declared_names=exported,
+                            run_id=metrics_path.stem,
+                            topology={
+                                "nodes": max(1, world // max(1, local)),
+                                "gpus_per_node": min(world, local),
+                                "tensor_parallel": cfg.tp,
+                                "pipeline_parallel": cfg.pp,
+                                "data_parallel": max(1, world // (cfg.tp * cfg.pp * cfg.cp)),
+                                "expert_parallel": cfg.ep,
+                                "context_parallel": cfg.cp,
+                            },
+                            config=vars(args),
+                            defaults={k: defaults_parser.get_default(k) for k in vars(args)},
+                        )
+                        report = run_policy_save_gates(path, first=saves_done == 0)
+                        record["gates"] = {r.gate_id: r.verdict.value for r in report.results}
+                        if not report.ok:
+                            refusal = f"save gates refused {path}:\n{report}"
+                except Exception as exc:  # noqa: BLE001 -- broadcast, then raised everywhere
+                    refusal = f"{type(exc).__name__}: {exc}"
+                record["ok"] = not refusal
+                if refusal:
+                    record["refusal"] = refusal
+                fh.write(json.dumps(record) + "\n")
+                fh.flush()
+                print(f"SAVE_{tag.upper()} {json.dumps(record)}", flush=True)
             saves_done += 1
-            record = {"save": tag, "step": step, "path": str(path), "gate_ok": bool(report.ok)}
-            fh.write(json.dumps({**record, "gate_report": str(report)}) + "\n")
-            fh.flush()
-            print(f"SAVE_{tag.upper()} {json.dumps(record)}", flush=True)
-            if not report.ok:
-                raise RuntimeError(f"save gates refused {path}:\n{report}")
+            if dist.is_initialized() and dist.get_world_size() > 1:
+                verdict = [refusal]
+                dist.broadcast_object_list(verdict, src=0)
+                refusal = verdict[0]
+            if refusal:
+                raise RuntimeError(f"checkpoint save {tag} refused: {refusal}")
 
         # Refit before the PRE eval too: it proves the export path round-trips the
         # unchanged weights before any training depends on it.
@@ -945,7 +974,7 @@ def _run_online(
             if step:
                 stats, refit_s = _refit()
                 if args.save_every and step % args.save_every == 0:
-                    _save(f"step_{step:06d}", step)
+                    _save(f"step_{step:06d}", step, stats["unwritten"])
             t0 = time.perf_counter()
             rows: list[Any] | None = None
             if writer:
@@ -1033,8 +1062,8 @@ def _run_online(
             if fh is not None:
                 fh.write(json.dumps(record) + "\n")
                 fh.flush()
-        _refit()
-        _save("final", args.steps)
+        stats, _ = _refit()
+        _save("final", args.steps, stats["unwritten"])
         _heldout("post")
     return 0
 

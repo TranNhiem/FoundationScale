@@ -92,3 +92,33 @@ def test_save_gates_refuse_a_declared_tensor_the_checkpoint_lacks(tmp_path: Path
     report = run_policy_save_gates(out, first=False)
     assert not report.ok
     assert "ghost_proj" in str(report)
+
+
+def test_a_second_save_into_the_same_directory_is_refused(tmp_path: Path) -> None:
+    model = _tiny_llama()
+    _save(tmp_path, model, model.state_dict())
+    with pytest.raises(FileExistsError, match="already exists"):
+        _save(tmp_path, model, model.state_dict())
+
+
+def test_config_values_equal_to_their_default_are_attributed_to_the_default(
+    tmp_path: Path,
+) -> None:
+    from foundationscale.checkpoint import load_manifest
+
+    model = _tiny_llama()
+    out = save_policy_checkpoint(
+        model,
+        None,
+        tmp_path / "final",
+        declared_names=model.state_dict(),
+        run_id="unit",
+        topology=_TOPOLOGY,
+        config={"steps": 300, "lr": 3e-7, "save_dir": None},
+        defaults={"steps": 1, "lr": 3e-7, "save_dir": None},
+    )
+    manifest = load_manifest(out)
+    assert manifest is not None
+    assert manifest.config["steps"].source == "cli"
+    assert manifest.config["lr"].source == "default"
+    assert manifest.config["save_dir"].source == "default"
