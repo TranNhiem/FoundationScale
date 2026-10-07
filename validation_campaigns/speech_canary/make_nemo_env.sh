@@ -11,4 +11,6 @@ V="${NEMO_SPEECH_VENV:-${CLUSTER_HOME:-$HOME}/envs/nemo-speech-asr}"
   | grep -v " @ " > "$V/constraints.txt" || true
 "$V/bin/python" -m pip install --quiet --upgrade pip
 "$V/bin/python" -m pip install --quiet -c "$V/constraints.txt" "/opt/NeMo[asr]"
+# speechlm2 (Canary-Qwen SALM) imports peft; --no-deps keeps the container torch untouched.
+"$V/bin/python" -m pip install --quiet --no-deps peft accelerate
 "$V/bin/python" -c "import torch, transformers, nemo; print('torch', torch.__version__, 'transformers', transformers.__version__, 'nemo', nemo.__version__)"
