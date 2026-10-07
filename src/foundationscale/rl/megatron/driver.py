@@ -764,6 +764,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--heldout-n", type=int, default=0, help="first N held-out rows; 0 = all")
     ap.add_argument("--heldout-max-new", type=int, default=0, help="0 = --max-new-tokens")
     ap.add_argument(
+        "--save-dir",
+        default="",
+        help="--online: write an HF safetensors checkpoint + run manifest per save, "
+        "then run the save gates on it; empty = no checkpoint",
+    )
+    ap.add_argument(
+        "--save-every", type=int, default=0, help="--online: also save every N steps; 0 = final"
+    )
+    ap.add_argument(
         "--heldout-loose-pattern",
         default=None,
         help="--online held-out: second, wider answer regex (one group = the letter) "
@@ -809,6 +818,7 @@ def _run_online(
     from foundationscale.rl.megatron import online
     from foundationscale.rl.megatron.normalization import compute_denominators
     from foundationscale.rl.megatron.pp_step import loss_unit
+    from foundationscale.rl.megatron.save import run_policy_save_gates, save_policy_checkpoint
     from foundationscale.rl.registry import lookup_algorithm
     from foundationscale.rl.rewards import MCQLetterReward
     from foundationscale.rl.torch_backend import TensorPolicyLoss
@@ -858,11 +868,18 @@ def _run_online(
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     heldout_max_new = args.heldout_max_new or args.max_new_tokens
 
+    # The names the most recent refit wrote: a save's declared tensor set.
+    exported: set[str] = set()
+    saves_done = 0
+
     def _refit() -> tuple[dict[str, int], float]:
         t0 = time.perf_counter()
         if args.offload_rollout_model and hf_model is not None:
             hf_model.to(device)
-        stats = online.refit_hf_policy(trainer.bridge, trainer.model, hf_model, is_writer=writer)
+        exported.clear()
+        stats = online.refit_hf_policy(
+            trainer.bridge, trainer.model, hf_model, is_writer=writer, written_out=exported
+        )
         return stats, time.perf_counter() - t0
 
     with contextlib.ExitStack() as stack:
@@ -884,6 +901,42 @@ def _run_online(
             fh.flush()
             print(f"HELDOUT_{tag.upper()} {json.dumps(result)}", flush=True)
 
+        def _save(tag: str, step: int) -> None:
+            # Called right after a refit, so the writer's HF copy IS the current
+            # policy; the refit was the collective, and nothing here is one.
+            nonlocal saves_done
+            if not args.save_dir or fh is None:
+                return
+            path = Path(args.save_dir) / tag
+            world = dist.get_world_size() if dist.is_initialized() else 1
+            local = int(os.environ.get("LOCAL_WORLD_SIZE", str(world)))
+            cfg = trainer.cfg
+            save_policy_checkpoint(
+                hf_model,
+                tokenizer,
+                path,
+                declared_names=exported,
+                run_id=metrics_path.stem,
+                topology={
+                    "nodes": max(1, world // max(1, local)),
+                    "gpus_per_node": min(world, local),
+                    "tensor_parallel": cfg.tp,
+                    "pipeline_parallel": cfg.pp,
+                    "data_parallel": max(1, world // (cfg.tp * cfg.pp * cfg.cp)),
+                    "expert_parallel": cfg.ep,
+                    "context_parallel": cfg.cp,
+                },
+                config={key: value for key, value in vars(args).items() if value is not None},
+            )
+            report = run_policy_save_gates(path, first=saves_done == 0)
+            saves_done += 1
+            record = {"save": tag, "step": step, "path": str(path), "gate_ok": bool(report.ok)}
+            fh.write(json.dumps({**record, "gate_report": str(report)}) + "\n")
+            fh.flush()
+            print(f"SAVE_{tag.upper()} {json.dumps(record)}", flush=True)
+            if not report.ok:
+                raise RuntimeError(f"save gates refused {path}:\n{report}")
+
         # Refit before the PRE eval too: it proves the export path round-trips the
         # unchanged weights before any training depends on it.
         stats, refit_s = _refit()
@@ -891,6 +944,8 @@ def _run_online(
         for step in range(args.steps):
             if step:
                 stats, refit_s = _refit()
+                if args.save_every and step % args.save_every == 0:
+                    _save(f"step_{step:06d}", step)
             t0 = time.perf_counter()
             rows: list[Any] | None = None
             if writer:
@@ -979,6 +1034,7 @@ def _run_online(
                 fh.write(json.dumps(record) + "\n")
                 fh.flush()
         _refit()
+        _save("final", args.steps)
         _heldout("post")
     return 0
 

@@ -321,6 +321,26 @@ def test_refit_hf_policy_writes_every_yielded_weight_into_the_hf_state_dict() ->
     assert torch.allclose(model.lm_head.weight, torch.full((8, 4), 2.0))
 
 
+def test_refit_hf_policy_written_out_receives_the_written_names_on_the_writer() -> None:
+    import torch
+
+    model = _tiny_hf(tied=False)
+    bridge = _FakeBridge([("embed_tokens.weight", torch.ones(8, 4))])
+    written: set[str] = set()
+    refit_hf_policy(bridge, [], model, is_writer=True, written_out=written)
+    # lm_head was never yielded: it is unwritten, so it is NOT declared.
+    assert written == {"embed_tokens.weight"}
+    peer: set[str] = set()
+    refit_hf_policy(
+        _FakeBridge([("embed_tokens.weight", torch.ones(8, 4))]),
+        [],
+        None,
+        is_writer=False,
+        written_out=peer,
+    )
+    assert peer == set()
+
+
 def test_refit_hf_policy_raises_on_name_missing_after_draining_the_export() -> None:
     import torch
 

@@ -409,6 +409,7 @@ def refit_hf_policy(
     hf_model: Any,
     *,
     is_writer: bool,
+    written_out: set[str] | None = None,
 ) -> dict[str, int]:
     """Gather Megatron weights into the generation-side HF copy (COLLECTIVE).
 
@@ -433,6 +434,11 @@ def refit_hf_policy(
       legitimate case is excluded: with ``config.tie_word_embeddings`` the HF
       checkpoint HAS no ``lm_head.weight`` -- it is the tied embedding -- and the
       export correctly has nothing to write for it.
+
+    ``written_out``, when given, receives the writer's written HF names (fused
+    expert targets included once complete). A checkpoint save uses it as the
+    declared tensor set: the export's account of the policy, independent of the
+    file ``save_pretrained`` later writes from the HF copy.
     """
     import torch
 
@@ -471,6 +477,8 @@ def refit_hf_policy(
             written.add(target)
     if not is_writer:
         return {"written": 0, "unwritten": 0}
+    if written_out is not None:
+        written_out.update(written)
     if missing:
         raise ValueError(
             f"refit_hf_policy: {len(missing)} of {len(written) + len(missing)} yielded "
