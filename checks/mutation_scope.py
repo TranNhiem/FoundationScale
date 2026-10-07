@@ -127,6 +127,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "global loss denominators across DP/CP ranks for the Megatron lane: a local "
         "denominator silently rescales the gradient, and no mutation row pins it yet."
     ),
+    "src/foundationscale/rl/megatron/save.py": (
+        "Megatron lane checkpoint save: manifest declaration from the refit's write list, "
+        "the unwritten-refit and overwrite refusals and the broadcast verdict; CPU legs pin "
+        "each refusal, but no mutation row yet kills a dropped refusal or an inverted ok."
+    ),
     "src/foundationscale/rl/megatron/pp_step.py": (
         "pipeline-parallel step: last-stage logprob broadcast and loss-mask width, "
         "exercised on GPUs under megatron-core, outside the CPU mutation battery."
