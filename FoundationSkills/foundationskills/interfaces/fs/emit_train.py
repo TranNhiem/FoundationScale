@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import math
 import re
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -186,6 +187,22 @@ def _dataset_path(dataset: dict[str, Any], notes: list[str]) -> str | None:
     first = str(Path(shards[0]["path"]).parent)
     notes.append(f"dataset shards span {len(parents)} directories; passing the first shard instead of a directory")
     return str(Path(shards[0]["path"]))
+
+
+def _pinned_launcher(launcher: str, notes: list[str]) -> str:
+    """Pin a bare ``python``/``torchrun`` to the interpreter that probed FS (and its sibling torchrun).
+
+    MEASURED (2026-10-07, r04dgx03): the bare launcher resolved through the node's PATH, where
+    ``~/.local/bin/torchrun`` (user-site python3.12, no pandas) shadowed the env's own, and FS
+    refused every rank (rc=96). The basename stays ``python``/``torchrun`` so the sbatch launcher
+    check still matches; when no such sibling exists the bare name is kept and the note says so."""
+    here = Path(sys.executable)
+    candidate = here if launcher == "python" and here.name == "python" else here.with_name(launcher)
+    if candidate.is_file():
+        notes.append(f"{launcher} pinned to {candidate}")
+        return str(candidate)
+    notes.append(f"{launcher} left to PATH: no {launcher!r} next to {here}")
+    return launcher
 
 
 def emit_train(
@@ -398,6 +415,7 @@ def emit_train(
         ]
     else:
         argv = ["python", *inner]
+    argv = [_pinned_launcher(argv[0], notes), *argv[1:]]
 
     dry_run_argv: list[str] | None
     if "--dry-run" in caps.train_flags:

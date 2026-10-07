@@ -2,6 +2,8 @@
 """Tests for TrainingEmitSkill: PASS paths and every MUST_FIRE fixture."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from foundationskills.core import SkillContext, Status
 from foundationskills.interfaces.fs.capabilities import FSCapabilities
 from foundationskills.skills.training.emit_skill import TrainingEmitSkill
@@ -82,7 +84,7 @@ def test_pass_writes_spec_artifact(tmp_path):
     assert ref.type == "fs_launch_spec"
     spec = result.payload["specs"][0]
     assert spec["executable"] is True
-    assert spec["argv"][0] == "python"  # world == 1
+    assert Path(spec["argv"][0]).name == "python"  # world == 1 (pinned to the probing interpreter)
     assert spec["sbatch"] is None  # local hardware -> no sbatch
     assert spec["output_dir"] == f"{tmp_path}/runs/fskills-sft1"
 

@@ -10,9 +10,10 @@ exit codes are the contract's own:
 * 0  PASS   -- the run measured at least one step;
 * 5  RED    -- an exception escaped the training loop;
 * 95 UNMEASURED -- zero measured steps, or a required final checkpoint that
-  could not be produced (the shipped RLTrainer holds the model in a LOCAL
-  variable of ``run()``; no instance attribute exposes it, so ``save_final``
-  genuinely cannot save and says so instead of pretending);
+  could not be produced. ``save_final`` hands FS its native ``save_dir`` (the
+  trainer writes ``<output_dir>/final``) when the installed RLTrainConfig has
+  one; an older trainer that only holds the model in a local variable of
+  ``run()`` genuinely cannot save and says so instead of pretending;
 * 96 REFUSED -- unknown config keys, a missing foundationscale module, an
   unparseable config file, or an FS ``TrainerRefusal``/exit-96 passthrough.
 """
@@ -192,6 +193,11 @@ def main(argv: list[str] | None = None) -> int:
         return 96
 
     fs_fields = {key: value for key, value in config.items() if key in rl_fields}
+    native_save = bool(config.get("save_final", False)) and "save_dir" in rl_fields and not fs_fields.get("save_dir")
+    if native_save:
+        # FS RLTrainer now persists natively (save_dir/final at the end). Found 2026-10-07: the
+        # driver never passed save_dir, so a 556-step E4B run ended UNMEASURED with no policy saved.
+        fs_fields["save_dir"] = str(config.get("output_dir", "."))
     try:
         rl_config = RLTrainConfig(**fs_fields)
         trainer = RLTrainer(rl_config)
@@ -274,7 +280,11 @@ def main(argv: list[str] | None = None) -> int:
         if candidate is not None and hasattr(candidate, "save_pretrained"):
             model_obj = candidate
             break
-    if model_obj is not None:
+    native_final = Path(str(fs_fields.get("save_dir") or "")) / "final" if fs_fields.get("save_dir") else None
+    if native_final is not None and native_final.is_dir() and any(native_final.iterdir()):
+        checkpoint_status = f"saved: {native_final}"
+        model_obj = native_final  # the policy exists on disk; the save_final gate below is satisfied
+    elif model_obj is not None:
         final_dir = output_dir / "final"
         final_dir.mkdir(parents=True, exist_ok=True)
         model_obj.save_pretrained(str(final_dir))

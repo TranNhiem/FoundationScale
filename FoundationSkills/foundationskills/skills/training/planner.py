@@ -720,6 +720,15 @@ def plan(
         grad_ckpt = bool(_first("gradient_checkpointing", "grad_ckpt", default=True))
         sharding = "ddp" if stage == "rl" else str(_first("sharding_strategy", "sharding", default="fsdp"))
         variant_raw = dict(_get(variant, "raw", {}) or {})
+        if grad_ckpt and variant_raw.get("fs_grad_ckpt") is False:
+            # measured per-variant refusal (Gemma-4 E4B: KV-shared layers need the cache that
+            # checkpointing disables); the estimate below then prices full activations honestly
+            grad_ckpt = False
+            hparams["gradient_checkpointing"] = False
+            hparams.pop("grad_ckpt", None)
+            decide("method", f"{stage}: gradient_checkpointing off",
+                   f"FS refuses gradient checkpointing for {_get(variant, 'id')}: "
+                   f"{variant_raw.get('fs_grad_ckpt_evidence', 'measured refusal')}")
         if sharding == "fsdp" and variant_raw.get("fs_fsdp") is False:
             # measured per-variant gap (e.g. Gemma-4 26B-A4B MoE: FS's FSDP auto-wrap
             # cannot find the layer class); DDP replicates, and feasibility below
@@ -783,9 +792,18 @@ def plan(
             budget_gpu_hours=budget_gpu_hours,
             deadline_hours=None,
             caps=caps,
-            sharding="fsdp",
+            # price the configuration that is emitted (found 2026-10-07: a hard-coded fsdp and the
+            # default grad_ckpt=True judged a no-checkpointing E4B plan at 77.7 GB instead of 138 GB,
+            # and would price a measured-ddp variant as if FSDP sharded it)
+            sharding=sharding if sharding in ("ddp", "fsdp") else "fsdp",
+            grad_ckpt=grad_ckpt,
             tp=1,
             stage=stage,
+            mem_extra={
+                "lora_rank": int(_first("lora_rank", "lora_r", default=16)),
+                "reference_copy": stage == "preference" and "reference_model" in _card_requires(algorithm),
+                "optimizer": "host_adamw" if stage in ("rl", "preference") else "adamw",
+            },
         )
         stage_feas = {
             "verdict": _get(feas, "verdict", "warn"),

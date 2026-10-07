@@ -172,8 +172,12 @@ class TrainingEmitSkill(BaseSkill):
         hardware: dict[str, Any] = {"id": hardware_id, "scheduler": _guess_scheduler(hardware_id, nodes)}
         try:
             from foundationskills.skills.training.knowledge import load_hardware
+            from foundationskills.skills.training.planner import _resolve_hardware
 
-            profile = load_hardware().get(hardware_id)
+            # same id resolution as the planner: "gb200" -> gb200-189gb. An exact-id lookup missed it
+            # (found 2026-10-07): the GB200 NCCL pins (bond0) were dropped, FS fell back to its
+            # profile's eth0, which these trays do not have, and the 4-rank fabric probe refused 96.
+            profile, _resolved_id = _resolve_hardware(load_hardware(), hardware_id, None)
             if profile is not None:
                 raw = dict(getattr(profile, "raw", None) or {})
                 hardware = {**raw, **{k: getattr(profile, k) for k in ("env", "cpus_per_task", "bf16_dense_tflops",

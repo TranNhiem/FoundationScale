@@ -31,6 +31,8 @@ those probes.
 """
 from __future__ import annotations
 
+import functools
+
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -121,17 +123,20 @@ def _alternatives(
     grad_ckpt: bool,
     caps: FSCapabilities | None,
     stage: str,
+    mem_extra: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    _mem = functools.partial(estimate_memory, **dict(mem_extra or {}))
     mem = hardware.mem_gb
     alts: list[dict[str, Any]] = []
     base_kw: dict[str, Any] = {"method": method, "sharding": sharding, "world": gpus, "tp": tp}
 
-    if not grad_ckpt:
-        est = estimate_memory(variant, seq_len=seq_len, micro_batch=micro_batch, grad_ckpt=True, **base_kw)
+    raw = dict(getattr(variant, "raw", None) or {})
+    if not grad_ckpt and raw.get("fs_grad_ckpt") is not False:  # never offer what FS refuses for this variant
+        est = _mem(variant, seq_len=seq_len, micro_batch=micro_batch, grad_ckpt=True, **base_kw)
         alts.append(_alt_entry("enable gradient checkpointing", est, mem, executable=True, missing=None))
 
     if micro_batch > 1:
-        est = estimate_memory(variant, seq_len=seq_len, micro_batch=1, grad_ckpt=grad_ckpt, **base_kw)
+        est = _mem(variant, seq_len=seq_len, micro_batch=1, grad_ckpt=grad_ckpt, **base_kw)
         alts.append(
             _alt_entry(
                 f"micro_batch {micro_batch} -> 1 (compensate with gradient accumulation)",
@@ -140,7 +145,7 @@ def _alternatives(
         )
 
     if sharding != "fsdp":
-        est = estimate_memory(
+        est = _mem(
             variant, seq_len=seq_len, micro_batch=micro_batch, grad_ckpt=grad_ckpt,
             method=method, sharding="fsdp", world=gpus, tp=tp,
         )
@@ -149,7 +154,7 @@ def _alternatives(
         )
 
     if method != "lora":
-        est = estimate_memory(
+        est = _mem(
             variant, seq_len=seq_len, micro_batch=micro_batch, grad_ckpt=grad_ckpt,
             method="lora", sharding=sharding, world=gpus, tp=tp,
         )
@@ -159,11 +164,11 @@ def _alternatives(
 
     if seq_len > 2048:
         new_seq = max(2048, seq_len // 2)
-        est = estimate_memory(variant, seq_len=new_seq, micro_batch=micro_batch, grad_ckpt=grad_ckpt, **base_kw)
+        est = _mem(variant, seq_len=new_seq, micro_batch=micro_batch, grad_ckpt=grad_ckpt, **base_kw)
         alts.append(_alt_entry(f"shorten seq_len {seq_len} -> {new_seq}", est, mem, executable=True, missing=None))
 
     if method != "qlora":
-        est = estimate_memory(
+        est = _mem(
             variant, seq_len=seq_len, micro_batch=micro_batch, grad_ckpt=grad_ckpt,
             method="qlora", sharding=sharding, world=gpus, tp=tp,
         )
@@ -179,7 +184,7 @@ def _alternatives(
     if tp < 2:
         backend = "fsdp" if sharding == "fsdp" else "ddp"
         for new_tp in (2, 4):
-            est = estimate_memory(
+            est = _mem(
                 variant, seq_len=seq_len, micro_batch=micro_batch, grad_ckpt=grad_ckpt,
                 method=method, sharding=sharding, world=gpus, tp=new_tp,
             )
@@ -206,7 +211,7 @@ def _alternatives(
         elif smaller is None:
             alts.append(_alt_blocked(change, f"no smaller variant in family {family.name}"))
         else:
-            est = estimate_memory(
+            est = _mem(
                 smaller, seq_len=seq_len, micro_batch=micro_batch, grad_ckpt=grad_ckpt, **base_kw
             )
             alts.append(
@@ -234,12 +239,18 @@ def check_feasibility(
     tp: int = 1,
     grad_ckpt: bool = True,
     stage: str = "sft",
+    mem_extra: dict[str, Any] | None = None,
 ) -> Feasibility:
-    """Verdict + cost findings + ranked alternatives for one configuration."""
+    """Verdict + cost findings + ranked alternatives for one configuration.
+
+    ``mem_extra`` carries the estimate_memory knobs the plan priced (optimizer, lora_rank,
+    reference_copy). Found 2026-10-07: without it an RL plan priced with the host optimizer
+    (102.7 GB) was judged with 12 B/param AdamW state on GPU (208 GB) and refused as infeasible."""
+    _mem = functools.partial(estimate_memory, **dict(mem_extra or {}))
     gpus = max(1, int(gpus))
     findings: list[dict[str, Any]] = []
 
-    base = estimate_memory(
+    base = _mem(
         variant, method=method, seq_len=seq_len, micro_batch=micro_batch,
         sharding=sharding, world=gpus, tp=tp, grad_ckpt=grad_ckpt,
     )
@@ -296,6 +307,6 @@ def check_feasibility(
         alternatives = _alternatives(
             variant, hardware, gpus=gpus, method=method, seq_len=seq_len,
             micro_batch=micro_batch, sharding=sharding, tp=tp,
-            grad_ckpt=grad_ckpt, caps=caps, stage=stage,
+            grad_ckpt=grad_ckpt, caps=caps, stage=stage, mem_extra=mem_extra,
         )
     return Feasibility(verdict=verdict, findings=findings, alternatives=alternatives)
