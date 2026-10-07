@@ -32,6 +32,7 @@ from foundationscale.rl.algorithm import (
 )
 from foundationscale.rl.group_policy import (
     SequencePolicyAlgorithm,
+    agentic_grpo_algorithm,
     check_group_policy_requirements,
     dapo_algorithm,
     dr_grpo_algorithm,
@@ -189,8 +190,9 @@ def _setup(
 
 
 def test_factories_return_fresh_bindings_with_the_declared_names() -> None:
-    """Three factories, three names, and no shared singleton between calls."""
+    """Four factories, four names, and no shared singleton between calls."""
     pairs = (
+        (agentic_grpo_algorithm, "agentic_grpo"),
         (gspo_algorithm, "gspo"),
         (dr_grpo_algorithm, "dr_grpo"),
         (dapo_algorithm, "dapo"),
@@ -209,11 +211,12 @@ def test_factories_derive_the_ratio_scope_of_their_objective() -> None:
     assert gspo_algorithm().semantics().ratio_scope == "sequence"
     assert dr_grpo_algorithm().semantics().ratio_scope == "token"
     assert dapo_algorithm().semantics().ratio_scope == "token"
+    assert agentic_grpo_algorithm().semantics().ratio_scope == "token"
 
 
 def test_factories_declare_the_rollout_owning_role_map() -> None:
     """Weight sync is unconsumed across the family; it must be graded as False."""
-    for factory in (gspo_algorithm, dr_grpo_algorithm, dapo_algorithm):
+    for factory in (agentic_grpo_algorithm, gspo_algorithm, dr_grpo_algorithm, dapo_algorithm):
         requires = factory().requirements().requires
         assert requires["rollout_source"] is True
         assert requires["advantage_fn"] is True

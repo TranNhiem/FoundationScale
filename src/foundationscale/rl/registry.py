@@ -160,6 +160,7 @@ def _install_default_algorithms() -> None:
     # SKIP silently when a different binding already held the name -- the
     # absence would then read as a successful install.
     from foundationscale.rl.group_policy import (
+        agentic_grpo_algorithm,
         dapo_algorithm,
         dr_grpo_algorithm,
         gspo_algorithm,
@@ -211,6 +212,7 @@ def _install_default_algorithms() -> None:
     # the same reason the preference family does: each binding carries a
     # configured objective, so the zero-argument callable is the family's
     # default-configured factory rather than the unconfigured class.
+    _REGISTRY["agentic_grpo"] = agentic_grpo_algorithm
     _REGISTRY["dapo"] = dapo_algorithm
     _REGISTRY["dr_grpo"] = dr_grpo_algorithm
     _REGISTRY["gspo"] = gspo_algorithm

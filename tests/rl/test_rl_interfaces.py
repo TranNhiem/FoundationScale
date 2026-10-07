@@ -59,6 +59,7 @@ TORCH_FREE_MODULES = {
         "LearnedValueAdvantageEstimation",
         "LeaveOneOutAdvantage",
         "RewardStats",
+        "SessionGroupAdvantage",
         "TemporalAdvantageFn",
     ),
     "foundationscale.rl.distributed": (
@@ -98,15 +99,18 @@ TORCH_FREE_MODULES = {
     "foundationscale.rl.group_policy": (
         "SequenceObjective",
         "SequencePolicyAlgorithm",
+        "agentic_grpo_algorithm",
         "check_group_policy_requirements",
         "dapo_algorithm",
         "dr_grpo_algorithm",
         "gspo_algorithm",
     ),
     "foundationscale.rl.group_policy_objectives": (
+        "AgenticGRPOLoss",
         "DAPOLoss",
         "DrGRPOLoss",
         "GSPOLoss",
+        "prompt_mean_row_weights",
     ),
     "foundationscale.rl.grpo": (
         "GRPOAlgorithm",

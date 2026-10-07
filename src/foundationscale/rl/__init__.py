@@ -162,6 +162,7 @@ from foundationscale.rl.advantage import (
     LearnedValueAdvantageEstimation,
     LeaveOneOutAdvantage,
     RewardStats,
+    SessionGroupAdvantage,
     TemporalAdvantageFn,
 )
 from foundationscale.rl.algorithm import (
@@ -183,15 +184,18 @@ from foundationscale.rl.corpus import (
 from foundationscale.rl.group_policy import (
     SequenceObjective,
     SequencePolicyAlgorithm,
+    agentic_grpo_algorithm,
     check_group_policy_requirements,
     dapo_algorithm,
     dr_grpo_algorithm,
     gspo_algorithm,
 )
 from foundationscale.rl.group_policy_objectives import (
+    AgenticGRPOLoss,
     DAPOLoss,
     DrGRPOLoss,
     GSPOLoss,
+    prompt_mean_row_weights,
 )
 from foundationscale.rl.grpo import (
     GRPOAlgorithm,
@@ -316,6 +320,7 @@ __all__ = (
     "AdvantageFn",
     "AdvantageRefusal",
     "AdvantageResult",
+    "AgenticGRPOLoss",
     "Algorithm",
     "AlgorithmRegistryRefusal",
     "AlgorithmRequirements",
@@ -374,6 +379,7 @@ __all__ = (
     "Sample",
     "SequenceObjective",
     "SequencePolicyAlgorithm",
+    "SessionGroupAdvantage",
     "SimPOLoss",
     "SourceCapabilities",
     "StepReport",
@@ -392,6 +398,7 @@ __all__ = (
     "ValueFunctionLoss",
     "ValueHead",
     "WeightSync",
+    "agentic_grpo_algorithm",
     "available_algorithm_names",
     "best_of_n_algorithm",
     "build_objective_gate_context",
@@ -421,6 +428,7 @@ __all__ = (
     "lookup_algorithm",
     "online_dpo_algorithm",
     "orpo_algorithm",
+    "prompt_mean_row_weights",
     "raft_algorithm",
     "register_algorithm",
     "reset_algorithm_registry",

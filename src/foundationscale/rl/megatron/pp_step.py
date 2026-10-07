@@ -18,7 +18,9 @@ not exist in every mcore release), and DDP then AVERAGES gradients over the
 DP x CP group, so :func:`undo_mcore_loss_average` pre-applies the inverse of
 both and the effective reduction is a SUM. The
 kernel performs its own internal reduction (token_mean / sequence_mean /
-constant); :func:`rescale_to_global_denominator` multiplies the scalar by
+constant); ``prompt_mean`` is refused by :func:`loss_unit`, which is
+implemented on the HF/FSDP2 lane only in this release.
+:func:`rescale_to_global_denominator` multiplies the scalar by
 ``local_denominator / global_denominator`` for the SAME unit the family
 prices, which is exactly the rule 'denominators are pre-collapsed global
 scalars; numerators are additive sums'. Summing the rescaled scalars over
@@ -321,6 +323,18 @@ def loss_unit(objective_loss_fn: Any) -> str:
     if family is not None:
         return family_of(str(family))
     reduction = getattr(objective, "reduction", None)
+    if reduction == "prompt_mean":
+        # Named, and naming the LANE: design section 3's four denominator
+        # units are token, sequence, dr_grpo and preference, and a per-group
+        # prompt mean is none of them -- re-denominating one onto a global
+        # scalar would need the prompt-group token totals this lane never
+        # collapses. Refused rather than guessed.
+        raise ValueError(
+            "prompt_mean is implemented on the HF/FSDP2 lane only in this "
+            "release; design section 3's four denominator units are token, "
+            "sequence, dr_grpo and preference, and none of them "
+            "re-denominates a per-group prompt mean"
+        )
     if reduction in _REDUCTION_UNITS:
         return _REDUCTION_UNITS[reduction]
     raise ValueError(

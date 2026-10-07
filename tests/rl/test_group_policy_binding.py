@@ -28,6 +28,7 @@ from foundationscale.rl.group_policy import (
     check_group_policy_requirements,
 )
 from foundationscale.rl.group_policy_objectives import (
+    AgenticGRPOLoss,
     DAPOLoss,
     DrGRPOLoss,
     GSPOLoss,
@@ -163,6 +164,7 @@ def test_each_factory_derives_a_binding_agreeing_with_its_objective_class() -> N
         ("gspo", GSPOLoss()),
         ("dr_grpo", DrGRPOLoss()),
         ("dapo", DAPOLoss()),
+        ("agentic_grpo", AgenticGRPOLoss()),
     ):
         algorithm = SequencePolicyAlgorithm(name=name, objective=objective)
         assert algorithm.semantics().ratio_scope == objective.ratio_scope

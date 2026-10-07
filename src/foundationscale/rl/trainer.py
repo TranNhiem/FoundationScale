@@ -57,6 +57,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never executed at runtime
 from foundationscale.rl.advantage import AdvantageRefusal, RewardStats
 from foundationscale.rl.algorithm import StepReport, StepReportRefusal
 from foundationscale.rl.corpus import Sample, load_sharegpt
+from foundationscale.rl.group_policy_objectives import prompt_mean_row_weights
 from foundationscale.rl.interfaces import BatchRefusal, LossOutput
 from foundationscale.rl.online_objectives import BestOfNLoss, RAFTLoss
 from foundationscale.rl.online_pref_step import (
@@ -316,7 +317,7 @@ class RLTrainConfig:
     ``model`` is a local path or hub id and is NEVER defaulted: hardcoding a
     default model would smuggle an untested surface into every run that
     forgot the flag. ``algorithm`` names a registry entry
-    (``"grpo"``/``"gspo"``/``"dr_grpo"``/``"dapo"``). ``device=None`` means
+    (``"grpo"``/``"gspo"``/``"dr_grpo"``/``"dapo"``/``"agentic_grpo"``). ``device=None`` means
     auto-select -- metal when available, else CPU.
 
     WHAT IS CLAIMED: these are the only knobs the loop reads.
@@ -1469,12 +1470,70 @@ class RLTrainer:
         kept_ref: torch.Tensor | None = None
         if reference_logprobs is not None:
             kept_ref = reference_logprobs.index_select(0, keep)
+        # prompt_mean's denominator is PER GROUP and is built from group ids,
+        # which the tensor kernel never receives. So the row weights are
+        # computed ONCE per optimizer step, here -- after row compaction and
+        # before the loss call -- from the KEPT rows' group ids and the kept
+        # mask's supervised counts, and ride unchanged through
+        # _micro_batched_backward and through the padding slices (which
+        # carry no loss). The denominator is supplied by
+        # prompt_mean_row_weights, the same torch-free function the oracle
+        # uses, so this plane cannot disagree with it on shape.
+        #
+        # P is STEP-GLOBAL. Prompts -- never completions -- are sharded whole,
+        # so groups are rank-local and the active-group count must be
+        # all-reduce-summed before the division. Under DDP gradient averaging
+        # (and FSDP2, which averages identically) the weights are then scaled
+        # by world_size so the GLOBAL objective is the prompt mean over ALL
+        # ranks' groups: the wrapper divides the averaged gradient by
+        # world_size, and w_row = world_size / (P_global * group_tokens)
+        # renormalises it back onto the global denominator. A null rank
+        # contributes 0 groups and 0 weight.
+        reduction_row_weights: Any = None
+        if getattr(objective, "reduction", None) == "prompt_mean":
+            counts = [int(value) for value in kept_mask.sum(dim=-1).tolist()]
+            group_ids = [prompt_id_values[row] for row in kept_rows]
+            local_groups = (
+                0
+                if null_rank
+                else len({key for key, count in zip(group_ids, counts, strict=True) if count > 0})
+            )
+            p_global = all_reduce_sum(float(local_groups), ctx)
+            if p_global == 0.0:
+                # Saturated/unmeasured step is not a step, in the same voice
+                # as the zero-advantage path below: no active group means no
+                # measured denominator, and 0.0 would report a perfect loss
+                # over no gradient.
+                print(
+                    f"UNMEASURED step {step}: 0 prompt group(s) carry a "
+                    f"supervised token over {len(kept_rows)} kept row(s) "
+                    f"across every rank; the prompt_mean denominator is "
+                    f"UNMEASURED and never 0.0. No gradient exists to take, "
+                    f"so no step is claimed.",
+                    file=sys.stderr,
+                )
+                return None
+            if local_groups == 0:
+                weights: tuple[float, ...] = (0.0,) * len(kept_rows)
+            else:
+                base = prompt_mean_row_weights(group_ids, counts)
+                scale = float(ctx.world_size) * float(local_groups) / p_global
+                weights = tuple(value * scale for value in base)
+            # The kernel's seam is a (rows,) tensor on the loss's device; the
+            # torch-free owner produced plain floats. float64 so a 1/6 is not
+            # rounded here -- the kernel casts once, to its own dtype.
+            import torch
+
+            reduction_row_weights = torch.tensor(
+                weights, dtype=torch.float64, device=kept_current.device
+            )
         loss_tensor = loss_fn(
             current_logprobs=kept_current,
             old_logprobs=kept_old,
             advantages=advantage_tensor,
             mask=kept_mask,
             reference_logprobs=kept_ref,
+            reduction_row_weights=reduction_row_weights,
         )
         if null_rank:
             # Mandatory, not cosmetic: with a zero advantage the surrogate is

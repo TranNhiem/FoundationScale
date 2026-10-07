@@ -82,6 +82,16 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/agentic_rl/contracts.py": (
+        "agentic trajectory contracts (Turn/Trajectory validation, loss_mask, flatten "
+        "to DECLARED_COLUMNS): 100% line-covered with a refusal test per field, but no "
+        "mutation row yet proves a flipped mask rule or a dropped refusal is caught."
+    ),
+    "src/foundationscale/agentic_rl/token_trace.py": (
+        "multi-turn token trace (prompt/observation/generated appends, budget, finalize "
+        "alignment): 100% line-covered, but zero mutation rows, so enrolling it in "
+        "MODULE_PATHS now would report a pass over nothing."
+    ),
     "src/foundationscale/rl/preference_torch.py": (
         "tensor preference kernel (dpo/ipo/simpo/orpo/cpo/kto): 1e-6 parity-matched "
         "to the float oracles and 100% line-covered, but no mutation row yet proves "
