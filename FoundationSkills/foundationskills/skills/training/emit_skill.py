@@ -212,6 +212,18 @@ class TrainingEmitSkill(BaseSkill):
                     stage, dataset=dataset, model=stage_model, output_dir=output_dir,
                     caps=caps, run_name=run_name,
                 )
+                if hardware_id.lower() not in _LOCAL_HARDWARE_IDS:
+                    # RL is single-device, but on a cluster target it still needs a Slurm job:
+                    # without an sbatch, `fskills launch` ran the argv on whatever host it was on
+                    # (found 2026-10-07; a login node has no GPU). One task, one GPU.
+                    sbatch_text = render_sbatch(
+                        spec["argv"], env={**dict(hardware.get("env") or {}), **dict(spec.get("env") or {})},
+                        hardware_id=hardware_id, nodes=1, gpus_per_node=1, job_name=run_name,
+                        log_dir=str(Path(launch_dir).resolve()), launcher="python", cwd=spec.get("cwd"),
+                        cpus_per_task=hardware.get("cpus_per_task"),
+                    )
+                    spec = {**spec, "sbatch": sbatch_text}
+                    write_sbatch(launch_dir / f"{run_name}.sbatch", sbatch_text)
             else:
                 spec = emit_train(
                     stage, dataset=dataset, model=stage_model, output_dir=output_dir,
@@ -230,7 +242,7 @@ class TrainingEmitSkill(BaseSkill):
                         nodes=nodes,
                         gpus_per_node=gpus_per_node,
                         job_name=run_name,
-                        log_dir=str(launch_dir),
+                        log_dir=str(Path(launch_dir).resolve()),
                         launcher=launcher,
                         cwd=spec.get("cwd"),
                         cpus_per_task=hardware.get("cpus_per_task"),
@@ -238,7 +250,8 @@ class TrainingEmitSkill(BaseSkill):
                     spec = {**spec, "sbatch": sbatch_text}
                     write_sbatch(launch_dir / f"{run_name}.sbatch", sbatch_text)
 
-            spec = {**spec, "model_source": model_source}
+            spec = {**spec, "model_source": model_source,
+                    "launch_target": "local" if hardware_id.lower() in _LOCAL_HARDWARE_IDS and nodes == 1 else "slurm"}
             if chain_missing:
                 spec = {**spec, "executable": False,
                         "missing": "; ".join(m for m in (spec.get("missing"), chain_missing) if m)}

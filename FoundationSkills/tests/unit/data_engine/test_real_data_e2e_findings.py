@@ -93,3 +93,17 @@ def test_hf_ingest_honours_config_and_names_load_failures(monkeypatch):
     assert calls[-1] == ("allenai/ai2_arc", "ARC-Challenge", "train")
     with pytest.raises(ingest.IngestError, match="did not load"):
         list(ingest._read_hf_dataset("allenai/ai2_arc", {}))
+
+
+def test_hf_loader_falls_back_to_the_cached_legacy_id(monkeypatch):
+    calls: list[str] = []
+
+    def load_dataset(hf_id, config=None, split=None):
+        calls.append(hf_id)
+        if hf_id == "openai/gsm8k":
+            raise ConnectionError("offline")
+        return [{"question": "q", "answer": "a"}]
+
+    monkeypatch.setitem(sys.modules, "datasets", types.SimpleNamespace(load_dataset=load_dataset))
+    assert decontam._load_hf_benchmark("gsm8k", "openai/gsm8k", ("main",)) == ["q", "a"]
+    assert calls[-1] == "gsm8k"

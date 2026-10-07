@@ -205,6 +205,33 @@ def _pinned_launcher(launcher: str, notes: list[str]) -> str:
     return launcher
 
 
+def _code_path_env(notes: list[str]) -> dict[str, str]:
+    """PYTHONPATH for packages this process imports from a source tree rather than site-packages.
+
+    MEASURED (2026-10-07, r04dgx03): the rendered sbatch ran ``python -m ...rl_driver`` and died
+    with ``No module named 'foundationskills'`` -- neither package is installed in the env, and the
+    script only worked when the submitting shell happened to export PYTHONPATH. The job now
+    carries the roots of the very code that emitted it; installed packages add nothing."""
+    import importlib.util
+
+    roots: list[str] = []
+    for name in ("foundationskills", "foundationscale"):
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ImportError, ValueError):
+            spec = None
+        origin = getattr(spec, "origin", None) if spec is not None else None
+        if not origin or "site-packages" in origin or "dist-packages" in origin:
+            continue
+        root = str(Path(origin).resolve().parent.parent)
+        if root not in roots:
+            roots.append(root)
+    if roots:
+        notes.append("PYTHONPATH carries the emitting source tree(s): " + ", ".join(roots))
+        return {"PYTHONPATH": ":".join(roots)}
+    return {}
+
+
 def emit_train(
     stage: dict[str, Any],
     *,
@@ -380,6 +407,7 @@ def emit_train(
     # peak FS needs to report MFU instead of UNMEASURED.
     for key, value in dict(_hw(hardware, "env", {}) or {}).items():
         env[str(key)] = str(value)
+    env.update(_code_path_env(notes))
     peak = _hw(hardware, "bf16_dense_tflops")
     if peak:
         env["FS_DEVICE_PEAK_TFLOPS"] = str(peak)

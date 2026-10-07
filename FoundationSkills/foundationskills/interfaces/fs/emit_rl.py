@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from foundationskills.interfaces.fs.capabilities import FSCapabilities
-from foundationskills.interfaces.fs.emit_train import _pinned_launcher, fs_repo_root
+from foundationskills.interfaces.fs.emit_train import _code_path_env, _pinned_launcher, fs_repo_root
 
 # hparams key -> RLTrainConfig field. Only keys present in the stage hparams
 # are emitted, so RLTrainConfig's own dataclass defaults govern the rest.
@@ -174,7 +174,7 @@ def emit_rl(
         "stage_name": str(stage.get("name") or run_name),
         "entry": "fskills-rl",
         "argv": argv,
-        "env": {},
+        "env": _code_path_env(notes),
         "sbatch": None,
         "dry_run_argv": [*argv, "--dry-run"],
         "expected_outputs": expected_outputs,

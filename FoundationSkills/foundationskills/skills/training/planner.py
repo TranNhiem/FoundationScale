@@ -287,6 +287,44 @@ def _synthesize_variant(base_model: dict) -> tuple[Any, Any, str | None]:
     return family, variant, note
 
 
+def _sft_processed_tokens(tokens: int, hparams: dict, readiness_stats: dict, micro_batch: int,
+                          assumptions: list[str]) -> int:
+    """Tokens FS actually pushes through the model for an SFT stage: epochs x data, padded.
+
+    MEASURED 2026-10-07 (E4B LoRA, AIEC 9.08M tokens, 2 epochs, b4): the estimate priced one
+    unpadded pass (9.08M) while FS ran 2 epochs and pads every row to the longest in its
+    micro-batch (no packing): 30.6M tokens processed, 1.69x padding, 3.3x the planned hours.
+    Padding is estimated from the readiness length histogram as E[max of micro_batch rows] at
+    0.75 x each power-of-two bin's upper edge (1.85x predicted on that run); absent histogram ->
+    no padding factor, stated as an assumption."""
+    processed = float(tokens)
+    epochs = hparams.get("epochs")
+    if epochs and hparams.get("max_steps") is None and hparams.get("tokens") is None:
+        processed *= float(epochs)
+        assumptions.append(f"sft processed tokens: {epochs} epoch(s) x {tokens:,}")
+    hist = readiness_stats.get("length_hist") if isinstance(readiness_stats, dict) else None
+    records, data_tokens = readiness_stats.get("num_records"), readiness_stats.get("num_tokens")
+    if isinstance(hist, dict) and hist and records and data_tokens and micro_batch >= 1:
+        try:
+            bins = sorted((int(k), int(v)) for k, v in hist.items())
+        except (TypeError, ValueError):
+            bins = []
+        total = sum(v for _, v in bins)
+        if total > 0:
+            cdf = last = expected_max = 0.0
+            for upper, count in bins:
+                cdf += count / total
+                expected_max += (cdf ** micro_batch - last ** micro_batch) * 0.75 * upper
+                last = cdf
+            factor = max(1.0, expected_max / (float(data_tokens) / float(records)))
+            processed *= factor
+            assumptions.append(f"sft padding: FS pads each row to the longest in its micro-batch (no packing); "
+                               f"x{factor:.2f} from the readiness length histogram at micro_batch {micro_batch}")
+    else:
+        assumptions.append("sft padding: no readiness length histogram; padding overhead NOT priced")
+    return int(processed)
+
+
 def _stage_tokens(stage: str, data_facts: dict, domain_tokens: int, assumptions: list[str]) -> int:
     if stage == "pretrain":
         tokens = max(domain_tokens * 5, 1_000_000_000)
@@ -761,12 +799,16 @@ def plan(
             reference_copy=(stage == "preference" and "reference_model" in _card_requires(algorithm)),
             optimizer="host_adamw" if stage in ("rl", "preference") else "adamw",
         )
-        time_kwargs: dict[str, Any] = {"tokens": tokens, "hardware": hw, "gpus": gpus_for_stage, "method": method,
+        processed = tokens
+        if stage == "sft":
+            processed = _sft_processed_tokens(tokens, hparams, readiness_stats, micro_batch, assumptions)
+        time_kwargs: dict[str, Any] = {"tokens": processed, "hardware": hw, "gpus": gpus_for_stage, "method": method,
                                        "stage": stage, "sharding": sharding, "micro_batch": micro_batch,
                                        "grad_ckpt": grad_ckpt}
         te = estimate_time(variant, **time_kwargs)
         estimate = {
             "tokens": tokens,
+            "tokens_processed": processed,
             "gpus": gpus_for_stage,
             "total_flops": _get(te, "total_flops"),
             "tokens_per_s_per_gpu": _get(te, "tokens_per_s_per_gpu"),
@@ -788,7 +830,7 @@ def plan(
             method=method,
             seq_len=seq_len,
             micro_batch=micro_batch,
-            tokens=tokens,
+            tokens=processed,
             budget_gpu_hours=budget_gpu_hours,
             deadline_hours=None,
             caps=caps,

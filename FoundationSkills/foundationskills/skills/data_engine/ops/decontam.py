@@ -132,6 +132,11 @@ def _load_local_benchmark(path: Path) -> list[str]:
     return [part for part in _BLANK_LINE_RE.split(content) if part.strip()]
 
 
+# Legacy canonical ids a cache may hold instead of the namespaced one (measured 2026-10-07: the
+# GB200 HF cache has gsm8k under "gsm8k", so offline decontam of "openai/gsm8k" was UNMEASURED).
+_HF_ID_ALIASES: dict[str, tuple[str, ...]] = {"openai/gsm8k": ("gsm8k",)}
+
+
 def _load_hf_benchmark(name: str, hf_id: str, configs: tuple[str | None, ...] = (None,)) -> list[str]:
     from datasets import load_dataset  # type: ignore
 
@@ -139,12 +144,16 @@ def _load_hf_benchmark(name: str, hf_id: str, configs: tuple[str | None, ...] = 
     for config in configs:
         dataset = None
         last_exc: Exception | None = None
-        for split in ("test", "validation", "train"):
-            try:
-                dataset = load_dataset(hf_id, config, split=split) if config else load_dataset(hf_id, split=split)
+        for candidate in (hf_id, *_HF_ID_ALIASES.get(hf_id, ())):
+            for split in ("test", "validation", "train"):
+                try:
+                    dataset = (load_dataset(candidate, config, split=split) if config
+                               else load_dataset(candidate, split=split))
+                    break
+                except Exception as exc:  # noqa: BLE001 - try the next split / id
+                    last_exc = exc
+            if dataset is not None:
                 break
-            except Exception as exc:  # noqa: BLE001 - try the next split
-                last_exc = exc
         if dataset is None:  # every config must load: a partial benchmark would be a vacuous pass
             raise IngestErrorLike(f"could not load benchmark {name!r} from {hf_id!r} config {config!r}: {last_exc}")
         for row in dataset:
