@@ -162,3 +162,46 @@ def test_save_and_adjudicate_refuses_unwritten_refit_before_writing(tmp_path: Pa
 def test_save_and_adjudicate_returns_an_exception_as_a_refusal(tmp_path: Path) -> None:
     record, refusal = _adjudicate(tmp_path, _tiny_llama(), [])
     assert refusal.startswith("ValueError:") and record["refusal"] == refusal
+
+
+def test_lane_topology_carves_expert_parallel_out_of_data_parallel() -> None:
+    from foundationscale.rl.megatron.save import lane_topology
+
+    # 4 GPUs, TP2 x EP2: DP is 4 / 2 = 2 -- EP sits inside DP, it does not divide again.
+    topo = lane_topology(world=4, local_world=4, tp=2, pp=1, cp=1, ep=2)
+    assert topo["data_parallel"] == 2 and topo["expert_parallel"] == 2
+    assert topo["nodes"] == 1 and topo["gpus_per_node"] == 4
+    two_nodes = lane_topology(world=8, local_world=4, tp=2, pp=2, cp=1, ep=1)
+    assert two_nodes["nodes"] == 2 and two_nodes["data_parallel"] == 2
+
+
+def test_run_lane_save_logs_the_writer_record_and_raises_on_refusal(tmp_path: Path) -> None:
+    import io
+    import json
+
+    from foundationscale.rl.megatron.save import run_lane_save
+
+    model = _tiny_llama()
+    stream = io.StringIO()
+    common: dict[str, Any] = {
+        "first": True,
+        "run_id": "unit",
+        "topology": _TOPOLOGY,
+        "config": {"steps": 6},
+    }
+    run_lane_save(
+        model, None, tmp_path / "ok", metrics=stream, tag="final", step=6,
+        unwritten=0, declared_names=model.state_dict(), **common,
+    )  # fmt: skip
+    assert json.loads(stream.getvalue())["ok"] is True
+    with pytest.raises(RuntimeError, match="checkpoint save stale refused"):
+        run_lane_save(
+            model, None, tmp_path / "stale", metrics=stream, tag="stale", step=6,
+            unwritten=1, declared_names=model.state_dict(), **common,
+        )  # fmt: skip
+    # A non-writer (metrics=None) writes nothing and, undistributed, does not raise.
+    run_lane_save(
+        model, None, tmp_path / "peer", metrics=None, tag="peer", step=6,
+        unwritten=0, declared_names=model.state_dict(), **common,
+    )  # fmt: skip
+    assert not (tmp_path / "peer").exists()

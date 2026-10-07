@@ -501,3 +501,26 @@ def test_sharded_rescaled_loss_equals_single_process_loss(algorithm: str) -> Non
             )
         )
     assert total == pytest.approx(full, rel=1e-5, abs=1e-7)
+
+
+def test_iter_microbatches_slices_every_tensor_in_lockstep() -> None:
+    batch = {"input_ids": torch.arange(10).view(5, 2), "mask": torch.ones(5, 2)}
+    chunks = list(driver._iter_microbatches(batch, 2))
+    assert [chunk["input_ids"].shape[0] for chunk in chunks] == [2, 2, 1]
+    assert torch.equal(chunks[2]["input_ids"], torch.tensor([[8, 9]]))
+    assert all(chunk["mask"].shape[0] == chunk["input_ids"].shape[0] for chunk in chunks)
+
+
+def test_load_mock_rollouts_skips_blank_lines(tmp_path) -> None:
+    path = tmp_path / "rollouts.jsonl"
+    row = {"prompt": "p", "completion": "c", "reward": 1.0}
+    path.write_text(f"\n{json.dumps(row)}\n\n", encoding="utf-8")
+    rows = driver.load_mock_rollouts(path)
+    assert len(rows) == 1 and rows[0].reward == 1.0
+
+
+def test_reduce_step_metrics_ignores_non_dict_entries() -> None:
+    metrics = driver.reduce_step_metrics(
+        ["not-a-dict", {"loss": 0.5, "ratio_mean": 1.0, "clip_fraction": 0.0, "tokens": 4.0}]
+    )
+    assert metrics["loss"] == pytest.approx(0.5)

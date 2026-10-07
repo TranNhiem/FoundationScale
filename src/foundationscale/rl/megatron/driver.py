@@ -818,7 +818,7 @@ def _run_online(
     from foundationscale.rl.megatron import online
     from foundationscale.rl.megatron.normalization import compute_denominators
     from foundationscale.rl.megatron.pp_step import loss_unit
-    from foundationscale.rl.megatron.save import save_and_adjudicate
+    from foundationscale.rl.megatron.save import lane_topology, run_lane_save
     from foundationscale.rl.registry import lookup_algorithm
     from foundationscale.rl.rewards import MCQLetterReward
     from foundationscale.rl.torch_backend import TensorPolicyLoss
@@ -911,46 +911,32 @@ def _run_online(
             nonlocal saves_done
             if not args.save_dir:
                 return
-            refusal = ""
-            if fh is not None:
-                world = dist.get_world_size() if dist.is_initialized() else 1
-                local = int(os.environ.get("LOCAL_WORLD_SIZE", str(world)))
-                cfg = trainer.cfg
-                record, refusal = save_and_adjudicate(
-                    hf_model,
-                    tokenizer,
-                    Path(args.save_dir) / tag,
-                    tag=tag,
-                    step=step,
-                    first=saves_done == 0,
-                    unwritten=unwritten,
-                    declared_names=exported,
-                    run_id=metrics_path.stem,
-                    topology={
-                        "nodes": max(1, world // max(1, local)),
-                        "gpus_per_node": min(world, local),
-                        "tensor_parallel": cfg.tp,
-                        "pipeline_parallel": cfg.pp,
-                        "data_parallel": max(1, world // (cfg.tp * cfg.pp * cfg.cp)),
-                        "expert_parallel": cfg.ep,
-                        "context_parallel": cfg.cp,
-                    },
-                    config=vars(args),
-                    defaults={k: defaults_parser.get_default(k) for k in vars(args)},
-                )
-                fh.write(json.dumps(record) + "\n")
-                fh.flush()
-                print(f"SAVE_{tag.upper()} {json.dumps(record)}", flush=True)
-            saves_done += 1
-            if dist.is_initialized() and dist.get_world_size() > 1:
-                verdict = [refusal]
-                dist.broadcast_object_list(verdict, src=0)
-                refusal = verdict[0]
-            if refusal:
-                raise RuntimeError(f"checkpoint save {tag} refused: {refusal}")
+            world = dist.get_world_size() if dist.is_initialized() else 1
+            cfg = trainer.cfg
+            first, saves_done = saves_done == 0, saves_done + 1
+            run_lane_save(
+                hf_model,
+                tokenizer,
+                Path(args.save_dir) / tag,
+                metrics=fh,
+                tag=tag,
+                step=step,
+                first=first,
+                unwritten=unwritten,
+                declared_names=exported,
+                run_id=metrics_path.stem,
+                topology=lane_topology(
+                    world=world,
+                    local_world=int(os.environ.get("LOCAL_WORLD_SIZE", str(world))),
+                    tp=cfg.tp,
+                    pp=cfg.pp,
+                    cp=cfg.cp,
+                    ep=cfg.ep,
+                ),
+                config=vars(args),
+                defaults={k: defaults_parser.get_default(k) for k in vars(args)},
+            )
 
-        # Refit before the PRE eval too: it proves the export path round-trips the
-        # unchanged weights before any training depends on it.
         stats, refit_s = _refit()
         _heldout("pre")
         for step in range(args.steps):

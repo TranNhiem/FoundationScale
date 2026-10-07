@@ -28,6 +28,8 @@ from typing import Any
 
 __all__ = [
     "MANIFEST_NAME",
+    "lane_topology",
+    "run_lane_save",
     "run_policy_save_gates",
     "save_and_adjudicate",
     "save_policy_checkpoint",
@@ -45,6 +47,28 @@ _TOPOLOGY_KEYS = (
     "expert_parallel",
     "context_parallel",
 )
+
+
+def lane_topology(
+    *, world: int, local_world: int, tp: int, pp: int, cp: int, ep: int
+) -> dict[str, int]:
+    """The provenance topology of a Megatron lane run, from its degrees and world size.
+
+    Megatron's data-parallel degree is ``world / (tp * pp * cp)``: expert
+    parallelism is carved out of the data-parallel group, not multiplied in, so it
+    does not divide the world a second time. ``local_world`` is the per-node rank
+    count (``LOCAL_WORLD_SIZE``); a single-node run reports ``nodes=1``.
+    """
+    local = max(1, min(world, local_world))
+    return {
+        "nodes": max(1, world // local),
+        "gpus_per_node": local,
+        "tensor_parallel": tp,
+        "pipeline_parallel": pp,
+        "data_parallel": max(1, world // (tp * pp * cp)),
+        "expert_parallel": ep,
+        "context_parallel": cp,
+    }
 
 
 def save_policy_checkpoint(
@@ -217,3 +241,65 @@ def save_and_adjudicate(
     if refusal:
         record["refusal"] = refusal
     return record, refusal
+
+
+def _broadcast_from_writer(refusal: str) -> str:
+    """Rank 0's verdict on every rank; the value itself when not distributed."""
+    import torch.distributed as dist
+
+    if not dist.is_initialized() or dist.get_world_size() == 1:
+        return refusal
+    verdict = [refusal]
+    dist.broadcast_object_list(verdict, src=0)
+    return str(verdict[0])
+
+
+def run_lane_save(
+    hf_model: Any,
+    tokenizer: Any,
+    out_dir: str | os.PathLike[str],
+    *,
+    metrics: Any,
+    tag: str,
+    step: int,
+    first: bool,
+    unwritten: int,
+    declared_names: Iterable[str],
+    run_id: str,
+    topology: Mapping[str, int],
+    config: Mapping[str, object],
+    defaults: Mapping[str, object] | None = None,
+) -> None:
+    """One lane save on EVERY rank: the writer saves and adjudicates, all ranks agree.
+
+    ``metrics`` is the writer's open metrics stream and ``None`` on every other
+    rank -- the same rank discriminator the driver uses for its other writer-only
+    work. The writer's ``(record, refusal)`` from :func:`save_and_adjudicate` is
+    logged, the refusal is broadcast from rank 0, and every rank raises the same
+    ``RuntimeError`` on a refusal, so no rank is left inside a collective its
+    peers abandoned.
+    """
+    import json
+
+    refusal = ""
+    if metrics is not None:
+        record, refusal = save_and_adjudicate(
+            hf_model,
+            tokenizer,
+            out_dir,
+            tag=tag,
+            step=step,
+            first=first,
+            unwritten=unwritten,
+            declared_names=declared_names,
+            run_id=run_id,
+            topology=topology,
+            config=config,
+            defaults=defaults,
+        )
+        metrics.write(json.dumps(record) + "\n")
+        metrics.flush()
+        print(f"SAVE_{tag.upper()} {json.dumps(record)}", flush=True)
+    refusal = _broadcast_from_writer(refusal)
+    if refusal:
+        raise RuntimeError(f"checkpoint save {tag} refused: {refusal}")
