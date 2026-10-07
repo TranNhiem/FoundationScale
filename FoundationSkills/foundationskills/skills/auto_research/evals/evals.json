@@ -41,11 +41,11 @@
     "question": "My lr sweep on qwen3-8b keeps hovering at 0.512 val_accuracy with warmup stuck at 0.02 — here are the symptoms and my current knobs, propose the next three hypotheses from the ideas catalog.",
     "expected_skill": "fskills-auto-research",
     "should_trigger": true,
-    "ground_truth": "The propose action returns idea cards from the ideas catalog given `current` knob values and `symptoms`, without writing to the ledger beyond the approval envelope.",
+    "ground_truth": "The propose action returns idea cards from the ideas catalog given `current` knob values and `symptoms`, and appends exactly one `proposal` op to the ledger recording the cards, the proposer provenance and the replay record (`replay_status`).",
     "expected_behavior": [
       "The agent read fskills-auto-research/SKILL.md before acting",
       "Call the propose action with current and symptoms and return three idea cards",
-      "State that propose writes nothing to the ledger besides the approval envelope"
+      "State that propose appends exactly one proposal op to the ledger (cards, proposer provenance, replay_status)"
     ]
   },
   {
