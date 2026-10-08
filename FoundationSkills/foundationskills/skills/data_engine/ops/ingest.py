@@ -169,11 +169,17 @@ def _read_hf_dataset(uri: str, options: dict) -> Iterator[dict]:
         raise IngestError(f"hf_dataset source {uri!r} requires optional dependency 'datasets'") from exc
     split = str(options.get("split") or "train")
     streaming = bool(options.get("streaming", False))
-    name = options.get("name")
-    if name is None:
-        dataset = load_dataset(uri, split=split, streaming=streaming)
-    else:
-        dataset = load_dataset(uri, name, split=split, streaming=streaming)
+    # "config" is the documented spelling (SKILL.md worked example 3); "name" is datasets' own.
+    # Found 2026-10-07: "config" was silently ignored, so gsm8k/ai2_arc failed as multi-config.
+    name = options.get("name", options.get("config"))
+    try:
+        if name is None:
+            dataset = load_dataset(uri, split=split, streaming=streaming)
+        else:
+            dataset = load_dataset(uri, name, split=split, streaming=streaming)
+    except Exception as exc:  # noqa: BLE001 - a named ingest failure, never a bare core exception
+        raise IngestError(f"hf_dataset source {uri!r} (config {name!r}, split {split!r}) did not load: "
+                          f"{type(exc).__name__}: {str(exc)[:300]}") from exc
     for row in dataset:
         if isinstance(row, dict):
             yield row

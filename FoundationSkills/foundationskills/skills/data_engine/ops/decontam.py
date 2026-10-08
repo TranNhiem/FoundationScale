@@ -45,17 +45,23 @@ CONFIG_SCHEMA: dict[str, Any] = {
 _BLANK_LINE_RE = re.compile(r"\n\s*\n+")
 _TEXT_KEYS = ("text", "question", "prompt", "problem", "answer", "solution", "query", "input")
 
-# name -> HF dataset id; loading is gated on allow_download + datasets import
-_BENCHMARK_HF: dict[str, str] = {
-    "gsm8k": "openai/gsm8k",
-    "math": "EleutherAI/hendrycks_math",
-    "mmlu": "cais/mmlu",
-    "humaneval": "openai/openai_humaneval",
-    "mbpp": "google-research-datasets/mbpp",
-    "arc": "allenai/ai2_arc",
-    "hellaswag": "Rowan/hellaswag",
-    "truthfulqa": "truthfulqa/truthful_qa",
-    "ifeval": "google/IFEval",
+# name -> (HF dataset id, configs); loading is gated on allow_download + datasets import.
+# MEASURED (2026-10-07): a multi-config dataset loaded WITHOUT a config raises (ai2_arc: "multiple
+# configurations"; gsm8k/mmlu need main/all), so "arc"/"gsm8k" were always unmeasured. Names also
+# follow the evaluation skill's eval_policy.yaml task names (arc_easy, arc_challenge) so one
+# benchmark list can drive both decontam and eval.
+_BENCHMARK_HF: dict[str, tuple[str, tuple[str | None, ...]]] = {
+    "gsm8k": ("openai/gsm8k", ("main",)),
+    "math": ("EleutherAI/hendrycks_math", (None,)),
+    "mmlu": ("cais/mmlu", ("all",)),
+    "humaneval": ("openai/openai_humaneval", (None,)),
+    "mbpp": ("google-research-datasets/mbpp", (None,)),
+    "arc": ("allenai/ai2_arc", ("ARC-Easy", "ARC-Challenge")),
+    "arc_easy": ("allenai/ai2_arc", ("ARC-Easy",)),
+    "arc_challenge": ("allenai/ai2_arc", ("ARC-Challenge",)),
+    "hellaswag": ("Rowan/hellaswag", (None,)),
+    "truthfulqa": ("truthfulqa/truthful_qa", ("generation",)),
+    "ifeval": ("google/IFEval", (None,)),
 }
 
 
@@ -126,23 +132,33 @@ def _load_local_benchmark(path: Path) -> list[str]:
     return [part for part in _BLANK_LINE_RE.split(content) if part.strip()]
 
 
-def _load_hf_benchmark(name: str, hf_id: str) -> list[str]:
+# Legacy canonical ids a cache may hold instead of the namespaced one (measured 2026-10-07: the
+# GB200 HF cache has gsm8k under "gsm8k", so offline decontam of "openai/gsm8k" was UNMEASURED).
+_HF_ID_ALIASES: dict[str, tuple[str, ...]] = {"openai/gsm8k": ("gsm8k",)}
+
+
+def _load_hf_benchmark(name: str, hf_id: str, configs: tuple[str | None, ...] = (None,)) -> list[str]:
     from datasets import load_dataset  # type: ignore
 
     docs: list[str] = []
-    dataset = None
-    last_exc: Exception | None = None
-    for split in ("test", "validation", "train"):
-        try:
-            dataset = load_dataset(hf_id, split=split)
-            break
-        except Exception as exc:  # noqa: BLE001 - try the next split
-            last_exc = exc
-    if dataset is None:
-        raise IngestErrorLike(f"could not load benchmark {name!r} from {hf_id!r}: {last_exc}")
-    for row in dataset:
-        if isinstance(row, dict):
-            _collect_texts({k: v for k, v in row.items() if k in _TEXT_KEYS}, docs)
+    for config in configs:
+        dataset = None
+        last_exc: Exception | None = None
+        for candidate in (hf_id, *_HF_ID_ALIASES.get(hf_id, ())):
+            for split in ("test", "validation", "train"):
+                try:
+                    dataset = (load_dataset(candidate, config, split=split) if config
+                               else load_dataset(candidate, split=split))
+                    break
+                except Exception as exc:  # noqa: BLE001 - try the next split / id
+                    last_exc = exc
+            if dataset is not None:
+                break
+        if dataset is None:  # every config must load: a partial benchmark would be a vacuous pass
+            raise IngestErrorLike(f"could not load benchmark {name!r} from {hf_id!r} config {config!r}: {last_exc}")
+        for row in dataset:
+            if isinstance(row, dict):
+                _collect_texts({k: v for k, v in row.items() if k in _TEXT_KEYS}, docs)
     return docs
 
 
@@ -165,7 +181,7 @@ def _load_benchmark_docs(name: str, cfg: dict) -> tuple[list[str] | None, str | 
             return None, f"benchmark source produced no documents: {path}"
         return docs, None
 
-    hf_id = _BENCHMARK_HF.get(name)
+    hf_id, configs = _BENCHMARK_HF.get(name) or (None, (None,))
     if hf_id is None:
         return None, "unknown benchmark (not in sources, not in the builtin registry)"
     if not cfg.get("allow_download", False):
@@ -175,7 +191,7 @@ def _load_benchmark_docs(name: str, cfg: dict) -> tuple[list[str] | None, str | 
     except ImportError:
         return None, f"optional dependency 'datasets' unavailable; cannot fetch benchmark {name!r}"
     try:
-        docs = _load_hf_benchmark(name, hf_id)
+        docs = _load_hf_benchmark(name, hf_id, configs)
     except IngestErrorLike as exc:
         return None, str(exc)
     if not docs:

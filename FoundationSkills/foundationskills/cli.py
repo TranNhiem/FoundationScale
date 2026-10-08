@@ -207,7 +207,7 @@ def _cmd_eval_emit(args: argparse.Namespace) -> int:
     from foundationskills.interfaces.fs.emit_eval import emit_eval
 
     spec = emit_eval(_eval_request(args), nodes=args.nodes, gpus_per_node=args.gpus_per_node,
-                     hardware_id=args.hardware, python=args.python, run_name=args.run_name)
+                     hardware_id=args.hardware, python=args.python or sys.executable, run_name=args.run_name)
     target = Path(args.spec_out)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -495,7 +495,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_emit.add_argument("--nodes", type=int, default=1)
     p_emit.add_argument("--gpus", dest="gpus_per_node", type=int, default=1)
     p_emit.add_argument("--hardware", default="gb200", help="hardware id; 'local' emits no sbatch")
-    p_emit.add_argument("--python", default="python", help="interpreter the job runs (its lm_eval is version-checked)")
+    p_emit.add_argument("--python", default=None,
+                        help="interpreter the job runs (its lm_eval is version-checked); default: this interpreter "
+                             "(a bare 'python' resolves through the node's PATH)")
     p_emit.add_argument("--run-name", dest="run_name", default="fskills-eval")
     p_emit.set_defaults(func=_cmd_eval_emit)
 

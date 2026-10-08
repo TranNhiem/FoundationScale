@@ -241,6 +241,8 @@ class DataEngineSkill(BaseSkill):
                 benchmarks=list(request.get("benchmarks") or []),
                 seq_len=int(request.get("seq_len") or 4096),
                 drop_overlong=bool(request.get("drop_overlong", False)),
+                benchmark_sources=dict(request.get("benchmark_sources") or {}) or None,
+                allow_benchmark_download=bool(request.get("allow_benchmark_download", False)),
             )
 
         dataset_id = f"{target}-{sha256_json({'sources': sources, 'spec': spec})[:12]}"

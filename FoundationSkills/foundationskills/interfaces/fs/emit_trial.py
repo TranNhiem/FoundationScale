@@ -25,6 +25,7 @@ must hold for the render this trial would ship, so a render bug raises
 from __future__ import annotations
 
 import importlib
+import inspect
 import subprocess
 import sys
 from typing import Any, Callable
@@ -68,6 +69,27 @@ def _load_emit_train() -> Callable[..., dict[str, Any]] | None:
     return fn if callable(fn) else None
 
 
+def _default_caps_probe() -> Any:
+    """Lazy default for ``caps_fn``: ``foundationskills.interfaces.fs.capabilities.probe``."""
+    from foundationskills.interfaces.fs.capabilities import probe as capabilities_probe
+
+    return capabilities_probe()
+
+
+def _accepts_caps(fn: Callable[..., Any]) -> bool:
+    """True when ``fn`` can be handed ``caps=``; opaque injected fakes may take neither it nor ``**kwargs``."""
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return False
+    for param in sig.parameters.values():
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            return True
+        if param.name == "caps":
+            return param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    return False
+
+
 def _refused(reason: str, trial_spec: dict[str, Any]) -> dict[str, Any]:
     """A REFUSED fact: nothing rendered, nothing submitted; the reason is named and counted as a drop."""
     fact = {"state": "REFUSED", "reason": reason}
@@ -87,6 +109,7 @@ def emit_trial(
     *,
     hardware_id: str = "gb200",
     emit_train_fn: Callable[..., dict[str, Any]] | None = None,
+    caps_fn: Callable[[], Any] | None = None,
     emit_eval_fn: Callable[..., dict[str, Any]] = emit_eval,
     probe: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
@@ -110,7 +133,11 @@ def emit_trial(
         fn = emit_train_fn if emit_train_fn is not None else _load_emit_train()
         if fn is None:
             return _refused("emit_train_missing", trial_spec)
-        train_args = dict(trial_request)
+        train_args = dict(trial_request)  # a copy: the caller's trial_request is never mutated
+        # Same rule as eval below: a bare "python" in the rendered job resolves to whatever PATH holds on
+        # the node (found on GPU: system python, no transformers -> FS refuses rc=96). emit_train takes no
+        # interpreter, so pin it here: train_request["python"], else this process's own interpreter.
+        train_python = str(train_args.pop("python", None) or sys.executable)
         # G2 (gate what actually runs): the RENDERED node shape is never taken from the opaque
         # train_request - nodes/gpus_per_node are forced to the trial_spec values and the override is named.
         for shape_key in ("nodes", "gpus_per_node"):
@@ -119,7 +146,35 @@ def emit_trial(
             if shape_key in train_args and carried is not None and carried != forced:
                 overrides.append(f"overrode train_request.{shape_key}")
             train_args[shape_key] = forced
-        spec = fn(**train_args)  # train_request is opaque to auto_research beyond the forced shape keys
+        # The trial spec is JSON (it is hashed into the launch token), so train_request can never
+        # carry an FSCapabilities object: probe it here and REFUSE before emit_train when there is none.
+        # The default probe runs for the real emit_train; an injected emit_train_fn is probed only with an
+        # injected caps_fn (fakes stay hermetic). caps is forwarded only when the emitter accepts it.
+        if "caps" not in trial_request and (emit_train_fn is None or caps_fn is not None):
+            try:
+                caps = (caps_fn or _default_caps_probe)()
+            except Exception as exc:  # a probe crash is a REFUSED fact, never an uncaught skill exception
+                return _refused(f"fs_capabilities_probe_failed:{type(exc).__name__}", trial_spec)
+            if not getattr(caps, "available", False):
+                errors = _as_list(getattr(caps, "errors", None))
+                return _refused(
+                    "fs_capabilities_unavailable" + (":" + "; ".join(errors) if errors else ""), trial_spec
+                )
+            if _accepts_caps(fn):
+                train_args["caps"] = caps
+        try:
+            spec = fn(**train_args)  # train_request is opaque to auto_research beyond the forced shape keys
+        except Exception as exc:  # train_request is opaque: a malformed one is a REFUSED fact, never a crash
+            return _refused(f"emit_train_bad_request:{type(exc).__name__}:{exc}", trial_spec)
+        pinned = {}
+        for argv_key in ("argv", "dry_run_argv"):
+            argv_value = spec.get(argv_key)
+            if isinstance(argv_value, list) and argv_value[:1] == ["python"]:
+                pinned[argv_key] = [train_python, *argv_value[1:]]
+        if pinned:
+            spec = {**spec, **pinned}
+            if "python" not in trial_request:
+                overrides.append(f"python defaulted to {train_python}")
     else:
         # The job runs the interpreter that is probed for lm_eval; a bare "python" resolves to
         # whatever PATH holds on the node, so an unnamed interpreter defaults to this process's own.

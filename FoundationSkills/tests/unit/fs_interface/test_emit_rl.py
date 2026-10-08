@@ -2,6 +2,8 @@
 """Tests for emit_rl: config shape, runnability gating, single-device warning."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from foundationskills.interfaces.fs.capabilities import FSCapabilities
 from foundationskills.interfaces.fs.emit_rl import emit_rl
 
@@ -56,8 +58,9 @@ def test_runnable_algorithm_config_and_argv(tmp_path):
     assert spec["missing"] is None
     assert spec["entry"] == "fskills-rl"
     # python -m works whether or not the console script is installed (measured launch failure)
-    assert spec["argv"] == ["python", "-m", "foundationskills.interfaces.fs.rl_driver", "--config",
-                            f"{tmp_path}/out/rl_config.json"]
+    assert Path(spec["argv"][0]).name == "python"  # pinned to the probing interpreter (bare python hit PATH)
+    assert spec["argv"][1:] == ["-m", "foundationskills.interfaces.fs.rl_driver", "--config",
+                                f"{tmp_path}/out/rl_config.json"]
     assert spec["dry_run_argv"] == spec["argv"] + ["--dry-run"]
 
     cfg = spec["rl_config"]

@@ -92,6 +92,13 @@ def launch(
     command: str
 
     extra: dict[str, Any] = {}
+    if submit and not spec.get("sbatch") and spec.get("launch_target") == "slurm":
+        # A cluster spec without a script would run its argv HERE (e.g. a login node with no GPU).
+        raise LaunchRefused(
+            "launch refused: a slurm-target spec carries no sbatch, so submitting would run the argv on this "
+            "host; re-emit it, or run it inside an allocation with --no-submit (srun --overlap ... fskills launch "
+            "--no-submit)"
+        )
     if submit and spec.get("sbatch"):
         output_dir = Path(str(spec.get("output_dir") or "."))
         sbatch_path = output_dir / f"launch-{spec.get('stage_name', 'stage')}.sbatch"

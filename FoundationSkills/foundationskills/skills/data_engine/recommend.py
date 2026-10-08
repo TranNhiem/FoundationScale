@@ -31,6 +31,8 @@ def recommend_pipeline(
     benchmarks: list[str],
     seq_len: int = 4096,
     drop_overlong: bool = False,
+    benchmark_sources: dict[str, str] | None = None,
+    allow_benchmark_download: bool = False,
 ) -> dict[str, Any]:
     """Build a data_pipeline_spec payload (with a rationale) for the target format."""
     if target_format not in FORMATS:
@@ -113,7 +115,10 @@ def recommend_pipeline(
     if benchmarks:
         add(
             "decontam",
-            {"benchmarks": list(benchmarks)},
+            {"benchmarks": list(benchmarks),
+             # without one of these every builtin benchmark is UNMEASURED (found on the real-data run)
+             **({"sources": dict(benchmark_sources)} if benchmark_sources else {}),
+             **({"allow_download": True} if allow_benchmark_download else {})},
             f"remove near-duplicates of the evaluation benchmarks ({', '.join(benchmarks)}) so eval stays honest",
         )
     else:

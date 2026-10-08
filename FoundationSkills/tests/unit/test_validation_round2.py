@@ -3,6 +3,8 @@ adversarial review. Each test names the follow-up (F*) or review item (rv*)
 from artifacts/foundationskills/FOLLOWUPS.md that it pins."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import json
 import types
 
@@ -521,7 +523,8 @@ def test_launch_writes_the_driver_config_and_uses_python_m(tmp_path):
                    dataset={"format": "rl", "shards": [{"path": f"{tmp_path}/shards/s.jsonl"}],
                             "fs_columns": {"gold_key": "answer"}},
                    model="/m", output_dir=str(tmp_path / "out"), caps=caps(), run_name="rl")
-    assert spec["argv"][:3] == ["python", "-m", "foundationskills.interfaces.fs.rl_driver"]
+    assert Path(spec["argv"][0]).name == "python"  # pinned interpreter (2026-10-07)
+    assert spec["argv"][1:3] == ["-m", "foundationskills.interfaces.fs.rl_driver"]
     calls = []
 
     def runner(argv, **kw):

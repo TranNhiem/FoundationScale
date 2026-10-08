@@ -31,6 +31,8 @@ variants:
     experts_per_token: null
     tied_embeddings: true
     instruct: false
+    fs_grad_ckpt: false
+    fs_grad_ckpt_evidence: "measured 2026-10-07 on GB200 (r04dgx18, 4 GPUs, LoRA) via fskills launch: FS refused (96) gradient_checkpointing=True because num_kv_shared_layers=18 of 42 -- checkpointing disables the KV cache these layers read from (foundationscale/train/loop.py _kv_shared_layer_count)"
   - id: gemma-4-E4B-it
     hf_id: null
     local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-E4B-it
@@ -48,6 +50,8 @@ variants:
     experts_per_token: null
     tied_embeddings: true
     instruct: true
+    fs_grad_ckpt: false
+    fs_grad_ckpt_evidence: "measured 2026-10-07 on GB200 (r04dgx18, 4 GPUs, LoRA) via fskills launch: FS refused (96) gradient_checkpointing=True because num_kv_shared_layers=18 of 42 -- checkpointing disables the KV cache these layers read from (foundationscale/train/loop.py _kv_shared_layer_count)"
   - id: gemma-4-12B
     hf_id: null
     local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-12B

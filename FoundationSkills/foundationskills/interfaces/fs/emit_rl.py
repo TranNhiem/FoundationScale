@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from foundationskills.interfaces.fs.capabilities import FSCapabilities
-from foundationskills.interfaces.fs.emit_train import fs_repo_root
+from foundationskills.interfaces.fs.emit_train import _code_path_env, _pinned_launcher, fs_repo_root
 
 # hparams key -> RLTrainConfig field. Only keys present in the stage hparams
 # are emitted, so RLTrainConfig's own dataclass defaults govern the rest.
@@ -45,6 +45,18 @@ _RL_IGNORED = frozenset({"kl_weight", "epochs", "tokens", "lora_rank", "lora_alp
 _SINGLE_DEVICE_WARNING = (
     "FS RLTrainer is single-device (one GPU): multi-GPU RL is refused by the installed FS"
 )
+
+
+def _rl_default(name: str) -> Any:
+    """Default of an installed RLTrainConfig field, or None when FS (or the field) is absent."""
+    try:
+        import dataclasses
+
+        from foundationscale.rl.trainer import RLTrainConfig  # type: ignore
+
+        return next((f.default for f in dataclasses.fields(RLTrainConfig) if f.name == name), None)
+    except Exception:  # noqa: BLE001 - absent FS: nothing derived, and the note says so
+        return None
 
 
 def emit_rl(
@@ -113,6 +125,18 @@ def emit_rl(
         # Data Engine rl datasets carry single-letter MCQ gold (the only reward FS
         # verifies); a recipe's free-form extraction pattern would not match it.
         rl_config.pop("answer_pattern")
+    if kind == "rl" and "max_steps" not in rl_config and "max_steps" in fields:
+        # The run must BE the plan: the planner prices one pass over every prompt, but an unset
+        # max_steps fell back to FS's default (10 steps x 2 prompts = 20 of 2,235 prompts,
+        # found 2026-10-07). Derive it from the dataset, as emit_train derives SFT steps.
+        records = sum(int(sh.get("records") or 0) for sh in shards if isinstance(sh, dict))
+        per_step = int(rl_config.get("prompts_per_step") or _rl_default("prompts_per_step") or 0)
+        if records > 0 and per_step > 0:
+            rl_config["max_steps"] = -(-records // per_step)
+            notes.append(f"max_steps derived: one pass = ceil({records:,} prompts / {per_step} per step) "
+                         f"= {rl_config['max_steps']}")
+        else:
+            notes.append("max_steps not derived (record count or prompts_per_step unknown); FS default applies")
     rl_config["output_dir"] = output_dir
     rl_config["save_final"] = bool(stage.get("save_final", True))
 
@@ -135,7 +159,9 @@ def emit_rl(
 
     # `python -m` works whether or not the fskills-rl console script is installed
     # (a real launch failed with "No such file or directory: 'fskills-rl'").
-    argv = ["python", "-m", "foundationskills.interfaces.fs.rl_driver", "--config", f"{output_dir}/rl_config.json"]
+    # The interpreter is pinned like emit_train's: a bare "python" resolved through the node's PATH.
+    argv = [_pinned_launcher("python", notes), "-m", "foundationskills.interfaces.fs.rl_driver",
+            "--config", f"{output_dir}/rl_config.json"]
     expected_outputs = [
         f"{output_dir}/rl_reports.json",
         f"{output_dir}/fskills_rl_manifest.json",
@@ -148,7 +174,7 @@ def emit_rl(
         "stage_name": str(stage.get("name") or run_name),
         "entry": "fskills-rl",
         "argv": argv,
-        "env": {},
+        "env": _code_path_env(notes),
         "sbatch": None,
         "dry_run_argv": [*argv, "--dry-run"],
         "expected_outputs": expected_outputs,

@@ -172,8 +172,12 @@ class TrainingEmitSkill(BaseSkill):
         hardware: dict[str, Any] = {"id": hardware_id, "scheduler": _guess_scheduler(hardware_id, nodes)}
         try:
             from foundationskills.skills.training.knowledge import load_hardware
+            from foundationskills.skills.training.planner import _resolve_hardware
 
-            profile = load_hardware().get(hardware_id)
+            # same id resolution as the planner: "gb200" -> gb200-189gb. An exact-id lookup missed it
+            # (found 2026-10-07): the GB200 NCCL pins (bond0) were dropped, FS fell back to its
+            # profile's eth0, which these trays do not have, and the 4-rank fabric probe refused 96.
+            profile, _resolved_id = _resolve_hardware(load_hardware(), hardware_id, None)
             if profile is not None:
                 raw = dict(getattr(profile, "raw", None) or {})
                 hardware = {**raw, **{k: getattr(profile, k) for k in ("env", "cpus_per_task", "bf16_dense_tflops",
@@ -208,6 +212,18 @@ class TrainingEmitSkill(BaseSkill):
                     stage, dataset=dataset, model=stage_model, output_dir=output_dir,
                     caps=caps, run_name=run_name,
                 )
+                if hardware_id.lower() not in _LOCAL_HARDWARE_IDS:
+                    # RL is single-device, but on a cluster target it still needs a Slurm job:
+                    # without an sbatch, `fskills launch` ran the argv on whatever host it was on
+                    # (found 2026-10-07; a login node has no GPU). One task, one GPU.
+                    sbatch_text = render_sbatch(
+                        spec["argv"], env={**dict(hardware.get("env") or {}), **dict(spec.get("env") or {})},
+                        hardware_id=hardware_id, nodes=1, gpus_per_node=1, job_name=run_name,
+                        log_dir=str(Path(launch_dir).resolve()), launcher="python", cwd=spec.get("cwd"),
+                        cpus_per_task=hardware.get("cpus_per_task"),
+                    )
+                    spec = {**spec, "sbatch": sbatch_text}
+                    write_sbatch(launch_dir / f"{run_name}.sbatch", sbatch_text)
             else:
                 spec = emit_train(
                     stage, dataset=dataset, model=stage_model, output_dir=output_dir,
@@ -226,7 +242,7 @@ class TrainingEmitSkill(BaseSkill):
                         nodes=nodes,
                         gpus_per_node=gpus_per_node,
                         job_name=run_name,
-                        log_dir=str(launch_dir),
+                        log_dir=str(Path(launch_dir).resolve()),
                         launcher=launcher,
                         cwd=spec.get("cwd"),
                         cpus_per_task=hardware.get("cpus_per_task"),
@@ -234,7 +250,8 @@ class TrainingEmitSkill(BaseSkill):
                     spec = {**spec, "sbatch": sbatch_text}
                     write_sbatch(launch_dir / f"{run_name}.sbatch", sbatch_text)
 
-            spec = {**spec, "model_source": model_source}
+            spec = {**spec, "model_source": model_source,
+                    "launch_target": "local" if hardware_id.lower() in _LOCAL_HARDWARE_IDS and nodes == 1 else "slurm"}
             if chain_missing:
                 spec = {**spec, "executable": False,
                         "missing": "; ".join(m for m in (spec.get("missing"), chain_missing) if m)}

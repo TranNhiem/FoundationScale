@@ -70,6 +70,12 @@ def launch_token(confirm: str, launch_spec: dict[str, Any]) -> str:
     return sha256_hex(b"fs-ar-launch-v1|" + confirm.encode("utf-8") + b"|" + canonical(launch_spec))
 
 
+def _block(spec: dict[str, Any], key: str) -> dict[str, Any]:
+    """A spec block as a dict; a junk (non-mapping) block reads as empty so the checks refuse instead of crash."""
+    value = spec.get(key)
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -237,14 +243,68 @@ def check_proposer_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     return problems
 
 
+def check_objectives_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
+    """AR-IN-009: optional multi-objectives block (M5a); absent/None -> no findings (M4 path untouched)."""
+    raw = spec.get("objectives")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return [("AR-IN-009", f"objectives_count:{type(raw).__name__}")]
+    if not 2 <= len(raw) <= 4:
+        return [("AR-IN-009", f"objectives_count:{len(raw)}")]
+    problems: list[tuple[str, str]] = []
+    good: list[int] = []
+    for index, entry in enumerate(raw):
+        shape_ok = (
+            isinstance(entry, dict)
+            and set(entry) == {"metric", "direction"}
+            and isinstance(entry.get("metric"), str)
+            and bool(entry.get("metric"))
+            and entry.get("direction") in GUARD_DIRECTIONS
+        )
+        if shape_ok:
+            good.append(index)
+        else:
+            problems.append(("AR-IN-009", f"objective_shape:{index}"))
+    if 0 in good:  # objectives[0] must agree with objective (direction defaults to "max")
+        first = raw[0]
+        primary = _block(spec, "objective")
+        if (first.get("metric"), first.get("direction")) != (
+            primary.get("metric"), primary.get("direction", "max")
+        ):
+            problems.append(("AR-IN-009", f"objectives0_mismatch:{first.get('metric')}"))
+    seen: set[str] = set()
+    dupes: set[str] = set()
+    distinct: list[str] = []
+    for index in good:
+        metric = raw[index]["metric"]
+        if metric in seen:
+            if metric not in dupes:
+                problems.append(("AR-IN-009", f"objective_metric_duplicate:{metric}"))
+                dupes.add(metric)
+        else:
+            seen.add(metric)
+            distinct.append(metric)
+    metrics = [str(m) for m in (_block(spec, "eval_policy").get("metrics") or [])]
+    for metric in distinct:
+        if metric not in metrics:
+            problems.append(("AR-IN-009", f"objective_not_in_eval_policy:{metric}"))
+    guards = _block(spec, "confirm").get("guardrails") or {}
+    names = {str(g) for g in guards}
+    for metric in distinct:
+        if metric in names:
+            problems.append(("AR-IN-009", f"guardrail_is_objective:{metric}"))
+    return problems
+
+
 def check_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     """(rule_id, message) problems in the campaign spec; [] means the spec is launchable."""
     problems: list[tuple[str, str]] = []
-    objective = dict(spec.get("objective") or {})
-    eval_policy = dict(spec.get("eval_policy") or {})
-    base = dict(spec.get("base") or {})
-    confirm = dict(spec.get("confirm") or {})
-    budget = dict(spec.get("budget") or {})
+    objective = _block(spec, "objective")
+    eval_policy = _block(spec, "eval_policy")
+    base = _block(spec, "base")
+    confirm = _block(spec, "confirm")
+    budget = _block(spec, "budget")
     metrics = [str(m) for m in (eval_policy.get("metrics") or [])]
     metric = objective.get("metric")
     if not isinstance(metric, str) or not metric or metric not in metrics:
@@ -291,7 +351,7 @@ def check_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
         problems.append(
             ("AR-LN-005", f"budget.per_run_timeout_h must be in (0, {CLUSTER_TIME_LIMIT_H}] (got {timeout!r})")
         )
-    cluster = dict(spec.get("cluster") or {})
+    cluster = _block(spec, "cluster")
     if cluster.get("time") != CLUSTER_TIME:
         problems.append(("AR-LN-004", f"cluster.time must be exactly {CLUSTER_TIME!r} (got {cluster.get('time')!r})"))
     excluded = [str(x) for x in (cluster.get("exclude") or [])]
@@ -302,6 +362,8 @@ def check_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     problems.extend(_check_max_in_flight(spec, runs))
     problems.extend(_check_seeds(spec))
     problems.extend(check_proposer_spec(spec))
+    # AR-IN-009 (M5a): the optional objectives block validates only when present (M4 path is byte-identical).
+    problems.extend(check_objectives_spec(spec))
     return problems
 
 
@@ -332,8 +394,8 @@ def check_launch(
     """Launch gates against the campaign spec and the already-authorised launch payloads."""
     problems: list[tuple[str, str]] = []
     axes = {str(a.get("key") or ""): dict(a) for a in (spec.get("axes") or [])}
-    cluster = dict(spec.get("cluster") or {})
-    budget = dict(spec.get("budget") or {})
+    cluster = _block(spec, "cluster")
+    budget = _block(spec, "budget")
     prior = list(ledger_entries_payloads or [])
 
     for key, value in (launch_spec.get("delta") or {}).items():

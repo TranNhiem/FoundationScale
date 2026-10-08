@@ -9,6 +9,8 @@ Read this first. It tells an agent which skills exist, how to chain them, and wh
 | `data_engine` | `raw_data_ref` | `data_pipeline_spec`, `dataset`, `readiness_report` | `foundationskills/skills/data_engine/SKILL.md` |
 | `training.planner` | `goal_spec` (+ `readiness_report`) | `training_plan` | `foundationskills/skills/training/SKILL.md` |
 | `training.emit` | `training_plan`, `dataset` | `fs_launch_spec` (+ sbatch) | `foundationskills/skills/training/SKILL.md` |
+| `evaluation` | `checkpoint` (or an FS `run_manifest.json`) | `eval_report` | `foundationskills/skills/evaluation/SKILL.md` |
+| `auto_research` | an approved campaign spec (request) | `auto_research_report` (+ hash-chained ledger) | `foundationskills/skills/auto_research/SKILL.md` |
 
 To find a chain from what you have to what you want, use `SkillRegistry.plan_chain(have, want)`. For example, `{raw_data_ref, goal_spec}` to `fs_launch_spec` gives `data_engine → training.planner → training.emit`.
 

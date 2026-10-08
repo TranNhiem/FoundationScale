@@ -2,6 +2,8 @@
 """Tests for emit_train: flag mapping, capability gating, launch shape."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from foundationskills.interfaces.fs.capabilities import FSCapabilities
@@ -175,13 +177,34 @@ def test_torchrun_when_world_gt_1_else_python(tmp_path):
     caps = make_caps()
     stage = base_stage()
     multi = call(stage, caps, dataset(tmp_path=tmp_path), tmp_path, gpus=4)
-    assert multi["argv"][0] == "torchrun"
+    assert Path(multi["argv"][0]).name == "torchrun"
     assert flag_value(multi["argv"], "--nproc-per-node") == "4"
     # one node: standalone rendezvous (a direct launch never expands $MASTER_ADDR)
     assert "--standalone" in multi["argv"] and "--rdzv-endpoint" not in multi["argv"]
     assert "-m" in multi["argv"] and "foundationscale.train.cli" in multi["argv"]
     single = call(stage, caps, dataset(tmp_path=tmp_path), tmp_path, gpus=1)
-    assert single["argv"][:3] == ["python", "-m", "foundationscale.train.cli"]
+    assert Path(single["argv"][0]).name == "python"
+    assert single["argv"][1:3] == ["-m", "foundationscale.train.cli"]
+
+
+def test_launcher_is_pinned_to_the_probing_interpreter(tmp_path, monkeypatch):
+    """A bare launcher resolved through the node's PATH (~/.local/bin/torchrun, no pandas -> rc=96)."""
+    import sys as _sys
+
+    bindir = tmp_path / "env" / "bin"
+    bindir.mkdir(parents=True)
+    for name in ("python", "torchrun"):
+        (bindir / name).write_text("#!/bin/sh\n")
+    monkeypatch.setattr(_sys, "executable", str(bindir / "python"))
+    caps, stage = make_caps(), base_stage()
+    single = call(stage, caps, dataset(tmp_path=tmp_path), tmp_path, gpus=1)
+    multi = call(stage, caps, dataset(tmp_path=tmp_path), tmp_path, gpus=4)
+    assert single["argv"][0] == str(bindir / "python")
+    assert multi["argv"][0] == str(bindir / "torchrun")
+    assert f"torchrun pinned to {bindir / 'torchrun'}" in multi["notes"]
+    (bindir / "torchrun").unlink()
+    bare = call(stage, caps, dataset(tmp_path=tmp_path), tmp_path, gpus=4)
+    assert bare["argv"][0] == "torchrun" and any(n.startswith("torchrun left to PATH") for n in bare["notes"])
 
 
 def test_lora_registered_family_no_targets(tmp_path):

@@ -157,6 +157,29 @@ propagates its children's coverage rather than minting a pass they never produce
 [-> docs/ARCHITECTURE.md; the full L0–L6 design is
 docs/deliverables/B1_architecture.md]
 
+### FoundationSkills — the agent layer on top
+
+`FoundationSkills/` is a separate package (`pip install -e FoundationSkills`, CLI `fskills`). With it, an
+agent such as Claude Code turns a goal into a full experiment, never launching without the user's confirmed hash:
+
+```
+Foundation Agent   reads FoundationSkills/SKILLS.md, calls skills
+FoundationSkills   decides WHAT  data_engine -> training.planner -> training.emit -> evaluation; auto_research
+FoundationScale    executes HOW  foundationscale-train (SFT/CPT), RLTrainer, gates, run manifests
+```
+
+| Skill | Turns | into |
+|---|---|---|
+| `data_engine` | raw JSONL/HF/doc sources | an FS-ready dataset + readiness report (dedup, quality, decontam, chat-template render) |
+| `training.planner` | a goal | stages, algorithm, method, memory/time estimate, feasibility |
+| `training.emit` | a plan + dataset | a hash-confirmed `fs_launch_spec` + sbatch |
+| `evaluation` | a checkpoint / run manifest | an eval report vs the base, regression-banded |
+| `auto_research` | an approved campaign | seed-paired, multi-objective accept/reject decisions on a hash-chained ledger |
+
+The skills never train; they measure what the installed FoundationScale can run (`fskills probe`) and report
+PASS/RED/UNMEASURED/REFUSED with the same 0/5/95/96 exit codes. All five were verified end to end on real
+workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.md, FoundationSkills/SKILLS.md]
+
 ## 6. Supported hardware and platforms
 
 * **The gate plane** targets Python 3.10, 3.11 and 3.12 (the CI matrix) and is
@@ -523,14 +546,14 @@ itself, from the Makefile's own accounting:
 
 ## 23. Project structure
 
-`src/` = 60797 LOC across 77 files. `launchers/` contains 10231 shell LOC plus 1615 Python
+`src/` = 61454 LOC across 79 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 34169 Python LOC and 6706 shell LOC on top of the
-package. `tools/` contains 10183 Python LOC. 320185 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 10183 Python LOC. 323314 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (87742 .py LOC); conftest carries the skip guard
+tests/                 the test suite (88265 .py LOC); conftest carries the skip guard
 tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
                        real_checkpoint_probe, preflight/, mutate, census)
 checks/                standalone repository gates: countables drift, packaging
@@ -542,6 +565,7 @@ validation_campaigns/  evidence campaigns, not framework code — read as lab no
                        its own tests, and the published h100/ deliverables
 docs/                  DECISIONS.md, deliverables/ (A1–D), SELF_AUDIT.md
 examples/              see §22
+FoundationSkills/      the agent layer (data_engine, training, evaluation, auto_research) -- see §5
 .github/workflows/     CI: check / controls / launchers / mutation shards
 ```
 

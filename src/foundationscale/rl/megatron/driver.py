@@ -763,6 +763,33 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--heldout", default="", help="--online greedy held-out corpus")
     ap.add_argument("--heldout-n", type=int, default=0, help="first N held-out rows; 0 = all")
     ap.add_argument("--heldout-max-new", type=int, default=0, help="0 = --max-new-tokens")
+    ap.add_argument(
+        "--save-dir",
+        default="",
+        help="--online: write an HF safetensors checkpoint + run manifest per save, "
+        "then run the save gates on it; empty = no checkpoint",
+    )
+    ap.add_argument(
+        "--save-every", type=int, default=0, help="--online: also save every N steps; 0 = final"
+    )
+    ap.add_argument(
+        "--train-state-dir",
+        default="",
+        help="--online: resumable state (Megatron shards + optimizer + step); a run whose "
+        "dir holds a complete state resumes from it; empty = not resumable",
+    )
+    ap.add_argument(
+        "--train-state-every",
+        type=int,
+        default=0,
+        help="--online: write resumable state every N steps (and at the end); 0 = end only",
+    )
+    ap.add_argument(
+        "--heldout-loose-pattern",
+        default=None,
+        help="--online held-out: second, wider answer regex (one group = the letter) "
+        "scored beside the strict one; absent = strict only",
+    )
     ap.add_argument("--metrics-out", required=True)
     ap.add_argument("--parity-only", action="store_true")
     ap.add_argument("--parity-rows", type=int, default=8)
@@ -803,6 +830,12 @@ def _run_online(
     from foundationscale.rl.megatron import online
     from foundationscale.rl.megatron.normalization import compute_denominators
     from foundationscale.rl.megatron.pp_step import loss_unit
+    from foundationscale.rl.megatron.resume import (
+        resume_if_present,
+        save_training_state,
+        state_save_due,
+    )
+    from foundationscale.rl.megatron.save import lane_topology, run_lane_save
     from foundationscale.rl.registry import lookup_algorithm
     from foundationscale.rl.rewards import MCQLetterReward
     from foundationscale.rl.torch_backend import TensorPolicyLoss
@@ -825,6 +858,11 @@ def _run_online(
         else ()
     )
     reward = MCQLetterReward(answer_pattern=args.answer_pattern)
+    loose_reward = (
+        MCQLetterReward(answer_pattern=args.heldout_loose_pattern)
+        if args.heldout_loose_pattern
+        else None
+    )
     dp_group = trainer.pg.dp
     dp_size, dp_rank = dp_group.size(), dp_group.rank()
     writer = not dist.is_initialized() or dist.get_rank() == 0
@@ -847,11 +885,18 @@ def _run_online(
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     heldout_max_new = args.heldout_max_new or args.max_new_tokens
 
+    # The names the most recent refit wrote: a save's declared tensor set.
+    exported: set[str] = set()
+    saves_done = 0
+
     def _refit() -> tuple[dict[str, int], float]:
         t0 = time.perf_counter()
         if args.offload_rollout_model and hf_model is not None:
             hf_model.to(device)
-        stats = online.refit_hf_policy(trainer.bridge, trainer.model, hf_model, is_writer=writer)
+        exported.clear()
+        stats = online.refit_hf_policy(
+            trainer.bridge, trainer.model, hf_model, is_writer=writer, written_out=exported
+        )
         return stats, time.perf_counter() - t0
 
     with contextlib.ExitStack() as stack:
@@ -867,18 +912,75 @@ def _run_online(
                 max_new_tokens=heldout_max_new,
                 reward=reward,
                 device=device,
+                loose_reward=loose_reward,
             )
             fh.write(json.dumps({"heldout": tag, **result}) + "\n")
             fh.flush()
             print(f"HELDOUT_{tag.upper()} {json.dumps(result)}", flush=True)
 
-        # Refit before the PRE eval too: it proves the export path round-trips the
-        # unchanged weights before any training depends on it.
+        defaults_parser = build_arg_parser()
+
+        def _save(tag: str, step: int, unwritten: int) -> None:
+            # Called on EVERY rank right after a refit, so the writer's HF copy IS
+            # the current policy. Only the writer writes and adjudicates; the verdict
+            # is then broadcast, so a refusal stops every rank together instead of
+            # leaving the peers blocked in the next collective while rank 0 unwinds.
+            nonlocal saves_done
+            if not args.save_dir:
+                return
+            world = dist.get_world_size() if dist.is_initialized() else 1
+            cfg = trainer.cfg
+            first, saves_done = saves_done == 0, saves_done + 1
+            run_lane_save(
+                hf_model,
+                tokenizer,
+                Path(args.save_dir) / tag,
+                metrics=fh,
+                tag=tag,
+                step=step,
+                first=first,
+                unwritten=unwritten,
+                declared_names=exported,
+                run_id=metrics_path.stem,
+                topology=lane_topology(
+                    world=world,
+                    local_world=int(os.environ.get("LOCAL_WORLD_SIZE", str(world))),
+                    tp=cfg.tp,
+                    pp=cfg.pp,
+                    cp=cfg.cp,
+                    ep=cfg.ep,
+                ),
+                config=vars(args),
+                defaults={k: defaults_parser.get_default(k) for k in vars(args)},
+            )
+
+        # Resume AFTER the reference snapshot above: the frozen reference must stay the
+        # initial policy, and the build loaded exactly that before any state is restored.
+        start_step, latest = resume_if_present(
+            args.train_state_dir, trainer.model, trainer.optimizer, trainer.pg
+        )
+        if latest is not None and writer:
+            print(
+                f"RESUMED from {latest} at step {start_step} "
+                f"param_hash={param_hash(trainer.model)}",
+                flush=True,
+            )
+
+        def _save_state(step: int) -> None:
+            if args.train_state_dir:
+                save_training_state(
+                    args.train_state_dir, trainer.model, trainer.optimizer, trainer.pg, step=step
+                )
+
         stats, refit_s = _refit()
-        _heldout("pre")
-        for step in range(args.steps):
-            if step:
+        if start_step == 0:
+            # A resumed run is mid-training; a "pre" eval of it would be mislabelled.
+            _heldout("pre")
+        for step in range(start_step, args.steps):
+            if step > start_step:
                 stats, refit_s = _refit()
+                if args.save_every and step % args.save_every == 0:
+                    _save(f"step_{step:06d}", step, stats["unwritten"])
             t0 = time.perf_counter()
             rows: list[Any] | None = None
             if writer:
@@ -966,7 +1068,12 @@ def _run_online(
             if fh is not None:
                 fh.write(json.dumps(record) + "\n")
                 fh.flush()
-        _refit()
+            if state_save_due(step, args.train_state_every, args.steps):
+                _save_state(step)
+        if start_step < args.steps:
+            _save_state(args.steps - 1)
+        stats, _ = _refit()
+        _save("final", args.steps, stats["unwritten"])
         _heldout("post")
     return 0
 

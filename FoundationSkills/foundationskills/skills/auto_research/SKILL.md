@@ -239,6 +239,23 @@ Once `campaign_closed` is on the ledger every action except `check` and `close` 
   `drop > max(guard_abs_epsilon, k * sqrt(se_r^2 + se_c^2))` and forces `rejected_regress`.
 - `confirm.guardrail_directions: {name: "max"|"min"}` overrides the sign per guard metric.
 
+## Multi-objective campaigns (M5a)
+- `spec.objectives`: 2-4 `{metric, direction}` entries; `objectives[0]` must equal `objective` (metric and
+  direction), metrics are distinct, inside `eval_policy.metrics`, and never a guardrail (AR-IN-009). A spec
+  without `objectives` takes the single-objective path byte-identically.
+- `accept.decide_multi`: one common seed set J (seeds where baseline and candidate both measure EVERY
+  objective; `|J| < confirm_repeats` -> unmeasured `n_pairs_below_confirm:<n>/<m>`), and per objective the M4
+  tau formula over J only. Each objective classes as win (`delta > tau`), loss (`delta < -tau`), tie, or
+  unmeasured (mean_delta `None`, never 0).
+- Verdicts, in order: any unmeasured -> `unmeasured`; guardrail breach -> `rejected_regress`; >= 1 win and no
+  loss -> `accepted_gain`; win + loss -> `tradeoff`; loss only -> `rejected_regress`; all tie and simpler ->
+  `accepted_flat`; else `no_gain`.
+- A `tradeoff` is never claimable (AR-RS-008 `claim_refused_not_dominating:<trial>`) and never promoted. A close
+  whose only non-baseline outcome is a trade-off is `no_gain` (RED, AR-HO-001) plus AR-HO-008 INFO naming the
+  trade-offs. The report then carries `objectives`, `tradeoffs` and
+  `frontier {entries, excluded, order: "presentation_only"}`. The frontier is a non-dominated listing for
+  humans; it never feeds accept or claim.
+
 ## Validation rules
 
 Outcome semantics (shared with `core/contract.py`): an **input** BLOCK refuses before any work - status
@@ -257,6 +274,7 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-IN-006 | input | BLOCK | result payload malformed, or a crash record carries metric values |
 | AR-IN-007 | input | BLOCK | seed plan invalid (seed_list empty/duplicate/non-int, repeats < 1, confirm_repeats beyond the seed list, or `cluster.max_in_flight` invalid/above `budget.max_runs`) |
 | AR-IN-008 | input | BLOCK | proposer config invalid (name outside `catalog`/`optuna`/`optuna-cma`, `min_rows` < 1, `require_model` not a bool, `seed` not an int, unknown keys) |
+| AR-IN-009 | input | BLOCK | spec.objectives invalid (not 2-4 `{metric, direction}` entries, objectives[0] != objective, a duplicate metric, a metric outside eval_policy.metrics, or a guardrail used as an objective) |
 | AR-AP-001 | input | BLOCK | campaign_confirm missing/wrong hash, ledger approved a different hash, or no approver to open the envelope |
 | AR-LN-001 | input | BLOCK | delta outside spec.axes, nodes/gpus/partition outside spec.cluster, or a `base`/`model` override |
 | AR-LN-002 | input | BLOCK | budget.max_runs reached, gpu-hour budget exceeded, or a non-confirm run dips into the reserve |
@@ -270,6 +288,7 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-LG-001 | input | BLOCK | recording would overwrite a (trial, seed) result; results are immutable |
 | AR-LG-002 | input | BLOCK | a mutating action after `campaign_closed` (close is final: only `check`/`close` stay open) |
 | AR-RS-007 | input | BLOCK | claim over an incomplete/unmeasured confirm set (missing, pending, crashed, limited or unpaired seed) or of a decision that is not `accepted_gain` |
+| AR-RS-008 | input | BLOCK | multi-objective claim of a candidate whose decision is not `accepted_gain` (a trade-off or worse never claims: `claim_refused_not_dominating:<trial>`) |
 | AR-PR-001 | input | BLOCK | `proposer.require_model` set and the model proposer is unavailable (below `min_rows`, extra missing, no axes, model error, no in-axes cards) or its replay is not byte-identical |
 | AR-PR-002 | input | BLOCK | the optuna-cma proposer cannot hold a categorical axis (refused, never dropped) |
 | AR-HO-001 | handoff | BLOCK | campaign closed with no accepted gain |
@@ -279,6 +298,7 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-HO-005 | handoff | INFO | accepted a flat-but-simpler change |
 | AR-HO-006 | handoff | WARN | a noise-floor baseline repeat shipped as a non-eval_only job, or (when the ledger has any `launch_envelope`) its `job_submitted` provenance is unknown (`baseline_provenance_unknown:<trial>`) (decision 3: the floor is eval-only repeats) - status UNMEASURED |
 | AR-HO-007 | handoff | BLOCK | a recorded proposal does not replay byte-identically at close (search provenance drifted) |
+| AR-HO-008 | handoff | INFO | a multi-objective close found only trade-offs (no dominating candidate); they are listed, never claimed, and the outcome stays `no_gain` |
 
 Close outcomes: improved (accepted gain) / flat_simplified / no_gain / regressed / unmeasured, decided in
 that order after the ledger check: ledger broken -> RED (AR-HO-003); unmeasured evidence that could change
@@ -361,8 +381,9 @@ gain/flat -> RED (AR-HO-001).
 - **M4 (done)**: `optuna-cma` + AR-PR-002 (categorical axes refused at check time), the ledgered replay record
   (`replay_inputs`, `package_version`, `replay_status`) on every `proposal`, and the close-time re-check
   (`proposers.reverify`) + AR-HO-007 drift escalation.
-- **M5 (pending)**: multi-objective, LLM proposer (needs its own provenance design); Ray Tune / Vizier stay
-  reference-only.
+- **M5a (done)**: multi-objective campaigns (`spec.objectives`, AR-IN-009), `decide_multi` over one common
+  seed set, AR-RS-008 (trade-offs never claim), AR-HO-008 and the presentation-only frontier.
+- **M5b (pending)**: LLM proposer (design in M5_DESIGN.md part B); Ray Tune / Vizier stay reference-only.
 
 ## Worked examples
 1. Validate a campaign before signing anything:

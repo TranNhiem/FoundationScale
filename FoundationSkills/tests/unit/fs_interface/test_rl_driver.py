@@ -164,3 +164,39 @@ def test_dry_run_fake_refusal(tmp_path, monkeypatch):
     _install_fake(monkeypatch)
     cfg = write_config(tmp_path, algorithm="fake-refuse", output_dir=str(tmp_path / "out"))
     assert rl_driver.main(["--config", str(cfg), "--dry-run"]) == 96
+
+
+def test_save_final_uses_the_native_save_dir(tmp_path, monkeypatch):
+    """Found on the 556-step E4B run: save_dir was never passed, so FS saved nothing (95)."""
+    module = types.ModuleType("foundationscale.rl.trainer")
+
+    @dataclasses.dataclass
+    class RLTrainConfig:
+        model: str = ""
+        dataset: str = ""
+        algorithm: str = "dr_grpo"
+        max_steps: int = 1
+        save_dir: str | None = None
+
+    class RLTrainer:
+        def __init__(self, config):
+            self.config = config
+
+        def _resolve_objective(self):
+            return object()
+
+        def run(self):
+            final = Path(self.config.save_dir) / "final"
+            final.mkdir(parents=True)
+            (final / "model.safetensors").write_text("fake", encoding="utf-8")
+            return [_FakeStepReport(0)]
+
+    module.RLTrainConfig, module.RLTrainer, module.TrainerRefusal = RLTrainConfig, RLTrainer, _FakeTrainerRefusal
+    for name in ("foundationscale", "foundationscale.rl"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, "foundationscale.rl.trainer", module)
+    out = tmp_path / "out"
+    cfg = write_config(tmp_path, max_steps=1, output_dir=str(out), save_final=True)
+    assert rl_driver.main(["--config", str(cfg)]) == 0
+    manifest = json.loads((out / "fskills_rl_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["checkpoint"] == f"saved: {out / 'final'}"

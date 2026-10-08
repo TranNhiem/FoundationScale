@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import math
 import re
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -186,6 +187,49 @@ def _dataset_path(dataset: dict[str, Any], notes: list[str]) -> str | None:
     first = str(Path(shards[0]["path"]).parent)
     notes.append(f"dataset shards span {len(parents)} directories; passing the first shard instead of a directory")
     return str(Path(shards[0]["path"]))
+
+
+def _pinned_launcher(launcher: str, notes: list[str]) -> str:
+    """Pin a bare ``python``/``torchrun`` to the interpreter that probed FS (and its sibling torchrun).
+
+    MEASURED (2026-10-07, r04dgx03): the bare launcher resolved through the node's PATH, where
+    ``~/.local/bin/torchrun`` (user-site python3.12, no pandas) shadowed the env's own, and FS
+    refused every rank (rc=96). The basename stays ``python``/``torchrun`` so the sbatch launcher
+    check still matches; when no such sibling exists the bare name is kept and the note says so."""
+    here = Path(sys.executable)
+    candidate = here if launcher == "python" and here.name == "python" else here.with_name(launcher)
+    if candidate.is_file():
+        notes.append(f"{launcher} pinned to {candidate}")
+        return str(candidate)
+    notes.append(f"{launcher} left to PATH: no {launcher!r} next to {here}")
+    return launcher
+
+
+def _code_path_env(notes: list[str]) -> dict[str, str]:
+    """PYTHONPATH for packages this process imports from a source tree rather than site-packages.
+
+    MEASURED (2026-10-07, r04dgx03): the rendered sbatch ran ``python -m ...rl_driver`` and died
+    with ``No module named 'foundationskills'`` -- neither package is installed in the env, and the
+    script only worked when the submitting shell happened to export PYTHONPATH. The job now
+    carries the roots of the very code that emitted it; installed packages add nothing."""
+    import importlib.util
+
+    roots: list[str] = []
+    for name in ("foundationskills", "foundationscale"):
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ImportError, ValueError):
+            spec = None
+        origin = getattr(spec, "origin", None) if spec is not None else None
+        if not origin or "site-packages" in origin or "dist-packages" in origin:
+            continue
+        root = str(Path(origin).resolve().parent.parent)
+        if root not in roots:
+            roots.append(root)
+    if roots:
+        notes.append("PYTHONPATH carries the emitting source tree(s): " + ", ".join(roots))
+        return {"PYTHONPATH": ":".join(roots)}
+    return {}
 
 
 def emit_train(
@@ -363,6 +407,7 @@ def emit_train(
     # peak FS needs to report MFU instead of UNMEASURED.
     for key, value in dict(_hw(hardware, "env", {}) or {}).items():
         env[str(key)] = str(value)
+    env.update(_code_path_env(notes))
     peak = _hw(hardware, "bf16_dense_tflops")
     if peak:
         env["FS_DEVICE_PEAK_TFLOPS"] = str(peak)
@@ -398,6 +443,7 @@ def emit_train(
         ]
     else:
         argv = ["python", *inner]
+    argv = [_pinned_launcher(argv[0], notes), *argv[1:]]
 
     dry_run_argv: list[str] | None
     if "--dry-run" in caps.train_flags:

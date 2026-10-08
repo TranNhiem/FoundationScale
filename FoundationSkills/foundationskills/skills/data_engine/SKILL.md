@@ -53,8 +53,11 @@ Request object (validated against the skill input schema):
   | image_text` (a `raw_data_ref` payload).
 - `target_format` (required): `pretrain | cpt | sft | mm_sft | preference | rl`.
 - Optional: `goal`, `algorithm`, `tokenizer`, `chat_template_family`, `domain`,
-  `benchmarks` (triggers decontam), `pipeline` (explicit spec; overrides the
-  recommendation), `requirements` (readiness overrides), `out_dir`.
+  `benchmarks` (triggers decontam; names follow eval_policy.yaml, e.g. `arc_easy`),
+  `benchmark_sources` (`{name: local file}`) or `allow_benchmark_download: true`
+  (builtin HF registry, served from the HF cache when offline) -- without either,
+  every declared benchmark is UNMEASURED (DE-RDY-005), `pipeline` (explicit spec;
+  overrides the recommendation), `requirements` (readiness overrides), `out_dir`.
 
 ## Outputs
 Three artifacts written to `<workdir>/artifacts/`:
@@ -173,9 +176,14 @@ readiness_report artifact `checks` for per-rule details.)
      "benchmarks": ["gsm8k"]
    }
    ```
-   Output records carry the gold answer under `fs_columns.gold_key="answer"`;
-   the emit skill turns this into an `fskills-rl` config for the runnable
-   dr_grpo/gspo/dapo family.
+   MEASURED 2026-10-07: FS's RL reward verifies a single MCQ letter only, so
+   every free-form gsm8k row is dropped (`rl_answer_not_mcq_letter`, 7,473/7,473)
+   and the run is RED. Use an MCQ source instead -- e.g. `allenai/ai2_arc`
+   with `options: {config: ARC-Challenge, split: train}` gave 1,111 records
+   (7 decontaminated against arc_challenge/arc_easy). Output records carry the
+   gold letter under `fs_columns.gold_key="answer"`; the emit skill turns this
+   into an `fskills-rl` config for the runnable dr_grpo/gspo/dapo family.
+   `options.config` (alias of datasets' `name`) selects a multi-config dataset.
 
 ## LLM-based ops
 Model-based processing for what heuristics cannot see (semantics, grounding,

@@ -40,6 +40,8 @@ Deliberate choices where the spec is silent:
 """
 from __future__ import annotations
 
+import re
+
 from typing import Callable, Any, Iterable, Iterator
 
 from foundationskills.skills.data_engine.ops.base import FunctionOp, OpStats, counted, register_op
@@ -194,6 +196,38 @@ def render_with_reasoning(messages: list[dict[str, Any]], *, family: str | None,
         if m.get("role") == "assistant" and m.get("reasoning_content"):
             m["content"] = f"<think>\n{m.pop('reasoning_content')}\n</think>\n\n{m['content']}"
     return render_chat(inline, family=family, tokenizer=None), "inline_fallback"
+
+
+_INLINE_THOUGHT = re.compile(r"^\s*<\|channel>thought\n?(.*?)\n?<channel\|>\s*", re.DOTALL)
+
+
+def lift_inline_thought(messages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    """Move a Gemma-4 thought block written INSIDE assistant content into ``reasoning_content``.
+
+    MEASURED (2026-10-07, SFT-Taiwan-AIEC formatted-gemma4-v3, 19,731 rows): every assistant
+    turn opens with ``<|channel>thought\n...<channel|>`` (empty for the no-think rows). The E4B
+    template strips that span from content, so the training render silently lost every trace
+    and DE-RDY-011 could not find the answer in it (19,699/19,699 unmeasured). A non-empty
+    trace becomes ``reasoning_content`` (rendered by render_with_reasoning, or dropped as
+    reasoning_lost_in_template); an empty block is removed, matching a thinking-off prompt.
+    Returns (messages, status) with status in {"none", "lifted", "empty_stripped"}."""
+    status = "none"
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        content = m.get("content")
+        match = _INLINE_THOUGHT.match(content) if m.get("role") == "assistant" and isinstance(content, str) else None
+        if match is None or m.get("reasoning_content"):
+            out.append(m)
+            continue
+        trace = match.group(1).strip()
+        lifted = {**m, "content": content[match.end():]}
+        if trace:
+            lifted["reasoning_content"] = trace
+            status = "lifted"
+        elif status == "none":
+            status = "empty_stripped"
+        out.append(lifted)
+    return out, status
 
 
 def align_with_generation_prompt(messages: list[dict[str, Any]], text: str, tokenizer: Any) -> tuple[str, str]:
@@ -359,6 +393,9 @@ def _convert(
             return None
         if system_prompt and not (messages and messages[0]["role"] == "system"):
             messages = [{"role": "system", "content": system_prompt}, *messages]
+        messages, inline_thought = lift_inline_thought(messages)
+        if inline_thought != "none":
+            meta["inline_thought"] = inline_thought
         text, source, error = _render_internal(messages, family=family, tokenizer=tokenizer)
         mode = "none"
         if any(m.get("reasoning_content") for m in messages):
@@ -504,6 +541,10 @@ def _format_records(records: Iterable[dict], cfg: dict, stats: OpStats) -> Itera
         if parity:
             counts = stats.extra.setdefault("generation_prompt_parity", {})
             counts[parity] = counts.get(parity, 0) + 1
+        inline = (out.get("meta") or {}).get("inline_thought") if isinstance(out, dict) else None
+        if inline:
+            lifted_counts = stats.extra.setdefault("inline_thought", {})
+            lifted_counts[inline] = lifted_counts.get(inline, 0) + 1
         mode = (out.get("meta") or {}).get("reasoning_render") if isinstance(out, dict) else None
         if mode and mode != "none":
             modes = stats.extra.setdefault("reasoning_render", {})
