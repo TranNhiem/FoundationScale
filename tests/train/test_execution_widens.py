@@ -376,7 +376,7 @@ def test_the_gate_sits_between_training_arguments_and_trainer_in_source() -> Non
     src = inspect.getsource(loop._train)
     args_line = src.index("args = _TrainingArguments(")
     gate = src.index("if _execution_widens_beyond_declaration(")
-    trainer = src.index("trainer = Trainer(")
+    trainer = src.index("trainer = _FsdpPeftSaveTrainer(")  # still Trainer under the hood
     assert args_line < gate, (
         "the gate runs before _TrainingArguments resolves n_gpu/parallel_mode, so it "
         "can never measure anything and is inert on every host (#492)"
