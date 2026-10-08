@@ -85,7 +85,7 @@ def test_echo_and_exit_codes() -> None:
 def test_timeout_kills_the_whole_process_group_including_children() -> None:
     async def body() -> None:
         env = LocalSubprocessBackend().create(
-            _spec(exec_timeout_s=1.0, episode_timeout_s=5.0), instance_id="pgkill"
+            _spec(exec_timeout_s=0.3, episode_timeout_s=5.0), instance_id="pgkill"
         )
         try:
             await env.start()
@@ -227,7 +227,7 @@ def test_timeout_path_applies_the_same_byte_cap_and_reports_real_truncated_bytes
     # process group kill still fires.
     async def body() -> None:
         env = LocalEnvironment(
-            _spec(exec_timeout_s=1.0, episode_timeout_s=5.0, max_output_bytes=100),
+            _spec(exec_timeout_s=0.3, episode_timeout_s=5.0, max_output_bytes=100),
             instance_id="tmocap",
         )
         try:
@@ -723,8 +723,20 @@ def test_sanitise_prefix_fallback_for_unusable_instance_id() -> None:
 
 
 def test_environment_protocol_instances_satisfy_runtime_checkable() -> None:
-    env = LocalEnvironment(_spec(), instance_id="proto")
-    assert isinstance(env, Environment)
+    # Python < 3.12 evaluates properties during isinstance() against a
+    # runtime_checkable Protocol (3.12+ inspects them statically), and
+    # ``workdir`` deliberately refuses before start(). Check a STARTED
+    # environment so the assertion means the same thing on every supported
+    # interpreter (CI caught this on 3.10/3.11).
+    async def scenario() -> None:
+        env = LocalEnvironment(_spec(), instance_id="proto")
+        await env.start()
+        try:
+            assert isinstance(env, Environment)
+        finally:
+            await env.close()
+
+    asyncio.run(scenario())
     assert isinstance(LocalSubprocessBackend(), EnvBackend)
 
 

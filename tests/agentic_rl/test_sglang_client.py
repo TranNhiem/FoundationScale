@@ -143,7 +143,7 @@ class _Handler(BaseHTTPRequestHandler):
 @pytest.fixture
 def server() -> Generator[_Server, None, None]:
     srv = _Server(("127.0.0.1", 0), _Handler)
-    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         yield srv

@@ -117,7 +117,7 @@ FAKE_SERVER_SOURCE = textwrap.dedent(
 
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    server.serve_forever()
+    server.serve_forever(poll_interval=0.01)
     """
 )
 

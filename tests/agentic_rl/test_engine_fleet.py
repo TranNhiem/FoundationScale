@@ -193,7 +193,7 @@ def test_server_never_healthy_times_out(tmp_path: Path, fake_module: str) -> Non
         fake_module,
         port=_free_port(),
         extra_args=("--never-healthy",),
-        startup_timeout_s=2.0,
+        startup_timeout_s=0.3,
         health_poll_interval_s=0.05,
     )
     server = SGLangServer(spec)
@@ -494,7 +494,7 @@ def test_engine_server_never_healthy_times_out(tmp_path: Path, fake_module: str)
         port=int(command[command.index("--port") + 1]),
         log_dir=str(tmp_path),
         env={"PYTHONPATH": str(tmp_path)},
-        startup_timeout_s=2.0,
+        startup_timeout_s=0.3,
         health_poll_interval_s=0.05,
     )
     server = EngineServer(spec)
