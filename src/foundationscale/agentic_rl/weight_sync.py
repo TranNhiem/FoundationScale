@@ -167,8 +167,10 @@ class DiskWeightSync:
         having been intentionally left out) -- see the module docstring.
         ``bytes_moved`` stays ``None`` (unmeasured: this transport never counts
         bytes), ``seconds`` is the measured wall time of the push, and ``is_stale``
-        is asserted ``False`` because this call is synchronous: the caller observes
-        the push complete before using its result, so staleness cannot have crept in
+        is always ``False`` here -- DERIVED from this call being a COMPLETE,
+        SYNCHRONOUS reload (the S0 schedule), never a separate measurement taken
+        on the fleet or the published checkpoint: the caller observes the push
+        complete before using its result, so staleness cannot have crept in
         between push and observation -- a claim specific to THIS synchronous
         realisation, never a general truth of the ``WeightSync`` contract (whose own
         docstring leaves staleness open, ``None``, for any realisation that cannot

@@ -34,7 +34,11 @@ version honours them before this client is pointed at a real engine):
 
 WHAT IS NOT CLAIMED: any retry, backoff or connection pooling -- one call is
 one socket, opened and closed by ``urllib``; and no behaviour for any
-SGLang endpoint this module does not name above.
+SGLang endpoint this module does not name above. A 3xx response is NEVER
+followed -- ``_request`` uses an opener with redirects refused (see
+``_NoRedirectHandler``), so a redirect surfaces as
+``EngineInfraError(kind="http_<code>")`` like any other non-2xx status, never
+as a silently-resent ``input_ids``/``model_path`` to a different host or scheme.
 """
 
 from __future__ import annotations
@@ -59,6 +63,33 @@ _FINISH_TYPES = ("stop", "length", "abort")
 
 def _described(value: object) -> str:
     return f"{type(value).__name__} {value!r}"
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuses every 3xx redirect: ``redirect_request`` returning ``None`` makes
+    ``HTTPRedirectHandler.http_error_302`` re-raise the ORIGINAL response as an
+    ``HTTPError`` (caught in ``_request`` exactly like any other non-2xx status)
+    instead of silently building and following a request to the redirect target.
+
+    Without this, a 3xx response could resend the full generate/weight-sync
+    request body (``input_ids``, or a ``model_path``) to a DIFFERENT host, or a
+    non-``http(s)`` scheme ``SGLangClient.__post_init__`` never agreed to -- the
+    caller declared ``base_url``, not whatever a ``Location`` header names.
+    """
+
+    def redirect_request(  # noqa: D102 - behaviour is the class docstring
+        self,
+        req: object,  # noqa: ARG002 -- HTTPRedirectHandler's signature, not ours
+        fp: object,  # noqa: ARG002
+        code: int,  # noqa: ARG002
+        msg: str,  # noqa: ARG002
+        headers: object,  # noqa: ARG002
+        newurl: str,  # noqa: ARG002
+    ) -> None:
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler)
 
 
 def _sampling_payload(sampling: SamplingParams) -> dict[str, float | int]:
@@ -86,7 +117,10 @@ def _request(
     decoded JSON response, raising :class:`EngineInfraError` for every way this can
     fail short of a well-formed 200 response: a transport failure (``kind="transport"``),
     a timeout (``kind="timeout"``), a non-2xx status (``kind="http_<code>"``) or a body
-    that is not valid JSON (``kind="bad_response"``).
+    that is not valid JSON (``kind="bad_response"``). A 3xx response is NEVER
+    followed (see :class:`_NoRedirectHandler`): it surfaces as ``kind="http_<code>"``
+    exactly like any other non-2xx status, never as a silently-resent request to
+    whatever host or scheme the ``Location`` header names.
     """
     data = None if body is None else json.dumps(body).encode("utf-8")
     request = urllib.request.Request(
@@ -96,7 +130,7 @@ def _request(
         method="POST" if data is not None else "GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+        with _NO_REDIRECT_OPENER.open(request, timeout=timeout_s) as response:
             status = response.status
             raw = response.read()
     except TimeoutError as exc:

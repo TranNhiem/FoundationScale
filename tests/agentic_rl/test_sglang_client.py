@@ -85,6 +85,12 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_redirect(self, status: int, location: str) -> None:
+        self.send_response(status)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's own naming
         if self.path == "/health":
             self._send_json(self.script.get("health_status", 200), {"status": "ok"})
@@ -106,6 +112,11 @@ class _Handler(BaseHTTPRequestHandler):
                 time.sleep(sleep_s)
             assert isinstance(self.server, _Server)
             self.server.last_generate_body = body
+            if "generate_redirect_to" in self.script:
+                self._send_redirect(
+                    self.script.get("generate_status", 307), self.script["generate_redirect_to"]
+                )
+                return
             if "generate_raw_body" in self.script:
                 self._send_raw(
                     self.script.get("generate_status", 200), self.script["generate_raw_body"]
@@ -458,6 +469,21 @@ def test_generate_slow_server_times_out(server: _Server) -> None:
     with pytest.raises(EngineInfraError) as excinfo:
         asyncio.run(client.generate((1,), _sampling()))
     assert excinfo.value.kind == "timeout"
+
+
+def test_generate_refuses_a_3xx_redirect_instead_of_following_it(server: _Server) -> None:
+    # Security regression: urllib follows 3xx redirects by default, which could
+    # resend input_ids to a different host (or a non-http scheme) the caller
+    # never declared. "http://127.0.0.1:1/evil" is unreachable (port 1 is a
+    # privileged port nothing here listens on) -- if the client ever followed
+    # it, this would raise kind="transport" (or time out), not kind="http_307";
+    # it must never even attempt to connect there.
+    _Handler.script["generate_status"] = 307
+    _Handler.script["generate_redirect_to"] = "http://127.0.0.1:1/evil"
+    client = _client(server)
+    with pytest.raises(EngineInfraError) as excinfo:
+        asyncio.run(client.generate((1,), _sampling()))
+    assert excinfo.value.kind == "http_307"
 
 
 # ---------------------------------------------------------------------------

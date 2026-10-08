@@ -191,6 +191,62 @@ def test_set_override_cannot_target_a_mapping_valued_field() -> None:
         build_config(_raw_config(), overrides)
 
 
+def test_set_override_refuses_engine_command_by_name() -> None:
+    # engine.command is a JSON array (the full argv), never settable as a
+    # single --set string; it used to be silently filtered into _section_
+    # overrides and then never read by any field resolver, dropped with no
+    # error at all.
+    overrides = parse_set_overrides(['engine.command=["python3"]'])
+    with pytest.raises(AgenticConfigRefusal, match="not settable via --set"):
+        build_config(_raw_config(), overrides)
+
+
+def test_set_override_refuses_an_unconsumed_key_typo_in_a_known_section() -> None:
+    # Regression: "--set policy.model_paht=/b" (typo'd field name) used to
+    # exit 0 with provenance["policy.model_path"] still "config" -- the
+    # override was silently dropped because no field resolver was ever asked
+    # about the dotted key "policy.model_paht".
+    overrides = parse_set_overrides(["policy.model_paht=/b"])
+    with pytest.raises(AgenticConfigRefusal, match=r"policy\.model_paht"):
+        build_config(_raw_config(), overrides)
+    assert build_config(_raw_config(), {}).policy.model_path == "Qwen/Qwen2.5-1.5B-Instruct"
+
+
+def test_set_override_refuses_an_unconsumed_key_for_an_unknown_section() -> None:
+    # Regression: "--set nosuch.section=1" used to exit 0 too -- no builder
+    # ever reads a "nosuch.*" dotted key, so it was silently dropped.
+    overrides = parse_set_overrides(["nosuch.section=1"])
+    with pytest.raises(AgenticConfigRefusal, match=r"nosuch\.section"):
+        build_config(_raw_config(), overrides)
+
+
+def test_set_override_refuses_multiple_unconsumed_keys_naming_both() -> None:
+    overrides = parse_set_overrides(["policy.model_paht=/b", "nosuch.section=1"])
+    with pytest.raises(AgenticConfigRefusal) as excinfo:
+        build_config(_raw_config(), overrides)
+    assert "policy.model_paht" in str(excinfo.value)
+    assert "nosuch.section" in str(excinfo.value)
+
+
+def test_engine_reload_mode_set_override_to_null_clears_it() -> None:
+    # Regression: "--set engine.reload_mode=null" used to take the raw CLI
+    # string "null" (never coerced to None the way every other optional field
+    # is), which then failed the "None or 'collective_rpc'" check below with
+    # a confusing "is str 'null'" message.
+    raw = _raw_config(
+        engine={
+            "kind": "sglang",
+            "command": ["python3", "-m", "sglang.launch_server"],
+            "port": 8001,
+            "reload_mode": "collective_rpc",
+        }
+    )
+    overrides = parse_set_overrides(["engine.reload_mode=null"])
+    config = build_config(raw, overrides)
+    assert config.engine.reload_mode is None
+    assert config.provenance["engine.reload_mode"] == "cli"
+
+
 # ---------------------------------------------------------------------------
 # refusals: unknown keys, missing required, wrong types
 # ---------------------------------------------------------------------------
@@ -317,8 +373,13 @@ def test_engine_rejects_an_unknown_weight_sync_mode() -> None:
 
 
 def test_engine_weight_sync_mode_cli_override() -> None:
+    raw = _raw_config()
+    # weight_sync_mode="restart" requires the command to declare the
+    # "{model_path}" placeholder (see test_engine_restart_mode_refuses_a_command_
+    # with_no_placeholder below) -- the base command has none.
+    raw["engine"]["command"] = [*raw["engine"]["command"], "--model", "{model_path}"]
     overrides = parse_set_overrides(["engine.weight_sync_mode=restart"])
-    config = build_config(_raw_config(), overrides)
+    config = build_config(raw, overrides)
     assert config.engine.weight_sync_mode == "restart"
     assert config.provenance["engine.weight_sync_mode"] == "cli"
 
@@ -334,8 +395,21 @@ def test_engine_restart_mode_needs_no_reload_mode() -> None:
     raw = _raw_config()
     del raw["engine"]["reload_mode"]
     raw["engine"]["weight_sync_mode"] = "restart"
+    raw["engine"]["command"] = [*raw["engine"]["command"], "--model", "{model_path}"]
     config = build_config(raw, {})
     assert config.engine.reload_mode is None
+
+
+def test_engine_restart_mode_refuses_a_command_with_no_placeholder() -> None:
+    # Regression: weight_sync.DiskWeightSync._restart_push only discovers a
+    # missing "{model_path}" placeholder at PUSH time, after a GPU is already
+    # resident; config.py now refuses the same declaration at config time,
+    # naming engine.command.
+    raw = _raw_config()
+    del raw["engine"]["reload_mode"]
+    raw["engine"]["weight_sync_mode"] = "restart"
+    with pytest.raises(AgenticConfigRefusal, match="engine.command"):
+        build_config(raw, {})
 
 
 def test_engine_sglang_needs_no_reload_mode() -> None:

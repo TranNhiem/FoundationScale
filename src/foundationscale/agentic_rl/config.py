@@ -15,6 +15,16 @@ such import at module scope; see its own module for where the lazy imports
 live), so building a declared, provenance-tracked config is possible, and
 required of ``--dry-run``, before touching a GPU.
 
+Every ``--set`` override is also required to land somewhere: after every
+section is built, :func:`build_config` refuses (naming the exact dotted
+key(s)) any override that no field resolver above ever read -- an unknown
+section, a field name typo'd within a known section, or a key this loader
+declares not ``--set``-able at all (``engine.env``/``env.env``'s mapping
+values, ``engine.command``'s full argv). Before this check existed, such an
+override was silently dropped: the run proceeded as if ``--set`` had never
+been given, with provenance still claiming the config file's (or default's)
+value.
+
 ``trainer{}`` is the one section this module does NOT hand-declare a field
 list for: its keys are READ from ``rl.trainer.RLTrainConfig``'s own
 dataclass fields (minus ``model``/``algorithm``/``rollout_source``/``dataset``,
@@ -61,6 +71,12 @@ __all__ = (
 Provenance = Literal["config", "cli", "default"]
 
 _DOC_KEY = "_doc"
+# Same literal as weight_sync.DiskWeightSync's own private constant (duplicated
+# rather than imported: this module declares zero dependency on weight_sync.py
+# or anything under engines/, keeping the "no torch, no transformers" claim
+# above free of extra import surface to audit). Only used to refuse, at config
+# time, a weight_sync_mode="restart" declaration whose command never names it.
+_MODEL_PATH_PLACEHOLDER = "{model_path}"
 # Owned elsewhere, or refused outright: model/algorithm come from the
 # `policy` section (one source of truth for what is trained and how);
 # rollout_source is always the internally-built RolloutHost -- never a value
@@ -208,6 +224,33 @@ def _refuse_unknown_keys(
     if unknown:
         dotted = ", ".join(f"{section}.{key}" for key in unknown)
         raise AgenticConfigRefusal(f"unknown key(s): {dotted}")
+
+
+def _refuse_unconsumed_overrides(
+    overrides: Mapping[str, str], provenance: Mapping[str, Provenance]
+) -> None:
+    """Refuse any ``--set`` override whose dotted key was never read while building
+    every section above.
+
+    A key that WAS read sets ``provenance[key] == "cli"`` -- either via
+    :func:`_resolve_scalar`, or one of this module's few hand-written cross-field
+    resolutions (``engine.kind``, ``engine.weight_sync_mode``, ``engine.reload_mode``,
+    ``harness.parser``) that set it the same way. Anything left in ``overrides``
+    with no matching ``"cli"`` entry named no real field this loader declares: an
+    unknown section (``nosuch.section=1``), a field name typo'd within a known
+    section (``policy.model_paht=...``), or a key explicitly refused earlier by its
+    own dedicated message (``engine.env``, ``env.env``, ``engine.command`` -- none
+    of which reaches this check, since each raises before ``build_config`` gets
+    here). Before this check existed, every one of these was silently dropped: the
+    run proceeded as if ``--set`` had never been given, with provenance still
+    claiming the config file's (or default's) value.
+    """
+    consumed = {key for key, source in provenance.items() if source == "cli"}
+    unconsumed = sorted(set(overrides) - consumed)
+    if unconsumed:
+        raise AgenticConfigRefusal(
+            f"--set: key(s) never read by any declared field: {', '.join(unconsumed)}"
+        )
 
 
 @dataclass(frozen=True)
@@ -512,6 +555,11 @@ def _build_engine(
         )
     kind: Literal["sglang", "vllm"] = kind_raw
 
+    if "engine.command" in local_overrides:
+        raise AgenticConfigRefusal(
+            "--set engine.command=...: the engine subprocess's full argv is a JSON "
+            "array, not settable via --set; edit the config file"
+        )
     if "command" not in section:
         raise AgenticConfigRefusal("engine.command: missing required key")
     command_raw = section["command"]
@@ -582,6 +630,18 @@ def _build_engine(
             f"'reload_endpoint' or 'restart'"
         )
     weight_sync_mode: Literal["reload_endpoint", "restart"] = weight_sync_mode_raw
+    if weight_sync_mode == "restart" and not any(
+        _MODEL_PATH_PLACEHOLDER in part for part in command
+    ):
+        raise AgenticConfigRefusal(
+            f"engine.command: is {_described(command)}, but engine.weight_sync_mode is "
+            f"'restart', which requires the command to declare the "
+            f"{_MODEL_PATH_PLACEHOLDER!r} placeholder at least once -- substituted with "
+            f"policy.model_path on the FIRST launch, and with each published checkpoint "
+            f"thereafter by weight_sync.DiskWeightSync -- or a config-time crash is "
+            f"deferred to a cluster launch that sends the literal placeholder to the "
+            f"engine as an argv entry"
+        )
     host = _resolve_scalar(
         dotted_key="engine.host",
         field_name="host",
@@ -624,7 +684,15 @@ def _build_engine(
     )
     reload_mode_raw = section.get("reload_mode")
     if "engine.reload_mode" in local_overrides:
-        reload_mode_raw = local_overrides["engine.reload_mode"]
+        # Routed through the SAME cli-scalar coercion every other optional field
+        # uses (via _resolve_scalar) rather than taking the raw string verbatim:
+        # without it, "--set engine.reload_mode=null" produced the literal str
+        # "null" here, which then failed the "None or 'collective_rpc'" check
+        # below -- the loader's own null -> None convention bypassed for this
+        # one hand-written field.
+        reload_mode_raw = _coerce_cli_scalar(
+            local_overrides["engine.reload_mode"], str | None, dotted_key="engine.reload_mode"
+        )
         provenance["engine.reload_mode"] = "cli"
     elif "reload_mode" in section:
         provenance["engine.reload_mode"] = "config"
@@ -1059,6 +1127,7 @@ def build_config(raw_config: Mapping[str, Any], overrides: Mapping[str, str]) ->
         required=True,
         provenance=provenance,
     )
+    _refuse_unconsumed_overrides(overrides, provenance)
     return AgenticRLConfig(
         policy=sections["policy"],
         trainer=sections["trainer"],

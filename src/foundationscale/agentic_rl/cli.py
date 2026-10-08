@@ -1,13 +1,19 @@
 """``foundationscale-agentic-rl``: build and run one agentic RL training run from
 a declared, provenance-tracked JSON config (see ``config.py``).
 
-Exit taxonomy is EXACTLY the four codes ``train/cli.py`` uses, imported from
-the same place (``train.loop``) rather than re-declared, so one grep finds
-every definition: ``EXIT_PASS`` (0, success), ``EXIT_RED`` (5, a crash --
-``train/cli.py``'s own words: "the answer train gives for 'crashed'"),
-``EXIT_UNMEASURED`` (95, ran but measured nothing -- the all([]) shape this
-whole plane refuses as a silent pass), ``EXIT_REFUSE`` (96, a declaration this
-plane will not honour, caught before or instead of running).
+Exit taxonomy is EXACTLY the four codes ``train/cli.py`` uses: ``EXIT_PASS``
+(0, success), ``EXIT_RED`` (5, a crash -- ``train/cli.py``'s own words: "the
+answer train gives for 'crashed'"), ``EXIT_UNMEASURED`` (95, ran but measured
+nothing -- the all([]) shape this whole plane refuses as a silent pass),
+``EXIT_REFUSE`` (96, a declaration this plane will not honour, caught before
+or instead of running). These four literals are RE-DECLARED below rather than
+imported from ``train.loop`` -- see that constant block's own comment for why
+(``train.loop`` imports torch/transformers at module scope, and importing
+from it here would defeat ``--dry-run``'s own "imports no torch" claim before
+a single line of ``main()`` ran); a drift test
+(``test_cli.py::test_exit_constants_match_train_loops_real_values``) pins
+these four values against ``train.loop``'s real ones, in a test process where
+that import cost is already paid, so the two sets cannot silently diverge.
 
 Two phases, two different levels of totality, mirroring ``train/cli.py``'s own
 split and for the same reason (see its docstring): command-line parsing and
@@ -81,6 +87,15 @@ EXIT_REFUSE = 96
 _REFUSE_MARKER = "[fs:agentic-rl:refuse]"
 _RED_MARKER = "[fs:agentic-rl:red]"
 _UNMEASURED_MARKER = "[fs:agentic-rl:unmeasured]"
+
+# Same literal as weight_sync.DiskWeightSync's own private constant (duplicated
+# rather than imported -- see config.py's identical constant and comment for
+# why). Used only to substitute policy.model_path into the FIRST launch of a
+# weight_sync_mode="restart" fleet; config.py's build_config already refuses,
+# at config time, a restart-mode config whose engine.command never names it.
+_MODEL_PATH_PLACEHOLDER = "{model_path}"
+
+_REDACTED = "<redacted>"
 
 
 @dataclass(frozen=True)
@@ -312,6 +327,61 @@ def _print_red(exc: Exception, *, where: str) -> None:
     )
 
 
+def _redact_env_values(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return ``config.as_json()``'s dict with every VALUE in ``engine.env`` and
+    ``env.env`` replaced by ``"<redacted>"`` -- keys, and every other field
+    (including ``provenance``, which names only the SOURCE of each key, never a
+    secret), are left untouched.
+
+    ``--dry-run`` prints THIS redacted copy, never the real one: both are
+    explicit env allow-lists a config may declare to carry secrets (API tokens,
+    credentials) into the engine/env subprocess's environment, and printing
+    them verbatim would leak them into the run's log.
+    """
+    redacted = dict(payload)
+    for section in ("engine", "env"):
+        section_dict = dict(redacted[section])
+        section_dict["env"] = dict.fromkeys(section_dict.get("env", {}), _REDACTED)
+        redacted[section] = section_dict
+    return redacted
+
+
+def _start_fleet_for_initial_launch(fleet: EngineFleet, config: AgenticRLConfig) -> None:
+    """Start every server in ``fleet`` for the run's FIRST launch.
+
+    ``weight_sync_mode="reload_endpoint"`` (the default): unchanged, starts every
+    server with its declared ``spec.command`` verbatim via ``EngineFleet.start_all``.
+
+    ``weight_sync_mode="restart"``: substitutes ``config.policy.model_path`` for
+    the declared ``"{model_path}"`` placeholder in each ``EngineServer``'s command,
+    for this ONE launch -- mirroring ``weight_sync.DiskWeightSync._restart_push``'s
+    own substitution, which otherwise only runs on a LATER restart (after the
+    first published checkpoint). Without this, the fleet's first ``EngineServer.
+    start()`` would launch with the placeholder reaching the engine verbatim as
+    an argv entry, crashing before any rollout runs. ``server.spec`` itself is
+    NEVER mutated (the same "declared template survives" contract
+    ``_restart_push`` keeps) -- only this one launch's command is substituted.
+    A failure partway through leaves earlier servers running, exactly like
+    ``EngineFleet.start_all``'s own documented contract (the caller decides
+    whether to ``stop_all``).
+    """
+    if config.engine.weight_sync_mode != "restart":
+        fleet.start_all()
+        return
+    for server in fleet.servers:
+        # cli.py's _build_real_run only ever builds EngineServer (never the
+        # legacy SGLangServer, which has no declared command/placeholder) --
+        # config.py's build_config also already refuses, at config time, a
+        # weight_sync_mode="restart" config whose engine.command does not
+        # declare the placeholder, so every server reached here has one.
+        assert isinstance(server, EngineServer)
+        substituted_command = tuple(
+            part.replace(_MODEL_PATH_PLACEHOLDER, config.policy.model_path)
+            for part in server.spec.command
+        )
+        server.start(command=substituted_command)
+
+
 def _dry_run(config: AgenticRLConfig) -> int:
     try:
         _build_non_gpu_objects(config)
@@ -321,7 +391,8 @@ def _dry_run(config: AgenticRLConfig) -> int:
     except Exception as exc:  # noqa: BLE001 -- adjudicated RED, see module docstring
         _print_red(exc, where="during --dry-run")
         return EXIT_RED
-    print(json.dumps(config.as_json(), indent=2, sort_keys=True, default=str))
+    payload = _redact_env_values(config.as_json())
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return EXIT_PASS
 
 
@@ -356,7 +427,7 @@ def _run(config: AgenticRLConfig) -> int:
     assert host.fleet is not None  # _build_real_run always supplies one
     fleet = host.fleet
     try:
-        fleet.start_all()
+        _start_fleet_for_initial_launch(fleet, config)
         trainer_config = RLTrainConfig(
             model=config.policy.model_path,
             algorithm=config.policy.algorithm,

@@ -23,6 +23,7 @@ HF tokenizer/model load.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import subprocess
@@ -31,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _fake_sglang_fixtures import free_port, make_engine_server_spec, write_fake_server
 
 from foundationscale.agentic_rl.cli import (
     EXIT_PASS,
@@ -38,10 +40,13 @@ from foundationscale.agentic_rl.cli import (
     EXIT_REFUSE,
     EXIT_UNMEASURED,
     _HFChatTokenizer,
+    _start_fleet_for_initial_launch,
     build_parser,
     main,
 )
-from foundationscale.agentic_rl.engines.fleet import EngineFleet
+from foundationscale.agentic_rl.config import build_config
+from foundationscale.agentic_rl.engines.fleet import EngineFleet, EngineServer
+from foundationscale.agentic_rl.harness.base import SamplingParams
 from foundationscale.rl.trainer import TrainerRefusal
 from foundationscale.train.loop import (
     EXIT_PASS as REAL_EXIT_PASS,
@@ -217,6 +222,34 @@ def test_the_example_config_dry_runs_clean(capsys: pytest.CaptureFixture[str]) -
     capsys.readouterr()
 
 
+def test_dry_run_redacts_engine_and_env_env_values(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Security regression: --dry-run used to print engine.env/env.env VALUES
+    # verbatim (e.g. an HF/W&B token declared for the engine or env subprocess's
+    # environment), leaking them into the run's log.
+    tasks_path = _write_tasks(tmp_path)
+    base = _raw_config(tasks_path)
+    raw = _raw_config(
+        tasks_path,
+        engine={**base["engine"], "env": {"HF_TOKEN": "sekret-token"}},
+        env={**base["env"], "env": {"WANDB_API_KEY": "sekret-key"}},
+    )
+    config_path = _write_config(tmp_path, raw)
+    code = main(["--config", config_path, "--dry-run"])
+    assert code == EXIT_PASS
+    raw_output = capsys.readouterr().out
+    assert "sekret-token" not in raw_output
+    assert "sekret-key" not in raw_output
+    printed = json.loads(raw_output)
+    assert printed["engine"]["env"] == {"HF_TOKEN": "<redacted>"}
+    assert printed["env"]["env"] == {"WANDB_API_KEY": "<redacted>"}
+    # Keys and provenance (which names only the SOURCE of a key, never a
+    # secret) survive untouched.
+    assert printed["provenance"]["engine.env"] == "config"
+    assert printed["provenance"]["env.env"] == "config"
+
+
 # ---------------------------------------------------------------------------
 # --dry-run: refusals and crashes
 # ---------------------------------------------------------------------------
@@ -281,6 +314,31 @@ def test_main_refuses_a_config_refusal(tmp_path: Path, capsys: pytest.CaptureFix
     code = main(["--config", missing])
     assert code == EXIT_REFUSE
     assert "config refused" in capsys.readouterr().out
+
+
+def test_main_refuses_an_unconsumed_set_override_typo(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Reproduces the reported bug end to end: "--set policy.model_paht=/b"
+    # (typo'd field name) used to exit 0 with provenance unchanged; it must
+    # now exit 96, naming the exact dotted key.
+    tasks_path = _write_tasks(tmp_path)
+    config_path = _write_config(tmp_path, _raw_config(tasks_path))
+    code = main(["--config", config_path, "--set", "policy.model_paht=/b", "--dry-run"])
+    assert code == EXIT_REFUSE
+    assert "policy.model_paht" in capsys.readouterr().out
+
+
+def test_main_refuses_an_unconsumed_set_override_unknown_section(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Reproduces the reported bug end to end: "--set nosuch.section=1" used
+    # to exit 0 too.
+    tasks_path = _write_tasks(tmp_path)
+    config_path = _write_config(tmp_path, _raw_config(tasks_path))
+    code = main(["--config", config_path, "--set", "nosuch.section=1", "--dry-run"])
+    assert code == EXIT_REFUSE
+    assert "nosuch.section" in capsys.readouterr().out
 
 
 def test_main_adjudicates_an_unexpected_binding_crash_as_red(
@@ -536,6 +594,87 @@ def test_real_run_stops_the_fleet_even_when_start_all_raises(
     code = main(["--config", _real_run_config_path(tmp_path)])
     assert code == EXIT_RED
     assert stopped == [True]
+
+
+# ---------------------------------------------------------------------------
+# weight_sync_mode="restart": the FIRST launch substitutes policy.model_path
+# ---------------------------------------------------------------------------
+
+
+def _restart_mode_config(tmp_path: Path, *, command: tuple[str, ...], port: int) -> Any:
+    tasks_path = _write_tasks(tmp_path)
+    raw = _raw_config(
+        tasks_path,
+        engine={
+            "kind": "sglang",
+            "command": list(command),
+            "port": port,
+            "weight_sync_mode": "restart",
+        },
+    )
+    return build_config(raw, {})
+
+
+def test_start_fleet_for_initial_launch_substitutes_the_placeholder(tmp_path: Path) -> None:
+    # Regression: cli.py used to start the fleet with spec.command VERBATIM
+    # (fleet.start_all()) even under weight_sync_mode="restart", so a declared
+    # "{model_path}" placeholder reached the engine literally on the very
+    # FIRST launch -- before any rollout. The fix substitutes
+    # config.policy.model_path for it on this one launch too, the same way
+    # weight_sync.DiskWeightSync substitutes on every LATER restart.
+    fake_module = write_fake_server(tmp_path)
+    port = free_port()
+    spec = make_engine_server_spec(
+        tmp_path, fake_module, port=port
+    )  # command carries "{model_path}"
+    server = EngineServer(spec)
+    fleet = EngineFleet(servers=(server,))
+    config = _restart_mode_config(tmp_path, command=spec.command, port=port)
+
+    try:
+        _start_fleet_for_initial_launch(fleet, config)
+        assert server.client().health() is True
+        # server.spec itself is NEVER mutated -- the declared template
+        # (placeholder included) survives for the next restart too.
+        assert "{model_path}" in server.spec.command
+        # The fake server's /generate echoes "loaded_model_path", initialised
+        # from the ACTUAL --model-path argv it was launched with -- proving
+        # the placeholder was substituted BEFORE this first launch, not left
+        # to reach the engine literally (which would echo "{model_path}").
+        generation = asyncio.run(
+            server.client().generate(
+                (1,),
+                SamplingParams(
+                    temperature=1.0,
+                    top_p=1.0,
+                    top_k=0,
+                    min_p=0.0,
+                    presence_penalty=0.0,
+                    repetition_penalty=1.0,
+                    max_new_tokens=4,
+                ),
+            )
+        )
+        assert generation.text == f"ok loaded:{config.policy.model_path}"
+    finally:
+        server.stop()
+
+
+def test_start_fleet_for_initial_launch_leaves_reload_endpoint_mode_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # weight_sync_mode="reload_endpoint" (the default) must still start every
+    # server with spec.command verbatim via EngineFleet.start_all -- unchanged
+    # from before _start_fleet_for_initial_launch existed.
+    calls: list[str] = []
+    monkeypatch.setattr(EngineFleet, "start_all", lambda self: calls.append("start_all"))
+    fake_module = write_fake_server(tmp_path)
+    spec = make_engine_server_spec(tmp_path, fake_module, port=free_port())
+    fleet = EngineFleet(servers=(EngineServer(spec),))
+    tasks_path = _write_tasks(tmp_path)
+    config = build_config(_raw_config(tasks_path), {})
+    _start_fleet_for_initial_launch(fleet, config)
+    assert calls == ["start_all"]
 
 
 # ---------------------------------------------------------------------------

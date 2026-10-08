@@ -385,6 +385,10 @@ class RolloutHost:
                 gate_ctx = WeightSyncGateContext(
                     offered=len(report.offered),
                     failed=len(report.failed_ranks),
+                    # report.is_stale is DERIVED by DiskWeightSync.push from the
+                    # push just having completed synchronously (S0) -- it is
+                    # never separately measured here, by the gate, or anywhere
+                    # else; see weight_sync.DiskWeightSync.push's own docstring.
                     is_stale=report.is_stale,
                     seconds=report.seconds,
                     step=step,
