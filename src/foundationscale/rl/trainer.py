@@ -309,6 +309,60 @@ class MasterWeightOptimizer:
         return result
 
 
+def _expand_video_samples(samples: Sequence[Sample], config: Any) -> tuple[Sample, ...]:
+    """Each video-carrying sample becomes its declared frames, appended as images.
+
+    Refuses (96) when video is present but no frame budget was declared, and when
+    a clip cannot be decoded -- naming the sample, never substituting a blank
+    frame or silently training on the text alone.
+    """
+    import dataclasses
+    from pathlib import Path
+
+    carriers = [sample for sample in samples if sample.video is not None]
+    if not carriers:
+        return tuple(samples)
+    if int(getattr(config, "video_frames", 0) or 0) < 1:
+        shown = ", ".join(f"{s.sample_id} (video)" for s in carriers[:5])
+        more = f" and {len(carriers) - 5} more" if len(carriers) > 5 else ""
+        _refuse_exit_96(
+            f"{len(carriers)} of {len(samples)} sample(s) carry video: {shown}{more}. "
+            "Frame count, sampling strategy and per-frame resolution are dataset "
+            "decisions with no safe default; declare them with video_frames (>= 1), "
+            "video_sampling and video_max_side, and each clip is routed as that many "
+            "frames through the image path."
+        )
+    from foundationscale.video import FrameBudget, VideoDecodeError, video_frame_paths
+
+    try:
+        budget = FrameBudget(
+            frames=int(config.video_frames),
+            sampling=str(config.video_sampling),
+            max_side=config.video_max_side,
+        )
+    except ValueError as exc:
+        _refuse_exit_96(f"invalid video frame budget: {exc}")
+    cache = config.video_cache_dir or str(
+        Path(config.dataset).resolve().parent / ".fs_video_frames"
+    )
+    expanded: list[Sample] = []
+    for sample in samples:
+        if sample.video is None:
+            expanded.append(sample)
+            continue
+        clip = Path(sample.video)
+        if not clip.is_absolute():
+            clip = Path(config.dataset).resolve().parent / clip
+        try:
+            frames = video_frame_paths(clip, budget, cache)
+        except (FileNotFoundError, VideoDecodeError) as exc:
+            _refuse_exit_96(f"sample {sample.sample_id!r}: {exc}")
+        expanded.append(
+            dataclasses.replace(sample, images=tuple(sample.images) + tuple(frames), video=None)
+        )
+    return tuple(expanded)
+
+
 @dataclass
 class RLTrainConfig:
     """Configuration for one RL training run.
@@ -413,6 +467,14 @@ class RLTrainConfig:
     # 4 of 5 seeds (0-48%) while "zero" held 63-65% on 5 of 5. The EMA still
     # folds in every raw return either way.
     reinforce_flat_groups: str = "zero"
+    # Video as a DECLARED frame budget (foundationscale.video): 0 keeps video
+    # refused; N >= 1 turns each clip into N centred-uniform frames, routed as
+    # images. Frames are cached under video_cache_dir (default: a
+    # ".fs_video_frames" directory beside the dataset).
+    video_frames: int = 0
+    video_sampling: str = "uniform"
+    video_max_side: int | None = None
+    video_cache_dir: str | None = None
 
 
 class RLTrainer:
@@ -624,27 +686,16 @@ class RLTrainer:
         # forwarded to the scorer alongside input_ids. Measured on gemma-4-E4B:
         # 258.0 prompt tokens per image, exactly linear at n = 1, 2, 4, 8.
         #
-        # VIDEO is still refused, and deliberately so. Nothing in this repo
-        # samples frames from a clip, and the missing pieces are DATA decisions
-        # rather than plumbing: frame count, sampling strategy, per-frame
-        # resolution. Any default chosen here would silently redefine the
-        # dataset. Against the measured 131,072-token context, 258 tok/frame
-        # puts the ceiling near 508 frames -- ample, which is precisely why the
-        # frame budget should be chosen rather than inherited from whoever
-        # wrote this line.
-        carriers = [(sample.sample_id, "video") for sample in samples if sample.video is not None]
-        if carriers:
-            shown = ", ".join(f"{sid} ({kind})" for sid, kind in carriers[:5])
-            more = f" and {len(carriers) - 5} more" if len(carriers) > 5 else ""
-            _refuse_exit_96(
-                f"{len(carriers)} of {len(samples)} sample(s) carry video, which "
-                f"no component in this repository decodes: {shown}{more}. "
-                "Frame count, sampling strategy and per-frame resolution are "
-                "dataset decisions with no safe default -- picking one here "
-                "would silently redefine the corpus. Images ARE supported and "
-                "are routed through the processor; video refuses until the "
-                "frame budget is declared."
-            )
+        # VIDEO used to be refused outright: nothing here sampled frames, and the
+        # missing pieces (frame count, spacing, resolution) are DATASET decisions
+        # with no safe default. They are now a declared FrameBudget
+        # (foundationscale.video): with video_frames >= 1 each clip becomes that
+        # many centred-uniform frames, cached on disk and routed as IMAGES through
+        # the processor path above. With video_frames == 0 video still refuses,
+        # naming the samples and the knob. Against the measured 131,072-token
+        # context, 258 tok/frame puts the ceiling near 508 frames -- ample, which
+        # is precisely why the budget is chosen by the caller, not inherited.
+        samples = _expand_video_samples(samples, self.config)
         try:
             import torch
         except ImportError:
