@@ -23,15 +23,28 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import time
 from pathlib import Path
 
 import pytest
-from tests.agentic_rl._fake_sglang_fixtures import free_port, make_server_spec, write_fake_server
+from _fake_sglang_fixtures import (
+    free_port,
+    make_engine_server_spec,
+    make_server_spec,
+    write_fake_server,
+)
 
 from foundationscale.agentic_rl.engines import EngineInfraError, EngineRefusal
-from foundationscale.agentic_rl.engines.fleet import EngineFleet, SGLangServer, SGLangServerSpec
+from foundationscale.agentic_rl.engines.fleet import (
+    EngineFleet,
+    EngineServer,
+    EngineServerSpec,
+    SGLangServer,
+    SGLangServerSpec,
+)
 from foundationscale.agentic_rl.engines.sglang import SGLangClient
+from foundationscale.agentic_rl.engines.vllm import VLLMClient
 
 
 @pytest.fixture
@@ -318,3 +331,285 @@ def test_fleet_update_weights_from_disk_reports_per_server_success(
         assert results == (False, False)
     finally:
         fleet.stop_all()
+
+
+# ---------------------------------------------------------------------------
+# EngineServerSpec construction refusals
+# ---------------------------------------------------------------------------
+
+
+def _engine_spec(tmp_path: Path, fake_module: str, **overrides: object) -> EngineServerSpec:
+    return make_engine_server_spec(tmp_path, fake_module, port=_free_port(), **overrides)  # type: ignore[arg-type]
+
+
+def test_engine_spec_rejects_an_unknown_kind(tmp_path: Path, fake_module: str) -> None:
+    with pytest.raises(EngineRefusal, match="field 'kind'"):
+        _engine_spec(tmp_path, fake_module, kind="tgi")
+
+
+def test_engine_spec_rejects_a_bare_str_command(tmp_path: Path, fake_module: str) -> None:
+    with pytest.raises(EngineRefusal, match="field 'command'"):
+        _engine_spec(tmp_path, fake_module, command="python -m vllm")
+
+
+def test_engine_spec_rejects_an_empty_command(tmp_path: Path, fake_module: str) -> None:
+    with pytest.raises(EngineRefusal, match="field 'command'"):
+        _engine_spec(tmp_path, fake_module, command=())
+
+
+def test_engine_spec_rejects_a_non_str_command_entry(tmp_path: Path, fake_module: str) -> None:
+    with pytest.raises(EngineRefusal, match="field 'command' entry"):
+        _engine_spec(tmp_path, fake_module, command=("python3", 5))
+
+
+def test_engine_spec_rejects_non_str_env_values(tmp_path: Path, fake_module: str) -> None:
+    with pytest.raises(EngineRefusal, match="field 'env'"):
+        _engine_spec(tmp_path, fake_module, env={"X": 5})
+
+
+def test_engine_spec_rejects_a_non_str_served_model_name(tmp_path: Path, fake_module: str) -> None:
+    with pytest.raises(EngineRefusal, match="field 'served_model_name'"):
+        _engine_spec(tmp_path, fake_module, kind="sglang", served_model_name=5)
+
+
+def test_engine_spec_requires_served_model_name_for_vllm(tmp_path: Path) -> None:
+    # Constructed directly (not via the fixture helper, whose own convenience
+    # default would fill in a served_model_name for kind="vllm"): this checks
+    # EngineServerSpec's OWN refusal when neither the caller nor a fixture
+    # supplies one.
+    with pytest.raises(EngineRefusal, match="served_model_name"):
+        EngineServerSpec(
+            kind="vllm",
+            command=("python3", "-m", "vllm.entrypoints.openai.api_server"),
+            port=_free_port(),
+            log_dir=str(tmp_path),
+        )
+
+
+def test_engine_spec_accepts_a_valid_sglang_declaration(tmp_path: Path, fake_module: str) -> None:
+    spec = _engine_spec(tmp_path, fake_module, kind="sglang")
+    assert spec.served_model_name is None
+    assert "{model_path}" in spec.command
+
+
+# ---------------------------------------------------------------------------
+# EngineServer lifecycle (kind="sglang", against the same fake server)
+# ---------------------------------------------------------------------------
+
+
+def test_engine_server_starts_health_checks_and_stops(tmp_path: Path, fake_module: str) -> None:
+    spec = _engine_spec(tmp_path, fake_module, model_path="/fake/model")
+    server = EngineServer(spec)
+    try:
+        server.start()
+        assert server.log_path is not None
+        assert Path(server.log_path).exists()
+        client = server.client()
+        assert isinstance(client, SGLangClient)
+        assert client.health() is True
+    finally:
+        server.stop()
+    assert server.client().health() is False
+
+
+def test_engine_server_client_dispatches_to_vllm_client_for_vllm_kind(
+    tmp_path: Path, fake_module: str
+) -> None:
+    # No subprocess needed: client() is cheap/stateless and never requires the
+    # server to be live (same contract SGLangServer.client() documents).
+    spec = _engine_spec(
+        tmp_path, fake_module, kind="vllm", model_path="/fake/model", served_model_name="m"
+    )
+    server = EngineServer(spec)
+    client = server.client()
+    assert isinstance(client, VLLMClient)
+    assert client.served_model_name == "m"
+    assert client.reload_mode is None
+
+
+def test_engine_server_client_forwards_reload_mode_to_vllm_client(
+    tmp_path: Path, fake_module: str
+) -> None:
+    spec = _engine_spec(
+        tmp_path,
+        fake_module,
+        kind="vllm",
+        model_path="/fake/model",
+        served_model_name="m",
+        reload_mode="collective_rpc",
+    )
+    client = EngineServer(spec).client()
+    assert isinstance(client, VLLMClient)
+    assert client.reload_mode == "collective_rpc"
+
+
+def test_engine_spec_rejects_an_undeclared_reload_mode(tmp_path: Path, fake_module: str) -> None:
+    with pytest.raises(EngineRefusal, match="field 'reload_mode'"):
+        _engine_spec(
+            tmp_path,
+            fake_module,
+            kind="vllm",
+            served_model_name="m",
+            reload_mode="rpc_v2",
+        )
+
+
+def test_engine_server_start_twice_refuses(tmp_path: Path, fake_module: str) -> None:
+    spec = _engine_spec(tmp_path, fake_module, model_path="/fake/model")
+    server = EngineServer(spec)
+    try:
+        server.start()
+        with pytest.raises(EngineRefusal):
+            server.start()
+    finally:
+        server.stop()
+
+
+def test_engine_server_crash_before_healthy_raises_startup_crashed(
+    tmp_path: Path, fake_module: str
+) -> None:
+    spec = _engine_spec(tmp_path, fake_module, model_path="FAIL_immediately", startup_timeout_s=5.0)
+    server = EngineServer(spec)
+    with pytest.raises(EngineInfraError) as excinfo:
+        server.start()
+    assert excinfo.value.kind == "startup_crashed"
+
+
+def test_engine_server_never_healthy_times_out(tmp_path: Path, fake_module: str) -> None:
+    command = (
+        sys.executable,
+        "-m",
+        fake_module,
+        "--model-path",
+        "/fake/model",
+        "--port",
+        str(_free_port()),
+        "--tp-size",
+        "1",
+        "--never-healthy",
+    )
+    spec = EngineServerSpec(
+        kind="sglang",
+        command=command,
+        port=int(command[command.index("--port") + 1]),
+        log_dir=str(tmp_path),
+        env={"PYTHONPATH": str(tmp_path)},
+        startup_timeout_s=2.0,
+        health_poll_interval_s=0.05,
+    )
+    server = EngineServer(spec)
+    try:
+        with pytest.raises(EngineInfraError) as excinfo:
+            server.start()
+        assert excinfo.value.kind == "startup_timeout"
+    finally:
+        server.stop()
+
+
+def test_engine_server_stop_is_idempotent(tmp_path: Path, fake_module: str) -> None:
+    spec = _engine_spec(tmp_path, fake_module, model_path="/fake/model")
+    server = EngineServer(spec)
+    server.stop()  # never started: must not raise
+    server.start()
+    server.stop()
+    server.stop()  # already stopped: must not raise
+
+
+def test_engine_server_stop_kills_a_process_that_ignores_sigterm(
+    tmp_path: Path, fake_module: str
+) -> None:
+    # Same shape as SGLangServer's identically-named test above, but for the
+    # generic EngineServer.stop(): a process that traps/ignores SIGTERM must
+    # still be gone after stop() returns, via the killpg(..., SIGKILL) fallback
+    # once process.wait(timeout=grace_s) raises TimeoutExpired.
+    port = _free_port()
+    command = (
+        sys.executable,
+        "-m",
+        fake_module,
+        "--model-path",
+        "/fake/model",
+        "--port",
+        str(port),
+        "--tp-size",
+        "1",
+        "--ignore-sigterm",
+    )
+    spec = EngineServerSpec(
+        kind="sglang",
+        command=command,
+        port=port,
+        log_dir=str(tmp_path),
+        env={"PYTHONPATH": str(tmp_path)},
+        startup_timeout_s=10.0,
+        health_poll_interval_s=0.05,
+    )
+    server = EngineServer(spec)
+    server.start()
+    server.stop(grace_s=0.2)
+    assert server.client().health() is False
+
+
+def test_engine_server_start_command_override_does_not_mutate_spec(
+    tmp_path: Path, fake_module: str
+) -> None:
+    spec = _engine_spec(tmp_path, fake_module, model_path="{model_path}")
+    server = EngineServer(spec)
+    override = tuple(part.replace("{model_path}", "/real/model") for part in spec.command)
+    try:
+        server.start(command=override)
+        assert server.client().health() is True
+    finally:
+        server.stop()
+    # The declared spec is untouched -- the placeholder survives.
+    assert server.spec.command == spec.command
+    assert "{model_path}" in server.spec.command
+
+
+# ---------------------------------------------------------------------------
+# EngineFleet with the generic server pair, and .clients()
+# ---------------------------------------------------------------------------
+
+
+def test_fleet_accepts_a_mix_of_sglang_and_generic_servers(
+    tmp_path: Path, fake_module: str
+) -> None:
+    legacy = SGLangServer(_spec(tmp_path, fake_module, port=_free_port()))
+    generic = EngineServer(_engine_spec(tmp_path, fake_module, model_path="/fake/model"))
+    fleet = EngineFleet(servers=(legacy, generic))
+    fleet.start_all()
+    try:
+        clients = fleet.clients()
+        assert len(clients) == 2
+        assert all(isinstance(c, SGLangClient) for c in clients)
+    finally:
+        fleet.stop_all()
+
+
+def test_fleet_clients_returns_the_right_class_per_kind_without_starting(
+    tmp_path: Path, fake_module: str
+) -> None:
+    sglang_server = EngineServer(_engine_spec(tmp_path, fake_module, kind="sglang"))
+    vllm_server = EngineServer(
+        _engine_spec(tmp_path, fake_module, kind="vllm", served_model_name="m")
+    )
+    fleet = EngineFleet(servers=(sglang_server, vllm_server))
+    clients = fleet.clients()
+    assert isinstance(clients[0], SGLangClient)
+    assert isinstance(clients[1], VLLMClient)
+
+
+def test_server_creates_a_missing_log_dir(tmp_path: Path, fake_module: str) -> None:
+    # Regression from the first real GPU launch: a declared log_dir that did not
+    # exist yet made start() raise FileNotFoundError before the engine ran.
+    log_dir = tmp_path / "not" / "created" / "yet"
+    assert not log_dir.exists()
+    spec = _spec(tmp_path, fake_module, port=_free_port(), log_dir=str(log_dir))
+    server = SGLangServer(spec)
+    try:
+        server.start()
+        assert server.log_path is not None
+        assert Path(server.log_path).parent == log_dir
+        assert Path(server.log_path).exists()
+    finally:
+        server.stop()

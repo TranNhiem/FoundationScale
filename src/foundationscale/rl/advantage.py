@@ -411,13 +411,22 @@ def _checked_masks(
     # SessionGroupAdvantage's None-admitting path needs exactly these checks
     # and no other. One statement of a refusal is one statement; two copies
     # of the same refusal are a countable that can drift.
+    #
+    # An ABSTAINED row's mask may be EMPTY, not merely all-0: a zero-turn
+    # INFRA trajectory (contracts.Trajectory with prompt_turns=turns=()) has
+    # no token positions to carry a mask over at all, and flatten() keeps
+    # that row. Refusing an empty row outright would make SessionGroupAdvantage
+    # unable to accept exactly the shape the agentic contract plane declares
+    # lawful for an abstention; the row still never reaches _broadcast (see
+    # _emit_used_rows: a None reward is skipped before any mask is read), so
+    # admitting the empty shape here costs nothing downstream.
     cleaned_masks: list[tuple[bool, ...]] = []
     for row, raw_row in enumerate(raw_masks):
         entries = tuple(
             _mask_entry(raw, row, position)
             for position, raw in enumerate(_as_tuple(raw_row, f"mask row {row}"))
         )
-        if not entries:
+        if not entries and row not in abstained_rows:
             raise AdvantageRefusal(
                 f"mask row {row} is empty; a sample with no token positions "
                 f"has no supervised token to land an advantage on, so it "

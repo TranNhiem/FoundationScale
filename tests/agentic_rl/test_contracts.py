@@ -234,6 +234,13 @@ def test_tool_call_name_must_be_a_non_empty_str() -> None:
         _tool_call(name=7)
 
 
+def test_tool_call_name_may_be_none_only_as_a_recorded_parse_failure() -> None:
+    unnamed = _tool_call(name=None, parse_error="call markup carries no function name")
+    assert unnamed.name is None
+    with pytest.raises(TrajectoryRefusal, match="field 'parse_error'"):
+        _tool_call(name=None, parse_error=None)
+
+
 def test_tool_call_arguments_must_be_the_raw_text() -> None:
     with pytest.raises(TrajectoryRefusal, match="field 'arguments'"):
         _tool_call(arguments={"q": 1})
@@ -397,6 +404,54 @@ def test_trajectory_turn_entries_must_be_turns() -> None:
 def test_trajectory_turns_must_exist() -> None:
     with pytest.raises(TrajectoryRefusal, match="field 'turns'"):
         _trajectory(turns=())
+
+
+def test_zero_turn_trajectory_is_lawful_only_under_infra() -> None:
+    # A run that failed before the harness ever rendered a prompt (e.g. the
+    # environment never started) has nothing real on either side; both
+    # prompt_turns and turns may be () exactly under Termination.INFRA.
+    trajectory = _trajectory(
+        prompt_turns=(),
+        turns=(),
+        reward=None,
+        abstention_reason="infra:EnvInfraError",
+        termination=Termination.INFRA,
+    )
+    assert trajectory.is_infra is True
+    assert trajectory.prompt_turns == ()
+    assert trajectory.turns == ()
+    assert trajectory.response_token_ids == ()
+    assert trajectory.loss_mask() == ()
+    assert trajectory.supervised_token_count == 0
+
+    # Outside INFRA, both sequences are still required non-empty, unchanged --
+    # the allowance is INFRA-only and is not extended to ABORTED, which has its
+    # own (separate) exemption from the generated-response requirement.
+    with pytest.raises(TrajectoryRefusal, match="field 'prompt_turns'"):
+        _trajectory(prompt_turns=(), turns=(), termination=Termination.STOP)
+    with pytest.raises(TrajectoryRefusal, match="field 'turns'"):
+        _trajectory(
+            turns=(),
+            termination=Termination.ABORTED,
+            reward=None,
+            abstention_reason="aborted: cancelled",
+        )
+
+
+def test_zero_turn_trajectory_flattens_with_empty_per_token_columns() -> None:
+    trajectory = _trajectory(
+        prompt_turns=(),
+        turns=(),
+        reward=None,
+        abstention_reason="infra:EnvInfraError",
+        termination=Termination.INFRA,
+    )
+    batch = flatten([trajectory])
+    assert len(batch) == 1
+    assert batch.columns["response_ids"][0] == ()
+    assert batch.columns["loss_mask"][0] == ()
+    assert batch.columns["prompt_token_ids"][0] == ()
+    assert batch.columns["reward"][0] is None
 
 
 def test_trajectory_turn_indices_are_strictly_increasing() -> None:

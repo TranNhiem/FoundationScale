@@ -300,7 +300,7 @@ class NativeToolLoop(HarnessAdapter):
             parsed_calls, visible_text = self.parser.parse(generation.text)
             tool_calls = tuple(
                 ToolCall(
-                    name=pc.name,
+                    name=pc.name or None,
                     arguments=pc.raw,
                     call_id=None,
                     parse_error=(

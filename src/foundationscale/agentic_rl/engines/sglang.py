@@ -79,7 +79,9 @@ def _sampling_payload(sampling: SamplingParams) -> dict[str, float | int]:
     }
 
 
-def _request(url: str, body: Mapping[str, Any] | None, *, timeout_s: float) -> dict[str, Any]:
+def _request(
+    url: str, body: Mapping[str, Any] | None, *, timeout_s: float, expect_json: bool = True
+) -> dict[str, Any]:
     """POST ``body`` as JSON to ``url`` (GET when ``body`` is ``None``) and return the
     decoded JSON response, raising :class:`EngineInfraError` for every way this can
     fail short of a well-formed 200 response: a transport failure (``kind="transport"``),
@@ -109,6 +111,12 @@ def _request(url: str, body: Mapping[str, Any] | None, *, timeout_s: float) -> d
         raise EngineInfraError("transport", f"{url}: {exc}") from exc
     if status != 200:
         raise EngineInfraError("http_" + str(status), f"{url}: HTTP {status}")
+    if not expect_json:
+        # Control endpoints (/health, /sleep, /wake_up, cache and memory calls)
+        # answer 200 with an EMPTY body on the real server (probed 2026-10-08):
+        # their success is the status, and parsing the body would turn every
+        # healthy answer into a bad_response.
+        return {}
     try:
         decoded = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -192,7 +200,7 @@ class SGLangClient:
         readiness (``engines.fleet.SGLangServer.start``) needs a plain yes/no.
         """
         try:
-            _request(self._url("health"), None, timeout_s=self.timeout_s)
+            _request(self._url("health"), None, timeout_s=self.timeout_s, expect_json=False)
         except EngineInfraError:
             return False
         return True
@@ -225,15 +233,19 @@ class SGLangClient:
 
     def flush_cache(self) -> None:
         """POST ``/flush_cache`` with an empty body."""
-        _request(self._url("flush_cache"), {}, timeout_s=self.timeout_s)
+        _request(self._url("flush_cache"), {}, timeout_s=self.timeout_s, expect_json=False)
 
     def release_memory(self) -> None:
         """POST ``/release_memory_occupation`` with an empty body, for colocation."""
-        _request(self._url("release_memory_occupation"), {}, timeout_s=self.timeout_s)
+        _request(
+            self._url("release_memory_occupation"), {}, timeout_s=self.timeout_s, expect_json=False
+        )
 
     def resume_memory(self) -> None:
         """POST ``/resume_memory_occupation`` with an empty body, for colocation."""
-        _request(self._url("resume_memory_occupation"), {}, timeout_s=self.timeout_s)
+        _request(
+            self._url("resume_memory_occupation"), {}, timeout_s=self.timeout_s, expect_json=False
+        )
 
 
 def _parse_generate_response(response: Mapping[str, Any], *, origin: str) -> Generation:

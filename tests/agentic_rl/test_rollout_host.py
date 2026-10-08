@@ -12,8 +12,9 @@ edit in this slice) yields a row with ``termination=INFRA``, ``reward=None``
 and ``abstention_reason="infra:engine_<kind>"`` WITHOUT the toy reward ever
 being called; an environment that fails to even START (``EnvInfraError`` from
 ``env.start()``, before ``NativeToolLoop.run_episode`` is ever called) is
-converted by ``RolloutHost``'s own outer catch into a synthetic
-``termination=INFRA`` row with ``abstention_reason="infra:EnvInfraError"``;
+converted by ``RolloutHost``'s own outer catch into a ZERO-TURN
+``termination=INFRA`` row (``prompt_turns=()``, ``turns=()``) with
+``abstention_reason="infra:EnvInfraError"``;
 ``max_concurrency`` actually bounds the number of in-flight episodes;
 construction refuses a bad field; ``publish`` calls ``save_fn`` on every rank
 but pushes to the fleet (observed via the prune side effect) only on rank 0.
@@ -21,7 +22,7 @@ but pushes to the fleet (observed via the prune side effect) only on rank 0.
 WHAT IS NOT CLAIMED: no SGLang engine of any kind is started for the rollout
 tests (``client_factory`` injects a pure-Python scripted client); the
 ``publish`` tests DO start fake-HTTP-server subprocesses (via
-``tests.agentic_rl._fake_sglang_fixtures``, shared with ``test_weight_sync.py``)
+``_fake_sglang_fixtures``, shared with ``test_weight_sync.py``)
 because ``DiskWeightSync`` requires a real ``EngineFleet``.
 """
 
@@ -35,7 +36,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from tests.agentic_rl._fake_sglang_fixtures import free_port, make_server_spec, write_fake_server
+from _fake_sglang_fixtures import free_port, make_server_spec, write_fake_server
 
 from foundationscale.agentic_rl import markup
 from foundationscale.agentic_rl.contracts import DECLARED_COLUMNS, Termination
@@ -295,9 +296,45 @@ def test_rollout_against_a_real_fleet_round_robins_clients(tmp_path: Path) -> No
         batch = host.rollout(0)
         assert len(batch) == 2
         assert all(t is Termination.STOP for t in batch.columns["termination"])
-        assert all(r == float(len("ok")) for r in batch.columns["reward"])
+        # The fake server's /generate echoes its currently-"loaded" model path
+        # (see _fake_sglang_fixtures.FAKE_SERVER_SOURCE) -- "/fake/model" here,
+        # since nothing has pushed a reload yet.
+        expected_text = "ok loaded:/fake/model"
+        assert all(r == float(len(expected_text)) for r in batch.columns["reward"])
     finally:
         fleet.stop_all()
+
+
+# ---------------------------------------------------------------------------
+# ROLLOUT agentic gate sweep: a blocking report raises RolloutHostRefusal
+# ---------------------------------------------------------------------------
+
+
+def test_rollout_raises_when_the_rollout_gate_sweep_blocks_on_infra_rate(
+    tmp_path: Path,
+) -> None:
+    # declared_max_infra_rate=0.0 with one infra'd attempt out of two gives a
+    # measured infra rate (1/2) that exceeds the declared bound, so
+    # RolloutAbstentionGate FAILs and the ROLLOUT gate sweep (gates=True by
+    # default) must turn that into a RolloutHostRefusal naming both the
+    # infra count and the total row count, never a silently-returned batch.
+    def client_factory(index: int) -> Any:
+        return ExplodingAfterOneClient() if index == 1 else SubmitClient("ok")
+
+    host = _host(
+        tmp_path,
+        uids=["taskA"],
+        group_size=2,
+        client_factory=client_factory,
+        declared_max_infra_rate=0.0,
+    )
+    with pytest.raises(RolloutHostRefusal, match="ROLLOUT gates blocked") as excinfo:
+        host.rollout(0)
+    message = str(excinfo.value)
+    assert "step 0" in message
+    # RolloutAbstentionGate's own FAIL detail names both counts: 1 infra'd row
+    # out of 2 total rows.
+    assert "1/2" in message
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +406,7 @@ def test_reward_scoring_infra_error_reuses_the_real_outcome_turns(tmp_path: Path
 # ---------------------------------------------------------------------------
 
 
-def test_env_start_failure_yields_synthetic_infra_rows(tmp_path: Path) -> None:
+def test_env_start_failure_yields_a_zero_turn_infra_row(tmp_path: Path) -> None:
     host = _host(
         tmp_path,
         uids=["taskA"],
@@ -382,11 +419,13 @@ def test_env_start_failure_yields_synthetic_infra_rows(tmp_path: Path) -> None:
     assert all(t is Termination.INFRA for t in batch.columns["termination"])
     assert all(r is None for r in batch.columns["reward"])
     assert all(a == "infra:EnvInfraError" for a in batch.columns["abstention_reason"])
-    # The synthetic prompt turn is an honest raw-byte encoding of the real seed
-    # message, never a guessed/default token sequence.
-    prompt_ids = batch.columns["prompt_token_ids"][0]
-    decoded = bytes(prompt_ids).decode("utf-8")
-    assert "please help taskA" in decoded
+    # Nothing was ever rendered (the environment failed before NativeToolLoop
+    # ever ran), so there is nothing real to report on either side: both the
+    # prompt and the response are genuinely empty, never a byte-encoded
+    # placeholder standing in for text nothing tokenised.
+    assert batch.columns["prompt_token_ids"][0] == ()
+    assert batch.columns["response_ids"][0] == ()
+    assert batch.columns["loss_mask"][0] == ()
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +478,37 @@ def test_measured_zero_with_informational_note_keeps_the_note_in_trajectory_meta
     assert trajectory.reward == 0.0
     assert trajectory.abstention_reason is None
     assert trajectory.metadata.get("reward_note") == "no_abc"
+
+
+# ---------------------------------------------------------------------------
+# An UNMEASURED verdict (value=None) becomes the trajectory's abstention
+# ---------------------------------------------------------------------------
+
+
+class AbstainingReward:
+    """Always returns an UNMEASURED verdict: value=None, reason names why."""
+
+    async def score(self, task: Any, outcome: Any) -> RewardVerdict:
+        return RewardVerdict(None, "policy_declined_to_answer")
+
+
+def test_abstaining_verdict_value_none_becomes_the_abstention_reason(tmp_path: Path) -> None:
+    # RewardVerdict(None, reason) is UNMEASURED: reward_value is None, so
+    # RolloutHost must copy verdict.reason straight into abstention_reason
+    # (never discard it), and reward itself must stay None on the resulting
+    # trajectory/batch row.
+    host = _host(
+        tmp_path,
+        uids=["taskA"],
+        group_size=2,
+        client_factory=lambda index: SubmitClient("ok"),
+        reward=AbstainingReward(),
+    )
+    batch = host.rollout(0)
+    assert len(batch) == 2
+    assert all(t is Termination.STOP for t in batch.columns["termination"])
+    assert all(r is None for r in batch.columns["reward"])
+    assert all(a == "policy_declined_to_answer" for a in batch.columns["abstention_reason"])
 
 
 # ---------------------------------------------------------------------------
@@ -513,6 +583,60 @@ def test_rejects_bad_weight_sync_type(tmp_path: Path) -> None:
         )
 
 
+def test_rejects_bad_sharding(tmp_path: Path) -> None:
+    with pytest.raises(RolloutHostRefusal, match="field 'sharding'") as excinfo:
+        _host(
+            tmp_path,
+            uids=["taskA"],
+            client_factory=lambda index: SubmitClient(),
+            sharding="tensor_parallel",
+        )
+    assert "'none'" in str(excinfo.value)
+    assert "'ddp'" in str(excinfo.value)
+    assert "'fsdp'" in str(excinfo.value)
+
+
+def test_rejects_non_bool_gates(tmp_path: Path) -> None:
+    with pytest.raises(RolloutHostRefusal, match="field 'gates'"):
+        _host(
+            tmp_path,
+            uids=["taskA"],
+            client_factory=lambda index: SubmitClient(),
+            gates=1,
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_rate",
+    [
+        1.5,  # out of [0.0, 1.0]
+        -0.1,  # out of [0.0, 1.0]
+        True,  # bool excluded even though isinstance(True, int)
+        "0.5",  # not a real number
+    ],
+)
+def test_rejects_bad_declared_max_infra_rate(tmp_path: Path, bad_rate: object) -> None:
+    with pytest.raises(RolloutHostRefusal, match="field 'declared_max_infra_rate'"):
+        _host(
+            tmp_path,
+            uids=["taskA"],
+            client_factory=lambda index: SubmitClient(),
+            declared_max_infra_rate=bad_rate,
+        )
+
+
+def test_accepts_declared_max_infra_rate_boundaries(tmp_path: Path) -> None:
+    # 0.0 and 1.0 are the inclusive boundary of the declared [0.0, 1.0] range
+    # and must not raise -- only values strictly outside it are refused.
+    for boundary in (0.0, 1.0):
+        _host(
+            tmp_path,
+            uids=["taskA"],
+            client_factory=lambda index: SubmitClient(),
+            declared_max_infra_rate=boundary,
+        )
+
+
 def test_rollout_rejects_bad_step(tmp_path: Path) -> None:
     host = _host(tmp_path, uids=["taskA"], client_factory=lambda index: SubmitClient())
     with pytest.raises(RolloutHostRefusal):
@@ -535,7 +659,24 @@ def test_publish_is_a_noop_without_weight_sync(tmp_path: Path) -> None:
     host.publish(None, None, SimpleNamespace(rank=0), 0)  # must not raise
 
 
-def test_publish_calls_save_fn_every_rank_but_pushes_only_rank_zero(tmp_path: Path) -> None:
+def test_publish_calls_the_save_path_every_rank_but_pushes_only_rank_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # publish() builds its save around the REAL model/tokenizer/ctx it
+    # receives (see rollout_host.py's own docstring on why save_fn cannot
+    # serve this path), via rl.distributed.save_checkpoint -- faked here so
+    # this test needs no real torch model.
+    calls: list[tuple[str, object, object, int]] = []
+
+    def fake_save_checkpoint(
+        model: object, tokenizer: object, out_dir: str, ctx: object, *, sharding: str, step: int
+    ) -> bool:
+        calls.append((out_dir, model, tokenizer, step))
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        return True
+
+    monkeypatch.setattr("foundationscale.rl.distributed.save_checkpoint", fake_save_checkpoint)
+
     fake_module = write_fake_server(tmp_path)
     specs = [make_server_spec(tmp_path, fake_module, port=free_port()) for _ in range(2)]
     servers = tuple(SGLangServer(spec) for spec in specs)
@@ -547,30 +688,180 @@ def test_publish_calls_save_fn_every_rank_but_pushes_only_rank_zero(tmp_path: Pa
         (publish_root / "step_000000").mkdir()
         (publish_root / "step_000001").mkdir()
 
-        calls: list[str] = []
-
-        def save_fn(path: str) -> None:
-            calls.append(path)
-            Path(path).mkdir(parents=True, exist_ok=True)
-
-        sync = DiskWeightSync(
-            save_fn=save_fn, publish_root=str(publish_root), fleet=fleet, keep_last=1
-        )
+        sync = DiskWeightSync(publish_root=str(publish_root), fleet=fleet, keep_last=1)
         host = _host(
-            tmp_path, uids=["taskA"], client_factory=lambda index: SubmitClient(), weight_sync=sync
+            tmp_path,
+            uids=["taskA"],
+            client_factory=lambda index: SubmitClient(),
+            weight_sync=sync,
         )
+        model, tokenizer = object(), object()
 
-        # rank != 0: save_fn runs, but push (and therefore prune) does not.
-        host.publish(None, None, SimpleNamespace(rank=1), step=5)
-        assert calls == [f"{publish_root}/step_000006"]
+        # rank != 0: the save runs on EVERY rank (collective), but push (and
+        # therefore prune) does not -- only rank 0 talks to the fleet.
+        host.publish(model, tokenizer, SimpleNamespace(rank=1), step=5)
+        assert calls == [(f"{publish_root}/step_000006", model, tokenizer, 6)]
         remaining = {p.name for p in publish_root.iterdir()}
         assert {"step_000000", "step_000001", "step_000006"} <= remaining
 
-        # rank == 0: save_fn runs again, AND push runs -- observed via the
+        # rank == 0: the save runs again, AND push runs -- observed via the
         # keep_last=1 prune leaving only the just-published directory.
-        host.publish(None, None, SimpleNamespace(rank=0), step=6)
-        assert calls == [f"{publish_root}/step_000006", f"{publish_root}/step_000007"]
+        host.publish(model, tokenizer, SimpleNamespace(rank=0), step=6)
+        assert calls == [
+            (f"{publish_root}/step_000006", model, tokenizer, 6),
+            (f"{publish_root}/step_000007", model, tokenizer, 7),
+        ]
         remaining = {p.name for p in publish_root.iterdir()}
         assert remaining == {"step_000007"}
     finally:
         fleet.stop_all()
+
+
+def test_publish_raises_when_the_push_is_not_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A push that does not fully succeed must be LOUD, never silently
+    # swallowed: continuing would serve a stale policy on every subsequent
+    # rollout without saying so (see rollout_host.py's own docstring).
+    monkeypatch.setattr(
+        "foundationscale.rl.distributed.save_checkpoint",
+        lambda *a, **k: Path(a[2]).mkdir(parents=True, exist_ok=True) or True,
+    )
+    fake_module = write_fake_server(tmp_path)
+    specs = [make_server_spec(tmp_path, fake_module, port=free_port()) for _ in range(2)]
+    servers = tuple(SGLangServer(spec) for spec in specs)
+    fleet = EngineFleet(servers=servers)
+    fleet.start_all()
+    try:
+        publish_root = tmp_path / "publish"
+        publish_root.mkdir()
+        sync = DiskWeightSync(publish_root=str(publish_root), fleet=fleet)
+        host = _host(
+            tmp_path,
+            uids=["taskA"],
+            client_factory=lambda index: SubmitClient(),
+            weight_sync=sync,
+        )
+        # The fake server fails any model_path containing "FAIL" (see
+        # _fake_sglang_fixtures.FAKE_SERVER_SOURCE); path_for's own step
+        # naming never produces that, so the class method is patched instead
+        # (DiskWeightSync is frozen -- an INSTANCE attribute cannot be set).
+        monkeypatch.setattr(
+            DiskWeightSync, "path_for", lambda self, step: f"{publish_root}/FAIL_step"
+        )
+        with pytest.raises(RolloutHostRefusal, match="NOT complete"):
+            host.publish(object(), object(), SimpleNamespace(rank=0), step=0)
+    finally:
+        fleet.stop_all()
+
+
+def test_publish_raises_when_the_weight_sync_gate_sweep_blocks_on_unmeasured_staleness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A push whose own SyncReport never measured is_stale (offered > 0 but
+    # is_stale=None) must FAIL StalenessGate: "a weight sync was offered ...
+    # but is_stale was never measured" cannot be reported healthy. gates=True
+    # by default, so publish() must turn that into a RolloutHostRefusal naming
+    # the WEIGHT_SYNC sweep, never silently accept the unmeasured push.
+    from foundationscale.rl.weightsync import SyncReport
+
+    monkeypatch.setattr(
+        "foundationscale.rl.distributed.save_checkpoint",
+        lambda *a, **k: Path(a[2]).mkdir(parents=True, exist_ok=True) or True,
+    )
+    fake_module = write_fake_server(tmp_path)
+    spec = make_server_spec(tmp_path, fake_module, port=free_port())
+    # Never started: push() is replaced below, so no real HTTP call is ever
+    # made -- this fleet exists only to satisfy DiskWeightSync's own
+    # isinstance(fleet, EngineFleet) construction check.
+    fleet = EngineFleet(servers=(SGLangServer(spec),))
+
+    def fake_push(self: DiskWeightSync, path: str) -> SyncReport:
+        return SyncReport(
+            transport="disk",
+            offered=("server_0",),
+            transferred=("server_0",),
+            skipped=(),
+            failed_ranks=(),
+            bytes_moved=None,
+            seconds=0.01,
+            is_stale=None,  # UNMEASURED: offered > 0 but staleness never measured
+        )
+
+    monkeypatch.setattr(DiskWeightSync, "push", fake_push)
+    publish_root = tmp_path / "publish"
+    publish_root.mkdir()
+    sync = DiskWeightSync(publish_root=str(publish_root), fleet=fleet)
+    host = _host(
+        tmp_path,
+        uids=["taskA"],
+        client_factory=lambda index: SubmitClient(),
+        weight_sync=sync,
+    )
+    with pytest.raises(RolloutHostRefusal, match="WEIGHT_SYNC gates blocked") as excinfo:
+        host.publish(object(), object(), SimpleNamespace(rank=0), step=0)
+    message = str(excinfo.value)
+    assert "step 0" in message
+    # StalenessGate's own FAIL detail names the offered-server count.
+    assert "1 server(s)" in message
+
+
+def test_second_step_rollout_is_served_by_the_fleet_after_a_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # End-to-end, a REAL EngineFleet of one fake HTTP server, through
+    # RolloutHost.rollout() + .publish() exactly as RLTrainer.run() drives
+    # them: step 2's rollout must be served by the RELOADED checkpoint, not
+    # the one the fleet started with -- observed via the fake server's own
+    # echo of its currently-"loaded" model path (see
+    # _fake_sglang_fixtures.FAKE_SERVER_SOURCE), not merely "nothing raised".
+    monkeypatch.setattr(
+        "foundationscale.rl.distributed.save_checkpoint",
+        lambda *a, **k: Path(a[2]).mkdir(parents=True, exist_ok=True) or True,
+    )
+    fake_module = write_fake_server(tmp_path)
+    spec = make_server_spec(tmp_path, fake_module, port=free_port())
+    fleet = EngineFleet(servers=(SGLangServer(spec),))
+    fleet.start_all()
+    try:
+        publish_root = tmp_path / "publish"
+        publish_root.mkdir()
+        sync = DiskWeightSync(publish_root=str(publish_root), fleet=fleet)
+        host = _host(
+            tmp_path,
+            uids=["taskA"],
+            group_size=2,
+            client_factory=None,
+            fleet=fleet,
+            weight_sync=sync,
+        )
+
+        # Step 0's rollout is served by the fleet's INITIAL checkpoint.
+        batch0 = host.rollout(0)
+        initial_len = len("ok loaded:/fake/model")
+        assert all(r == float(initial_len) for r in batch0.columns["reward"])
+
+        # RLTrainer.run() calls publish(model, tokenizer, ctx, step) after the
+        # optimizer step; rank 0 saves (faked above), then pushes the reload.
+        host.publish(object(), object(), SimpleNamespace(rank=0), step=0)
+
+        # Step 1 ("step 2" in 1-indexed training-step terms) is served by the
+        # RELOADED checkpoint.
+        batch1 = host.rollout(1)
+        reloaded_len = len(f"ok loaded:{publish_root}/step_000001")
+        assert reloaded_len != initial_len
+        assert all(r == float(reloaded_len) for r in batch1.columns["reward"])
+    finally:
+        fleet.stop_all()
+
+
+def test_rollout_summary_counts_abstentions_and_never_averages_none() -> None:
+    import json
+
+    from foundationscale.agentic_rl.rollout_host import rollout_summary
+
+    line = rollout_summary(3, [])
+    payload = json.loads(line.split(" ", 1)[1])
+    assert payload["trajectories"] == 0
+    assert payload["reward_mean"] is None
+    assert payload["abstained"] == 0

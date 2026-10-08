@@ -1248,3 +1248,26 @@ def test_registered_tool_without_execution_binding_reports_error() -> None:
     decoded = tokenizer.decode(observation.token_ids)
     assert "no execution binding" in decoded
     assert outcome.termination is Termination.STOP
+
+
+def test_nameless_call_markup_is_recorded_not_a_crash() -> None:
+    # Regression from the first GPU smoke run: the policy emitted call markup
+    # with no function name; building ToolCall(name="") aborted the whole run.
+    tokenizer = ToyTokenizer()
+    loop = _loop(tokenizer=tokenizer)
+    nameless = (
+        markup.TOOL_CALL_OPEN
+        + markup.FUNCTION_OPEN_PREFIX
+        + markup.TAG_CLOSE
+        + markup.FUNCTION_CLOSE
+        + markup.TOOL_CALL_CLOSE
+    )
+    client = ScriptedClient([_generation(nameless), _generation(_submit_call_text("ok"))])
+    env = FakeEnvironment()
+    outcome = _run(loop, _task(), client, env, _budget())
+    first = outcome.trajectory_turns[0]
+    assert len(first.tool_calls) == 1
+    assert first.tool_calls[0].name is None
+    assert first.tool_calls[0].parse_error
+    assert env.commands == []
+    assert outcome.termination is Termination.STOP

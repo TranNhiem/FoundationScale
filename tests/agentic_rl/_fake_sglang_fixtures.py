@@ -4,7 +4,11 @@ NOT a ``test_*.py`` module (pytest never collects it directly): a standalone fak
 HTTP server script, written to a caller's ``tmp_path`` and launched exactly the
 way ``engines.fleet.SGLangServer.start`` launches a real SGLang server
 (``python_bin -m <launch_module> --model-path ... --port ... --tp-size ...``),
-never importing or starting the real ``sglang`` package.
+never importing or starting the real ``sglang`` package. The same script also
+backs ``EngineServer``/``EngineServerSpec`` tests (``make_engine_server_spec``
+below): its ``--model-path`` value crashing the process when it contains "FAIL"
+lets a restart-mode ``DiskWeightSync`` push be tested end to end, the same
+"FAIL" convention ``/update_weights_from_disk`` already uses for reload-mode.
 """
 
 from __future__ import annotations
@@ -13,8 +17,9 @@ import socket
 import sys
 import textwrap
 from pathlib import Path
+from typing import Literal
 
-from foundationscale.agentic_rl.engines.fleet import SGLangServerSpec
+from foundationscale.agentic_rl.engines.fleet import EngineServerSpec, SGLangServerSpec
 
 FAKE_SERVER_SOURCE = textwrap.dedent(
     """
@@ -34,7 +39,7 @@ FAKE_SERVER_SOURCE = textwrap.dedent(
     parser.add_argument("--spawn-child-pidfile", required=False)
     args, _unknown = parser.parse_known_args()
 
-    if args.crash_immediately:
+    if args.crash_immediately or "FAIL" in args.model_path:
         sys.exit(7)
 
     if args.ignore_sigterm:
@@ -53,6 +58,11 @@ FAKE_SERVER_SOURCE = textwrap.dedent(
         with open(args.spawn_child_pidfile, "w") as fh:
             fh.write(str(child.pid))
 
+    # Tracks which checkpoint this fake server last successfully "loaded" via
+    # /update_weights_from_disk, echoed into /generate's own response text so
+    # a test can observe a reload/restart actually taking effect on the NEXT
+    # rollout, not merely that the call didn't raise.
+    state = {"loaded_model_path": args.model_path}
 
     class Handler(BaseHTTPRequestHandler):
         def _send_json(self, status, payload):
@@ -68,7 +78,10 @@ FAKE_SERVER_SOURCE = textwrap.dedent(
                 if args.never_healthy:
                     self._send_json(503, {"status": "not ready"})
                 else:
-                    self._send_json(200, {"status": "ok"})
+                    # Real servers answer /health with 200 and an EMPTY body.
+                    self.send_response(200)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
                 return
             self._send_json(404, {"error": "not found"})
 
@@ -80,7 +93,7 @@ FAKE_SERVER_SOURCE = textwrap.dedent(
                 self._send_json(
                     200,
                     {
-                        "text": "ok",
+                        "text": "ok loaded:" + state["loaded_model_path"],
                         "output_ids": [1],
                         "meta_info": {
                             "output_token_logprobs": [[-0.1, 1]],
@@ -94,6 +107,7 @@ FAKE_SERVER_SOURCE = textwrap.dedent(
                 if "FAIL" in model_path:
                     self._send_json(200, {"success": False, "message": "simulated failure"})
                 else:
+                    state["loaded_model_path"] = model_path
                     self._send_json(200, {"success": True})
                 return
             self._send_json(200, {"success": True})
@@ -146,3 +160,45 @@ def make_server_spec(
     }
     fields.update(overrides)
     return SGLangServerSpec(**fields)  # type: ignore[arg-type]
+
+
+def make_engine_server_spec(
+    tmp_path: Path,
+    fake_module: str,
+    *,
+    kind: Literal["sglang", "vllm"] = "sglang",
+    port: int,
+    model_path: str = "{model_path}",
+    served_model_name: str | None = None,
+    **overrides: object,
+) -> EngineServerSpec:
+    """A generic ``EngineServerSpec`` pointed at the fake server script, with a
+    FULL argv equivalent to what ``SGLangServer.start`` assembles internally --
+    ``--model-path`` carries the literal ``"{model_path}"`` placeholder by
+    default so a restart-mode ``DiskWeightSync`` push has something to
+    substitute.
+    """
+    command = (
+        sys.executable,
+        "-m",
+        fake_module,
+        "--model-path",
+        model_path,
+        "--port",
+        str(port),
+        "--tp-size",
+        "1",
+    )
+    fields: dict[str, object] = {
+        "kind": kind,
+        "command": command,
+        "port": port,
+        "log_dir": str(tmp_path),
+        "env": {"PYTHONPATH": str(tmp_path)},
+        "startup_timeout_s": 10.0,
+        "health_poll_interval_s": 0.05,
+        "request_timeout_s": 5.0,
+        "served_model_name": served_model_name or ("served-model" if kind == "vllm" else None),
+    }
+    fields.update(overrides)
+    return EngineServerSpec(**fields)  # type: ignore[arg-type]

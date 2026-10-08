@@ -350,6 +350,23 @@ def test_an_infra_row_with_an_all_zero_mask_leaves_the_group_not_the_batch() -> 
     assert [row[0] for row in result.weights] == [-1.0, 1.0]
 
 
+def test_an_infra_row_with_an_empty_mask_leaves_the_group_not_the_batch() -> None:
+    # A zero-turn INFRA trajectory (contracts.Trajectory with prompt_turns=
+    # turns=()) has no token positions at all, not merely an all-0 mask: the
+    # empty row must be admitted for an abstained (None) reward exactly as the
+    # all-0 case already is.
+    estimator = SessionGroupAdvantage(min_group_size=2, partial_group_policy="shrink", min_valid=2)
+    result = estimator.compute(
+        prompt_ids=("s", "s", "s"),
+        rewards=(None, 1.0, 3.0),
+        mask=((), (1, 1), (1, 1)),
+    )
+    assert result.rows == (1, 2)
+    assert result.used == 2
+    assert result.offered == 3
+    assert [row[0] for row in result.weights] == [-1.0, 1.0]
+
+
 def test_a_scored_row_that_supervises_nothing_is_still_refused() -> None:
     estimator = SessionGroupAdvantage(min_group_size=2)
     with pytest.raises(AdvantageRefusal, match="supervises 0 of 2"):

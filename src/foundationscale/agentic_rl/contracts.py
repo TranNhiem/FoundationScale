@@ -209,9 +209,11 @@ def _tool_calls(value: object, *, where: str) -> tuple[ToolCall, ...]:
     return tuple(calls)
 
 
-def _turn_list(value: object, *, field_name: str, where: str) -> tuple[Turn, ...]:
+def _turn_list(
+    value: object, *, field_name: str, where: str, allow_empty: bool = False
+) -> tuple[Turn, ...]:
     items = _items(value, field_name=field_name, where=where)
-    if not items:
+    if not items and not allow_empty:
         raise TrajectoryRefusal(
             f"{where}: field {field_name!r} is empty: a trajectory is prompt turns (the "
             f"shared context) plus response turns (the attempt), and one side missing leaves "
@@ -252,18 +254,29 @@ class ToolCall:
     fine" for a call whose caller simply forgot to report.
     """
 
-    name: str
+    # None ONLY for a call whose markup was too malformed to yield a function
+    # name -- and then parse_error must say so. Measured on the first GPU smoke
+    # run: a model emitted call markup with no name, and the honest record is
+    # "unnamed, and here is why", not an invented placeholder name.
+    name: str | None
     arguments: str
     call_id: str | None
     parse_error: str | None
 
     def __post_init__(self) -> None:
         where = _unattached(f"tool call name={self.name!r}")
-        if not isinstance(self.name, str) or not self.name:
+        if self.name is None:
+            if not isinstance(self.parse_error, str) or not self.parse_error:
+                raise TrajectoryRefusal(
+                    f"{where}: field 'name' is None but field 'parse_error' is "
+                    f"{_described(self.parse_error)}: an unnamed call is only lawful as a "
+                    f"recorded parse failure -- a call that parsed fine always names its tool"
+                )
+        elif not isinstance(self.name, str) or not self.name:
             raise TrajectoryRefusal(
-                f"{where}: field 'name' is {_described(self.name)}: every tool call names its "
-                f"tool with a non-empty str -- absence of a name is not a name, and an unnamed "
-                f"call can be neither routed, refused nor reported"
+                f"{where}: field 'name' is {_described(self.name)}: a tool call names its "
+                f"tool with a non-empty str, or is None with a parse_error -- an empty "
+                f"string is neither, and an unnamed call can be neither routed nor reported"
             )
         if not isinstance(self.arguments, str):
             raise TrajectoryRefusal(
@@ -397,6 +410,16 @@ class Trajectory:
     ``metadata`` is harness-private ``str`` text carried read-only and never
     exported to a batch.
 
+    ``prompt_turns`` and ``turns`` may BOTH be ``()`` iff ``termination`` is
+    ``Termination.INFRA``: a run that failed before the harness ever rendered a
+    prompt (e.g. the environment never started) has nothing real on either
+    side, and a zero-turn trajectory records exactly that -- honestly, rather
+    than inventing placeholder tokens for text nothing tokenised. Such a row's
+    per-token columns (``response_token_ids``, ``loss_mask``, ...) come out
+    empty and :func:`flatten` keeps the row (its per-row checks compare lengths,
+    never require them non-zero). Outside ``Termination.INFRA`` both sequences
+    are still required non-empty, unchanged.
+
     Validation lives where the context lives: per-field shape is refused at
     :class:`Turn`/class:`ToolCall` construction -- where no trajectory exists and
     the message says so -- and every sequence-level rule (strict index order,
@@ -426,12 +449,27 @@ class Trajectory:
                     f"group, session_id one attempt inside it and harness which robot recorded "
                     f"the turns, and each is a non-empty str -- absence of a name is not a name"
                 )
+        # A zero-turn trajectory is lawful ONLY under Termination.INFRA (see the
+        # class docstring): read here, before `self.termination` itself is
+        # validated below, because an invalid `termination` value is simply
+        # never `is Termination.INFRA` and so never grants the allowance --
+        # the later isinstance check still fires and names it.
+        allow_empty_turns = self.termination is Termination.INFRA
         object.__setattr__(
             self,
             "prompt_turns",
-            _turn_list(self.prompt_turns, field_name="prompt_turns", where=where),
+            _turn_list(
+                self.prompt_turns,
+                field_name="prompt_turns",
+                where=where,
+                allow_empty=allow_empty_turns,
+            ),
         )
-        object.__setattr__(self, "turns", _turn_list(self.turns, field_name="turns", where=where))
+        object.__setattr__(
+            self,
+            "turns",
+            _turn_list(self.turns, field_name="turns", where=where, allow_empty=allow_empty_turns),
+        )
         for position, turn in enumerate(self.prompt_turns):
             if turn.generated:
                 raise TrajectoryRefusal(

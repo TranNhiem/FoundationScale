@@ -24,9 +24,14 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 
 import pytest
-from tests.agentic_rl._fake_sglang_fixtures import free_port, make_server_spec, write_fake_server
+from _fake_sglang_fixtures import (
+    free_port,
+    make_engine_server_spec,
+    make_server_spec,
+    write_fake_server,
+)
 
-from foundationscale.agentic_rl.engines.fleet import EngineFleet, SGLangServer
+from foundationscale.agentic_rl.engines.fleet import EngineFleet, EngineServer, SGLangServer
 from foundationscale.agentic_rl.weight_sync import DiskWeightSync, DiskWeightSyncRefusal
 from foundationscale.rl.weightsync import SyncCapabilities, SyncReport
 
@@ -67,6 +72,19 @@ def test_rejects_non_callable_save_fn(fleet: EngineFleet, publish_root: str) -> 
         DiskWeightSync(save_fn="not callable", publish_root=publish_root, fleet=fleet)  # type: ignore[arg-type]
 
 
+def test_accepts_a_none_save_fn_for_a_publish_only_caller(
+    fleet: EngineFleet, publish_root: str
+) -> None:
+    sync = DiskWeightSync(publish_root=publish_root, fleet=fleet)
+    assert sync.save_fn is None
+
+
+def test_sync_refuses_when_save_fn_is_none(fleet: EngineFleet, publish_root: str) -> None:
+    sync = DiskWeightSync(publish_root=publish_root, fleet=fleet)
+    with pytest.raises(DiskWeightSyncRefusal, match="save_fn"):
+        sync.sync(0)
+
+
 def test_rejects_empty_publish_root(fleet: EngineFleet) -> None:
     with pytest.raises(DiskWeightSyncRefusal):
         DiskWeightSync(save_fn=lambda path: None, publish_root="", fleet=fleet)
@@ -82,6 +100,21 @@ def test_rejects_non_positive_keep_last(fleet: EngineFleet, publish_root: str) -
         DiskWeightSync(
             save_fn=lambda path: None, publish_root=publish_root, fleet=fleet, keep_last=0
         )
+
+
+def test_rejects_an_undeclared_mode(fleet: EngineFleet, publish_root: str) -> None:
+    with pytest.raises(DiskWeightSyncRefusal, match="field 'mode'"):
+        DiskWeightSync(
+            save_fn=lambda path: None,
+            publish_root=publish_root,
+            fleet=fleet,
+            mode="reload_from_memory",  # type: ignore[arg-type]
+        )
+
+
+def test_default_mode_is_reload_endpoint(fleet: EngineFleet, publish_root: str) -> None:
+    sync = DiskWeightSync(save_fn=lambda path: None, publish_root=publish_root, fleet=fleet)
+    assert sync.mode == "reload_endpoint"
 
 
 # ---------------------------------------------------------------------------
@@ -237,3 +270,93 @@ def test_prune_is_a_noop_when_publish_root_does_not_exist(
     missing_root = str(tmp_path / "does_not_exist_yet")
     sync = DiskWeightSync(save_fn=lambda path: None, publish_root=missing_root, fleet=fleet)
     sync._prune()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# mode="restart": stop + relaunch with {model_path} substituted
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def engine_fleet(tmp_path: Path) -> Generator[EngineFleet, None, None]:
+    fake_module = write_fake_server(tmp_path)
+    specs = [make_engine_server_spec(tmp_path, fake_module, port=free_port()) for _ in range(2)]
+    servers = tuple(EngineServer(spec) for spec in specs)
+    built = EngineFleet(servers=servers)
+    built.start_all()
+    yield built
+    built.stop_all()
+
+
+def test_restart_mode_relaunches_every_server_with_the_checkpoint_substituted(
+    engine_fleet: EngineFleet, publish_root: str
+) -> None:
+    sync = DiskWeightSync(
+        save_fn=lambda path: None, publish_root=publish_root, fleet=engine_fleet, mode="restart"
+    )
+    report = sync.push("/ckpt/step_000001")
+    assert report.transport == "disk"
+    assert report.complete is True
+    assert report.transferred == ("server_0", "server_1")
+    for server in engine_fleet.servers:
+        assert isinstance(server, EngineServer)
+        # server.spec is NEVER mutated by a restart -- the declared template
+        # (placeholder included) survives for the next restart too.
+        assert "{model_path}" in server.spec.command
+        assert server.client().health() is True
+
+    # A second restart against the SAME (unmutated) template must also work --
+    # the placeholder was not consumed by the first substitution.
+    report2 = sync.push("/ckpt/step_000002")
+    assert report2.complete is True
+    for server in engine_fleet.servers:
+        assert isinstance(server, EngineServer)
+        assert server.client().health() is True
+
+
+def test_restart_mode_records_a_crashed_restart_in_skipped_and_failed_ranks(
+    engine_fleet: EngineFleet, publish_root: str
+) -> None:
+    sync = DiskWeightSync(
+        save_fn=lambda path: None, publish_root=publish_root, fleet=engine_fleet, mode="restart"
+    )
+    # The fake server crashes immediately whenever --model-path contains "FAIL"
+    # (see _fake_sglang_fixtures.FAKE_SERVER_SOURCE) -- the same convention
+    # reload-mode's /update_weights_from_disk failure test already uses.
+    report = sync.push("/ckpt/FAIL_step")
+    assert report.failed_ranks == (0, 1)
+    assert report.skipped == ("server_0", "server_1")
+    assert report.transferred == ()
+    assert report.complete is False
+    assert report.partial is True
+
+
+def test_restart_mode_refuses_a_fleet_of_legacy_sglang_servers(
+    fleet: EngineFleet, publish_root: str
+) -> None:
+    # `fleet` (the module-level fixture) is built from plain SGLangServer
+    # instances, which have no declared command / {model_path} placeholder.
+    sync = DiskWeightSync(
+        save_fn=lambda path: None, publish_root=publish_root, fleet=fleet, mode="restart"
+    )
+    with pytest.raises(DiskWeightSyncRefusal, match="server_0"):
+        sync.push("/ckpt/step_000001")
+
+
+def test_restart_mode_refuses_a_command_with_no_placeholder(
+    tmp_path: Path, publish_root: str
+) -> None:
+    fake_module = write_fake_server(tmp_path)
+    spec = make_engine_server_spec(
+        tmp_path, fake_module, port=free_port(), model_path="/fixed/model"
+    )
+    fleet = EngineFleet(servers=(EngineServer(spec),))
+    fleet.start_all()
+    try:
+        sync = DiskWeightSync(
+            save_fn=lambda path: None, publish_root=publish_root, fleet=fleet, mode="restart"
+        )
+        with pytest.raises(DiskWeightSyncRefusal, match="server_0"):
+            sync.push("/ckpt/step_000001")
+    finally:
+        fleet.stop_all()

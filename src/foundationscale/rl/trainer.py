@@ -327,7 +327,10 @@ class RLTrainConfig:
     """
 
     model: str
-    dataset: str
+    # The ShareGPT corpus the built-in generate-and-score leg draws prompts
+    # from. None only together with rollout_source, which replaces that leg
+    # entirely; each of the two other combinations is refused in run().
+    dataset: str | None = None
     # dr_grpo, not grpo. dr_grpo is reference-free, so the default run never
     # pays the memory for the frozen reference copy that grpo's k3 term
     # requires. The default should be the cheapest entry that trains end to
@@ -642,7 +645,22 @@ class RLTrainer:
                 "to take. Raise the temperature or set group_size=1."
             )
 
-        samples = load_sharegpt(self.config.dataset, gold_key=self.config.gold_key)
+        if self.config.rollout_source is not None and self.config.dataset is not None:
+            _refuse_exit_96(
+                f"dataset={self.config.dataset!r} together with rollout_source: the "
+                f"rollout source replaces the corpus draw entirely, so the dataset "
+                f"would be declared and never read. Drop one of the two."
+            )
+        if self.config.rollout_source is None and self.config.dataset is None:
+            _refuse_exit_96(
+                "dataset=None without a rollout_source: the built-in leg draws its "
+                "prompts from the corpus, and there is none to draw from"
+            )
+        samples: tuple[Sample, ...] | list[Sample] = (
+            ()
+            if self.config.dataset is None
+            else load_sharegpt(self.config.dataset, gold_key=self.config.gold_key)
+        )
         # #371: corpus.py PARSES `image` and `video` into Sample.images/.video,
         # and its docstring advertises "text-only, image-text, multi-image, and
         # video" records. This trainer references neither field: it builds every
@@ -925,7 +943,7 @@ class RLTrainer:
             )
 
         usable = tuple(sample for sample in samples if sample.gold is not None)
-        if not usable:
+        if not usable and self.config.rollout_source is None:
             _refuse_exit_96(
                 f"0 of {len(samples)} loaded samples carry a parseable gold letter; "
                 f"a run with no verifiable row is vacuous"

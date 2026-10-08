@@ -13,7 +13,13 @@ with a ``rollout_source`` configured skips generation entirely, shards whole
 groups by the batch's own ``prompt_ids`` column, prices each step through
 ``_one_step_rows`` / ``_priced_tail``, and calls ``rollout_source.publish``
 after every measured step; and ``rollout_source`` is refused together with
-ppo in ``_resolve_objective`` before any row is ever read.
+ppo in ``_resolve_objective`` before any row is ever read. ``RLTrainConfig.
+dataset`` is ``str | None``: declaring it TOGETHER with ``rollout_source``
+refuses (exit 96) by name (the rollout source replaces the corpus draw, so a
+declared dataset would never be read), declaring NEITHER refuses too (the
+built-in leg has no corpus to draw from), and under ``rollout_source`` with
+``dataset=None`` no corpus is loaded at all -- ``load_sharegpt`` is never
+called.
 
 WHAT IS NOT CLAIMED: convergence, real-model loading, or equivalence with
 any published implementation. The fake host is the deterministic
@@ -40,6 +46,7 @@ from test_trainer_group_family import (  # noqa: E402 (sibling test module, no p
     _install_fake_host,
 )
 
+import foundationscale.rl.trainer as trainer_module  # noqa: E402
 from foundationscale.rl.interfaces import ExperienceBatch  # noqa: E402
 from foundationscale.rl.torch_backend import TensorPolicyLoss  # noqa: E402
 from foundationscale.rl.trainer import RLTrainer, TrainerRefusal  # noqa: E402
@@ -293,11 +300,67 @@ def test_run_with_rollout_source_never_generates_and_publishes_each_step(
     monkeypatch.setattr(_FakeModel, "generate", _refuse_generate)
 
     source = _FakeRolloutSource([_rows_batch(), _rows_batch()])
-    reports = RLTrainer(_config("agentic_grpo", max_steps=2, rollout_source=source)).run()
+    reports = RLTrainer(
+        _config("agentic_grpo", max_steps=2, rollout_source=source, dataset=None)
+    ).run()
 
     assert len(reports) == 2
     assert source.rollout_calls == [0, 1]
     assert source.publish_calls == [0, 1]
+
+
+# --- (e2) RLTrainConfig.dataset/rollout_source: declared together or not at
+# all, and the rollout_source path loads NO corpus ---------------------------
+
+
+def test_run_refuses_dataset_declared_together_with_rollout_source(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install_fake_host(monkeypatch)
+    source = _FakeRolloutSource([_rows_batch()])
+    trainer = RLTrainer(
+        _config("agentic_grpo", max_steps=1, rollout_source=source, dataset="some.jsonl")
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        trainer.run()
+    assert excinfo.value.code == 96
+    err = capsys.readouterr().err
+    assert "dataset='some.jsonl'" in err
+    assert "rollout_source" in err
+
+
+def test_run_refuses_dataset_none_without_rollout_source(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install_fake_host(monkeypatch)
+    trainer = RLTrainer(_config("agentic_grpo", dataset=None))
+    with pytest.raises(SystemExit) as excinfo:
+        trainer.run()
+    assert excinfo.value.code == 96
+    assert "dataset=None without a rollout_source" in capsys.readouterr().err
+
+
+def test_run_with_rollout_source_and_no_dataset_loads_no_corpus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_host(monkeypatch)
+
+    def _refuse_load_sharegpt(dataset: Any, gold_key: Any = None) -> Any:
+        raise AssertionError(
+            "load_sharegpt must never be called when rollout_source replaces the corpus"
+        )
+
+    # Overrides _install_fake_host's own (permissive) load_sharegpt stub with
+    # one that fails loudly if ever reached.
+    monkeypatch.setattr(trainer_module, "load_sharegpt", _refuse_load_sharegpt)
+
+    source = _FakeRolloutSource([_rows_batch()])
+    reports = RLTrainer(
+        _config("agentic_grpo", max_steps=1, rollout_source=source, dataset=None)
+    ).run()
+
+    assert len(reports) == 1
+    assert source.rollout_calls == [0]
 
 
 # --- (f) refusal: rollout_source together with ppo -------------------------
