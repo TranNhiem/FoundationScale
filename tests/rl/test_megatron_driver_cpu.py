@@ -524,3 +524,13 @@ def test_reduce_step_metrics_ignores_non_dict_entries() -> None:
         ["not-a-dict", {"loss": 0.5, "ratio_mean": 1.0, "clip_fraction": 0.0, "tokens": 4.0}]
     )
     assert metrics["loss"] == pytest.approx(0.5)
+
+
+def test_build_arg_parser_train_state_is_opt_in() -> None:
+    base = ["--hf-model", "m", "--rollout-jsonl", "r.jsonl", "--metrics-out", "o.jsonl"]
+    args = driver.build_arg_parser().parse_args(base)
+    assert args.train_state_dir == "" and args.train_state_every == 0
+    args = driver.build_arg_parser().parse_args(
+        [*base, "--train-state-dir", "s", "--train-state-every", "50"]
+    )
+    assert args.train_state_dir == "s" and args.train_state_every == 50
