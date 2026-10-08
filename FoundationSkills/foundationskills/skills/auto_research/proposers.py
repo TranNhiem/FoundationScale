@@ -392,6 +392,10 @@ def _reverify(
     """The C6 checks in record order: legacy -> recorded -> prefix -> rebuild -> re-propose."""
     if not isinstance(proposal, dict):
         return "unmeasured", "legacy_proposal"                       # 1. not a record at all
+    who = proposal.get("proposer")
+    if isinstance(who, dict) and who.get("name") == "llm":          # M5b: generation is unreplayable - re-parse only
+        from .proposers_llm import reverify_record
+        return reverify_record(spec, proposal)
     inputs = proposal.get("replay_inputs")
     if not isinstance(inputs, dict):
         return "unmeasured", "legacy_proposal"                       # 1. missing/None replay_inputs: an M3 proposal
