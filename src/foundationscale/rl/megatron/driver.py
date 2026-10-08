@@ -831,9 +831,9 @@ def _run_online(
     from foundationscale.rl.megatron.normalization import compute_denominators
     from foundationscale.rl.megatron.pp_step import loss_unit
     from foundationscale.rl.megatron.resume import (
-        latest_training_state,
-        load_training_state,
+        resume_if_present,
         save_training_state,
+        state_save_due,
     )
     from foundationscale.rl.megatron.save import lane_topology, run_lane_save
     from foundationscale.rl.registry import lookup_algorithm
@@ -956,17 +956,15 @@ def _run_online(
 
         # Resume AFTER the reference snapshot above: the frozen reference must stay the
         # initial policy, and the build loaded exactly that before any state is restored.
-        start_step = 0
-        latest = latest_training_state(args.train_state_dir) if args.train_state_dir else None
-        if latest is not None:
-            restored = load_training_state(latest, trainer.model, trainer.optimizer, trainer.pg)
-            start_step = int(restored["step"]) + 1
-            if writer:
-                print(
-                    f"RESUMED from {latest} at step {start_step} "
-                    f"param_hash={param_hash(trainer.model)}",
-                    flush=True,
-                )
+        start_step, latest = resume_if_present(
+            args.train_state_dir, trainer.model, trainer.optimizer, trainer.pg
+        )
+        if latest is not None and writer:
+            print(
+                f"RESUMED from {latest} at step {start_step} "
+                f"param_hash={param_hash(trainer.model)}",
+                flush=True,
+            )
 
         def _save_state(step: int) -> None:
             if args.train_state_dir:
@@ -1070,8 +1068,7 @@ def _run_online(
             if fh is not None:
                 fh.write(json.dumps(record) + "\n")
                 fh.flush()
-            every = args.train_state_every
-            if every and (step + 1) % every == 0 and step + 1 < args.steps:
+            if state_save_due(step, args.train_state_every, args.steps):
                 _save_state(step)
         if start_step < args.steps:
             _save_state(args.steps - 1)

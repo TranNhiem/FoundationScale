@@ -37,8 +37,10 @@ __all__ = [
     "LATEST_NAME",
     "latest_training_state",
     "load_training_state",
+    "resume_if_present",
     "save_training_state",
     "state_dir_for_step",
+    "state_save_due",
 ]
 
 # Rank 0 writes this tracker only after every rank has finished the save, so a
@@ -181,3 +183,26 @@ def load_training_state(
         raise ValueError(f"{path}: no {_STATE_KEY!r} entry; not a training-state checkpoint")
     restored: dict[str, Any] = json.loads(raw)
     return restored
+
+
+def resume_if_present(
+    root: str | os.PathLike[str] | None, model: Any, optimizer: Any, pg: Any
+) -> tuple[int, Path | None]:
+    """COLLECTIVE when a state exists: ``(first step to run, state resumed from)``.
+
+    An empty ``root`` or one with no complete state starts at step 0 (``None``); a
+    complete state is loaded into ``model``/``optimizer`` and the run continues at
+    the step after the one it was saved at.
+    """
+    if not root:
+        return 0, None
+    latest = latest_training_state(root)
+    if latest is None:
+        return 0, None
+    restored = load_training_state(latest, model, optimizer, pg)
+    return int(restored["step"]) + 1, latest
+
+
+def state_save_due(step: int, every: int, total_steps: int) -> bool:
+    """True when a periodic state save falls after ``step`` (the final one is separate)."""
+    return bool(every) and (step + 1) % every == 0 and step + 1 < total_steps
