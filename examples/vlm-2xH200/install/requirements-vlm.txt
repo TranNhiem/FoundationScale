@@ -1,0 +1,14 @@
+# Versions verified together on 2x H200 (driver 580, CUDA 13.0) on 2026-10-08.
+# torch/torchvision come from the PyTorch cu132 index (see environment.yml / Dockerfile).
+--extra-index-url https://download.pytorch.org/whl/cu132
+torch==2.13.0
+torchvision==0.28.0
+transformers==5.18.0
+peft==0.21.2
+accelerate==1.15.0
+datasets==5.1.0
+liger-kernel==0.8.4
+av==19.0.1
+pillow==12.3.0
+safetensors==0.8.0
+soundfile==0.14.0
