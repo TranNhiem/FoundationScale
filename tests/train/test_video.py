@@ -259,3 +259,260 @@ def test_a_concurrent_publisher_wins_and_its_frames_are_kept(
     paths = video_frame_paths(clip, budget, tmp_path, backends=["race"])
     assert len(calls) == 2 and all(Path(p).is_file() for p in paths)
     assert not list(Path(paths[0]).parent.parent.glob(".frames-*")), "staging left behind"
+
+
+# -- each decoder backend, driven through a stand-in library ---------------------------
+# The cluster images differ in which decoder they ship, so every backend's own
+# instant arithmetic is pinned here against a fake of its library: all four must
+# ask for the SAME centred-uniform instants of an 8-second clip.
+
+_WANT = [1.0, 3.0, 5.0, 7.0]
+
+
+def _rgb(frames: int) -> Any:
+    import numpy as np
+
+    return np.zeros((frames, 6, 8, 3), dtype=np.uint8)
+
+
+def test_torchcodec_backend_asks_for_the_centred_instants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    import types
+
+    asked: list[list[float]] = []
+
+    class _Batch:
+        def __init__(self, n: int) -> None:
+            self.n = n
+
+        @property
+        def data(self) -> _Batch:
+            return self
+
+        def permute(self, *_: int) -> _Batch:
+            return self
+
+        def cpu(self) -> _Batch:
+            return self
+
+        def numpy(self) -> Any:
+            return _rgb(self.n)
+
+    class VideoDecoder:
+        metadata = types.SimpleNamespace(duration_seconds=8.0)
+
+        def __init__(self, path: str) -> None:
+            self.path = path
+
+        def get_frames_played_at(self, seconds: list[float]) -> _Batch:
+            asked.append(seconds)
+            return _Batch(len(seconds))
+
+    decoders = types.ModuleType("torchcodec.decoders")
+    decoders.VideoDecoder = VideoDecoder  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "torchcodec", types.ModuleType("torchcodec"))
+    monkeypatch.setitem(sys.modules, "torchcodec.decoders", decoders)
+    images = video._decode_torchcodec("c.mp4", 4)
+    assert asked == [_WANT] and len(images) == 4
+
+
+def test_av_backend_seeks_each_instant_and_keeps_the_first_frame_at_or_after_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    import types
+    from fractions import Fraction
+
+    from PIL import Image
+
+    seeks: list[int] = []
+
+    class _Frame:
+        def __init__(self, time: float) -> None:
+            self.time = time
+
+        def to_image(self) -> Any:
+            return Image.new("RGB", (8, 6), (int(self.time * 10), 0, 0))
+
+    class _Container:
+        duration = None
+
+        def __init__(self) -> None:
+            stream = types.SimpleNamespace(duration=8000, time_base=Fraction(1, 1000))
+            self.streams = types.SimpleNamespace(video=[stream])
+            self.at = 0.0
+
+        def __enter__(self) -> _Container:
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+        def seek(self, offset: int, **_: Any) -> None:
+            seeks.append(offset)
+            self.at = max(0.0, offset / 1000 - 0.5)
+
+        def decode(self, _stream: Any) -> Any:
+            t = self.at
+            while t < 8.0:
+                yield _Frame(t)
+                t += 0.25
+
+    fake = types.ModuleType("av")
+    fake.open = lambda _path: _Container()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "av", fake)
+    images = video._decode_av("c.mp4", 4)
+    assert seeks == [1000, 3000, 5000, 7000]
+    assert [im.getpixel((0, 0))[0] for im in images] == [10, 30, 50, 70]
+
+
+def test_av_backend_refuses_a_clip_with_no_frame_at_an_instant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    import types
+
+    class _Empty:
+        duration = 2_000_000
+        streams = types.SimpleNamespace(
+            video=[types.SimpleNamespace(duration=None, time_base=0.001)]
+        )
+
+        def __enter__(self) -> _Empty:
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+        def seek(self, *_: Any, **__: Any) -> None:
+            return None
+
+        def decode(self, _stream: Any) -> Any:
+            return iter(())
+
+    fake = types.ModuleType("av")
+    fake.open = lambda _path: _Empty()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "av", fake)
+    with pytest.raises(video.VideoDecodeError, match="no frame decoded"):
+        video._decode_av("c.mp4", 2)
+
+
+def _fake_cv2(opened: bool = True, readable: bool = True) -> tuple[Any, list[float]]:
+    import types
+
+    positions: list[float] = []
+
+    class VideoCapture:
+        def __init__(self, path: str) -> None:
+            self.path = path
+
+        def isOpened(self) -> bool:  # noqa: N802 -- cv2's spelling
+            return opened
+
+        def get(self, prop: int) -> float:
+            return {1: 25.0, 2: 200.0}[prop]
+
+        def set(self, prop: int, value: float) -> None:
+            positions.append(value)
+
+        def read(self) -> tuple[bool, Any]:
+            return readable, _rgb(1)[0]
+
+        def release(self) -> None:
+            return None
+
+    fake = types.ModuleType("cv2")
+    fake.CAP_PROP_FPS = 1  # type: ignore[attr-defined]
+    fake.CAP_PROP_FRAME_COUNT = 2  # type: ignore[attr-defined]
+    fake.CAP_PROP_POS_MSEC = 3  # type: ignore[attr-defined]
+    fake.COLOR_BGR2RGB = 4  # type: ignore[attr-defined]
+    fake.VideoCapture = VideoCapture  # type: ignore[attr-defined]
+    fake.cvtColor = lambda array, _code: array  # type: ignore[attr-defined]
+    return fake, positions
+
+
+def test_cv2_backend_positions_by_milliseconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    fake, positions = _fake_cv2()
+    monkeypatch.setitem(sys.modules, "cv2", fake)
+    images = video._decode_cv2("c.mp4", 4)
+    assert positions == [t * 1000.0 for t in _WANT] and len(images) == 4
+
+
+@pytest.mark.parametrize(
+    ("opened", "readable", "message"),
+    [(False, True, "could not open"), (True, False, "read failed")],
+)
+def test_cv2_backend_refusals(
+    monkeypatch: pytest.MonkeyPatch, opened: bool, readable: bool, message: str
+) -> None:
+    import sys
+
+    fake, _ = _fake_cv2(opened=opened, readable=readable)
+    monkeypatch.setitem(sys.modules, "cv2", fake)
+    with pytest.raises(video.VideoDecodeError, match=message):
+        video._decode_cv2("c.mp4", 2)
+
+
+def _png() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (8, 6)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_ffmpeg_backend_grabs_each_instant(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+    import types
+
+    grabs: list[str] = []
+
+    def run(cmd: list[str], **_: Any) -> Any:
+        if cmd[0] == "ffprobe":
+            return types.SimpleNamespace(stdout="8.0\n", stderr="", returncode=0)
+        grabs.append(cmd[cmd.index("-ss") + 1])
+        return types.SimpleNamespace(stdout=_png(), stderr=b"", returncode=0)
+
+    monkeypatch.setattr(video, "_ffmpeg_bins", lambda: ("ffmpeg", "ffprobe"))
+    monkeypatch.setattr(subprocess, "run", run)
+    images = video._decode_ffmpeg("c.mp4", 4)
+    assert [float(g) for g in grabs] == _WANT and len(images) == 4
+
+
+@pytest.mark.parametrize(
+    ("probe_out", "grab_rc", "message"),
+    [("N/A", 0, "no duration"), ("8.0", 1, "grab failed")],
+)
+def test_ffmpeg_backend_refusals(
+    monkeypatch: pytest.MonkeyPatch, probe_out: str, grab_rc: int, message: str
+) -> None:
+    import subprocess
+    import types
+
+    def run(cmd: list[str], **_: Any) -> Any:
+        if cmd[0] == "ffprobe":
+            return types.SimpleNamespace(stdout=probe_out, stderr="bad", returncode=0)
+        return types.SimpleNamespace(stdout=b"", stderr=b"", returncode=grab_rc)
+
+    monkeypatch.setattr(video, "_ffmpeg_bins", lambda: ("ffmpeg", "ffprobe"))
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(video.VideoDecodeError, match=message):
+        video._decode_ffmpeg("c.mp4", 2)
+
+
+def test_ffmpeg_backend_without_binaries_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(video, "_ffmpeg_bins", lambda: None)
+    with pytest.raises(video.VideoDecodeError, match="not found"):
+        video._decode_ffmpeg("c.mp4", 2)
+
+
+def test_ffmpeg_bins_honour_the_override_variables(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FOUNDATIONSCALE_FFMPEG", "/x/ffmpeg")
+    monkeypatch.setenv("FOUNDATIONSCALE_FFPROBE", "/x/ffprobe")
+    assert video._ffmpeg_bins() == ("/x/ffmpeg", "/x/ffprobe")
