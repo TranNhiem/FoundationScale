@@ -82,6 +82,81 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/agentic_rl/engines/fleet.py": (
+        "engine server lifecycle (spawn, health poll, process-group stop) and round-robin "
+        "clients: line-covered by tests/agentic_rl, but no mutation row yet proves a flipped "
+        "rule here would be caught."
+    ),
+    "src/foundationscale/agentic_rl/engines/sglang.py": (
+        "token-in/token-out engine client with strict response validation and weight reload: "
+        "line-covered by tests/agentic_rl, but no mutation row yet proves a flipped rule here "
+        "would be caught."
+    ),
+    "src/foundationscale/agentic_rl/envs/base.py": (
+        "environment contracts, EnvSpec validation and the backend registry: line-covered by "
+        "tests/agentic_rl, but no mutation row yet proves a flipped rule here would be caught."
+    ),
+    "src/foundationscale/agentic_rl/envs/local.py": (
+        "local subprocess environment: allow-listed env, process-group timeout kill, output "
+        "caps: line-covered by tests/agentic_rl, but no mutation row yet proves a flipped rule "
+        "here would be caught."
+    ),
+    "src/foundationscale/agentic_rl/harness/base.py": (
+        "harness contracts (sampling, generation, episode task/budget/outcome, to_trajectory): "
+        "line-covered by tests/agentic_rl, but no mutation row yet proves a flipped rule here "
+        "would be caught."
+    ),
+    "src/foundationscale/agentic_rl/harness/native_tool_loop.py": (
+        "native multi-turn tool loop: generate, parse, execute, observe, terminate: line-"
+        "covered by tests/agentic_rl, but no mutation row yet proves a flipped rule here would "
+        "be caught."
+    ),
+    "src/foundationscale/agentic_rl/markup.py": (
+        "chat special-token and tag constants: line-covered by tests/agentic_rl, but no "
+        "mutation row yet proves a flipped rule here would be caught."
+    ),
+    "src/foundationscale/agentic_rl/rewards/base.py": (
+        "RewardFn/RewardVerdict contract and the music reward adapter: line-covered by "
+        "tests/agentic_rl, but no mutation row yet proves a flipped rule here would be caught."
+    ),
+    "src/foundationscale/agentic_rl/rewards/music/baseline.py": (
+        "embedded human-music baseline table (data): line-covered by tests/agentic_rl, but no "
+        "mutation row yet proves a flipped rule here would be caught."
+    ),
+    "src/foundationscale/agentic_rl/rewards/music/core.py": (
+        "ported MIDI parser and acoustic/tonal primitives: line-covered by tests/agentic_rl, "
+        "but no mutation row yet proves a flipped rule here would be caught."
+    ),
+    "src/foundationscale/agentic_rl/rewards/music/feats.py": (
+        "ported MIDI feature extraction: line-covered by tests/agentic_rl, but no mutation row "
+        "yet proves a flipped rule here would be caught."
+    ),
+    "src/foundationscale/agentic_rl/rewards/music/pipeline.py": (
+        "ported abc2midi render pipeline with infra-error split: line-covered by "
+        "tests/agentic_rl, but no mutation row yet proves a flipped rule here would be caught."
+    ),
+    "src/foundationscale/agentic_rl/rewards/music/score.py": (
+        "ported band/JS human-likeness scoring: line-covered by tests/agentic_rl, but no "
+        "mutation row yet proves a flipped rule here would be caught."
+    ),
+    "src/foundationscale/agentic_rl/rollout_host.py": (
+        "rollout host: concurrent sessions, reward attach, INFRA conversion, publish: line-"
+        "covered by tests/agentic_rl, but no mutation row yet proves a flipped rule here would "
+        "be caught."
+    ),
+    "src/foundationscale/agentic_rl/tasks.py": (
+        "JSONL task source with deterministic per-step sampling: line-covered by "
+        "tests/agentic_rl, but no mutation row yet proves a flipped rule here would be caught."
+    ),
+    "src/foundationscale/agentic_rl/tools.py": (
+        "tool specs, Qwen-XML/Hermes parsers and call validation: line-covered by "
+        "tests/agentic_rl, but no mutation row yet proves a flipped rule here would be caught."
+    ),
+    "src/foundationscale/agentic_rl/weight_sync.py": (
+        "disk weight sync realising the WeightSync contract, publish-dir pruning: line-covered "
+        "by tests/agentic_rl, but no mutation row yet proves a flipped rule here would be "
+        "caught."
+    ),
     "src/foundationscale/agentic_rl/contracts.py": (
         "agentic trajectory contracts (Turn/Trajectory validation, loss_mask, flatten "
         "to DECLARED_COLUMNS): 100% line-covered with a refusal test per field, but no "

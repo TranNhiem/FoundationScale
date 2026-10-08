@@ -16,6 +16,14 @@ analysis and the phased plan) lives outside the repository with the owner.
 | `SessionGroupAdvantage` | `src/foundationscale/rl/advantage.py` | Group baseline that ADMITS `None` rewards (infra failures, unmeasured verdicts) and removes them from the baseline instead of scoring them 0.0, under a declared `partial_group_policy` (`refuse` / `drop_group` / `shrink(min_valid)`). Centred by default; std normalisation is opt-in. Equal-reward groups are dropped by exact equality. |
 | `prompt_mean` reduction | `rl/group_policy_objectives.py`, `rl/torch_backend.py`, `rl/trainer.py` | Each prompt group contributes equally to the loss regardless of how many tokens its trajectories hold. HF/FSDP2 lane only; the Megatron lane refuses it by name. |
 | `agentic_grpo` algorithm | `rl/group_policy.py`, registry | Token ratio, clip (0.8, 1.2), `SessionGroupAdvantage`, `prompt_mean`, structurally no KL term. |
+| Environments | `agentic_rl/envs/` | `EnvBackend` registry and `Environment` protocol; the `local` backend runs model-chosen commands in a fresh temp dir with an explicit environment allow-list (plus `HOME`/`PWD` = workdir), its own process group killed on timeout, and head/tail output caps whose dropped bytes are counted. It has no isolation, so it refuses to start unless `EnvSpec.allow_unsandboxed=True`. Infrastructure failures raise `EnvInfraError(kind)` and become `infra:<kind>` abstentions. |
+| Tools and parsers | `agentic_rl/tools.py`, `agentic_rl/markup.py` | `ToolSpec`, the Qwen-XML and Hermes-JSON tool-call parsers (malformed markup is a model-attributable `parse_error`, never an exception) and `validate_call`. Every chat special token and tag is spelled once, in `markup.py`. |
+| Native multi-turn loop | `agentic_rl/harness/` | `NativeToolLoop`: generate → parse → execute → observe until `submit`, a final answer, the step limit, the response budget, an engine abort or an infrastructure failure. Token ids come from the engine and are never re-rendered; observation tokens are prefix deltas of the chat template, refused if the template is not prefix-stable. |
+| Inference engines | `agentic_rl/engines/` | Token-in/token-out `SGLangClient` with logprobs and weight reload from disk, and an `EngineFleet` that owns server processes. The HTTP field names follow SGLang's native API and are an assumption until probed on the cluster; the GB200 estate currently ships vLLM, not SGLang. |
+| Weight sync | `agentic_rl/weight_sync.py` | `DiskWeightSync`: every rank writes the HF checkpoint, rank 0 tells the fleet to reload it; `is_stale=False` only because the S0 schedule is synchronous. Old publish directories are pruned strictly inside `publish_root`. |
+| Rewards | `agentic_rl/rewards/` | `RewardFn` / `RewardVerdict` (a verdict with no value must carry a reason). The rule-scored music reward is a typed port of an Apache-2.0 scorer: model-attributable failures score a measured 0.0, a missing or failing `abc2midi` abstains. |
+| Rollout host | `agentic_rl/rollout_host.py`, `agentic_rl/tasks.py` | Draws tasks, runs `group_size` concurrent sessions per task (each in its own environment), scores them and returns the `flatten()`ed batch; infrastructure failures become INFRA trajectories, programming errors propagate. |
+| Trainer rows path | `rl/trainer.py` | `RLTrainConfig.rollout_source`: each step consumes the agentic batch instead of the built-in single-turn generate-and-score leg. The per-token mask comes from `loss_mask` (tool tokens stay 0), padding is by length, `None` rewards are dropped, old logprobs are still recomputed, and `publish()` runs after every optimizer step. Refused for PPO, online preference and estimator-free algorithms. |
 
 ## Rules every later piece must keep
 
@@ -29,7 +37,6 @@ analysis and the phased plan) lives outside the repository with the owner.
 
 ## Next
 
-Environment backends and the native multi-turn tool loop, the rollout host and
-engine fleet with weight sync, reward services, the agentic gates, and the
-`foundationscale-agentic-rl` entry point, ending in a small-scale
-reproduction on a rule-scored task.
+A vLLM client (the engine the GB200 estate has) and a cluster probe of the
+engine API, the agentic gates, the `foundationscale-agentic-rl` entry point and
+configuration, and a small-scale reproduction on a rule-scored task.

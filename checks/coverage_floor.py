@@ -231,13 +231,34 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/rl/megatron/normalization.py": 77,  # set by --update; measured 77.1%
     "src/foundationscale/rl/megatron/pp_step.py": 58,  # set by --update; measured 58.7%
     "src/foundationscale/train/__main__.py": 0,  # set by --update; measured 0.0%
-    # RATCHET -- 64 module(s) ABOVE the default band. These record what
+    # RATCHET -- 85 module(s) ABOVE the default band. These record what
     # the tree already achieves, so a regression to a merely-passing 90% is RED
     # rather than invisible.
     "src/foundationscale/__init__.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/agentic_rl/__init__.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/agentic_rl/contracts.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/agentic_rl/token_trace.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/agentic_rl/engines/__init__.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/agentic_rl/engines/fleet.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/agentic_rl/engines/sglang.py": 97,  # set by --update; measured 97.5%
+    "src/foundationscale/agentic_rl/envs/__init__.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/agentic_rl/envs/base.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/agentic_rl/envs/local.py": 95,  # set by --update; measured 95.9%
+    "src/foundationscale/agentic_rl/harness/__init__.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/agentic_rl/harness/base.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/agentic_rl/harness/native_tool_loop.py": 100,  # --update; measured 100.0%
+    "src/foundationscale/agentic_rl/markup.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/agentic_rl/rewards/__init__.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/agentic_rl/rewards/base.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/agentic_rl/rewards/music/__init__.py": 100,  # --update; measured 100.0%
+    "src/foundationscale/agentic_rl/rewards/music/baseline.py": 100,  # --update; measured 100.0%
+    "src/foundationscale/agentic_rl/rewards/music/core.py": 98,  # set by --update; measured 98.6%
+    "src/foundationscale/agentic_rl/rewards/music/feats.py": 97,  # set by --update; measured 97.9%
+    "src/foundationscale/agentic_rl/rewards/music/score.py": 100,  # --update; measured 100.0%
+    "src/foundationscale/agentic_rl/rollout_host.py": 99,  # set by --update; measured 99.1%
+    "src/foundationscale/agentic_rl/tasks.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/agentic_rl/tools.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/agentic_rl/weight_sync.py": 98,  # set by --update; measured 98.7%
     "src/foundationscale/checkpoint/__init__.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/checkpoint/dcp_meta.py": 99,  # set by --update; measured 99.6%
     "src/foundationscale/families/__init__.py": 100,  # set by --update; measured 100.0%
