@@ -773,6 +773,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--save-every", type=int, default=0, help="--online: also save every N steps; 0 = final"
     )
     ap.add_argument(
+        "--train-state-dir",
+        default="",
+        help="--online: resumable state (Megatron shards + optimizer + step); a run whose "
+        "dir holds a complete state resumes from it; empty = not resumable",
+    )
+    ap.add_argument(
+        "--train-state-every",
+        type=int,
+        default=0,
+        help="--online: write resumable state every N steps (and at the end); 0 = end only",
+    )
+    ap.add_argument(
         "--heldout-loose-pattern",
         default=None,
         help="--online held-out: second, wider answer regex (one group = the letter) "
@@ -818,6 +830,11 @@ def _run_online(
     from foundationscale.rl.megatron import online
     from foundationscale.rl.megatron.normalization import compute_denominators
     from foundationscale.rl.megatron.pp_step import loss_unit
+    from foundationscale.rl.megatron.resume import (
+        resume_if_present,
+        save_training_state,
+        state_save_due,
+    )
     from foundationscale.rl.megatron.save import lane_topology, run_lane_save
     from foundationscale.rl.registry import lookup_algorithm
     from foundationscale.rl.rewards import MCQLetterReward
@@ -937,10 +954,30 @@ def _run_online(
                 defaults={k: defaults_parser.get_default(k) for k in vars(args)},
             )
 
+        # Resume AFTER the reference snapshot above: the frozen reference must stay the
+        # initial policy, and the build loaded exactly that before any state is restored.
+        start_step, latest = resume_if_present(
+            args.train_state_dir, trainer.model, trainer.optimizer, trainer.pg
+        )
+        if latest is not None and writer:
+            print(
+                f"RESUMED from {latest} at step {start_step} "
+                f"param_hash={param_hash(trainer.model)}",
+                flush=True,
+            )
+
+        def _save_state(step: int) -> None:
+            if args.train_state_dir:
+                save_training_state(
+                    args.train_state_dir, trainer.model, trainer.optimizer, trainer.pg, step=step
+                )
+
         stats, refit_s = _refit()
-        _heldout("pre")
-        for step in range(args.steps):
-            if step:
+        if start_step == 0:
+            # A resumed run is mid-training; a "pre" eval of it would be mislabelled.
+            _heldout("pre")
+        for step in range(start_step, args.steps):
+            if step > start_step:
                 stats, refit_s = _refit()
                 if args.save_every and step % args.save_every == 0:
                     _save(f"step_{step:06d}", step, stats["unwritten"])
@@ -1031,6 +1068,10 @@ def _run_online(
             if fh is not None:
                 fh.write(json.dumps(record) + "\n")
                 fh.flush()
+            if state_save_due(step, args.train_state_every, args.steps):
+                _save_state(step)
+        if start_step < args.steps:
+            _save_state(args.steps - 1)
         stats, _ = _refit()
         _save("final", args.steps, stats["unwritten"])
         _heldout("post")
