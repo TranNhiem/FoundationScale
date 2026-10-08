@@ -205,8 +205,11 @@ workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.m
   tray, 600 steps: with an image column declared, 149 of 658 vision-tower tensors moved;
   over the same rows with the image key removed, 0 of 658 moved while the language tower
   still trained. The discriminator is bit-exact, so there is no tolerance to argue about.
-  Declaring **video** REFUSES with exit 96 and names the modality — this plane has no
-  video arm, and it says so rather than dropping the column in silence. **Audio** trains
+  Declaring **video** alone REFUSES with exit 96 and names the modality, rather than
+  dropping the column in silence. Video gets an arm once its sampling is DECLARED: with
+  `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES=N` beside the column, each clip becomes N
+  centred-uniform frames on the image arm (measured through the processor: 16 frames of
+  a real clip cost 264 tokens each on `gemma-4-E4B-it`). **Audio** trains
   through the speech plane (next item). An omni checkpoint's untrainable towers are **carried, not trained**, and the
   run announces which ones by name, because "trained a multimodal model" and "carried two
   thirds of one unchanged" are different claims. *Not* declaring them is no longer silent
