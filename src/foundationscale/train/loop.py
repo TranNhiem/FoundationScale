@@ -4953,27 +4953,15 @@ def _train(cfg: TrainConfig) -> int:
                 return EXIT_REFUSE
             lora_config["target_modules"] = list(plan.targets)
             if AUDIO_COLUMN is not None:
-                # Speech plane: LoRA on the language model, the audio towers trained
-                # IN FULL (peft modules_to_save) -- the SALM shape. Without this peft
-                # freezes every non-target parameter, and a declared audio column
-                # would train a run whose audio tower never moved. Which modules can
-                # be wrapped is the family's MEASURED declaration (FamilySpec.
-                # adapter_full_train); none declared refuses rather than guesses.
-                from foundationscale.train.audio import (  # noqa: PLC0415
-                    audio_full_train_modules,
-                )
+                # Speech plane: the audio towers train IN FULL (peft modules_to_save) at the
+                # family's MEASURED wrap points; none declared refuses rather than guesses.
+                from foundationscale.train.speech_kinds import lora_audio_plan  # noqa: PLC0415
 
-                _full_train = audio_full_train_modules(
-                    resolve_family(_family_config_mapping(model))
+                _full_train, _plan_line = lora_audio_plan(
+                    resolve_family(_family_config_mapping(model)), AUDIO_COLUMN
                 )
                 if not _full_train:
-                    _mark(
-                        Step.REFUSE,
-                        f"adapter='lora' with audio_column={AUDIO_COLUMN!r}: this family "
-                        "declares no adapter_full_train modules for its audio towers, so "
-                        "an adapter run cannot train them (peft would freeze them). Run a "
-                        "full fine-tune, or measure and register the family's wrap points",
-                    )
+                    _mark(Step.REFUSE, _plan_line)
                     _emit_manifest(
                         cfg,
                         stage="refused",
@@ -4985,12 +4973,7 @@ def _train(cfg: TrainConfig) -> int:
                     )
                     return EXIT_REFUSE
                 lora_config["modules_to_save"] = _full_train
-                _mark(
-                    Step.ADAPTER,
-                    f"adapter='lora' with audio_column={AUDIO_COLUMN!r}: "
-                    f"{', '.join(_full_train)} train in full (peft modules_to_save); "
-                    "LoRA covers the language model",
-                )
+                _mark(Step.ADAPTER, _plan_line)
             if cfg.adapter_dropout is not None:
                 lora_config["lora_dropout"] = cfg.adapter_dropout
             try:
@@ -5168,31 +5151,16 @@ def _train(cfg: TrainConfig) -> int:
     _speech_towers: list[tuple[str, bool]] = []
     _speech_base_digests: dict[str, str] | None = None
     if AUDIO_COLUMN is not None:
-        from foundationscale.train.speech_adjudication import (  # noqa: PLC0415
-            capture_speech_inputs,
-        )
+        # Before a step: freeze BatchNorm statistics, and digest the towers (or, under an
+        # adapter, the declared full-train modules) for the post-save movement gate.
+        from foundationscale.train.audio import audio_full_train_modules  # noqa: PLC0415
+        from foundationscale.train.speech_adjudication import prepare_speech_run  # noqa: PLC0415
 
-        _speech_towers, _speech_base_digests = capture_speech_inputs(
-            # PARAMETERS, not the state_dict: buffers such as BatchNorm running
-            # statistics change in train mode without any weight training, which
-            # would let an untrained tower read as "moved" (measured on
-            # parakeet-ctc-1.1b, whose conformer convs carry BatchNorm).
-            _family,
-            lambda: model.named_parameters(),
+        _speech_towers, _speech_base_digests, _bn_line = prepare_speech_run(
+            model, _family, audio_full_train_modules(_family) if cfg.adapter is not None else None
         )
-    if AUDIO_COLUMN is not None:
-        from foundationscale.train.speech_kinds import (  # noqa: PLC0415
-            freeze_batchnorm_statistics,
-        )
-
-        _frozen_bn = freeze_batchnorm_statistics(model)
-        if _frozen_bn:
-            _mark(
-                Step.VALIDATED,
-                f"[   ok] speech.batchnorm: {_frozen_bn} BatchNorm layer(s) keep their stored "
-                "running statistics during training (affine weights still train): small, "
-                "zero-padded audio batches otherwise corrupt them (measured on parakeet-ctc)",
-            )
+        if _bn_line is not None:
+            _mark(Step.VALIDATED, _bn_line)
     _dormant_towers = _dormant_modality_towers(
         model,
         family=_family,
@@ -5639,29 +5607,34 @@ def _train(cfg: TrainConfig) -> int:
         # collate time, so the stripping is disabled for the image arm only.
         kwargs["remove_unused_columns"] = False
     if AUDIO_COLUMN is not None:
-        from foundationscale.train.audio import (  # noqa: PLC0415
-            refuse_if_audio_features_dropped,
+        from foundationscale.train.speech_kinds import (  # noqa: PLC0415
+            build_speech_collator_checked,
         )
-        from foundationscale.train.speech_kinds import build_speech_collator  # noqa: PLC0415
 
-        data_collator = build_speech_collator(
+        # Built, probed on two real rows (refuses if input_features never reaches the batch),
+        # and its coverage reset so only training rows are counted.
+        data_collator = build_speech_collator_checked(
             _speech_kind or "audio_llm",
             prompt_surface,
+            [tokenized[i] for i in range(min(2, len(tokenized)))],
             audio_column=AUDIO_COLUMN,
             max_length=cfg.max_sequence_length,
             model_config=model.config,
             language=_os.environ.get("FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE") or None,
         )
-        # The image arm's POSITIVE survival proof, for audio: collate real rows
-        # before a step is paid for, and refuse (96) -- naming the column -- if
-        # input_features is not in the batch the model would receive.
-        probe_rows = [tokenized[i] for i in range(min(2, len(tokenized)))]
-        refuse_if_audio_features_dropped(data_collator(probe_rows).keys(), AUDIO_COLUMN)
-        # The probe rows proved the path, they did not train: drop them from the
-        # coverage record so the manifest counts training rows only.
-        data_collator.coverage.reset()
         # Same reason as images: the raw audio column must survive to collate time.
         kwargs["remove_unused_columns"] = False
+        from foundationscale.train.speech_kinds import apply_group_by_duration  # noqa: PLC0415
+
+        _grouping = apply_group_by_duration(kwargs, _os.environ, list(tokenized.column_names))
+        if _grouping is not None and not _grouping.startswith("[   ok]"):
+            _mark(Step.REFUSE, _grouping)
+            _emit_manifest(
+                cfg, stage="refused", extra={"exit": EXIT_REFUSE, "audio_column": AUDIO_COLUMN}
+            )
+            return EXIT_REFUSE
+        if _grouping is not None:
+            _mark(Step.VALIDATED, _grouping)
     try:
         args = _TrainingArguments(**kwargs)
         # #517: the host budget, before the fabric and before the device. Read from
@@ -6252,13 +6225,13 @@ def _train(cfg: TrainConfig) -> int:
     # blocking verdict outranks a PASS and an abstention only moves a PASS.
     speech_manifest: str | None = None
     if AUDIO_COLUMN is not None:
-        from foundationscale.train.speech_adjudication import (  # noqa: PLC0415
-            SUPERSEDE_NOTE,
-            fold_speech_verdict,
-            run_final_speech_adjudication,
-        )
+        # The speech gates run here with their contexts (they are registered on SAVE so the
+        # controls walk certifies them, which lists them as SKIP in the save sweeps above).
+        from foundationscale.train.speech_adjudication import finish_speech_run  # noqa: PLC0415
 
-        speech = run_final_speech_adjudication(
+        rc, done, _speech_lines, speech_manifest = finish_speech_run(
+            rc=rc,
+            done=done,
             final_dir=Path(final_dir),
             has_safetensors=bool(shards),
             coverage_manifest=data_collator.coverage.as_manifest(),
@@ -6267,13 +6240,8 @@ def _train(cfg: TrainConfig) -> int:
             adapter=cfg.adapter,
             placeholder_applicable=_speech_kind == "audio_llm",
         )
-        # The speech gates are registered on SAVE so the controls walk certifies
-        # them, which also lists them as SKIP in the generic save sweeps; the note
-        # says this is where they run with their contexts.
-        for line in (SUPERSEDE_NOTE, *speech.render_lines()):
+        for line in _speech_lines:
             _mark(Step.ADJUDICATE, line)
-        speech_manifest = json.dumps(speech.as_manifest(), sort_keys=True)
-        rc, done = fold_speech_verdict(rc, done, speech.exit_code)
     # Declared precision and the OBSERVED dtype histogram are SEPARATE keys
     # (1d): the whole point is that a reader can see when they disagreed,
     # which requires neither to be collapsed into the other. The histogram is

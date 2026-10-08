@@ -285,6 +285,22 @@ AMI and Earnings-22 for all four models (LibriSpeech-only fine-tuning moves OOD 
 improves for all four), LoRA wrap points measured and registered for Whisper and Qwen2-Audio, and a
 real Qwen2-Audio placeholder check (248/248 verified). Canary: design note `speech_canary.md`.
 
+Status (2026-10-07): **Canary lane + P6 DONE** (`validation_campaigns/speech_canary`, `speech_p6`): Canary
+trains through NeMo with FoundationScale adjudication; a LibriSpeech + AMI mix removes the
+out-of-domain regression (AMI 16.2% -> 12.6%); declared duration grouping (no gain measured on
+Gemma-4); `FamilySpec.adapter_prefixes` gives CTC models encoder-layer LoRA (Parakeet AMI 16.4% ->
+15.5% with ~2% of parameters).
+
+Status (2026-10-07): **P7 measured** (`validation_campaigns/speech_p7`): audio training is
+compute-bound (collate 0.15 s hidden by workers, GPU step 0.66 s, ~0 FoundationScale overhead).
+Canary-Qwen-2.5B (NeMo speechlm2 SALM) zero-shot, FoundationScale-scored: dev-clean 1.54%,
+AMI 10.5%, Earnings-22 19.5%, beating the fine-tuned Canary-1B-flash out of domain. Fine-tuned
+through NeMo with the released scope and FoundationScale-adjudicated (frozen LLM bit-identical
+310/310, encoder/projector/LoRA moved), but the LS+AMI recipe gives no gain. A paired
+bootstrap on larger sets finds AMI-2000 -0.1 points (not significant) and full dev-clean +0.12
+points (a significant regression). Earnings-domain
+training data (SPGISpeech) is gated behind terms the user must accept.
+
 ### P4, more families and Lane B
 
 Goal: generalize Lane A and open Lane B.

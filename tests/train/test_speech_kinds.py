@@ -951,3 +951,91 @@ def test_frozen_batchnorm_keeps_running_stats_and_still_trains_affine() -> None:
     assert torch.equal(model[1].running_mean, before)
     assert model[1].weight.grad is not None
     assert freeze_batchnorm_statistics(torch.nn.Linear(2, 2)) == 0
+
+
+def test_group_by_duration_is_declared_and_refuses_without_the_column() -> None:
+    """MUST_PASS/MUST_FIRE: undeclared -> None; declared -> sampler; no column -> refusal."""
+    from foundationscale.train.speech_kinds import group_by_duration_settings
+
+    assert group_by_duration_settings(None, ["audio", "duration"]) is None
+    assert group_by_duration_settings("", ["audio", "duration"]) is None
+    assert group_by_duration_settings("1", ["audio", "duration"]) == {
+        "train_sampling_strategy": "group_by_length",
+        "length_column_name": "duration",
+    }
+    refusal = group_by_duration_settings("1", ["audio", "answer"])
+    assert isinstance(refusal, str) and "duration" in refusal
+
+
+def test_apply_group_by_duration_updates_kwargs_or_refuses() -> None:
+    """MUST_PASS/MUST_FIRE: applied in place with an announcement; refusal; undeclared no-op."""
+    from foundationscale.train.speech_kinds import GROUP_BY_DURATION_ENV, apply_group_by_duration
+
+    kw: dict = {}
+    line = apply_group_by_duration(kw, {GROUP_BY_DURATION_ENV: "1"}, ["audio", "duration"])
+    assert line is not None and line.startswith("[   ok]")
+    assert kw["train_sampling_strategy"] == "group_by_length"
+    kw2: dict = {}
+    refusal = apply_group_by_duration(kw2, {GROUP_BY_DURATION_ENV: "1"}, ["audio"])
+    assert refusal is not None and not refusal.startswith("[   ok]") and kw2 == {}
+    assert apply_group_by_duration({}, {}, ["duration"]) is None
+
+
+def test_full_train_announcement_names_the_declared_scope() -> None:
+    """The announcement names the scope from the family, not a fixed 'language model'."""
+    from foundationscale.train.speech_kinds import full_train_announcement
+
+    fam = SimpleNamespace(adapter_scope_prefixes=("encoder.layers",))
+    line = full_train_announcement("audio", ["encoder.subsampling"], fam)
+    assert "encoder.subsampling" in line and "['encoder.layers']" in line
+
+
+def test_lora_audio_plan_announces_or_refuses() -> None:
+    """MUST_PASS/MUST_FIRE: measured wrap points -> modules + announcement; none -> refusal."""
+    from foundationscale.families.registry import REGISTRY
+    from foundationscale.train.speech_kinds import lora_audio_plan
+
+    by_name = {spec.name: spec for spec in REGISTRY}
+    modules, line = lora_audio_plan(by_name["parakeet_ctc"], "audio")
+    assert modules == ["encoder.subsampling"] and "['encoder.layers']" in line
+    none, refusal = lora_audio_plan(SimpleNamespace(towers=(("a", "audio"),)), "audio")
+    assert none == [] and "declares no adapter_full_train" in refusal
+
+
+def test_build_speech_collator_checked_probes_and_resets(monkeypatch) -> None:
+    """MUST_PASS: probe rows are collated, then coverage is reset; MUST_FIRE: no features."""
+    from foundationscale.train import speech_kinds as sk
+
+    calls: list = []
+
+    class _Col:
+        def __init__(self, keys):
+            self.keys_ = keys
+            self.coverage = SimpleNamespace(reset=lambda: calls.append("reset"))
+
+        def __call__(self, rows):
+            calls.append(len(rows))
+            return dict.fromkeys(self.keys_)
+
+    monkeypatch.setattr(sk, "build_speech_collator", lambda *a, **k: _Col(["input_features"]))
+    col = sk.build_speech_collator_checked(
+        "ctc",
+        object(),
+        [{}, {}],
+        audio_column="a",
+        max_length=1,
+        model_config=SimpleNamespace(),
+        language=None,
+    )
+    assert calls == [2, "reset"] and isinstance(col, _Col)
+    monkeypatch.setattr(sk, "build_speech_collator", lambda *a, **k: _Col(["input_ids"]))
+    with pytest.raises(SystemExit):
+        sk.build_speech_collator_checked(
+            "ctc",
+            object(),
+            [{}],
+            audio_column="a",
+            max_length=1,
+            model_config=SimpleNamespace(),
+            language=None,
+        )

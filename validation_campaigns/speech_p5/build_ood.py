@@ -32,7 +32,10 @@ SHARDS = {
         "earnings22/test-00002-of-00005.parquet",
     ],
 }
-LIMIT = 300
+# OOD_LIMIT raises the cap for a tighter WER estimate; extra shards follow the default one, so the
+# first 300 rows (and their flac files) are identical to the default build.
+LIMIT = int(os.environ.get("OOD_LIMIT", "300"))
+EXTRA_SHARDS = {"ami": ["ami/test-00005-of-00015.parquet", "ami/test-00006-of-00015.parquet"]}
 
 
 def load_table(shards: list[str]) -> pa.Table:
@@ -47,13 +50,16 @@ def load_table(shards: list[str]) -> pa.Table:
 
 
 def build(name: str) -> None:
-    table = load_table(SHARDS[name])
+    table = load_table(SHARDS[name] + (EXTRA_SHARDS.get(name, []) if LIMIT > 300 else []))
     text_col = next(c for c in ("text", "transcription", "sentence") if c in table.column_names)
     out_dir = ROOT / name / "flac"
     out_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for i, rec in enumerate(table.to_pylist()):
-        wave, sr = sf.read(io.BytesIO(rec["audio"]["bytes"]), dtype="float32", always_2d=False)
+        wave, sr = sf.read(io.BytesIO(rec["audio"]["bytes"]), dtype="float32", always_2d=True)
+        # Mono, like the training manifests: some sets (Earnings-22) ship stereo, and NeMo's
+        # lhotse loader refuses multi-channel input (FoundationScale's loader mixes down).
+        wave = wave.mean(axis=1)
         dur = len(wave) / sr
         text = (rec[text_col] or "").strip()
         if sr != 16000 or not (1.0 <= dur <= 25.0) or not text:
@@ -71,7 +77,7 @@ def build(name: str) -> None:
         )
         if len(rows) == LIMIT:
             break
-    with (MAN / f"ood_{name}300.jsonl").open("w") as f:
+    with (MAN / f"ood_{name}{LIMIT}.jsonl").open("w") as f:
         for row in rows:
             f.write(json.dumps(row) + "\n")
     hours = round(sum(r["duration"] for r in rows) / 3600, 2)

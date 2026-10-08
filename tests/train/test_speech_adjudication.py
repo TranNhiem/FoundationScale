@@ -389,3 +389,63 @@ def test_dtype_tag_keeps_a_non_torch_dtype_name_verbatim() -> None:
 
     assert _dtype_name(SimpleNamespace(dtype="float8_e4m3")) == "float8_e4m3"
     assert _dtype_name(_bf16_tensor(seed=0)) == "bfloat16"
+
+
+def test_adapter_run_judges_the_full_train_modules_not_the_whole_tower() -> None:
+    """MUST_PASS: under an adapter, movement is measured on what modules_to_save saves whole."""
+    from types import SimpleNamespace
+
+    from foundationscale.train.speech_adjudication import capture_speech_inputs
+
+    family = SimpleNamespace(towers=(("encoder", "audio"), ("vision", "image")))
+    items = lambda: [  # noqa: E731
+        ("encoder.subsampling.w", _bf16_tensor(seed=1)),
+        ("encoder.layers.0.q.w", _bf16_tensor(seed=2)),
+        ("vision.w", _bf16_tensor(seed=3)),
+    ]
+    towers, base = capture_speech_inputs(family, items, ["encoder.subsampling"])
+    assert towers == [("encoder.subsampling", True), ("vision", False)]
+    assert base is not None and set(base) == {"encoder.subsampling.w", "vision.w"}
+
+
+def test_prepare_and_finish_speech_run(tmp_path: Path) -> None:
+    """MUST_PASS: prepare freezes BN and digests; finish adjudicates, folds and renders."""
+    from types import SimpleNamespace
+
+    import torch
+    from safetensors.torch import save_file
+
+    from foundationscale import EXIT_PASS
+    from foundationscale.train.speech_adjudication import finish_speech_run, prepare_speech_run
+
+    model = torch.nn.Module()
+    model.enc = torch.nn.Sequential(torch.nn.Conv1d(2, 2, 1), torch.nn.BatchNorm1d(2))
+    family = SimpleNamespace(towers=(("enc", "audio"),))
+    towers, base, line = prepare_speech_run(model, family, None)
+    assert towers == [("enc", True)] and base is not None and line is not None
+    assert prepare_speech_run(torch.nn.Linear(1, 1), family, None)[2] is None
+    with torch.no_grad():
+        model.enc[0].weight.add_(1.0)
+    save_file(
+        {k: v.contiguous() for k, v in model.state_dict().items()}, str(tmp_path / "m.safetensors")
+    )
+    coverage = {
+        "rows_expected": 1,
+        "rows_checked": 1,
+        "rows_refused": 0,
+        "refused": {},
+        "placeholder_rows_verified": 0,
+        "placeholder_rows_unmeasured": 0,
+    }
+    rc, done, lines, manifest = finish_speech_run(
+        rc=EXIT_PASS,
+        done="PASS",
+        final_dir=tmp_path,
+        has_safetensors=True,
+        coverage_manifest=coverage,
+        base_digests=base,
+        towers=towers,
+        adapter=None,
+        placeholder_applicable=False,
+    )
+    assert rc == EXIT_PASS and lines[0].startswith("speech plane:") and '"gates"' in manifest

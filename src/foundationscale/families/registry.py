@@ -108,6 +108,18 @@ class FamilySpec:
     not derivable from the module tree. Empty means not measured: an adapter run that
     declares the modality refuses rather than guessing."""
 
+    adapter_prefixes: tuple[str, ...] = ()
+    """Where adapter targets are selected, when that is NOT the language side. Empty means
+    ``language_prefixes`` (every non-CTC family). A CTC model has no language model -- its
+    only non-encoder module is a 1x1 conv head -- so useful LoRA lives in the encoder's
+    Linear layers (how NeMo adapts CTC models). Declaring a prefix inside a tower here is
+    the explicit opt-in that lets the adapter reach it; without it towers stay excluded."""
+
+    @property
+    def adapter_scope_prefixes(self) -> tuple[str, ...]:
+        """The prefixes adapter selection scopes to: adapter_prefixes, else language_prefixes."""
+        return self.adapter_prefixes or self.language_prefixes
+
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("FamilySpec.name must be non-empty")
@@ -136,6 +148,14 @@ class FamilySpec:
                     f"modality {modality!r}; known modalities are "
                     f"{sorted(KNOWN_MODALITIES)}. Use None for a submodule that is "
                     "merely out of adapter scope rather than exercised by a modality"
+                )
+        declared = [*self.language_prefixes, *(prefix for prefix, _ in self.towers)]
+        for scope in self.adapter_prefixes:
+            if not any(scope == d or scope.startswith(d + ".") for d in declared):
+                raise ValueError(
+                    f"FamilySpec {self.name!r} declares adapter prefix {scope!r} outside every "
+                    f"declared language or tower prefix {declared}: an adapter scope must name a "
+                    "part of the model this spec already describes"
                 )
         modality_towers = [prefix for prefix, modality in self.towers if modality]
         for module in self.adapter_full_train:
@@ -248,7 +268,7 @@ REGISTRY: tuple[FamilySpec, ...] = (
     # modeling_qwen2_audio `self.audio_tower(input_features, ...)` /
     # `self.multi_modal_projector(feature)`), so the roots are the wrap points --
     # confirmed by LoRA runs on GB200 (validation_campaigns/speech_p5). parakeet_ctc
-    # stays EMPTY (not measured): an adapter run that declares audio refuses.
+    # declares encoder-layer adapters instead (adapter_prefixes; see its entry).
     FamilySpec(
         name="whisper",
         model_types=("whisper",),
@@ -266,8 +286,15 @@ REGISTRY: tuple[FamilySpec, ...] = (
         # tokens and is the only non-encoder module.
         language_prefixes=("ctc_head",),
         towers=(("encoder", "audio"),),
-        adapter_leaf_modules=("ctc_head",),
+        # LoRA for a CTC model: the conformer layers' Linear projections (attention q/k/v/o
+        # and feed-forward linear1/linear2; relative_k_proj is the positional projection and
+        # is left alone), measured on parakeet-ctc-1.1b (42 layers). The subsampling front end
+        # is called positionally (`self.subsampling(input_features, mask)`), so it trains in
+        # full; the encoder root is called by keyword and cannot be a peft wrap point.
+        adapter_leaf_modules=("q_proj", "k_proj", "v_proj", "o_proj", "linear1", "linear2"),
         expert_count_path=(),
+        adapter_prefixes=("encoder.layers",),
+        adapter_full_train=("encoder.subsampling",),
     ),
     FamilySpec(
         name="qwen2_audio",

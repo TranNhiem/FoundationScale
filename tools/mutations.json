@@ -498,8 +498,8 @@
     {
       "name": "families_adapters.tower-scope-never-consulted",
       "what": "Tower membership is what ATTRIBUTES an exclusion to a named tower and a module type. Without it a vision-tower module still fails to be selected (the language-prefix rule also excludes it, deliberate defence in depth) but is reported as sitting outside every declared prefix -- i.e. as a registration gap. The selection stays right and the DIAGNOSIS becomes wrong, which is the failure mode that cost a week.",
-      "anchor": "        tower = _under(name, spec.tower_prefixes)",
-      "replacement": "        tower = None"
+      "anchor": "        tower = None if in_scope else _under(name, spec.tower_prefixes)",
+      "replacement": "        tower = None if in_scope else None"
     },
     {
       "name": "families_adapters.out-of-scope-modules-selected-anyway",

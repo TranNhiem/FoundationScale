@@ -642,7 +642,7 @@ def test_full_train_modules_come_from_the_family_and_only_from_audio_towers() ->
 
 
 def test_full_train_modules_for_the_measured_speech_families() -> None:
-    """Whisper and Qwen2-Audio wrap their audio roots; Parakeet is unmeasured (refuses)."""
+    """Whisper and Qwen2-Audio wrap their audio roots; Parakeet its subsampling front end."""
     from foundationscale.families.registry import REGISTRY
     from foundationscale.train.audio import audio_full_train_modules
 
@@ -652,7 +652,8 @@ def test_full_train_modules_for_the_measured_speech_families() -> None:
         "audio_tower",
         "multi_modal_projector",
     ]
-    assert audio_full_train_modules(by_name["parakeet_ctc"]) == []
+    # Parakeet trains its subsampling front end in full and adapts its conformer layers.
+    assert audio_full_train_modules(by_name["parakeet_ctc"]) == ["encoder.subsampling"]
 
 
 def test_qwen2_audio_placeholder_formula_matches_the_processor() -> None:

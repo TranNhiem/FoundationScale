@@ -321,6 +321,26 @@ def test_refit_hf_policy_writes_every_yielded_weight_into_the_hf_state_dict() ->
     assert torch.allclose(model.lm_head.weight, torch.full((8, 4), 2.0))
 
 
+def test_refit_hf_policy_written_out_receives_the_written_names_on_the_writer() -> None:
+    import torch
+
+    model = _tiny_hf(tied=False)
+    bridge = _FakeBridge([("embed_tokens.weight", torch.ones(8, 4))])
+    written: set[str] = set()
+    refit_hf_policy(bridge, [], model, is_writer=True, written_out=written)
+    # lm_head was never yielded: it is unwritten, so it is NOT declared.
+    assert written == {"embed_tokens.weight"}
+    peer: set[str] = set()
+    refit_hf_policy(
+        _FakeBridge([("embed_tokens.weight", torch.ones(8, 4))]),
+        [],
+        None,
+        is_writer=False,
+        written_out=peer,
+    )
+    assert peer == set()
+
+
 def test_refit_hf_policy_raises_on_name_missing_after_draining_the_export() -> None:
     import torch
 
@@ -545,12 +565,63 @@ def test_greedy_heldout_left_pads_batches_and_reports_truncation() -> None:
         "correct": 1,
         "unparsed": 1,
         "truncated": 1,
+        "unparsed_truncated": 1,  # row 3 abstained AND ran out of budget
         "accuracy": pytest.approx(1.0 / 3.0),
         "parsed_accuracy": 0.5,
         "mean_completion_tokens": pytest.approx(7.0 / 3.0),
     }
     # completions kept: [2] then [5,5,2] then [4,4,4] (row 3 has no EOS in budget)
     assert tokenizer.decodes == [[2], [5, 5, 2], [4, 4, 4]]
+
+
+def test_greedy_heldout_loose_reward_scores_the_same_decodes_beside_strict() -> None:
+    import torch
+
+    tokenizer = _FakeTokenizer(
+        eos_id=2,
+        pad_id=0,
+        rendered={"q1": [10], "q2": [10, 11], "q3": [10, 11, 12]},
+        as_dict=True,
+    )
+    model = _FakeGenerate([torch.tensor([[5, 2, 0], [6, 2, 0], [7, 7, 7]])])
+    samples = [
+        _FakeSample((("user", "q1"),), "A"),
+        _FakeSample((("user", "q2"),), "B"),
+        _FakeSample((("user", "q3"),), "C"),
+    ]
+    strict = _FakeReward([1.0, None, None])
+    loose = _FakeReward([1.0, 1.0, 0.0])
+    metrics = greedy_heldout(
+        model,
+        tokenizer,
+        samples,
+        max_new_tokens=3,
+        reward=strict,
+        device="cpu",
+        batch_size=4,
+        loose_reward=loose,
+    )
+    assert [call for call in loose.calls] == [call for call in strict.calls]
+    assert metrics["correct"] == 1 and metrics["unparsed"] == 2
+    assert metrics["unparsed_truncated"] == 1  # only row 3 lacks an EOS
+    assert metrics["loose_correct"] == 2 and metrics["loose_unparsed"] == 0
+    assert metrics["loose_accuracy"] == pytest.approx(2.0 / 3.0)
+
+
+def test_greedy_heldout_without_loose_reward_emits_no_loose_keys() -> None:
+    import torch
+
+    tokenizer = _FakeTokenizer(eos_id=2, pad_id=0, rendered={"q1": [10]}, as_dict=True)
+    model = _FakeGenerate([torch.tensor([[5, 2]])])
+    metrics = greedy_heldout(
+        model,
+        tokenizer,
+        [_FakeSample((("user", "q1"),), "A")],
+        max_new_tokens=2,
+        reward=_FakeReward([1.0]),
+        device="cpu",
+    )
+    assert not any(key.startswith("loose_") for key in metrics)
 
 
 # -- torch-free import contract ---------------------------------------------
