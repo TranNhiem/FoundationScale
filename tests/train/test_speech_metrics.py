@@ -15,11 +15,16 @@ import random
 import pytest
 
 from foundationscale.train.speech_metrics import (
+    RUNAWAY_RATIO,
+    RUNAWAY_SLACK_WORDS,
     TRANSCRIPT_NORMALIZER_ID,
     EditCounts,
+    RunawayCount,
     align,
     char_errors,
     corpus_error_rate,
+    count_runaway,
+    is_runaway,
     normalize_transcript,
     word_errors,
 )
@@ -377,4 +382,120 @@ def test_property_errors_equal_independent_levenshtein() -> None:
     assert differing >= 50, (
         f"MUST_FIRE: only {differing} differing pairs were generated -- the "
         "property proved nothing and must fail rather than pass vacuously"
+    )
+
+
+def test_runaway_boundary_is_strictly_greater() -> None:
+    """MUST_PASS: a hypothesis landing exactly on the threshold is inside it.
+
+    MUST_FIRE: one word past the threshold is a runaway -- the comparison is
+    strictly greater, and that boundary is where two detectors silently
+    disagree about the same corpus.
+    """
+    # 4 reference words: threshold = 2.0 * 4 + 5 = 13 words.
+    exactly_thirteen = "a b c d e f g h i j k l m"
+    assert not is_runaway("one two three four", exactly_thirteen), (
+        "MUST_PASS: 13 words against 4 reference words lands exactly on 2 * 4 + 5 "
+        "and is inside the threshold"
+    )
+    assert is_runaway("one two three four", exactly_thirteen + " n"), (
+        "MUST_FIRE: one more word is 14 > 2 * 4 + 5 and must fire"
+    )
+
+
+def test_runaway_against_an_empty_reference() -> None:
+    """MUST_PASS: at or under the slack, an empty reference is not a runaway.
+
+    MUST_FIRE: past the slack alone it fires -- with nothing to echo, invention
+    is not excused by the reference having nothing in it, and the empty row is
+    still a row the detector judged (count_runaway counts it checked).
+    """
+    assert not is_runaway("", ""), "MUST_PASS: empty against empty is below any threshold"
+    assert not is_runaway("", "one two three four five"), (
+        "MUST_PASS: exactly the slack (5 words) against an empty reference is inside it"
+    )
+    assert is_runaway("", "one two three four five six"), (
+        "MUST_FIRE: one word past the slack against an empty reference must fire"
+    )
+
+
+def test_runaway_counts_normalized_words_only() -> None:
+    """MUST_PASS: case and punctuation are not words -- a shout is its own length.
+
+    MUST_FIRE: they cannot mask a real runaway either -- a dressed repetition
+    loop fires exactly like a plain one, because both sides run the normalizer.
+    """
+    reference = "the cat sat in the yard"  # 6 words: threshold = 2 * 6 + 5 = 17
+    shouted = "THE CAT SAT, IN THE YARD!!!"
+    assert not is_runaway(reference, shouted), (
+        "MUST_PASS: case and punctuation normalize away -- 6 words against 6 words "
+        "is inside the threshold however loudly it is written"
+    )
+    assert not is_runaway(reference, "!! ... ??? (( - --"), (
+        "MUST_PASS: pure punctuation normalizes to zero words and can never be a runaway"
+    )
+    loop = "the cat sat in the yard " * 4  # 24 words: the measured failure shape
+    assert is_runaway(reference, loop.upper() + "!? ..."), (
+        "MUST_FIRE: 24 normalized words against 6 reference words is a runaway "
+        "whether or not it is dressed in case and punctuation"
+    )
+
+
+def test_count_runaway_counts_the_rows_it_checked() -> None:
+    """MUST_PASS: healthy rows are counted checked and never counted runaway.
+
+    MUST_FIRE: only the true runaways are counted runaway -- deletions are not
+    runaways, the slack is not a runaway, and no examined row vanishes from
+    either count.
+    """
+    pairs = [
+        ("the cat sat", "the cat sat"),  # 3 vs 3: healthy
+        ("the cat sat", "the bat sat"),  # 3 words, one substitution
+        ("the cat sat", ""),  # a whole reference deleted is not a runaway
+        ("", "one two three four five"),  # exactly the slack: healthy
+        ("", "one two three four five six"),  # one word past the slack
+        ("one two", "x x x x x x x x x x"),  # 10 words over a threshold of 9
+    ]
+    counts = count_runaway(pairs)
+    assert counts == RunawayCount(rows_checked=6, rows_runaway=2), (
+        "MUST_PASS: all six rows checked and exactly the two length runaways counted -- "
+        "the empty-reference row past the slack and the ten-word echo of 'one two'"
+    )
+    assert count_runaway([]) == RunawayCount(rows_checked=0, rows_runaway=0), (
+        "MUST_PASS: an empty pair list is zero rows checked and invents nothing"
+    )
+
+
+def test_runaway_manifest_names_the_detector_arms() -> None:
+    """MUST_PASS: the manifest carries the counts WITH ratio, slack and normalizer.
+
+    MUST_FIRE: the counts alone are not the claim -- the same rows counted under
+    another slack publish another verdict, so a manifest missing its arms cannot
+    be re-derived and must not be the shape this module hands out.
+    """
+    manifest = count_runaway([("", "one two three four five six")]).as_manifest()
+    assert set(manifest) == {
+        "rows_checked",
+        "rows_runaway",
+        "runaway_ratio",
+        "runaway_slack_words",
+        "normalizer",
+    }, "MUST_PASS: the manifest is exactly these keys, nothing more and nothing less"
+    assert manifest["runaway_ratio"] == RUNAWAY_RATIO == 2.0, (
+        "MUST_PASS: the ratio arm is published and is the frozen constant"
+    )
+    assert manifest["runaway_slack_words"] == RUNAWAY_SLACK_WORDS == 5, (
+        "MUST_PASS: the slack arm is published and is the frozen constant"
+    )
+    assert manifest["normalizer"] == TRANSCRIPT_NORMALIZER_ID, (
+        "MUST_PASS: the normalizer that defines the counted words is named inside "
+        "the claim it underwrote"
+    )
+    assert (manifest["rows_checked"], manifest["rows_runaway"]) == (1, 1), (
+        "MUST_FIRE: 6 words over an empty reference is one checked row of one runaway "
+        "under the published slack -- hide the slack and a reader at slack 6 would "
+        "re-derive 'healthy' from these same two numbers"
+    )
+    assert json.loads(json.dumps(manifest)) == manifest, (
+        "MUST_PASS: the manifest round-trips through JSON unchanged"
     )

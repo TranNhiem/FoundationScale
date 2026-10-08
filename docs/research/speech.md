@@ -303,6 +303,12 @@ points (a significant regression). Every earlier fine-tune claim was re-scored t
 at about half to two-thirds of the 300-row size. Whisper's AMI gain is not significant. Earnings-domain
 training data (SPGISpeech) is gated behind terms the user must accept.
 
+Status (2026-10-08): **P8 DONE** (`validation_campaigns/speech_p8`): leak-free open Earnings data
+(the 6 test calls excluded by `source_id`). Canary-1B-flash on held-out Earnings-22 calls drops
+from 19.4% to 11.3% WER (-8.05, 95% CI [-8.66, -7.42]); AMI drops from 16.9% to 13.6%. A first round
+trained on mismatched audio (a clip-naming collision) and was retracted. New:
+`speech.runaway_hypotheses` gate and refusal of repeated audio paths.
+
 ### P4, more families and Lane B
 
 Goal: generalize Lane A and open Lane B.
