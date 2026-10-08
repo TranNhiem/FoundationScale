@@ -207,7 +207,10 @@ workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.m
   still trained. The discriminator is bit-exact, so there is no tolerance to argue about.
   Declaring **audio** or **video** REFUSES with exit 96 and names the modality — this
   plane has no audio or video arm, and it says so rather than dropping the column in
-  silence. An omni checkpoint's untrainable towers are **carried, not trained**, and the
+  silence. Video gets an arm once its sampling is DECLARED: with
+  `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES=N` beside the column, each clip becomes N
+  centred-uniform frames on the image arm (measured through the processor: 16 frames of
+  a real clip cost 264 tokens each on `gemma-4-E4B-it`). An omni checkpoint's untrainable towers are **carried, not trained**, and the
   run announces which ones by name, because "trained a multimodal model" and "carried two
   thirds of one unchanged" are different claims. *Not* declaring them is no longer silent
   either: a corpus that folds its media reference into the text — the shape conversion
