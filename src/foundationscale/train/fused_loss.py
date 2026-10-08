@@ -193,6 +193,14 @@ def apply_fused_loss(model: Any, model_type: str) -> str:
     for every other optional-dependency gap, never let it escape as a
     traceback.
     """
+    # The caller-defect check comes before any liger import, so an unsupported
+    # model_type is reported as what it is even where liger is not installed.
+    if model_type not in LIGER_GENERIC_MODEL_TYPES and model_type != "gemma4_unified":
+        raise ValueError(
+            f"apply_fused_loss called with unsupported model_type={model_type!r}; "
+            "callers must call fused_loss_refusal_reason first and refuse on a "
+            "non-None result rather than reaching here"
+        )
     _ensure_liger_flce_is_dtensor_safe()
     if model_type in LIGER_GENERIC_MODEL_TYPES:
         from liger_kernel.transformers import _apply_liger_kernel_to_instance  # noqa: PLC0415
