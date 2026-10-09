@@ -225,6 +225,9 @@ ignore = ["UP038"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ARG"]
+# GPU-host pytest suites that CI cannot run (FS_FORBID_SKIPS forbids skipping
+# them inside tests/); same test-fake signatures, same exemption.
+"validation_campaigns/vlm_2xh200/test_*.py" = ["ARG"]
 # The ten preflight checks are dispatched through one uniform signature
 # `(cfg, s, env, shared, registry=None)` so `_execute` can call any of them
 # without knowing which; a check that reads no corpus still receives `env`.
