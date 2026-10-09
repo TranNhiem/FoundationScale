@@ -14,8 +14,12 @@ or ``model{i}`` (virtual pipeline chunks), then the optimizer's from that dict;
 save with ``content_metadata`` so a load can rebuild the same layout; on load,
 build the same sharded dict from the live objects, ``dist_checkpointing.load`` it,
 and restore model then optimizer (the latter under ``torch.no_grad`` -- it copies
-into the fp32 main params). The optimizer layout is ``fully_reshardable``, so a
-checkpoint taken under one TP/PP/EP split can be loaded under another.
+into the fp32 main params). The optimizer layout is ``dp_reshardable``, Megatron-Bridge's
+own default: every rank writes its distributed-optimizer shard as it stands, with no
+gather. ``fully_reshardable`` would let a load change the TP/PP/EP split, but it first
+all-gathers the optimizer state to every rank -- measured on Gemma-4 26B PP2 x EP2 it asks
+for 21 GiB more on a GPU already holding 165 GiB and dies saving step 1. So a resume must
+use the parallel layout the state was saved under.
 
 What is NOT restored, by design: RNG state. The lane draws prompts from
 ``sample_prompt_indices(seed, step)``, a pure function of the step, so the data order
@@ -27,6 +31,7 @@ The module imports without torch or megatron; both are imported inside the calls
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 from collections.abc import Mapping
@@ -86,7 +91,7 @@ def _chunks(model: Any) -> list[Any]:
 def _metadata(pg: Any) -> dict[str, Any]:
     """Sharded-state metadata, identical on save and load (it changes key naming)."""
     return {
-        "distrib_optim_sharding_type": "fully_reshardable",
+        "distrib_optim_sharding_type": "dp_reshardable",
         "singleton_local_shards": False,
         "chained_optim_avoid_prefix": True,
         "dp_cp_group": pg.dp_cp,
@@ -176,9 +181,15 @@ def load_training_state(
             chunk.load_state_dict(loaded[f"model{index}"], strict=True)
     with torch.no_grad():
         optimizer.load_state_dict(loaded["optimizer"])
+    # The loaded dict still holds the read buffers; drop them and return the cache
+    # before the next step, which on a 26B model needs that headroom.
+    loaded_state = loaded.get(_STATE_KEY)
+    del loaded, state
+    gc.collect()
+    torch.cuda.empty_cache()
     if dist.is_initialized():
         dist.barrier()
-    raw = loaded.get(_STATE_KEY)
+    raw = loaded_state
     if not isinstance(raw, str):
         raise ValueError(f"{path}: no {_STATE_KEY!r} entry; not a training-state checkpoint")
     restored: dict[str, Any] = json.loads(raw)
