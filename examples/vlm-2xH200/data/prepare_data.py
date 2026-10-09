@@ -665,6 +665,32 @@ def cmd_mix(args: argparse.Namespace) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def cmd_split(args: argparse.Namespace) -> None:
+    """Split one canonical JSONL file into disjoint train and eval files.
+
+    Rows are shuffled with a fixed seed, then the first ``--eval-fraction`` of them
+    go to the eval file and the rest to the train file. Every row lands in exactly
+    one output, so the held-out set never overlaps training. Split each source
+    (image, video, text) BEFORE mixing, then mix only the train halves.
+    """
+    if not 0.0 < args.eval_fraction < 1.0:
+        sys.exit("--eval-fraction must be between 0 and 1 (exclusive)")
+    with Path(args.input).open(encoding="utf-8") as fin:
+        rows = [line for line in fin if line.strip()]
+    if len(rows) < 2:
+        sys.exit(f"{args.input} has {len(rows)} row(s); need at least 2 to split")
+    random.Random(args.seed).shuffle(rows)
+    n_eval = max(1, round(len(rows) * args.eval_fraction))
+    with Path(args.eval_out).open("w", encoding="utf-8") as f:
+        f.writelines(rows[:n_eval])
+    with Path(args.train_out).open("w", encoding="utf-8") as f:
+        f.writelines(rows[n_eval:])
+    print(
+        f"split {args.input}: {len(rows) - n_eval} train -> {args.train_out}, "
+        f"{n_eval} eval -> {args.eval_out} (seed {args.seed})"
+    )
+
+
 def cmd_stats(args: argparse.Namespace) -> None:
     """Print summarised statistics for a canonical JSONL file.
 
@@ -820,6 +846,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_stats = sub.add_parser("stats", help="Print statistics on a canonical JSONL file.")
     p_stats.add_argument("--input", required=True, help="Canonical JSONL file to analyse.")
     p_stats.set_defaults(func=cmd_stats)
+
+    # ── 6. split ────────────────────────────────────────────────────────
+    p_split = sub.add_parser(
+        "split", help="Split a canonical JSONL file into disjoint train/eval files."
+    )
+    p_split.add_argument("--input", required=True, help="Canonical JSONL file to split.")
+    p_split.add_argument("--train-out", required=True, help="Output path for the training rows.")
+    p_split.add_argument("--eval-out", required=True, help="Output path for the held-out rows.")
+    p_split.add_argument(
+        "--eval-fraction", type=float, default=0.05, help="Share of rows held out (default 0.05)."
+    )
+    p_split.add_argument("--seed", type=int, default=0, help="Shuffle seed (default 0).")
+    p_split.set_defaults(func=cmd_split)
 
     return parser
 

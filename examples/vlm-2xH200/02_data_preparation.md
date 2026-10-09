@@ -1,8 +1,8 @@
 # 02 — Data preparation: image-text, video-text and text-only, and mixing them
 
-In this chapter you will get three sample datasets onto the VM, convert every one of them into the single JSONL format FoundationScale trains on, mix the three with weighted sampling, and read the resulting statistics. Along the way you will set the few environment variables that control video frame sampling and the handling of over-long conversations.
+In this chapter you will get three sample datasets onto the VM, convert every one of them into the single JSONL format FoundationScale trains on, split each into a train/held-out pair, mix the three with weighted sampling, and read the resulting statistics. Along the way you will set the few environment variables that control video frame sampling and the handling of over-long conversations.
 
-**Time needed:** TODO(verify) — the video dataset alone is ~116 GB to download.
+**Time needed:** about 30–45 min for the image and text datasets combined; the video set is ~116 GB and takes hours to download.
 
 All commands run from the repository root (`FoundationScale/`). Everything the converter does is pure Python stdlib; there is nothing to `pip install` here.
 
@@ -29,7 +29,7 @@ Field by field:
 | `conversations` | yes | List of `{"from", "value"}` turns; `from` is `"human"`, `"gpt"` or `"system"`. |
 | `image` | optional | List of image paths. Human turns carry **one `<image>` marker per image**. |
 | `video` | optional | Path to a video file. Human turns carry **one `<video>` marker**. |
-| `start`, `end` | optional | Clip segment in seconds inside the full video. |
+| `start`, `end` | optional | Clip segment in seconds inside the full video. Video rows must carry **both**. |
 
 Things that are worth internalising now, because they affect what your data must look like:
 
@@ -49,23 +49,24 @@ python examples/vlm-2xH200/data/prepare_data.py --help
 Check it worked:
 
 ```
-usage: prepare_data.py [-h] {image,video,text,mix,stats} ...
+usage: prepare_data.py [-h] {image,video,text,mix,split,stats} ...
 
 Convert raw datasets into one canonical JSONL format and mix them.
 
 positional arguments:
-  {image,video,text,mix,stats}
+  {image,video,text,mix,split,stats}
     image               Convert a VDoc-style image dataset.
     video               Convert an Action-100M-style video dataset.
     text                Convert a text-only QA dataset.
     mix                 Mix canonical JSONL files with weighted sampling.
+    split               Split a canonical JSONL file into disjoint train/eval files.
     stats               Print statistics on a canonical JSONL file.
 
 options:
   -h, --help            show this help message and exit
 ```
 
-Each subcommand takes `--max-rows N` (stop after N *valid* rows) and `--no-check-files` (skip media existence checks). Full help for each subcommand is in the details blocks below if you want to look up flags later.
+Each of `image`, `video`, `text` takes `--max-rows N` (stop after N *valid* rows) and `--no-check-files` (skip media existence checks). `split` has its own flags. Full help per subcommand is in the details blocks below if you want to look up flags later.
 
 <details>
 <summary><code>image</code> / <code>video</code> / <code>text</code> flag reference</summary>
@@ -115,7 +116,7 @@ options:
 
 </details>
 <details>
-<summary><code>mix</code> / <code>stats</code> flag reference</summary>
+<summary><code>mix</code> / <code>split</code> / <code>stats</code> flag reference</summary>
 
 ```
 usage: prepare_data.py mix [-h] --inputs INPUTS [INPUTS ...] --weights WEIGHTS
@@ -136,6 +137,21 @@ options:
 ```
 
 ```
+usage: prepare_data.py split [-h] --input INPUT --train-out TRAIN_OUT
+                             --eval-out EVAL_OUT [--eval-fraction EVAL_FRACTION]
+                             [--seed SEED]
+
+options:
+  -h, --help            show this help message and exit
+  --input INPUT         Canonical JSONL file to split.
+  --train-out TRAIN_OUT Where the training rows are written.
+  --eval-out EVAL_OUT   Where the held-out rows are written.
+  --eval-fraction EVAL_FRACTION
+                        Fraction of rows sent to --eval-out.
+  --seed SEED           Random seed for the split.
+```
+
+```
 usage: prepare_data.py stats [-h] --input INPUT
 
 options:
@@ -149,7 +165,7 @@ options:
 
 ## 2. Image-text: Vietnamese document images with reasoning
 
-**What it is:** `trannhiem/TranNhiem-Vietnamese-DocumentImage-Reasoning` on the Hub — 64,516 records of Vietnamese document images with 10-turn conversations. The repository contains a `data/vdoc.jsonl` metadata file plus **6 image tar shards under `shards/`**. The `gpt` turns are `{"reasoning","answer"}` dicts, which the converter unfolds into the `🥵…🥵/…answer` form for you.
+**What it is:** `trannhiem/TranNhiem-Vietnamese-DocumentImage-Reasoning` on the Hub — 64,516 records of Vietnamese document images with 10-turn conversations. The repository contains a `data/vdoc.jsonl` metadata file plus **6 image tar shards under `shards/`**, named `shards/images-00000.tar` … `shards/images-00005.tar`. The `gpt` turns are `{"reasoning","answer"}` dicts, which the converter unfolds into the `🥵…🥵/…answer` form for you.
 
 Note: 64,516 is the metadata count. The measured baseline below uses **only shard 0**, which is why you get 11,000 rows and 53,516 skips.
 
@@ -163,19 +179,19 @@ hf download trannhiem/TranNhiem-Vietnamese-DocumentImage-Reasoning \
 
 ### Extract the image shards
 
-Shards are tars; extract one per shard **inside `data/raw/image/`** so that the relative image paths inside `data/vdoc.jsonl` resolve. For a fast start, extract shard 0 only (TODO(verify) exact shard filenames inside `shards/`):
+Each shard is a tar whose members are `images/…`. Extract them **inside `data/raw/image/`** so that the relative image paths inside `data/vdoc.jsonl` resolve. For a fast start, extract shard 0 only:
 
 ```bash
 cd data/raw/image
-for s in shards/*.tar; do tar xf "$s"; done   # all 6 shards
+tar xf shards/images-00000.tar
 cd ../..
 ```
 
-or just the first one while you iterate:
+All six shards at once:
 
 ```bash
 cd data/raw/image
-tar xf shards/shard_0.tar   # TODO(verify) exact filename
+for s in shards/*.tar; do tar xf "$s"; done   # images-00000.tar ... images-00005.tar
 cd ../..
 ```
 
@@ -187,46 +203,83 @@ Partial extraction is fine on purpose: the converter checks that each image file
 python examples/vlm-2xH200/data/prepare_data.py image \
   --input data/raw/image/data/vdoc.jsonl \
   --image-root data/raw/image \
-  --output data/canon/image.jsonl
+  --output data/prepared/image.jsonl
 ```
 
 Check it worked (measured with shard 0 extracted):
 
 ```
-rows written: 11000, rows skipped: 53516 (missing_media: 53516)
+rows written: 11000
+rows skipped: 53516
+missing_media: 53516
 ```
 
-If you later extract the remaining shards and re-run, `rows written` goes up and `missing_media` goes down. TODO(verify) exact numbers with all 6 shards.
+The converter always prints one `rows written: N` line and one `rows skipped: M` line, and *then* one line per skip reason (like `missing_media: …`) whenever that reason's count is greater than zero.
+
+If you later extract the remaining shards and re-run, `rows written` goes up and `missing_media` goes down. TODO(verify) the exact counts with all 6 shards extracted.
 
 ---
 
 ## 3. Video-text: human activity clips with segment annotations
 
-**What it is:** `trannhiem/TranNhiem-Action100M-Human-Activities` — 2,985 records over 908 YouTube source videos, ~116 GB in total. Each record describes a `[start, end]` clip inside a full video (median 8.7 s), with a 6-turn English conversation and `🥵…🥵/` reasoning. TODO(verify) the final repo layout.
+**What it is:** `trannhiem/TranNhiem-Action100M-Human-Activities` — 2,985 records over 908 YouTube source videos, ~116 GB in total. Each record describes a `[start, end]` clip inside a full video (median 8.7 s), with a 6-turn English conversation and `🥵…🥵/` reasoning. The layout on the Hub is:
+
+```
+data/action100m_split1.jsonl              all 2,985 records
+data/action100m_split1_shortvideo.jsonl   short-video subset
+data/action100m_split1_longvideo.jsonl    long-video subset
+videos/<youtube_id>.mp4                   908 source videos
+```
 
 **Read the licence first:** the dataset is under **FAIR Noncommercial Research** terms and the videos are third-party YouTube content. Noncommercial research use only.
+
+### Download (full)
 
 ```bash
 hf download trannhiem/TranNhiem-Action100M-Human-Activities \
   --repo-type dataset \
-  --local-dir data/raw/video     # TODO(verify) + layout: metadata file name, video files location
+  --local-dir data/raw/video
 ```
 
-TODO(verify) extraction/layout command for this dataset (mirror the image flow once the layout is fixed).
+There are no tars to extract here — `hf download` leaves the layout above on disk. Expect hours: it is ~116 GB across 908 videos.
 
-Then convert — `--video-root` is the directory that the **basenames** in the metadata are resolved against:
+### Or download only what you need
+
+The dataset is too large for a first end-to-end test. Download `data/` first, then a subset of the videos with `--include` patterns (the selection is up to you — see `hf download --help`):
+
+```bash
+hf download trannhiem/TranNhiem-Action100M-Human-Activities \
+  --repo-type dataset \
+  --local-dir data/raw/video \
+  --include <patterns covering data/ and the videos you want>
+```
+
+The converter **skips rows whose video file is missing**, exactly like the image converter. Measured with 300 of the 908 videos present:
+
+```
+rows written: 671
+rows skipped: 2314
+missing_media: 2314
+```
+
+Download more videos and re-run to grow the file.
+
+### Convert
+
+`--video-root` is the directory that the **basenames** in the metadata are resolved against — that is `videos/` here:
 
 ```bash
 python examples/vlm-2xH200/data/prepare_data.py video \
-  --input data/raw/video/TODO.jsonl \
-  --video-root data/raw/video \
-  --output data/canon/video.jsonl
+  --input data/raw/video/data/action100m_split1.jsonl \
+  --video-root data/raw/video/videos \
+  --output data/prepared/video.jsonl
 ```
 
-Check it worked: expect 2,985 written rows.
+Check it worked (full download: every record resolves):
 
 ```
-rows written: 2985, rows skipped: …   # TODO(verify) exact line wording when nothing is skipped
+rows written: 2985
+rows skipped: 0
 ```
 
 Each converted row carries `start`/`end` in seconds, so the trainer knows which segment to sample frames from.
@@ -235,43 +288,75 @@ Each converted row carries `start`/`end` in seconds, so the trainer knows which 
 
 ## 4. Text-only: ShareGPT-style QA
 
-**What it is:** any ShareGPT jsonl works. The competition sample is a small Vietnamese persona logic/math reasoning file: 209 rows, 2-turn conversations, `🥵…🥵/` reasoning, median ~5,700 characters per row. It is supplied by the organisers and is **not** on the Hub.
+**What it is:** any ShareGPT jsonl works. The competition sample is a small Vietnamese persona reasoning file: 209 rows, 2-turn conversations, `🥵…🥵/` reasoning. It is supplied by the organisers and is **not** on the Hub.
 
 ```bash
 python examples/vlm-2xH200/data/prepare_data.py text \
-  --input data/raw/text/persona_logic_math.jsonl \   # TODO(verify) organiser-supplied filename and path
-  --output data/canon/text.jsonl
+  --input data/raw/text/persona_vi_reasoning.jsonl \
+  --output data/prepared/text.jsonl
 ```
 
-Check it worked: 209 written rows.
+Check it worked:
 
 ```
-rows written: 209, rows skipped: …   # TODO(verify) exact line wording
+rows written: 209
+rows skipped: 0
 ```
 
 ---
 
-## 5. Mix the three datasets
+## 5. Split, then mix the three datasets
 
 `mix` does weighted sampling over the inputs to produce exactly `--total` rows, then shuffles. Weights are relative — `0.4 0.4 0.2` means 40 % / 40 % / 20 % of the output.
 
+### First: keep a held-out split
+
+Do not evaluate on the rows you trained on. Split **each converted file before mixing**, so that train and eval are exactly disjoint and every row lands in precisely one of the two files:
+
+```bash
+python3 examples/vlm-2xH200/data/prepare_data.py split \
+  --input data/prepared/image.jsonl \
+  --train-out data/prepared/image.train.jsonl \
+  --eval-out data/prepared/image.eval.jsonl \
+  --eval-fraction 0.05 \
+  --seed 0
+```
+
+It prints one line of the form:
+
+```
+split data/prepared/image.jsonl: N train -> data/prepared/image.train.jsonl, M eval -> data/prepared/image.eval.jsonl (seed 0)
+```
+
+with `N + M` equal to the number of rows in `--input`. Run the same command for `video.jsonl` and `text.jsonl`. Then **mix only the `*.train.jsonl` files** and keep the `*.eval.jsonl` files untouched — chapter 05 evaluates on them.
+
+### Mix
+
 ```bash
 python examples/vlm-2xH200/data/prepare_data.py mix \
-  --inputs data/canon/image.jsonl data/canon/video.jsonl data/canon/text.jsonl \
+  --inputs data/prepared/image.train.jsonl data/prepared/video.train.jsonl data/prepared/text.train.jsonl \
   --weights 0.4 0.4 0.2 \
   --total 2000 \
-  --output data/canon/mix.jsonl \
+  --output data/prepared/mix.jsonl \
   --seed 0
 ```
 
 Check it worked (measured):
 
 - `image` 800 rows / `video` 800 rows / `text` 400 rows
-- a warning telling you that `text` (209 rows) **was repeated to fill 400** (TODO(verify) the exact warning wording)
+- a warning telling you that `text` **was repeated to fill 400**
 
 ### Reading the repeat warning
 
-The text pool only has 209 rows and you asked for 400, so the sampler has to reuse rows. That is not an error, but it deserves attention:
+When a pool cannot fill its quota the converter says so, in so many words. The exact wording (measured here with a `text` pool of 209 rows and a 400 quota):
+
+```
+⚠  source 'data/prepared/text.jsonl' had 209 rows but quota is 400.  Repeated 191 rows (each original row appears at least once).
+```
+
+The source name and numbers in your run describe the file and quota you actually passed (e.g. `data/prepared/text.train.jsonl` after the split); the wording is always this shape.
+
+The text pool only has ~209 rows and you asked for 400, so the sampler has to reuse rows. That is not an error, but it deserves attention:
 
 - Rows copied more than once add no information; they just weight those conversations harder. The model starts to memorise 209 rows instead of seeing 400 different ones.
 - Every repeat is a signal that your `--weights` are asking for more of a pool than the pool holds. Prefer lowering the text weight (or `--total`) over silently doubling rows.
@@ -281,27 +366,12 @@ The text pool only has 209 rows and you asked for 400, so the sampler has to reu
 
 Start from what is scarce and what you want the evaluated models to do well at. Image-text document reasoning and video understanding dominate this sample, so 40 % / 40 % is the given baseline; text is the anchor preventing the model from degenerating into pure VQA. Then rerun `stats` (next section) and adjust. There is no single correct split — just don't let the weights drift away from what the competition actually evaluates. TODO(verify) what the evaluation emphasises.
 
-### Keep a held-out split
-
-Do not evaluate on the rows you trained on. Produce a second mix with a different `--seed` (or use a split step; TODO(verify) the exact command — e.g. a dedicated `split` subcommand or a documented convention) and keep that untouched:
-
-```bash
-python examples/vlm-2xH200/data/prepare_data.py mix \
-  --inputs data/canon/image.jsonl data/canon/video.jsonl data/canon/text.jsonl \
-  --weights 0.4 0.4 0.2 \
-  --total 2000 \
-  --output data/canon/mix_eval.jsonl \
-  --seed 1     # TODO(verify) confirm non-overlap with seed 0 before trusting this as "held out"
-```
-
-Two seeds sample from the *same* pools, so they can overlap. If exact disjointness matters, split each canonical file into train/eval first. TODO(verify).
-
 ---
 
 ## 6. Sanity-check the mix
 
 ```bash
-python examples/vlm-2xH200/data/prepare_data.py stats --input data/canon/mix.jsonl
+python examples/vlm-2xH200/data/prepare_data.py stats --input data/prepared/mix.jsonl
 ```
 
 Check it worked (measured for the 2,000-row mix above):
@@ -316,19 +386,36 @@ Two things to notice: the three sources contribute distinct conversation lengths
 
 ## 7. Declare a video frame budget
 
-Video frames are sampled **per clip, inside `[start, end]`**, and the frame budget is **declared by you — there is no hidden default**. Set these before training:
+Video frames are sampled **per clip, inside `[start, end]`**, and the segment **is** honoured: sampling is uniform over exactly that interval (a video row must carry both `start` and `end`), and the segment is part of the decode-cache key. The frames are handed to the model as **native video** — with timestamps, for Qwen — not as separate images.
+
+The frame budget is **declared by you — there is no hidden default**. Set these before training:
 
 ```bash
-export FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES=16             # frame budget per clip; use 16 to match the sample setup
-export FOUNDATIONSCALE_TRAIN_VIDEO_SAMPLING=uniform      # sampling pattern across the clip
-export FOUNDATIONSCALE_TRAIN_VIDEO_MAX_SIDE=…            # TODO(verify) value and meaning (longest side in pixels)
-export FOUNDATIONSCALE_TRAIN_VIDEO_CACHE_DIR=…           # TODO(verify) path; frames are cached here across runs
-export FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES FOUNDATIONSCALE_TRAIN_VIDEO_SAMPLING
+export FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN=video       # required whenever your rows carry <video>
+export FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES=16          # required — frame budget per clip
+export FOUNDATIONSCALE_TRAIN_VIDEO_SAMPLING=uniform   # the only option
+export FOUNDATIONSCALE_TRAIN_VIDEO_MAX_SIDE=448       # optional — longest-side pixel cap per frame
+export FOUNDATIONSCALE_TRAIN_VIDEO_CACHE_DIR=...      # optional — decoded-frame cache directory
 ```
 
-Token cost per frame depends on the target model (TODO(verify) the per-model numbers) — budget your `--total` and frame count against the context limit in Section 8.
+- `FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN` names the field holding the video path (the canonical field is `video`). Required when your rows carry `<video>`.
+- `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` is required and has no default. Forget it and training is **refused with exit 96**, along with a message asking you to declare the frame budget.
+- `FOUNDATIONSCALE_TRAIN_VIDEO_SAMPLING=uniform` is the only option.
+- `FOUNDATIONSCALE_TRAIN_VIDEO_MAX_SIDE` is optional: it caps the longer side of each decoded frame to N pixels and keeps the aspect ratio. Unset, the decoded resolution is kept and the processor resizes by its own rule.
+- `FOUNDATIONSCALE_TRAIN_VIDEO_CACHE_DIR` is optional: decoded frames are cached per clip, budget and segment in a `.fs_video_frames` directory next to the dataset by default. The first run pays the decode cost (measured pre-pass: 197 s over 300 rows with a cold cache, ~30–60 s once warm).
 
-Segment support (`start`/`end`) is being finalised: TODO(verify) what is honoured at training time.
+### What a clip costs in tokens
+
+Measured at the default resolution with 16 frames per clip:
+
+| Model | Tokens per frame | Tokens per 16-frame clip |
+|---|---|---|
+| `gemma-4-12B-it` | 63 | 1008 |
+| `Qwen3.6-27B` | 40 | 640 |
+
+A 16-frame clip together with its 6-turn conversation is about 1.8–2.3 K tokens — far under a 16 K context. Budget your `--total` and frame count against the context limit in Section 8.
+
+**Qwen caveat:** Qwen's video processor in `transformers` 5.18 does **not** apply the per-frame pixel cap that the reference `qwen-vl-utils` applies, so a high-resolution video can cost many more tokens than the table says. If rows are being dropped as overlong, set `FOUNDATIONSCALE_TRAIN_VIDEO_MAX_SIDE` (e.g. `448`) to bring the per-frame token cost back down.
 
 ---
 
@@ -340,10 +427,12 @@ Once images and frames are expanded into tokens, some conversations will exceed 
 export FOUNDATIONSCALE_TRAIN_OVERLONG=drop    # or: refuse
 ```
 
+The measurement happens in a **pre-pass before training, on every rank** — after images/frames have been expanded into tokens — so you know the answer before any GPU work.
+
 | Value | Behaviour | When to use |
 |---|---|---|
-| `drop` | Over-long rows are removed from training. | You have plenty of rows and a few long ones are not worth shrinking the dataset. |
-| `refuse` | Training refuses to start if any row is over-long. | You want to catch a mis-configured frame budget or context length before burning GPU time. |
+| `drop` | Over-long rows are removed and counted; the count is recorded in `run_manifest.json` under `conversation_prepass dropped_overlong`. | You have plenty of rows and a few long ones are not worth shrinking the dataset. |
+| `refuse` | Training exits with status 96, naming the first offending row and its token count. | You want to catch a mis-configured frame budget or context length before burning GPU time. |
 
 Use `refuse` for your first run so a bad setting shows up immediately; switch to `drop` once you know your longest rows.
 
@@ -351,15 +440,21 @@ Use `refuse` for your first run so a bad setting shows up immediately; switch to
 
 ## Troubleshooting
 
-**My image conversion says `rows skipped: … (missing_media: …)`.** Expected when you extracted fewer than all 6 shards. Each counted row points at an image file that is not on disk yet. Extract more shards and re-run — the skipped rows come back. Only use `--no-check-files` if you are sure the files exist at training time; otherwise the failure moves (lazily) into the training run.
+**My image conversion says `rows skipped: …` and `missing_media: …`.** Expected when you extracted fewer than all 6 shards. Each counted row points at an image file that is not on disk yet. Extract more shards (`shards/images-00001.tar` … `images-00005.tar`) and re-run — the skipped rows come back. Only use `--no-check-files` if you are sure the files exist at training time; otherwise the failure moves (lazily) into the training run.
+
+**My video conversion writes far fewer than 2,985 rows.** Same mechanism: you downloaded `data/` but not all 908 videos. With 300 videos present you get 671 rows; download more videos and re-run.
 
 **`mix` warns that a source was repeated.** You asked for more rows than that pool contains. Lower that source's weight, lower `--total`, or widen the pool. See Section 5.
 
-**Nothing seems to happen with videos / frames are empty.** Check `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` — the frame budget has no default. TODO(verify) whether it errors or silently produces zero frames.
+**Training exits 96 and talks about a frame budget.** `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` has no default. Set it (and `FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN`) and start again — nothing was trained and nothing was silently zeroed.
 
-**A training row is much longer than expected.** Remember frames count as tokens and the token cost per frame is model-dependent (TODO(verify)). Rows are not truncated; with `FOUNDATIONSCALE_TRAIN_OVERLONG=drop` they silently disappear from the run.
+**Training exits 96 and names a row with a token count.** `FOUNDATIONSCALE_TRAIN_OVERLONG=refuse` found an over-long row in the pre-pass. Lower `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES`, set `FOUNDATIONSCALE_TRAIN_VIDEO_MAX_SIDE`, or switch to `=drop`.
 
-**The video download is enormous.** It is ~116 GB across 908 source videos by design. If you only need an end-to-end smoke test, start `--total 200` and `--max-rows` on each converter.
+**A training row is much longer than expected.** Frames count as tokens and the cost is model-dependent — 63 tokens/frame for `gemma-4-12B-it` versus 40 for `Qwen3.6-27B` at the default resolution. With Qwen in `transformers` 5.18 a high-resolution clip can cost far more than that (no `qwen-vl-utils` pixel cap); set `FOUNDATIONSCALE_TRAIN_VIDEO_MAX_SIDE=448`. Rows are not truncated; with `FOUNDATIONSCALE_TRAIN_OVERLONG=drop` they silently disappear from the run (the count is in `run_manifest.json`).
+
+**The pre-pass is slow the first time and fast afterwards.** That is the frame decode cache (`FOUNDATIONSCALE_TRAIN_VIDEO_CACHE_DIR`, or `.fs_video_frames` next to the dataset). Measured: 197 s over 300 rows with a cold cache, ~30–60 s warm. The cache keys on the clip, the frame budget and the segment.
+
+**The video download is enormous.** It is ~116 GB across 908 source videos by design. If you only need an end-to-end smoke test, download `data/` plus a subset of videos with `--include` patterns, and use `--total 200` and `--max-rows` on each converter.
 
 **Can I fine-tune on the video data for my product demo?** No — FAIR Noncommercial Research, third-party YouTube content.
 
@@ -371,5 +466,4 @@ Use `refuse` for your first run so a bad setting shows up immediately; switch to
 
 ## Next
 
-**Next:** 03 — Training configuration (model selection, LoRA, context length and memory tuning on 2x H200).
-</parameter>
+**Next:** [03 — Training configuration](03_training_configuration.md)
