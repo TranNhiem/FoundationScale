@@ -44,7 +44,7 @@ from foundationskills.skills.data_engine.report import build_readiness
 
 _LLM_OPS = ("llm_classify", "llm_enhance")
 # Ops whose module exports preflight(cfg) -> list[str]: offline checks of encoders, binaries, cached models.
-_RUNTIME_OPS = ("semantic_dedup", "video_ingest")
+_RUNTIME_OPS = ("semantic_dedup", "video_ingest", "difficulty_filter")
 
 LOCAL_KINDS = {"local_dir", "jsonl", "json", "parquet", "csv", "documents", "image_text"}
 _PREFERENCE_ALGOS = ("dpo", "ipo", "kto", "orpo", "simpo", "cpo", "online_dpo", "iterative_dpo")

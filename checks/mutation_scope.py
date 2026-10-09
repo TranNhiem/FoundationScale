@@ -95,11 +95,6 @@ PENDING_ENROLMENT: dict[str, str] = {
         "token-in/token-out vLLM client with strict response validation and weight reload: "
         "line-covered by tests/agentic_rl, but no mutation row yet."
     ),
-    "src/foundationscale/gates/agentic_gates.py": (
-        "five agentic gates (trajectory integrity, rollout abstention, staleness, weight-sync "
-        "parity, prompt bytes) with their own MUST_FIRE/MUST_PASS controls, but no mutation row"
-        " yet in this battery."
-    ),
     "src/foundationscale/agentic_rl/engines/fleet.py": (
         "engine server lifecycle (spawn, health poll, process-group stop) and round-robin "
         "clients: line-covered by tests/agentic_rl, but no mutation row yet proves a flipped "
@@ -174,11 +169,6 @@ PENDING_ENROLMENT: dict[str, str] = {
         "disk weight sync realising the WeightSync contract, publish-dir pruning: line-covered "
         "by tests/agentic_rl, but no mutation row yet proves a flipped rule here would be "
         "caught."
-    ),
-    "src/foundationscale/agentic_rl/contracts.py": (
-        "agentic trajectory contracts (Turn/Trajectory validation, loss_mask, flatten "
-        "to DECLARED_COLUMNS): 100% line-covered with a refusal test per field, but no "
-        "mutation row yet proves a flipped mask rule or a dropped refusal is caught."
     ),
     "src/foundationscale/agentic_rl/token_trace.py": (
         "multi-turn token trace (prompt/observation/generated appends, budget, finalize "

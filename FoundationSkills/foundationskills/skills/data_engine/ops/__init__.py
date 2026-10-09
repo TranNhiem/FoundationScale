@@ -13,6 +13,7 @@ from __future__ import annotations
 from foundationskills.skills.data_engine.ops import base
 from foundationskills.skills.data_engine.ops import clean
 from foundationskills.skills.data_engine.ops import decontam
+from foundationskills.skills.data_engine.ops import difficulty_filter
 from foundationskills.skills.data_engine.ops import dedup
 from foundationskills.skills.data_engine.ops import format
 from foundationskills.skills.data_engine.ops import ingest
@@ -35,6 +36,7 @@ __all__ = [
     "dedup",
     "quality",
     "decontam",
+    "difficulty_filter",
     "format",
     "tokenize",
     "mix",
@@ -43,4 +45,5 @@ __all__ = [
     "semantic_dedup",
     "toolcall_format",
     "video_ingest",
+    "difficulty_filter",
 ]

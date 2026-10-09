@@ -785,6 +785,13 @@ def plan(
                                ("gradient_checkpointing", grad_ckpt), ("sharding_strategy", sharding)):
                 if not any(hparams.get(k) is not None for k in (key, *_HP_ALIASES.get(key, ()))):
                     hparams[key] = value
+        if (stage == "rl" and goal.get("rl_min_measured_fraction") is not None
+                and hparams.get("min_measured_fraction") is None):  # an operator stage value wins
+            # An operator-declared verdict floor, never a planner guess: the RL driver
+            # exits 95 when fewer steps measure (zero-variance groups are UNMEASURED in FS).
+            hparams["min_measured_fraction"] = float(goal["rl_min_measured_fraction"])
+            decide("hparams", f"{stage}: min_measured_fraction {hparams['min_measured_fraction']:g}",
+                   "declared by goal.rl_min_measured_fraction")
 
         # estimate
         mem = estimate_memory(

@@ -42,6 +42,8 @@ exactly the record shapes `foundationscale-train` / `fskills-rl` consume.
 - You need embedding near-dedup (`semantic_dedup`), tool-calling traces in one
   schema (`toolcall_format`) or video turned into frame+transcript records
   (`video_ingest`) — see "Semantic, tool-call and video ops" below.
+- You want RL prompts the base model neither always solves nor always misses
+  (`difficulty_filter`), so GRPO groups have reward variance.
 
 Do NOT use it for: training itself (training.planner / training.emit) or
 synthesizing examples from nothing (`synthesize`, phase 2).
@@ -94,7 +96,7 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | DE-IN-005 | sft/mm_sft | WARN | chat_template_family or tokenizer missing |
 | DE-IN-006 | input | WARN | preference target while the installed FS cannot run the preference family |
 | DE-IN-007 | input | BLOCK | `llm_classify`/`llm_enhance` without a usable `config.backend` (static), or a backend config error at run time → REFUSED |
-| DE-IN-008 | input | BLOCK | `semantic_dedup`/`video_ingest` runtime dependency unavailable (encoder not cached, ffmpeg/ffprobe missing, ASR model not cached) — checked offline by the op's `preflight`, or raised at run time → REFUSED; nothing is downloaded |
+| DE-IN-008 | input | BLOCK | `semantic_dedup`/`video_ingest`/`difficulty_filter` runtime dependency unavailable (encoder not cached, ffmpeg/ffprobe missing, ASR model not cached) — checked offline by the op's `preflight`, or raised at run time → REFUSED; nothing is downloaded |
 | DE-HO-001 | handoff | BLOCK | readiness verdict is RED |
 | DE-HO-002 | handoff | WARN | readiness verdict is UNMEASURED (null checks listed) |
 | DE-HO-003 | handoff | BLOCK | zero records written |
@@ -246,6 +248,17 @@ Design record and survey: `artifacts/research/llm_data_engine.md`.
   repetition-loop hallucinations on non-speech audio and are suppressed
   (`asr_segments_suppressed`). In chunk mode a window with no sampled frame
   emits nothing; its segments are counted in `asr_segments_frameless_window`.
+- `difficulty_filter` (rl, after `format`) — `k` (default 8) sampled base-model
+  completions per prompt, built and scored exactly as FS RL does
+  (`rl.corpus._parse_record`, `encode_prompts`, `MCQLetterReward`). It keeps a
+  prompt iff `keep_above < pass_rate < keep_below` (default 0 < p < 1), because an
+  all-correct or all-wrong group has zero advantage and FS marks its step
+  UNMEASURED. Unparseable completions abstain: they leave the denominator and
+  are never counted wrong. Drops: `difficulty_too_easy`, `difficulty_too_hard`,
+  `difficulty_unscorable` (< 2 scored), `difficulty_no_gold`,
+  `difficulty_unparseable_record`. Kept records gain `meta.pass_rate`. The
+  readiness stats carry `rl_pass_rate_hist` and `rl_kept_fraction`. It needs CUDA
+  (`device: cpu` forces CPU) and a locally resolvable `model`.
 Running these on a GPU is a library call, not a launch: no confirm hash; the
 device is recorded in stats.
 

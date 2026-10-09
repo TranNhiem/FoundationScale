@@ -257,6 +257,14 @@ def _refuse_unconsumed_overrides(
 class PolicyConfig:
     model_path: str
     algorithm: str = "agentic_grpo"
+    # True (default): a real run plumbs model_path to RolloutHost as
+    # servable_base_model_dir, so RolloutHost.publish completes each
+    # published checkpoint for serving (foundationscale.agentic_rl.servable)
+    # before pushing it to the fleet -- needed whenever model_path is a
+    # multimodal model the trainer loads as text-only. False is a declared
+    # opt-out (e.g. model_path is already text-only, so there is nothing to
+    # complete) recorded in provenance like every other key.
+    servable_publish: bool = True
 
 
 @dataclass(frozen=True)
@@ -448,7 +456,9 @@ def _build_policy(
 ) -> PolicyConfig:
     section = _strip_doc(raw, dotted_prefix="policy")
     local_overrides = _section_overrides(overrides, section="policy")
-    _refuse_unknown_keys(section, frozenset({"model_path", "algorithm"}), section="policy")
+    _refuse_unknown_keys(
+        section, frozenset({"model_path", "algorithm", "servable_publish"}), section="policy"
+    )
     model_path = _resolve_scalar(
         dotted_key="policy.model_path",
         field_name="model_path",
@@ -469,7 +479,19 @@ def _build_policy(
         required=False,
         provenance=provenance,
     )
-    return PolicyConfig(model_path=model_path, algorithm=algorithm)
+    servable_publish = _resolve_scalar(
+        dotted_key="policy.servable_publish",
+        field_name="servable_publish",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=bool,
+        default=True,
+        required=False,
+        provenance=provenance,
+    )
+    return PolicyConfig(
+        model_path=model_path, algorithm=algorithm, servable_publish=servable_publish
+    )
 
 
 def _trainer_field_table() -> dict[str, tuple[Any, Any, bool]]:
