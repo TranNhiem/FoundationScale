@@ -82,6 +82,10 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/agentic_rl/servable.py": (
+        "serving completion of published checkpoints (extras extraction, config copy, index): "
+        "line-covered by tests/agentic_rl, but no mutation row yet."
+    ),
     "src/foundationscale/agentic_rl/cli.py": (
         "agentic RL console front end (dry-run, real-run wiring, exit taxonomy): line-covered "
         "by tests/agentic_rl, but no mutation row yet proves a flipped exit mapping would be "
