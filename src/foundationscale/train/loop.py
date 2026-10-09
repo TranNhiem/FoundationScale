@@ -5712,6 +5712,23 @@ def _train(cfg: TrainConfig) -> int:
             )
             return EXIT_REFUSE
         fsdp_config["transformer_layer_cls_to_wrap"] = wrap_classes
+        if cfg.adapter is not None:
+            # Under peft, transformers swaps in peft's fsdp_auto_wrap_policy, which
+            # takes its class list from FSDP_TRANSFORMER_CLS_TO_WRAP (only
+            # `accelerate launch` sets it) and otherwise from the model's
+            # _no_split_modules. Measured on gemma-4-31B-it and 26B-A4B: that list
+            # names Gemma4AudioLayer, which these checkpoints do not contain, and
+            # peft raised "Could not find the transformer layer class to wrap"
+            # before step 1. The resolved classes above exist in the model, so
+            # they are handed to peft as the declaration it reads.
+            os.environ["FSDP_TRANSFORMER_CLS_TO_WRAP"] = ",".join(wrap_classes)
+            _mark(
+                Step.VALIDATED,
+                "fsdp + adapter: FSDP_TRANSFORMER_CLS_TO_WRAP set to the resolved "
+                f"wrap classes {wrap_classes} so peft's auto-wrap policy uses them "
+                "instead of _no_split_modules, which can name towers this "
+                "checkpoint does not have",
+            )
         if tied and (cfg.tp > 1 or cfg.cp > 1):
             # accelerate's ParallelismConfig composes tp/cp with FSDP version 2
             # only, and a tied model needs version 1 (above). Measured on the
