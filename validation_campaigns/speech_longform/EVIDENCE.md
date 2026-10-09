@@ -119,3 +119,24 @@ Beam 4 removes 80-88% of the loops and the silence artifact. L reaches 12.81 on 
 (-4.55 points against base, the best long-form result). It still exceeds the declared loop limit,
 with "the" runs on call 4432298 and "in" runs on 4479741, so the gate correctly blocks it. The
 threshold is a declared policy and is not loosened to admit a model.
+
+## Thinning repeated words in the training text
+
+`thin_repeats.py` caps runs of one word in the Earnings training transcripts (train + long
+segments); the audio is untouched. keep 2: 195 + 224 tokens dropped, about 300 rows changed.
+keep 1: every immediate repeat removed. Same recipe as L otherwise.
+
+| whole calls | greedy WER / loop words | beam 4 WER / loop words | `speech.repetition_loops` (beam 4) | Earnings clips |
+|---|---|---|---|---|
+| base | 17.30 / 0 | 17.36 / 0 | -- | 19.38 |
+| L | 14.47 / 1,164 | 12.81 / 285 | FAIL | 11.35 |
+| **T2** (keep 2) | 14.73 / 1,242 | **12.36 / 153** | **PASS** | 11.67 |
+| T1 (keep 1) | **13.30 / 524** | 12.37 / 174 | **PASS** | 11.82 |
+
+- **T2 with beam 4 is the first long-form model that passes both gates:** 12.36 on whole calls,
+  -5.0 points against base. It costs about 0.3 points on clips.
+- **T1 halves the loops even under greedy decoding** (524 vs 1,164) and improves greedy WER to
+  13.30. It is the clearest evidence that repetition-heavy transcripts drive the loops.
+- Caution: T2 barely changes the training text, so L -> T2 under beam (285 -> 153 loop words)
+  may partly be run-to-run variation. Each arm is one seed; seeds are needed before the keep-2
+  effect is claimed. The T1 greedy effect is large and goes the expected way.
