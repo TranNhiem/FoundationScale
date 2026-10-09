@@ -96,7 +96,7 @@ The census reports counts per importing area, not unique dependencies or a file-
 
 ```mermaid
 flowchart TB
-  TESTS["tests/<br/>254 Python files / 108,003 LOC"]
+  TESTS["tests/<br/>254 Python files / 108,515 LOC"]
   TOOLS["tools/<br/>32 Python files / 10,183 LOC"]
   SRC["src/ as importer<br/>120 Python files / 79,441 LOC"]
 
@@ -110,7 +110,7 @@ flowchart TB
   INTEG["integrate.py<br/>1 file / 54 LOC"]
   ROOT["root __init__.py<br/>1 file / 3 LOC"]
 
-  TESTS -->|"686 Python import statements"| FS
+  TESTS -->|"698 Python import statements"| FS
   TOOLS -->|"14 Python import statements"| FS
   SRC -->|"342 Python import statements, source not disaggregated"| FS
 
