@@ -181,6 +181,7 @@ Loading the adapter:
 
 ```python
 from peft import PeftModel
+
 adapter = PeftModel.from_pretrained(base_model, "OUTPUT_DIR/checkpoint-N")
 ```
 

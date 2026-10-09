@@ -225,7 +225,7 @@ FLOORS: dict[str, int] = {
     # tests are written. Delete a line when its module reaches the default; do not
     # add a line by hand, and do not lower one to make a red run green.
     "src/foundationscale/gates/speech_gates.py": 99,  # measured 100.0%; 1 pt CI slack
-    "src/foundationscale/rl/distributed.py": 73,  # measured 74.5% with the LoRA save path; 1 pt CI slack
+    "src/foundationscale/rl/distributed.py": 73,  # measured 74.5% (LoRA save path); 1 pt CI slack
     "src/foundationscale/rl/megatron/driver.py": 39,  # measured 39.8%; rung-2 loop is GPU-only
     "src/foundationscale/rl/megatron/logprobs.py": 33,  # set by --update; measured 33.3%
     "src/foundationscale/rl/megatron/normalization.py": 77,  # set by --update; measured 77.1%
