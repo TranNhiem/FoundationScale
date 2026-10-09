@@ -453,7 +453,7 @@ working home fails a test rather than an import at a user's site.
 
 ## Around the package
 
-`src/` is 78550 LOC across 117 files; `tests/` adds 107026 `.py` LOC (its
+`src/` is 79441 LOC across 120 files; `tests/` adds 108003 `.py` LOC (its
 conftest carries the skip guard). Beside the package:
 
 | Tree | Contents |
@@ -465,7 +465,7 @@ conftest carries the skip guard). Beside the package:
 | `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 365959 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 367842 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 
