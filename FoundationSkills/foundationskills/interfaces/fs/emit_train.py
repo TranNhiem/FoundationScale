@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from foundationskills.interfaces.fs.capabilities import FSCapabilities
+from foundationskills.interfaces.fs.shard_paths import resolve_shard_ref
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, owner D1 writes the module
     from foundationskills.skills.training.knowledge import Hardware
@@ -174,21 +175,6 @@ def _derive_max_steps(stage: dict[str, Any], hparams: dict[str, Any], dp: int,
     return max(1, math.ceil(float(tokens) / (micro * seq * ga * max(1, dp))))
 
 
-def _dataset_path(dataset: dict[str, Any], notes: list[str]) -> str | None:
-    """The shard directory (FS accepts a directory of jsonl) or a single shard."""
-    shards = dataset.get("shards") or []
-    if not shards:
-        return None
-    parents = {str(Path(s["path"]).parent) for s in shards if s.get("path")}
-    if len(parents) == 1:
-        return parents.pop()
-    if not parents:
-        return None
-    first = str(Path(shards[0]["path"]).parent)
-    notes.append(f"dataset shards span {len(parents)} directories; passing the first shard instead of a directory")
-    return str(Path(shards[0]["path"]))
-
-
 def _pinned_launcher(launcher: str, notes: list[str]) -> str:
     """Pin a bare ``python``/``torchrun`` to the interpreter that probed FS (and its sibling torchrun).
 
@@ -267,13 +253,22 @@ def emit_train(
 
     world = max(1, int(nodes) * int(gpus_per_node))
     dp = max(1, world // max(1, tp * cp))
+    if world == 1 and str(sharding) == "fsdp":
+        # One GPU launches as plain python (no torchrun): FSDP over one rank shards
+        # nothing, and transformers refuses it outside distributed training (FS rc=96,
+        # measured 2026-10-09 on GB200, gemma-4-E4B-it LoRA). Per-GPU memory is unchanged.
+        for key in _HPARAM_ALIASES["sharding-strategy"]:
+            hparams.pop(key, None)
+        hparams["sharding_strategy"] = sharding = backend = "ddp"
+        notes.append("sharding fsdp -> ddp: a 1-GPU launch is not distributed, and FSDP over one rank shards nothing")
 
     # Structural flags: required by the CLI contract itself.
     scheduler = _hw(hardware, "scheduler")
     profile = "slurm-generic" if (int(nodes) > 1 or (scheduler not in (None, "", "local"))) else "local-single-node"
-    data_path = _dataset_path(dataset, notes)
-    if data_path is None:
-        missing.append("dataset payload has no shards to pass to --dataset")
+    data_path, shard_refusal, shard_notes = resolve_shard_ref(dataset.get("shards") or [], "*.json*")
+    notes.extend(shard_notes)
+    if shard_refusal is not None:
+        missing.append(shard_refusal)
 
     pairs: list[tuple[str, Any]] = [
         ("model", model),

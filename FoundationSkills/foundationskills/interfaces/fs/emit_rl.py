@@ -13,11 +13,11 @@ no sharding/parallel axes apply and every payload carries that warning.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from foundationskills.interfaces.fs.capabilities import FSCapabilities
 from foundationskills.interfaces.fs.emit_train import _code_path_env, _pinned_launcher, fs_repo_root
+from foundationskills.interfaces.fs.shard_paths import resolve_shard_ref
 
 # hparams key -> RLTrainConfig field. Only keys present in the stage hparams
 # are emitted, so RLTrainConfig's own dataclass defaults govern the rest.
@@ -78,7 +78,13 @@ def emit_rl(
 
     shards = dataset.get("shards") or []
     if shards:
-        data_path = str(Path(shards[0]["path"]).parent)
+        # "*.json*": FS rl/corpus.py loads a directory's *.json AND *.jsonl (rl_driver's preference
+        # merge reads *.jsonl), so a stray file of either kind would become training data.
+        data_path, shard_refusal, shard_notes = resolve_shard_ref(shards, "*.json*")
+        notes.extend(shard_notes)
+        if shard_refusal is not None:
+            missing.append(shard_refusal)
+            data_path = None
     else:
         data_path = None
         missing.append("dataset payload has no shards to pass as the RL corpus")
