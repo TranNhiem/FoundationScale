@@ -25,10 +25,15 @@ save at step 6. Peak memory is `nvidia-smi` memory.used, the max over both GPUs.
 | gemma-4-26B-A4B-it | 32768 | 0 | 65.7 | 2528 | 410 |
 | gemma-4-31B-it | 16384 | 0 | 62.9 | 1101 | 820 |
 | gemma-4-31B-it | 32768 | 0 | 90.2 | 650 | 820 |
-| Qwen3.6-27B | 16384 | 0 | 50.8 | 2695 | 512 |
-| Qwen3.6-27B | 32768 | 0 | 69.7 | 3156 | 512 |
-| Qwen3.6-35B-A3B | 16384 | 0 | 48.8 | 4893 | 320 |
-| Qwen3.6-35B-A3B | 32768 | 0 | 64.5 | 2862 | 320 |
+| Qwen3.6-27B | 16384 | 0 | 50.9 | 3475 | 512 |
+| Qwen3.6-27B | 32768 | 0 | 70.0 | 3078 | 512 |
+| Qwen3.6-35B-A3B | 16384 | 0 | 48.3 | 9322 | 320 |
+| Qwen3.6-35B-A3B | 32768 | 0 | 57.6 | 8546 | 320 |
+
+The Qwen rows were first measured with the model loaded through `AutoModelForCausalLM`,
+which maps `qwen3_5`/`qwen3_5_moe` to text-only classes that skip the vision tower and
+ignore pixel inputs, so those runs trained on text alone. The rows above are the re-run
+with `AutoModelForImageTextToText` (recorded as `model_auto_class` in each manifest).
 
 Tokens/s over 6 steps is noisy (warm-up included); the long-run table replaces it.
 Every saved adapter passed the save gate and loads with `PeftModel.from_pretrained`
@@ -50,7 +55,35 @@ with no missing keys (checked on gemma-4-12B-it and Qwen3.6-27B).
 
 relative difference: gemma-4-12B-it 6e-6, gemma-4-26B-A4B-it 4.7e-4, Qwen3.6-27B 0.
 
+## Mixed image + video + text matrix (measured 2026-10-09)
+
+300 rows: 120 image, 120 video (Action100M segments, 16 frames per clip sampled uniformly
+inside each row's [start, end], passed to the processor as native video), 60 text. Same
+settings as above plus `FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN=video`,
+`FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES=16`. The pre-pass kept all 300 rows at both contexts.
+
+| model | context | exit | peak GB/GPU | tokens/s (2 GPUs) | LoRA tensors | pre-pass s |
+|---|---|---|---|---|---|---|
+| gemma-4-12B-it | 16384 | 0 | 32.3 | 2596 | 656 | 196.8 (cold frame cache) |
+| gemma-4-12B-it | 32768 | 0 | 49.7 | 1582 | 656 | 32.8 |
+| gemma-4-26B-A4B-it | 16384 | 0 | 48.2 | 3626 | 410 | 34.1 |
+| gemma-4-26B-A4B-it | 32768 | 0 | 65.7 | 2526 | 410 | 29.0 |
+| gemma-4-31B-it | 16384 | 0 | 63.0 | 1088 | 820 | 25.9 |
+| gemma-4-31B-it | 32768 | 0 | 90.2 | 650 | 820 | 32.5 |
+| Qwen3.6-27B | 16384 | 0 | 51.0 | 3372 | 512 | 61.6 |
+| Qwen3.6-27B | 32768 | 0 | 70.3 | 3024 | 512 | 63.7 |
+| Qwen3.6-35B-A3B | 16384 | 0 | 48.5 | 8009 | 320 | 60.3 |
+| Qwen3.6-35B-A3B | 32768 | 0 | 58.0 | 8071 | 320 | 58.1 |
+
+Video tokens per frame at the default processor resolution: gemma-4-12B-it 63, Qwen3.6-27B 40.
+
+## Video reaches the model (control)
+
+Qwen3.6-27B through `train()`, 8 video rows, 2 steps, same initial weights: real frames
+0.510 -> 0.403, all-black frames 0.549 -> 0.509. Before the class fix both runs gave the
+same losses. Suite: `test_video_reaches_the_model.py` (gemma-4-12B-it and Qwen3.6-27B).
+
 ## Not yet measured
 
-Video + text (frame budget and segment sampling pending), long runs, the evaluation loop,
+Long runs, the evaluation loop,
 and the RL / preference algorithms with LoRA.
