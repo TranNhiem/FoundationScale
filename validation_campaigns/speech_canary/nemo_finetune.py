@@ -85,6 +85,9 @@ def main() -> None:
     # Longest clip accepted, in seconds. 25 s is the clip recipe; long-form training raises it
     # to 40 s (speech_longform), and a longer clip is refused and counted, never truncated.
     ap.add_argument("--max-duration", type=float, default=25.0)
+    # Unset keeps the earlier runs' behaviour; set, it seeds Lightning and the lhotse shuffle so a
+    # result can be replicated across seeds (one seed per arm cannot separate an effect from noise).
+    ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--freeze", action="append", default=[])
     args = ap.parse_args()
     out = Path(args.out_dir)
@@ -94,6 +97,9 @@ def main() -> None:
     print("COVERAGE", json.dumps(coverage))
 
     import lightning.pytorch as pl
+
+    if args.seed is not None:
+        pl.seed_everything(args.seed, workers=True)
     from nemo.collections.asr.models import ASRModel
     from omegaconf import OmegaConf, open_dict
 
@@ -108,6 +114,8 @@ def main() -> None:
         train_cfg.use_lhotse = True
         train_cfg.batch_size = args.batch_size
         train_cfg.shuffle = True
+        if args.seed is not None:
+            train_cfg.seed = args.seed
         train_cfg.num_workers = 4
         train_cfg.max_duration = args.max_duration
         train_cfg.prompt_format = model.cfg.get("prompt_format", train_cfg.get("prompt_format"))

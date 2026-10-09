@@ -140,3 +140,23 @@ keep 1: every immediate repeat removed. Same recipe as L otherwise.
 - Caution: T2 barely changes the training text, so L -> T2 under beam (285 -> 153 loop words)
   may partly be run-to-run variation. Each arm is one seed; seeds are needed before the keep-2
   effect is claimed. The T1 greedy effect is large and goes the expected way.
+
+## Seeds: L vs T2 (beam 4, whole calls)
+
+`nemo_finetune.py --seed` (seeds Lightning and the lhotse shuffle). Each cell: WER / loop words.
+
+| | seed 0 (above) | seed 1 | seed 2 | mean WER | mean loop words | passes `repetition_loops` |
+|---|---|---|---|---|---|---|
+| L | 12.81 / 285 | 12.35 / 195 | 12.75 / 518 | 12.64 | 333 | 1 of 3 |
+| **T2** | 12.36 / 153 | **11.99 / 45** | 12.96 / 270 | **12.44** | **156** | **2 of 3** |
+
+Earnings clips: L 11.35 / 11.48 / 11.58, T2 11.67 / 11.79 / 11.73. Capping repeats at 2
+costs about 0.2-0.3 points on clips, consistently.
+
+- **Capping repeats at 2 halves the loops**: T2 has fewer loop words than L at every seed. The
+  WER gain (-0.2 on average) is inside the seed spread.
+- **Loops are seed-sensitive** (45 to 518 loop words for one recipe), and neither recipe passes
+  every seed. The gate is what makes that safe: a looping seed is blocked whatever its WER. The
+  best run, T2 seed 1, scores 11.99 on whole calls (base 17.36) with 45 loop words and passes
+  both gates. A long-form recipe should select among seeds or checkpoints under the gate, not
+  trust one run.
