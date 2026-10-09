@@ -33,6 +33,7 @@ import base64
 import csv
 import json
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -112,17 +113,39 @@ def strip_thinking(text: str) -> str:
 
 
 def parse_option_letter(raw: str, letters: str) -> str | None:
-    """Return the first *standalone* option letter in the output, else ``None``.
+    """Return the option letter the model committed to, else ``None``.
 
-    "Standalone" means not glued to other letters/digits, e.g. "A", "(B)",
-    "C." or "The answer is D" all match; "AB" or "Easy" do not.
+    Order of preference, because a model that reasons before answering writes
+    ordinary English first ("A chart shows ..."), and the first standalone
+    capital in that text is an article, not an answer:
+
+    1. an explicit final answer: "Answer: C", "the answer is (C)", "**C**";
+    2. a bare short reply such as "C", "(C)" or "C.";
+    3. the LAST standalone option letter on the last non-empty line.
     """
     if not letters:
         return None
-    text = strip_thinking(raw)
-    pattern = r"(?<![0-9A-Za-z])([" + re.escape("".join(sorted(letters))) + r"])(?![0-9A-Za-z])"
-    match = re.search(pattern, text)
-    return match.group(1) if match else None
+    text = strip_thinking(raw).strip()
+    if not text:
+        return None
+    opts = re.escape("".join(sorted(letters)))
+    explicit = [
+        r"answer\s*(?:is|:)?\s*[:\-]?\s*\(?\**\s*([" + opts + r"])\b",
+        r"\*\*\(?([" + opts + r"])\)?\*\*",
+        r"(?:option|choice)\s+\(?([" + opts + r"])\b",
+    ]
+    for pattern in explicit:
+        found = [f.upper() for f in re.findall(pattern, text, flags=re.IGNORECASE)]
+        found = [f for f in found if f in letters]
+        if found:
+            return found[-1]
+    bare = re.fullmatch(r"\(?([" + opts + r"])\)?[.:]?", text)
+    if bare:
+        return bare.group(1)
+    last_line = [line for line in text.splitlines() if line.strip()][-1]
+    standalone = r"(?<![0-9A-Za-z])([" + opts + r"])(?![0-9A-Za-z])"
+    found = re.findall(standalone, last_line)
+    return found[-1] if found else None
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +158,8 @@ def load_rows(tsv_path: str, limit: int | None):
     ``rows``: dicts with the columns the scorer needs (plus parsed options).
     """
     with Path(tsv_path).open(newline="", encoding="utf-8") as handle:
+        # Benchmark TSVs embed images as base64; some fields exceed csv's 128 KiB default.
+        csv.field_size_limit(sys.maxsize)
         reader = csv.DictReader(handle, delimiter="\t")
         if not reader.fieldnames:
             raise SystemExit(f"{tsv_path}: empty file (no header row)")
@@ -222,6 +247,13 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="JSON file that receives scores and per-row predictions.",
     )
     parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=512,
+        help="generation budget; models that reason before answering need room to finish "
+        "(measured: 32 tokens left 26%% of MMStar answers unparsable for gemma-4-12B-it)",
+    )
+    parser.add_argument(
         "--disable-thinking",
         action="store_true",
         help="Slide in chat_template_kwargs={'enable_thinking': False} to llm.chat.",
@@ -257,7 +289,7 @@ def main(argv=None) -> None:
         limit_mm_per_prompt={"image": 1},
         trust_remote_code=True,
     )
-    sampling = SamplingParams(temperature=0, max_tokens=32)
+    sampling = SamplingParams(temperature=0, max_tokens=args.max_tokens)
 
     started = time.perf_counter()
     if args.disable_thinking:

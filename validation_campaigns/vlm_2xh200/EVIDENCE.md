@@ -83,7 +83,77 @@ Qwen3.6-27B through `train()`, 8 video rows, 2 steps, same initial weights: real
 0.510 -> 0.403, all-black frames 0.549 -> 0.509. Before the class fix both runs gave the
 same losses. Suite: `test_video_reaches_the_model.py` (gemma-4-12B-it and Qwen3.6-27B).
 
+## Longer context
+
+Mixed image + video + text (16 frames per clip), context runs padded to the full length =
+worst case.
+
+65536 tokens:
+
+| model | context | exit | peak GB/GPU | tokens/s (2 GPUs) |
+|---|---|---|---|---|
+| gemma-4-12B-it | 65536 | 0 | 90.3 | 861 |
+| gemma-4-26B-A4B-it | 65536 | 0 | 106.6 | 1379 |
+| Qwen3.6-27B | 65536 | 0 | 113.8 | 2042 |
+| Qwen3.6-35B-A3B | 65536 | 0 | 81.2 | 4830 |
+| gemma-4-31B-it | 65536 | — | OUT OF MEMORY | — |
+
+gemma-4-31B-it's maximum on 2x H200 is 32K.
+
+131072 tokens: out of memory on all five models with this setup (would need context
+parallelism or CPU offload).
+
+## Algorithms with LoRA
+
+20 steps each, all exit 0:
+
+- DPO with LoRA on all five models.
+- IPO, SimPO, CPO, ORPO on Qwen3.6-27B.
+- GRPO, Dr-GRPO, DAPO, GSPO, REINFORCE++, RLOO on gemma-4-12B-it with images.
+- GRPO with images on gemma-4-26B-A4B-it and gemma-4-31B-it.
+
+GRPO with images on Qwen3.6-27B / 35B-A3B: three bugs found and fixed on the branch
+(text-only class loaded by the RL trainer; prompt-length mm_token_type_ids forwarded with
+prompt+completion ids; Qwen's flattened patch tensor sliced by row in group expansion and
+micro-batching); after the fixes both run 10 steps with images without error (peak
+60.3 / 82.2 GB per GPU).
+
+GRPO signal: on ScienceQA many groups give all-identical rewards (the model gets all 4
+samples right, or none finishes within max_new_tokens), and identical rewards give zero
+advantage, so the step is skipped; a run where every step is skipped is refused (exit 96,
+"vacuous run"). Measured: gemma-4-12B-it measured 3 of 20 steps with group 4 / 4 prompts.
+Remedies: larger `--group-size` (8), more `--prompts-per-step`, harder questions matched to
+the model, `--max-new-tokens 400+` for reasoning models.
+
+## Longer SFT run and evaluation
+
+gemma-4-12B-it, 16K, 300 steps, grad accumulation 4, unpadded, on a train split made with
+`prepare_data.py split`; held-out = 171 disjoint rows: 110 image, 40 video, 21 text.
+Training loss 1.11 -> 0.43, exit 0.
+
+Held-out NLL: base 1.433 (perplexity 4.19) -> fine-tuned 0.505 (perplexity 1.66),
+0 rows dropped.
+
+MMStar (1,498 questions, vLLM, `--max-tokens 512`): base 64.02% (112 unparsable) ->
+fine-tuned 61.88% (105 unparsable): specialising on Vietnamese documents and activity
+videos cost about 2 points of general English perception.
+
+`eval_heldout_loss.py` now takes `--video-frames N` (use the same value as
+`FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` in training); without it, video rows are refused with
+exit 96.
+
+## Scoring defect found
+
+Must be stated in chapter 05: an earlier version of `eval_mcq_vllm.py` used `max_tokens=32`
+and took the FIRST standalone capital letter as the answer. On MMStar that reported 47.00%
+for the same base model, 17 points too low: reasoning answers were cut off (26% unparsable),
+and an English article "A" could be read as option A. The script now defaults to
+`--max-tokens 512` and prefers an explicit answer ("Answer: C", "the answer is (C)",
+"**C**"), then a bare letter, then the last letter on the final line. Always check the
+unparsable count and read a few raw outputs before trusting a benchmark number; raise
+`--max-tokens` to 1024 for reasoning-heavy benchmarks.
+
 ## Not yet measured
 
-Long runs, the evaluation loop,
-and the RL / preference algorithms with LoRA.
+131072-token context runs beyond this setup (they need context parallelism or CPU offload
+to fit).

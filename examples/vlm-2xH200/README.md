@@ -51,6 +51,89 @@ All ten runs exit 0, pass FoundationScale's save gate, and write a LoRA adapter 
 Qwen3.6-27B peaks at 72.7 GB per GPU at 4K and 8K tokens; GRPO with images peaks at about 55 GB
 (gemma-4-12B-it) and 69 GB (Qwen3.6-27B).
 
+### Longer context: 64K and 128K (65536 / 131072 tokens)
+
+Same setup as above: LoRA r16 / alpha 32, FSDP, bf16, activation checkpointing, `--fused-loss
+liger`; mixed image + video + text with 16 frames per clip. The context runs are **padded to the
+full length**, so these numbers are the worst case. Peak memory is per GPU, tokens/s is over
+both GPUs.
+
+| model | 64K peak | 64K tokens/s | 128K |
+|---|---|---|---|
+| gemma-4-12B-it | 90.3 GB | 861 | out of memory |
+| gemma-4-26B-A4B-it (MoE) | 106.6 GB | 1,379 | out of memory |
+| gemma-4-31B-it | out of memory — its maximum on 2x H200 is 32K | — | out of memory |
+| Qwen3.6-27B | 113.8 GB | 2,042 | out of memory |
+| Qwen3.6-35B-A3B (MoE) | 81.2 GB | 4,830 | out of memory |
+
+- 65536 tokens: gemma-4-12B-it, gemma-4-26B-A4B-it, Qwen3.6-27B and Qwen3.6-35B-A3B all **exit
+  0**. gemma-4-31B-it is **out of memory** at 64K; its maximum context on 2x H200 is 32K.
+- 131072 tokens: **out of memory on all five models** with this setup. You would need context
+  parallelism or CPU offload.
+
+### Algorithms: 20-step runs (all exit 0)
+
+| algorithm | model(s) | data |
+|---|---|---|
+| DPO (LoRA) | all five models | text |
+| IPO, SimPO, CPO, ORPO | Qwen3.6-27B | text |
+| GRPO, Dr-GRPO, DAPO, GSPO, REINFORCE++, RLOO | gemma-4-12B-it | images |
+| GRPO | gemma-4-26B-A4B-it, gemma-4-31B-it | images |
+
+GRPO with images on **Qwen3.6-27B / Qwen3.6-35B-A3B** needed three bug fixes (found on this
+branch):
+
+- the RL trainer loaded the text-only processor class instead of the multimodal one;
+- prompt-length `mm_token_type_ids` were forwarded together with the prompt+completion `input_ids`;
+- Qwen's flattened patch tensor was sliced by row in group expansion and micro-batching.
+
+After the fixes both models run 10 steps with images without error (peak **60.3 GB** per GPU for
+Qwen3.6-27B, **82.2 GB** for Qwen3.6-35B-A3B).
+
+**GRPO signal: watch the advantage.** On ScienceQA many groups give all-identical rewards — the
+model gets all 4 samples right, or none finishes within `max_new_tokens`. Identical rewards give
+zero advantage, so that step is skipped, and **a run where every step is skipped is refused
+(exit 96, "vacuous run")**. Measured: gemma-4-12B-it completed 3 of 20 steps with group size 4 /
+4 prompts per step. Remedies: larger `--group-size` (8), more `--prompts-per-step`, harder
+questions matched to the model, `--max-new-tokens 400+` for reasoning models.
+
+### 300-step SFT + evaluation (gemma-4-12B-it, 16K)
+
+Training: 300 steps, gradient accumulation 4, **unpadded** batches, 16K context, on a train
+split made with `prepare_data.py split`; the held-out set is 171 disjoint rows (110 image,
+40 video, 21 text). Training loss **1.11 → 0.43**, exit 0.
+
+Held-out loss (`eval_heldout_loss.py`, 0 rows dropped):
+
+| | NLL | perplexity |
+|---|---|---|
+| base | 1.433 | 4.19 |
+| fine-tuned | **0.505** | **1.66** |
+
+`eval_heldout_loss.py` now takes `--video-frames N` — use the same value as
+`FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` in training. Without it, video rows are refused with
+exit 96.
+
+MMStar (1,498 questions, vLLM, `--max-tokens 512`):
+
+| | MMStar | unparsable |
+|---|---|---|
+| base | **64.02%** | 112 |
+| fine-tuned | 61.88% | 105 |
+
+Specialising on Vietnamese documents and activity videos cost about **2 points** of general
+English perception.
+
+### Benchmark scoring lesson (also stated in chapter 05)
+
+An earlier version of `eval_mcq_vllm.py` used `max_tokens=32` and took the **first** standalone
+capital letter as the answer. On MMStar that reported **47.00% for the same base model — 17
+points too low**: reasoning answers were cut off (26% unparsable), and an English article "A"
+could be read as option A. The script now defaults to `--max-tokens 512` and prefers an explicit
+answer (`Answer: C`, `the answer is (C)`, `**C**`), then a bare letter, then the last letter on
+the final line. **Always check the unparsable count and read a few raw outputs before trusting a
+benchmark number**; raise `--max-tokens` to 1024 for reasoning-heavy benchmarks.
+
 ## 06 — Ready-to-run configs for each model
 
 `configs/` holds one file per model and context length. Each sets only `MODEL`, `CONTEXT`,

@@ -12,11 +12,13 @@ The held-out split comes from the `prepare_data.py` split from chapter 02, so ev
 ls -l data/prepared/heldout.jsonl
 ```
 
-**Check it worked.** The file exists and is non-empty. Evaluation rows must not overlap training rows — if you rebuilt the data yourself, re-run `prepare_data.py` from chapter 02 rather than hand-splitting TODO(verify) the exact split flags.
+**Check it worked.** The file exists and is non-empty. Evaluation rows must not overlap training rows — if you rebuilt the data yourself, re-run `prepare_data.py split` from chapter 02 rather than hand-splitting; the measured train/held-out split is exactly this (a train split made with `prepare_data.py split`), and its held-out file holds **171 disjoint rows: 110 image, 40 video, 21 text**.
 
 ## 2. Held-out loss (NLL and perplexity)
 
 Run the held-out loss script. It uses FoundationScale's own collator, so **the same tokens are supervised as during training**, which makes the number directly comparable across runs.
+
+`eval_heldout_loss.py` takes `--video-frames N`, the number of frames sampled per video clip. Pass the **same value as `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES`** used during training (16 frames/clip in the measured runs). Without `--video-frames`, video rows are refused and the script exits with code 96.
 
 Evaluate the base model:
 
@@ -25,6 +27,7 @@ python examples/vlm-2xH200/scripts/eval_heldout_loss.py \
   --model models/gemma-4-12B-it \
   --data data/prepared/heldout.jsonl \
   --max-length 16384 \
+  --video-frames 16 \
   --out results/heldout_base.json
 ```
 
@@ -36,6 +39,7 @@ python examples/vlm-2xH200/scripts/eval_heldout_loss.py \
   --adapter runs/<run>/checkpoint-N \
   --data data/prepared/heldout.jsonl \
   --max-length 16384 \
+  --video-frames 16 \
   --out results/heldout_lora.json
 ```
 
@@ -49,6 +53,15 @@ Both commands use both GPUs via `device_map=auto`. The output block reports `row
 | + 6-step LoRA adapter | 1.149 | 3.16 | ~90 s |
 
 A 6-step adapter is a **plumbing check, not a quality claim** — the above numbers only prove the pipeline runs end to end. Train for hundreds of steps before comparing.
+
+After a real **300-step** run (`gemma-4-12B-it`, 16K, 300 steps, grad accumulation 4, unpadded; LoRA r16/a32 on 2x H200 with FSDP, bf16, activation checkpointing and `--fused-loss liger`, on a train split made with `prepare_data.py split`), the training loss fell **1.11 → 0.43** (exit 0) and the measured held-out result (171 disjoint rows: 110 image, 40 video, 21 text) is:
+
+| model | mean NLL (nats/token) | perplexity | rows used | rows dropped |
+|---|---|---|---|---|
+| base `gemma-4-12B-it` | 1.433 | 4.19 | 171 | 0 |
+| + 300-step LoRA adapter | 0.505 | 1.66 | 171 | 0 |
+
+This is the real quality signal: fine-tuning cut the held-out NLL from **1.433 to 0.505** (perplexity **4.19 → 1.66**) with **0 rows dropped**.
 
 For each JSON you write, record `rows used` and `rows dropped` alongside the loss so runs with different drop rates are not compared naively.
 
@@ -72,6 +85,9 @@ python examples/vlm-2xH200/scripts/merge_lora.py \
 Look for the three `PASS` lines in the output before continuing.
 
 ## 4. Benchmark accuracy with vLLM
+
+> [!WARNING]
+> **A benchmark number is only as good as its answer parser. A scoring bug once reported the same base model at 47.00% on MMStar instead of 64.02% — 17 points too low.** An earlier version of `eval_mcq_vllm.py` generated with `max_tokens=32` and took the **first standalone capital letter** as the answer. Two failure modes followed: reasoning answers were cut off mid-thought (**26% unparsable**), and the English article "A" inside an answer sentence was read as option A. The script now defaults to `--max-tokens 512` and prefers an explicit answer (`Answer: C`, `the answer is (C)`, `**C**`), then a bare letter, then the last letter on the final line. **Always check the `unparsable` count and read a few raw generated outputs before you trust a benchmark number**, and raise `--max-tokens` to 1024 for reasoning-heavy benchmarks.
 
 ### 4a. Create a separate vLLM environment
 
@@ -103,7 +119,7 @@ https://opencompass.openxlab.space/utils/VLMEval/<NAME>.tsv
 
 TODO(verify) the exact URLs. The columns are: `index`, `question`, `A`..`D`, `answer`, `image` (base64), optional `hint`, `category`.
 
-Store them under `data/eval/`, e.g. `data/eval/MMStar.tsv`.
+Store them under `data/eval/`, e.g. `data/eval/MMStar.tsv`. The measured `MMStar` TSV contains **1,498 questions**.
 
 ### 4c. Run a benchmark
 
@@ -114,6 +130,11 @@ Store them under `data/eval/`, e.g. `data/eval/MMStar.tsv`.
 
 Every target model fits one H200 for inference, so run **two benchmarks in parallel, one per GPU** (`CUDA_VISIBLE_DEVICES=0` and `CUDA_VISIBLE_DEVICES=1`).
 
+Scoring controls (see the warning above):
+
+- `--max-tokens N` — maximum number of new tokens generated per question. The script defaults to **512**; the old fixed `max_tokens=32` cut reasoning answers off (26% unparsable) and made numbers untrustworthy. Raise to **1024** for reasoning-heavy benchmarks.
+- `--limit N` — score only the first N questions. Fine for a smoke test, but score the **same** rows for every model you compare, or drop `--limit` entirely (the measured numbers below are the full 1,498-question MMStar set).
+
 GPU 0 (merged 6-step adapter):
 
 ```bash
@@ -123,12 +144,13 @@ CUDA_VISIBLE_DEVICES=0 VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_USE_DEEP_GEMM=0 \
   --tsv data/eval/MMStar.tsv \
   --name MMStar \
   --limit 100 \
+  --max-tokens 512 \
   --tp 1 \
   --max-model-len 8192 \
   --out results/mmstar.json
 ```
 
-GPU 1 (base model, same rows for comparison) — TODO(verify) that `--model models/gemma-4-12B-it` is accepted alongside `--tsv data/eval/MMBench_DEV_EN.tsv`:
+GPU 1 (base model, same rows for comparison):
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_USE_DEEP_GEMM=0 \
@@ -137,6 +159,7 @@ CUDA_VISIBLE_DEVICES=1 VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_USE_DEEP_GEMM=0 \
   --tsv data/eval/MMBench_DEV_EN.tsv \
   --name MMBench_DEV_EN \
   --limit 100 \
+  --max-tokens 512 \
   --tp 1 \
   --max-model-len 8192 \
   --out results/mmbench_dev_en_base.json
@@ -144,14 +167,16 @@ CUDA_VISIBLE_DEVICES=1 VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_USE_DEEP_GEMM=0 \
 
 For Qwen3.6, add `--disable-thinking` so it answers with a letter directly.
 
-**Check it worked.** Measured on MMStar, first 100 questions:
+**Check it worked.** Measured on MMStar, the full 1,498 questions, `--max-tokens 512`, base vs the merged 300-step adapter (trained on Vietnamese documents and activity videos):
 
-| model | accuracy | unparsable | generation time |
-|---|---|---|---|
-| base `gemma-4-12B-it` | 54.00% (54/100) | 0 | 5.4 s |
-| merged 6-step adapter | 54.00% | 1 | — |
+| model | accuracy | unparsable |
+|---|---|---|
+| base `gemma-4-12B-it` | 64.02% | 112 |
+| + 300-step LoRA adapter (merged) | 61.88% | 105 |
 
-Again: a 6-step run is a plumbing check, not a quality claim. Note also that the **first 20 questions alone score 20% (both runs, identical predictions)** — a small slice of a benchmark is not representative, so **always report the full set** (or at least the same `--limit` for every model you compare).
+Specialising on Vietnamese documents and activity videos **cost about 2 points of general English perception** (64.02% → 61.88%) — a real trade-off you only see when base and fine-tuned are scored on the same rows. Read that against the held-out numbers in section 2: the adapter is much better on its own domain while giving up a little general English perception.
+
+Again: a 6-step run is a plumbing check, not a quality claim. Note also that the **first 20 questions alone score 20% (both runs, identical predictions)** — a small slice of a benchmark is not representative, so **always report the full set** (or at least the same `--limit` for every model you compare). And per the warning above, check the `unparsable` counts (112 base / 105 fine-tuned here) and read a few raw outputs before quoting these numbers.
 
 Save every result JSON (`results/*.json`). Report base vs fine-tuned on the same held-out rows and the same benchmark rows.
 
@@ -168,10 +193,11 @@ TODO(verify) command — use `vllm chat` (from the `vllm-env` environment) on a 
 - **`nvcc` / FlashInfer JIT compile failure at startup, or with `--tp 2`.** The VM has no CUDA toolkit. Set `VLLM_USE_FLASHINFER_SAMPLER=0` and `VLLM_USE_DEEP_GEMM=0` and run with `--tp 1`. Tensor parallel 2 triggers FlashInfer's fused all-reduce, which JIT-compiles with `nvcc` and fails on this VM.
 - **vLLM import conflicts / wrong torch version.** vLLM pins its own stack. Run benchmarks only from `vllm-env` (`vllm-env/bin/python`), never from the training environment.
 - **`merge_lora.py` does not print all three `PASS` checks.** Do not use the merged checkpoint. Re-check that `--adapter` points to a complete `checkpoint-N` from chapter 04 and re-run the merge.
-- **Held-out loss looks suspiciously good.** Check "rows used" / "rows dropped" and verify your held-out rows never appeared in training. A script check that let rows partly overlap training measured NLL 1.601 → 1.149 in only 6 steps; that kind of gap can be an artifact of overlap rather than learning.
-- **Benchmark score varies wildly between runs or reports.** Do not extrapolate from a subset: the first 20 MMStar questions scored 20% while the first 100 scored 54%. Use the full set (or an identical `--limit` for all models).
+- **`eval_heldout_loss.py` refuses video rows with `exit 96`.** Video rows only run with `--video-frames N`. Pass the same value as `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` from training (16 frames/clip in the measured runs).
+- **Held-out loss looks suspiciously good.** Check "rows used" / "rows dropped" and verify your held-out rows never appeared in training. A script check that let rows partly overlap training measured NLL 1.601 → 1.149 in only 6 steps; that kind of gap can be an artifact of overlap rather than learning. (For scale: on the clean 171-row split the 300-step adapter measured 1.433 → 0.505 with 0 rows dropped.)
+- **Benchmark score varies wildly between runs or reports.** Do not extrapolate from a subset: the first 20 MMStar questions scored 20% while the first 100 scored 54%. Use the full set (or an identical `--limit` for all models). If a score looks far too **low**, read the warning in section 4 first: check the `unparsable` count and a few raw outputs (a 32-token budget plus first-capital-letter parsing once reported 47.00% where the same base model scores 64.02%).
 - **Model does not answer with a multiple-choice letter (Qwen3.6).** Add `--disable-thinking` so it answers with a letter directly.
-- **TODO(verify): out-of-memory during `eval_heldout_loss.py` at `--max-length 16384`.** Fallback: lower `--max-length` and account for the increased `rows dropped` count.
+- **Out of memory during `eval_heldout_loss.py` at `--max-length 16384`.** Not expected: the measured 171-row held-out eval ran at `--max-length 16384` to completion with 0 rows dropped. If you still hit OOM (a larger model or longer rows), lower `--max-length` and account for the increased `rows dropped` count.
 
 Next: repeated-training runs at scale (multi-checkpoint sweeps, hundreds of steps) and qualitative error analysis on the saved JSONs.
 

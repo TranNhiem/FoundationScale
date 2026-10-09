@@ -303,6 +303,16 @@ torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 295
 
 Environment overrides: `GRPO_MODEL`, `GRPO_SAVE_DIR`, `GRPO_MAX_STEPS`, `GRPO_PROMPTS_PER_STEP`.
 
+### GRPO with images on the Qwen models (status: working, after three fixes)
+
+GRPO with images on `Qwen3.6-27B` and `Qwen3.6-35B-A3B` used to be broken by three vision-specific bugs. All three are **fixed on the current branch**:
+
+1. the RL trainer loaded the **text-only class** for the Qwen models (the vision path never reached the RL trainer);
+2. **prompt-length `mm_token_type_ids`** were forwarded together with the prompt+completion ids;
+3. **Qwen's flattened patch tensor was sliced by row** in group expansion and micro-batching.
+
+After the fixes **both models run GRPO with images 10 steps without error**: peak **60.3 GB/GPU** (`Qwen3.6-27B`) and **82.2 GB/GPU** (`Qwen3.6-35B-A3B`), on the 2× H200 run recipe used throughout this chapter (LoRA r16/α32, FSDP, bf16, activation checkpointing, `--fused-loss liger`). The gemma models never had these problems: `gemma-4-26B-A4B-it` and `gemma-4-31B-it` each run 20 steps of GRPO with images, exit 0. See the algorithm × model matrix in Step 5 and the Troubleshooting entry if a Qwen run fails.
+
 ---
 
 ## Step 4 — Get the reward you expect: budget the completions
@@ -347,6 +357,52 @@ The 12 RL algorithms share the same `algorithm=` field; per-algorithm hyperparam
 
 Generation runs in eval mode with the KV cache even when `gradient_checkpointing=True`. An earlier bug corrupted rollouts after the first token; it is fixed and verified (identical 32-token greedy rollout with checkpointing on/off). Training and generation can therefore both use gradient checkpointing.
 
+### Algorithm × model results (measured sweep, 2 × H200)
+
+Every cell below is a measured run of the **20-step acceptance sweep**: 2× H200, LoRA `adapter_rank=16` / `adapter_alpha=32`, FSDP, bf16, activation checkpointing, `--fused-loss liger`. Unless a cell says otherwise, each run trained **20 steps and exited 0**. A dash (—) = not part of this sweep.
+
+| `algorithm=` | `gemma-4-12B-it` | `gemma-4-26B-A4B-it` | `gemma-4-31B-it` | `Qwen3.6-27B` | `Qwen3.6-35B-A3B` |
+|---|---|---|---|---|---|
+| `dpo` + LoRA (text only) | 20 steps, exit 0 | 20 steps, exit 0 | 20 steps, exit 0 | 20 steps, exit 0 | 20 steps, exit 0 |
+| `ipo` (text only) | — | — | — | 20 steps, exit 0 | — |
+| `simpo` (text only) | — | — | — | 20 steps, exit 0 | — |
+| `cpo` (text only) | — | — | — | 20 steps, exit 0 | — |
+| `orpo` (text only) | — | — | — | 20 steps, exit 0 | — |
+| `grpo`, with images | 20 steps, exit 0 | 20 steps, exit 0 | 20 steps, exit 0 | 10 steps with images, no error, peak 60.3 GB/GPU † | 10 steps with images, no error, peak 82.2 GB/GPU † |
+| `dr_grpo`, with images | 20 steps, exit 0 | — | — | — | — |
+| `dapo`, with images | 20 steps, exit 0 | — | — | — | — |
+| `gspo`, with images | 20 steps, exit 0 | — | — | — | — |
+| `reinforce_pp` (REINFORCE++), with images | 20 steps, exit 0 | — | — | — | — |
+| `rloo`, with images | 20 steps, exit 0 | — | — | — | — |
+
+† GRPO with images on the Qwen models runs only **after** the three vision fixes (see Step 3): text-only class loaded by the RL trainer; prompt-length `mm_token_type_ids` forwarded with prompt+completion ids; Qwen's flattened patch tensor sliced by row in group expansion and micro-batching. Before the fixes the run failed; after them both run 10 steps with images without error.
+
+Not in this sweep: `kto`, `raft`, `best_of_n`, `online_dpo`, `iterative_dpo`, `ppo` (registered, but no measured numbers to report here). Modality rules do not change with the algorithm: preference rows stay text-only and `RLTrainer` still refuses video rows.
+
+---
+
+## The GRPO signal: zero-variance groups and skipped steps (measured)
+
+GRPO turns rewards into advantages **inside a group**. If every sample of a prompt gets the same reward, the advantage is exactly `0`, the step carries no gradient and is **skipped**. On ScienceQA this happens often — the measured causes are all-identical rewards in the group:
+
+- the model gets **all 4 samples right**, or
+- **none of the 4 samples finishes** within `max_new_tokens`
+
+— so one group's rewards are all identical and there is no signal to train on.
+
+If **every** step of a run is skipped, the run is refused outright: **exit 96, "vacuous run"** (= no one step ever produced a trainable signal).
+
+**Measured** (2× H200, `gemma-4-12B-it`, GRPO with images, `group_size 4`, 4 prompts per step, 20 steps attempted): only **3 of 20 steps** produced a trainable signal — the remaining steps were skipped on identical group rewards. Exit codes 0 for the run itself; 3/20 is the kind of yield you should expect from `group_size 4` / 4 prompts per step on ScienceQA.
+
+### Remedies
+
+- **larger `--group-size` (8)** (`group_size=8`) — more samples per prompt, so a group is more likely to contain both right and wrong completions instead of 4 identical rewards;
+- **more `--prompts-per-step`** (`prompts_per_step`) — more independent groups per step means more chance that at least one of them has variance;
+- **harder questions matched to the model** — prompts the model already solves at 4/4 carry no signal; move to questions it has not mastered;
+- **`--max-new-tokens 400+` for reasoning models** (the Step 4 advice) — when samples have room to finish, groups stop all-tieing on "none finished".
+
+Start with a larger group and more prompts per step (the cheapest change), then tune the question difficulty and the completion budget.
+
 ---
 
 ## Troubleshooting
@@ -366,6 +422,10 @@ Generation runs in eval mode with the KV cache even when `gradient_checkpointing
 **Generation hangs or behaves oddly under FSDP on the RL trainer.** Repeated generation under FSDP is not yet reliable; switch to `sharding="ddp"` (validated with LoRA on 2× H200).
 
 **Only some steps of 30 produce a reward (11/30 or 13/30 is the measured norm).** Expected on hard ScienceQA questions with `group_size 4`: all 4 samples keep reasoning and hit `max_new_tokens`. This is abstention, not a bug.
+
+**GRPO with images on a Qwen model fails (`mm_token_type_ids` mismatch, patch-tensor slicing, or a run that silently trains text only).** Three vision bugs, all fixed on the current branch: the text-only class was loaded by the RL trainer; prompt-length `mm_token_type_ids` were forwarded with the prompt+completion ids; Qwen's flattened patch tensor was sliced by row in group expansion and micro-batching. After the fixes `Qwen3.6-27B` and `Qwen3.6-35B-A3B` run 10 steps of GRPO with images without error (peak 60.3 / 82.2 GB per GPU, 2× H200, LoRA r16/α32).
+
+**Exit 96 with "vacuous run", or almost every step is skipped.** Every group scored identical rewards (all 4 samples right, or none finished within `max_new_tokens`), so every advantage was zero and every step was skipped; the trainer refuses a run with no trainable step at all. Measured here: `gemma-4-12B-it` produced 3 of 20 trainable steps with `group_size 4` / 4 prompts per step. Remedies: `--group-size 8`, more `--prompts-per-step`, harder questions matched to the model, `--max-new-tokens 400+` for reasoning models (see "The GRPO signal" section above).
 
 **Edit `sharding` field name to `objective` by habit?** The verified scripts take `algorithm="dpo"` / `algorithm="grpo"` on `PreferenceTrainConfig` / `RLTrainConfig`; other config field names for the objective: TODO(verify).
 

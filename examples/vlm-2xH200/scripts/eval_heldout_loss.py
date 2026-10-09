@@ -104,6 +104,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="column holding each row's image list ('none' declares no image column)",
     )
     ap.add_argument(
+        "--video-frames",
+        type=int,
+        default=None,
+        metavar="N",
+        help="frames per clip for rows with a video; required when the data has video "
+        "rows, and should match FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES used in training",
+    )
+    ap.add_argument(
+        "--video-column", default="video", metavar="COL", help="column holding the clip path"
+    )
+    ap.add_argument(
+        "--video-cache-dir",
+        default=None,
+        metavar="DIR",
+        help="decoded-frame cache (default: .fs_video_frames next to the data file)",
+    )
+    ap.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -348,12 +365,30 @@ def main(argv: list[str] | None = None) -> int:
     # Exactly the collator the trainer builds for SFT: assistant-only labels and
     # overlong rows dropped/truncated exactly as in training (no dummy media injected,
     # so text-only rows are never padded out with fake images).
+    # Video rows need the same frame budget training used: frames are sampled
+    # inside each row's [start, end] and passed to the processor as native video.
+    frames_for = None
+    if args.video_frames is not None:
+        import functools
+
+        from foundationscale import video as fs_video
+
+        data_dir = Path(args.data).resolve().parent
+        frames_for = functools.partial(
+            fs_video.frames_for_row,
+            video_column=args.video_column,
+            budget=fs_video.FrameBudget(frames=args.video_frames),
+            cache_dir=args.video_cache_dir or str(data_dir / ".fs_video_frames"),
+            base_dir=str(data_dir),
+        )
     collator = train_conversation_collator_or_refuse(
         processor,
         image_column=image_column,
+        video_column=args.video_column if frames_for is not None else None,
         max_length=args.max_length,
         overlong="drop",
         inject_dummy_media=False,
+        frames_for=frames_for,
     )
     model = load_model(args.model, args.adapter)
     device = getattr(model, "device", None) or next(model.parameters()).device
