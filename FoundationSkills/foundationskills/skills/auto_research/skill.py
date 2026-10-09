@@ -67,6 +67,7 @@ from foundationskills.skills.auto_research.jobs import JOB_ID_RE, cancel_jobs, o
 from foundationskills.skills.auto_research.ledger import Ledger, canonical, ledger_files, sha256_hex
 from foundationskills.skills.auto_research.propose import propose
 from .proposers import DEFAULT_K, proposer_config, reverify, select
+from .proposers_llm import audit_record, calls_used, check_record, llm_config, select_llm
 from .concurrency import concurrency_check, reserve_check
 from .locks import closing_check
 from .claims import ROOT as CLAIM_ROOT
@@ -161,6 +162,163 @@ def _claim_must_fire_fixtures() -> dict[str, dict[str, Any]]:
     }
 
 
+def _llm_usage(spec: dict[str, Any], records: list[Any]) -> dict[str, Any]:
+    """M5b usage over llm proposal records: calls against the cap; token sums are None when any call left them unreported."""
+    try:
+        max_calls = llm_config(spec).get("max_calls")  # AR-IN-010 refuses a malformed block at input
+    except Exception:
+        max_calls = None
+    usage = {"tokens_in": 0, "tokens_out": 0}
+    unreported: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict) or not isinstance(record.get("llm"), dict):
+            continue  # a no-call fallback carries no response to count
+        response = dict(record["llm"].get("response") or {})
+        for key in usage:
+            if response.get(key) is None:
+                unreported.add(key)  # tokens are None when not reported, never 0
+            else:
+                usage[key] += int(response[key])
+    return {
+        "calls_used": calls_used(records),
+        "max_calls": max_calls,
+        "tokens_in": None if "tokens_in" in unreported else usage["tokens_in"],
+        "tokens_out": None if "tokens_out" in unreported else usage["tokens_out"],
+    }
+
+
+def _llm_digest(body: str) -> str:
+    """``sha256:<64hex>`` of ``body`` (fixture-only, stdlib)."""
+    from hashlib import sha256
+
+    return "sha256:" + sha256(body.encode("utf-8")).hexdigest()
+
+
+def _llm_cards_text(cards: list[dict[str, Any]]) -> str:
+    """Fixture llm response body: one JSON array of ``cards`` (the model's only legal output shape)."""
+    import json
+
+    return json.dumps(cards, sort_keys=True, separators=(",", ":"))
+
+
+def _llm_fixture_record(
+    response_text: str,
+    recorded_cards: list[dict[str, Any]],
+    replay_status: str = "parse_identical",
+) -> dict[str, Any]:
+    """M5b proposal record (pure data): one llm model call with fixed provenance and a verbatim body."""
+    cards = [dict(card) for card in recorded_cards]
+    return {
+        "proposer": {"name": "llm", "version": "1", "package_version": "parse_spec/1;client/stdlib"},
+        "package_version": "parse_spec/1;client/stdlib",
+        "seed": 0,
+        "rows_digest": None,
+        "k": 3,
+        "fallback": None,
+        "replay_inputs": {"current": {}, "symptoms": [], "results_count": 0, "launches_count": 0},
+        "replay_status": replay_status,
+        "generation": "nondeterministic",
+        "llm": {
+            "request": {
+                "model": "fixture-model-1",
+                "pool_key": "nightly-llm",
+                "endpoint_fingerprint": _llm_digest("http://fixture.example:8000|nightly-llm|fixture-model-1"),
+                "sampling": {"temperature": 0.2, "max_tokens": 1200},
+                "prompt_spec_version": 1,
+                "prompt_hash": _llm_digest("fixture-prompt"),
+                "messages": [{"role": "system", "content": "fixture"}],
+                "evidence_truncated": [],
+            },
+            "response": {
+                "status": "ok",
+                "text": response_text,
+                "response_hash": _llm_digest(response_text),
+                "excerpt": response_text[:64],
+                "latency_s": "2.1",
+                "tokens_in": None,
+                "tokens_out": None,
+            },
+            "parse": {
+                "spec_version": 1,
+                "max_cards": 3,
+                "cards": cards,
+                "cards_total": len(cards),
+                "drops": {},
+                "tainted": False,
+            },
+            "calls_used": 1,
+            "max_calls": 6,
+        },
+    }
+
+
+def _llm_must_fire_fixtures() -> dict[str, dict[str, Any]]:
+    """M5b fixtures (pure data): malformed llm config (AR-IN-010), unpinned endpoint (AR-PR-005), tainted card
+    (AR-PR-003), overstated replay claim (AR-PR-004) and llm parse drift at close (AR-HO-009)."""
+    fix = "arbiter"
+    clean = {
+        "idea": "halve-lr-after-warmup-spike",
+        "domain": "optimizer",
+        "delta": {"optim.lr": 5e-4},
+        "watch": ["loss_spike"],
+        "score": None,
+        "rationale": "loss spike 200 steps after warmup",
+    }
+    drift_a = {**clean, "delta": {"optim.lr": 2e-4}, "rationale": "halve lr again"}
+    drift_b = {**clean, "delta": {"optim.lr": 5e-4}, "rationale": "steady lr"}
+    tampered = {**clean, "idea": "tampered"}
+    spec = _spec(proposer={"name": "llm", "llm": {"pool_key": "nightly-llm", "model": "fixture-model-1"}})
+    bad_config = _spec(proposer={"name": "llm", "llm": {"max_cards": 0}})
+    unpinned = _spec(proposer={"name": "llm", "llm": {"pool_key": "gpt-x", "model": "fixture-model-1"}})
+    pool = {
+        "nightly-llm": {
+            "status": "active",
+            "endpoint": "http://fixture.example:8000",
+            "model_id": "fixture-model-1",
+            "auth": {"env": "FIXTURE_KEY"},
+        }
+    }
+
+    def approval(s: dict[str, Any]) -> list[tuple[str, str, str, dict[str, Any]]]:
+        return [("campaign_approved", _campaign(s), "-", {"spec_hash": campaign_hash(s), "approver": fix})]
+
+    def staged(record: dict[str, Any]) -> dict[str, str]:
+        return ledger_files([*approval(spec), ("proposal", _campaign(spec), "t1", record)])
+
+    close = {
+        "action": "close", "campaign_spec": spec, "campaign_confirm": "{confirm}", "approver": fix,
+        "ledger_dir": "{tmp}/ledger", "stop_reason": "budget exhausted",
+    }
+    return {
+        "AR-IN-010": {
+            "request": {
+                "action": "check", "campaign_spec": bad_config, "campaign_confirm": "{confirm}",
+                "ledger_dir": "{tmp}/ledger",
+            },
+        },
+        "AR-PR-005": {
+            "files": ledger_files(approval(unpinned)),
+            "request": {
+                "action": "propose", "campaign_spec": unpinned, "campaign_confirm": "{confirm}", "approver": fix,
+                "ledger_dir": "{tmp}/ledger", "trial": "t1", "symptoms": ["loss spike 200 steps after warmup"],
+                "llm_pool": pool,
+            },
+        },
+        "AR-PR-003": {
+            "files": staged(_llm_fixture_record(_llm_cards_text([clean, {"command": "scancel 4242"}]), [clean])),
+            "request": dict(close),
+        },
+        "AR-PR-004": {
+            "files": staged(_llm_fixture_record(_llm_cards_text([clean]), [clean], replay_status="byte_identical")),
+            "request": dict(close),
+        },
+        "AR-HO-009": {
+            "files": staged(_llm_fixture_record(_llm_cards_text([drift_a, drift_b]), [tampered])),
+            "request": dict(close),
+        },
+    }
+
+
 def _multi_objective_must_fire_fixtures() -> dict[str, dict[str, Any]]:
     """M5a fixtures (pure data): a mismatched objectives[0] (AR-IN-009), a claimed trade-off (AR-RS-008), a disclosed
     trade-off at close (AR-HO-008). The trade-off wins val_accuracy (+0.4) and loses throughput (-50, tau ~2.8)."""
@@ -232,12 +390,23 @@ _RECOVERY = {
     "AR-LN-008": "let a submitted run settle (record its result or cancel it) before submitting again",
     "AR-LN-009": "keep the run reserve for confirm-phase runs: screen with fewer repeats or confirm first",
     "AR-RS-007": "claim only a measured, complete confirm set whose decide() verdict is accepted_gain (record the missing seeds first)",
-    "AR-IN-008": "fix the campaign spec's proposer block (name catalog|optuna|optuna-cma, min_rows int >= 1, require_model bool, seed int)",
+    "AR-IN-008": "fix the campaign spec's proposer block (name catalog|optuna|optuna-cma|llm, min_rows int >= 1 (>= 0 for llm), require_model bool, seed int)",
     "AR-PR-001": "record more measured trials, install the optional proposer extra, or drop proposer.require_model to fall back to the catalog",
     "AR-IN-009": "declare 2-4 objectives as {metric, direction}: objectives[0] equal to objective, distinct metrics from eval_policy.metrics, none listed in confirm.guardrails",
     "AR-RS-008": "claim only a candidate that wins on >= 1 objective by more than tau and loses on none; trade-offs are reported, never claimed",
     "AR-HO-008": "arbitrate the listed trade-offs by hand: promote one only through a new campaign spec (new campaign_confirm)",
     "AR-PR-002": "use proposer optuna (TPE holds categorical axes) or remove the categorical axes",
+    "AR-IN-010": "fix the llm proposer block (pool_key and model required and not URL-shaped, max_cards/max_calls >= 1, parse_spec_version >= 1, sampling a dict)",
+    "AR-PR-003": "drop the tainted llm response: an llm response carries an unsafe card and a command never survives in a card",
+    "AR-PR-004": "record only what was measured: an llm proposal record overstates provenance (byte_identical / generation replay claimed)",
+    "AR-PR-005": "pin the endpoint through the config model pool registry and keep credentials out of the ledgered prompt/response",
+    "AR-HO-009": "investigate llm parse drift before adopting: an llm proposal's recorded cards do not re-parse from its recorded response",
+}
+
+_LLM_CLOSE_TEXT = {  # M5b: one close-time finding per close-time llm audit rule
+    "AR-PR-003": "an llm response was tainted by an unsafe card",
+    "AR-PR-004": "an llm proposal record overstated its provenance",
+    "AR-PR-005": "an llm ledgered payload held a credential-shaped token",
 }
 
 
@@ -352,6 +521,18 @@ class AutoResearchSkill(BaseSkill):
         RuleSpec("AR-PR-002",
                  "the optuna-cma proposer cannot hold a categorical axis (refused, never dropped)",
                  Severity.BLOCK, "input"),
+        RuleSpec("AR-IN-010",
+                 "llm proposer block malformed (pool_key/model missing, URL-shaped, or caps/sampling invalid)",
+                 Severity.BLOCK, "input"),
+        RuleSpec("AR-PR-003",
+                 "an llm response carries an unsafe card (unknown key, non-scalar delta, or a command/quarantined node in model output)",
+                 Severity.BLOCK, "handoff"),  # audited at close (strict propose also refuses)
+        RuleSpec("AR-PR-004",
+                 "an llm proposal record overstates provenance (byte_identical / generation replay claimed)",
+                 Severity.BLOCK, "handoff"),  # audited at close (propose refuses defensively)
+        RuleSpec("AR-PR-005",
+                 "llm endpoint not pinned by the pool registry, or a credential-shaped token in the ledgered payload",
+                 Severity.BLOCK, "input"),
         RuleSpec("AR-HO-001", "campaign closed with no accepted gain", Severity.BLOCK, "handoff"),
         RuleSpec("AR-HO-002", "best candidate breaches a guardrail band", Severity.BLOCK, "handoff"),
         RuleSpec("AR-HO-003", "ledger chain verification failed", Severity.BLOCK, "handoff"),
@@ -365,6 +546,8 @@ class AutoResearchSkill(BaseSkill):
                  Severity.BLOCK, "handoff"),
         RuleSpec("AR-HO-008", "multi-objective trade-offs disclosed at close (never claimed; no accepted gain)",
                  Severity.INFO, "handoff"),
+        RuleSpec("AR-HO-009", "an llm proposal's recorded cards do not re-parse from its recorded response (parse provenance drifted)",
+                 Severity.BLOCK, "handoff"),
     )
     fs_interface = FSInterface(
         entries=(),
@@ -389,11 +572,13 @@ class AutoResearchSkill(BaseSkill):
         clock: Callable[[], float] | None = None,
         state_fn: Callable[[str], str | None] | None = None,
         proposer_registry: dict[str, Callable[..., Any]] | None = None,
+        llm_transport: Callable[..., Any] | None = None,
     ) -> None:
         """Injectable connectors (None -> the real implementation; tests never see Slurm or sockets).
 
         Tests inject stub proposers; MUST_FIRE fixtures never do (``proposer_registry`` is a test-only
-        override of the optional model proposer registry; None -> ``proposers.REGISTRY``).
+        override of the optional model proposer registry; None -> ``proposers.REGISTRY``; ``llm_transport``
+        is likewise a test-only model transport override that MUST_FIRE fixtures never inject).
         """
         super().__init__()
         self._runner: Callable[..., Any] = runner if runner is not None else subprocess.run
@@ -403,6 +588,7 @@ class AutoResearchSkill(BaseSkill):
         self._clock: Callable[[], float] = clock if clock is not None else time.time
         self._state_fn: Callable[[str], str | None] | None = state_fn
         self._proposer_registry: dict[str, Callable[..., Any]] | None = proposer_registry
+        self._llm_transport: Callable[..., Any] | None = llm_transport  # M5b: test-only model transport
 
     @staticmethod
     def _ledger_dir(request: dict[str, Any], ctx: SkillContext) -> Path:
@@ -460,6 +646,28 @@ class AutoResearchSkill(BaseSkill):
         if action == "propose":
             findings.extend(self._check_propose_request(request, spec, ledger))
         return findings
+
+    def _llm_pool(self, request: dict[str, Any]) -> Any:
+        """Model pool registry from the request: a dict, or a ``.json``/``.yaml`` path (None on any error)."""
+        import json  # stdlib (module-wide too): only yaml stays an optional lazy import
+
+        pool = request.get("llm_pool")
+        if isinstance(pool, dict):
+            return pool
+        path = str(request.get("llm_pool_file") or "").strip()
+        if not path:
+            return None
+        try:
+            with open(path, encoding="utf-8") as handle:
+                if path.endswith(".json"):
+                    return json.load(handle)
+                if path.endswith((".yaml", ".yml")):
+                    import yaml  # optional extra, lazily imported: never a core dependency
+
+                    return yaml.safe_load(handle)
+        except Exception:  # any read/parse error -> no pool -> AR-PR-005 unpinned_endpoint at propose
+            return None
+        return None
 
     def _check_approval(self, request: dict[str, Any], spec: dict[str, Any], ledger: Ledger) -> list[Finding]:
         findings: list[Finding] = []
@@ -782,7 +990,7 @@ class AutoResearchSkill(BaseSkill):
         if any(rule_id == "AR-IN-008" for rule_id, _ in check_spec(spec)):
             return []
         cfg = proposer_config(spec)
-        if not cfg["require_model"] or cfg["name"] == "catalog":
+        if not cfg["require_model"] or cfg["name"] in ("catalog", "llm"):  # llm: asserted at propose (no call here)
             return []
         campaign = _campaign(spec)
         _cards, drops, provenance = select(
@@ -865,10 +1073,24 @@ class AutoResearchSkill(BaseSkill):
             launches = _safe_list(lambda: ledger.launches(campaign))
             current = dict(request.get("current") or {})
             symptoms = list(request.get("symptoms") or [])
-            cards, drops, provenance = select(
-                spec, results, launches, current, symptoms, k=DEFAULT_K, registry=self._proposer_registry,
-            )
-            strict = self._strict_proposer_findings(proposer_config(spec), drops, provenance)
+            llm = None
+            if proposer_config(spec)["name"] == "llm":  # M5b: the model emits typed cards only
+                chosen = select_llm(
+                    spec, results, launches, current, symptoms, k=DEFAULT_K, pool=self._llm_pool(request),
+                    transport=self._llm_transport, calls_used=calls_used(_safe_list(lambda: ledger.proposals(campaign))),
+                )
+                cards, drops, provenance, llm = chosen["cards"], chosen["drops"], chosen["provenance"], chosen["llm"]
+                if chosen["refusal"] is not None:  # named, counted REFUSED: append nothing
+                    rule_id, message = chosen["refusal"]
+                    return SkillResult(Status.REFUSED, {"refused": message, "drops": drops}, (),
+                                       (self.finding(rule_id, message, {"drops": drops}, _RECOVERY[rule_id]),),
+                                       refusal=message)
+                strict = []
+            else:
+                cards, drops, provenance = select(
+                    spec, results, launches, current, symptoms, k=DEFAULT_K, registry=self._proposer_registry,
+                )
+                strict = self._strict_proposer_findings(proposer_config(spec), drops, provenance)
             if strict:  # the model can change between check and run: re-assert, append nothing
                 message = _finding_message(strict[0])
                 return SkillResult(Status.REFUSED, {"refused": message, "drops": drops}, (), tuple(strict),
@@ -886,9 +1108,10 @@ class AutoResearchSkill(BaseSkill):
                     "launches_count": len(launches),
                 }
             replay_status = "byte_identical" if replay_inputs is not None and version is not None else "unmeasured"
-            ledger.append(  # B1: EXACTLY one proposal op per propose call (propose is mutating)
-                "proposal", campaign, "-",
-                {
+            generated = (provenance.get("proposer") or {}).get("name") == "llm"
+            if generated:  # B.3: generation is unreplayable - the record claims a parse re-check, never bytes
+                replay_status = "parse_identical" if replay_inputs is not None else "unmeasured"
+            payload = {
                     "proposer": provenance["proposer"],
                     "requested": provenance["requested"],
                     "seed": provenance["seed"],
@@ -901,8 +1124,20 @@ class AutoResearchSkill(BaseSkill):
                     "replay_inputs": replay_inputs,
                     "package_version": version,
                     "replay_status": replay_status,
-                },
-            )
+            }
+            if llm is not None:
+                payload["llm"] = llm
+            if generated:
+                payload["generation"] = "nondeterministic"
+            overstated = check_record(payload) if llm is not None else None
+            hits = audit_record(payload) if llm is not None else []
+            if overstated or hits:  # defensive: an over-claimed or tainted record is refused, never laundered
+                rule_id, detail = ("AR-PR-004", f"claim_overstated:{overstated}") if overstated else hits[0]
+                message = f"{rule_id}_{detail}"
+                return SkillResult(Status.REFUSED, {"refused": message, "drops": drops}, (),
+                                   (self.finding(rule_id, message, {"drops": drops}, _RECOVERY[rule_id]),),
+                                   refusal=message)
+            ledger.append("proposal", campaign, "-", payload)  # B1: EXACTLY one proposal op per propose call
             by_reason: dict[str, int] = {}
             for drop in drops:
                 reason = str(drop).split(":", 1)[0]
@@ -919,6 +1154,7 @@ class AutoResearchSkill(BaseSkill):
                     "fallback": provenance["fallback"],
                     "replay_status": replay_status,
                     "dropped": {"total": len(drops), "by_reason": dict(sorted(by_reason.items()))},
+                    **({"llm_usage": _llm_usage(spec, [*_safe_list(lambda: ledger.proposals(campaign))])} if proposer_config(spec)["name"] == "llm" else {}),
                 },
             )
         return self._close(request, ctx, ledger, spec, campaign, spec_hash)
@@ -1254,20 +1490,37 @@ class AutoResearchSkill(BaseSkill):
                     _RECOVERY["AR-HO-006"],
                 )
             )
-        # C7 close-time replay re-check (AR-HO-007): every recorded proposal, in 0-based ledger order.
+        # C7 close-time replay re-check (AR-HO-007 + AR-HO-009): every recorded proposal, in 0-based ledger order.
         records = _safe_list(lambda: ledger.proposals(campaign))
         drifted: list[int] = []
         replay_drops: list[str] = []
         byte_identical = unmeasured = 0
+        parse_identical = 0  # M5b: `parse_identical` is never `byte_identical` (generation is nondeterministic)
+        parse_drifted: list[int] = []
+        llm_indexes = [  # M5b: an llm-free campaign reports and behaves exactly as today
+            i
+            for i, record in enumerate(records)
+            if dict(record.get("proposer") or {}).get("name") == "llm" or isinstance(record.get("llm"), dict)
+        ]
+        audit_hits: dict[str, list[list[Any]]] = {}
         for i, record in enumerate(records):
+            record_hits = audit_record(record) if not problems else []  # M5b close-time audits (AR-PR-003/004/005)
+            for audit_rule, audit_message in record_hits:
+                audit_hits.setdefault(audit_rule, []).append([i, audit_message])
             if problems:
                 verdict, reason = "unmeasured", "chain_unverified"  # AR-HO-003 keeps precedence (C7)
+            elif any(audit_rule == "AR-PR-004" for audit_rule, _detail in record_hits):
+                verdict, reason = "unmeasured", "claim_overstated"  # AR-PR-004: an overstated claim is never replayed
             else:
                 verdict, reason = reverify(spec, record, results, launches, registry=self._proposer_registry)
             if verdict == "byte_identical":
                 byte_identical += 1
             elif verdict == "drifted":
                 drifted.append(i)
+            elif verdict == "parse_identical":
+                parse_identical += 1
+            elif verdict == "parse_drifted":
+                parse_drifted.append(i)
             else:
                 unmeasured += 1
                 replay_drops.append(f"proposal_replay_unmeasured:{reason or 'legacy_proposal'}:{i}")
@@ -1278,6 +1531,11 @@ class AutoResearchSkill(BaseSkill):
             "drifted": list(drifted),
             "unmeasured": unmeasured,
         }
+        llm_usage: dict[str, Any] | None = None
+        if llm_indexes:  # M5b: parse provenance and usage only for campaigns that used the llm proposer
+            replay_report["parse_identical"] = parse_identical
+            replay_report["parse_drifted"] = list(parse_drifted)
+            llm_usage = _llm_usage(spec, [records[i] for i in llm_indexes])
         if drifted:  # one AR-HO-007 at RED (unless already RED): the outcome is never moved (C7)
             status = Status.RED
             recommendation = "investigate proposal replay drift before adopting: " + recommendation
@@ -1289,6 +1547,35 @@ class AutoResearchSkill(BaseSkill):
                     + " (search provenance is not reproducible)",
                     {"proposals": replay_report},
                     _RECOVERY["AR-HO-007"],
+                )
+            )
+        if parse_drifted:  # one AR-HO-009 at RED (unless already RED): the outcome is never moved (M5b)
+            status = Status.RED
+            recommendation = "investigate llm parse drift before adopting: " + recommendation
+            findings.append(
+                self.finding(
+                    "AR-HO-009",
+                    "llm proposal parse drifted at close: proposal(s) "
+                    + ", ".join(str(i) for i in parse_drifted)
+                    + " (recorded cards do not re-parse from the recorded response)",
+                    {"proposals": replay_report},
+                    _RECOVERY["AR-HO-009"],
+                )
+            )
+        for rule_id, rule_hits in audit_hits.items():  # one finding per audit rule at RED (M5b)
+            ordered = sorted(rule_hits, key=lambda hit: hit[0])
+            status = Status.RED
+            findings.append(
+                self.finding(
+                    rule_id,
+                    _LLM_CLOSE_TEXT.get(rule_id, rule_id)
+                    + ": proposal(s) "
+                    + ", ".join(str(i) for i in sorted({hit[0] for hit in ordered}))
+                    + " ("
+                    + str(ordered[0][1])
+                    + ")",
+                    {"hits": ordered},
+                    _RECOVERY[rule_id],
                 )
             )
         preseal = ledger.head()
@@ -1314,6 +1601,8 @@ class AutoResearchSkill(BaseSkill):
             "ledger": {"count": head["count"], "head_hash": head["head_hash"], "verified": not problems},
             "tsv": _safe_text(lambda: ledger.tsv_view(campaign)),
         }
+        if llm_usage is not None:  # M5b: llm campaigns only (an llm-free report is byte-identical to today)
+            report["llm_usage"] = llm_usage
         if spec.get("objectives"):  # M5a additive keys; an objective-only report stays byte-identical
             entries_front, excluded = frontier(decisions)
             report["objectives"] = [
@@ -1342,7 +1631,7 @@ class AutoResearchSkill(BaseSkill):
             "ledger": report["ledger"],
             "tsv": report["tsv"],
         }
-        for key in ("objectives", "tradeoffs", "frontier"):
+        for key in ("objectives", "tradeoffs", "frontier", "llm_usage"):
             if key in report:
                 payload[key] = report[key]
         return SkillResult(status, payload, artifacts, tuple(findings), provenance=stamp)
@@ -1713,7 +2002,7 @@ class AutoResearchSkill(BaseSkill):
                 },
             },
             **_claim_must_fire_fixtures(),
-            **_multi_objective_must_fire_fixtures(),
+            **_multi_objective_must_fire_fixtures(), **_llm_must_fire_fixtures(),
         }
 
 

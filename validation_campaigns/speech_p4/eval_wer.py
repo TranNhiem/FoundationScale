@@ -254,6 +254,9 @@ def main():
         "rows_scored": 0,
         "truncated_count": 0,
         "samples": [],
+        # Every row, so two models scored on the same manifest can be compared pairwise
+        # (paired bootstrap); the corpus rate alone cannot say whether a gap is noise.
+        "all": [],
     }
     pairs = []
     out_path = Path(args.out)
@@ -289,6 +292,7 @@ def main():
                 hyp = hyps[i]
                 pairs.append((ref, hyp))
                 results["rows_scored"] = len(pairs)
+                results["all"].append({"id": r["id"], "reference": ref, "hypothesis": hyp})
                 if len(results["samples"]) < 25:
                     sample = {"id": r["id"], "reference": ref, "hypothesis": hyp}
                     if ref.strip():

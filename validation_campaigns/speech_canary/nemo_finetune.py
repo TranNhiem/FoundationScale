@@ -8,6 +8,8 @@
 
 Usage: nemo_finetune.py --model nvidia/canary-1b-flash --train JSONL --out-dir DIR
                         [--max-steps 500 --batch-size 8 --lr 1e-5 --warmup 50 --pnc no]
+                        [--save-every N]  (also save DIR/step{N}.nemo, for checkpoint selection)
+                        [--freeze PREFIX ...]  (e.g. transf_decoder; adjudicate with --frozen)
 """
 
 from __future__ import annotations
@@ -24,10 +26,15 @@ def convert(train_jsonl: Path, out_manifest: Path, pnc: str) -> dict[str, object
     kept = 0
     rows = [json.loads(line) for line in train_jsonl.read_text().splitlines()]
     with out_manifest.open("w") as f:
+        seen_paths: set[str] = set()
         for r in rows:
             info = sf.info(r["audio"])
             reason = None
-            if info.samplerate != 16000:
+            # A repeated path means two transcripts share one recording: every row still "loads",
+            # so row coverage cannot see it. Measured: a builder bug left 6,000 rows on 820 files.
+            if r["audio"] in seen_paths:
+                reason = "duplicate_audio_path"
+            elif info.samplerate != 16000:
                 reason = "sample_rate_mismatch"
             elif info.channels != 1:
                 reason = "not_mono"
@@ -38,6 +45,7 @@ def convert(train_jsonl: Path, out_manifest: Path, pnc: str) -> dict[str, object
             if reason:
                 refused[reason] = refused.get(reason, 0) + 1
                 continue
+            seen_paths.add(r["audio"])
             f.write(
                 json.dumps(
                     {
@@ -71,6 +79,8 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=1e-5)
     ap.add_argument("--warmup", type=int, default=50)
     ap.add_argument("--pnc", default="no")
+    ap.add_argument("--save-every", type=int, default=0)
+    ap.add_argument("--freeze", action="append", default=[])
     args = ap.parse_args()
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -114,6 +124,13 @@ def main() -> None:
             train_cfg.pop(k, None)
     print("TRAIN_DS", OmegaConf.to_yaml(train_cfg).replace("\n", " | ")[:600])
     model.setup_training_data(train_cfg)
+    for prefix in args.freeze:
+        hit = [p for n, p in model.named_parameters() if n == prefix or n.startswith(prefix + ".")]
+        if not hit:  # a typo would freeze nothing and train everything, silently
+            raise SystemExit(f"REFUSE (96): --freeze {prefix!r} matches no parameter")
+        for p in hit:
+            p.requires_grad_(False)
+        print(f"FROZEN {prefix}: {len(hit)} tensors, {sum(p.numel() for p in hit)} params", flush=True)
     optim = OmegaConf.create(
         {
             "name": "adamw",
@@ -128,6 +145,19 @@ def main() -> None:
             },
         }
     )
+
+    class _Snapshot(pl.Callback):
+        """Save a .nemo every --save-every batches: the last step is not necessarily the best one
+        (a 1500-step Earnings run collapsed where the 500-step one had not), so a held-out dev
+        set must be able to choose among them."""
+
+        n = 0
+
+        def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):  # noqa: ARG002
+            self.n += 1
+            if args.save_every and self.n % args.save_every == 0 and self.n < args.max_steps:
+                pl_module.save_to(str(out / f"step{self.n}.nemo"))
+                print(f"SNAPSHOT step{self.n}.nemo", flush=True)
 
     class _LossPrinter(pl.Callback):
         """Print the training loss: the evidence the targets are real (not empty)."""
@@ -158,7 +188,7 @@ def main() -> None:
         num_sanity_val_steps=0,
         log_every_n_steps=10,
         use_distributed_sampler=False,
-        callbacks=[_LossPrinter()],
+        callbacks=[_LossPrinter(), _Snapshot()],
     )
     model.set_trainer(trainer)
     model.setup_optimization(optim)
