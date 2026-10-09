@@ -56,6 +56,12 @@ Request object (all fields optional except those the action needs):
   always re-probed.
 - `current`: current knob values for the proposer, `symptoms`: observed symptoms (propose action).
 - `stop_reason`: why the campaign is being closed (close action).
+- `llm_pool` / `llm_pool_file` (propose, proposer `llm` only): the ONLY source of the LLM endpoint - `llm_pool` is a
+  registry dict (fs.model_registry/1 `models.<key>` or the same fields flat) and `llm_pool_file` a `.json`/`.yaml`
+  path (yaml is read only for this). The spec hash-locks `pool_key` + `model`; the endpoint is fingerprinted
+  `sha256(base_url||pool_key||model)` and ledgered - never the URL, never a credential (only the auth env var NAME is
+  used). Unpinned (missing/inactive pool entry, model mismatch, credential in the registry) or a credential-shaped
+  token in the prompt or response -> AR-PR-005 REFUSED (input BLOCK) before/without appending.
 
 Spec shape (the object a human hashes and approves):
 `{id, objective{metric, direction(max|min), benchmarks[]}, eval_policy{fingerprint: sha256:<hex>, metrics[]},
@@ -67,8 +73,12 @@ Axes are the measured FoundationSkills knobs (`optim.lr`, `optim.warmup_ratio`, 
 `train.method` full|lora, `lora.rank`, `lora.alpha`, `train.seq_len`, `train.global_batch`,
 `train.micro_batch`, `train.max_steps`, `train.epochs`, `rl.algorithm` dr_grpo|gspo|dapo, `rl.group_size`,
 `rl.temperature`, `rl.kl_coef`, `data.mix`); `parallel.*` and `train.async` are refused (UNSUPPORTED_AXES).
-- Optional block `proposer{name: catalog (default) | optuna | optuna-cma, min_rows: 10 (>= 1), require_model: false,
-  seed: 0}`: selects the (M3) proposer and is part of the spec hash; validated by AR-IN-008.
+- Optional block `proposer{name: catalog (default) | optuna | optuna-cma | llm, min_rows: 10 (>= 1; may be 0 for llm),
+  require_model: false, seed: 0}`: selects the (M3/M5b) proposer and is part of the spec hash; validated by AR-IN-008.
+- For `proposer.name: llm`, the block `proposer.llm{pool_key (required), model (required), max_cards (1..budget.max_runs,
+  default 3), max_calls (default budget.max_runs), max_evidence_chars, parse_spec_version: 1,
+  sampling{temperature, max_tokens}}` - a URL-shaped `pool_key`/`model` is refused (the endpoint is never configured
+  in the spec; see `llm_pool`). A malformed block is AR-IN-010.
 
 Launch spec shape: `{trial, role(baseline|candidate|confirm), seed, delta{path: value}, nodes, gpus_per_node,
 partition, time, gpu_hours_est, commands[]}`.
@@ -86,16 +96,19 @@ metrics{name: {value, se}}}`.
   `job_submitted`, `job_cancelled`, `proposal` (exactly one per `propose` call; payload keys `proposer`,
   `requested`, `seed`, `rows_digest`, `k`, `fallback`, `cards`, `drops`, `stats`, `replay_inputs` ({current,
   symptoms, results_count, launches_count}, or None when not canonicalisable), `package_version`, `replay_status`
-  (byte_identical|unmeasured)), each entry hash-chained over
+  (byte_identical|parse_identical|unmeasured; `byte_identical` is never claimed for llm), `llm_usage`
+  ({calls_used, max_calls, tokens_in, tokens_out}, llm only, None when unreported, never 0), and for llm the inline
+  `llm` request/response/parse block), each entry hash-chained over
   its fields; `verify()` reports the first
   broken seq; results are never updated or deleted.
 - Status/exit: PASS (0) | RED (5) | UNMEASURED (95) | REFUSED (96).
 - Payload per action: `check` -> `{spec_hash, axes, budget}` (no ledger writes); `envelope` ->
   `{envelope_token}`; `launch` -> `{launch_token, budget_left}`; `submit` -> `{job_id, budget_after}`;
   `cancel` -> `{cancelled, drops}`; `record` -> `{recorded, ledger}`; `propose` ->
-  `{cards, drops, proposer, requested, rows_digest, seed, fallback, dropped, replay_status}` (writes one `proposal` op);
+  `{cards, drops, proposer, requested, rows_digest, seed, fallback, dropped, replay_status, llm_usage}` (writes one `proposal` op);
   `close` -> the report contents (`budgets` carry measured/declared/drops from `campaign_usage`; `proposals` carries
-  `{checked, byte_identical, drifted:[i], unmeasured}`).
+  `{checked, byte_identical, drifted:[i], unmeasured}`, plus `parse_identical` / `parse_drifted:[i]` and a
+  top-level `llm_usage` for llm campaigns only).
   A repeated `close` re-reports the sealed chain and never appends a second `campaign_closed`.
 - Render refusals (`submit`, REFUSED before any launch): `sbatch_not_rendered` (a cluster trial with no sbatch
   would run argv on this host), `sbatch_render_failed:<why>` (train sbatch layering failed),
@@ -159,7 +172,7 @@ itself - the acceptance statistics and the exit codes (0/5/95/96) are computed f
 | `submit` | spec + confirm + `trial_spec` + `launch_token` | `launch_authorised` + `job_submitted` | job_id, budget_after |
 | `cancel` | spec + confirm + `job_ids` + `reason` | `job_cancelled` | cancelled, drops |
 | `record` | spec + confirm + `result` | `trial_result` | recorded key, ledger head |
-| `propose` | spec + confirm + `current` + `symptoms` | `proposal` | cards, drops, proposer, requested, rows_digest, seed, fallback, dropped |
+| `propose` | spec + confirm + `current` + `symptoms` (+ `llm_pool` or `llm_pool_file` for proposer `llm`) | `proposal` | cards, drops, proposer, requested, rows_digest, seed, fallback, dropped, `llm_usage` (llm) |
 | `claim` | spec + confirm + `trial` | `claim` | claim_id, champion, prev |
 | `close` | spec + confirm + recorded results + `stop_reason` | `campaign_closed` + report artifact | report contents (champion, claims, unclaimed_gains) |
 
@@ -189,7 +202,7 @@ Once `campaign_closed` is on the ledger every action except `check` and `close` 
   without cascading: at close a claimed trial is decided against the rows it was claimed against, every
   other trial against the champion's rows (baseline rows while the chain roots at `baseline`).
 
-## Proposers (M3, M4)
+## Proposers (M3, M4, M5b)
 - The ideas catalog (`propose.py`, untouched) is the deterministic default and the regression oracle
   (byte-identical to the M0 ranking), and the mandatory fallback.
 - A model proposer (optuna: TPE) is a lazily imported optional extra, never installed by default; it is
@@ -217,6 +230,23 @@ Once `campaign_closed` is on the ledger every action except `check` and `close` 
   recommendation prefixed "investigate proposal replay drift before adopting: ".
 - A replay that cannot be checked is the counted drop `proposal_replay_unmeasured:<reason>:<i>` (reasons: `legacy_proposal`, `recorded_unmeasured`, `ledger_prefix_missing`, `extra_missing:<name>`, `version_changed:<name>`, `model_error`, `chain_unverified`) and is never a pass.
 - A changed optuna version is `version_changed` (unmeasured), not drift: cross-version identity is not claimed. The test registry injection (`registry=`) is test-only.
+- The `llm` proposer (M5b) calls ONE OpenAI-compatible chat model - the endpoint comes ONLY from the request
+  (`llm_pool` / `llm_pool_file`, AR-PR-005) and transport reuses data_engine's stdlib OpenAI-compatible client: no new
+  dependency (`yaml` only to read an `llm_pool_file` `.yaml`). The model only emits typed cards
+  (idea/domain/delta/watch/score/rationale); card validation drops, never clamps (`llm_out_of_axes:<idea>`, ...); `proposer.min_rows` may be 0.
+- `llm` budgets and taint: `max_calls` counts ledgered calls (exhausted -> the fallback drop
+  `llm_call_budget_exhausted`) and `llm_usage` `{calls_used, max_calls, tokens_in, tokens_out}` (`None` when
+  unreported, never 0) rides the propose PASS payload and the close report. A forbidden command (pkill -u / scancel /
+  killall) or a quarantined node in the response taints the WHOLE response: non-strict -> catalog fallback
+  `llm_response_tainted:<i>`, strict -> AR-PR-003 REFUSED (AR-PR-003 is also a close-time audit of the recorded
+  responses). Non-strict fallback reasons (`proposer_fallback_catalog:<reason>`; strict -> AR-PR-001
+  `proposer_unavailable:<reason>`): `no_calls_left`, `no_axes`, `no_transport`, `transport_error`, `parse_error`,
+  `parse_unstable`, `tainted`, `no_model_cards`, `model_error`.
+- Record-and-audit (`llm`): the proposal payload stores the full request/response/parse inline (`llm` block),
+  `generation: "nondeterministic"`, and `replay_status` `parse_identical|unmeasured` - `byte_identical` is never
+  claimed for llm; an overstated claim is AR-PR-004 (handoff BLOCK) and propose refuses it defensively. Close
+  re-parses the recorded response (it never calls the model again) and counts `parse_identical` / `parse_drifted` in
+  `replay_report` (llm campaigns only); a drift is AR-HO-009 (handoff BLOCK, RED) and the outcome is never moved.
 
 ## Acceptance statistics
 - Evidence = ok, non-limited results with the metric present, paired by seed; crashes are excluded and
@@ -273,8 +303,9 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-IN-005 | input | BLOCK | axis key outside AXIS_PATHS (or in UNSUPPORTED_AXES) or range/values invalid for its kind |
 | AR-IN-006 | input | BLOCK | result payload malformed, or a crash record carries metric values |
 | AR-IN-007 | input | BLOCK | seed plan invalid (seed_list empty/duplicate/non-int, repeats < 1, confirm_repeats beyond the seed list, or `cluster.max_in_flight` invalid/above `budget.max_runs`) |
-| AR-IN-008 | input | BLOCK | proposer config invalid (name outside `catalog`/`optuna`/`optuna-cma`, `min_rows` < 1, `require_model` not a bool, `seed` not an int, unknown keys) |
+| AR-IN-008 | input | BLOCK | proposer config invalid (name outside `catalog`/`optuna`/`optuna-cma`/`llm`, `min_rows` < 1 (>= 0 allowed for `llm`), `require_model` not a bool, `seed` not an int, unknown keys) |
 | AR-IN-009 | input | BLOCK | spec.objectives invalid (not 2-4 `{metric, direction}` entries, objectives[0] != objective, a duplicate metric, a metric outside eval_policy.metrics, or a guardrail used as an objective) |
+| AR-IN-010 | input | BLOCK | the `proposer.llm` block is malformed (missing `pool_key`/`model`, `max_cards` outside 1..budget.max_runs, `max_calls` invalid, `parse_spec_version` != 1, bad `sampling`, a URL-shaped value, or unknown keys) |
 | AR-AP-001 | input | BLOCK | campaign_confirm missing/wrong hash, ledger approved a different hash, or no approver to open the envelope |
 | AR-LN-001 | input | BLOCK | delta outside spec.axes, nodes/gpus/partition outside spec.cluster, or a `base`/`model` override |
 | AR-LN-002 | input | BLOCK | budget.max_runs reached, gpu-hour budget exceeded, or a non-confirm run dips into the reserve |
@@ -291,6 +322,9 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-RS-008 | input | BLOCK | multi-objective claim of a candidate whose decision is not `accepted_gain` (a trade-off or worse never claims: `claim_refused_not_dominating:<trial>`) |
 | AR-PR-001 | input | BLOCK | `proposer.require_model` set and the model proposer is unavailable (below `min_rows`, extra missing, no axes, model error, no in-axes cards) or its replay is not byte-identical |
 | AR-PR-002 | input | BLOCK | the optuna-cma proposer cannot hold a categorical axis (refused, never dropped) |
+| AR-PR-003 | handoff | BLOCK | an llm response named a forbidden command (pkill -u / scancel / killall) or a quarantined node: the WHOLE response is tainted (non-strict -> catalog fallback `llm_response_tainted:<i>`, strict -> propose REFUSEDs at input); also the close-time audit of recorded responses |
+| AR-PR-004 | handoff | BLOCK | an llm proposal claims byte-identical replay (overstated: llm `replay_status` is `parse_identical|unmeasured`) - audited at close, and propose refuses the claim defensively |
+| AR-PR-005 | input | BLOCK | the llm endpoint is not pinned (pool entry missing/inactive, model mismatch, credential in the registry) or a credential-shaped token sat in the prompt/response - REFUSED before/without appending |
 | AR-HO-001 | handoff | BLOCK | campaign closed with no accepted gain |
 | AR-HO-002 | handoff | BLOCK | best candidate breaches a guardrail band |
 | AR-HO-003 | handoff | BLOCK | ledger chain verification failed (reports the first broken seq) |
@@ -299,6 +333,7 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-HO-006 | handoff | WARN | a noise-floor baseline repeat shipped as a non-eval_only job, or (when the ledger has any `launch_envelope`) its `job_submitted` provenance is unknown (`baseline_provenance_unknown:<trial>`) (decision 3: the floor is eval-only repeats) - status UNMEASURED |
 | AR-HO-007 | handoff | BLOCK | a recorded proposal does not replay byte-identically at close (search provenance drifted) |
 | AR-HO-008 | handoff | INFO | a multi-objective close found only trade-offs (no dominating candidate); they are listed, never claimed, and the outcome stays `no_gain` |
+| AR-HO-009 | handoff | BLOCK | a recorded llm response re-parses differently at close (`parse_drifted` in `replay_report`, llm campaigns only, the model is never called again) - RED, the outcome never moves |
 
 Close outcomes: improved (accepted gain) / flat_simplified / no_gain / regressed / unmeasured, decided in
 that order after the ledger check: ledger broken -> RED (AR-HO-003); unmeasured evidence that could change
@@ -326,6 +361,15 @@ gain/flat -> RED (AR-HO-001).
   `proposer_fallback_catalog:<reason>` is counted. An `optuna-cma` axis of `type == "categorical"` is refused at
   check time (AR-PR-002: `proposer_axis_unsupported:optuna-cma:<key>`, one per categorical axis in axis order) -
   the axis is never dropped: use `optuna` (TPE holds categorical axes) or remove the categorical axes.
+- REFUSED (96) / fallback (llm, M5b): an unpinned or credential-leaking endpoint is AR-PR-005 (fix `llm_pool` /
+  `llm_pool_file`: the entry must carry `pool_key` + `model`, be active, and hold only an auth env var NAME) and
+  nothing is appended; a credential-shaped token in the prompt/response is refused the same way. A tainted response is
+  AR-PR-003 (strict REFUSE) or the catalog fallback `llm_response_tainted:<i>`; llm `max_calls` counts ledgered calls
+  and an exhausted budget drops `llm_call_budget_exhausted`. Non-strict llm failure falls back to the catalog with
+  `proposer_fallback_catalog:<reason>` (strict: AR-PR-001 `proposer_unavailable:<reason>`): `no_calls_left`, `no_axes`,
+  `no_transport`, `transport_error`, `parse_error`, `parse_unstable`, `tainted`, `no_model_cards`, `model_error`. At
+  close, an llm response whose re-parse differs is AR-HO-009 (RED, the outcome never moves); an llm replay is never
+  claimed byte-identical (AR-PR-004).
 - RED (5): the campaign measured something and it did not accept - read `decisions` in the report and the
   `reasons` lines (`guardrail:<name>`, `mean_delta ... > tau ...`), or AR-HO-003 for a damaged chain. A recorded
   proposal that does not replay byte-identically at close (AR-HO-007) turns the status RED with `outcome`
@@ -383,7 +427,9 @@ gain/flat -> RED (AR-HO-001).
   (`proposers.reverify`) + AR-HO-007 drift escalation.
 - **M5a (done)**: multi-objective campaigns (`spec.objectives`, AR-IN-009), `decide_multi` over one common
   seed set, AR-RS-008 (trade-offs never claim), AR-HO-008 and the presentation-only frontier.
-- **M5b (pending)**: LLM proposer (design in M5_DESIGN.md part B); Ray Tune / Vizier stay reference-only.
+- **M5b (done)**: LLM proposer (`proposer.llm`, AR-IN-010; request-only endpoint `llm_pool`/`llm_pool_file` + AR-PR-005;
+  typed cards that drop, never clamp; record-and-audit = AR-PR-003/-004 + AR-HO-009; `llm_usage` budgets); Ray Tune /
+  Vizier stay reference-only.
 
 ## Worked examples
 1. Validate a campaign before signing anything:

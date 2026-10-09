@@ -24,6 +24,9 @@ Reading:
 - LibriSpeech-only fine-tuning moves out-of-domain WER little: AMI improves for all four models
   (including Parakeet, which had no in-domain headroom), VoxPopuli and Earnings-22 are mixed within
   about 0.8 points, and no model regresses badly.
+  **Correction (speech_p7 section 5):** on AMI-2000 with a paired bootstrap, the AMI gain is
+  significant for Gemma-4, Qwen2-Audio and Parakeet but not for Whisper (+0.60 points, 95% CI
+  [-0.49, +2.51]).
 - Qwen2-Audio's large drops are mostly the base instruct model's wrapper text ("The original content
   of this audio is: ...") disappearing once trained on plain transcripts.
 
