@@ -1,6 +1,6 @@
-"""Speech gates: audio-row coverage, placeholder coverage, tower movement, runaways.
+"""Speech gates: audio-row coverage, placeholder coverage, tower movement, runaways, loops.
 
-Four gates auditing a speech training job's checkpoint at :attr:`Lifecycle.SAVE`:
+Five gates auditing a speech training job's checkpoint at :attr:`Lifecycle.SAVE`:
 
 * :class:`AudioRowCoverageGate` — every declared audio row was either loaded into
   the artifact or refused-and-counted (and any refusal leaking into the save under
@@ -17,6 +17,12 @@ Four gates auditing a speech training job's checkpoint at :attr:`Lifecycle.SAVE`
   within ``2 * base_runaway + ceil(0.005 * rows_checked)`` runaway hypotheses: a
   decoder that stopped listening (repetition loops, hallucinated domain text) is
   invisible to every artifact gate, and the base model's own rate is the yardstick.
+* :class:`RepetitionLoopGate` — the loop words the run measured at save stay within
+  ``2 * base_loop_words + ceil(0.005 * reference_words)``: ``is_runaway`` judges
+  WHOLE rows (past twice the row's reference length) and a repetition loop inside
+  one 40 s chunk of an hour-long call adds only 4-12% of that call's words (the
+  measured 1,428-loop-word Canary-1B Earnings collapse passed it), so loops are
+  counted locally, in words, against the base model's own loop count.
 
 Registration at import time is doctrine (mirroring ``checkpoint_gates.py``): the
 ``@register`` class decorator adds each gate to the process-wide :data:`REGISTRY`,
@@ -908,5 +914,293 @@ class RunawayHypothesisGate(Gate):
                 note="4 runaway rows counted over 3 checked rows: the census "
                 "cannot describe any run and must be refused (ValueError, "
                 "blocking) before any limit is derived from it",
+            ),
+        ]
+
+
+@dataclass(frozen=True)
+class RepetitionLoopContext:
+    """Repetition-loop census over one eval run's rows, for the base and the tuned model.
+
+    ``rows_expected`` is the corpus's declared size (2,504 for a Earnings-22
+    clip sweep, 6 whole calls for the long-form one) and must come from OUTSIDE
+    the eval artifact — a run's summary can claim any number of rows, which is
+    exactly the audited disaster the framework names. ``rows_checked`` counts the
+    rows whose (reference, hypothesis) pairs were actually measured;
+    ``reference_words`` is their summed NORMALIZED reference length
+    (``LoopCount.reference_words``) and ``base_loop_words`` /
+    ``tuned_loop_words`` are the words ``train.speech_metrics.loop_words``
+    flagged inside the base and the tuned hypotheses over those same rows.
+
+    Loop words are HYPOTHESIS words and routinely outnumber the reference's words
+    in a collapse — a decoder stuck on ``"the"`` emits words the reference never
+    had — so ``loop words <= reference words`` is NOT an invariant here and is not
+    refused. Only counts that cannot describe any run (a negative number) are
+    refused ``ValueError``, never priced: the same refusal ``Coverage``'s own
+    constructor makes over a negative count, one field earlier.
+    """
+
+    rows_expected: int
+    rows_checked: int
+    reference_words: int
+    base_loop_words: int
+    tuned_loop_words: int
+
+
+@register
+class RepetitionLoopGate(Gate):
+    """The tuned model's local repetition loop words stay near the base count, or the run blocks.
+
+    Defect class: a decoder that fell into a LOCAL repetition loop INSIDE one
+    chunk. The measured case is a Canary-1B Earnings fine-tune decoded with
+    NeMo's chunked long-form inference over six whole Earnings-22 calls: the
+    loops (``"the the the ..."``, ``"uh uh uh ..."``) made 1,428 words beside
+    50,400 reference words where the base model looped none, turning a
+    17.30 -> 14.14 WER gain (the loops collapsed, a diagnostic) into the real
+    17.30 -> 16.77. ``speech.runaway_hypotheses`` passed over that output and
+    could not have fired: it judges whole rows (past twice the row's reference
+    length) and a loop inside one 40 s chunk of an hour-long call adds 4-12% of
+    that call's words. Loops must be counted locally, in words, against the base
+    model.
+
+    The allowance is ``limit = 2 * base_loop_words + ceil(0.005 *
+    reference_words)``: double the base drift, plus half a percent of the
+    reference words for the repetition every corpus carries in its speech and its
+    transcript alike (the per-run run-length floor is spent inside ``loop_words``;
+    this is the corpus-level slack). RED (FAIL, blocking) iff
+    ``tuned_loop_words > limit`` — landing exactly on the limit is inside it. The
+    base model is the yardstick rather than a hard ceiling because a corpus the
+    base reads with the same repetitions must not block on repetition alone (AMI's
+    base model loops 165 words in 15,194, and a fine-tune sitting at 188 is
+    drift, not a defect).
+
+    Coverage is the row census: (rows_checked, rows_expected) in ``"eval rows"``,
+    so zero measured rows is VACUOUS and a short sweep is UNDERCOVERED — both
+    blocking, exactly as :class:`AudioRowCoverageGate` reports its rows.
+
+    Counts that cannot describe a run are refused ``ValueError`` before any limit
+    is derived: anything negative — and nothing else, because loop words are
+    hypothesis words and a collapse CAN carry more of them than the reference has
+    words. Malformed input is corruption of the measurement, not a fact about the
+    model.
+    """
+
+    id: ClassVar[str] = "speech.repetition_loops"
+    description: ClassVar[str] = (
+        "The tuned model's local repetition loop words stay within the limit of "
+        "2 * base_loop_words + ceil(0.005 * reference_words) at save: a decoder "
+        "that fell into a repetition loop inside one chunk is invisible to every "
+        "artifact gate and sails under the whole-row runaway detector, and only "
+        "this local count sees it"
+    )
+    events: ClassVar[tuple[Lifecycle, ...]] = (Lifecycle.SAVE,)
+    context_type: ClassVar[type | None] = RepetitionLoopContext
+
+    def check(self, ctx: Any) -> GateResult:
+        c = ctx
+        rows_expected = c.rows_expected
+        rows_checked = c.rows_checked
+        reference_words = c.reference_words
+        base_loop_words = c.base_loop_words
+        tuned_loop_words = c.tuned_loop_words
+
+        # Refusing impossible input BEFORE any limit is derived, exactly as
+        # Coverage's constructor refuses a negative count. Only negatives here:
+        # loop words are HYPOTHESIS words and a collapse can emit more of them
+        # than the reference has words (the measured 1,428 beside a reference
+        # carrying its own 50,400), so bounding them by the reference would
+        # refuse the very measurement this gate exists to make. A negative count,
+        # though, describes no run at all — refused, never priced.
+        if (
+            min(
+                rows_expected,
+                rows_checked,
+                reference_words,
+                base_loop_words,
+                tuned_loop_words,
+            )
+            < 0
+        ):
+            raise ValueError(
+                "loop counts cannot be negative: rows_expected="
+                f"{rows_expected}, rows_checked={rows_checked}, "
+                f"reference_words={reference_words}, "
+                f"base_loop_words={base_loop_words}, "
+                f"tuned_loop_words={tuned_loop_words} — "
+                "a negative count describes no run at all"
+            )
+
+        # The Coverage formula (rows checked against the manifest's expected),
+        # with rows_checked == 0 deliberately overridden to Coverage.none below
+        # for the same reason AudioRowCoverageGate does it: forcing checked=0 is
+        # the only way to make the framework's ok() downgrade yield the mandated
+        # VACUOUS verdict.
+        coverage = Coverage(
+            checked=rows_checked,
+            unit="eval rows",
+            expected=rows_expected,
+        )
+
+        if rows_checked == 0:
+            # First rule of this gate and absolute: zero measured rows attests
+            # nothing (the refusal above has already forbidden any loop count
+            # here). Through self.ok over Coverage.none this is the framework's
+            # VACUOUS downgrade — the only sanctioned way to produce it without
+            # hand-assembling a result.
+            return self.ok(
+                f"no eval row was measured (0 of {rows_expected} expected) — "
+                "nothing to attest about for repetition loops",
+                Coverage.none("eval rows"),
+                evidence={
+                    "rows_expected": rows_expected,
+                    "rows_checked": rows_checked,
+                    "reference_words": reference_words,
+                    "base_loop_words": base_loop_words,
+                    "tuned_loop_words": tuned_loop_words,
+                },
+            )
+
+        # Double the base drift plus the corpus slack over the reference's
+        # words. Both arms are spelled out in every message: the limit IS the
+        # claim, and a threshold a reader cannot recompute is a threshold nobody
+        # can audit.
+        limit = 2 * base_loop_words + ceil(0.005 * reference_words)
+
+        if tuned_loop_words > limit:
+            return self.fail(
+                f"{tuned_loop_words} loop words over {reference_words} reference "
+                f"words (the base model produced {base_loop_words}) exceeded the "
+                f"limit of {limit} (2 * base_loop_words {base_loop_words} + "
+                f"ceil(0.005 * {reference_words})) — the tuned decoder fell into "
+                "local repetition loops where the base model stayed with the "
+                "transcript",
+                coverage,
+                evidence={
+                    "rows_checked": rows_checked,
+                    "reference_words": reference_words,
+                    "base_loop_words": base_loop_words,
+                    "tuned_loop_words": tuned_loop_words,
+                    "limit": limit,
+                },
+            )
+
+        return self.ok(
+            f"{tuned_loop_words} loop words over {reference_words} reference "
+            f"words (the base model produced {base_loop_words}) stayed within "
+            f"the limit of {limit} (2 * base_loop_words {base_loop_words} + "
+            f"ceil(0.005 * {reference_words})) — the decoder kept out of the "
+            "repetition loops",
+            coverage,
+            evidence={
+                "rows_checked": rows_checked,
+                "reference_words": reference_words,
+                "base_loop_words": base_loop_words,
+                "tuned_loop_words": tuned_loop_words,
+                "limit": limit,
+            },
+        )
+
+    def controls(self) -> list[Control]:
+        return [
+            Control(
+                name="earnings-22-long-form-loops",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: RepetitionLoopContext(
+                    rows_expected=6,
+                    rows_checked=6,
+                    reference_words=50400,
+                    base_loop_words=0,
+                    tuned_loop_words=1428,
+                ),
+                note="the measured NeMo chunked collapse (Canary-1B Earnings "
+                "fine-tune over 6 whole calls): 1,428 loop words beside 50,400 "
+                "reference words where the base model looped none (limit 252 = "
+                "2 * 0 + ceil(0.005 * 50400)) — must RED-block naming both "
+                "counts, the reference words and the limit",
+            ),
+            Control(
+                name="earnings-22-corrupted-data-clips",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: RepetitionLoopContext(
+                    rows_expected=2504,
+                    rows_checked=2504,
+                    reference_words=47865,
+                    base_loop_words=0,
+                    tuned_loop_words=2936,
+                ),
+                note="the corrupted-data fine-tune's clip eval: 2,936 loop words "
+                "beside 47,865 reference words where the base model looped none "
+                "(limit 240 = 2 * 0 + ceil(0.005 * 47865)) — must RED-block "
+                "naming both counts and the limit",
+            ),
+            Control(
+                name="earnings-22-clip-finetune",
+                kind=ControlKind.MUST_PASS,
+                make_ctx=lambda: RepetitionLoopContext(
+                    rows_expected=2504,
+                    rows_checked=2504,
+                    reference_words=47865,
+                    base_loop_words=0,
+                    tuned_loop_words=151,
+                ),
+                note="the clean clip fine-tune over the same corpus: 151 loop "
+                "words inside the limit of 240 — ordinary drift over 47,865 "
+                "reference words, not a decoder in a loop",
+            ),
+            Control(
+                name="ami-base-loops-too",
+                kind=ControlKind.MUST_PASS,
+                make_ctx=lambda: RepetitionLoopContext(
+                    rows_expected=2000,
+                    rows_checked=2000,
+                    reference_words=15194,
+                    base_loop_words=165,
+                    tuned_loop_words=188,
+                ),
+                note="a corpus the BASE model also loops on: 165 base loop words "
+                "in 15,194 reference words, and a fine-tune at 188 is drift "
+                "inside the limit of 406 (2 * 165 + ceil(0.005 * 15194)) — the "
+                "base model is the yardstick, not a zero",
+            ),
+            Control(
+                name="no-rows-vacuous",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: RepetitionLoopContext(
+                    rows_expected=5,
+                    rows_checked=0,
+                    reference_words=0,
+                    base_loop_words=0,
+                    tuned_loop_words=0,
+                ),
+                note="0 rows measured against 5 expected: must block as VACUOUS "
+                "with zero coverage (no attestation over zero rows)",
+            ),
+            Control(
+                name="undercover-row-count",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: RepetitionLoopContext(
+                    rows_expected=5,
+                    rows_checked=3,
+                    reference_words=100,
+                    base_loop_words=1,
+                    tuned_loop_words=1,
+                ),
+                note="3 of 5 rows measured with the loops inside the limit "
+                "(2 * 1 + ceil(0.005 * 100) = 3): the shortfall of 2 must block "
+                "as UNDERCOVERED (framework downgrade over Coverage(3, 5))",
+            ),
+            Control(
+                name="negative-count-refused",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: RepetitionLoopContext(
+                    rows_expected=5,
+                    rows_checked=5,
+                    reference_words=100,
+                    base_loop_words=0,
+                    tuned_loop_words=-1,
+                ),
+                note="a negative loop-word count describes no run and must be "
+                "refused (ValueError, blocking) before any limit is derived "
+                "from it",
             ),
         ]

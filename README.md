@@ -237,7 +237,8 @@ workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.m
   it declared on the wrong audio. A data-builder bug once pointed 6,000 transcripts at 820
   files and every artifact gate passed. So repeated audio paths are refused, and
   `speech.runaway_hypotheses` blocks a fine-tune whose hypotheses run away far past the base
-  model's count on the same eval rows. With the data fixed, Canary-1B-flash on held-out
+  model's count on the same eval rows. `speech.repetition_loops` blocks local loops ("the the the
+  ...") that a long recording would otherwise dilute. With the data fixed, Canary-1B-flash on held-out
   Earnings-22 calls drops from 19.4% to 11.3% WER.
   [-> docs/research/speech.md, validation_campaigns/speech_p7/EVIDENCE.md, validation_campaigns/speech_p8/EVIDENCE.md]
 * **Via the launchers as reference material**: one full fine-tune and one LoRA workflow
@@ -546,14 +547,14 @@ itself, from the Makefile's own accounting:
 
 ## 23. Project structure
 
-`src/` = 74140 LOC across 109 files. `launchers/` contains 10231 shell LOC plus 1615 Python
+`src/` = 74571 LOC across 109 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 34169 Python LOC and 6706 shell LOC on top of the
-package. `tools/` contains 10183 Python LOC. 352675 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 10183 Python LOC. 353812 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (101808 .py LOC); conftest carries the skip guard
+tests/                 the test suite (102185 .py LOC); conftest carries the skip guard
 tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
                        real_checkpoint_probe, preflight/, mutate, census)
 checks/                standalone repository gates: countables drift, packaging

@@ -49,18 +49,22 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 __all__ = [
+    "LOOP_MIN_RUN",
     "RUNAWAY_RATIO",
     "RUNAWAY_SLACK_WORDS",
     "TRANSCRIPT_NORMALIZER_ID",
     "CorpusErrorRate",
     "EditCounts",
+    "LoopCount",
     "PairedComparison",
     "RunawayCount",
     "align",
     "char_errors",
     "corpus_error_rate",
+    "count_loop_words",
     "count_runaway",
     "is_runaway",
+    "loop_words",
     "normalize_transcript",
     "paired_bootstrap",
     "word_errors",
@@ -663,3 +667,136 @@ def count_runaway(pairs: Iterable[tuple[str, str]]) -> RunawayCount:
         if is_runaway(ref, hyp):
             runaway += 1
     return RunawayCount(rows_checked=checked, rows_runaway=runaway)
+
+
+LOOP_MIN_RUN = 4
+"""How many identical tokens in a row make a repetition loop the metrics must count.
+
+The run-length arm of the LOCAL loop detector (``loop_words`` is the only place
+the formula is stated). Motivated by a failure no row-level detector saw: a
+Canary-1B Earnings fine-tune, decoded with NeMo's chunked long-form inference,
+fell into LOCAL repetition loops INSIDE chunks (``"the the the ..."``,
+``"uh uh uh ..."``) across six whole Earnings-22 calls -- 1,428 loop words
+beside 50,400 reference words where the base model looped none, turning a
+17.30 -> 14.14 WER gain (the loops collapsed, a diagnostic measurement) into the
+real 17.30 -> 16.77. ``is_runaway`` passed over that output and correctly so:
+it judges whole rows (past twice the row's reference length) and a loop inside
+one 40 s chunk of an hour-long call adds only 4-12% of that call's words. Loops
+must be counted locally, in words, against the base model -- and four is the run
+where ``"the the the ..."`` stops having a stuttering speaker in it.
+
+The threshold travels in every manifest it underwrites
+(``LoopCount.as_manifest``): a threshold nobody can state is a threshold nobody
+can reproduce.
+"""
+
+
+def loop_words(tokens: Sequence[str]) -> int:
+    """Tokens inside maximal runs of ONE identical token, of length >= ``LOOP_MIN_RUN``.
+
+    Every token of a qualifying run counts -- a run of five ``"the"`` is 5 loop
+    words -- because each is a word the decoder emitted where the audio carried
+    another. A shorter run contributes NOTHING (a run of 3 is 0, and 0 for the
+    whole run rather than partial credit for its tail): a stutter is not a
+    decoder that lost the transcript, and charging runs only at ``LOOP_MIN_RUN``
+    keeps the boundary honest in both directions -- a run of 4 is 4 and a run of
+    5 is 5, the loop length IS the measurement and no per-run cap shrinks it.
+    Maximal runs separated by ANY other token add (a call that loops twice has
+    looped twice), while a short run between two loops bridges neither.
+
+    ``tokens`` are NORMALIZED words (``normalize_transcript``): the caller runs
+    the normalizer first, so ``"The the THE the"`` is one run of four and no
+    loop can hide in case or punctuation while another shows through it. This is
+    a census of words -- no denominator and no refusals: an empty token list is
+    0 loop words and a fact about nothing said, not a 0.0 about everything.
+    """
+    total = 0
+    run_length = 0
+    previous: str | None = None
+    for token in tokens:
+        if token == previous:
+            run_length += 1
+        else:
+            if run_length >= LOOP_MIN_RUN:
+                total += run_length
+            run_length = 1
+            previous = token
+    if run_length >= LOOP_MIN_RUN:
+        total += run_length
+    return total
+
+
+@dataclass(frozen=True)
+class LoopCount:
+    """Rows measured against the local loop detector, and the loop words in each side.
+
+    The counting sibling of ``RunawayCount`` with the words it needs beside the
+    rows: ``reference_words`` is the summed NORMALIZED reference length (the
+    yardstick a gate's corpus slack is spent against) and the two loop-word sums
+    are what ``loop_words`` counted inside the hypotheses and inside the
+    references of those rows. A reference can loop too (a transcript artifact, a
+    genuinely repeated utterance) and its loops are COUNTED rather than assumed
+    away: the base-vs-tuned comparison needs both sides' dirt.
+
+    Frozen because these numbers ARE the measurement: a sum that mutates in
+    place is a number whose provenance nobody can state.
+    """
+
+    rows_checked: int
+    reference_words: int
+    hypothesis_loop_words: int
+    reference_loop_words: int
+
+    def as_manifest(self) -> dict[str, int | str]:
+        """The JSON-ready count claim with the detector's arm named INSIDE it.
+
+        ``loop_min_run`` and the normalizer travel with the numbers counted
+        under them: ``loop_words`` counts normalized words, so two runs' counts
+        are comparable only under one normalizer
+        (``TRANSCRIPT_NORMALIZER_ID``) and re-derivable only from the run length
+        the manifest itself publishes -- a reader counting runs of three would
+        re-derive a different census from these same four numbers.
+        """
+        return {
+            "rows_checked": self.rows_checked,
+            "reference_words": self.reference_words,
+            "hypothesis_loop_words": self.hypothesis_loop_words,
+            "reference_loop_words": self.reference_loop_words,
+            "loop_min_run": LOOP_MIN_RUN,
+            "normalizer": TRANSCRIPT_NORMALIZER_ID,
+        }
+
+
+def count_loop_words(pairs: Iterable[tuple[str, str]]) -> LoopCount:
+    """Every ``(reference, hypothesis)`` TEXT pair folded into one loop-word census.
+
+    Both sides run ``normalize_transcript`` before ``loop_words``, so the counts
+    are only ever comparable with counts whose normalizer is the one named in
+    ``TRANSCRIPT_NORMALIZER_ID``. Rows whose reference is empty are COUNTED --
+    they contribute 0 reference words and 0 reference loop words -- and are
+    never refused here: nothing on this side of the file divides by the
+    reference, so an empty reference is a row examined with zero words in it,
+    and dropping it in silence would lose the very hypothesis loops it may still
+    carry (an empty recording is not a well-behaved one). No ``rows_expected``
+    denominator either: ``rows_checked`` is the rows actually examined, and the
+    gate that consumes these counts takes its coverage denominator from outside
+    the eval artifact, exactly as ``count_runaway`` leaves it to
+    ``RunawayHypothesisGate``.
+    """
+    checked = 0
+    reference_words = 0
+    hypothesis_loop_words = 0
+    reference_loop_words = 0
+    for ref, hyp in pairs:
+        checked += 1
+        ref_tokens = normalize_transcript(ref)
+        hyp_tokens = normalize_transcript(hyp)
+        reference_words += len(ref_tokens)
+        hypothesis_loop_words += loop_words(hyp_tokens)
+        reference_loop_words += loop_words(ref_tokens)
+    return LoopCount(
+        rows_checked=checked,
+        reference_words=reference_words,
+        hypothesis_loop_words=hypothesis_loop_words,
+        reference_loop_words=reference_loop_words,
+    )

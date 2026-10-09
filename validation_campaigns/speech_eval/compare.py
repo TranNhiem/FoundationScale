@@ -31,8 +31,15 @@ The ``speech.runaway_hypotheses`` verdict is computed exactly as
 ``RunawayHypothesisGate().run(RunawayHypothesisContext(...))``) and is printed as
 that script prints it, so the two reports cannot disagree about one corpus.
 
-Exit code follows the run contract: 0 when the report is complete and the runaway
-gate does not block, 5 when it does -- or when the comparison refused, because a
+The ``speech.repetition_loops`` verdict follows it over the SAME aligned rows
+(``count_loop_words``): the runaway count judges whole rows and a repetition loop
+inside one 40 s chunk of an hour-long call adds only 4-12% of that call's words
+(the measured Canary-1B Earnings collapse put 1,428 loop words beside 50,400
+reference words while every row stayed under the runaway yardstick), so the loop
+words are counted locally and judged against the base model's own loop count.
+
+Exit code follows the run contract: 0 when the report is complete and neither
+gate blocks, 5 when either does -- or when the comparison refused, because a
 gap that could not be measured is not a green report.
 
 Usage: compare.py --manifest evals.jsonl --base base.json --tuned tuned.json \\
@@ -47,9 +54,15 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from foundationscale.gates.speech_gates import RunawayHypothesisContext, RunawayHypothesisGate
+from foundationscale.gates.speech_gates import (
+    RepetitionLoopContext,
+    RepetitionLoopGate,
+    RunawayHypothesisContext,
+    RunawayHypothesisGate,
+)
 from foundationscale.train.speech_metrics import (
     TRANSCRIPT_NORMALIZER_ID,
+    count_loop_words,
     count_runaway,
     paired_bootstrap,
 )
@@ -135,7 +148,7 @@ def manifest_rows_expected(path: str) -> int:
 
 
 def main() -> int:
-    """Print the base-vs-tuned comparison with provenance, then the runaway verdict."""
+    """Print the base-vs-tuned comparison with provenance, then the runaway and loop verdicts."""
     ap = argparse.ArgumentParser(description="Paired base-vs-tuned ASR comparison with provenance")
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--base", required=True)
@@ -183,6 +196,28 @@ def main() -> int:
         f"{outcome.coverage.unit} -- {outcome.detail}"
     )
 
+    # Loops are LOCAL: the runaway gate above judges whole rows and a repetition
+    # loop inside one 40 s chunk of an hour-long call adds 4-12% of that call's
+    # words, so the loop words are counted inside the same aligned rows and
+    # judged against the base model's own count. The references are aligned
+    # (paired_bootstrap refuses any two lists whose references differ), so the
+    # base side states the corpus reference words once.
+    base_loops = count_loop_words(pairs_base)
+    tuned_loops = count_loop_words(pairs_tuned)
+    loop_outcome = RepetitionLoopGate().run(
+        RepetitionLoopContext(
+            rows_expected=expected,
+            rows_checked=len(shared),
+            reference_words=base_loops.reference_words,
+            base_loop_words=base_loops.hypothesis_loop_words,
+            tuned_loop_words=tuned_loops.hypothesis_loop_words,
+        )
+    )
+    loop_line = (
+        f"[{loop_outcome.verdict.value}] {loop_outcome.gate_id}: {loop_outcome.coverage.checked}/{loop_outcome.coverage.expected} "
+        f"{loop_outcome.coverage.unit} -- {loop_outcome.detail}"
+    )
+
     shortfall = expected - len(shared)
     print(f"base : {base.describe()}")
     print(f"tuned: {tuned.describe()}")
@@ -212,6 +247,7 @@ def main() -> int:
             f"resamples (seed {comparison.seed})"
         )
     print(verdict_line)
+    print(loop_line)
 
     if args.json is not None:
         report = {
@@ -236,10 +272,24 @@ def main() -> int:
                     "line": verdict_line,
                 },
             },
+            "repetition_loops": {
+                "base": base_loops.as_manifest(),
+                "tuned": tuned_loops.as_manifest(),
+                "gate": {
+                    "gate_id": loop_outcome.gate_id,
+                    "verdict": loop_outcome.verdict.value,
+                    "blocking": loop_outcome.blocking,
+                    "detail": loop_outcome.detail,
+                    "coverage_checked": loop_outcome.coverage.checked,
+                    "coverage_expected": loop_outcome.coverage.expected,
+                    "coverage_unit": loop_outcome.coverage.unit,
+                    "line": loop_line,
+                },
+            },
         }
         Path(args.json).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
-    return 5 if (outcome.blocking or refused is not None) else 0
+    return 5 if (outcome.blocking or loop_outcome.blocking or refused is not None) else 0
 
 
 if __name__ == "__main__":

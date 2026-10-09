@@ -15,17 +15,21 @@ import random
 import pytest
 
 from foundationscale.train.speech_metrics import (
+    LOOP_MIN_RUN,
     RUNAWAY_RATIO,
     RUNAWAY_SLACK_WORDS,
     TRANSCRIPT_NORMALIZER_ID,
     EditCounts,
+    LoopCount,
     PairedComparison,
     RunawayCount,
     align,
     char_errors,
     corpus_error_rate,
+    count_loop_words,
     count_runaway,
     is_runaway,
+    loop_words,
     normalize_transcript,
     paired_bootstrap,
     word_errors,
@@ -729,6 +733,144 @@ def test_paired_manifest_is_the_whole_claim() -> None:
     )
     assert manifest["diff"] == manifest["tuned_rate"] - manifest["base_rate"], (
         "MUST_FIRE: the sign convention is inside the claim -- a reader cannot invert it"
+    )
+    assert json.loads(json.dumps(manifest)) == manifest, (
+        "MUST_PASS: the manifest round-trips through JSON unchanged"
+    )
+
+
+def test_loop_words_boundary_is_a_run_of_four() -> None:
+    """MUST_PASS: three identical tokens in a row is a stutter and contributes 0.
+
+    MUST_FIRE: one token past the boundary is a loop in FULL -- a run of 4 is 4
+    loop words and a run of 5 is 5, because every word the decoder emitted where
+    the audio carried another is the defect itself and no per-run cap may shrink
+    "the the the ..." into "the" once over.
+    """
+    assert loop_words(normalize_transcript("the the the")) == 0, (
+        "MUST_PASS: a run of 3 is below LOOP_MIN_RUN and contributes zero loop words"
+    )
+    assert loop_words(normalize_transcript("the the the the")) == 4, (
+        "MUST_FIRE: a run of 4 is the boundary exactly -- 4 loop words and not 1"
+    )
+    assert loop_words(normalize_transcript("the the the the the")) == 5, (
+        "MUST_FIRE: a run of 5 contributes all 5 -- the loop length IS the measurement"
+    )
+    assert loop_words(normalize_transcript("")) == 0, (
+        "MUST_PASS: an empty token list is 0 loop words -- a fact about nothing said"
+    )
+
+
+def test_loop_words_separate_runs_add_and_stutters_bridge_nothing() -> None:
+    """MUST_PASS: a call that loops twice has looped twice -- the runs add.
+
+    MUST_FIRE: a short run between two loops bridges neither one and is never
+    charged -- runs of 3 reach the detector as 0, so 4 + 0 + 5 is 9 and never 12
+    (every stutter paid as a loop) and never 0 (a real loop excused by a
+    stutter sitting beside it).
+    """
+    tokens = normalize_transcript("the the the the cat uh uh uh uh uh")
+    assert loop_words(tokens) == 9, (
+        "MUST_PASS: 4 + 5 over two maximal runs separated by the non-looping 'cat'"
+    )
+    bridged = normalize_transcript("a a a a b b b c c c c c")
+    assert loop_words(bridged) == 9, (
+        "MUST_FIRE: the run of 3 ('b b b') is not a loop -- the census is 4 + 0 + 5"
+    )
+
+
+def test_count_loop_words_sees_through_the_normalizer() -> None:
+    """MUST_PASS: 'The the THE the' is one run of 4 once normalized -- 4 loop words.
+
+    MUST_FIRE: case and punctuation cannot manufacture a loop ("The cat, THE
+    cat" has no run of one token at all) and cannot mask a real one ("the, the!
+    THE? the." is exactly the same four-word loop the plain spelling is), and
+    the REFERENCE side is counted too rather than assumed well-behaved.
+    """
+    loud = count_loop_words([("the cat sat", "The the THE the")])
+    assert (loud.rows_checked, loud.hypothesis_loop_words) == (1, 4), (
+        "MUST_PASS: 'The the THE the' normalizes to four identical tokens -- one run of 4"
+    )
+    dressed = count_loop_words([("the cat sat", "the, the! THE? the.")])
+    assert dressed.hypothesis_loop_words == 4, (
+        "MUST_FIRE: punctuation dressed over the same loop counts 4 exactly as before"
+    )
+    invented = count_loop_words([("the cat sat", "The cat, THE cat, the cat")])
+    assert invented.hypothesis_loop_words == 0, (
+        "MUST_FIRE: two-token runs under differing tokens are no run of ONE token -- 0"
+    )
+    ref_loop = count_loop_words([("the the the the the", "the cat the cat the cat")])
+    assert (ref_loop.reference_loop_words, ref_loop.hypothesis_loop_words) == (5, 0), (
+        "MUST_FIRE: a looping REFERENCE is counted (5) and a clean hypothesis is 0 -- "
+        "both sides' dirt travels or the comparison cannot see which side looped"
+    )
+
+
+def test_count_loop_words_totals_every_row_and_counts_empty_references() -> None:
+    """MUST_PASS: the sums are the sums over every (reference, hypothesis) TEXT pair.
+
+    MUST_FIRE: an empty reference row is COUNTED -- 0 reference words, 0
+    reference loop words -- and its hypothesis loops are still measured: nothing
+    here divides by the reference, so refusing the row would hide exactly the
+    collapse an empty recording produces.
+    """
+    pairs = [
+        ("the cat sat", "the the the the"),  # ref 3 words, hyp loops 4
+        ("", "uh uh uh uh uh"),  # empty reference: counted, 0 words
+        ("x the the the the y", "fine fine fine fine fine"),  # ref loops 4, hyp loops 5
+    ]
+    counts = count_loop_words(pairs)
+    assert counts == LoopCount(
+        rows_checked=3,
+        reference_words=3 + 0 + 6,
+        hypothesis_loop_words=4 + 5 + 5,
+        reference_loop_words=0 + 0 + 4,
+    ), (
+        "MUST_PASS: 3 rows checked, 9 reference words, 14 hypothesis loop words and "
+        "4 reference loop words summed over the pair list"
+    )
+    assert counts.hypothesis_loop_words != 7, (
+        "MUST_FIRE: dropping the empty-reference row would lose its 5 hypothesis loop "
+        "words and publish 7 for the same pair list"
+    )
+    assert count_loop_words([]) == LoopCount(
+        rows_checked=0,
+        reference_words=0,
+        hypothesis_loop_words=0,
+        reference_loop_words=0,
+    ), "MUST_PASS: an empty pair list invents nothing and refuses nothing"
+
+
+def test_loop_manifest_names_the_run_length_arm() -> None:
+    """MUST_PASS: the manifest carries the counts WITH LOOP_MIN_RUN and the normalizer.
+
+    MUST_FIRE: the counts alone are not the claim -- the same rows judged at
+    run-length 5 publish 0 instead of 5, so a manifest missing its arm cannot be
+    re-derived and must not be the shape this module hands out.
+    """
+    manifest = count_loop_words([("", "uh uh uh uh uh")]).as_manifest()
+    assert set(manifest) == {
+        "rows_checked",
+        "reference_words",
+        "hypothesis_loop_words",
+        "reference_loop_words",
+        "loop_min_run",
+        "normalizer",
+    }, "MUST_PASS: the manifest is exactly these keys, nothing more and nothing less"
+    assert manifest["loop_min_run"] == LOOP_MIN_RUN == 4, (
+        "MUST_PASS: the run-length arm is published and is the frozen constant"
+    )
+    assert manifest["normalizer"] == TRANSCRIPT_NORMALIZER_ID, (
+        "MUST_PASS: the normalizer that defines the counted words is named inside "
+        "the claim it underwrote"
+    )
+    assert (manifest["rows_checked"], manifest["reference_words"]) == (1, 0), (
+        "MUST_PASS: the empty reference is one row checked and zero reference words"
+    )
+    assert (manifest["hypothesis_loop_words"], manifest["reference_loop_words"]) == (5, 0), (
+        "MUST_FIRE: 5 loop words in one hypothesis under the published run length -- "
+        "hide the arm and a reader at LOOP_MIN_RUN 6 would re-derive 'healthy' from "
+        "these same numbers"
     )
     assert json.loads(json.dumps(manifest)) == manifest, (
         "MUST_PASS: the manifest round-trips through JSON unchanged"

@@ -1,4 +1,4 @@
-"""Tests for the speech gates: audio-row coverage, placeholder coverage, movement, runaways.
+"""Tests for the speech gates: audio-row coverage, placeholder coverage, movement, runaways, loops.
 
 Two layers of coverage per gate:
 
@@ -30,6 +30,8 @@ from foundationscale.gates.speech_gates import (
     AudioPlaceholderCoverageGate,
     AudioRowCoverageContext,
     AudioRowCoverageGate,
+    RepetitionLoopContext,
+    RepetitionLoopGate,
     RunawayHypothesisContext,
     RunawayHypothesisGate,
     TowerMovementContext,
@@ -526,3 +528,236 @@ class TestRunawayHypothesisGate:
             f"REGISTRY, got {type(gate).__name__}"
         )
         assert gate.context_type is RunawayHypothesisContext
+
+
+class TestRepetitionLoopGate:
+    def _gate(self) -> RepetitionLoopGate:
+        return RepetitionLoopGate()
+
+    def test_measured_long_form_loops_fail(self):
+        # The measured failure that motivated the gate: NeMo chunked long-form
+        # inference over 6 whole Earnings-22 calls (50,400 reference words)
+        # where a Canary-1B Earnings fine-tune fell into LOCAL repetition loops
+        # inside chunks ("the the the ...", "uh uh uh ...") -- 1,428 loop words
+        # where the base model looped none -- turning a 17.30 -> 14.14 WER gain
+        # into 17.30 -> 16.77. speech.runaway_hypotheses passed over the same
+        # output and could not have fired: a loop inside one 40 s chunk of an
+        # hour-long call adds 4-12% of the call's words.
+        # limit = 2 * 0 + ceil(0.005 * 50400) = 252.
+        ctx = RepetitionLoopContext(
+            rows_expected=6,
+            rows_checked=6,
+            reference_words=50400,
+            base_loop_words=0,
+            tuned_loop_words=1428,
+        )
+        result = self._gate().check(ctx)
+        assert result.verdict is Verdict.FAIL
+        assert result.blocking
+        assert result.coverage.checked == 6
+        assert result.coverage.expected == 6
+        assert result.coverage.unit == "eval rows"
+        # The detail must name both counts, the reference words and the limit.
+        assert "1428 loop words over 50400 reference words" in result.detail
+        assert "the base model produced 0" in result.detail
+        assert "limit of 252" in result.detail
+        assert "2 * base_loop_words 0" in result.detail
+        assert result.evidence["limit"] == 252
+
+    def test_measured_corrupted_data_clips_fail(self):
+        # The corrupted-data fine-tune's clip evaluation: 2,936 loop words where
+        # the base model looped none. limit = 2 * 0 + ceil(0.005 * 47865) = 240.
+        ctx = RepetitionLoopContext(
+            rows_expected=2504,
+            rows_checked=2504,
+            reference_words=47865,
+            base_loop_words=0,
+            tuned_loop_words=2936,
+        )
+        result = self._gate().check(ctx)
+        assert result.verdict is Verdict.FAIL
+        assert result.blocking
+        assert "2936 loop words over 47865 reference words" in result.detail
+        assert "limit of 240" in result.detail
+        assert result.evidence["limit"] == 240
+
+    def test_measured_clip_finetune_passes(self):
+        # The clean clip fine-tune over the same corpus: 151 loop words over
+        # 47,865 reference words with a base looping none -- inside limit 240.
+        ctx = RepetitionLoopContext(
+            rows_expected=2504,
+            rows_checked=2504,
+            reference_words=47865,
+            base_loop_words=0,
+            tuned_loop_words=151,
+        )
+        result = self._gate().check(ctx)
+        assert result.verdict is Verdict.PASS
+        assert result.coverage.checked == 2504
+        assert result.coverage.expected == 2504
+        assert result.coverage.unit == "eval rows"
+
+    def test_ami_base_loops_too_passes(self):
+        # A corpus the BASE model also loops on: 165 base loop words in 15,194
+        # reference words and a fine-tune at 188 -- limit = 2 * 165 +
+        # ceil(0.005 * 15194) = 330 + 76 = 406. The base model is the yardstick,
+        # not a zero, or every repetition-prone corpus would block.
+        ctx = RepetitionLoopContext(
+            rows_expected=2000,
+            rows_checked=2000,
+            reference_words=15194,
+            base_loop_words=165,
+            tuned_loop_words=188,
+        )
+        result = self._gate().check(ctx)
+        assert result.verdict is Verdict.PASS
+        assert result.coverage.checked == 2000
+        assert result.coverage.expected == 2000
+        assert "limit of 406" in result.detail
+
+    def test_limit_boundary_is_inclusive(self):
+        # base 25 loop words over 20,000 reference words: limit = 2 * 25 +
+        # ceil(0.005 * 20000) = 50 + 100 = 150. Landing exactly on the limit is
+        # inside it (entirely declared drift); one loop word past it is the
+        # first word outside the run's allowance and must block.
+        at_limit = RepetitionLoopContext(
+            rows_expected=100,
+            rows_checked=100,
+            reference_words=20000,
+            base_loop_words=25,
+            tuned_loop_words=150,
+        )
+        over_limit = RepetitionLoopContext(
+            rows_expected=100,
+            rows_checked=100,
+            reference_words=20000,
+            base_loop_words=25,
+            tuned_loop_words=151,
+        )
+        result = self._gate().check(at_limit)
+        assert result.verdict is Verdict.PASS, "tuned == limit is inside the limit"
+        result = self._gate().check(over_limit)
+        assert result.verdict is Verdict.FAIL
+        assert result.blocking, "tuned == limit + 1 must block"
+
+    def test_no_rows_vacuous(self):
+        ctx = RepetitionLoopContext(
+            rows_expected=5,
+            rows_checked=0,
+            reference_words=0,
+            base_loop_words=0,
+            tuned_loop_words=0,
+        )
+        result = self._gate().check(ctx)
+        assert result.verdict is Verdict.VACUOUS
+        assert result.blocking
+        assert result.coverage.checked == 0
+        assert result.coverage.unit == "eval rows"
+
+    def test_undercover_row_count_blocks(self):
+        # 3 of 5 rows measured with the loops inside the limit (2 * 1 +
+        # ceil(0.005 * 100) = 3): the shortfall of 2 must block via the
+        # framework's self.ok() downgrade.
+        ctx = RepetitionLoopContext(
+            rows_expected=5,
+            rows_checked=3,
+            reference_words=100,
+            base_loop_words=1,
+            tuned_loop_words=1,
+        )
+        result = self._gate().check(ctx)
+        assert result.verdict is Verdict.UNDERCOVERED
+        assert result.blocking
+        assert result.coverage.checked == 3
+        assert result.coverage.expected == 5
+
+    def test_overcover_row_count_blocks(self):
+        # Loops inside the limit (2 * 0 + ceil(0.005 * 100) = 1), but the row
+        # census contradicts its own denominator.
+        ctx = RepetitionLoopContext(
+            rows_expected=3,
+            rows_checked=5,
+            reference_words=100,
+            base_loop_words=0,
+            tuned_loop_words=1,
+        )
+        result = self._gate().check(ctx)
+        assert result.verdict is Verdict.OVERCOVERED
+        assert result.blocking
+        assert result.coverage.checked == 5
+        assert result.coverage.expected == 3
+
+    def test_negative_count_is_refused_and_a_collapse_is_priced(self):
+        # A negative count in any field describes no run at all: refused as
+        # ValueError (the idiom Coverage's own constructor uses for a negative
+        # count) and never priced as a verdict about the model. But loop words
+        # ABOVE the reference's words are the measured collapse -- hypothesis
+        # words are not bounded by the reference they failed to follow -- and
+        # must be priced (RED) rather than refused as an impossible census.
+        for impossible in (
+            dict(
+                rows_expected=-1,
+                rows_checked=5,
+                reference_words=50,
+                base_loop_words=0,
+                tuned_loop_words=1,
+            ),
+            dict(
+                rows_expected=5,
+                rows_checked=-1,
+                reference_words=50,
+                base_loop_words=0,
+                tuned_loop_words=1,
+            ),
+            dict(
+                rows_expected=5,
+                rows_checked=5,
+                reference_words=-1,
+                base_loop_words=0,
+                tuned_loop_words=1,
+            ),
+            dict(
+                rows_expected=5,
+                rows_checked=5,
+                reference_words=50,
+                base_loop_words=-1,
+                tuned_loop_words=1,
+            ),
+            dict(
+                rows_expected=5,
+                rows_checked=5,
+                reference_words=50,
+                base_loop_words=0,
+                tuned_loop_words=-1,
+            ),
+        ):
+            with pytest.raises(ValueError, match="cannot be negative"):
+                self._gate().check(RepetitionLoopContext(**impossible))
+
+        collapse = self._gate().check(
+            RepetitionLoopContext(
+                rows_expected=1,
+                rows_checked=1,
+                reference_words=3,
+                base_loop_words=0,
+                tuned_loop_words=200,
+            )
+        )
+        assert collapse.verdict is Verdict.FAIL
+        assert collapse.blocking
+
+    def test_verify_controls_per_gate(self):
+        registry = GateRegistry()
+        registry.register(RepetitionLoopGate())
+        failures = verify_controls(registry, gate_ids=["speech.repetition_loops"])
+        assert failures == [], f"controls for speech.repetition_loops did not hold: {failures}"
+
+    def test_registered_under_declared_id(self):
+        # @register must have the gate in the process-wide REGISTRY at import
+        # time, under its declared id and wired to its own context type.
+        gate = REGISTRY.get("speech.repetition_loops")
+        assert isinstance(gate, RepetitionLoopGate), (
+            f"speech.repetition_loops must resolve to the repetition-loop gate in "
+            f"REGISTRY, got {type(gate).__name__}"
+        )
+        assert gate.context_type is RepetitionLoopContext
