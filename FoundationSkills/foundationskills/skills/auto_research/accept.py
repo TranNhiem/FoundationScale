@@ -86,6 +86,9 @@ def decide(
         if row.get("status") == "crash":
             reasons.append(f"crash_excluded:{tag}")  # crashes are counted, never evidence
             continue
+        if row.get("status") == "unmeasured":
+            unmeasured.append(f"manifest_unmeasured:{tag}")  # counted, never evidence (M6, D2)
+            continue
         if row.get("limited"):
             unmeasured.append(f"limited_run:{tag}")
             continue
@@ -202,6 +205,9 @@ def decide_multi(
         tag = f"{row.get('trial')}:{row.get('seed')}"
         if row.get("status") == "crash":
             reasons.append(f"crash_excluded:{tag}")  # crashes are counted, never evidence
+            continue
+        if row.get("status") == "unmeasured":
+            unmeasured.append(f"manifest_unmeasured:{tag}")  # counted, never evidence (M6, D2)
             continue
         if row.get("limited"):
             unmeasured.append(f"limited_run:{tag}")
