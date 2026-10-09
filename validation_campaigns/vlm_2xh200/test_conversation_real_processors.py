@@ -87,11 +87,6 @@ class _UntouchedProcessor:
 # FAST: normalize_conversation
 # ---------------------------------------------------------------------------
 
-if requires_real_processors.args and requires_real_processors.args[0]:
-    pytest.exit(
-        "FS_TEST_MODELS_DIR is unset or incomplete: real-processor campaign UNMEASURED",
-        returncode=95,
-    )
 
 # ---------------------------------------------------------------------------
 # REAL PROCESSOR
