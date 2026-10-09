@@ -426,7 +426,7 @@ class TestRealProcessor:
 
         # The pre-pass's length for the SAME row, via the SAME shared
         # rendering function the collator itself delegates to.
-        text, images, videos, _turns = conversation_module._render_conversation_row(
+        text, images, videos, video_meta, _turns = conversation_module._render_conversation_row(
             0,
             row,
             conversations_column="conversations",
@@ -436,7 +436,7 @@ class TestRealProcessor:
             frames_for=None,
         )
         measured = conversation_module._conversation_processor_batch_call(
-            processor, [text], [images], [videos], max_length=512, pad_to_max=False
+            processor, [text], [images], [videos], [video_meta], max_length=512, pad_to_max=False
         )
         prepass_length = int(measured["attention_mask"][0].sum())
 

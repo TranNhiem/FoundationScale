@@ -23,6 +23,7 @@ full model weights -- loading is CPU-only and fast.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -264,6 +265,38 @@ def test_normalize_multiple_video_markers_refuses() -> None:
             row, conversations_column="conversations", image_column="image", video_column="video"
         )
     assert exc_info.value.code == 96
+
+
+def test_normalize_video_marker_with_no_declared_column_refuses_naming_the_env_var(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # video_column=None mirrors image_column=None: no column is declared at
+    # all (FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN is unset), so a row that still
+    # carries a <video> marker must name the missing env var, not the
+    # generic "declared in column None" message.
+    row = _sharegpt_row(
+        [
+            {"from": "human", "value": "<video>Describe the clip."},
+            {"from": "gpt", "value": "A dog runs."},
+        ],
+        video="/tmp/clip.mp4",
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        normalize_conversation(
+            row, conversations_column="conversations", image_column="image", video_column=None
+        )
+    assert exc_info.value.code == 96
+    assert "FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN" in capsys.readouterr().err
+
+
+def test_normalize_video_column_none_with_no_marker_is_unaffected() -> None:
+    # The symmetric control: no column declared, no marker, no video -- must
+    # not refuse merely because video_column is None.
+    row = _sharegpt_row([{"from": "human", "value": "Hi."}, {"from": "gpt", "value": "Hello."}])
+    messages = normalize_conversation(
+        row, conversations_column="conversations", image_column="image", video_column=None
+    )
+    assert messages[0]["content"] == [{"type": "text", "text": "Hi."}]
 
 
 def test_normalize_unknown_role_refuses() -> None:
@@ -564,6 +597,55 @@ def test_collator_video_without_frames_for_refuses(tmp_path: Path) -> None:
     assert exc_info.value.code == 96
 
 
+def test_collator_frames_for_raising_video_decode_error_refuses_exit_96(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from foundationscale.video import VideoDecodeError
+
+    row = _sharegpt_row(
+        [
+            {"from": "human", "value": "<video>Describe this clip."},
+            {"from": "gpt", "value": "A clip."},
+        ],
+        video=str(tmp_path / "clip.mp4"),
+    )
+
+    def broken_frames_for(data: Mapping[str, Any]) -> dict[str, Any]:
+        raise VideoDecodeError("no decoder here")
+
+    # _UntouchedProcessor: the refusal fires from inside frames_for, caught
+    # and converted BEFORE apply_chat_template is ever reached -- same
+    # declaration-only guarantee test_collator_video_without_frames_for_refuses
+    # proves for the "no frames_for at all" case.
+    collate = train_conversation_collator_or_refuse(
+        _UntouchedProcessor(), max_length=128, frames_for=broken_frames_for
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        collate([row])
+    assert exc_info.value.code == 96
+    assert "no decoder here" in capsys.readouterr().err
+
+
+def test_collator_frames_for_raising_file_not_found_refuses_exit_96(tmp_path: Path) -> None:
+    row = _sharegpt_row(
+        [
+            {"from": "human", "value": "<video>Describe this clip."},
+            {"from": "gpt", "value": "A clip."},
+        ],
+        video=str(tmp_path / "clip.mp4"),
+    )
+
+    def missing_frames_for(data: Mapping[str, Any]) -> dict[str, Any]:
+        raise FileNotFoundError("clip gone")
+
+    collate = train_conversation_collator_or_refuse(
+        _UntouchedProcessor(), max_length=128, frames_for=missing_frames_for
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        collate([row])
+    assert exc_info.value.code == 96
+
+
 def test_collator_invalid_overlong_policy_refuses() -> None:
     with pytest.raises(SystemExit) as exc_info:
         train_conversation_collator_or_refuse(
@@ -858,11 +940,27 @@ class _FakeConversationProcessor:
         max_length: int | None = None,
         images: list[list[Any]] | None = None,
         videos: list[list[Any]] | None = None,
+        video_metadata: list[list[dict[str, Any]]] | None = None,
         do_sample_frames: bool | None = None,
     ) -> dict[str, Any]:
         import torch
 
         assert return_tensors == "pt"
+        if videos is not None and any(videos):
+            # MEASURED shape (see _conversation_processor_batch_call's own
+            # docstring): video_metadata mirrors videos_by_row's own per-row
+            # nesting exactly, one metadata dict per video.
+            assert video_metadata is not None
+            assert len(video_metadata) == len(videos)
+            for row_videos, row_metadata in zip(videos, video_metadata, strict=True):
+                assert len(row_videos) == len(row_metadata)
+                for metadata in row_metadata:
+                    assert metadata.keys() >= {
+                        "total_num_frames",
+                        "fps",
+                        "frames_indices",
+                        "duration",
+                    }
         rows: list[list[int]] = []
         for index, row_text in enumerate(text):
             remaining_images = list(images[index]) if images else []
@@ -1047,6 +1145,65 @@ def test_collate_dummy_media_injected_into_shortest_row_labels_unaffected(
 
 
 # ---------------------------------------------------------------------------
+# FAST: native video through a fake processor that accepts videos --
+# frames_for's {"frames", "fps", "frames_indices", "duration"} result
+# becomes a native videos=/video_metadata= processor call, never N separate
+# image blocks.
+# ---------------------------------------------------------------------------
+
+
+def _stub_frames_for(data: Mapping[str, Any]) -> dict[str, Any]:
+    return {"frames": ["frame0", "frame1"], "fps": 2.0, "frames_indices": [0, 1], "duration": 1.0}
+
+
+def test_collate_native_video_produces_video_pixel_values_and_masks_its_token(
+    fake_processor: _FakeConversationProcessor,
+) -> None:
+    row = _sharegpt_row(
+        [
+            {"from": "human", "value": "<video>What happens?"},
+            {"from": "gpt", "value": "A dog runs."},
+        ],
+        video="clip.mp4",
+    )
+    collate = train_conversation_collator_or_refuse(
+        fake_processor, max_length=256, inject_dummy_media=False, frames_for=_stub_frames_for
+    )
+    batch = collate([row])
+    assert "pixel_values_videos" in batch
+    assert "pixel_values" not in batch  # no image, only video, on this row
+    video_token_id = fake_processor.video_token_id
+    assert not bool((batch["labels"] == video_token_id).any())
+
+    tok = fake_processor.tokenizer
+    supervised = [t for t in batch["labels"][0].tolist() if t != -100]
+    assert "runs" in tok.decode(supervised)
+
+
+def test_collate_native_video_and_image_rows_batch_together(
+    fake_processor: _FakeConversationProcessor, tmp_path: Path
+) -> None:
+    row_video = _sharegpt_row(
+        [
+            {"from": "human", "value": "<video>What happens?"},
+            {"from": "gpt", "value": "A dog runs."},
+        ],
+        video="clip.mp4",
+    )
+    row_image = _sharegpt_row(
+        [{"from": "human", "value": "<image>What is this?"}, {"from": "gpt", "value": "A photo."}],
+        image=_make_image(tmp_path, "img.png"),
+    )
+    collate = train_conversation_collator_or_refuse(
+        fake_processor, max_length=256, inject_dummy_media=False, frames_for=_stub_frames_for
+    )
+    batch = collate([row_video, row_image])
+    assert batch["input_ids"].shape[0] == 2
+    assert "pixel_values_videos" in batch
+    assert "pixel_values" in batch
+
+
+# ---------------------------------------------------------------------------
 # FAST: conversation_prepass_or_refuse -- with the fake processor, covering
 # the overlong drop/refuse measurement and the num_proc>1 catch-and-replay
 # path (test_conversation_collator_or_refuse's own REAL-PROCESSOR tier tests
@@ -1099,3 +1256,54 @@ def test_prepass_overlong_refuse_reports_with_fake_processor(
     assert result.refusal_reason is not None
     assert "row 0" in result.refusal_reason
     assert result.filtered_dataset is None
+
+
+def test_prepass_video_with_frames_for_measures_the_same_length_the_collator_would(
+    fake_processor: _FakeConversationProcessor,
+) -> None:
+    row = _sharegpt_row(
+        [
+            {"from": "human", "value": "<video>What happens?"},
+            {"from": "gpt", "value": "A dog runs."},
+        ],
+        video="clip.mp4",
+    )
+    dataset = _FakeDataset([row])
+    result = conversation_prepass_or_refuse(
+        dataset,
+        fake_processor,
+        conversations_column="conversations",
+        image_column="image",
+        video_column="video",
+        max_length=256,
+        overlong="drop",
+        frames_for=_stub_frames_for,
+    )
+    assert result.refusal_reason is None
+    assert result.rows_seen == 1
+    assert result.dropped_overlong == 0
+    assert result.kept == 1
+
+
+def test_prepass_video_without_frames_for_refuses(
+    fake_processor: _FakeConversationProcessor,
+) -> None:
+    row = _sharegpt_row(
+        [
+            {"from": "human", "value": "<video>What happens?"},
+            {"from": "gpt", "value": "A dog runs."},
+        ],
+        video="clip.mp4",
+    )
+    dataset = _FakeDataset([row])
+    with pytest.raises(SystemExit) as exc_info:
+        conversation_prepass_or_refuse(
+            dataset,
+            fake_processor,
+            conversations_column="conversations",
+            image_column="image",
+            video_column="video",
+            max_length=256,
+            overlong="drop",
+        )
+    assert exc_info.value.code == 96
