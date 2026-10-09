@@ -420,12 +420,21 @@ class _NonPositiveConstantLength:
     constant_length = 0
 
 
+class _PromptMeanWithoutWeights:
+    """The fourth reduction declared with no caller-supplied row-weight plane."""
+
+    ratio_scope = "token"
+    reduction = "prompt_mean"
+    clip_bounds = (0.8, 1.2)
+
+
 @pytest.mark.parametrize(
     ("objective", "pattern"),
     [
         (_UndeclaredScope(), r"ratio_scope='chunk'"),
         (_UndeclaredReduction(), r"reduction='harmonic'"),
         (_NonPositiveConstantLength(), r"constant_length=0"),
+        (_PromptMeanWithoutWeights(), r"required reduction_row_weights"),
     ],
 )
 def test_undeclared_axis_values_refuse(objective: Any, pattern: str) -> None:

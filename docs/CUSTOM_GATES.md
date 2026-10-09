@@ -43,11 +43,15 @@ A fourth attribute is optional but load-bearing:
 | `context_type` | `type \| None` | The concrete context this gate consumes. Default `None` keeps the legacy single-context broadcast of `GateRegistry.run`. Declaring a real type lets `run_event` mix your gate into a multi-context sweep — and turns "the integrator never wired my context" from a raw `TypeError` inside `check` into a named, blocking ERROR identifying the missing type. |
 
 The `Lifecycle` enum defines the points at which gates run — `LAUNCH`, `BUILD`,
-`DATA`, `STEP_ZERO`, `FIRST_SAVE`, `SAVE`, `EXPORT`, `PROMOTE`. Each corresponds to
-a moment where a defect either gets caught or gets baked into an artifact. Pick the
-cheapest event where your defect class is still catchable: the README's example
-gate runs at `FIRST_SAVE` precisely because the first checkpoint of a run is the
-cheapest place to catch a save defect — and again at every subsequent `SAVE`.
+`DATA`, `STEP_ZERO`, `FIRST_SAVE`, `SAVE`, `EXPORT`, `PROMOTE`, `ROLLOUT`,
+`EPISODE`, `WEIGHT_SYNC`. Each corresponds to a moment where a defect either gets
+caught or gets baked into an artifact. Pick the cheapest event where your defect
+class is still catchable: the README's example gate runs at `FIRST_SAVE` precisely
+because the first checkpoint of a run is the cheapest place to catch a save defect
+— and again at every subsequent `SAVE`. The last three members are the agentic RL
+plane's points (a flattened rollout batch, one isolated episode, and a weight-sync
+push); `src/foundationscale/gates/agentic_gates.py` is their worked example,
+alongside the checkpoint-plane `example.py` referenced throughout this document.
 
 ## Writing `check()`
 

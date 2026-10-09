@@ -524,3 +524,28 @@ def test_reduce_step_metrics_ignores_non_dict_entries() -> None:
         ["not-a-dict", {"loss": 0.5, "ratio_mean": 1.0, "clip_fraction": 0.0, "tokens": 4.0}]
     )
     assert metrics["loss"] == pytest.approx(0.5)
+
+
+def test_build_arg_parser_train_state_is_opt_in() -> None:
+    base = ["--hf-model", "m", "--rollout-jsonl", "r.jsonl", "--metrics-out", "o.jsonl"]
+    args = driver.build_arg_parser().parse_args(base)
+    assert args.train_state_dir == "" and args.train_state_every == 0
+    args = driver.build_arg_parser().parse_args(
+        [*base, "--train-state-dir", "s", "--train-state-every", "50"]
+    )
+    assert args.train_state_dir == "s" and args.train_state_every == 50
+
+
+def test_maybe_dump_grads_writes_per_parameter_sumsq_once(tmp_path, monkeypatch) -> None:
+    model = torch.nn.Linear(2, 1, bias=False)
+    model.weight.grad = torch.tensor([[3.0, 4.0]])
+    prefix = tmp_path / "dump"
+    monkeypatch.setenv("MEG_GRAD_DUMP", str(prefix))
+    driver._maybe_dump_grads([model])
+    rows = json.loads((tmp_path / "dump.rank0.json").read_text())
+    assert rows["weight"]["sumsq"] == pytest.approx(25.0)
+    assert rows["weight"]["shape"] == [1, 2]
+    # The env var is consumed: a second call is a no-op, not a second dump.
+    (tmp_path / "dump.rank0.json").unlink()
+    driver._maybe_dump_grads([model])
+    assert not (tmp_path / "dump.rank0.json").exists()

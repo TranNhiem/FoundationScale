@@ -1,20 +1,24 @@
-"""The group-relative policy binding: one parameterised algorithm, three objectives.
+"""The group-relative policy binding: one parameterised algorithm, four objectives.
 
 ``policy_gradient.py`` writes one algorithm class per loss because each
-policy-gradient family genuinely fixes different semantic seams. The three
-group-relative policy objectives bound here -- GSPO, Dr.GRPO and DAPO -- do
-not. The measured difference between docs/RL_ALGORITHMS.md's critic-free row
-(:125, Dr.GRPO and DAPO) and its sequence-level row (:129, GSPO) is exactly
-two declarations -- ``ratio_scope`` and ``reduction`` -- plus the objective's
-own advantage estimator, clip bounds and KL stance. One parameterised
-:class:`SequencePolicyAlgorithm` therefore binds all three through one seam,
-and three thin factories construct it with the right objective for
-``registry.py``: ``gspo_algorithm()``, ``dr_grpo_algorithm()`` and
-``dapo_algorithm()``. ``group_policy`` names the invariant all three share: a
-group-relative advantage over prompt groups with a clipped importance ratio.
+policy-gradient family genuinely fixes different semantic seams. The four
+group-relative policy objectives bound here -- GSPO, Dr.GRPO, DAPO and
+agentic-GRPO -- do not. The measured difference between
+docs/RL_ALGORITHMS.md's critic-free row (:125, Dr.GRPO and DAPO) and its
+sequence-level row (:129, GSPO) is exactly two declarations --
+``ratio_scope`` and ``reduction`` -- plus the objective's own advantage
+estimator, clip bounds and KL stance. One parameterised
+:class:`SequencePolicyAlgorithm` therefore binds all four through one seam,
+and four thin factories construct it with the right objective for
+``registry.py``: ``gspo_algorithm()``, ``dr_grpo_algorithm()``,
+``dapo_algorithm()`` and ``agentic_grpo_algorithm()``. ``group_policy`` names
+the invariant all four share: a group-relative advantage over prompt groups
+with a clipped importance ratio. ``prompt_mean`` is the first reduction whose
+denominator is per GROUP rather than per token or per row, and it widens the
+declared reduction set on owner decision D2.
 
 THE DENOMINATOR SEAM, stated once. ``reduction``
-(``token_mean``/``sequence_mean``/``constant``) is independent of the ratio
+(``token_mean``/``sequence_mean``/``constant``/``prompt_mean``) is independent of the ratio
 geometry, and it is what actually separates GSPO from Dr.GRPO from DAPO, so
 it rides on the objective's own declaration and is never restated here. Per
 docs/RL_ALGORITHMS.md's open question (:137), ``ratio_scope`` keeps the
@@ -51,7 +55,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from foundationscale.rl.advantage import AdvantageFn
+from foundationscale.rl.advantage import AdvantageFn, SessionGroupAdvantage
 from foundationscale.rl.algorithm import (
     AlgorithmRequirements,
     AlgorithmSemantics,
@@ -62,6 +66,7 @@ from foundationscale.rl.algorithm import (
     check_role_map,
 )
 from foundationscale.rl.group_policy_objectives import (
+    AgenticGRPOLoss,
     DAPOLoss,
     DrGRPOLoss,
     GSPOLoss,
@@ -78,6 +83,7 @@ from foundationscale.rl.weightsync import WeightSync
 __all__ = (
     "SequenceObjective",
     "SequencePolicyAlgorithm",
+    "agentic_grpo_algorithm",
     "check_group_policy_requirements",
     "dapo_algorithm",
     "dr_grpo_algorithm",
@@ -126,7 +132,9 @@ class SequenceObjective(LossFn, Protocol):
     def ratio_scope(self) -> Literal["token", "sequence"]: ...
 
     @property
-    def reduction(self) -> Literal["token_mean", "sequence_mean", "constant"]: ...
+    def reduction(
+        self,
+    ) -> Literal["token_mean", "sequence_mean", "constant", "prompt_mean"]: ...
 
     @property
     def required_columns(self) -> tuple[str, ...]: ...
@@ -697,3 +705,36 @@ def dapo_algorithm() -> SequencePolicyAlgorithm:
     """
     objective = DAPOLoss()
     return SequencePolicyAlgorithm(name="dapo", objective=objective)
+
+
+def agentic_grpo_algorithm() -> SequencePolicyAlgorithm:
+    """Construct a ``SequencePolicyAlgorithm`` binding ``AgenticGRPOLoss``
+    as ``agentic_grpo``.
+
+    Zero-argument, so ``registry.py`` may register the factory itself.
+
+    WHAT IS CLAIMED: the returned algorithm declares a token-scope ratio
+    with the ``prompt_mean`` reduction, a ``SessionGroupAdvantage`` whose
+    minimum group size agrees with the objective's ``group_size`` (the
+    sibling default of 2, so the registered binding prices whatever group
+    size a run samples rather than dropping every group below a hard-coded
+    floor) and whose partial groups SHRINK to ``min_valid=2`` valid
+    sessions, and the
+    symmetric +-0.2 ratio clip -- (0.8, 1.2) in the objective's absolute
+    bounds, the same spelling :class:`DAPOLoss` uses for its (0.8, 1.28).
+    The estimator is centred-only (``normalise_by_std=False``), which is the
+    agentic default.
+
+    WHAT IS NOT CLAIMED: that ``min_valid=2`` is tuned -- it is the
+    smallest set a baseline can be taken over, not a measurement; that
+    ``filter_groups`` or any rollout-side refill is implemented (it is not);
+    or that any run of this algorithm has been trained.
+    """
+    objective = AgenticGRPOLoss(
+        advantage_fn=SessionGroupAdvantage(
+            normalise_by_std=False,
+            partial_group_policy="shrink",
+            min_valid=2,
+        ),
+    )
+    return SequencePolicyAlgorithm(name="agentic_grpo", objective=objective)

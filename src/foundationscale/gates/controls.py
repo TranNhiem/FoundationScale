@@ -88,6 +88,18 @@ _KNOWN_GATELESS_PACKAGES: frozenset[str] = frozenset(
         # change, the provenance reconciliation names it -- the new gate's defining
         # module would not be among the walk's attempted set.
         "foundationscale.train",
+        # FoundationScale Agentic RL's contract plane (trajectory dataclasses,
+        # the declared column schema, the token trace, RolloutHost, weight sync):
+        # torch-free data types, refusals, and gate CONSUMERS -- RolloutHost and
+        # DiskWeightSync call run_event(REGISTRY, ...) to RUN the five agentic
+        # gates, but zero ClassDef in this package inherits Gate and zero call
+        # site is register/add_gate. The five gates themselves (trajectory
+        # integrity, rollout abstention, staleness, weight-sync parity, prompt
+        # bytes) register from foundationscale.gates.agentic_gates, already a
+        # member of _GATE_PACKAGES via the "foundationscale.gates" root above --
+        # no entry moves. AST-verified over this package, not read: zero
+        # ClassDef inherits Gate, zero call site is register/add_gate.
+        "foundationscale.agentic_rl",
         # The model-adapter registry is a CLASSIFIER, not a gate: it answers
         # "dense or MoE, on what evidence" and refuses on malformed config
         # facts, but it registers nothing and blocks nothing -- the emitter and

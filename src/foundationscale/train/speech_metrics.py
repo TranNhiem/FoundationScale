@@ -43,16 +43,21 @@ this module is part of that plane.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 __all__ = [
+    "RUNAWAY_RATIO",
+    "RUNAWAY_SLACK_WORDS",
     "TRANSCRIPT_NORMALIZER_ID",
     "CorpusErrorRate",
     "EditCounts",
+    "RunawayCount",
     "align",
     "char_errors",
     "corpus_error_rate",
+    "count_runaway",
+    "is_runaway",
     "normalize_transcript",
     "word_errors",
 ]
@@ -342,3 +347,94 @@ def corpus_error_rate(
         utterances_scored=scored,
         utterances_refused=refused,
     )
+
+
+RUNAWAY_RATIO = 2.0
+"""How many times the reference's words a hypothesis may reach before it runs away.
+
+The ratio arm of the runaway detector (``RUNAWAY_SLACK_WORDS`` is the slack arm
+and ``is_runaway`` is the only place the formula is stated). Motivated by a
+failure no artifact gate saw: a Canary-1B fine-tune trained on rows whose audio
+did not match their transcripts passed every adjudication gate, yet ran 122 of
+its 2504 Earnings-22 hypotheses into repetition loops and hallucinated domain
+text where the base model ran 3. A decoder that stopped listening leaves nothing
+in the artifact; only hypothesis length against the reference shows it.
+"""
+
+RUNAWAY_SLACK_WORDS = 5
+"""Word slack past the ratio, so segmentation noise is not counted as a runaway.
+
+A permissively segmented utterance must not fire the detector on length alone;
+the same slack is all the headroom invention gets against an empty reference
+(``is_runaway``). Both knobs travel in every manifest they underwrite
+(``RunawayCount.as_manifest``): a threshold nobody can state is a threshold
+nobody can reproduce.
+"""
+
+
+def is_runaway(reference: str, hypothesis: str) -> bool:
+    """``hypothesis`` ran away past ``reference`` -- a decoder that stopped listening.
+
+    True iff NORMALIZED hypothesis words exceed
+    ``RUNAWAY_RATIO * reference words + RUNAWAY_SLACK_WORDS``. Both sides go
+    through ``normalize_transcript`` first: case and punctuation cannot
+    manufacture a runaway and cannot hide one. The comparison is STRICTLY
+    greater -- a hypothesis landing exactly on the threshold is inside it. An
+    empty reference contributes zero words on the right-hand side, so anything
+    past the slack alone is runaway by the same formula and not a special case:
+    with nothing to echo, invention is not a length the reference sanctioned.
+    """
+    return len(normalize_transcript(hypothesis)) > (
+        RUNAWAY_RATIO * len(normalize_transcript(reference)) + RUNAWAY_SLACK_WORDS
+    )
+
+
+@dataclass(frozen=True)
+class RunawayCount:
+    """Rows measured against the runaway detector, and how many ran away.
+
+    The count sibling of ``CorpusErrorRate``: no rate to divide and no refusal
+    lane -- a runaway is a per-row fact and the claim is a summed count over the
+    rows actually examined. Frozen because these two numbers ARE the
+    measurement.
+    """
+
+    rows_checked: int
+    rows_runaway: int
+
+    def as_manifest(self) -> dict[str, int | float | str]:
+        """The JSON-ready count claim with the detector's arms named INSIDE it.
+
+        Ratio, slack and the normalizer travel with the numbers that were
+        counted under them: ``is_runaway`` counts normalized words, so two runs'
+        counts are comparable only under one normalizer
+        (``TRANSCRIPT_NORMALIZER_ID``), and the counts are re-derivable only
+        from the threshold the manifest itself publishes.
+        """
+        return {
+            "rows_checked": self.rows_checked,
+            "rows_runaway": self.rows_runaway,
+            "runaway_ratio": RUNAWAY_RATIO,
+            "runaway_slack_words": RUNAWAY_SLACK_WORDS,
+            "normalizer": TRANSCRIPT_NORMALIZER_ID,
+        }
+
+
+def count_runaway(pairs: Iterable[tuple[str, str]]) -> RunawayCount:
+    """Every ``(reference, hypothesis)`` pair folded into one runaway census.
+
+    No refusals and no expected denominator here: ``rows_checked`` is the rows
+    actually examined, and the gate that consumes this supplies its coverage
+    denominator from outside the artifact exactly as the row-coverage gate takes
+    ``rows_expected`` from the training manifest. Every pair is judged by the
+    one formula, ``is_runaway``, including rows whose reference is empty --
+    invention past the slack is not excused by having nothing to echo, and no
+    row is dropped silently from the count of rows examined.
+    """
+    checked = 0
+    runaway = 0
+    for ref, hyp in pairs:
+        checked += 1
+        if is_runaway(ref, hyp):
+            runaway += 1
+    return RunawayCount(rows_checked=checked, rows_runaway=runaway)

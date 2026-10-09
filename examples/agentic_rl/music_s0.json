@@ -1,0 +1,89 @@
+{
+  "_doc": "S0 example: the music reward arm on one GPU tray, one vLLM server, local (unsandboxed) bash+submit tools. JSON has no comments, so every section below carries its own '_doc' string, which the loader strips before validating keys -- never read as a declared field. Validate this file with: foundationscale-agentic-rl --config examples/agentic_rl/music_s0.json --dry-run",
+  "policy": {
+    "_doc": "model_path is the HF id/local path the real run loads (tokenizer + policy weights). algorithm is a foundationscale.rl registry name; 'agentic_grpo' is the group-relative objective this plane wires end to end.",
+    "model_path": "Qwen/Qwen2.5-1.5B-Instruct",
+    "algorithm": "agentic_grpo"
+  },
+  "trainer": {
+    "_doc": "Keys here map EXACTLY onto rl.trainer.RLTrainConfig field names (dynamically read, never hand-duplicated) -- model/algorithm/rollout_source are refused here, declared under 'policy' or built internally instead. 'dataset' is ALSO refused here: RLTrainConfig.dataset defaults to None now, and RLTrainer.run() refuses dataset-together-with-rollout_source by name (the rollout source replaces the corpus draw entirely, so a declared dataset would never be read) and skips the gold-letter-corpus refusal whenever rollout_source is set. temperature/top_p/top_k/max_new_tokens/group_size here are ALSO vestigial under rollout_source EXCEPT for one early greedy-decoding guard (group_size>1 and temperature<=0 refuses before any step) -- leave them at their defaults unless you mean to touch that guard; the sampling that actually reaches the engine is the top-level 'sampling' section below.",
+    "max_steps": 20,
+    "learning_rate": 1e-6,
+    "logprob_micro_batch": 0,
+    "sharding": "none",
+    "save_dir": "/tmp/fs_agentic_rl_s0/checkpoints",
+    "seed": 0
+  },
+  "engine": {
+    "_doc": "kind='vllm' because the GB200 estate ships vLLM, not SGLang (see docs/AGENTIC_RL.md). command is the FULL argv (declared, never assembled from pieces) launched exactly as given. served_model_name must equal vLLM's --served-model-name (or --model when that flag is omitted) -- every /v1/completions request carries it as 'model'. weight_sync_mode='reload_endpoint' asks each publish() to reload over /collective_rpc, which requires reload_mode='collective_rpc' declared here too (PROBED on the real cluster: POST /collective_rpc {method:'reload_weights', kwargs:{weights_path:<dir>}} -- 'model_path' is rejected with a 500; see engines/vllm.py's UNPROBED ASSUMPTIONS for what is still unverified beyond that) -- config-time refused by name if kind='vllm'+weight_sync_mode='reload_endpoint' with reload_mode left null. 'restart' (stop+relaunch with a declared '{model_path}' placeholder substituted into command) is the alternative S0 path needing no reload_mode at all. env is the engine subprocess's COMPLETE environment, an explicit allow-list never merged with this process's own os.environ -- a real vLLM launch needs at least PATH/HOME to run python at all, CUDA_VISIBLE_DEVICES to pick its GPU tray, VLLM_SERVER_DEV_MODE=1 to expose /collective_rpc, and PYTHONNOUSERSITE=1 so a user site-packages install can never shadow the cluster's pinned vLLM.",
+    "kind": "vllm",
+    "command": [
+      "python3", "-m", "vllm.entrypoints.openai.api_server",
+      "--model", "Qwen/Qwen2.5-1.5B-Instruct",
+      "--served-model-name", "Qwen/Qwen2.5-1.5B-Instruct",
+      "--port", "8000",
+      "--gpu-memory-utilization", "0.85"
+    ],
+    "port": 8000,
+    "served_model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+    "startup_timeout_s": 300.0,
+    "weight_sync_mode": "reload_endpoint",
+    "reload_mode": "collective_rpc",
+    "host": "127.0.0.1",
+    "log_dir": "/tmp/fs_agentic_rl_s0/engine_logs",
+    "env": {
+      "PATH": "/usr/local/bin:/usr/bin:/bin",
+      "HOME": "/home/fs-agentic-rl",
+      "CUDA_VISIBLE_DEVICES": "0",
+      "VLLM_SERVER_DEV_MODE": "1",
+      "PYTHONNOUSERSITE": "1"
+    }
+  },
+  "env": {
+    "_doc": "backend='local' runs model-chosen bash commands directly on this host in a fresh temp dir; it has no isolation, so allow_unsandboxed=true is the explicit opt-in EnvSpec/check_isolation require (never a silent default).",
+    "backend": "local",
+    "exec_timeout_s": 60.0,
+    "episode_timeout_s": 600.0,
+    "max_output_bytes": 65536,
+    "env": {},
+    "allow_unsandboxed": true
+  },
+  "harness": {
+    "_doc": "native_tool_loop is the only harness this plane builds. parser picks the tool-call wire format the policy was trained/templated to emit: 'qwen_xml' (Qwen-style <tool_call> XML) or 'hermes_json' (a JSON object inside the call tags). tools='default' is the built-in bash+submit registry (tools.default_tools()).",
+    "name": "native_tool_loop",
+    "parser": "qwen_xml",
+    "tools": "default"
+  },
+  "budget": {
+    "_doc": "Hard per-episode ceilings (harness.base.EpisodeBudget). step_limit bounds tool-call turns; max_response_tokens/max_observation_chars bound what the model emits and what a tool result may show it back.",
+    "step_limit": 8,
+    "max_response_tokens": 512,
+    "max_observation_chars": 2048
+  },
+  "sampling": {
+    "_doc": "harness.base.SamplingParams for every /v1/completions call the engine makes. top_k=0 means 'no restriction' (engines.vllm translates it to vLLM's own -1 sentinel).",
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 0,
+    "min_p": 0.0,
+    "presence_penalty": 0.0,
+    "repetition_penalty": 1.0,
+    "max_new_tokens": 512
+  },
+  "rollout": {
+    "_doc": "tasks_path is the JSONL pool (see tasks.py); each step draws tasks_per_step tasks and runs group_size attempts of each concurrently (bounded by max_concurrency). seed makes TaskSource.batch(step, n) deterministic across resumes.",
+    "tasks_path": "examples/agentic_rl/music_tasks_s0.jsonl",
+    "tasks_per_step": 2,
+    "group_size": 4,
+    "max_concurrency": 4,
+    "group_by_harness": false,
+    "seed": 0
+  },
+  "reward": {
+    "_doc": "kind='music' is the only reward this plane builds today (rewards/music/: rule-scored MIDI human-likeness over the submitted ABC notation). abc2midi_bin is never read from the environment -- name the binary explicitly, 'abc2midi' if it is on PATH.",
+    "kind": "music",
+    "abc2midi_bin": "abc2midi",
+    "timeout_s": 60.0
+  },
+  "publish_root": "/tmp/fs_agentic_rl_s0/publish"
+}

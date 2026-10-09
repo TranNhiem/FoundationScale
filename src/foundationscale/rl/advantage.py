@@ -20,6 +20,21 @@ GAE's zero value baseline is an assumption of THIS binding, not of GAE; the
 :class:`GeneralisedAdvantageEstimation` docstring says so again where the
 recursion is written down.
 
+WHY ``None`` IS ADMITTED EXACTLY ONCE HERE. Every advantage function in this
+module scores its offered rows and refuses a row it cannot score.
+:class:`SessionGroupAdvantage` is the single exception, and the reason is
+ownership: an agentic session can be UNMEASURED for an infrastructure
+reason -- the harness died, the verifier never ran -- and the CALLER knows
+that while this module only ever sees a scalar. Scoring that row 0.0 would
+invent a measurement; refusing it would end a whole run because one of
+eight sessions in a group was unmeasured by accident. So the reward is
+``None``, the row EXITS the baseline and ``used``, and the exclusion stays
+visible in ``AdvantageResult.rows``. Nowhere else in this module is ``None``
+a reward: ``_coerce_reward`` keeps refusing it on every other path, and
+``_checked_rows`` keeps its own contract. Admission is a DECLARED property
+of one estimator's partial-group policy, never a loosening of the module's
+reward contract.
+
 No torch, no randomness, no clocks, no I/O: grouping, normalisation and the
 backward recursion are pure stdlib arithmetic, and module scope stays
 importable by torch-free host tooling.
@@ -30,7 +45,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 __all__ = (
     "AdvantageConfigRefusal",
@@ -43,6 +58,7 @@ __all__ = (
     "LearnedValueAdvantageEstimation",
     "LeaveOneOutAdvantage",
     "RewardStats",
+    "SessionGroupAdvantage",
     "TemporalAdvantageFn",
 )
 
@@ -385,26 +401,49 @@ def _checked_rows(
             "so the result is UNMEASURED, not 0.0"
         )
     cleaned_rewards = tuple(_coerce_reward(raw, row) for row, raw in enumerate(raw_rewards))
+    return ids, cleaned_rewards, _checked_masks(raw_masks)
+
+
+def _checked_masks(
+    raw_masks: tuple[Any, ...], abstained_rows: frozenset[int] = frozenset()
+) -> tuple[tuple[bool, ...], ...]:
+    # The mask half of the checked-rows path, factored out because
+    # SessionGroupAdvantage's None-admitting path needs exactly these checks
+    # and no other. One statement of a refusal is one statement; two copies
+    # of the same refusal are a countable that can drift.
+    #
+    # An ABSTAINED row's mask may be EMPTY, not merely all-0: a zero-turn
+    # INFRA trajectory (contracts.Trajectory with prompt_turns=turns=()) has
+    # no token positions to carry a mask over at all, and flatten() keeps
+    # that row. Refusing an empty row outright would make SessionGroupAdvantage
+    # unable to accept exactly the shape the agentic contract plane declares
+    # lawful for an abstention; the row still never reaches _broadcast (see
+    # _emit_used_rows: a None reward is skipped before any mask is read), so
+    # admitting the empty shape here costs nothing downstream.
     cleaned_masks: list[tuple[bool, ...]] = []
     for row, raw_row in enumerate(raw_masks):
         entries = tuple(
             _mask_entry(raw, row, position)
             for position, raw in enumerate(_as_tuple(raw_row, f"mask row {row}"))
         )
-        if not entries:
+        if not entries and row not in abstained_rows:
             raise AdvantageRefusal(
                 f"mask row {row} is empty; a sample with no token positions "
                 f"has no supervised token to land an advantage on, so it "
                 f"contributes no gradient and cannot be counted as used"
             )
-        if not any(entries):
+        if not any(entries) and row not in abstained_rows:
+            # An ABSTAINED row (reward None, SessionGroupAdvantage only) may
+            # supervise nothing: an infra-ended trajectory's loss mask is
+            # all-0 by contract, and it leaves the result before any weight
+            # is broadcast, so it is never "counted as used".
             raise AdvantageRefusal(
                 f"mask row {row} supervises 0 of {len(entries)} positions; "
                 f"a sample with no supervised token contributes no gradient "
                 f"and must be refused, not counted as used with zero weights"
             )
         cleaned_masks.append(entries)
-    return ids, cleaned_rewards, tuple(cleaned_masks)
+    return tuple(cleaned_masks)
 
 
 def _group_indices(ids: tuple[Any, ...]) -> list[tuple[int, ...]]:
@@ -453,7 +492,7 @@ def _build_result(
 
 def _emit_used_rows(
     per_sample: list[float | None],
-    cleaned_rewards: tuple[float, ...],
+    cleaned_rewards: tuple[float | None, ...],
     masks: tuple[tuple[bool, ...], ...],
     method: str,
 ) -> AdvantageResult:
@@ -461,7 +500,10 @@ def _emit_used_rows(
     used_rewards: list[float] = []
     rows: list[int] = []
     for row, (advantage, reward) in enumerate(zip(per_sample, cleaned_rewards, strict=True)):
-        if advantage is None:
+        if advantage is None or reward is None:
+            # A row the estimator excluded -- or one whose reward ABSTAINED
+            # with None -- leaves no weight row behind. The compaction is
+            # this one loop, so used < offered stays the visible record.
             continue
         weights.append(_broadcast(advantage, masks[row]))
         used_rewards.append(reward)
@@ -602,6 +644,209 @@ class CentredAdvantage:
             for i in indices:
                 per_sample[i] = cleaned_rewards[i] - mean
         return _emit_used_rows(per_sample, cleaned_rewards, masks, self.method_name)
+
+
+def _checked_session_rows(
+    prompt_ids: Sequence[str],
+    rewards: Sequence[float | None],
+    mask: Sequence[Sequence[int]],
+) -> tuple[tuple[Any, ...], tuple[float | None, ...], tuple[tuple[bool, ...], ...]]:
+    # The None-admitting twin of _checked_rows, owned by
+    # SessionGroupAdvantage. Same length agreement, same empty-batch
+    # refusal, same mask discipline through _checked_masks; the ONE
+    # difference is that a reward of None is an ABSTENTION rather than a
+    # malformed value. Every non-None reward still goes through
+    # _coerce_reward, so an unconvertible or non-finite reward is refused on
+    # exactly the same words as every other estimator uses.
+    ids = _as_tuple(prompt_ids, "prompt_ids")
+    raw_rewards = _as_tuple(rewards, "rewards")
+    raw_masks = _as_tuple(mask, "mask")
+    if not (len(ids) == len(raw_rewards) == len(raw_masks)):
+        raise AdvantageRefusal(
+            f"prompt_ids, rewards and mask disagree on the sample count: "
+            f"{len(ids)} prompt ids, {len(raw_rewards)} rewards, "
+            f"{len(raw_masks)} mask rows; the three lengths must agree, "
+            f"because sample i's reward must land on row i's tokens and a "
+            f"silent mismatch would train the wrong row"
+        )
+    if not ids:
+        raise AdvantageRefusal(
+            "compute got 0 samples: advantage statistics over zero used "
+            "samples claim a denominator of nothing -- the all([]) shape -- "
+            "so the result is UNMEASURED, not 0.0"
+        )
+    cleaned_rewards = tuple(
+        _coerce_reward(raw, row) if raw is not None else None for row, raw in enumerate(raw_rewards)
+    )
+    abstained = frozenset(row for row, reward in enumerate(cleaned_rewards) if reward is None)
+    return ids, cleaned_rewards, _checked_masks(raw_masks, abstained)
+
+
+@dataclass(frozen=True, slots=True)
+class SessionGroupAdvantage:
+    """Session-group baseline over rewards that may ABSTAIN with ``None``.
+
+    Each sample's group is the set of SESSIONS sharing its grouping key. In
+    this slice one row IS one session -- the agentic flatten emits one row
+    per trajectory -- so ``prompt_ids`` carries the session identity and the
+    caller chooses how coarse that identity is: ``uid`` for one baseline per
+    task, ``f"{uid}::{harness}"` (the CALLER's spelling, not this module's
+    separator) for one baseline per task per harness. Multi-output sessions
+    -- one session emitting several scored trajectories -- arrive later
+    through a SIBLING protocol, exactly as :class:`TemporalAdvantageFn` is a
+    sibling of :class:`AdvantageFn`: the extra axis is a required input, so
+    substitutability runs the wrong way and inheriting ``AdvantageFn`` would
+    assert a relation that does not hold.
+
+    A reward may be ``float`` or ``None``. ``None`` is ABSTAINED -- the
+    harness failed, or the verifier never ran -- and such a row is EXCLUDED,
+    never scored 0.0 and never refused outright. That admission is why the
+    class owns :func:`_checked_session_rows`: ``_coerce_reward`` refuses
+    ``None`` on every other path and is left refused there. What happens to
+    a group that PARTIALLY abstained is DECLARED at construction and never
+    guessed per batch:
+
+    * ``"refuse"`` -- one abstention anywhere refuses the whole computation,
+      naming the group and the row. A group with an unmeasured member has an
+      unknowable baseline, and the run config asked for that to be loud.
+    * ``"drop_group"`` -- a group containing ANY abstention contributes no
+      rows at all. Conservative and honest: a half-measured group would
+      carry a baseline over whichever members happened to survive.
+    * ``"shrink"`` (default) -- the group is kept when its VALID members
+      number at least ``min_valid``, and the baseline is formed over
+      exactly those members.
+
+    Independently of that policy, a group whose OFFERED size is below
+    ``min_group_size`` is dropped -- one session has nothing to be compared
+    against, the same drop :class:`GroupNormalisedAdvantage` performs -- and
+    a group whose valid rewards have EXACTLY zero spread is dropped too. The
+    second drop is a deliberate divergence from :class:`CentredAdvantage`,
+    which KEEPS such a group because centred-only weighting makes zero
+    spread well defined (every weight is a measured 0.0). It is dropped here
+    because the agentic default is a SHORT baseline over few sessions: with
+    ``min_group_size`` sessions at one shared reward there is no relative
+    signal, the would-be weights are 0.0 by cancellation, and a row of
+    measured zeros is indistinguishable in a ``LossOutput`` from a row that
+    was never priced. The exclusion stays visible in ``used < offered``
+    instead.
+
+    WHAT IS CLAIMED: a kept row carries ``reward - mean(valid)`` broadcast
+    over its unmasked positions, or that quantity divided by the POPULATION
+    std of the group's valid rewards when ``normalise_by_std`` is set -- a
+    REAL bool (``1`` is not ``True``) so a manifest records which of the two
+    behaviours was chosen; ``RewardStats`` summarise exactly the kept rows;
+    and ``used``/``offered``/``rows`` report what was kept and from where.
+
+    WHAT IS NOT CLAIMED: that ``min_valid`` means anything outside
+    ``"shrink"`` -- it is read only there and validated for RANGE only, not
+    for policy consistency; that the grouping key is an "episode" beyond
+    whatever the caller passed in; or any equivalence with a reference
+    implementation's session handling.
+    """
+
+    name: str = "session_group"
+    min_group_size: int = 2
+    normalise_by_std: bool = False
+    partial_group_policy: Literal["refuse", "drop_group", "shrink"] = "shrink"
+    min_valid: int = 2
+
+    def __post_init__(self) -> None:
+        _require_name("name", self.name)
+        _require_min_group_size(self.min_group_size)
+        if not isinstance(self.normalise_by_std, bool):
+            # 1 is not True: a truthy stand-in hides which of the two
+            # behaviours a manifest recorded as chosen.
+            raise AdvantageConfigRefusal(
+                f"normalise_by_std={self.normalise_by_std!r}: std "
+                f"normalisation is a declared per-run policy choice, so it "
+                f"must be a bool; a truthy stand-in hides which behaviour a "
+                f"manifest recorded as chosen"
+            )
+        if self.partial_group_policy not in ("refuse", "drop_group", "shrink"):
+            raise AdvantageConfigRefusal(
+                f"partial_group_policy={self.partial_group_policy!r}: one of "
+                f"'refuse', 'drop_group' or 'shrink' is required; how a "
+                f"partially abstained group is handled must be DECLAred at "
+                f"construction, not guessed per batch"
+            )
+        if (
+            isinstance(self.min_valid, bool)
+            or not isinstance(self.min_valid, int)
+            or not 2 <= self.min_valid <= self.min_group_size
+        ):
+            raise AdvantageConfigRefusal(
+                f"min_valid={self.min_valid!r}: the shrink threshold is an "
+                f"int in [2, {self.min_group_size}] -- at least 2 because "
+                f"one valid session has no baseline to form, and at most "
+                f"min_group_size because a group is already dropped below "
+                f"that"
+            )
+
+    def compute(
+        self,
+        *,
+        prompt_ids: Sequence[str],
+        rewards: Sequence[float | None],
+        mask: Sequence[Sequence[int]],
+    ) -> AdvantageResult:
+        ids, cleaned_rewards, masks = _checked_session_rows(prompt_ids, rewards, mask)
+        per_sample: list[float | None] = [None] * len(ids)
+        groups = _group_indices(ids)
+        if self.partial_group_policy == "refuse":
+            # Layered AFTER the offered-size drop: a group too small for a
+            # baseline leaves the result whatever its rewards say.
+            abstained = [
+                row
+                for indices in groups
+                if len(indices) >= self.min_group_size
+                for row in indices
+                if cleaned_rewards[row] is None
+            ]
+            if abstained:
+                raise AdvantageRefusal(
+                    f"reward at row {abstained[0]} of session group "
+                    f"{ids[abstained[0]]!r} abstained with None: {len(abstained)} of "
+                    f"{len(cleaned_rewards)} offered rewards are not measurements, "
+                    f"and partial_group_policy='refuse' treats any abstention as "
+                    f"an unmeasured batch rather than as a reason to shrink a "
+                    f"group around it"
+                )
+        for indices in groups:
+            if len(indices) < self.min_group_size:
+                # Too few OFFERED sessions for a baseline: the rows leave the
+                # result entirely and used < offered records the drop.
+                continue
+            valid_rows: list[int] = []
+            group: list[float] = []
+            for row in indices:
+                reward = cleaned_rewards[row]
+                if reward is None:
+                    continue
+                valid_rows.append(row)
+                group.append(reward)
+            if self.partial_group_policy == "drop_group" and len(valid_rows) != len(indices):
+                continue
+            if self.partial_group_policy == "shrink" and len(valid_rows) < self.min_valid:
+                continue
+            # Reaching here, `group` is non-empty on every declared policy:
+            # never-abstained groups carry len(group) == len(indices) >=
+            # min_group_size >= 2, `refuse` already raised on any abstention,
+            # and `shrink` only passes with >= min_valid >= 2 members.
+            if max(group) == min(group):
+                # Zero spread: no relative signal anywhere in the group and
+                # the would-be weights are 0.0 by cancellation, which is NOT
+                # a measurement. The group is dropped -- the deliberate
+                # divergence from CentredAdvantage stated above. Decided by
+                # exact equality, never by a computed std: (0.1, 0.1, 0.1)
+                # sums to 0.30000000000000004 and would leave a ~1e-17 std
+                # that normalisation inflates into a full-strength +-1.
+                continue
+            mean = math.fsum(group) / len(group)
+            std = math.sqrt(math.fsum((reward - mean) ** 2 for reward in group) / len(group))
+            for row, reward in zip(valid_rows, group, strict=True):
+                centred = reward - mean
+                per_sample[row] = centred / std if self.normalise_by_std else centred
+        return _emit_used_rows(per_sample, cleaned_rewards, masks, self.name)
 
 
 @dataclass(frozen=True, slots=True)

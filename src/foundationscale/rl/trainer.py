@@ -57,7 +57,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never executed at runtime
 from foundationscale.rl.advantage import AdvantageRefusal, RewardStats
 from foundationscale.rl.algorithm import StepReport, StepReportRefusal
 from foundationscale.rl.corpus import Sample, load_sharegpt
-from foundationscale.rl.interfaces import BatchRefusal, LossOutput
+from foundationscale.rl.group_policy_objectives import prompt_mean_row_weights
+from foundationscale.rl.interfaces import BatchRefusal, ExperienceBatch, LossOutput
 from foundationscale.rl.online_objectives import BestOfNLoss, RAFTLoss
 from foundationscale.rl.online_pref_step import (
     is_online_pref,
@@ -316,7 +317,7 @@ class RLTrainConfig:
     ``model`` is a local path or hub id and is NEVER defaulted: hardcoding a
     default model would smuggle an untested surface into every run that
     forgot the flag. ``algorithm`` names a registry entry
-    (``"grpo"``/``"gspo"``/``"dr_grpo"``/``"dapo"``). ``device=None`` means
+    (``"grpo"``/``"gspo"``/``"dr_grpo"``/``"dapo"``/``"agentic_grpo"``). ``device=None`` means
     auto-select -- metal when available, else CPU.
 
     WHAT IS CLAIMED: these are the only knobs the loop reads.
@@ -326,7 +327,10 @@ class RLTrainConfig:
     """
 
     model: str
-    dataset: str
+    # The ShareGPT corpus the built-in generate-and-score leg draws prompts
+    # from. None only together with rollout_source, which replaces that leg
+    # entirely; each of the two other combinations is refused in run().
+    dataset: str | None = None
     # dr_grpo, not grpo. dr_grpo is reference-free, so the default run never
     # pays the memory for the frozen reference copy that grpo's k3 term
     # requires. The default should be the cheapest entry that trains end to
@@ -413,6 +417,18 @@ class RLTrainConfig:
     # 4 of 5 seeds (0-48%) while "zero" held 63-65% on 5 of 5. The EMA still
     # folds in every raw return either way.
     reinforce_flat_groups: str = "zero"
+    # None (default) keeps the built-in encode -> generate -> decode -> MCQ-score
+    # leg untouched. Set to an object exposing ``rollout(step: int) ->
+    # ExperienceBatch`` (and optionally ``publish(model, tokenizer, ctx, step) ->
+    # None``, a weight-export hook) to have ``run()`` price externally generated
+    # multi-turn rows instead: each step calls ``rollout_source.rollout(step)``,
+    # shards the returned groups whole across ranks, and prices them through
+    # ``_one_step_rows`` / ``_priced_tail`` -- the SAME kept-plane-onward pricing
+    # the built-in leg uses. Refused (named) together with ppo, the
+    # online-preference family and the estimator-free family in this slice: none
+    # of those three price a group-relative advantage over externally supplied
+    # rows yet.
+    rollout_source: Any | None = None
 
 
 class RLTrainer:
@@ -486,6 +502,14 @@ class RLTrainer:
         algorithm = lookup_algorithm(self.config.algorithm)
         ppo = ppo_objective(algorithm)
         if ppo is not None:
+            if self.config.rollout_source is not None:
+                raise TrainerRefusal(
+                    f"rollout_source is set together with algorithm="
+                    f"{self.config.algorithm!r}, which resolves to a PPO objective: "
+                    f"ppo is refused together with rollout_source in this slice -- "
+                    f"its advantage is temporal (GAE over a learned value), not the "
+                    f"group-relative advantage_fn family rollout_source rows price"
+                )
             # PPOAlgorithm carries no ``_objective``: its advantage is temporal
             # (GAE over a learned value), which ppo_step owns, not _one_step.
             return ppo
@@ -537,6 +561,15 @@ class RLTrainer:
         # the contract owes a refusal that names the missing input, and one that
         # arrives only after the expensive part of the step has been paid for.
         if is_online_pref(objective):
+            if self.config.rollout_source is not None:
+                raise TrainerRefusal(
+                    f"rollout_source is set together with algorithm="
+                    f"{self.config.algorithm!r}, which resolves to an online-"
+                    f"preference objective: the online-preference family is "
+                    f"refused together with rollout_source in this slice -- it "
+                    f"prices a PAIR mined from the group's own rewards, not the "
+                    f"group-relative advantage_fn family rollout_source rows price"
+                )
             # Online/iterative DPO price a PAIR mined from the group's own
             # rewards; online_pref_step owns that loop, not _one_step.
             return objective
@@ -553,6 +586,14 @@ class RLTrainer:
             "raft",
             "best_of_n",
         )
+        if estimator_free and self.config.rollout_source is not None:
+            raise TrainerRefusal(
+                f"rollout_source is set together with algorithm="
+                f"{self.config.algorithm!r}: the estimator-free family "
+                f"(reinforce_baseline, reinforce_pp, raft, best_of_n) is refused "
+                f"together with rollout_source in this slice -- none of them price "
+                f"a group-relative advantage_fn over externally supplied rows"
+            )
         if not estimator_free and not hasattr(objective, "advantage_fn"):
             raise TrainerRefusal(
                 f"algorithm {self.config.algorithm!r}: 0 of 1 required advantage "
@@ -604,7 +645,22 @@ class RLTrainer:
                 "to take. Raise the temperature or set group_size=1."
             )
 
-        samples = load_sharegpt(self.config.dataset, gold_key=self.config.gold_key)
+        if self.config.rollout_source is not None and self.config.dataset is not None:
+            _refuse_exit_96(
+                f"dataset={self.config.dataset!r} together with rollout_source: the "
+                f"rollout source replaces the corpus draw entirely, so the dataset "
+                f"would be declared and never read. Drop one of the two."
+            )
+        if self.config.rollout_source is None and self.config.dataset is None:
+            _refuse_exit_96(
+                "dataset=None without a rollout_source: the built-in leg draws its "
+                "prompts from the corpus, and there is none to draw from"
+            )
+        samples: tuple[Sample, ...] | list[Sample] = (
+            ()
+            if self.config.dataset is None
+            else load_sharegpt(self.config.dataset, gold_key=self.config.gold_key)
+        )
         # #371: corpus.py PARSES `image` and `video` into Sample.images/.video,
         # and its docstring advertises "text-only, image-text, multi-image, and
         # video" records. This trainer references neither field: it builds every
@@ -887,7 +943,7 @@ class RLTrainer:
             )
 
         usable = tuple(sample for sample in samples if sample.gold is not None)
-        if not usable:
+        if not usable and self.config.rollout_source is None:
             _refuse_exit_96(
                 f"0 of {len(samples)} loaded samples carry a parseable gold letter; "
                 f"a run with no verifiable row is vacuous"
@@ -896,77 +952,130 @@ class RLTrainer:
         reports: list[StepReport] = []
         cursor = 0
         for step in range(self.config.max_steps):
-            global_chunk = [
-                usable[(cursor + offset) % len(usable)]
-                for offset in range(self.config.prompts_per_step)
-            ]
-            cursor += self.config.prompts_per_step
-            if ctx.is_distributed:
-                # Shard PROMPTS, never completions: all G completions of one
-                # prompt stay on one rank so the group baseline stays local.
-                my_indices = shard_indices(len(global_chunk), ctx)
-                chunk = [global_chunk[i] for i in my_indices]
-                if not chunk:
-                    # More ranks than prompts this step: replicate one prompt
-                    # so generation still returns rows and collectives fire.
-                    chunk = [global_chunk[0]]
-            else:
-                chunk = global_chunk
-            if use_ppo:
-                report = ppo_step(
-                    self,
-                    step=step,
-                    chunk=chunk,
-                    model=model,
-                    tokenizer=tokenizer,
-                    surface=prompt_surface,
-                    reward=reward,
-                    objective=objective,
-                    optimizer=optimizer,
-                    ref_model=ref_model,
-                    device=device,
-                    ctx=ctx,
-                    value_head=value_head,
-                    value_optimizer=value_optimizer,
-                )
-            elif online_pref:
-                report = online_pref_step(
-                    self,
-                    step=step,
-                    chunk=chunk,
-                    model=model,
-                    tokenizer=tokenizer,
-                    surface=prompt_surface,
-                    reward=reward,
-                    objective=objective,
-                    optimizer=optimizer,
-                    ref_model=ref_model,
-                    device=device,
-                    ctx=ctx,
-                )
-                if maybe_refresh_reference(
-                    step=step, cadence=refresh_every, model=model, ref_model=ref_model
-                ):
-                    print(
-                        f"[trainer] reference refreshed from policy after step {step}",
-                        file=sys.stderr,
-                    )
-            else:
+            if self.config.rollout_source is not None:
+                # The additive rows lane: an externally generated
+                # ExperienceBatch replaces the corpus draw AND the per-step
+                # encode -> generate -> decode -> score leg entirely.
+                # _resolve_objective already refused ppo / online-preference /
+                # estimator-free algorithms together with rollout_source, so
+                # loss_fn here is always the group-relative TensorPolicyLoss.
                 assert loss_fn is not None
-                report = self._one_step(
-                    step=step,
-                    chunk=chunk,
+                batch = self.config.rollout_source.rollout(step)
+                group_key_column = batch.column("prompt_ids")
+                unique_groups = sorted(set(group_key_column))
+                if ctx.is_distributed:
+                    # Shard whole GROUPS, never rows within one: the same
+                    # "a group's baseline stays on one rank" invariant the
+                    # built-in leg keeps by sharding prompts instead of
+                    # completions.
+                    my_group_positions = shard_indices(len(unique_groups), ctx)
+                    my_groups = {unique_groups[i] for i in my_group_positions}
+                    if not my_groups and unique_groups:
+                        # More ranks than groups this step: replicate one
+                        # group so this rank still participates and every
+                        # collective fires.
+                        my_groups = {unique_groups[0]}
+                else:
+                    my_groups = set(unique_groups)
+                row_indices = [i for i, key in enumerate(group_key_column) if key in my_groups]
+                sharded_batch = ExperienceBatch(
+                    columns={
+                        name: tuple(column[i] for i in row_indices)
+                        for name, column in batch.columns.items()
+                    },
+                    required=batch.required,
+                )
+                report = self._one_step_rows(
+                    step,
+                    sharded_batch,
                     model=model,
-                    tokenizer=tokenizer,
-                    surface=prompt_surface,
-                    reward=reward,
+                    optimizer=optimizer,
+                    ref_model=ref_model,
                     objective=objective,
                     loss_fn=loss_fn,
-                    optimizer=optimizer,
-                    ref_model=ref_model,
                     device=device,
+                    pad_token_id=tokenizer.pad_token_id,
                     ctx=ctx,
                 )
+                if report is not None:
+                    publish = getattr(self.config.rollout_source, "publish", None)
+                    if publish is not None:
+                        # S0: synchronous, one rollout per optimizer step --
+                        # the next iteration's rollout(step + 1) is free to
+                        # read whatever this publish just exported.
+                        publish(model, tokenizer, ctx, step)
+            else:
+                global_chunk = [
+                    usable[(cursor + offset) % len(usable)]
+                    for offset in range(self.config.prompts_per_step)
+                ]
+                cursor += self.config.prompts_per_step
+                if ctx.is_distributed:
+                    # Shard PROMPTS, never completions: all G completions of one
+                    # prompt stay on one rank so the group baseline stays local.
+                    my_indices = shard_indices(len(global_chunk), ctx)
+                    chunk = [global_chunk[i] for i in my_indices]
+                    if not chunk:
+                        # More ranks than prompts this step: replicate one prompt
+                        # so generation still returns rows and collectives fire.
+                        chunk = [global_chunk[0]]
+                else:
+                    chunk = global_chunk
+                if use_ppo:
+                    report = ppo_step(
+                        self,
+                        step=step,
+                        chunk=chunk,
+                        model=model,
+                        tokenizer=tokenizer,
+                        surface=prompt_surface,
+                        reward=reward,
+                        objective=objective,
+                        optimizer=optimizer,
+                        ref_model=ref_model,
+                        device=device,
+                        ctx=ctx,
+                        value_head=value_head,
+                        value_optimizer=value_optimizer,
+                    )
+                elif online_pref:
+                    report = online_pref_step(
+                        self,
+                        step=step,
+                        chunk=chunk,
+                        model=model,
+                        tokenizer=tokenizer,
+                        surface=prompt_surface,
+                        reward=reward,
+                        objective=objective,
+                        optimizer=optimizer,
+                        ref_model=ref_model,
+                        device=device,
+                        ctx=ctx,
+                    )
+                    if maybe_refresh_reference(
+                        step=step, cadence=refresh_every, model=model, ref_model=ref_model
+                    ):
+                        print(
+                            f"[trainer] reference refreshed from policy after step {step}",
+                            file=sys.stderr,
+                        )
+                else:
+                    assert loss_fn is not None
+                    report = self._one_step(
+                        step=step,
+                        chunk=chunk,
+                        model=model,
+                        tokenizer=tokenizer,
+                        surface=prompt_surface,
+                        reward=reward,
+                        objective=objective,
+                        loss_fn=loss_fn,
+                        optimizer=optimizer,
+                        ref_model=ref_model,
+                        device=device,
+                        ctx=ctx,
+                    )
             if report is not None:
                 reports.append(report)
             if (
@@ -1022,13 +1131,7 @@ class RLTrainer:
 
         WHAT IS NOT CLAIMED: that any particular step produces a report.
         """
-        from foundationscale.rl.distributed import (
-            DistContext,
-            agree_all,
-            agree_max,
-            all_reduce_sum,
-            generate_kwargs_for,
-        )
+        from foundationscale.rl.distributed import DistContext, agree_all, generate_kwargs_for
 
         if ctx is None:
             ctx = DistContext(
@@ -1156,6 +1259,72 @@ class RLTrainer:
                 file=sys.stderr,
             )
 
+        group_ids = [f"row-{index // self.config.group_size}" for index, _ in rows]
+        return self._priced_tail(
+            step=step,
+            model=model,
+            optimizer=optimizer,
+            ref_model=ref_model,
+            device=device,
+            ctx=ctx,
+            objective=objective,
+            loss_fn=loss_fn,
+            kept_sequences=kept_sequences,
+            response_mask=response_mask,
+            attention=attention,
+            modality_kwargs=modality_kwargs,
+            rewards=rewards,
+            group_ids=group_ids,
+            null_rank=null_rank,
+            rows=rows,
+        )
+
+    def _priced_tail(
+        self,
+        *,
+        step: int,
+        model: Any,
+        optimizer: Any,
+        ref_model: Any | None,
+        device: str,
+        ctx: Any,
+        objective: Any,
+        loss_fn: TensorPolicyLoss,
+        kept_sequences: torch.Tensor,
+        response_mask: torch.Tensor,
+        attention: torch.Tensor,
+        modality_kwargs: dict[str, torch.Tensor],
+        rewards: torch.Tensor,
+        group_ids: list[str],
+        null_rank: bool,
+        rows: list[tuple[int, float]] | None = None,
+    ) -> StepReport | None:
+        """Price the kept planes: logprobs, advantage, loss, backward, report.
+
+        WHAT IS CLAIMED: this is EVERY optimizer step this module takes from
+        "the kept rows are known" onward, shared VERBATIM by the built-in
+        encode -> generate -> decode -> score leg (``_one_step``) and the
+        externally generated multi-turn rows leg (``_one_step_rows``):
+        ``old_logprobs`` are recomputed under ``torch.no_grad()`` on exactly
+        ``kept_sequences`` regardless of where those rows came from, and
+        ``group_ids`` is the ONLY group-identity input the advantage estimator
+        reads -- a caller that synthesizes ``f"row-{index // group_size}"``
+        (the built-in leg) and a caller that reads a batch's own
+        ``prompt_ids`` column (the rows leg) are indistinguishable from here
+        on. ``rows`` -- the pre-compaction ``(index, score)`` pairs -- is read
+        only by the SFT and REINFORCE-family tails, which ``_resolve_objective``
+        already refuses together with ``rollout_source``, so the rows leg
+        never needs to supply it; every other branch counts offered rows off
+        ``kept_sequences`` itself.
+
+        WHAT IS NOT CLAIMED: that any particular step produces a report, or
+        that a caller may reach the SFT / REINFORCE branches without ``rows``.
+        """
+        import torch
+
+        from foundationscale.rl.distributed import agree_all, agree_max, all_reduce_sum
+
+        target_ids = kept_sequences[:, 1:]
         n_rows = int(kept_sequences.shape[0])
         micro_batch = self.config.logprob_micro_batch
         use_logprob_micro_batching = 0 < micro_batch < n_rows
@@ -1213,6 +1382,14 @@ class RLTrainer:
             # those three computations are paid for. Generation, scoring,
             # abstention dropping and the mask construction above are shared
             # with the PPO-clip tail.
+            if rows is None:
+                raise TrainerRefusal(
+                    f"algorithm {self.config.algorithm!r} resolves to the SFT "
+                    f"tail, which groups by the pre-compaction (index, score) "
+                    f"pairs this caller did not supply; rollout_source callers "
+                    f"refuse this algorithm family in _resolve_objective before "
+                    f"reaching here"
+                )
             return self._sft_tail(
                 step=step,
                 objective=objective,
@@ -1278,6 +1455,14 @@ class RLTrainer:
         # kept scored row is used, so the row gather is the identity on the
         # kept planes, never a compaction.
         if self.config.algorithm in ("reinforce_baseline", "reinforce_pp"):
+            if rows is None:
+                raise TrainerRefusal(
+                    f"algorithm {self.config.algorithm!r} resolves to the "
+                    f"estimator-free REINFORCE tail, which needs the pre-"
+                    f"compaction (index, score) pairs this caller did not "
+                    f"supply; rollout_source callers refuse this algorithm "
+                    f"family in _resolve_objective before reaching here"
+                )
             keep_all = torch.arange(n_rows, device=device)
             tail_current = current_logprobs.index_select(0, keep_all)
             tail_old = old_logprobs.index_select(0, keep_all).detach()
@@ -1322,18 +1507,19 @@ class RLTrainer:
                 extra_slices=extra_slices,
             )
 
-        prompt_id_values = [f"row-{index // self.config.group_size}" for index, _ in rows]
         # The estimator reads the PER-TOKEN supervision mask, not a per-row
         # flag: it denominates each response by its own supervised length.
         # Handing it a 1-D tensor of ones made every row non-iterable and
         # refused the batch, and the row count it would have implied is not
-        # the quantity the estimator needs.
+        # the quantity the estimator needs. ``group_ids`` is the caller's
+        # group-identity input -- synthesized by the built-in leg, read off
+        # the batch's own column by the rows leg -- never recomputed here.
         advantage: Any = None
         adv_refusal: str | None = None
         try:
             if not null_rank:
                 advantage = objective.advantage_fn.compute(
-                    prompt_ids=tuple(prompt_id_values),
+                    prompt_ids=tuple(group_ids),
                     rewards=tuple(float(value) for value in rewards.tolist()),
                     mask=tuple(tuple(int(e) for e in row) for row in response_mask.tolist()),
                 )
@@ -1367,7 +1553,7 @@ class RLTrainer:
             # nothing" and continuing.
             print(
                 f"UNMEASURED step {step}: the advantage estimator used 0 of "
-                f"{len(rows)} offered row(s) -- {adv_refusal}",
+                f"{n_rows} offered row(s) -- {adv_refusal}",
                 file=sys.stderr,
             )
             return None
@@ -1396,7 +1582,7 @@ class RLTrainer:
                 return None
             print(
                 f"UNMEASURED step {step}: the advantage estimator kept 0 of "
-                f"{len(rows)} scored row(s); no group was large enough to admit a "
+                f"{n_rows} scored row(s); no group was large enough to admit a "
                 f"baseline. No gradient exists to take, so no step is claimed.",
                 file=sys.stderr,
             )
@@ -1448,11 +1634,11 @@ class RLTrainer:
             # the diagnosis is wrong, and a diagnostic nobody can trust is worse
             # than no diagnostic. MEASURED on GB200, step 17 of a 20-step run.
             summary = _per_group_reward_summary(
-                kept_rows, prompt_id_values, [float(value) for value in rewards.tolist()]
+                kept_rows, group_ids, [float(value) for value in rewards.tolist()]
             )
             print(
                 f"UNMEASURED step {step}: advantage is identically zero over "
-                f"{len(kept_rows)} of {len(rows)} used row(s); no group's reward "
+                f"{len(kept_rows)} of {n_rows} used row(s); no group's reward "
                 f"varies within that group (rewards per group -- {summary}). "
                 f"No gradient exists to take, so no step is claimed.",
                 file=sys.stderr,
@@ -1469,12 +1655,72 @@ class RLTrainer:
         kept_ref: torch.Tensor | None = None
         if reference_logprobs is not None:
             kept_ref = reference_logprobs.index_select(0, keep)
+        # prompt_mean's denominator is PER GROUP and is built from group ids,
+        # which the tensor kernel never receives. So the row weights are
+        # computed ONCE per optimizer step, here -- after row compaction and
+        # before the loss call -- from the KEPT rows' group ids and the kept
+        # mask's supervised counts, and ride unchanged through
+        # _micro_batched_backward and through the padding slices (which
+        # carry no loss). The denominator is supplied by
+        # prompt_mean_row_weights, the same torch-free function the oracle
+        # uses, so this plane cannot disagree with it on shape.
+        #
+        # P is STEP-GLOBAL. Prompts -- never completions -- are sharded whole,
+        # so groups are rank-local and the active-group count must be
+        # all-reduce-summed before the division. Under DDP gradient averaging
+        # (and FSDP2, which averages identically) the weights are then scaled
+        # by world_size so the GLOBAL objective is the prompt mean over ALL
+        # ranks' groups: the wrapper divides the averaged gradient by
+        # world_size, and w_row = world_size / (P_global * group_tokens)
+        # renormalises it back onto the global denominator. A null rank
+        # contributes 0 groups and 0 weight.
+        reduction_row_weights: Any = None
+        if getattr(objective, "reduction", None) == "prompt_mean":
+            counts = [int(value) for value in kept_mask.sum(dim=-1).tolist()]
+            kept_group_ids = [group_ids[row] for row in kept_rows]
+            local_groups = (
+                0
+                if null_rank
+                else len(
+                    {key for key, count in zip(kept_group_ids, counts, strict=True) if count > 0}
+                )
+            )
+            p_global = all_reduce_sum(float(local_groups), ctx)
+            if p_global == 0.0:
+                # Saturated/unmeasured step is not a step, in the same voice
+                # as the zero-advantage path below: no active group means no
+                # measured denominator, and 0.0 would report a perfect loss
+                # over no gradient.
+                print(
+                    f"UNMEASURED step {step}: 0 prompt group(s) carry a "
+                    f"supervised token over {len(kept_rows)} kept row(s) "
+                    f"across every rank; the prompt_mean denominator is "
+                    f"UNMEASURED and never 0.0. No gradient exists to take, "
+                    f"so no step is claimed.",
+                    file=sys.stderr,
+                )
+                return None
+            if local_groups == 0:
+                weights: tuple[float, ...] = (0.0,) * len(kept_rows)
+            else:
+                base = prompt_mean_row_weights(kept_group_ids, counts)
+                scale = float(ctx.world_size) * float(local_groups) / p_global
+                weights = tuple(value * scale for value in base)
+            # The kernel's seam is a (rows,) tensor on the loss's device; the
+            # torch-free owner produced plain floats. float64 so a 1/6 is not
+            # rounded here -- the kernel casts once, to its own dtype.
+            import torch
+
+            reduction_row_weights = torch.tensor(
+                weights, dtype=torch.float64, device=kept_current.device
+            )
         loss_tensor = loss_fn(
             current_logprobs=kept_current,
             old_logprobs=kept_old,
             advantages=advantage_tensor,
             mask=kept_mask,
             reference_logprobs=kept_ref,
+            reduction_row_weights=reduction_row_weights,
         )
         if null_rank:
             # Mandatory, not cosmetic: with a zero advantage the surrogate is
@@ -1558,6 +1804,240 @@ class RLTrainer:
                 else RewardStats.over(tuple(float(rewards[row]) for row in kept_rows))
             ),
             sync=None,
+        )
+
+    def _planes_from_batch(
+        self, batch: ExperienceBatch, *, device: str, pad_token_id: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[str], list[int]]:
+        """Build the kept planes from an externally generated ``ExperienceBatch``.
+
+        WHAT IS CLAIMED: reads exactly the columns ``prompt_token_ids``,
+        ``response_ids``, ``loss_mask``, ``prompt_ids`` and ``reward``; a row
+        with ``reward is None`` is DROPPED as an abstention (never priced as
+        0.0), the same rule the built-in MCQ leg applies, and the drop count
+        is printed. Each kept row's sequence is
+        ``prompt_token_ids + response_ids``, RIGHT-padded by LENGTH to the
+        batch's longest kept sequence with ``pad_token_id``; ``attention`` is
+        built from those same per-row LENGTHS, never by scanning for a pad
+        id (a tool token or an EOS-as-pad token must not be mistaken for
+        padding). ``response_mask[i, t]`` for target position ``t``
+        (predicting ``kept_sequences[i, t + 1]``) is the response token's own
+        ``loss_mask`` entry at response position ``t + 1 - len(prompt_i)``
+        when that position is inside the response, else 0 -- so a tool-result
+        token recorded with ``loss_mask`` 0 stays unsupervised wherever it
+        lands, unlike the built-in leg's single completion-only boundary.
+        Refuses (``TrainerRefusal``, naming both sides) when a kept row's
+        ``loss_mask`` length disagrees with its ``response_ids`` length, or
+        when every remaining row supervises 0 response tokens in total.
+
+        WHAT IS NOT CLAIMED: that any row survived -- an all-abstention batch
+        returns zero-row planes rather than refusing, so the caller can apply
+        the same null-rank voice the built-in leg uses when every local row
+        abstains while a peer rank still has rows.
+        """
+        import torch
+
+        prompt_token_ids_col = batch.column("prompt_token_ids")
+        response_ids_col = batch.column("response_ids")
+        loss_mask_col = batch.column("loss_mask")
+        prompt_ids_col = batch.column("prompt_ids")
+        reward_col = batch.column("reward")
+
+        sequences: list[tuple[int, ...]] = []
+        prompt_lengths: list[int] = []
+        response_lengths: list[int] = []
+        row_loss_masks: list[tuple[int, ...]] = []
+        group_ids: list[str] = []
+        rewards_list: list[float] = []
+        kept_row_indices: list[int] = []
+        dropped = 0
+
+        for row in range(len(batch)):
+            reward_value = reward_col[row]
+            if reward_value is None:
+                # Abstention: dropped, never priced as 0.0 -- the same rule
+                # the built-in MCQ leg applies to a scorer that declined.
+                dropped += 1
+                continue
+            response = tuple(response_ids_col[row])
+            mask = tuple(loss_mask_col[row])
+            if len(mask) != len(response):
+                raise TrainerRefusal(
+                    f"_planes_from_batch: row {row} (prompt_ids="
+                    f"{prompt_ids_col[row]!r}): loss_mask has {len(mask)} "
+                    f"entries for a response of {len(response)} token(s) -- a "
+                    f"per-token mask must carry exactly one entry per "
+                    f"response token"
+                )
+            prompt = tuple(prompt_token_ids_col[row])
+            sequences.append(prompt + response)
+            prompt_lengths.append(len(prompt))
+            response_lengths.append(len(response))
+            row_loss_masks.append(mask)
+            group_ids.append(str(prompt_ids_col[row]))
+            rewards_list.append(float(reward_value))
+            kept_row_indices.append(row)
+
+        if dropped:
+            print(
+                f"[trainer] _planes_from_batch: dropped {dropped} of "
+                f"{len(batch)} row(s) to abstention (reward=None)",
+                file=sys.stderr,
+            )
+
+        if not sequences:
+            # Every row abstained: an empty result, not a refusal -- the
+            # caller (_one_step_rows) owes the same null-rank/UNMEASURED
+            # voice the built-in leg uses when every local row abstains
+            # while a peer rank still has rows.
+            empty_sequences = torch.empty((0, 1), dtype=torch.long, device=device)
+            empty_mask = torch.empty((0, 0), dtype=torch.float32, device=device)
+            empty_rewards = torch.empty((0,), dtype=torch.float32, device=device)
+            return empty_sequences, empty_mask, empty_sequences.clone(), empty_rewards, [], []
+
+        max_len = max(len(seq) for seq in sequences)
+        n_rows = len(sequences)
+        kept_sequences = torch.full(
+            (n_rows, max_len), pad_token_id, dtype=torch.long, device=device
+        )
+        attention = torch.zeros((n_rows, max_len), dtype=torch.long, device=device)
+        response_mask = torch.zeros((n_rows, max_len - 1), dtype=torch.float32, device=device)
+        total_supervised = 0
+        for i, seq in enumerate(sequences):
+            length = len(seq)
+            kept_sequences[i, :length] = torch.tensor(seq, dtype=torch.long, device=device)
+            attention[i, :length] = 1
+            prompt_len = prompt_lengths[i]
+            response_len = response_lengths[i]
+            mask_i = row_loss_masks[i]
+            # Target position t predicts kept_sequences[i, t + 1]; that
+            # position is a response token iff prompt_len <= t + 1 <
+            # prompt_len + response_len, i.e. t in [prompt_len - 1,
+            # prompt_len + response_len - 1). Clamped into [0, max_len - 1)
+            # and re-based onto the response's own indices so a 0-length
+            # prompt (no column ever predicts the response's own first
+            # token, same as the built-in shift) is handled without a
+            # negative slice.
+            lo = max(prompt_len - 1, 0)
+            hi = min(prompt_len + response_len - 1, max_len - 1)
+            if hi > lo:
+                resp_lo = lo + 1 - prompt_len
+                row_values = torch.tensor(
+                    mask_i[resp_lo : resp_lo + (hi - lo)], dtype=torch.float32, device=device
+                )
+                response_mask[i, lo:hi] = row_values
+                total_supervised += int(row_values.sum())
+
+        if total_supervised == 0:
+            raise TrainerRefusal(
+                f"_planes_from_batch: {n_rows} of {len(batch)} row(s) survived "
+                f"abstention-dropping but supervise 0 response token(s) in "
+                f"total; a step with no supervised token has no gradient to "
+                f"take and is refused rather than priced as a zero-loss step"
+            )
+
+        rewards = torch.tensor(rewards_list, dtype=torch.float32, device=device)
+        return kept_sequences, response_mask, attention, rewards, group_ids, kept_row_indices
+
+    def _one_step_rows(
+        self,
+        step: int,
+        batch: ExperienceBatch,
+        *,
+        model: Any,
+        optimizer: Any,
+        ref_model: Any | None,
+        objective: Any,
+        loss_fn: TensorPolicyLoss,
+        device: str,
+        pad_token_id: int,
+        ctx: Any = None,
+    ) -> StepReport | None:
+        """One step over an externally generated multi-turn ``ExperienceBatch``.
+
+        WHAT IS CLAIMED: ``_planes_from_batch`` builds the kept planes and
+        ``_priced_tail`` prices them -- the SAME pricing the built-in
+        encode -> generate -> decode -> score leg uses from the kept rows
+        onward. Old logprobs are recomputed under ``torch.no_grad()`` inside
+        ``_priced_tail``; the batch's own ``rollout_logprobs`` column (if any)
+        is never read here or passed to it. A rank left with 0 kept rows
+        while a peer rank still has rows participates with a zero-weight
+        dummy row and votes UNMEASURED, in the same spirit as the built-in
+        leg's null-rank dummy -- this lane has no ``generated`` tensor to
+        borrow a row from, so the dummy is built fresh. A step where EVERY
+        rank's batch is empty after abstention-dropping is UNMEASURED and
+        returns ``None``, naming the same voice the built-in leg uses.
+
+        WHAT IS NOT CLAIMED: that any particular step produces a report, or
+        that a malformed row (mask/response length mismatch, or an
+        all-zero-supervision batch) is tolerated -- ``_planes_from_batch``
+        refuses those loudly rather than returning here.
+        """
+        import torch
+
+        from foundationscale.rl.distributed import DistContext, agree_all
+
+        if ctx is None:
+            ctx = DistContext(
+                rank=0, world_size=1, local_rank=0, device=device, is_distributed=False
+            )
+
+        # The 6th element (kept_row_indices) maps surviving rows back onto the
+        # original batch; nothing in this tail needs that map, so it is read
+        # here only to keep the tuple contract honest, under a `_`-prefixed
+        # name ruff's unused-local check treats as deliberate.
+        kept_sequences, response_mask, attention, rewards, group_ids, _kept_row_indices = (
+            self._planes_from_batch(batch, device=device, pad_token_id=pad_token_id)
+        )
+        n_rows = int(kept_sequences.shape[0])
+        null_rank = False
+        every_rank_empty = agree_all(n_rows == 0, ctx)
+        if n_rows == 0 and not every_rank_empty:
+            null_rank = True
+            # No `generated` tensor exists on this lane to borrow row 0 from
+            # the way the built-in leg's null-rank dummy does: build the
+            # smallest participating row instead. Width 2 keeps target_ids
+            # non-empty, attention 1 everywhere keeps the forward well
+            # defined, and an all-zero response_mask supervises nothing even
+            # before null_rank zeroes the loss below.
+            kept_sequences = torch.full((1, 2), pad_token_id, dtype=torch.long, device=device)
+            attention = torch.ones((1, 2), dtype=torch.long, device=device)
+            response_mask = torch.zeros((1, 1), dtype=torch.float32, device=device)
+            rewards = torch.zeros((1,), dtype=torch.float32, device=device)
+            group_ids = ["null-rank-dummy"]
+            print(
+                f"[trainer] step {step} rank {ctx.rank}: "
+                "0 row(s) survived _planes_from_batch on this rank; others "
+                "kept rows -- participating with zero loss (UNMEASURED here)",
+                file=sys.stderr,
+            )
+        if n_rows == 0 and every_rank_empty:
+            print(
+                f"UNMEASURED step {step}: 0 of {len(batch)} row(s) survived "
+                f"_planes_from_batch on every rank; every rollout abstained, "
+                f"so the step carries no reward at all. No gradient exists to "
+                f"take, so no step is claimed.",
+                file=sys.stderr,
+            )
+            return None
+
+        return self._priced_tail(
+            step=step,
+            model=model,
+            optimizer=optimizer,
+            ref_model=ref_model,
+            device=device,
+            ctx=ctx,
+            objective=objective,
+            loss_fn=loss_fn,
+            kept_sequences=kept_sequences,
+            response_mask=response_mask,
+            attention=attention,
+            modality_kwargs={},
+            rewards=rewards,
+            group_ids=group_ids,
+            null_rank=null_rank,
+            rows=None,
         )
 
     def _sft_tail(

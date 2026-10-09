@@ -1501,7 +1501,17 @@ jobs:
     # rows is too many: the corpus is supposed to grow, and a deadline that
     # forces rows to be split across invented module keys would encode a CI
     # budget into the corpus taxonomy, which is the wrong place for it.
-    timeout-minutes: 75
+    #
+    # Raised again 75 -> 113 with the inner deadline 60m -> 90m, for the same
+    # reason. MEASURED: on main the `perf_telemetry` shard took 51.2m of its 60m
+    # (2n+1 = 31 full-suite runs); the agentic RL plane added ~900 tests and the
+    # shard crossed 60m on the agentic-rl merge commit, again with every scored
+    # row killed. Those tests were first cut from ~60s to ~19s per suite run
+    # (fake HTTP servers polled at 0.5s on shutdown; timeout tests slept 1-2s),
+    # and the wall still moves: 51m plus ~31 runs x ~19s is ~61m, so 60m is no
+    # longer room for the suite to keep growing. 113m keeps the outer backstop
+    # the same ~1.25x behind the inner deadline.
+    timeout-minutes: 113
     strategy:
       # Every shard reports. fail-fast would cancel the siblings of the first
       # red one, and a cancelled sibling is an unmeasured module wearing the
@@ -1548,12 +1558,12 @@ jobs:
         # which is exactly the "looks like something else" failure being fixed.
         run: |
           set +e
-          timeout --signal=INT --kill-after=60s 60m \
+          timeout --signal=INT --kill-after=60s 90m \
             python tools/mutate.py --module "${{ matrix.module }}"
           rc=$?
           set -e
           if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
-            echo "::error::mutation shard ${{ matrix.module }} exceeded its 60-minute deadline."
+            echo "::error::mutation shard ${{ matrix.module }} exceeded its 90-minute deadline."
             echo "::error::NOTHING WAS MEASURED for this module. This is exit 2 (never"
             echo "::error::measured), not a cancellation and not a pass: no mutant in"
             echo "::error::${{ matrix.module }} was scored, so no claim about it holds."
