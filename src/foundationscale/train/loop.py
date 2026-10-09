@@ -516,21 +516,15 @@ def _fold_video_split(
     declaration is the silent drop this plane exists to prevent.
     """
     import functools  # noqa: PLC0415
-    from pathlib import Path  # noqa: PLC0415
 
     from foundationscale import video  # noqa: PLC0415
 
     if video_column is None or image_column is None:
         return "video fold called without a declared video and image column"
-    if video_column not in split.column_names:
-        return (
-            f"video column {video_column!r} is declared but dataset {dataset!r} has "
-            f"columns {split.column_names}. Training anyway would run text-only under "
-            "a video label -- the silent-drop defect this plane refuses"
-        )
-    local = Path(dataset)
-    base = local if local.is_dir() else local.parent if local.is_file() else Path.cwd()
-    cache = Path(cache_dir) if cache_dir else base / ".fs_video_frames"
+    missing = _video_column_missing(split, dataset=dataset, video_column=video_column)
+    if missing is not None:
+        return missing
+    base, cache = _video_base_and_cache(dataset, cache_dir)
     fold = functools.partial(
         video.fold_video_row,
         video_column=video_column,
@@ -543,6 +537,61 @@ def _fold_video_split(
         return split.map(fold)
     except (video.VideoDecodeError, FileNotFoundError) as exc:
         return f"video column {video_column!r}: a clip could not become frames: {exc}"
+
+
+def _video_column_missing(split: Any, *, dataset: str, video_column: str) -> str | None:
+    """The refusal for a declared video column the dataset lacks, or None.
+
+    Every row would otherwise train on its text alone under a video declaration,
+    on whichever arm carries the clips.
+    """
+    if video_column in split.column_names:
+        return None
+    return (
+        f"video column {video_column!r} is declared but dataset {dataset!r} has "
+        f"columns {split.column_names}. Training anyway would run text-only under "
+        "a video label -- the silent-drop defect this plane refuses"
+    )
+
+
+def _video_base_and_cache(dataset: str, cache_dir: str | None) -> tuple[Any, Any]:
+    """Where relative clip paths resolve, and where frames are cached, for ``dataset``.
+
+    Both live beside a local dataset (its directory, or a data file's parent); a
+    hub dataset id resolves against the working directory. The image arm's fold
+    and the conversation arm's ``frames_for`` share this one rule, so a clip
+    resolves -- and caches -- identically on either arm.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    local = Path(dataset)
+    base = local if local.is_dir() else local.parent if local.is_file() else Path.cwd()
+    cache = Path(cache_dir) if cache_dir else base / ".fs_video_frames"
+    return base, cache
+
+
+def _conversation_frames_for(
+    split: Any,
+    *,
+    dataset: str,
+    video_column: str,
+    budget: Any,
+    cache_dir: str | None,
+) -> Any:
+    """The conversation arm's ``frames_for`` for a declared budget, or a refusal string.
+
+    A declared video column the dataset does not carry refuses with the same words
+    as the image arm's fold (:func:`_video_column_missing`).
+    """
+    from foundationscale import video  # noqa: PLC0415
+
+    missing = _video_column_missing(split, dataset=dataset, video_column=video_column)
+    if missing is not None:
+        return missing
+    base, cache = _video_base_and_cache(dataset, cache_dir)
+    return video.conversation_frames_for(
+        budget, str(cache), base_dir=str(base), video_column=video_column
+    )
 
 
 def _untrainable_modality_refusal(modality: str, var: str, declared: str) -> str:
@@ -4654,6 +4703,9 @@ def _train(cfg: TrainConfig) -> int:
 
     VIDEO_COLUMN: str | None = None
     _video_budget: Any = None
+    # frames_for + video_column for the conversation arm; empty unless a budget
+    # is declared there, so the arm's video rows keep refusing by default.
+    _conversation_video_kwargs: dict[str, Any] = {}
     if _untrainable is not None and _untrainable[0] == "video":
         try:
             _video_budget = _video.budget_from_env(_os.environ)
@@ -4668,13 +4720,20 @@ def _train(cfg: TrainConfig) -> int:
         if _video_budget is not None:
             VIDEO_COLUMN = _untrainable[2]
             _untrainable = None
-            if IMAGE_COLUMN is None:
-                IMAGE_COLUMN = _video.VIDEO_FRAMES_COLUMN
+            # The conversation arm takes clips as a native ``videos=`` input
+            # (frames_for), so it needs no synthetic image column; inventing one
+            # there would name a column no row carries.
+            if _os.environ.get("FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN"):
+                _video_target = "the conversation arm's videos input"
+            else:
+                if IMAGE_COLUMN is None:
+                    IMAGE_COLUMN = _video.VIDEO_FRAMES_COLUMN
+                _video_target = f"image column {IMAGE_COLUMN!r}"
             _mark(
                 Step.DATA,
                 f"video column {VIDEO_COLUMN!r} declared with frame budget "
                 f"{_video_budget.key}: each clip becomes {_video_budget.frames} "
-                f"{_video_budget.sampling} frames on image column {IMAGE_COLUMN!r}",
+                f"{_video_budget.sampling} frames on {_video_target}",
             )
     if _untrainable is not None:
         _modality, _var, _declared = _untrainable
@@ -5149,6 +5208,25 @@ def _train(cfg: TrainConfig) -> int:
             # CONVERSATIONS_COLUMN) unless it resolved to a real value; this
             # states that fact where the type checker can use it too.
             assert OVERLONG is not None
+            _video_kwargs: dict[str, Any] = {}
+            if _video_budget is not None and VIDEO_COLUMN is not None:
+                _frames_for = _conversation_frames_for(
+                    raw[split],
+                    dataset=cfg.dataset,
+                    video_column=VIDEO_COLUMN,
+                    budget=_video_budget,
+                    cache_dir=_os.environ.get(_video.VIDEO_CACHE_ENV) or None,
+                )
+                if isinstance(_frames_for, str):
+                    _mark(Step.REFUSE, _frames_for)
+                    _emit_manifest(
+                        cfg,
+                        stage="refused",
+                        extra={"exit": EXIT_REFUSE, "video_column": VIDEO_COLUMN},
+                    )
+                    return EXIT_REFUSE
+                _video_kwargs = {"video_column": VIDEO_COLUMN, "frames_for": _frames_for}
+            _conversation_video_kwargs = _video_kwargs
             _prepass = conversation_prepass_or_refuse(
                 raw[split],
                 prompt_surface.surface,
@@ -5156,6 +5234,7 @@ def _train(cfg: TrainConfig) -> int:
                 image_column=IMAGE_COLUMN,
                 max_length=cfg.max_sequence_length,
                 overlong=OVERLONG,
+                **_video_kwargs,
             )
             _conversation_prepass_stats = {
                 "rows_seen": _prepass.rows_seen,
@@ -6133,6 +6212,7 @@ def _train(cfg: TrainConfig) -> int:
             overlong=OVERLONG,
             pad_to_max_length=PAD_TO_MAX_LENGTH,
             inject_dummy_media=INJECT_DUMMY_MEDIA,
+            **_conversation_video_kwargs,
         )
         # Trainer's default strips dataset columns its model signature does
         # not name -- with this collator the raw conversations column (and,

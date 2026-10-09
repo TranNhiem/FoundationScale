@@ -793,3 +793,94 @@ def test_fsdp_transformer_cls_to_wrap_env_not_set_without_an_adapter(
     assert rc in PROCEEDED_CODES, f"expected proceed, got {rc}"
     assert "FSDP_TRANSFORMER_CLS_TO_WRAP" not in os.environ
     assert stack.constructed
+
+
+# ---------------------------------------------------------------------------
+# Video on the conversation arm: a declared frame budget reaches BOTH entry
+# points as a frames_for callable (and the arm invents no image column); a
+# declared video column the dataset lacks refuses before any collator exists.
+# ---------------------------------------------------------------------------
+
+
+def _video_conversation_fakes(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str, Any]]:
+    from foundationscale.train import conversation as conversation_module
+
+    seen: dict[str, dict[str, Any]] = {}
+
+    def _fake_prepass(dataset: Any, processor: Any, **kwargs: Any) -> Any:
+        seen["prepass"] = kwargs
+        return conversation_module.ConversationPrepassResult(
+            refusal_reason=None,
+            filtered_dataset=dataset,
+            rows_seen=1,
+            dropped_overlong=0,
+            kept=1,
+            seconds=0.01,
+        )
+
+    def _fake_collator(surface: Any, **kwargs: Any) -> Any:
+        seen["collator"] = kwargs
+
+        def _collate(features: Any) -> dict[str, Any]:
+            return {}
+
+        _collate.stats = {"rows_seen": 1, "dropped_overlong": 0, "dummy_media_batches": 0}
+        return _collate
+
+    monkeypatch.setattr(conversation_module, "conversation_prepass_or_refuse", _fake_prepass)
+    monkeypatch.setattr(
+        conversation_module, "train_conversation_collator_or_refuse", _fake_collator
+    )
+    return seen
+
+
+def test_conversations_with_a_frame_budget_pass_frames_for_to_both_entry_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_runtime(monkeypatch, columns=("conversations", "clips"))
+    monkeypatch.setenv("FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN", "conversations")
+    monkeypatch.setenv("FOUNDATIONSCALE_TRAIN_OVERLONG", "drop")
+    monkeypatch.setenv("FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN", "clips")
+    monkeypatch.setenv("FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES", "4")
+    seen = _video_conversation_fakes(monkeypatch)
+
+    rc = loop.train(_conversation_cfg())
+
+    assert rc in PROCEEDED_CODES, f"expected proceed, got {rc}"
+    for entry in ("prepass", "collator"):
+        assert callable(seen[entry]["frames_for"]), entry
+        assert seen[entry]["video_column"] == "clips", entry
+        # The image arm's synthetic frames column must not leak into this arm.
+        assert seen[entry]["image_column"] is None, entry
+
+
+def test_conversations_without_a_frame_budget_pass_no_frames_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_runtime(monkeypatch, columns=("conversations",))
+    monkeypatch.setenv("FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN", "conversations")
+    monkeypatch.setenv("FOUNDATIONSCALE_TRAIN_OVERLONG", "drop")
+    seen = _video_conversation_fakes(monkeypatch)
+
+    rc = loop.train(_conversation_cfg())
+
+    assert rc in PROCEEDED_CODES, f"expected proceed, got {rc}"
+    assert "frames_for" not in seen["prepass"]
+    assert "frames_for" not in seen["collator"]
+
+
+def test_conversations_with_a_budget_and_no_such_video_column_refuse(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install_fake_runtime(monkeypatch, columns=("conversations",))
+    monkeypatch.setenv("FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN", "conversations")
+    monkeypatch.setenv("FOUNDATIONSCALE_TRAIN_OVERLONG", "drop")
+    monkeypatch.setenv("FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN", "clips")
+    monkeypatch.setenv("FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES", "4")
+    seen = _video_conversation_fakes(monkeypatch)
+
+    rc = loop.train(_conversation_cfg())
+
+    assert rc == loop.EXIT_REFUSE
+    assert "video column 'clips' is declared" in capsys.readouterr().out
+    assert "prepass" not in seen and "collator" not in seen

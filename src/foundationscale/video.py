@@ -49,6 +49,7 @@ __all__ = [
     "VideoDecodeError",
     "available_backends",
     "budget_from_env",
+    "conversation_frames_for",
     "fold_video_row",
     "sample_times",
     "video_frame_paths",
@@ -373,6 +374,12 @@ def _as_list(value: Any) -> list[str]:
     return [str(item) for item in value if item]
 
 
+def _clip_path(clip: str, base_dir: str | os.PathLike[str]) -> Path:
+    """``clip`` as a path; a relative one resolves against ``base_dir``."""
+    path = Path(clip)
+    return path if path.is_absolute() else Path(base_dir) / path
+
+
 def fold_video_row(
     row: Mapping[str, Any],
     *,
@@ -394,11 +401,53 @@ def fold_video_row(
     out = dict(row)
     frames: list[str] = []
     for clip in _as_list(row.get(video_column)):
-        path = Path(clip)
-        if not path.is_absolute():
-            path = Path(base_dir) / path
-        frames.extend(video_frame_paths(path, budget, cache_dir))
+        frames.extend(video_frame_paths(_clip_path(clip, base_dir), budget, cache_dir))
     out[image_column] = _as_list(row.get(image_column)) + frames
     if frames and isinstance(out.get("text"), str):
         out["text"] = out["text"].replace(_VIDEO_MARKER, "").strip()
     return out
+
+
+def conversation_frames_for(
+    budget: FrameBudget,
+    cache_dir: str | os.PathLike[str],
+    *,
+    base_dir: str | os.PathLike[str],
+    video_column: str,
+    backends: Sequence[str] | None = None,
+) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+    """The ``frames_for`` callable the conversation arm needs, from a declared budget.
+
+    The image arm folds clips into frame FILES on the image column
+    (:func:`fold_video_row`); the conversation arm instead hands the processor a
+    native ``videos=`` input, so it needs the frames themselves. Both go through
+    the same :func:`video_frame_paths` cache and the same relative-path rule, so
+    one clip yields the same instants on either arm.
+
+    The callable returns ``{"frames": [...], "frames_indices": [...]}`` -- RGB
+    images, exactly ``budget.frames`` of them. No ``fps`` or ``duration`` is
+    reported: the cache records normalised instants, and inventing either would be
+    a guess. It raises rather than substituting: ``FileNotFoundError`` for a
+    missing clip, :class:`VideoDecodeError` when no decoder can read it, and
+    ``ValueError`` for a row carrying more than one clip (the conversation arm
+    supports one ``<video>`` per row). The caller turns each into its refusal.
+    """
+
+    def frames_for(row: Mapping[str, Any]) -> dict[str, Any]:
+        from PIL import Image  # noqa: PLC0415
+
+        clips = _as_list(row.get(video_column))
+        if len(clips) != 1:
+            raise ValueError(
+                f"expected exactly one clip in column {video_column!r}, found {len(clips)}"
+            )
+        files = video_frame_paths(
+            _clip_path(clips[0], base_dir), budget, cache_dir, backends=backends
+        )
+        frames = []
+        for name in files:
+            with Image.open(name) as image:
+                frames.append(image.convert("RGB"))
+        return {"frames": frames, "frames_indices": list(range(len(frames)))}
+
+    return frames_for

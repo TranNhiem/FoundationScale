@@ -639,7 +639,15 @@ def _render_conversation_row(
                 "budget was declared (frames_for=None); declare a frame budget or drop "
                 "the video column. This never guesses how many frames to decode"
             )
-        frame_info = frames_for(data)
+        from foundationscale.video import VideoDecodeError  # noqa: PLC0415
+
+        try:
+            frame_info = frames_for(data)
+        except (FileNotFoundError, ValueError, VideoDecodeError) as exc:
+            _refuse_exit_96(
+                f"row {index}: the video in column {video_column!r} could not be turned "
+                f"into frames: {exc}"
+            )
         video_frames = list(frame_info["frames"])
 
     assistant_turn_count = sum(1 for m in messages if m["role"] == "assistant")
