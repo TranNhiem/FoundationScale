@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import socket
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 import torch
@@ -8,10 +12,13 @@ from safetensors.torch import save_file
 
 from foundationscale import EXIT_PASS, EXIT_RED, EXIT_UNMEASURED
 from foundationscale.train.speech_adjudication import (
+    _coverage_counts_vector,
     adjudicate_speech,
     digests_from_named_tensors,
     digests_from_safetensors_dir,
     dtype_mismatches,
+    finish_speech_run,
+    reduce_coverage_across_ranks,
     tensor_digest,
 )
 
@@ -449,3 +456,390 @@ def test_prepare_and_finish_speech_run(tmp_path: Path) -> None:
         placeholder_applicable=False,
     )
     assert rc == EXIT_PASS and lines[0].startswith("speech plane:") and '"gates"' in manifest
+
+
+def _rank_manifest(
+    expected: int = 1272,
+    checked: int | None = None,
+    refused: Mapping[str, int] | None = None,
+    *,
+    seconds: float = 51.5,
+    verified: int | None = None,
+    unmeasured: int = 0,
+) -> dict[str, Any]:
+    """One rank's collator manifest -- ``AudioCoverage.as_manifest``'s keys, per rank.
+
+    The defaults are the measured ones (GB200, 2026-10-09): 1,200 rows trained
+    plus 72 prefetched is the 1-GPU count ``speech.audio_row_coverage`` printed
+    as "1272/1272 audio rows" while the 2-rank run trained 2,400 rows.
+    """
+    buckets = dict(refused or {})
+    checked = expected if checked is None else checked
+    return {
+        "rows_expected": expected,
+        "rows_checked": checked,
+        "rows_refused": sum(buckets.values()),
+        "seconds_total": seconds,
+        "sampling_rate": 16000,
+        "refused": buckets,
+        "placeholder_rows_verified": checked if verified is None else verified,
+        "placeholder_rows_unmeasured": unmeasured,
+        "verdict": "COVERED",
+    }
+
+
+def _wire_sum_with(remote: Mapping[str, Any]) -> Callable[[list[float]], list[float]]:
+    """A two-rank ``all_reduce(SUM)`` stand-in: the OTHER rank's packed row added in.
+
+    Built from :func:`speech_adjudication._coverage_counts_vector` so the test
+    speaks the wire layout the reduction speaks -- a mirrored literal here would
+    prove nothing the day the two layouts drift apart.
+    """
+    other = _coverage_counts_vector(remote)
+    return lambda row: [a + b for a, b in zip(row, other, strict=True)]
+
+
+def test_reduce_coverage_across_ranks_single_process_is_the_census_copied() -> None:
+    """MUST_PASS — no peers means no sums: same counts, ranks == 1, and a real copy."""
+    local = _rank_manifest()
+    reduced = reduce_coverage_across_ranks(local)
+    assert reduced == {**local, "ranks": 1}
+    assert (reduced["rows_expected"], reduced["rows_checked"]) == (1272, 1272)
+    assert reduced["rows_refused"] == 0 and reduced["refused"] == {}
+    assert reduced["placeholder_rows_verified"] == 1272
+    assert reduced["seconds_total"] == local["seconds_total"]
+    assert reduced["ranks"] == 1
+    reduced["rows_checked"] = 0
+    reduced["refused"]["unreadable"] = 5
+    assert local["rows_checked"] == 1272
+    assert local["refused"] == {}
+
+
+def test_reduce_coverage_across_ranks_sums_the_two_rank_manifests() -> None:
+    """MUST_FIRE — 1272/1272 + 1272/1270 is 2544/2542 with the 2 refusals ACCOUNTED."""
+    from foundationscale.train.audio import AudioCoverage
+
+    zero = _rank_manifest()
+    short = _rank_manifest(checked=1270, refused={"unreadable": 2})
+    reduced = reduce_coverage_across_ranks(short, all_reduce_sum=_wire_sum_with(zero), world_size=2)
+    assert (reduced["rows_expected"], reduced["rows_checked"]) == (2544, 2542)
+    assert reduced["rows_refused"] == 2
+    assert reduced["refused"] == {"unreadable": 2}
+    assert (reduced["placeholder_rows_verified"], reduced["placeholder_rows_unmeasured"]) == (
+        2542,
+        0,
+    )
+    assert reduced["sampling_rate"] == 16000
+    assert reduced["ranks"] == 2
+    # checked < expected with the refusals ACCOUNTED toward the denominator is
+    # COVERED rather than UNDERCOVERED -- and the verdict is audio.py's own.
+    from_audio = AudioCoverage(
+        rows_expected=2544, rows_checked=2542, refused={"unreadable": 2}
+    ).verdict()
+    assert from_audio == "COVERED"
+    assert reduced["verdict"] == from_audio
+
+
+def test_reduce_coverage_across_ranks_sums_a_reason_only_one_rank_saw() -> None:
+    """MUST_FIRE — reason slots are keyed by AUDIO_LOAD_REASONS, so single-rank reasons add up."""
+    caps = _rank_manifest(checked=1270, refused={"too_long": 2})
+    unreadable = _rank_manifest(checked=1270, refused={"unreadable": 2})
+    reduced = reduce_coverage_across_ranks(
+        caps, all_reduce_sum=_wire_sum_with(unreadable), world_size=2
+    )
+    assert reduced["refused"] == {"too_long": 2, "unreadable": 2}
+    assert reduced["rows_refused"] == 4
+    # 1270 checked on each rank: the sum is 2540, with 2 + 2 refused toward 2544 expected.
+    assert (reduced["rows_expected"], reduced["rows_checked"]) == (2544, 2540)
+
+
+def test_reduce_coverage_across_ranks_2544_is_the_measured_defect_regression() -> None:
+    """MUST_FIRE (regression, GB200 2026-10-09) — two ranks of 1272/1272 are 2544/2544.
+
+    The measured defect reported "1272/1272 audio rows" over these two manifests
+    -- the 1-GPU count -- because each manifest was adjudicated inside its own
+    process. The SUM is the coverage claim; 1272 is the defect.
+    """
+    local = _rank_manifest()
+    reduced = reduce_coverage_across_ranks(
+        local, all_reduce_sum=lambda row: [2.0 * x for x in row], world_size=2
+    )
+    assert (reduced["rows_expected"], reduced["rows_checked"]) == (2544, 2544)
+    assert reduced["placeholder_rows_verified"] == 2544
+    assert reduced["seconds_total"] == 2.0 * local["seconds_total"]
+    assert reduced["ranks"] == 2
+    assert (local["rows_expected"], local["rows_checked"]) == (1272, 1272)
+
+
+def test_reduce_coverage_across_ranks_refuses_a_manifest_missing_a_required_count() -> None:
+    """MUST_FIRE — every census key is required: an absent count is refused, never zero-filled."""
+    for key in (
+        "rows_expected",
+        "rows_checked",
+        "rows_refused",
+        "refused",
+        "placeholder_rows_verified",
+        "placeholder_rows_unmeasured",
+    ):
+        manifest = _rank_manifest()
+        del manifest[key]
+        with pytest.raises(ValueError):
+            reduce_coverage_across_ranks(manifest)
+
+
+def test_reduce_coverage_across_ranks_keeps_absent_seconds_absent() -> None:
+    """MUST_PASS — a census without seconds sums to no seconds: reductions invent no duration."""
+    local = _rank_manifest()
+    del local["seconds_total"]
+    doubled = reduce_coverage_across_ranks(
+        local, all_reduce_sum=lambda row: [2.0 * x for x in row], world_size=2
+    )
+    assert "seconds_total" not in doubled
+    assert doubled["rows_expected"] == 2544
+    assert "seconds_total" not in reduce_coverage_across_ranks(local)
+
+
+def _free_port() -> int:
+    """A port the OS says is free right now (mirrors tests/rl/test_megatron_lane.py)."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = int(sock.getsockname()[1])
+    sock.close()
+    return port
+
+
+def _reduce_coverage_worker(rank: int, port: int) -> None:
+    """One rank of the real two-process reduction over gloo.
+
+    Each rank holds a DIFFERENT manifest and both must come out with the same
+    summed one -- the two results are gathered and compared for identity
+    ("identical", not "equal on the counts the test happened to name").
+    """
+    from datetime import timedelta  # noqa: PLC0415
+
+    import torch  # noqa: PLC0415
+    import torch.distributed as dist  # noqa: PLC0415
+
+    torch.set_num_threads(1)
+    dist.init_process_group(
+        backend="gloo",
+        init_method=f"tcp://127.0.0.1:{port}",
+        world_size=2,
+        rank=rank,
+        timeout=timedelta(seconds=60),
+    )
+    try:
+        local = _rank_manifest(
+            checked=1272 if rank == 0 else 1270,
+            refused={} if rank == 0 else {"unreadable": 2},
+        )
+        reduced = reduce_coverage_across_ranks(local)
+        assert (reduced["rows_expected"], reduced["rows_checked"]) == (2544, 2542), reduced
+        assert reduced["rows_refused"] == 2 and reduced["refused"] == {"unreadable": 2}, reduced
+        assert reduced["ranks"] == 2 and reduced["verdict"] == "COVERED", reduced
+        gathered: list[dict[str, Any]] = [{}, {}]
+        dist.all_gather_object(gathered, reduced)
+        assert gathered[0] == gathered[1] == reduced, gathered
+        dist.barrier()
+    finally:
+        dist.destroy_process_group()
+
+
+def test_reduce_coverage_across_ranks_really_sums_over_two_gloo_ranks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MUST_FIRE — a real 2-process group: BOTH ranks adjudicate 2544/2542, never 1272/1272."""
+    pytest.importorskip("torch")
+    import torch.multiprocessing as mp  # noqa: PLC0415
+
+    # Another test in the suite can leave GLOO_SOCKET_IFNAME (e.g. "lo") in os.environ
+    # through the fabric declaration; macOS has no "lo" and gloo dies with "Unable to find
+    # address for: lo". Cleared for the spawn only, so gloo picks the loopback itself.
+    for name in ("GLOO_SOCKET_IFNAME", "TP_SOCKET_IFNAME"):
+        monkeypatch.delenv(name, raising=False)
+    mp.spawn(_reduce_coverage_worker, args=(_free_port(),), nprocs=2, join=True)
+
+
+def test_finish_speech_run_holds_no_collective_and_adjudicates_the_census_as_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MUST_PASS -- finish_speech_run runs on the WRITING rank only, so it must not reduce.
+
+    A collective there deadlocked on GB200 (rank 0 spinning, rank 1 already gone).
+    The spy raises if the reduction is reached; the gates must read the census they
+    were handed, which train() already summed over the ranks.
+    """
+    import foundationscale.train.speech_adjudication as speech_adjudication
+
+    summed = _rank_manifest(expected=8, checked=8, seconds=5.0)
+    w = _bf16_tensor(seed=41)
+    base = {"enc.w": tensor_digest(w)}
+    moved = w.clone()
+    moved.view(torch.uint8)[0] = torch.tensor(3, dtype=torch.uint8)
+    save_file({"enc.w": moved}, str(tmp_path / "m.safetensors"))
+
+    def _no_collective_here(manifest: Mapping[str, Any]) -> dict[str, Any]:
+        raise AssertionError("finish_speech_run reached a collective")
+
+    monkeypatch.setattr(speech_adjudication, "reduce_coverage_across_ranks", _no_collective_here)
+
+    rc, done, lines, manifest_json = finish_speech_run(
+        rc=EXIT_PASS,
+        done="PASS",
+        final_dir=tmp_path,
+        has_safetensors=True,
+        coverage_manifest=summed,
+        base_digests=base,
+        towers=[("enc", True)],
+        adapter=None,
+        placeholder_applicable=True,
+    )
+    assert rc == EXIT_PASS
+    gates = json.loads(manifest_json)["gates"]
+    row_gate = next(g for g in gates if g["gate_id"] == "speech.audio_row_coverage")
+    assert (row_gate["expected"], row_gate["checked"]) == (8, 8), row_gate
+    assert "8/8" in "\n".join(lines)
+
+
+def test_finish_speech_run_refuses_a_missing_census(tmp_path: Path) -> None:
+    """MUST_FIRE -- no census means train() skipped the rank sum; refuse, never read one rank."""
+    with pytest.raises(ValueError, match="coverage_after_train"):
+        finish_speech_run(
+            rc=EXIT_PASS,
+            done="PASS",
+            final_dir=tmp_path,
+            has_safetensors=False,
+            coverage_manifest=None,
+            base_digests={},
+            towers=[],
+            adapter=None,
+            placeholder_applicable=False,
+        )
+
+
+def test_coverage_after_train_sums_over_ranks_only_when_audio_is_declared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MUST_FIRE -- the census train() hands on is the RANKS' sum (8/8), never one rank's 4/4."""
+    import foundationscale.train.speech_adjudication as speech_adjudication
+
+    class _Coverage:
+        def as_manifest(self) -> dict[str, Any]:
+            return _rank_manifest(expected=4, checked=4, seconds=2.5)
+
+    class _Collator:
+        coverage = _Coverage()
+
+    def _two_ranks(manifest: Mapping[str, Any]) -> dict[str, Any]:
+        return reduce_coverage_across_ranks(
+            manifest, all_reduce_sum=lambda row: [2.0 * x for x in row], world_size=2
+        )
+
+    monkeypatch.setattr(speech_adjudication, "reduce_coverage_across_ranks", _two_ranks)
+    assert speech_adjudication.coverage_after_train(object(), audio_declared=False) is None
+    summed = speech_adjudication.coverage_after_train(_Collator(), audio_declared=True)
+    assert summed is not None
+    assert (summed["rows_expected"], summed["rows_checked"], summed["ranks"]) == (8, 8, 2)
+
+
+def test_reduce_coverage_across_ranks_refuses_an_unknown_refusal_reason() -> None:
+    """MUST_FIRE -- a reason with no bucket would lose its rows from the summed census."""
+    with pytest.raises(ValueError, match="not one of"):
+        reduce_coverage_across_ranks(_rank_manifest(checked=1270, refused={"cosmic_ray": 2}))
+
+
+def test_reduce_coverage_across_ranks_passes_through_when_torch_is_not_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MUST_PASS -- no torch in sys.modules means no process group: the census is this process's."""
+    import sys  # noqa: PLC0415
+
+    monkeypatch.delitem(sys.modules, "torch", raising=False)
+    reduced = reduce_coverage_across_ranks(_rank_manifest())
+    assert (reduced["rows_checked"], reduced["ranks"]) == (1272, 1)
+
+
+class _FakeRow:
+    def __init__(self, values: list[float], device: object) -> None:
+        self.values, self.device = list(values), device
+
+    def to(self, _where: str) -> _FakeRow:
+        return self
+
+    def tolist(self) -> list[float]:
+        return list(self.values)
+
+
+def _fake_torch(*, world_size: int, backend: str) -> tuple[Any, list[object]]:
+    """A torch stand-in in sys.modules: the default path's branches without real processes."""
+    import types  # noqa: PLC0415
+
+    devices: list[object] = []
+    dist = types.SimpleNamespace(
+        is_available=lambda: True,
+        is_initialized=lambda: True,
+        get_world_size=lambda: world_size,
+        get_backend=lambda: backend,
+        ReduceOp=types.SimpleNamespace(SUM="sum"),
+    )
+
+    def _all_reduce(row: _FakeRow, op: object) -> None:
+        assert op == "sum"
+        row.values = [world_size * value for value in row.values]
+
+    dist.all_reduce = _all_reduce
+
+    def _tensor(values: list[float], dtype: object, device: object) -> _FakeRow:
+        devices.append(device)
+        return _FakeRow(values, device)
+
+    fake = types.SimpleNamespace(
+        distributed=dist,
+        float64="float64",
+        device=lambda kind, index=None: (kind, index),
+        cuda=types.SimpleNamespace(current_device=lambda: 3),
+        tensor=_tensor,
+    )
+    return fake, devices
+
+
+@pytest.mark.parametrize(
+    ("backend", "device"), [("gloo", ("cpu", None)), ("Backend.NCCL", ("cuda", 3))]
+)
+def test_reduce_coverage_across_ranks_default_path_sums_on_the_backends_device(
+    monkeypatch: pytest.MonkeyPatch, backend: str, device: tuple[str, int | None]
+) -> None:
+    """MUST_FIRE -- the default path all-reduces one row: CPU for gloo, the CUDA device for NCCL."""
+    import sys  # noqa: PLC0415
+
+    fake, devices = _fake_torch(world_size=2, backend=backend)
+    monkeypatch.setitem(sys.modules, "torch", fake)
+    reduced = reduce_coverage_across_ranks(_rank_manifest())
+    assert (reduced["rows_expected"], reduced["rows_checked"], reduced["ranks"]) == (2544, 2544, 2)
+    assert devices == [device]
+
+
+def test_reduce_coverage_across_ranks_one_rank_group_is_a_pass_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MUST_PASS -- an initialized group of one rank has no peers to sum with."""
+    import sys  # noqa: PLC0415
+
+    fake, devices = _fake_torch(world_size=1, backend="gloo")
+    monkeypatch.setitem(sys.modules, "torch", fake)
+    reduced = reduce_coverage_across_ranks(_rank_manifest())
+    assert (reduced["rows_checked"], reduced["ranks"], devices) == (1272, 1, [])
+
+
+def test_reduce_coverage_across_ranks_refuses_an_injected_sum_without_world_size() -> None:
+    """MUST_FIRE -- a sum that does not say over how many ranks is not a coverage claim."""
+    with pytest.raises(ValueError, match="without world_size"):
+        reduce_coverage_across_ranks(_rank_manifest(), all_reduce_sum=lambda row: row)
+
+
+def test_reduce_coverage_across_ranks_refuses_a_row_that_changed_width() -> None:
+    """MUST_FIRE -- a reduction returning a different width would pair rows across ranks wrongly."""
+    with pytest.raises(ValueError, match="values for a packed row"):
+        reduce_coverage_across_ranks(
+            _rank_manifest(), all_reduce_sum=lambda row: row[:-1], world_size=2
+        )
