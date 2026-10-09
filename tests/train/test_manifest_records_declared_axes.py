@@ -177,6 +177,10 @@ _DECLARATION_TOKENS: dict[str, tuple[str, object, str]] = {
     # token argparse would otherwise receive is rejected at parse time. Pinning
     # a real backend keeps this axis in the round-trip rather than out of it.
     "sdp_backend": ("math", "math", "math"),
+    # fused_loss is choice-constrained the same way (choices=("liger",)); the
+    # generic synthetic-fused-loss token argparse would mint is rejected at
+    # parse time, exactly the sdp_backend shape above.
+    "fused_loss": ("liger", "liger", "liger"),
 }
 
 

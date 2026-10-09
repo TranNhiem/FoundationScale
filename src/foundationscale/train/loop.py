@@ -205,6 +205,13 @@ SHARDING_STRATEGIES: tuple[str, ...] = ("ddp", "fsdp")
 # SHARDING_STRATEGIES is one.
 FSDP_STATE_DICT_TYPES: tuple[str, ...] = ("full", "sharded")
 
+# The fused-loss backends this plane can patch a model instance with (#--).
+# "liger" is the only one; see train/fused_loss.py for the model_type
+# coverage it actually reaches and the REFUSE path for everything else. The
+# tuple exists so refusal messages can name the accepted set, the same reason
+# PRECISIONS and SHARDING_STRATEGIES are tuples.
+FUSED_LOSS_BACKENDS: tuple[str, ...] = ("liger",)
+
 
 def _fsdp_wrap_classes(model: Any) -> list[str]:
     """Transformer-block class names to wrap, from the model ACTUALLY loaded.
@@ -251,6 +258,20 @@ def _fsdp_wrap_classes(model: Any) -> list[str]:
                     structural.append(child_name)
                 break
     return structural
+
+
+def _model_ties_word_embeddings(model: Any) -> bool:
+    """Whether this model's config declares tied input/output embeddings.
+
+    The SAME reading the FSDP version decision uses (tied embeddings pin
+    ``fsdp_config["version"] = 1``, below): pulled out as its own function so
+    the skeleton-factory capture site can ask the identical question BEFORE
+    the FSDP block runs, rather than guessing or duplicating the three-line
+    read and risking the two answers drifting apart.
+    """
+    model_config = getattr(model, "config", None)
+    text_config = getattr(model_config, "text_config", model_config)
+    return bool(getattr(text_config, "tie_word_embeddings", False))
 
 
 def _parallelism_backend() -> tuple[Any, str | None]:
@@ -609,6 +630,90 @@ def _audio_declaration_conflict(
     return None
 
 
+def _conversations_declaration_conflict(
+    *, conversations_column: str | None, audio_column: str | None
+) -> str | None:
+    """Why a declared conversations column cannot run alongside a declared audio one, or None.
+
+    Pure, mirrors :func:`_audio_declaration_conflict`'s shape and reason:
+    audio keeps its own collator (train/audio.py), the conversation collator
+    (train/conversation.py) composes none of it, and declaring both would
+    silently drop one of the two -- the same T1-22 shape as audio+image.
+    """
+    if conversations_column is None or audio_column is None:
+        return None
+    return (
+        f"both a conversations column ({conversations_column!r}) and an audio "
+        f"column ({audio_column!r}) are declared: audio keeps its own collator "
+        "(train/audio.py), and the conversation collator has no audio arm, so "
+        "one would be dropped silently. Declare at most one of the two. "
+        "Refusing (96)"
+    )
+
+
+def _conversation_overlong_policy_or_refusal(
+    raw_overlong: str | None,
+) -> tuple[str | None, str | None]:
+    """Resolve FOUNDATIONSCALE_TRAIN_OVERLONG, or the refusal naming why not.
+
+    Returns ``(policy, refusal)`` -- exactly one is None. REQUIRED when a
+    conversations column is declared: ``raw_overlong=None`` (the env var unset
+    or empty) is ITSELF a refusal, never a default -- there is no safe choice
+    between silently dropping an overlong row and refusing the run, so this
+    never guesses one.
+    """
+    if raw_overlong is None:
+        return None, (
+            "FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN is declared but "
+            "FOUNDATIONSCALE_TRAIN_OVERLONG is not: an overlong-row policy ('drop' "
+            "or 'refuse') is REQUIRED alongside the conversations column, with no "
+            "default -- this never guesses between silently dropping a row and "
+            "refusing the run"
+        )
+    if raw_overlong not in ("drop", "refuse"):
+        return None, (
+            f"FOUNDATIONSCALE_TRAIN_OVERLONG={raw_overlong!r} is not one of "
+            "'drop'/'refuse'; refusing rather than silently treating an unknown "
+            "policy as one of the two"
+        )
+    return raw_overlong, None
+
+
+def _conversation_pad_to_max_length_or_refusal(raw_pad: str | None) -> tuple[bool, str | None]:
+    """Resolve FOUNDATIONSCALE_TRAIN_PAD_TO_MAX_LENGTH, or the refusal naming why not.
+
+    Returns ``(value, refusal)``; ``value`` is always a real bool. Unlike
+    OVERLONG, this axis DOES have a safe default (False, recorded as a
+    default rather than a claim) when the env var is absent, the same
+    true/false/omitted shape ``--gradient-checkpointing`` uses.
+    """
+    if raw_pad is None:
+        return False, None
+    if raw_pad not in ("true", "false"):
+        return False, (
+            f"FOUNDATIONSCALE_TRAIN_PAD_TO_MAX_LENGTH={raw_pad!r} is not one of 'true'/'false'"
+        )
+    return raw_pad == "true", None
+
+
+def _conversation_inject_dummy_media_or_refusal(raw_value: str | None) -> tuple[bool, str | None]:
+    """Resolve FOUNDATIONSCALE_TRAIN_INJECT_DUMMY_MEDIA, or the refusal naming why not.
+
+    Same true/false/omitted shape as PAD_TO_MAX_LENGTH, with a different
+    default: True, matching train_conversation_collator_or_refuse's own
+    ``inject_dummy_media`` default (keep the vision tower in every rank's
+    forward pass even on an all-text batch) -- an undeclared run stays
+    byte-identical to one from before this knob existed.
+    """
+    if raw_value is None:
+        return True, None
+    if raw_value not in ("true", "false"):
+        return True, (
+            f"FOUNDATIONSCALE_TRAIN_INJECT_DUMMY_MEDIA={raw_value!r} is not one of 'true'/'false'"
+        )
+    return raw_value == "true", None
+
+
 def _unresolved_placeholder_notice(
     texts: Sequence[str], *, image_declared: bool, audio_declared: bool = False
 ) -> str | None:
@@ -725,6 +830,7 @@ DECLARATION_AXES: Final[tuple[str, ...]] = (
     "torch_compile",
     "torch_compile_backend",
     "torch_compile_mode",
+    "fused_loss",
 )
 
 
@@ -771,7 +877,7 @@ class TrainConfig:
     adapter_alpha: float | None = None
     adapter_targets: tuple[str, ...] | None = None
     adapter_dropout: float | None = None
-    # --- The sixteen declaration axes ---------------------------------------
+    # --- The seventeen declaration axes ---------------------------------------
     # Every one of these defaults to None, and None means exactly what
     # precision's None means: not declared -- claim nothing, apply nothing,
     # record the absence. Each axis has a live HF Trainer default behind it
@@ -867,6 +973,20 @@ class TrainConfig:
     torch_compile: bool | None = None
     torch_compile_backend: str | None = None
     torch_compile_mode: str | None = None
+    # fused_loss selects a fused linear-cross-entropy kernel, applied to the
+    # model INSTANCE (train/fused_loss.py) before peft/FSDP wrap it -- the
+    # same "binds elsewhere, never on TrainingArguments" family as
+    # attn_implementation and sdp_backend. None means NOT DECLARED: no patch
+    # is applied, the model's own forward is unchanged, and an undeclared run
+    # is byte-identical to one from before this flag existed. "liger" REFUSES
+    # (96) at the patch site, naming the model_type and the supported list,
+    # for any model_type the installed liger_kernel (plus this plane's
+    # FS-owned gemma4_unified patch) does not cover -- never silently trains
+    # unfused under a declared label. Required to reach 32K context at all on
+    # a large-vocabulary model: measured, gemma-4-12B-it at 32768 tokens OOMs
+    # allocating exactly 32 GiB of fp32 logits (seq x vocab=262144 x 4 bytes)
+    # with this unset.
+    fused_loss: str | None = None
     # logging_steps IS one of the declaration axes -- DECLARATION_AXES names it
     # -- but it is the one whose None still BINDS. The wiring site in _train
     # falls back to max(1, min(10, max_steps)), the historical unconditional
@@ -966,6 +1086,8 @@ class TrainConfig:
                 f"fsdp_state_dict={self.fsdp_state_dict!r} is not one of "
                 f"{FSDP_STATE_DICT_TYPES} (#544)"
             )
+        if self.fused_loss is not None and self.fused_loss not in FUSED_LOSS_BACKENDS:
+            raise ValueError(f"fused_loss={self.fused_loss!r} is not one of {FUSED_LOSS_BACKENDS}")
         # Range checks on the declared optional axes mirror the ones
         # TrainingArguments performs -- but performed HERE, at statement time,
         # so an out-of-range declaration is a config error with a named field
@@ -3022,7 +3144,7 @@ def _manifest_payload(
             "max_steps": cfg.max_steps,
             "per_device_batch_size": cfg.per_device_batch_size,
             # Recorded as a plain value alongside batch size and step count, not
-            # as one of the sixteen declaration axes, because it has a real
+            # as one of the seventeen declaration axes, because it has a real
             # default (128) rather than a None abstention -- there is no
             # "the run did not say" state for it, only a value it ran at.
             # It is here at all because every performance number in this
@@ -3060,7 +3182,7 @@ def _manifest_payload(
                 list(cfg.adapter_targets) if cfg.adapter_targets is not None else None
             ),
             "adapter_dropout": cfg.adapter_dropout,
-            # The sixteen declaration axes are recorded UNCONDITIONALLY -- None and
+            # The seventeen declaration axes are recorded UNCONDITIONALLY -- None and
             # all. That is the precision rule (#342) applied to every axis: a
             # key present carrying None says "the operator abstained and the
             # engine default applied, unclaimed"; a missing key would say
@@ -3105,6 +3227,13 @@ def _manifest_payload(
             "torch_compile": cfg.torch_compile,
             "torch_compile_backend": cfg.torch_compile_backend,
             "torch_compile_mode": cfg.torch_compile_mode,
+            # Recorded unconditionally like its "binds elsewhere" neighbours
+            # (attn_implementation, sdp_backend): None means no patch was
+            # applied and the model's own forward ran unchanged. A declared
+            # value here is what made the measured memory figures above it
+            # possible at long sequence lengths, so a peak-memory comparison
+            # across two manifests is not interpretable without it.
+            "fused_loss": cfg.fused_loss,
         },
         "extra": extra or {},
         # Outcome telemetry is its own top-level section, never folded into
@@ -3677,7 +3806,7 @@ def _build_run_manifest(
             # contract is {key, value, source, ...} for every field, and the
             # key is never what carries the abstention: key present + value
             # None = abstained; key absent = this loop never populated the
-            # field. All sixteen declaration axes go through this same path.
+            # field. All seventeen declaration axes go through this same path.
             _put(key, value, _config_source(key))
     # argv is the composed launch command; without it a run is not reproducible
     # from its own output (#180). stage says WHICH point in the lifecycle wrote
@@ -4494,6 +4623,79 @@ def _train(cfg: TrainConfig) -> int:
             extra={"exit": EXIT_REFUSE, "audio_column": AUDIO_COLUMN, "cp": cfg.cp},
         )
         return EXIT_REFUSE
+    # Conversation-aware SFT: declared the same way as image/audio, on an
+    # environment variable with NO default. Absent leaves the text, image and
+    # audio arms byte-identical. When declared, rows are multi-turn ShareGPT
+    # conversations (train/conversation.py) rather than a flat 'text' column,
+    # so OVERLONG is REQUIRED alongside it -- there is no safe default between
+    # silently dropping an overlong row and refusing the run, and guessing
+    # either one is exactly the silent-default class this plane exists to
+    # refuse. PAD_TO_MAX_LENGTH is optional (worst-case memory probes) and
+    # INJECT_DUMMY_MEDIA is optional (FSDP collective safety on an all-text
+    # batch); both are recorded as a declared default when absent, mirroring
+    # --gradient-checkpointing's true/false declaration shape.
+    CONVERSATIONS_COLUMN = _os.environ.get("FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN") or None
+    OVERLONG: str | None = None
+    PAD_TO_MAX_LENGTH = False
+    INJECT_DUMMY_MEDIA = True
+    _conversation_declared_sources: dict[str, str] = {}
+    _conversation_prepass_stats: dict[str, Any] | None = None
+    if CONVERSATIONS_COLUMN is not None:
+        _conversations_conflict = _conversations_declaration_conflict(
+            conversations_column=CONVERSATIONS_COLUMN, audio_column=AUDIO_COLUMN
+        )
+        if _conversations_conflict is not None:
+            _mark(Step.REFUSE, _conversations_conflict)
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={
+                    "exit": EXIT_REFUSE,
+                    "conversations_column": CONVERSATIONS_COLUMN,
+                    "audio_column": AUDIO_COLUMN,
+                },
+            )
+            return EXIT_REFUSE
+        _overlong_raw = _os.environ.get("FOUNDATIONSCALE_TRAIN_OVERLONG") or None
+        OVERLONG, _overlong_refusal = _conversation_overlong_policy_or_refusal(_overlong_raw)
+        if _overlong_refusal is not None:
+            _mark(Step.REFUSE, _overlong_refusal)
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={"exit": EXIT_REFUSE, "conversations_column": CONVERSATIONS_COLUMN},
+            )
+            return EXIT_REFUSE
+        _conversation_declared_sources["conversations_column"] = "declared"
+        _conversation_declared_sources["overlong"] = "declared"
+        _pad_raw = _os.environ.get("FOUNDATIONSCALE_TRAIN_PAD_TO_MAX_LENGTH") or None
+        PAD_TO_MAX_LENGTH, _pad_refusal = _conversation_pad_to_max_length_or_refusal(_pad_raw)
+        if _pad_refusal is not None:
+            _mark(Step.REFUSE, _pad_refusal)
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={"exit": EXIT_REFUSE, "conversations_column": CONVERSATIONS_COLUMN},
+            )
+            return EXIT_REFUSE
+        _conversation_declared_sources["pad_to_max_length"] = (
+            "declared" if _pad_raw is not None else "default"
+        )
+        _inject_raw = _os.environ.get("FOUNDATIONSCALE_TRAIN_INJECT_DUMMY_MEDIA") or None
+        INJECT_DUMMY_MEDIA, _inject_refusal = _conversation_inject_dummy_media_or_refusal(
+            _inject_raw
+        )
+        if _inject_refusal is not None:
+            _mark(Step.REFUSE, _inject_refusal)
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={"exit": EXIT_REFUSE, "conversations_column": CONVERSATIONS_COLUMN},
+            )
+            return EXIT_REFUSE
+        _conversation_declared_sources["inject_dummy_media"] = (
+            "declared" if _inject_raw is not None else "default"
+        )
     # attn_implementation binds at MODEL CONSTRUCTION, not on TrainingArguments
     # -- no such knob exists there, so it rides from_pretrained. The contract is
     # the same one the TrainingArguments introspection below enforces (#342: a
@@ -4614,12 +4816,15 @@ def _train(cfg: TrainConfig) -> int:
 
             prompt_surface = resolve_audio_surface(cfg.model)
             tokenizer = getattr(prompt_surface.surface, "tokenizer", prompt_surface.surface)
-        elif IMAGE_COLUMN is None:
+        elif IMAGE_COLUMN is None and CONVERSATIONS_COLUMN is None:
             tokenizer = AutoTokenizer.from_pretrained(cfg.model)
         else:
-            # Declared images: AutoProcessor is REQUIRED and its absence
-            # refuses (96) inside the surface -- the right verdict here,
-            # because a declared axis that cannot be executed is a refusal.
+            # Declared images AND/OR declared conversations: AutoProcessor is
+            # REQUIRED either way (train_conversation_collator_or_refuse's own
+            # contract names it required, same as the image arm) and its
+            # absence refuses (96) inside the surface -- the right verdict
+            # here, because a declared axis that cannot be executed is a
+            # refusal.
             from foundationscale.rl.prompt_surface import resolve_prompt_surface
 
             prompt_surface = resolve_prompt_surface(cfg.model, needs_images=True)
@@ -4744,14 +4949,14 @@ def _train(cfg: TrainConfig) -> int:
         raw = _load_raw_dataset(hf_datasets, cfg.dataset)
         split = "train" if "train" in raw else next(iter(raw))
         columns = raw[split].column_names
-        if "text" not in columns:
+        if CONVERSATIONS_COLUMN is None and "text" not in columns:
             _mark(
                 Step.REFUSE,
                 f"dataset {cfg.dataset!r} split {split!r} has columns {columns}; "
                 "the thin path requires a 'text' column",
             )
             return EXIT_REFUSE
-        if IMAGE_COLUMN is None and AUDIO_COLUMN is None:
+        if IMAGE_COLUMN is None and AUDIO_COLUMN is None and CONVERSATIONS_COLUMN is None:
             # #490: say what is being dropped. A console line only -- the arm
             # below stays byte-identical, which is what makes it safe to add
             # here rather than folding it into the map().
@@ -4794,6 +4999,88 @@ def _train(cfg: TrainConfig) -> int:
                 batched=True,
                 remove_columns=columns,
             )
+        elif CONVERSATIONS_COLUMN is not None:
+            # CONVERSATION ARM: rows stay RAW (conversations, optional image
+            # list, optional video) -- encoding happens per batch in
+            # train_conversation_collator_or_refuse, exactly like the image
+            # arm leaves pixel loading to the surface's own collator. A
+            # declared-but-absent column is a REFUSAL, never a quiet
+            # text-only train, the same #422 rule the image/audio arm applies
+            # to its own declared column below.
+            if CONVERSATIONS_COLUMN not in columns:
+                _mark(
+                    Step.REFUSE,
+                    f"conversations column {CONVERSATIONS_COLUMN!r} is declared but "
+                    f"dataset {cfg.dataset!r} split {split!r} has columns {columns}. "
+                    "Training anyway would run on nothing under a conversation "
+                    "label -- refusing rather than guessing",
+                )
+                _emit_manifest(
+                    cfg,
+                    stage="refused",
+                    extra={"exit": EXIT_REFUSE, "conversations_column": CONVERSATIONS_COLUMN},
+                )
+                return EXIT_REFUSE
+            if IMAGE_COLUMN is not None and IMAGE_COLUMN not in columns:
+                _mark(
+                    Step.REFUSE,
+                    f"image column {IMAGE_COLUMN!r} is declared alongside conversations "
+                    f"but dataset {cfg.dataset!r} split {split!r} has columns {columns}. "
+                    "Training anyway would run text-only under a multimodal label -- "
+                    "the silent-drop defect this plane refuses",
+                )
+                _emit_manifest(
+                    cfg,
+                    stage="refused",
+                    extra={
+                        "exit": EXIT_REFUSE,
+                        "conversations_column": CONVERSATIONS_COLUMN,
+                        "image_column": IMAGE_COLUMN,
+                    },
+                )
+                return EXIT_REFUSE
+            from foundationscale.train.conversation import (  # noqa: PLC0415
+                conversation_prepass_or_refuse,
+            )
+
+            # OVERLONG was refused above (REQUIRED alongside
+            # CONVERSATIONS_COLUMN) unless it resolved to a real value; this
+            # states that fact where the type checker can use it too.
+            assert OVERLONG is not None
+            _prepass = conversation_prepass_or_refuse(
+                raw[split],
+                prompt_surface.surface,
+                conversations_column=CONVERSATIONS_COLUMN,
+                image_column=IMAGE_COLUMN,
+                max_length=cfg.max_sequence_length,
+                overlong=OVERLONG,
+            )
+            _conversation_prepass_stats = {
+                "rows_seen": _prepass.rows_seen,
+                "dropped_overlong": _prepass.dropped_overlong,
+                "kept": _prepass.kept,
+                "seconds": round(_prepass.seconds, 3),
+            }
+            if _prepass.refusal_reason is not None:
+                _mark(Step.REFUSE, _prepass.refusal_reason)
+                _emit_manifest(
+                    cfg,
+                    stage="refused",
+                    extra={
+                        "exit": EXIT_REFUSE,
+                        "conversations_column": CONVERSATIONS_COLUMN,
+                        "conversation_prepass": json.dumps(_conversation_prepass_stats),
+                    },
+                )
+                return EXIT_REFUSE
+            _mark(
+                Step.DATA,
+                f"conversation pre-pass: {_prepass.rows_seen} row(s) validated and measured, "
+                f"{_prepass.dropped_overlong} dropped (overlong), {_prepass.kept} kept, "
+                f"{_prepass.seconds:.2f}s -- BEFORE the Trainer was built, identically on "
+                "every rank",
+            )
+            tokenized = _prepass.filtered_dataset
         else:
             # Exactly one of the two is declared here: _audio_declaration_conflict
             # refused the pair before the model was built.
@@ -4870,6 +5157,55 @@ def _train(cfg: TrainConfig) -> int:
         f"{len(tokenized)} examples tokenized "
         f"(split={split}, max_length={cfg.max_sequence_length})",
     )
+
+    # --- Fused loss (--fused-loss), patched on the model INSTANCE HERE ------
+    #
+    # Before adapters (next section) and before the Trainer/FSDP wrap further
+    # down, on purpose: peft's get_peft_model() and accelerate's FSDP prepare
+    # both need to see the REAL forward they are wrapping, and patching after
+    # either would either be invisible to the wrapper or require unwrapping
+    # first to reach the method being replaced. See train/fused_loss.py's
+    # module docstring for the full root cause (32 GiB of fp32 logits at
+    # 32768 tokens) and the model_type coverage.
+    if cfg.fused_loss is not None:
+        from foundationscale.train.fused_loss import (  # noqa: PLC0415
+            apply_fused_loss,
+            fused_loss_refusal_reason,
+        )
+
+        _fused_loss_model_type = getattr(getattr(model, "config", None), "model_type", None)
+        _fused_loss_refusal = fused_loss_refusal_reason(cfg.fused_loss, _fused_loss_model_type)
+        if _fused_loss_refusal is not None:
+            _mark(Step.REFUSE, _fused_loss_refusal)
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={
+                    "exit": EXIT_REFUSE,
+                    "fused_loss": cfg.fused_loss,
+                    "model_type": _fused_loss_model_type,
+                },
+            )
+            return EXIT_REFUSE
+        # fused_loss_refusal_reason already refused a None model_type above;
+        # this states that fact where the type checker can use it too.
+        assert _fused_loss_model_type is not None
+        try:
+            _fused_loss_line = apply_fused_loss(model, _fused_loss_model_type)
+        except ImportError as exc:
+            missing = getattr(exc, "name", None) or str(exc)
+            _mark(
+                Step.REFUSE,
+                f"fused_loss={cfg.fused_loss!r} is declared but {missing!r} is "
+                f"absent; install with {EXTRA_HINT}",
+            )
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={"exit": EXIT_REFUSE, "fused_loss": cfg.fused_loss},
+            )
+            return EXIT_REFUSE
+        _mark(Step.VALIDATED, _fused_loss_line)
 
     # --- Adapters (LoRA), wrapped HERE -- upstream of the declaration -------
     #
@@ -5038,6 +5374,64 @@ def _train(cfg: TrainConfig) -> int:
         else:  # pragma: no cover -- __post_init__ refuses every other value
             _mark(Step.REFUSE, f"adapter={cfg.adapter!r} has no wiring in the thin path")
             return EXIT_REFUSE
+
+    # FSDP version 1 + peft: capture the save-time skeleton RECIPE here, while
+    # `model` is still a plain (not yet FSDP-wrapped) PeftModel -- FSDP only
+    # wraps it later, inside accelerator.prepare as part of trainer.train().
+    # None when there is no adapter at all: the Trainer subclass below treats
+    # that exactly like FSDP2/DDP (nothing to fix). See
+    # train/fsdp_peft_save.py's module docstring for the measured root cause
+    # (an empty adapter_model.safetensors under FSDP1 auto-wrap).
+    _peft_fsdp1_skeleton_factory: Callable[[], Any] | None = None
+    if cfg.adapter is not None:
+        from foundationscale.train.fsdp_peft_save import (  # noqa: PLC0415
+            build_peft_fsdp1_skeleton_factory,
+        )
+
+        # Read the SAME tie-embeddings fact the FSDP block below will use to
+        # pin fsdp_config["version"] = 1 -- known as soon as the model is
+        # loaded, well before that block runs -- so a factory-build failure
+        # can be adjudicated NOW against what this run will actually do,
+        # not guessed at.
+        _will_be_fsdp1 = cfg.sharding_strategy == "fsdp" and _model_ties_word_embeddings(model)
+        try:
+            _peft_fsdp1_skeleton_factory = build_peft_fsdp1_skeleton_factory(model)
+        except (AttributeError, ValueError) as exc:
+            if _will_be_fsdp1:
+                # Without the skeleton, EVERY checkpoint this run writes
+                # saves an empty adapter_model.safetensors (the exact #--
+                # defect train/fsdp_peft_save.py exists to fix) -- a
+                # measured, not a hypothetical, outcome for this combination.
+                # Refusing before a GPU-hour is spent, never training to a
+                # checkpoint nobody can load.
+                _mark(
+                    Step.REFUSE,
+                    f"sharding_strategy=fsdp with a tied-embedding model (FSDP version 1 "
+                    "will be pinned) and adapter='lora', but the FSDP1+peft save-fix "
+                    f"recipe could not be prepared ({exc!r}): every checkpoint this run "
+                    "writes would save an EMPTY adapter -- train/fsdp_peft_save.py's "
+                    "measured root cause. Refusing (96) rather than training to an "
+                    "unloadable checkpoint",
+                )
+                _emit_manifest(
+                    cfg,
+                    stage="refused",
+                    extra={"exit": EXIT_REFUSE, "fsdp1_peft_save_prepare_error": repr(exc)},
+                )
+                return EXIT_REFUSE
+            # A real peft.get_peft_model() result always exposes
+            # get_base_model()/peft_config -- this is a shape-mismatch
+            # DEGRADATION, not an operator-facing refusal, and it is provably
+            # harmless here: this run is not FSDP version 1 (DDP, or FSDP2 on
+            # an untied model), so the fix this factory feeds was never going
+            # to engage regardless of whether it built successfully.
+            _mark(
+                Step.ADAPTER,
+                f"[   ok] fsdp1_peft_save: could not prepare the FSDP1+peft save-fix "
+                f"recipe ({exc!r}); continuing without it -- this run is not FSDP "
+                "version 1 (sharding_strategy != 'fsdp', or untied embeddings so FSDP2 "
+                "applies), so the fix this recipe feeds would never have engaged",
+            )
 
     # Derive the checkpoint denominator HERE -- from the model in memory, once,
     # before a single tensor has been written. Doing it after a save would read
@@ -5211,13 +5605,17 @@ def _train(cfg: TrainConfig) -> int:
     # behind it (AdamW, accumulation 1, max_grad_norm 1.0, no recompute, linear
     # LR with zero warmup) and passing that default undeclared would convert an
     # abstention into the appearance of a statement (#342).
-    # Three of the sixteen declaration axes are deliberately NOT in this dict,
+    # Four of the seventeen declaration axes are deliberately NOT in this dict,
     # each for its own reason:
     # attn_implementation binds at model construction (introspected and
     # possibly refused at its own site above); sdp_backend binds through
-    # process-global torch toggles and never touches TrainingArguments; and
+    # process-global torch toggles and never touches TrainingArguments;
     # logging_steps is resolved once into logging_steps_effective above,
-    # because it is the one axis whose ABSENCE still binds a cadence.
+    # because it is the one axis whose ABSENCE still binds a cadence; and
+    # fused_loss binds by monkeypatching the model INSTANCE, before this
+    # function is even reached (see the "Adapters (LoRA)" section above),
+    # and like attn_implementation/sdp_backend has no TrainingArguments field
+    # to wire at all.
     # sharding_strategy and cpu_optimizer_offload used to be in this list as
     # axes with no wiring at all; they are wired below now.
     # Every key added here flows through the `accepted` introspection check
@@ -5290,9 +5688,7 @@ def _train(cfg: TrainConfig) -> int:
         #
         # So the version is chosen by the tie and the granularity stays per
         # layer either way.
-        model_config = getattr(model, "config", None)
-        text_config = getattr(model_config, "text_config", model_config)
-        tied = bool(getattr(text_config, "tie_word_embeddings", False))
+        tied = _model_ties_word_embeddings(model)
         kwargs["fsdp"] = "full_shard auto_wrap"
         # Pinned explicitly rather than left to transformers' own resolution of
         # _no_split_modules, which matches class NAMES and dies on a name the
@@ -5316,6 +5712,23 @@ def _train(cfg: TrainConfig) -> int:
             )
             return EXIT_REFUSE
         fsdp_config["transformer_layer_cls_to_wrap"] = wrap_classes
+        if cfg.adapter is not None:
+            # Under peft, transformers swaps in peft's fsdp_auto_wrap_policy, which
+            # takes its class list from FSDP_TRANSFORMER_CLS_TO_WRAP (only
+            # `accelerate launch` sets it) and otherwise from the model's
+            # _no_split_modules. Measured on gemma-4-31B-it and 26B-A4B: that list
+            # names Gemma4AudioLayer, which these checkpoints do not contain, and
+            # peft raised "Could not find the transformer layer class to wrap"
+            # before step 1. The resolved classes above exist in the model, so
+            # they are handed to peft as the declaration it reads.
+            os.environ["FSDP_TRANSFORMER_CLS_TO_WRAP"] = ",".join(wrap_classes)
+            _mark(
+                Step.VALIDATED,
+                "fsdp + adapter: FSDP_TRANSFORMER_CLS_TO_WRAP set to the resolved "
+                f"wrap classes {wrap_classes} so peft's auto-wrap policy uses them "
+                "instead of _no_split_modules, which can name towers this "
+                "checkpoint does not have",
+            )
         if tied and (cfg.tp > 1 or cfg.cp > 1):
             # accelerate's ParallelismConfig composes tp/cp with FSDP version 2
             # only, and a tied model needs version 1 (above). Measured on the
@@ -5586,7 +5999,45 @@ def _train(cfg: TrainConfig) -> int:
         )
         _emit_manifest(cfg, stage="refused", extra={"exit": EXIT_REFUSE, "cp": cfg.cp})
         return EXIT_REFUSE
-    if IMAGE_COLUMN is not None:
+    if CONVERSATIONS_COLUMN is not None and cfg.cp > 1:
+        _mark(
+            Step.REFUSE,
+            f"cp={cfg.cp} with a conversations column: the conversation collator "
+            f"does not pad to a multiple of 2*cp={2 * cfg.cp} either (same gap as "
+            "the image collator), and context parallelism cannot split a sequence "
+            "that does not divide. Refusing (96)",
+        )
+        _emit_manifest(cfg, stage="refused", extra={"exit": EXIT_REFUSE, "cp": cfg.cp})
+        return EXIT_REFUSE
+    if CONVERSATIONS_COLUMN is not None:
+        from foundationscale.train.conversation import (  # noqa: PLC0415
+            train_conversation_collator_or_refuse,
+        )
+
+        # OVERLONG was refused above (REQUIRED alongside CONVERSATIONS_COLUMN)
+        # unless it resolved to a real value; this states that fact where the
+        # type checker can use it too.
+        assert OVERLONG is not None
+        # image_column is IMAGE_COLUMN itself, never a guessed "image": an
+        # undeclared image column means normalize_conversation expects ZERO
+        # images on every row, and a row that still carries an <image>
+        # marker refuses (naming the missing declaration) rather than
+        # silently training it text-only under a conversations label.
+        data_collator = train_conversation_collator_or_refuse(
+            prompt_surface.surface,
+            conversations_column=CONVERSATIONS_COLUMN,
+            image_column=IMAGE_COLUMN,
+            max_length=cfg.max_sequence_length,
+            overlong=OVERLONG,
+            pad_to_max_length=PAD_TO_MAX_LENGTH,
+            inject_dummy_media=INJECT_DUMMY_MEDIA,
+        )
+        # Trainer's default strips dataset columns its model signature does
+        # not name -- with this collator the raw conversations column (and,
+        # when declared, the raw image column) must SURVIVE to collate time,
+        # same reason the image arm disables it below.
+        kwargs["remove_unused_columns"] = False
+    elif IMAGE_COLUMN is not None:
         from foundationscale.rl.prompt_surface import (
             refuse_if_pixel_column_dropped,
             train_image_collator_or_refuse,
@@ -5779,13 +6230,26 @@ def _train(cfg: TrainConfig) -> int:
         # the refusal, exactly as it does for #447 one line up.
         if _execution_widens_beyond_declaration(cfg, args):
             return EXIT_REFUSE
-        trainer = Trainer(
+        # The Trainer class is always the FSDP1+peft-save-fixing subclass, not
+        # only when `cfg.adapter` is declared: building the subclass is a pure
+        # class statement with no side effect, and its override of `_save`
+        # does nothing but call `super()._save(...)` whenever
+        # `_fs_peft_skeleton_factory` is None (set two lines below) -- so
+        # every other path (FSDP2, DDP, no adapter) stays byte-identical to
+        # constructing `Trainer` directly. See train/fsdp_peft_save.py.
+        from foundationscale.train.fsdp_peft_save import (  # noqa: PLC0415
+            fsdp1_peft_save_trainer_class,
+        )
+
+        _FsdpPeftSaveTrainer = fsdp1_peft_save_trainer_class(Trainer)
+        trainer = _FsdpPeftSaveTrainer(
             model=model,
             args=args,
             train_dataset=tokenized,
             data_collator=data_collator,
             callbacks=callbacks,
         )
+        trainer._fs_peft_skeleton_factory = _peft_fsdp1_skeleton_factory
         # Trainer.__init__ just set config.use_cache=False. On a KV-sharing model
         # that corrupts the training forward (see _kv_shared_layer_count), so the
         # cache is pinned back on here, AFTER the constructor that turned it off.
@@ -6099,6 +6563,35 @@ def _train(cfg: TrainConfig) -> int:
     # does at the per-checkpoint site. None is NOT a vote for PASS: the code
     # this rank exits with is the one the WRITING rank measured, adopted
     # through the collective.
+    # Conversation collator stats (rows_seen, dropped_overlong,
+    # dummy_media_batches -- train/conversation.py's collate.stats) are
+    # PER-RANK: each rank's DataLoader shard collates different batches.
+    # All-reduced SUM HERE, on EVERY rank, BEFORE the per-rank early-return
+    # below -- that return is reached by every non-writing rank, and a
+    # collective called only on the writer, after its peers already left,
+    # would hang forever waiting for them.
+    _conversation_stats_reduced: dict[str, int] | None = None
+    _conversation_stats_scope = "unmeasured"
+    if CONVERSATIONS_COLUMN is not None:
+        _conversation_stats_local = dict(getattr(data_collator, "stats", {}))
+        _stats_keys = sorted(_conversation_stats_local)
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            _stats_values = torch.tensor(
+                [_conversation_stats_local.get(k, 0) for k in _stats_keys], dtype=torch.float64
+            )
+            if torch.cuda.is_available():
+                _stats_values = _stats_values.to("cuda")
+            torch.distributed.all_reduce(_stats_values, op=torch.distributed.ReduceOp.SUM)
+            _conversation_stats_reduced = dict(
+                zip(_stats_keys, (int(v) for v in _stats_values.tolist()), strict=True)
+            )
+            _conversation_stats_scope = "all-reduced SUM across ranks"
+        else:
+            _conversation_stats_reduced = _conversation_stats_local
+            _conversation_stats_scope = (
+                "single-process (no torch.distributed group); this IS the whole "
+                "value, not one rank's share of it"
+            )
     # getattr, not attribute access: _wrote_this_checkpoint's whole contract is
     # that an UNANSWERABLE question returns None and the caller then adjudicates
     # -- "a bare test double, or a plain single-process run". Reaching through
@@ -6260,6 +6753,52 @@ def _train(cfg: TrainConfig) -> int:
     }
     if speech_manifest is not None:
         done_extra["speech_gates"] = speech_manifest
+    if CONVERSATIONS_COLUMN is not None:
+        # The declared conversation axes, recorded as an effective value plus
+        # its source (declared vs default), the same shape every CLI
+        # DECLARATION_AXES entry carries -- these are env-declared, not CLI
+        # fields, so they ride in `extra` rather than TrainConfig's own
+        # config section, but the value+source pair is the same information.
+        done_extra["conversation_declaration"] = json.dumps(
+            {
+                "conversations_column": {
+                    "value": CONVERSATIONS_COLUMN,
+                    "source": _conversation_declared_sources.get("conversations_column"),
+                },
+                "overlong": {
+                    "value": OVERLONG,
+                    "source": _conversation_declared_sources.get("overlong"),
+                },
+                "pad_to_max_length": {
+                    "value": PAD_TO_MAX_LENGTH,
+                    "source": _conversation_declared_sources.get("pad_to_max_length"),
+                },
+                "inject_dummy_media": {
+                    "value": INJECT_DUMMY_MEDIA,
+                    "source": _conversation_declared_sources.get("inject_dummy_media"),
+                },
+            },
+            sort_keys=True,
+        )
+        if _conversation_prepass_stats is not None:
+            done_extra["conversation_prepass"] = json.dumps(
+                _conversation_prepass_stats, sort_keys=True
+            )
+        # The collator's own stats (rows_seen, dropped_overlong,
+        # dummy_media_batches -- train/conversation.py's collate.stats),
+        # all-reduced SUM across ranks above (or labelled single-process),
+        # reported HERE at done-time because they are only final once
+        # training has consumed every batch; the "train"-stage manifest
+        # emitted before the first step could only have reported zeros.
+        done_extra["conversation_collator_stats"] = json.dumps(
+            _conversation_stats_reduced, sort_keys=True
+        )
+        done_extra["conversation_collator_stats_scope"] = _conversation_stats_scope
+        _mark(
+            Step.ADJUDICATE,
+            f"conversation collator stats ({_conversation_stats_scope}): "
+            f"{_conversation_stats_reduced}",
+        )
     _emit_manifest(
         cfg,
         stage="done",

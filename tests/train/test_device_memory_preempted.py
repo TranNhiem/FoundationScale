@@ -496,7 +496,7 @@ def test_the_gate_sits_between_training_arguments_and_trainer_in_source() -> Non
     # gate sits; pinning the exact arguments too would make it fail on a change it
     # has no opinion about, and a leg that cries on unrelated edits gets deleted.
     gate = src.index("if _device_memory_preempted(")
-    trainer = src.index("trainer = Trainer(")
+    trainer = src.index("trainer = _FsdpPeftSaveTrainer(")  # still Trainer under the hood
     assert args_line < gate, (
         "the gate runs before _TrainingArguments, so torch.distributed is not yet "
         "initialized: _agree_on_stop silently returns the local answer and one rank's "

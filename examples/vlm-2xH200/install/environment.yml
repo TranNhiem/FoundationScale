@@ -1,0 +1,12 @@
+# conda env create -f environment.yml && conda activate fs-vlm
+# then, from the repository root:  pip install -e ".[train]"
+name: fs-vlm
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - ffmpeg
+  - git
+  - pip:
+      - -r requirements-vlm.txt
