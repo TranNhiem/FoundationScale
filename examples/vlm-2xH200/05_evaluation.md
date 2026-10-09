@@ -2,17 +2,17 @@
 
 In this chapter you evaluate the adapter you trained in chapter 04 on data that was never seen during training, merge the adapter into a single checkpoint for serving, and score both the base model and the fine-tuned model on public benchmarks with vLLM. Always compare **base vs fine-tuned on the same held-out rows and the same benchmark rows**, and save the JSON results — they are your evidence.
 
-(The measured numbers below were produced on the 2x H200 VM with `gemma-4-12B-it`.)
+(The measured numbers below were produced on the 2x H200 VM with `gemma-4-12B-it`. Measured timings for this chapter: ~20 min of evaluation, plus a 6 min one-off vLLM install.)
 
 ## 1. Confirm your held-out split is clean
 
-The held-out split comes from the `prepare_data.py` split from chapter 02, so evaluation rows never appear in training. Locate the file:
+The held-out file is built in chapter 02 from the three per-source eval splits (`cat data/prepared/image.eval.jsonl data/prepared/video.eval.jsonl data/prepared/text.eval.jsonl > data/prepared/heldout.jsonl`), so evaluation rows never appear in training. Locate the file:
 
 ```bash
 ls -l data/prepared/heldout.jsonl
 ```
 
-**Check it worked.** The file exists and is non-empty. Evaluation rows must not overlap training rows — if you rebuilt the data yourself, re-run `prepare_data.py split` from chapter 02 rather than hand-splitting; the measured train/held-out split is exactly this (a train split made with `prepare_data.py split`), and its held-out file holds **171 disjoint rows: 110 image, 40 video, 21 text**.
+**Check it worked.** The file exists and is non-empty. Evaluation rows must not overlap training rows — if you rebuilt the data yourself, re-run `prepare_data.py split` from chapter 02 and then the `cat` command above, rather than hand-splitting; the measured train/held-out split is exactly this (a train split made with `prepare_data.py split`), and its held-out file holds **171 disjoint rows: 110 image, 40 video, 21 text**.
 
 ## 2. Held-out loss (NLL and perplexity)
 
@@ -76,13 +76,13 @@ python examples/vlm-2xH200/scripts/merge_lora.py \
   --out merged/gemma-4-12B-it-lora
 ```
 
-**Check it worked.** The script prints `PASS` checks for all three of these:
+**Check it worked.** The script prints **8 `PASS` check lines**. They cover at least these three kinds of check:
 
 - reloaded params equal base params,
 - no LoRA weights left in memory or on disk,
 - processor saved and reloadable.
 
-Look for the three `PASS` lines in the output before continuing.
+Look for all 8 `PASS` lines in the output before continuing.
 
 ## 4. Benchmark accuracy with vLLM
 
@@ -91,17 +91,13 @@ Look for the three `PASS` lines in the output before continuing.
 
 ### 4a. Create a separate vLLM environment
 
-vLLM pins its own stack, so install it into its own virtualenv, not the training environment:
-
-```bash
-python -m vvenv vllm-env  # TODO(verify) — use: python -m venv vllm-env
-```
+vLLM pins its own stack, so install it into its own virtualenv, not the training environment (the separate venv keeps vLLM from changing the training env):
 
 ```bash
 python -m venv vllm-env && vllm-env/bin/pip install vllm
 ```
 
-TODO(verify) the exact vLLM version to pin. Measured with **vLLM 0.30.0 + torch 2.13 + transformers 5.18**.
+Tested with **vLLM 0.30–0.31 with torch 2.13** (the measured stack was **vLLM 0.30.0 + torch 2.13 + transformers 5.18**; no explicit version pin is required). The install takes about **6 min**.
 
 ```bash
 vllm-env/bin/python -c "import vllm, torch, transformers; print(vllm.__version__, torch.__version__, transformers.__version__)"
@@ -111,15 +107,28 @@ vllm-env/bin/python -c "import vllm, torch, transformers; print(vllm.__version__
 
 ### 4b. Get the benchmark TSVs
 
-Download the VLMEvalKit TSVs (`MMStar`, `MMBench_DEV_EN`, `AI2D_TEST`) from:
+Download the VLMEvalKit TSVs (`MMStar`, `MMBench_DEV_EN`, `AI2D_TEST`) from `https://opencompass.openxlab.space/utils/VLMEval/<NAME>.tsv`. For MMStar:
 
+```bash
+mkdir -p data/eval
+curl -L -o data/eval/MMStar.tsv https://opencompass.openxlab.space/utils/VLMEval/MMStar.tsv
 ```
-https://opencompass.openxlab.space/utils/VLMEval/<NAME>.tsv
+
+**If it fails with "certificate has expired"** (curl error 60): the opencompass host's TLS certificate was expired when tested. Retry with `curl -k` — the file is public data:
+
+```bash
+curl -k -L -o data/eval/MMStar.tsv https://opencompass.openxlab.space/utils/VLMEval/MMStar.tsv
 ```
 
-TODO(verify) the exact URLs. The columns are: `index`, `question`, `A`..`D`, `answer`, `image` (base64), optional `hint`, `category`.
+Check the row count looks right:
 
-Store them under `data/eval/`, e.g. `data/eval/MMStar.tsv`. The measured `MMStar` TSV contains **1,498 questions**.
+```bash
+wc -l data/eval/MMStar.tsv
+```
+
+**Check it worked.** `wc -l` prints ~1,500 rows. Expect **~1,500 questions**; the scorer skips 2 malformed rows, so the measured `MMStar` TSV scores **1,498 questions**.
+
+The columns are: `index`, `question`, `A`..`D`, `answer`, `image` (base64), optional `hint`, `category`. Store them under `data/eval/`, e.g. `data/eval/MMStar.tsv`. (The same URL pattern with a different `<NAME>` gives `MMBench_DEV_EN.tsv` and `AI2D_TEST.tsv`.)
 
 ### 4c. Run a benchmark
 
@@ -128,14 +137,14 @@ Store them under `data/eval/`, e.g. `data/eval/MMStar.tsv`. The measured `MMStar
 1. set `VLLM_USE_FLASHINFER_SAMPLER=0` and `VLLM_USE_DEEP_GEMM=0`, and
 2. use `--tp 1` — tensor parallel 2 triggers FlashInfer's fused all-reduce, which JIT-compiles with `nvcc` and fails.
 
-Every target model fits one H200 for inference, so run **two benchmarks in parallel, one per GPU** (`CUDA_VISIBLE_DEVICES=0` and `CUDA_VISIBLE_DEVICES=1`).
+Every target model fits one H200 for inference, so run **two benchmarks in parallel, one per GPU** (`CUDA_VISIBLE_DEVICES=0` and `CUDA_VISIBLE_DEVICES=1`). **Compare base vs fine-tuned on the SAME benchmark rows** — both runs below score `data/eval/MMStar.tsv`, so the two numbers are directly comparable.
 
 Scoring controls (see the warning above):
 
 - `--max-tokens N` — maximum number of new tokens generated per question. The script defaults to **512**; the old fixed `max_tokens=32` cut reasoning answers off (26% unparsable) and made numbers untrustworthy. Raise to **1024** for reasoning-heavy benchmarks.
 - `--limit N` — score only the first N questions. Fine for a smoke test, but score the **same** rows for every model you compare, or drop `--limit` entirely (the measured numbers below are the full 1,498-question MMStar set).
 
-GPU 0 (merged 6-step adapter):
+GPU 0 (merged adapter):
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_USE_DEEP_GEMM=0 \
@@ -147,22 +156,22 @@ CUDA_VISIBLE_DEVICES=0 VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_USE_DEEP_GEMM=0 \
   --max-tokens 512 \
   --tp 1 \
   --max-model-len 8192 \
-  --out results/mmstar.json
+  --out results/mmstar_lora.json
 ```
 
-GPU 1 (base model, same rows for comparison):
+GPU 1 (base model, **the same MMStar rows** for comparison):
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_USE_DEEP_GEMM=0 \
   vllm-env/bin/python examples/vlm-2xH200/scripts/eval_mcq_vllm.py \
   --model models/gemma-4-12B-it \
-  --tsv data/eval/MMBench_DEV_EN.tsv \
-  --name MMBench_DEV_EN \
+  --tsv data/eval/MMStar.tsv \
+  --name MMStar \
   --limit 100 \
   --max-tokens 512 \
   --tp 1 \
   --max-model-len 8192 \
-  --out results/mmbench_dev_en_base.json
+  --out results/mmstar_base.json
 ```
 
 For Qwen3.6, add `--disable-thinking` so it answers with a letter directly.
@@ -192,11 +201,14 @@ TODO(verify) command — use `vllm chat` (from the `vllm-env` environment) on a 
 
 - **`nvcc` / FlashInfer JIT compile failure at startup, or with `--tp 2`.** The VM has no CUDA toolkit. Set `VLLM_USE_FLASHINFER_SAMPLER=0` and `VLLM_USE_DEEP_GEMM=0` and run with `--tp 1`. Tensor parallel 2 triggers FlashInfer's fused all-reduce, which JIT-compiles with `nvcc` and fails on this VM.
 - **vLLM import conflicts / wrong torch version.** vLLM pins its own stack. Run benchmarks only from `vllm-env` (`vllm-env/bin/python`), never from the training environment.
-- **`merge_lora.py` does not print all three `PASS` checks.** Do not use the merged checkpoint. Re-check that `--adapter` points to a complete `checkpoint-N` from chapter 04 and re-run the merge.
+- **Benchmark TSV download fails with "certificate has expired" (curl error 60).** The opencompass host's TLS certificate can be expired. Retry with `curl -k` (the file is public data) and check with `wc -l` that you have ~1,500 rows.
+- **Wrong or tiny TSV.** Check `wc -l data/eval/<name>.tsv`: MMStar has ~1,500 rows (1,498 usable — the scorer skips 2 malformed rows). Re-download if the file is truncated or empty.
+- **`merge_lora.py` does not print all 8 `PASS` check lines.** Do not use the merged checkpoint. Re-check that `--adapter` points to a complete `checkpoint-N` from chapter 04 and re-run the merge.
 - **`eval_heldout_loss.py` refuses video rows with `exit 96`.** Video rows only run with `--video-frames N`. Pass the same value as `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` from training (16 frames/clip in the measured runs).
 - **Held-out loss looks suspiciously good.** Check "rows used" / "rows dropped" and verify your held-out rows never appeared in training. A script check that let rows partly overlap training measured NLL 1.601 → 1.149 in only 6 steps; that kind of gap can be an artifact of overlap rather than learning. (For scale: on the clean 171-row split the 300-step adapter measured 1.433 → 0.505 with 0 rows dropped.)
 - **Benchmark score varies wildly between runs or reports.** Do not extrapolate from a subset: the first 20 MMStar questions scored 20% while the first 100 scored 54%. Use the full set (or an identical `--limit` for all models). If a score looks far too **low**, read the warning in section 4 first: check the `unparsable` count and a few raw outputs (a 32-token budget plus first-capital-letter parsing once reported 47.00% where the same base model scores 64.02%).
 - **Model does not answer with a multiple-choice letter (Qwen3.6).** Add `--disable-thinking` so it answers with a letter directly.
+- **Base and fine-tuned numbers are not comparable.** They were probably scored on different TSVs or different `--limit` slices. Score both on the same benchmark file (both `data/eval/MMStar.tsv` here) and the same rows, one run per GPU.
 - **Out of memory during `eval_heldout_loss.py` at `--max-length 16384`.** Not expected: the measured 171-row held-out eval ran at `--max-length 16384` to completion with 0 rows dropped. If you still hit OOM (a larger model or longer rows), lower `--max-length` and account for the increased `rows dropped` count.
 
 Next: repeated-training runs at scale (multi-checkpoint sweeps, hundreds of steps) and qualitative error analysis on the saved JSONs.

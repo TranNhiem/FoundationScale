@@ -11,7 +11,7 @@ evidence is in [`validation_campaigns/vlm_2xh200/EVIDENCE.md`](../../validation_
 
 | | |
 |---|---|
-| Models | `Qwen/Qwen3.6-27B` (dense), `Qwen/Qwen3.6-35B-A3B` (MoE), `google/gemma-4-31B-it` (dense), `google/gemma-4-26B-A4B-it` (MoE), `google/gemma-4-12B-it` (dense) |
+| Models | `Qwen/Qwen3.6-27B` (dense), `Qwen/Qwen3.6-35B-A3B` (MoE), `google/gemma-4-31B-it` (dense), `google/gemma-4-26B-A4B-it` (MoE), `google/gemma-4-12B-it` (dense) — plan ~300 GB of free disk to hold all five |
 | Method | LoRA (r16 / alpha 32 by default), FSDP across both GPUs, bf16, activation checkpointing |
 | Context | 16K and 32K tokens |
 | Data | image + text, video + text and text-only, mixed in one run |
@@ -28,9 +28,18 @@ evidence is in [`validation_campaigns/vlm_2xh200/EVIDENCE.md`](../../validation_
 
 ## Quick start (after chapters 1 and 2)
 
+Get the tutorial and run everything from the repository root `FoundationScale/`:
+
 ```bash
+git clone --branch vlm-competition https://github.com/TranNhiem/FoundationScale.git && cd FoundationScale
 bash examples/vlm-2xH200/scripts/train_sft.sh examples/vlm-2xH200/configs/gemma-4-12B-it_16k.env
 ```
+
+(The tutorial lives on branch `vlm-competition` until it is merged into `main`.)
+
+Measured by a fresh user on 2x H200: data prep < 1 min on the sample files, 20-step SFT of
+gemma-4-12B-it ~12 min (add `STEPS=20` for that smoke run), DPO 5 steps 92 s, GRPO 5 steps 198 s,
+evaluation ~20 min plus a 6 min vLLM install.
 
 ## Measured results: mixed image + video + text, LoRA, 2x H200
 
@@ -93,17 +102,20 @@ Qwen3.6-27B, **82.2 GB** for Qwen3.6-35B-A3B).
 **GRPO signal: watch the advantage.** On ScienceQA many groups give all-identical rewards — the
 model gets all 4 samples right, or none finishes within `max_new_tokens`. Identical rewards give
 zero advantage, so that step is skipped, and **a run where every step is skipped is refused
-(exit 96, "vacuous run")**. Measured: gemma-4-12B-it completed 3 of 20 steps with group size 4 /
-4 prompts per step. Remedies: larger `--group-size` (8), more `--prompts-per-step`, harder
-questions matched to the model, `--max-new-tokens 400+` for reasoning models.
+(exit 96, REFUSED — "vacuous run")**. Measured: gemma-4-12B-it completed 3 of 20 steps with group
+size 4 / 4 prompts per step. Remedies: larger `--group-size` (8), more `--prompts-per-step`,
+harder questions matched to the model, `--max-new-tokens 400+` for reasoning models.
 
 ### 300-step SFT + evaluation (gemma-4-12B-it, 16K)
 
 Training: 300 steps, gradient accumulation 4, **unpadded** batches, 16K context, on a train
-split made with `prepare_data.py split`; the held-out set is 171 disjoint rows (110 image,
-40 video, 21 text). Training loss **1.11 → 0.43**, exit 0.
+split made with `prepare_data.py split` (`data/prepared/<src>.train.jsonl`, mixed into
+`data/prepared/mixed.jsonl`); the held-out file is `data/prepared/heldout.jsonl`, built with
+`cat data/prepared/image.eval.jsonl data/prepared/video.eval.jsonl data/prepared/text.eval.jsonl >
+data/prepared/heldout.jsonl`. The held-out set is 171 disjoint rows (110 image, 40 video,
+21 text). Training loss **1.11 → 0.43**, exit 0.
 
-Held-out loss (`eval_heldout_loss.py`, 0 rows dropped):
+Held-out loss (`eval_heldout_loss.py --data data/prepared/heldout.jsonl`, 0 rows dropped):
 
 | | NLL | perplexity |
 |---|---|---|
@@ -113,6 +125,19 @@ Held-out loss (`eval_heldout_loss.py`, 0 rows dropped):
 `eval_heldout_loss.py` now takes `--video-frames N` — use the same value as
 `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` in training. Without it, video rows are refused with
 exit 96.
+
+Getting the benchmark (the file is public data; the opencompass host's TLS certificate was
+expired when tested, so `curl` may fail with "certificate has expired" / error 60):
+
+```bash
+curl -L -o data/eval/MMStar.tsv https://opencompass.openxlab.space/utils/VLMEval/MMStar.tsv
+# if it fails with "certificate has expired", retry with:
+curl -k -L -o data/eval/MMStar.tsv https://opencompass.openxlab.space/utils/VLMEval/MMStar.tsv
+wc -l data/eval/MMStar.tsv    # expect ~1,500 rows; the scorer skips 2 malformed ones
+```
+
+Base and fine-tuned are compared on the **same** MMStar rows (both MMStar), one model per GPU
+(`CUDA_VISIBLE_DEVICES=0` / `CUDA_VISIBLE_DEVICES=1`) with `--max-tokens 512`.
 
 MMStar (1,498 questions, vLLM, `--max-tokens 512`):
 
@@ -137,7 +162,8 @@ benchmark number**; raise `--max-tokens` to 1024 for reasoning-heavy benchmarks.
 ## 06 — Ready-to-run configs for each model
 
 `configs/` holds one file per model and context length. Each sets only `MODEL`, `CONTEXT`,
-`DATASET` and `OUTPUT_DIR`; everything else is in [`scripts/train_sft.sh`](scripts/train_sft.sh).
+`DATASET` (pointing to `data/prepared/mixed.jsonl`) and `OUTPUT_DIR`; everything else is in
+[`scripts/train_sft.sh`](scripts/train_sft.sh).
 
 | config | model | context |
 |---|---|---|
@@ -151,13 +177,22 @@ benchmark number**; raise `--max-tokens` to 1024 for reasoning-heavy benchmarks.
 # SFT on your mixed data
 bash examples/vlm-2xH200/scripts/train_sft.sh examples/vlm-2xH200/configs/Qwen3.6-27B_32k.env
 
-# Preference training (text) and RL (images): see chapter 4
+# Preference training (text) — scripts/train_dpo.py; see chapter 4
 torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29500 \
-  examples/vlm-2xH200/scripts/train_dpo.py --model models/Qwen3.6-27B \
-  --data data/pref/dpo_train.jsonl --output-dir runs/dpo --algorithm dpo
+  examples/vlm-2xH200/scripts/train_dpo.py --model models/gemma-4-12B-it \
+  --data data/pref/dpo_train.jsonl --output-dir runs/dpo --algorithm dpo \
+  --max-steps 20 --max-length 4096
+
+# RL (images) — scripts/train_grpo.py; see chapter 4
+torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29500 \
+  examples/vlm-2xH200/scripts/train_grpo.py --model models/gemma-4-12B-it \
+  --data data/rl_scienceqa/scienceqa_train.jsonl --output-dir runs/grpo --algorithm grpo \
+  --max-steps 20 --max-new-tokens 400 --group-size 4 --prompts-per-step 4
 ```
 
-Override any setting from the shell: `STEPS=2000 LR=5e-5 bash scripts/train_sft.sh configs/...`.
+Override any setting from the shell with environment variables (`STEPS`, `LR`, `RANK`, `ALPHA`,
+`SAVE_EVERY`, `GRAD_ACCUM`, `VIDEO_FRAMES`):
+`STEPS=2000 LR=5e-5 bash examples/vlm-2xH200/scripts/train_sft.sh examples/vlm-2xH200/configs/...`.
 
 ## Things that will bite you on this VM (all measured)
 
@@ -165,15 +200,22 @@ Override any setting from the shell: `STEPS=2000 LR=5e-5 bash scripts/train_sft.
   Always pass `--master_addr 127.0.0.1`.
 - 32K context needs `--fused-loss liger`. Without it, gemma-4-12B-it tries to allocate a 32 GiB
   fp32 logits tensor (32768 x 262144 x 4 bytes) and runs out of memory.
-- Qwen3.6 needs `pip install flash-linear-attention` for speed: 502 vs 3,156 tokens/s on
+- Qwen3.6 needs `pip install flash-linear-attention` for speed (0.5.2): 502 vs 3,156 tokens/s on
   Qwen3.6-27B at 32K.
-- There is no CUDA toolkit (`nvcc`) on the VM. vLLM evaluation needs
-  `VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_USE_DEEP_GEMM=0` and `--tp 1`.
+- There is no CUDA toolkit (`nvcc`) on the VM. vLLM for evaluation goes in a **separate venv**
+  (keeps it from changing the training env):
+  `python -m venv vllm-env && vllm-env/bin/pip install vllm` (tested: vLLM 0.30-0.31 with
+  torch 2.13); it needs `VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_USE_DEEP_GEMM=0` and `--tp 1`.
 
 ## Sample data
 
 - Image + text: [`trannhiem/TranNhiem-Vietnamese-DocumentImage-Reasoning`](https://huggingface.co/datasets/trannhiem/TranNhiem-Vietnamese-DocumentImage-Reasoning)
 - Video + text: [`trannhiem/TranNhiem-Action100M-Human-Activities`](https://huggingface.co/datasets/trannhiem/TranNhiem-Action100M-Human-Activities)
   (annotations under the FAIR Noncommercial Research License; videos are third-party YouTube
-  content, noncommercial research only)
+  content, noncommercial research only). Layout: `data/action100m_split1.jsonl` (plus
+  `_shortvideo` / `_longvideo`) and `videos/<id>.mp4`; download with
+  `hf download trannhiem/TranNhiem-Action100M-Human-Activities --repo-type dataset --local-dir data/raw/video`
+  and convert with `--input data/raw/video/data/action100m_split1.jsonl --video-root data/raw/video/videos`
+  (see chapter 02).
+  **Publishing in progress: if the dataset is not on the Hub yet, ask the organisers for the files and place them in that layout.**
 - Text-only: a 209-row Vietnamese reasoning file supplied by the organisers.

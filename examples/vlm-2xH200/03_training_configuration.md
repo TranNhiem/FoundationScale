@@ -4,29 +4,27 @@ This chapter is the configuration layer: one launch command, the flags and data 
 
 ## 1. The launch command
 
-Verified script, `examples/vlm-2xH200/scripts/train_sft.sh` (takes `MODEL_DIR CONTEXT DATASET OUTPUT_DIR [STEPS]`):
+One script does the work: `examples/vlm-2xH200/scripts/train_sft.sh` — LoRA SFT on mixed image + video + text data on 2x H200. It takes one argument, a `CONFIG_FILE` (see `examples/vlm-2xH200/configs/*.env`), which sets `MODEL`, `CONTEXT`, `DATASET` and `OUTPUT_DIR`:
 
 ```bash
-#!/bin/bash
-# examples/vlm-2xH200/scripts/train_sft.sh MODEL_DIR CONTEXT DATASET OUTPUT_DIR [STEPS]
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True HF_HUB_OFFLINE=1
-export FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN=conversations
-export FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN=image
-export FOUNDATIONSCALE_TRAIN_OVERLONG=drop
-torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29500 -m foundationscale.train \
-  --model $MODEL_DIR --dataset $DATASET --output-dir $OUTPUT_DIR --nodes 1 --gpus-per-node 2 --dp 2 \
-  --profile-name local-single-node --max-steps $STEPS --per-device-batch-size 1 --learning-rate 1e-4 \
-  --max-sequence-length $CONTEXT --precision bf16 --adapter lora --adapter-rank 16 --adapter-alpha 32 \
-  --sharding-strategy fsdp --gradient-checkpointing true --attn-implementation sdpa --logging-steps 1 \
-  --save-interval 500 --fused-loss liger
+bash examples/vlm-2xH200/scripts/train_sft.sh examples/vlm-2xH200/configs/<model>_<16k|32k>.env
 ```
+
+Everything else is overridden as an **environment variable in front of the command**: `STEPS` (default 1000), `LR` (1e-4), `RANK` (16), `ALPHA` (32), `SAVE_EVERY` (200), `GRAD_ACCUM` (8), `VIDEO_FRAMES` (16):
+
+```bash
+STEPS=20 bash examples/vlm-2xH200/scripts/train_sft.sh examples/vlm-2xH200/configs/gemma-4-12B-it_16k.env
+```
+
+The config file `examples/vlm-2xH200/configs/gemma-4-12B-it_16k.env` is four lines of intent: `MODEL=models/gemma-4-12B-it`, `CONTEXT=16384`, `DATASET=data/prepared/mixed.jsonl`, `OUTPUT_DIR=runs/gemma-4-12B-it_16k` (`DATASET` points at the mixed train file built in chapter 02).
+
+Inside the script the config is sourced and the real launch is a `torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29500 -m foundationscale.train ...` line; the tables below walk its flags and declarations in order.
 
 ### dotenv / torchrun line
 
 | element | why |
 |---|---|
-| `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` | avoids allocator fragmentation at long context |
-| `HF_HUB_OFFLINE=1` | models are local on this VM; no network round trips |
+| `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` | exported by the script; avoids allocator fragmentation at long context |
 | `torchrun --nnodes 1 --nproc_per_node 2` | one node, two processes = two GPUs |
 | `--master_addr 127.0.0.1` | **mandatory on this VM**: `localhost` resolves only to `::1`, so `torchrun --standalone` hangs (see §8) |
 | `--master_port 29500` | rendezvous port |
@@ -35,7 +33,7 @@ torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 295
 
 | flag | value | meaning |
 |---|---|---|
-| `--model` | `$MODEL_DIR` | HF model id or local path |
+| `--model` | `$MODEL` (from the config file) | HF model id or local path |
 | `--dataset` | `$DATASET` | HF dataset id, a `.json`/`.jsonl` file, or a directory of them |
 | `--output-dir` | `$OUTPUT_DIR` | where checkpoints/adapter land |
 | `--nodes 1 --gpus-per-node 2` | | declared world shape |
@@ -46,20 +44,20 @@ torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 295
 
 | flag | value | meaning |
 |---|---|---|
-| `--max-steps` | `$STEPS` | training budget |
-| `--per-device-batch-size 1` | | batch 1 per GPU (the memory-safe setting; see §6) |
-| `--learning-rate 1e-4` | | LoRA learning rate |
-| `--max-sequence-length $CONTEXT` | 16384 or 32768 | maximum tokenised sequence length. Caveat from the help text: longer samples are *truncated* to this length by the trainer — the dataset-level `FOUNDATIONSCALE_TRAIN_OVERLONG=drop` guard (§2) is what drops or refuses over-long rows before training, never truncates them. Default is 128 (a historical cap), so never omit this flag by accident |
+| `--max-steps` | `$STEPS` (default 1000) | training budget |
+| `--per-device-batch-size 1` + `--gradient-accumulation-steps` | `$GRAD_ACCUM` (default 8) | batch 1 per GPU (the memory-safe setting; see §6); the effective batch is `1 × 2 GPUs × GRAD_ACCUM` |
+| `--learning-rate` | `$LR` (default 1e-4) | LoRA learning rate (the script also fixes `--warmup-steps 20 --lr-scheduler-type cosine`) |
+| `--max-sequence-length` | `$CONTEXT` (16384 or 32768) | maximum tokenised sequence length, from the config. Caveat from the help text: longer samples are *truncated* to this length by the trainer — the dataset-level `FOUNDATIONSCALE_TRAIN_OVERLONG=drop` guard (§2) is what drops or refuses over-long rows before training, never truncates them. Default is 128 (a historical cap), so never omit this flag by accident |
 | `--precision bf16` | | declared precision (`bf16`, `fp16`, `fp32`; `nvfp4` is declarable but `train()` **refuses it (96)** — no backend, never a silent fallback) |
-| `--adapter lora --adapter-rank 16 --adapter-alpha 32` | | LoRA instead of full fine-tune (§4) |
+| `--adapter lora` | rank `$RANK` (16), alpha `$ALPHA` (32) | LoRA instead of full fine-tune (§4) |
 | `--sharding-strategy fsdp` | | parameters/gradients/optimizer state sharded across both GPUs — this is what makes a 26B/31B checkpoint reachable at all. `ddp` only replicates (each rank then holds the whole model + AdamW state ≈ 8 bytes/parameter). ZeRO/DeepSpeed are REFUSED (96) |
 | `--gradient-checkpointing true` | | activation recomputation. Note: it's a string flag, not `store_true`, so an omitted flag stays distinguishable from explicit `false` |
 | `--attn-implementation sdpa` | | supplied at model construction; refused (96) if this transformers loader can't provably accept it |
-| `--logging-steps 1` | | one loss point per step — the cadence decides when a loss is first OBSERVED; without it the loop binds `max(1, min(10, max_steps))` and the manifest records the effective value |
-| `--save-interval 500` | | checkpoint/save-gate cadence (the 6-step evidence runs used their own cadence and saved at step 6) |
+| `--logging-steps 10` | | one loss point every 10 steps — the cadence decides when a loss is first OBSERVED; without it the loop binds `max(1, min(10, max_steps))` and the manifest records the effective value |
+| `--save-interval` | `$SAVE_EVERY` (default 200) | checkpoint/save-gate cadence (the 6-step evidence runs used their own cadence and saved at step 6) |
 | `--fused-loss liger` | | fused linear cross-entropy — mandatory at 32K (§6) |
 
-Flags present in the CLI but not in this script: `--objective`, `--seed`, `--optimizer`, `--warmup-steps`, `--lr-scheduler-type`, `--gradient-accumulation-steps`, `--adapter-target`, `--adapter-dropout`, `--cpu-optimizer-offload`, `--dry-run`, `--launch-corpus`, `--profile-path`, `--tp/--pp/--ep/--cp`. Several of them (**TODO(verify)** which defaults bind where) apply engine defaults when omitted and record *no claim* in the manifest.
+Flags present in the CLI but not in this script: `--objective`, `--seed`, `--optimizer`, `--adapter-target`, `--adapter-dropout`, `--cpu-optimizer-offload`, `--dry-run`, `--launch-corpus`, `--profile-path`, `--tp/--pp/--ep/--cp`. Several of them (**TODO(verify)** which defaults bind where) apply engine defaults when omitted and record *no claim* in the manifest.
 
 ## 2. Declaring the data (environment variables)
 
@@ -72,7 +70,7 @@ The data contract is declared through **required/optional environment variables*
 | `FOUNDATIONSCALE_TRAIN_OVERLONG` | `drop` \| `refuse` | **required, no default**. What to do with rows whose measured length exceeds `--max-sequence-length` |
 | `FOUNDATIONSCALE_TRAIN_PAD_TO_MAX_LENGTH` | `true` \| `false` (optional) | `true` pads every batch to the full context — i.e. the **worst-case** memory/load profile. Use it **once** to prove the worst case fits, then turn it off for real training |
 
-Video frame budget (verified names pending): `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` (frame count), `FOUNDATIONSCALE_TRAIN_VIDEO_SAMPLING` (sampling strategy), `FOUNDATIONSCALE_TRAIN_VIDEO_MAX_SIDE` (max image side per frame), `FOUNDATIONSCALE_TRAIN_VIDEO_CACHE_DIR` (**TODO(verify)** these four names — video + text is not yet measured).
+Video columns and frame budget: `FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN` (the clip-path column) and `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` (frames per clip, sampled inside `[start, end]` — `train_sft.sh` exports it from the `VIDEO_FRAMES` override, default 16) are **verified names**. **TODO(verify)** the remaining three video names — `FOUNDATIONSCALE_TRAIN_VIDEO_SAMPLING` (sampling strategy), `FOUNDATIONSCALE_TRAIN_VIDEO_MAX_SIDE` (max image side per frame), `FOUNDATIONSCALE_TRAIN_VIDEO_CACHE_DIR` (decoded-frame cache): video + text is not yet measured.
 
 ### The pre-pass: validate and measure before training
 
@@ -95,13 +93,13 @@ but a row is **never silently truncated** to fit. Truncation would make your rep
 | gemma-4-26B-A4B-it | Gemma-4 | MoE (4 B active) | 51.6 GB |
 | gemma-4-12B-it | Gemma-4 | dense | 23.9 GB |
 
-**What changes per model: nothing but `--model`.** The same command runs all five — the LoRA target registry, the FSDP wrap and the fused loss adapt per family (see §4 and §6).
+**What changes per model: nothing but `MODEL` in the config file.** The same command runs all five — the LoRA target registry, the FSDP wrap and the fused loss adapt per family (see §4 and §6).
 
 One real dependency: for **Qwen3.6** models, install `flash-linear-attention` for speed. Without it, the gated-delta-rule layers fall back to the reference PyTorch path: measured **502 tokens/s** vs 1461–3156 tokens/s on Qwen3.6-27B at 32768 (§8).
 
 ## 4. LoRA settings
 
-**Verified configuration: rank 16, alpha 32** (`--adapter-rank 16 --adapter-alpha 32`) with the family-default targets:
+**Verified configuration: rank 16, alpha 32** (`RANK=16 ALPHA=32`) with the family-default targets:
 
 - **Targets are chosen automatically per family** when `--adapter-target` is omitted: peft's per-model defaults, adjusted by the FoundationScale family registry so that **vision towers are excluded** and, on the two MoE models, **LoRA goes on attention and shared projections, not on the routed experts**. That saves adapters: **Qwen3.6-35B-A3B saves 320 LoRA tensors**, **gemma-4-26B-A4B-it saves 410** (vs 656 for gemma-4-12B-it, 820 for gemma-4-31B-it, 512 for Qwen3.6-27B) — a big adapter for routed experts buys little and costs save-time and checkpoint RAM/disk.
 - **Override**: `--adapter-target PATTERN` is repeatable and collected in order. If the adapter resolves to **zero modules**, the run is **refused after wrapping** — never a silent full fine-tune.
@@ -199,7 +197,7 @@ Verified on gemma-4-12B-it and Qwen3.6-27B: **loads with no missing keys**. (Ear
 | Exit 95 | The check was **unmeasured** this run — it is not a pass; re-run with the measurement path available |
 | OOM at 32K without `--fused-loss liger` | The 32 GiB fp32 logits allocation (32768 × 262144 × 4 B). Set `--fused-loss liger` |
 
-Not yet measured on this VM: video + text (frame budget and segment sampling pending), long runs, the evaluation loop, and the RL/preference algorithms with LoRA — treat any of their behaviour as **TODO(verify)**.
+Still not measured on this VM: video + text (frame budget and segment sampling pending) and long runs — treat their behaviour as **TODO(verify)**. The evaluation loop and the preference/RL algorithms with LoRA *have* since been run end-to-end (chapters 04–05): DPO 5 steps 92 s, GRPO 5 steps 198 s, evaluation ~20 min plus a 6 min vLLM install.
 
 
 **Next:** [04 — Training algorithms](04_training_algorithms.md)

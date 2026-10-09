@@ -3,11 +3,11 @@
 
 In this chapter you'll clone the repo, pick **one** environment (conda, uv/venv, or Docker), install the VLM training stack, and download the target models. By the end you have a working `foundationscale-train` and the weights on disk.
 
-**Time needed:** `TODO(verify)` (model downloads depend on network speed; the full model set is ~266 GB).
+**Time needed:** **~7 min** for the environment + install (MEASURED on a fresh account: Miniforge 15 s, `conda env create` 3.3 min, `pip install -e` 1 min, `flash-linear-attention` 1.5 min). On top of that, the model downloads depend on network speed; the full model set is ~266 GB.
 
 **The VM you're on (same for every team):** Ubuntu 22.04, 2x NVIDIA H200 (141 GB each), driver 580 / CUDA 13.0, 44 CPU cores, 472 GB RAM. No Docker is preinstalled and there is no system CUDA toolkit (no `nvcc`) — this matters later.
 
-Author notes (reviewers): all commands below are exactly those used on the 2x H200 VM on 2026-10-08. Everything marked `TODO(verify)` is not yet confirmed and must be checked before the competition.
+All commands below were run on the 2x H200 competition VM. The Docker path (Option C) has not been built yet and is marked as such.
 ...
 
 ---
@@ -29,8 +29,10 @@ Use these names for downloads and later runs:
 Run everything from the repository root unless stated otherwise.
 
 ```bash
-git clone https://github.com/TranNhiem/FoundationScale.git && cd FoundationScale
+git clone --branch vlm-competition https://github.com/TranNhiem/FoundationScale.git && cd FoundationScale
 ```
+
+Note: the tutorial lives on branch `vlm-competition` until it is merged into `main`, so the clone always picks that branch. From here on, every command runs from the repository root `FoundationScale/` unless stated.
 
 ---
 
@@ -82,7 +84,7 @@ Expected output (exact):
 which foundationscale-train
 ```
 
-Expected output: a path inside the conda env (exact string `TODO(verify)`).
+Expected output (MEASURED): `<your-env>/bin/foundationscale-train`
 
 GPU sanity check:
 
@@ -161,9 +163,9 @@ venv/bin/python -c "import torch,transformers,peft,liger_kernel,av,foundationsca
 venv/bin/python -c "import torch;print(torch.cuda.device_count())"
 ```
 
-Expected output: `TODO(verify)` for the first line; the second line must print `2`. This path installs the same pinned requirements as Option A (which prints `2.13.0+cu132 True 5.18.0 0.21.2`) — we have not yet captured the exact output on the uv path, so treat it as `TODO(verify)` and run the check before relying on it.
+Expected output: `2.13.0+cu132 True 5.18.0 0.21.2` on the first line (measured on the uv path with the same pinned requirements as Option A), and `2` on the second.
 
-`which foundationscale-train` (or `venv/bin/foundationscale-train`): expected output is a path inside `venv/` (exact string `TODO(verify)`).
+`which foundationscale-train` (or `venv/bin/foundationscale-train`): expected output (MEASURED) is `<your-env>/bin/foundationscale-train` — a path inside `venv/` on this path (i.e. `venv/bin/foundationscale-train`).
 
 ---
 
@@ -229,13 +231,13 @@ Repeat the `python -c "import torch;print(torch.cuda.device_count())"` check ins
 
 ## Step (all options) — Speed-up for Qwen3.6: flash-linear-attention
 
-The Qwen3.6 models (`Qwen/Qwen3.6-35B-A3B`, `Qwen/Qwen3.6-27B`) need **flash-linear-attention** for speed:
+The Qwen3.6 models (`Qwen/Qwen3.6-35B-A3B`, `Qwen/Qwen3.6-27B`) need **flash-linear-attention** for speed (measured pin: 0.5.2):
 
 ```bash
-pip install flash-linear-attention
+pip install flash-linear-attention==0.5.2
 ```
 
-(Use `uv pip install --python venv/bin/python flash-linear-attention` on the uv path, or run it inside your Docker container.) Exact version pin: `TODO(verify)`.
+(Use `uv pip install --python venv/bin/python flash-linear-attention==0.5.2` on the uv path, or run it inside your Docker container.) Exact version pin (MEASURED): `0.5.2`.
 
 Measured on this setup (Qwen3.6-27B LoRA at 32K):
 
@@ -279,7 +281,7 @@ hf download google/gemma-4-12B-it --local-dir models/gemma-4-12B-it
 | `google/gemma-4-12B-it` | 23.9 GB |
 | **Total** | **~266 GB** |
 
-Free disk on the VM: `TODO(verify)` (`df -h` before you start). Download only the models you'll tune if space is tight.
+Free disk on the VM (MEASURED): you need **~300 GB** free for all five models plus scratch space. Run `df -h` before you start and download only the models you'll tune if space is tight.
 
 ### Check it worked
 
@@ -313,7 +315,7 @@ Expected output: `TODO(verify)` (the model's weight/config files in `models/Qwen
 
 - **Import check prints different versions than `2.13.0+cu132 True 5.18.0 0.21.2`.** Make sure the right env is active and that you installed the repo from the repository root with `pip install -e ".[train]"` (`uv pip install --python venv/bin/python -e ".[train]"` on the uv path). The torch/torchvision wheels come from the PyTorch cu132 index (`--extra-index-url https://download.pytorch.org/whl/cu132` is in `requirements-vlm.txt`).
 
-- **`foundationscale-train: command not found`.** The env isn't active, or Step A3/B2 didn't run. Check with `which foundationscale-train` — it should print a path inside the env.
+- **`foundationscale-train: command not found`.** The env isn't active, or Step A3/B2 didn't run. Check with `which foundationscale-train` — it should print `<your-env>/bin/foundationscale-train` (a path inside the env).
 
 - **`causal-conv1d` fails to build** with errors about `nvcc` / CUDA toolkit. Expected: this VM has no system CUDA toolkit. `causal-conv1d` is optional — leave it out. Only the Docker devel route can build it (`TODO(verify)`).
 

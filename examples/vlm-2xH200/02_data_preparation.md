@@ -2,7 +2,7 @@
 
 In this chapter you will get three sample datasets onto the VM, convert every one of them into the single JSONL format FoundationScale trains on, split each into a train/held-out pair, mix the three with weighted sampling, and read the resulting statistics. Along the way you will set the few environment variables that control video frame sampling and the handling of over-long conversations.
 
-**Time needed:** about 30–45 min for the image and text datasets combined; the video set is ~116 GB and takes hours to download.
+**Time needed:** about 30–45 min for the image and text datasets combined (measured by a fresh user: the convert, split, mix and stats commands themselves take **< 1 min** on the samples — the time is spent downloading and unpacking); the video set is ~116 GB and takes hours to download.
 
 All commands run from the repository root (`FoundationScale/`). Everything the converter does is pure Python stdlib; there is nothing to `pip install` here.
 
@@ -34,7 +34,7 @@ Field by field:
 Things that are worth internalising now, because they affect what your data must look like:
 
 - **Reasoning is written inline** as `🥵…🥵/…answer`. You do **not** hand-convert it: FoundationScale translates it into the target model's native format. **Gemma 4 uses its own thought channel and does *not* understand a literal `🥵` tag** — `Qwen3.6` uses `🥵`. Never tape one family's tags onto the other by hand.
-- **Reasoning is kept only on the *final* assistant turn.** Both model families' chat templates drop reasoning from earlier turns. So in the 10-turn Vietnamese document rows and the 6-turn video rows, only the last answer's reasoning is actually trained.
+- **Reasoning is kept only on the *final* assistant turn.** Both model families' chat templates drop reasoning from earlier turns. So in the 10-turn Vietnamese document rows and the 6-turn video rows (turn counts are typical, not guaranteed — see below), only the last answer's reasoning is actually trained.
 - **Loss is computed on assistant turns only.** System and human turns are context, not targets.
 - The converter **does not require you to write `<image>` yourself**: the image-text sample has no markers, and the converter inserts them. If you build custom data, write markers explicitly and expect them to be kept as-is.
 
@@ -49,18 +49,18 @@ python examples/vlm-2xH200/data/prepare_data.py --help
 Check it worked:
 
 ```
-usage: prepare_data.py [-h] {image,video,text,mix,split,stats} ...
+usage: prepare_data.py [-h] {image,video,text,mix,stats,split} ...
 
 Convert raw datasets into one canonical JSONL format and mix them.
 
 positional arguments:
-  {image,video,text,mix,split,stats}
+  {image,video,text,mix,stats,split}
     image               Convert a VDoc-style image dataset.
     video               Convert an Action-100M-style video dataset.
     text                Convert a text-only QA dataset.
     mix                 Mix canonical JSONL files with weighted sampling.
-    split               Split a canonical JSONL file into disjoint train/eval files.
     stats               Print statistics on a canonical JSONL file.
+    split               Split a canonical JSONL file into disjoint train/eval files.
 
 options:
   -h, --help            show this help message and exit
@@ -222,7 +222,7 @@ If you later extract the remaining shards and re-run, `rows written` goes up and
 
 ## 3. Video-text: human activity clips with segment annotations
 
-**What it is:** `trannhiem/TranNhiem-Action100M-Human-Activities` — 2,985 records over 908 YouTube source videos, ~116 GB in total. Each record describes a `[start, end]` clip inside a full video (median 8.7 s), with a 6-turn English conversation and `🥵…🥵/` reasoning. The layout on the Hub is:
+**What it is:** `trannhiem/TranNhiem-Action100M-Human-Activities` — 2,985 records over 908 YouTube source videos, ~116 GB in total. Each record describes a `[start, end]` clip inside a full video (median 8.7 s), with a typical 6-turn English conversation and `🥵…🥵/` reasoning. Turn counts are **typical, not guaranteed** — measured on a 120-row sample: 113 of 120 rows have 6 turns, 7 have 2. The layout on the Hub is:
 
 ```
 data/action100m_split1.jsonl              all 2,985 records
@@ -230,6 +230,8 @@ data/action100m_split1_shortvideo.jsonl   short-video subset
 data/action100m_split1_longvideo.jsonl    long-video subset
 videos/<youtube_id>.mp4                   908 source videos
 ```
+
+**Publishing in progress:** if the dataset is not on the Hub yet, ask the organisers for the files and place them in that layout.
 
 **Read the licence first:** the dataset is under **FAIR Noncommercial Research** terms and the videos are third-party YouTube content. Noncommercial research use only.
 
@@ -288,7 +290,7 @@ Each converted row carries `start`/`end` in seconds, so the trainer knows which 
 
 ## 4. Text-only: ShareGPT-style QA
 
-**What it is:** any ShareGPT jsonl works. The competition sample is a small Vietnamese persona reasoning file: 209 rows, 2-turn conversations, `🥵…🥵/` reasoning. It is supplied by the organisers and is **not** on the Hub.
+**What it is:** any ShareGPT jsonl works. The competition sample is a small Vietnamese persona reasoning file: 209 rows, 2-turn conversations (typical, not guaranteed), `🥵…🥵/` reasoning. It is supplied by the organisers and is **not** on the Hub.
 
 ```bash
 python examples/vlm-2xH200/data/prepare_data.py text \
@@ -328,7 +330,11 @@ It prints one line of the form:
 split data/prepared/image.jsonl: N train -> data/prepared/image.train.jsonl, M eval -> data/prepared/image.eval.jsonl (seed 0)
 ```
 
-with `N + M` equal to the number of rows in `--input`. Run the same command for `video.jsonl` and `text.jsonl`. Then **mix only the `*.train.jsonl` files** and keep the `*.eval.jsonl` files untouched — chapter 05 evaluates on them.
+with `N + M` equal to the number of rows in `--input`. Run the same command for `video.jsonl` and `text.jsonl`. Then **mix only the `*.train.jsonl` files** and keep the `*.eval.jsonl` files untouched — chapter 05 evaluates on them. Concatenate the three eval files into one held-out file, which is exactly what chapter 05 scores:
+
+```bash
+cat data/prepared/image.eval.jsonl data/prepared/video.eval.jsonl data/prepared/text.eval.jsonl > data/prepared/heldout.jsonl
+```
 
 ### Mix
 
@@ -337,9 +343,11 @@ python examples/vlm-2xH200/data/prepare_data.py mix \
   --inputs data/prepared/image.train.jsonl data/prepared/video.train.jsonl data/prepared/text.train.jsonl \
   --weights 0.4 0.4 0.2 \
   --total 2000 \
-  --output data/prepared/mix.jsonl \
+  --output data/prepared/mixed.jsonl \
   --seed 0
 ```
+
+The mix output is `data/prepared/mixed.jsonl` — that is the file every `configs/*.env` points at through `DATASET`.
 
 Check it worked (measured):
 
@@ -371,7 +379,7 @@ Start from what is scarce and what you want the evaluated models to do well at. 
 ## 6. Sanity-check the mix
 
 ```bash
-python examples/vlm-2xH200/data/prepare_data.py stats --input data/prepared/mix.jsonl
+python examples/vlm-2xH200/data/prepare_data.py stats --input data/prepared/mixed.jsonl
 ```
 
 Check it worked (measured for the 2,000-row mix above):
@@ -380,7 +388,7 @@ Check it worked (measured for the 2,000-row mix above):
 - rows with reasoning: `2000`
 - median characters per row: `8932`
 
-Two things to notice: the three sources contribute distinct conversation lengths (text = 2, video = 6, image = 10 turns), and reasoning rows are guaranteed only on the **final** assistant turn of each conversation regardless of those lengths.
+Two things to notice: the three sources contribute distinct conversation lengths (text = 2, video = 6, image = 10 turns — **typical, not guaranteed**: measured on 120 video rows, 113 have 6 turns and 7 have 2), and reasoning rows are guaranteed only on the **final** assistant turn of each conversation regardless of those lengths.
 
 ---
 

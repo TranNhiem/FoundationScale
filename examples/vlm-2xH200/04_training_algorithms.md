@@ -8,7 +8,7 @@ FoundationScale registers 18 algorithms behind three front doors. Everything you
 | Offline preference | `PreferenceTrainer` | `dpo`, `ipo`, `kto`, `orpo`, `simpo`, `cpo` | **TEXT ONLY** — rows containing an image or a video are refused (exit 96) |
 | Online RL | `RLTrainer` | `grpo`, `dr_grpo`, `dapo`, `gspo`, `reinforce_baseline`, `reinforce_pp`, `rloo`, `raft`, `best_of_n`, `online_dpo`, `iterative_dpo`, `ppo` | **images yes, video refused** |
 
-Switching algorithm is a one-line config change: the `algorithm` field of `PreferenceTrainConfig` / `RLTrainConfig` (the `objective` field name appears in some configs; TODO(verify) in which). Everything else — data format, sharding, LoRA fields — stays the same.
+Switching algorithm is a one-line change: the `algorithm` field of `PreferenceTrainConfig` / `RLTrainConfig` (command-line: `--algorithm`; the `objective` name appears in some older configs, but the shipped scripts use `algorithm`). Everything else — data format, sharding, LoRA fields — stays the same.
 
 Two runbook properties you get for free on every algorithm:
 
@@ -19,12 +19,11 @@ Two runbook properties you get for free on every algorithm:
 
 ## Step 1 — Prepare the two datasets
 
-`prepare_rl_data.py` emits both formats. Run from the repo root (`/workspace/fs-vlm`, the parent of `models/`; TODO(verify) if your checkout lives elsewhere).
+`prepare_rl_data.py` emits both formats. Run from the repository root `FoundationScale/` (the parent of `models/`); every command in this chapter runs from there unless stated.
 
 1. Generate the text-only preference set (`{"prompt","chosen","rejected"}` JSONL rows):
 
 ```bash
-cd /workspace/fs-vlm
 python3 examples/vlm-2xH200/scripts/prepare_rl_data.py preference \
   --out data/pref/dpo_train.jsonl --rows 2000
 ```
@@ -50,102 +49,30 @@ The DPO script reads `data/pref/dpo_train.jsonl`; the GRPO script reads `data/rl
 
 ## Step 2 — DPO + LoRA on 2× H200 (text-only, verified)
 
-The two preference/RL trainers are a **Python API**, not a CLI: ship a small script and launch it with `torchrun`.
+The two preference/RL trainers ship as ready-made scripts under `examples/vlm-2xH200/scripts/`. They are **real CLIs**: `--help` prints every flag, and each is launched with `torchrun`, with 127.0.0.1 for the rendezvous (IPv6 localhost is not usable on the competition VM image).
 
-1. Save this as `scripts/train_dpo.py` (verified as shipped):
+1. `examples/vlm-2xH200/scripts/train_dpo.py` — Preference training (DPO, IPO, ORPO, SimPO, CPO) with LoRA over a JSONL of prompt/chosen/rejected triples.
 
-```python
-#!/usr/bin/env python3
-"""GPU proof (a): DPO + LoRA, text-only, 2x H200, FSDP2, bf16, gradient
-checkpointing. Run under torchrun --nproc_per_node 2.
-"""
-
-from __future__ import annotations
-
-import json
-import math
-import os
-import sys
-import time
-
-from foundationscale.rl.preference_trainer import PreferenceTrainConfig, PreferenceTrainer
-
-MODEL = os.environ.get("DPO_MODEL", "/workspace/fs-vlm/models/Qwen3.6-27B")
-DATASET = "/workspace/fs-vlm/data/pref/dpo_train.jsonl"
-SAVE_DIR = os.environ.get("DPO_SAVE_DIR", "/workspace/fs-vlm/runs/dpo_lora_proof")
-MAX_STEPS = int(os.environ.get("DPO_MAX_STEPS", "30"))
-MAX_LENGTH = int(os.environ.get("DPO_MAX_LENGTH", "4096"))
-LOGPROB_MICRO_BATCH = int(os.environ.get("DPO_MICRO_BATCH", "1"))
-
-
-def _is_rank0() -> bool:
-    return os.environ.get("RANK", "0") == "0"
-
-
-def main() -> int:
-    cfg = PreferenceTrainConfig(
-        model=MODEL,
-        dataset=DATASET,
-        algorithm="dpo",
-        learning_rate=1e-4,
-        pairs_per_step=4,
-        max_steps=MAX_STEPS,
-        max_length=MAX_LENGTH,
-        logprob_micro_batch=LOGPROB_MICRO_BATCH,
-        sharding="fsdp",
-        gradient_checkpointing=True,
-        adapter="lora",
-        adapter_rank=16,
-        adapter_alpha=32.0,
-        save_dir=SAVE_DIR,
-        save_every=0,
-        seed=0,
-    )
-    if _is_rank0():
-        print(f"[run_dpo_lora_proof] model={MODEL} max_steps={MAX_STEPS}", file=sys.stderr)
-    trainer = PreferenceTrainer(cfg)
-    t0 = time.time()
-    reports = trainer.run()
-    t1 = time.time()
-
-    if _is_rank0():
-        os.makedirs(SAVE_DIR, exist_ok=True)
-        history = trainer.history
-        result = {
-            "ok": True,
-            "model": MODEL,
-            "max_length": MAX_LENGTH,
-            "logprob_micro_batch": LOGPROB_MICRO_BATCH,
-            "n_steps_measured": len(reports),
-            "wall_s": t1 - t0,
-            "s_per_step": (t1 - t0) / max(1, len(reports)),
-            "history_first": history[0] if history else None,
-            "history_last": history[-1] if history else None,
-            "ln2": math.log(2),
-            "step0_minus_ln2": (history[0]["loss"] - math.log(2)) if history else None,
-        }
-        out_path = os.path.join(SAVE_DIR, "result.json")
-        with open(out_path, "w", encoding="utf-8") as fh:
-            json.dump(result, fh, indent=2, default=str)
-        print("RESULT_JSON " + json.dumps(result, default=str))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+```text
+usage: train_dpo.py [-h] --model MODEL --data DATA --output-dir OUTPUT_DIR
+                    [--algorithm {dpo,ipo,orpo,simpo,cpo}]
+                    [--max-steps MAX_STEPS] [--max-length MAX_LENGTH]
+                    [--learning-rate LEARNING_RATE] [--lora-rank LORA_RANK]
+                    [--lora-alpha LORA_ALPHA]
 ```
 
-2. Launch on both GPUs:
+Only the preference objective is exposed on the CLI (`kto` stays a Python API algorithm); `--output-dir` is the save/scratch directory where `result.json` lands.
+
+2. Launch on both GPUs, from the repository root `FoundationScale/`:
 
 ```bash
-torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29500 \
-  scripts/train_dpo.py
+torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29500 examples/vlm-2xH200/scripts/train_dpo.py --model models/gemma-4-12B-it --data data/pref/dpo_train.jsonl --output-dir runs/dpo --algorithm dpo --max-steps 20 --max-length 4096
 ```
 
 **Check it worked** (measured, 2× H200, Qwen3.6-27B, bf16, gradient checkpointing, `max_length 4096`, `logprob_micro_batch=1`, 30 steps):
 
 ```text
-RESULT_JSON {"ok": true, "model": "/workspace/fs-vlm/models/Qwen3.6-27B",
+RESULT_JSON {"ok": true, "model": "models/Qwen3.6-27B",
  "max_length": 4096, "logprob_micro_batch": 1, "n_steps_measured": 30,
  "wall_s": 292.5 (9.75 s/step),
  "history_first": {"loss": 0.6931, ...preference_accuracy 0.0, margin 0.0},
@@ -157,137 +84,41 @@ RESULT_JSON {"ok": true, "model": "/workspace/fs-vlm/models/Qwen3.6-27B",
 - loss `0.6931 -> 0.6712`; preference accuracy `0 -> 0.75`; margin `0 -> 0.229`
 - `step0_minus_ln2 = 0.0` — the reference-model / LoRA sanity check holds
 - peak memory **72.7 GB/GPU** (identical 72.7 GB at `max_length 8192`)
-- exact history key names for preference accuracy / margin: TODO(verify)
+- exact history key names for preference accuracy / margin: `preference_accuracy` and `margin` (next to `loss`), as printed above
 
-Environment overrides: `DPO_MODEL`, `DPO_SAVE_DIR`, `DPO_MAX_STEPS`, `DPO_MAX_LENGTH`, `DPO_MICRO_BATCH`. Full run at 30 steps is under 5 minutes.
+Flags: `--model`, `--data`, `--output-dir`, `--algorithm`, `--max-steps`, `--max-length`, `--learning-rate`, `--lora-rank`, `--lora-alpha`. Measured by a fresh user: a 5-step acceptance run is **92 s**; a full run at 30 steps is under 5 minutes.
 
 ---
 
 ## Step 3 — GRPO + LoRA with images (verified)
 
-The RL rows carry an image and a `"gold"` answer letter. The only built-in verifiable reward is `MCQLetterReward`, configured here with `answer_pattern = r"Answer:\s*([A-Z])"`; it parses `"Answer: X"` and **abstains (drops the row)** when no single letter is found.
+The RL rows carry an image and a `"gold"` answer letter. The only built-in verifiable reward is `MCQLetterReward`, configured with `answer_pattern = r"Answer:\s*([A-Z])"`; it parses `"Answer: X"` and **abstains (drops the row)** when no single letter is found.
 
-1. Save this as `scripts/train_grpo.py` (verified as shipped):
+1. `examples/vlm-2xH200/scripts/train_grpo.py` — GRPO + LoRA RL training (with images) over the RL JSONL rows built above.
 
-```python
-#!/usr/bin/env python3
-"""GPU re-proof (item 4): GRPO + LoRA + images, after the generate()-eval-mode
-fix (item 1) and the FSDP2-vision-tower fix (item 2). sharding='fsdp',
-gradient_checkpointing=True, group_size=4, >=4 prompts/step, 30 steps.
-Uses MCQLetterReward.answer_pattern = "Answer:\\s*([A-Z])" against the
-"Answer: X" instruction format. Run under torchrun --nproc_per_node 2.
-"""
-
-from __future__ import annotations
-
-import json
-import os
-import sys
-import time
-
-from foundationscale.rl.trainer import RLTrainConfig, RLTrainer
-
-MODEL = os.environ.get("GRPO_MODEL", "/workspace/fs-vlm/models/gemma-4-12B-it")
-DATASET = "/workspace/fs-vlm/data/rl_scienceqa/scienceqa_train.jsonl"
-SAVE_DIR = os.environ.get("GRPO_SAVE_DIR", "/workspace/fs-vlm/runs/grpo_lora_proof_v2")
-MAX_STEPS = int(os.environ.get("GRPO_MAX_STEPS", "30"))
-PROMPTS_PER_STEP = int(os.environ.get("GRPO_PROMPTS_PER_STEP", "8"))
-ANSWER_PATTERN = r"Answer:\s*([A-Z])"
-
-
-def _is_rank0() -> bool:
-    return os.environ.get("RANK", "0") == "0"
-
-
-def main() -> int:
-    cfg = RLTrainConfig(
-        model=MODEL,
-        dataset=DATASET,
-        gold_key="gold",
-        algorithm="grpo",
-        group_size=4,
-        answer_pattern=ANSWER_PATTERN,
-        learning_rate=1e-4,
-        max_steps=MAX_STEPS,
-        max_new_tokens=400,
-        temperature=1.0,
-        top_p=0.95,
-        prompts_per_step=PROMPTS_PER_STEP,
-        logprob_micro_batch=2,
-        sharding="ddp",
-        gradient_checkpointing=True,
-        adapter="lora",
-        adapter_rank=16,
-        save_dir=SAVE_DIR,
-        save_every=0,
-        seed=0,
-    )
-    if _is_rank0():
-        print(
-            f"[run_grpo_lora_v2] model={MODEL} max_steps={MAX_STEPS} "
-            f"prompts_per_step={PROMPTS_PER_STEP} sharding=ddp "
-            f"gradient_checkpointing=True answer_pattern={ANSWER_PATTERN!r}",
-            file=sys.stderr,
-        )
-    trainer = RLTrainer(cfg)
-    t0 = time.time()
-    reports = trainer.run()
-    t1 = time.time()
-
-    if _is_rank0():
-        os.makedirs(SAVE_DIR, exist_ok=True)
-        per_step = []
-        for r in reports:
-            entry = {"step": r.step, "loss": r.loss.loss, "rows": r.rows}
-            if r.reward_stats is not None:
-                entry["reward_mean"] = r.reward_stats.mean
-                entry["reward_std"] = r.reward_stats.std
-                entry["reward_min"] = r.reward_stats.minimum
-                entry["reward_max"] = r.reward_stats.maximum
-            kl_component = next(
-                (c.contribution for c in r.loss.components if "kl" in c.name.lower()), None
-            )
-            if kl_component is not None:
-                entry["kl_contribution"] = kl_component
-            per_step.append(entry)
-        result = {
-            "ok": True,
-            "model": MODEL,
-            "prompts_per_step": PROMPTS_PER_STEP,
-            "n_steps_attempted": MAX_STEPS,
-            "n_steps_measured": len(reports),
-            "n_steps_abstained": MAX_STEPS - len(reports),
-            "wall_s": t1 - t0,
-            "s_per_step": (t1 - t0) / max(1, len(reports)),
-            "per_step": per_step,
-            "first5": per_step[:5],
-            "last5": per_step[-5:],
-        }
-        out_path = os.path.join(SAVE_DIR, "result.json")
-        with open(out_path, "w", encoding="utf-8") as fh:
-            json.dump(result, fh, indent=2, default=str)
-        print("RESULT_JSON " + json.dumps(result, default=str))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+```text
+usage: train_grpo.py [-h] --model MODEL --data DATA --output-dir OUTPUT_DIR
+                     [--max-steps MAX_STEPS] [--max-new-tokens MAX_NEW_TOKENS]
+                     [--algorithm {grpo,dr_grpo,dapo,gspo,reinforce_pp,rloo}]
+                     [--group-size GROUP_SIZE]
+                     [--prompts-per-step PROMPTS_PER_STEP]
+                     [--learning-rate LEARNING_RATE] [--lora-rank LORA_RANK]
+                     [--lora-alpha LORA_ALPHA]
 ```
 
 2. Launch on both GPUs (group_size 4, ≥ 4 prompts per step):
 
 ```bash
-torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29500 \
-  scripts/train_grpo.py
+torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29500 examples/vlm-2xH200/scripts/train_grpo.py --model models/gemma-4-12B-it --data data/rl_scienceqa/scienceqa_train.jsonl --output-dir runs/grpo --algorithm grpo --max-steps 20 --max-new-tokens 400 --group-size 4 --prompts-per-step 4
 ```
 
 To run the 27B instead, swap the model only:
 
 ```bash
-GRPO_MODEL=/workspace/fs-vlm/models/Qwen3.6-27B \
-torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29500 \
-  scripts/train_grpo.py
+torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29500 examples/vlm-2xH200/scripts/train_grpo.py --model models/Qwen3.6-27B --data data/rl_scienceqa/scienceqa_train.jsonl --output-dir runs/grpo --algorithm grpo --max-steps 20 --max-new-tokens 400 --group-size 4 --prompts-per-step 4
 ```
+
+A refused run (for example every GRPO step had identical rewards) **exits 96 with a `REFUSED` message** instead of finishing.
 
 **Check it worked** (measured, 2× H200, 30 steps, `group_size 4`, `MCQLetterReward`, `max_new_tokens 400`; adapters load):
 
@@ -299,9 +130,9 @@ torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 295
 - exit code 0; the saved LoRA adapter loads
 - `kl_contribution` at the first step must be exactly `0` — the reference-model sanity check (same model, adapter off, no second copy in VRAM)
 - abstained steps are **expected**: on hard questions all 4 samples kept reasoning and ran out of `max_new_tokens` before writing `"Answer: X"`; `MCQLetterReward` then drops the row and the step produces no reward
-- wall time and per-step fields with measured reward stats: reproduced in `runs/grpo_lora_proof_v2/result.json` (TODO(verify) exact printed JSON)
+- wall time and per-step reward stats land in `runs/grpo/result.json` (`reward_mean`, `reward_std`, `reward_min`, `reward_max`, `kl_contribution` per step); measured by a fresh user: a 5-step acceptance run is **198 s**
 
-Environment overrides: `GRPO_MODEL`, `GRPO_SAVE_DIR`, `GRPO_MAX_STEPS`, `GRPO_PROMPTS_PER_STEP`.
+Flags: `--model`, `--data`, `--output-dir`, `--algorithm`, `--max-steps`, `--max-new-tokens`, `--group-size`, `--prompts-per-step`, `--learning-rate`, `--lora-rank`, `--lora-alpha`.
 
 ### GRPO with images on the Qwen models (status: working, after three fixes)
 
@@ -325,7 +156,7 @@ Measured per-completion parse rate for `"Answer: X"` with reasoning models:
 | 200 | 25 % |
 | 400 | 85 % |
 
-Advice baked into the verified script above: **set `max_new_tokens` to 400 or more for reasoning models**, and put an explicit *"end with `Answer: X`"* instruction in the prompt. Otherwise most groups abstain and you train on a fraction of the steps.
+Advice baked into the example command above: **set `max_new_tokens` to 400 or more for reasoning models**, and put an explicit *"end with `Answer: X`"* instruction in the prompt. Otherwise most groups abstain and you train on a fraction of the steps.
 
 ---
 
@@ -345,12 +176,12 @@ cfg = RLTrainConfig(..., algorithm="rloo")  # grpo | dr_grpo | dapo | gspo |
 # best_of_n | online_dpo | iterative_dpo | ppo
 ```
 
-The 12 RL algorithms share the same `algorithm=` field; per-algorithm hyperparameter names beyond the fields shown in `scripts/train_grpo.py`: TODO(verify).
+The 12 RL algorithms share the same `algorithm=` field (CLI: `--algorithm`); per-algorithm hyperparameter names beyond the fields shown in `examples/vlm-2xH200/scripts/train_grpo.py` are not exposed — `--learning-rate`, `--lora-rank` and `--lora-alpha` are the only extra tuning flags, and every RL objective consumes the same fields.
 
 ### Sharding and LoRA memory (2× H200)
 
 - `sharding="ddp"` is the validated choice for RL and preference training with LoRA — it fits, with the peaks measured above.
-- `sharding="fsdp"` works for RL **training**, but repeated generation under FSDP is not yet reliable. The verified DPO script ships with `sharding="fsdp"` (its measured 72.7 GB/GPU is under that setting); use `ddp` when in doubt.
+- `sharding="fsdp"` works for RL **training**, but repeated generation under FSDP is not yet reliable. The shipped DPO recipe runs with `sharding="fsdp"` (its measured 72.7 GB/GPU is under that setting); use `ddp` when in doubt.
 - Keep `logprob_micro_batch=1` for long preference rows: without it the peak was **125 GB** at `max_length 4096` (fp32 vocab logits of a long row); with it, 72.7 GB at 4096 and the same 72.7 GB at 8192.
 
 ### Rollout generation is now safe with gradient checkpointing
@@ -390,7 +221,7 @@ GRPO turns rewards into advantages **inside a group**. If every sample of a prom
 
 — so one group's rewards are all identical and there is no signal to train on.
 
-If **every** step of a run is skipped, the run is refused outright: **exit 96, "vacuous run"** (= no one step ever produced a trainable signal).
+If **every** step of a run is skipped, the run is refused outright: **exit 96, `REFUSED`** ("vacuous run" = no one step ever produced a trainable signal).
 
 **Measured** (2× H200, `gemma-4-12B-it`, GRPO with images, `group_size 4`, 4 prompts per step, 20 steps attempted): only **3 of 20 steps** produced a trainable signal — the remaining steps were skipped on identical group rewards. Exit codes 0 for the run itself; 3/20 is the kind of yield you should expect from `group_size 4` / 4 prompts per step on ScienceQA.
 
@@ -415,7 +246,7 @@ Start with a larger group and more prompts per step (the cheapest change), then 
 
 **`n_steps_abstained` equals `n_steps_attempted` — no reward, ever.** Your completions never reach `"Answer: X"`. Measured parse rate: 0 % at `max_new_tokens 64`, 25 % at 200, 85 % at 400. Raise `max_new_tokens` to 400+, add "end with `Answer: X`" to the prompt. Remember `MCQLetterReward` drops the row whenever it finds no single letter.
 
-**DPO step-0 loss is not exactly `ln 2 = 0.6931`, or GRPO step-0 KL is not exactly `0`.** The reference model must be the same model with the adapter switched off. Check that `adapter="lora"` and the adapter fields are set and that nothing loads a second (or a diverged copy of the) model. The verified DPO script prints `step0_minus_ln2` into `result.json` precisely for this check.
+**DPO step-0 loss is not exactly `ln 2 = 0.6931`, or GRPO step-0 KL is not exactly `0`.** The reference model must be the same model with the adapter switched off. Check that `adapter="lora"` and the adapter fields are set and that nothing loads a second (or a diverged copy of the) model. The DPO run writes `result.json` into `--output-dir` precisely for this check (measured `step0_minus_ln2 = 0.0`).
 
 **Rollouts look corrupted after the first token with gradient checkpointing on.** You are on a build older than the generate-in-eval-mode fix. Update FoundationScale and re-run: greedy 32-token rollouts must be identical with checkpointing on and off.
 
@@ -425,10 +256,10 @@ Start with a larger group and more prompts per step (the cheapest change), then 
 
 **GRPO with images on a Qwen model fails (`mm_token_type_ids` mismatch, patch-tensor slicing, or a run that silently trains text only).** Three vision bugs, all fixed on the current branch: the text-only class was loaded by the RL trainer; prompt-length `mm_token_type_ids` were forwarded with the prompt+completion ids; Qwen's flattened patch tensor was sliced by row in group expansion and micro-batching. After the fixes `Qwen3.6-27B` and `Qwen3.6-35B-A3B` run 10 steps of GRPO with images without error (peak 60.3 / 82.2 GB per GPU, 2× H200, LoRA r16/α32).
 
-**Exit 96 with "vacuous run", or almost every step is skipped.** Every group scored identical rewards (all 4 samples right, or none finished within `max_new_tokens`), so every advantage was zero and every step was skipped; the trainer refuses a run with no trainable step at all. Measured here: `gemma-4-12B-it` produced 3 of 20 trainable steps with `group_size 4` / 4 prompts per step. Remedies: `--group-size 8`, more `--prompts-per-step`, harder questions matched to the model, `--max-new-tokens 400+` for reasoning models (see "The GRPO signal" section above).
+**Exit 96 with a `REFUSED` ("vacuous run") message, or almost every step is skipped.** Every group scored identical rewards (all 4 samples right, or none finished within `max_new_tokens`), so every advantage was zero and every step was skipped; the trainer refuses a run with no trainable step at all. Measured here: `gemma-4-12B-it` produced 3 of 20 trainable steps with `group_size 4` / 4 prompts per step. Remedies: `--group-size 8`, more `--prompts-per-step`, harder questions matched to the model, `--max-new-tokens 400+` for reasoning models (see "The GRPO signal" section above).
 
-**Edit `sharding` field name to `objective` by habit?** The verified scripts take `algorithm="dpo"` / `algorithm="grpo"` on `PreferenceTrainConfig` / `RLTrainConfig`; other config field names for the objective: TODO(verify).
+**Edit the `algorithm` field name to `objective` by habit?** The shipped scripts take `algorithm="dpo"` / `algorithm="grpo"` on `PreferenceTrainConfig` / `RLTrainConfig` (`--algorithm dpo` / `--algorithm grpo` on the CLI); there is no separate `objective` field to set — `objective` is only a legacy spelling found in some older configs.
 
-Next: chapter 05 — TODO(verify) title and link.
+Next: chapter 05 — [Evaluation](05_evaluation.md).
 
 **Next:** [05 — Evaluation](05_evaluation.md)
