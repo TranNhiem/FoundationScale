@@ -320,3 +320,24 @@ def test_operator_stages_follow_an_explicit_stage_order() -> None:
     out = planner._apply_operator_stages(["cpt", "sft"], selected, [], [], lambda *a: decisions.append(a),
                                          stage_order=["sft", "cpt"])
     assert [s["stage"] for s in out] == ["sft", "cpt"]
+
+
+def test_declared_rl_floor_reaches_only_the_rl_stage(patched) -> None:
+    payload = planner.plan(_goal(rl_min_measured_fraction=0.4), caps=_fake_caps())
+    by_stage = {s["stage"]: s for s in payload["stages"]}
+    assert by_stage["rl"]["hparams"]["min_measured_fraction"] == 0.4
+    assert "min_measured_fraction" not in by_stage["sft"]["hparams"]
+
+
+def test_undeclared_rl_floor_is_not_guessed(patched) -> None:
+    payload = planner.plan(_goal(), caps=_fake_caps())
+    assert all("min_measured_fraction" not in s["hparams"] for s in payload["stages"])
+
+
+def test_operator_rl_floor_is_not_clobbered_by_the_goal(patched, monkeypatch) -> None:
+    original = planner._recipe_stage_hparams
+    monkeypatch.setattr(planner, "_recipe_stage_hparams",
+                        lambda raw, stage: {**original(raw, stage), **({"min_measured_fraction": 0.2} if stage == "rl" else {})})
+    payload = planner.plan(_goal(rl_min_measured_fraction=0.8), caps=_fake_caps())
+    by_stage = {s["stage"]: s for s in payload["stages"]}
+    assert by_stage["rl"]["hparams"]["min_measured_fraction"] == 0.2

@@ -122,6 +122,12 @@ def emit_rl(
     for key, value in hparams.items():
         if value is None or key == "gold_key":
             continue
+        if key == "min_measured_fraction":
+            if kind == "rl":  # a driver-side verdict floor, not an RLTrainConfig field
+                rl_config[key] = value
+            else:
+                notes.append("hparam 'min_measured_fraction' applies to RL rollouts only; not passed")
+            continue
         field = _HPARAM_TO_RL.get(key, key)
         if field in fields and field not in ("model", "dataset", "algorithm"):
             rl_config[field] = value
@@ -143,6 +149,9 @@ def emit_rl(
                          f"= {rl_config['max_steps']}")
         else:
             notes.append("max_steps not derived (record count or prompts_per_step unknown); FS default applies")
+    if kind == "rl" and "min_measured_fraction" not in rl_config:
+        notes.append("min_measured_fraction not declared: the driver passes any run with >= 1 measured step "
+                     "(declare it in the stage hparams to fail a saturated run as UNMEASURED)")
     rl_config["output_dir"] = output_dir
     rl_config["save_final"] = bool(stage.get("save_final", True))
 

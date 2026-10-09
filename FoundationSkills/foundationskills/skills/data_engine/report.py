@@ -192,6 +192,12 @@ def build_readiness(dataset: dict, stats: list[dict], requirements: dict) -> dic
     }
     if approximate:
         stats_section["token_counts_approximate"] = True
+    difficulty = _first(by, "difficulty_filter")
+    if difficulty is not None:
+        # Measured base-policy pass rates (pre-filter): the planner can size RL from them.
+        diff_extra = _extra(difficulty)
+        stats_section["rl_pass_rate_hist"] = diff_extra.get("pass_rate_hist")
+        stats_section["rl_kept_fraction"] = diff_extra.get("kept_fraction")
 
     checks: list[dict] = []
 
