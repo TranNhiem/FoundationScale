@@ -610,3 +610,353 @@ def test_build_sample_normalises_with_the_declared_mode(
         rtol=0,
         atol=1e-6,
     )
+
+
+# -- coverage of the remaining refusal branches and accessors ---------------------------
+
+
+def test_normalizer_refuses_an_unknown_mode() -> None:
+    mode: Any = "standardize"
+    _refusal(
+        SampleError,
+        lambda: Normalizer({}, mode=mode),
+        "normalizer mode 'standardize' is unknown",
+        "expected one of",
+    )
+
+
+def test_normalizer_refuses_a_stats_key_that_is_not_a_column_name() -> None:
+    key: Any = ""
+    _refusal(
+        SampleError,
+        lambda: Normalizer({key: _norm_stats()}, mode="mean_std"),
+        "normalizer stats key ''",
+        "is not a non-empty string",
+        "expected a dataset column name",
+    )
+
+
+def test_normalizer_refuses_stats_that_are_not_norm_stats() -> None:
+    entry: Any = "not statistics"
+    _refusal(
+        SampleError,
+        lambda: Normalizer({NORM_KEY: entry}, mode="mean_std"),
+        f"normalizer stats {NORM_KEY!r} is a str",
+        "expected a NormStats",
+    )
+
+
+def test_normalizer_exposes_the_declared_mode() -> None:
+    assert Normalizer({NORM_KEY: _norm_stats()}, mode="q01_q99").mode == "q01_q99"
+    assert Normalizer({NORM_KEY: _norm_stats()}, mode="min_max").mode == "min_max"
+
+
+def test_normalizer_exposes_the_statistics_it_was_built_from() -> None:
+    stats = _norm_stats()
+    norm = Normalizer({NORM_KEY: stats}, mode="mean_std")
+    assert norm.stats[NORM_KEY] is stats
+    assert list(norm.stats) == [NORM_KEY]
+
+
+def test_apply_refuses_a_non_numeric_array() -> None:
+    norm = Normalizer({NORM_KEY: _norm_stats()}, mode="mean_std")
+    x: Any = ["not", "numbers"]
+    _refusal(
+        SampleError,
+        lambda: norm.apply(NORM_KEY, x),
+        f"normalizer key {NORM_KEY!r}",
+        "x of type list is not a numeric array",
+    )
+
+
+def test_normalizer_refuses_ragged_statistics_naming_the_dims() -> None:
+    class _UncheckedStats(NormStats):
+        """``NormStats`` with construction-time checks skipped, so ragged dims reach the check."""
+
+        def __post_init__(self) -> None:
+            pass
+
+    stats = _UncheckedStats(
+        key=NORM_KEY,
+        frames=15,
+        episodes=3,
+        mean=(1.0, -2.0, 0.5),
+        std=(2.0, 0.5),
+        min=(-3.0, -4.0),
+        max=(5.0, 0.0),
+        q01=(0.0, -3.0),
+        q99=(4.0, -1.0),
+    )
+    norm = Normalizer({NORM_KEY: stats}, mode="mean_std")
+    _refusal(
+        SampleError,
+        lambda: norm.apply(NORM_KEY, np.zeros((1, 3), dtype=np.float32)),
+        f"normalizer key {NORM_KEY!r}",
+        "the statistics have dims",
+        "expected every statistic in",
+        "non-empty dims",
+    )
+
+
+def test_build_sample_refuses_a_non_int_episode_index(tmp_path: Path) -> None:
+    from foundationscale.vla.chunking import ChunkSpec
+
+    ds, spec = _setup(tmp_path)
+    chunks = ChunkSpec(state_delta=(0,), action_delta=(0,), video_delta=(0,))
+    episode_index: Any = True
+    _refusal(
+        SampleError,
+        lambda: build_sample(ds, spec, chunks, _normalizer(), episode_index, 0, pad="refuse"),
+        "episode_index is True",
+        "expected an int",
+    )
+
+
+def test_build_sample_refuses_a_non_int_anchor(tmp_path: Path) -> None:
+    from foundationscale.vla.chunking import ChunkSpec
+
+    ds, spec = _setup(tmp_path)
+    chunks = ChunkSpec(state_delta=(0,), action_delta=(0,), video_delta=(0,))
+    anchor: Any = 2.5
+    _refusal(
+        SampleError,
+        lambda: build_sample(ds, spec, chunks, _normalizer(), 0, anchor, pad="refuse"),
+        "anchor is 2.5",
+        "expected an int",
+    )
+
+
+def test_build_sample_refuses_a_pad_mode_outside_pad_modes(tmp_path: Path) -> None:
+    from foundationscale.vla.chunking import ChunkSpec
+
+    ds, spec = _setup(tmp_path)
+    chunks = ChunkSpec(state_delta=(0,), action_delta=(0,), video_delta=(0,))
+    pad: Any = "clamp"
+    _refusal(
+        SampleError,
+        lambda: build_sample(ds, spec, chunks, _normalizer(), 0, 0, pad=pad),
+        "pad is 'clamp'",
+        "there is no default, the caller declares the pad mode",
+    )
+
+
+def test_rows_refuses_a_delta_landing_outside_the_episode_under_refuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from foundationscale.vla.chunking import ChunkSpec
+
+    ds, spec = _setup(tmp_path)
+    _inject(monkeypatch, _FakeDecoder())
+    # Let the anchor through so the ``_rows`` guard is the one that refuses it.
+    monkeypatch.setattr(
+        "foundationscale.vla.sample.valid_anchor_indices",
+        lambda length, chunks, pad: range(length),
+    )
+    chunks = ChunkSpec(state_delta=(0, 1), action_delta=(0,), video_delta=(0,))
+    _refusal(
+        SampleError,
+        lambda: build_sample(ds, spec, chunks, _normalizer(), 0, 3, pad="refuse"),
+        "state delta 1 lands on frame 4",
+        "pad 'refuse' never pads",
+        "should have been refused",
+    )
+
+
+def test_build_sample_reshapes_a_one_dimensional_source_column(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from foundationscale.vla.chunking import ChunkSpec
+
+    modality = _modality()
+    modality["state"] = {"scalar": {"original_key": "timestamp", "start": 0, "end": 1}}
+    ds, spec = _setup(tmp_path, modality)
+    _inject(monkeypatch, _FakeDecoder())
+    norm = Normalizer(
+        {
+            "timestamp": _sample_stats("timestamp", (0.0,), (1.0,)),
+            ACTION_KEY: _sample_stats(ACTION_KEY, ACTION_MEAN, ACTION_STD),
+        },
+        mode="mean_std",
+    )
+    chunks = ChunkSpec(state_delta=(0, 1), action_delta=(0,), video_delta=(0,))
+    sample = build_sample(ds, spec, chunks, norm, 0, 1, pad="refuse")
+    assert sample.task == TASK
+    assert sample.state.shape == (2, 1)
+    assert sample.state.dtype == np.float32
+    np.testing.assert_allclose(sample.state, np.array([[1.0], [2.0]]) / FPS, rtol=0, atol=1e-6)
+
+
+def test_build_sample_refuses_a_three_dimensional_source_column(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from foundationscale.vla.chunking import ChunkSpec
+
+    ds, spec = _setup(tmp_path)
+    _inject(monkeypatch, _FakeDecoder())
+
+    def _columns(_ds: Any, episode_index: int, wanted: Sequence[str]) -> Mapping[str, np.ndarray]:
+        length = LENGTHS[episode_index]
+        table = {
+            STATE_KEY: _state(episode_index, length)[:, :, None],
+            EXTRA_KEY: _extra(episode_index, length),
+            ACTION_KEY: _action(episode_index, length),
+            "task_index": np.zeros(length, dtype=np.int64),
+        }
+        return {key: table[key] for key in wanted}
+
+    monkeypatch.setattr("foundationscale.vla.sample.read_episode_columns", _columns)
+    chunks = ChunkSpec(state_delta=(0,), action_delta=(0,), video_delta=(0,))
+    _refusal(
+        SampleError,
+        lambda: build_sample(ds, spec, chunks, _normalizer(), 0, 0, pad="refuse"),
+        f"column {STATE_KEY!r} is a 3-D array",
+        "expected one value per frame per dim",
+    )
+
+
+def test_build_sample_refuses_a_slice_past_the_column_width(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from foundationscale.vla.chunking import ChunkSpec
+
+    modality = _modality()
+    modality["state"] = {"wide": {"original_key": EXTRA_KEY, "start": 0, "end": 3}}
+    ds, spec = _setup(tmp_path, modality)
+    _inject(monkeypatch, _FakeDecoder())
+    chunks = ChunkSpec(state_delta=(0,), action_delta=(0,), video_delta=(0,))
+    _refusal(
+        SampleError,
+        lambda: build_sample(ds, spec, chunks, _normalizer(), 0, 0, pad="refuse"),
+        "slice 'wide' spans [0, 3)",
+        f"original_key {EXTRA_KEY!r}",
+        "the column carries 2 dim(s) per frame",
+        "expected <= 2",
+    )
+
+
+def test_build_sample_returns_an_empty_block_when_a_group_has_no_slices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from foundationscale.vla.chunking import ChunkSpec
+
+    modality = _modality()
+    modality["state"] = {}
+    ds, spec = _setup(tmp_path, modality)
+    _inject(monkeypatch, _FakeDecoder())
+    chunks = ChunkSpec(state_delta=(0, 1), action_delta=(0, 1), video_delta=(0,))
+    sample = build_sample(ds, spec, chunks, _normalizer(), 0, 1, pad="refuse")
+    assert sample.state.shape == (2, 0)
+    assert sample.state.dtype == np.float32
+    assert sample.action.shape == (2, ACTION_DIM)
+
+
+def test_build_sample_refuses_a_task_column_that_is_not_one_dimensional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from foundationscale.vla.chunking import ChunkSpec
+
+    ds, spec = _setup(tmp_path)
+    _inject(monkeypatch, _FakeDecoder())
+
+    def _columns(_ds: Any, episode_index: int, wanted: Sequence[str]) -> Mapping[str, np.ndarray]:
+        length = LENGTHS[episode_index]
+        table = {
+            STATE_KEY: _state(episode_index, length),
+            EXTRA_KEY: _extra(episode_index, length),
+            ACTION_KEY: _action(episode_index, length),
+            "task_index": np.zeros((length, 1), dtype=np.int64),
+        }
+        return {key: table[key] for key in wanted}
+
+    monkeypatch.setattr("foundationscale.vla.sample.read_episode_columns", _columns)
+    chunks = ChunkSpec(state_delta=(0,), action_delta=(0,), video_delta=(0,))
+    _refusal(
+        SampleError,
+        lambda: build_sample(ds, spec, chunks, _normalizer(), 0, 0, pad="refuse"),
+        "column 'task_index' is a 2-D array",
+        "expected one task index per frame",
+    )
+
+
+def test_build_sample_refuses_a_non_numeric_task_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from foundationscale.vla.chunking import ChunkSpec
+
+    ds, spec = _setup(tmp_path)
+    _inject(monkeypatch, _FakeDecoder())
+
+    def _columns(_ds: Any, episode_index: int, wanted: Sequence[str]) -> Mapping[str, np.ndarray]:
+        length = LENGTHS[episode_index]
+        table = {
+            STATE_KEY: _state(episode_index, length),
+            EXTRA_KEY: _extra(episode_index, length),
+            ACTION_KEY: _action(episode_index, length),
+            "task_index": np.array(["abc"] * length, dtype=object),
+        }
+        return {key: table[key] for key in wanted}
+
+    monkeypatch.setattr("foundationscale.vla.sample.read_episode_columns", _columns)
+    chunks = ChunkSpec(state_delta=(0,), action_delta=(0,), video_delta=(0,))
+    _refusal(
+        SampleError,
+        lambda: build_sample(ds, spec, chunks, _normalizer(), 0, 0, pad="refuse"),
+        "task_index is 'abc'",
+        "expected an integer task index (",
+    )
+
+
+def test_build_sample_refuses_a_non_integer_task_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from foundationscale.vla.chunking import ChunkSpec
+
+    ds, spec = _setup(tmp_path)
+    _inject(monkeypatch, _FakeDecoder())
+
+    def _columns(_ds: Any, episode_index: int, wanted: Sequence[str]) -> Mapping[str, np.ndarray]:
+        length = LENGTHS[episode_index]
+        table = {
+            STATE_KEY: _state(episode_index, length),
+            EXTRA_KEY: _extra(episode_index, length),
+            ACTION_KEY: _action(episode_index, length),
+            "task_index": np.array([0.5] * length, dtype=object),
+        }
+        return {key: table[key] for key in wanted}
+
+    monkeypatch.setattr("foundationscale.vla.sample.read_episode_columns", _columns)
+    chunks = ChunkSpec(state_delta=(0,), action_delta=(0,), video_delta=(0,))
+    _refusal(
+        SampleError,
+        lambda: build_sample(ds, spec, chunks, _normalizer(), 0, 0, pad="refuse"),
+        "task_index is 0.5",
+        "expected an integer task index",
+    )
+
+
+def test_build_sample_refuses_a_task_index_absent_from_meta_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from foundationscale.vla.chunking import ChunkSpec
+
+    ds, spec = _setup(tmp_path)
+    _inject(monkeypatch, _FakeDecoder())
+
+    def _columns(_ds: Any, episode_index: int, wanted: Sequence[str]) -> Mapping[str, np.ndarray]:
+        length = LENGTHS[episode_index]
+        table = {
+            STATE_KEY: _state(episode_index, length),
+            EXTRA_KEY: _extra(episode_index, length),
+            ACTION_KEY: _action(episode_index, length),
+            "task_index": np.full(length, 7, dtype=np.int64),
+        }
+        return {key: table[key] for key in wanted}
+
+    monkeypatch.setattr("foundationscale.vla.sample.read_episode_columns", _columns)
+    chunks = ChunkSpec(state_delta=(0,), action_delta=(0,), video_delta=(0,))
+    _refusal(
+        SampleError,
+        lambda: build_sample(ds, spec, chunks, _normalizer(), 0, 0, pad="refuse"),
+        "task_index 7 is absent from meta/tasks.jsonl",
+        "expected one of [0]",
+    )
