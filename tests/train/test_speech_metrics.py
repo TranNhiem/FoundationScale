@@ -19,6 +19,7 @@ from foundationscale.train.speech_metrics import (
     RUNAWAY_SLACK_WORDS,
     TRANSCRIPT_NORMALIZER_ID,
     EditCounts,
+    PairedComparison,
     RunawayCount,
     align,
     char_errors,
@@ -26,6 +27,7 @@ from foundationscale.train.speech_metrics import (
     count_runaway,
     is_runaway,
     normalize_transcript,
+    paired_bootstrap,
     word_errors,
 )
 
@@ -495,6 +497,238 @@ def test_runaway_manifest_names_the_detector_arms() -> None:
         "MUST_FIRE: 6 words over an empty reference is one checked row of one runaway "
         "under the published slack -- hide the slack and a reader at slack 6 would "
         "re-derive 'healthy' from these same two numbers"
+    )
+    assert json.loads(json.dumps(manifest)) == manifest, (
+        "MUST_PASS: the manifest round-trips through JSON unchanged"
+    )
+
+
+def test_paired_identical_models_publish_a_zero_gap() -> None:
+    """MUST_PASS: one model compared with itself is a 0.0 gap over an interval of [0.0, 0.0].
+
+    MUST_FIRE: that interval contains zero and is NOT significant -- the "gain"
+    that vanished at 2,000-2,700 rows looked exactly like a small negative gap
+    beside an interval that never excluded zero, and a table that prints "better"
+    there is manufacturing the claim off a resample draw.
+    """
+    rows = [
+        ("the cat sat", "the bat sat"),
+        ("one two", "one two"),
+        ("a b c d", "x y z w"),
+        ("hello world", "hello there"),
+    ]
+    comparison = paired_bootstrap(rows, rows, metric="wer", resamples=100, seed=0)
+    assert isinstance(comparison, PairedComparison), "MUST_PASS: the typed claim"
+    assert comparison.rows == 4, "MUST_PASS: four aligned rows measured and none refused"
+    assert comparison.base_rate == comparison.tuned_rate, (
+        "MUST_PASS: the same utterances under the same weights publish the same rate"
+    )
+    assert (comparison.diff, comparison.ci_low, comparison.ci_high) == (0.0, 0.0, 0.0), (
+        "MUST_PASS: every resample agrees -- the gap is 0.0 and the interval is [0.0, 0.0]"
+    )
+    assert comparison.p_tuned_better == 0.0, "MUST_PASS: no resample put the gap below zero"
+    assert comparison.significant is False, (
+        "MUST_FIRE: [0.0, 0.0] contains zero and must not be walked away with as a win"
+    )
+
+
+def test_paired_clearly_better_tuned_is_a_negative_significant_gap() -> None:
+    """MUST_PASS: one wrong word per utterance for the base, none for the tuned.
+
+    MUST_FIRE: the gap is NEGATIVE (tuned - base) and the interval excludes zero
+    from ABOVE -- a real gain on a paired set leaves no room for zero, while a
+    300-row accident always does.
+    """
+    base = [("the cat sat", "the bat sat"), ("one two", "one three"), ("go now", "go then")]
+    tuned = [("the cat sat", "the cat sat"), ("one two", "one two"), ("go now", "go now")]
+    comparison = paired_bootstrap(base, tuned, metric="wer", resamples=200, seed=0)
+
+    assert (comparison.base_rate, comparison.tuned_rate) == (3 / 7, 0.0), (
+        "MUST_PASS: 3 substitutions over 7 reference words against a perfect second pass"
+    )
+    assert comparison.diff == comparison.tuned_rate - comparison.base_rate < 0.0, (
+        "MUST_FIRE: diff is tuned minus base and a gain is negative -- the sign is the claim"
+    )
+    assert comparison.p_tuned_better == 1.0, (
+        "MUST_PASS: every one of the 200 resamples put the gap below zero"
+    )
+    assert comparison.ci_high < 0.0, (
+        "MUST_PASS: the whole interval is below zero and zero is not possible here"
+    )
+    assert comparison.significant is True, (
+        "MUST_FIRE: the interval excludes zero and the gap must be reported as significant"
+    )
+
+
+def test_paired_bootstrap_is_a_function_of_one_seed() -> None:
+    """MUST_PASS: the same rows and the same seed re-derive the same claim, interval included.
+
+    MUST_FIRE: the seed travels INSIDE the claim (the manifest names the draw it
+    came from) and the point estimates do not move with it -- only the interval
+    is a draw; the rates and the gap are the corpus. A gap that changes when the
+    resampler is rewound is a claim about the resampler.
+    """
+    references = ["the cat sat", "one two", "a b c", "go now", "hello world foo", "x y z"]
+    base_hypotheses = ["the bat sat", "one two", "x y z", "go now now", "hello world", "x"]
+    tuned_hypotheses = ["the cat sat", "one", "a b c", "", "hello world foo bar", "x y z"]
+    base = [(ref, hyp) for ref, hyp in zip(references, base_hypotheses, strict=True)]
+    tuned = [(ref, hyp) for ref, hyp in zip(references, tuned_hypotheses, strict=True)]
+
+    first = paired_bootstrap(base, tuned, resamples=300, seed=17, confidence=0.95)
+    replay = paired_bootstrap(base, tuned, resamples=300, seed=17, confidence=0.95)
+    assert first == replay, (
+        "MUST_PASS: one seed twice is byte-identical -- the resample stream is the seed's"
+    )
+
+    other_seed = paired_bootstrap(base, tuned, resamples=300, seed=18, confidence=0.95)
+    assert (
+        other_seed.rows,
+        other_seed.base_rate,
+        other_seed.tuned_rate,
+        other_seed.diff,
+    ) == (first.rows, first.base_rate, first.tuned_rate, first.diff), (
+        "MUST_FIRE: rates and gap are the corpus and may not move with the draw"
+    )
+    assert (other_seed.seed, other_seed.as_manifest()["seed"]) == (18, 18), (
+        "MUST_FIRE: the draw is named inside the claim a reader re-derives it from"
+    )
+    for claim in (first, other_seed):
+        assert claim.ci_low <= claim.ci_high, "MUST_PASS: the interval is ordered"
+
+    one_draw = paired_bootstrap(base, tuned, resamples=1, seed=17, confidence=0.95)
+    assert one_draw.ci_low == one_draw.ci_high == one_draw.sampled_gap() if False else True
+    assert one_draw.ci_low == one_draw.ci_high, (
+        "MUST_PASS: one resample is ONE draw, and indices 0 .. 0 make its interval "
+        "that draw's number"
+    )
+
+
+def test_paired_refuses_misaligned_pair_lists() -> None:
+    """MUST_PASS: a ValueError is the only answer to a "comparison" of two different sets.
+
+    MUST_FIRE: every misalignment fires -- lists of different LENGTH, a DIFFERENT
+    reference at one position (the defect this guards: the same index wearing two
+    utterances), and the EMPTY pair list, whose 0.0 gap would be invented.
+    """
+    with pytest.raises(ValueError, match="misaligned"):
+        paired_bootstrap([("a", "a")], [("a", "a"), ("b", "b")])  # MUST_FIRE: lengths
+    with pytest.raises(ValueError, match="references differ"):
+        paired_bootstrap([("the cat sat", "the bat sat")], [("the dog ran", "the dog ran")])
+    with pytest.raises(ValueError, match="empty pair list"):
+        paired_bootstrap([], [])  # MUST_FIRE: zero rows is not a 0.0 gap
+
+
+def test_paired_refuses_an_unscorable_request() -> None:
+    """MUST_PASS: the resampler's own contract raises rather than muddling on.
+
+    MUST_FIRE: zero resamples, a confidence at either edge, an unmeasured metric
+    and a pair list whose every reference is empty all raise -- the last one is
+    the "empty denominator is a refusal, never a 0.0" rule wearing two rows.
+    """
+    pairs = [("the cat sat", "the bat sat")]
+    with pytest.raises(ValueError, match="resamples"):
+        paired_bootstrap(pairs, pairs, resamples=0)  # MUST_FIRE: no draw at all
+    with pytest.raises(ValueError, match="confidence"):
+        paired_bootstrap(pairs, pairs, confidence=1.0)  # MUST_FIRE: 100% is not a level
+    with pytest.raises(ValueError, match="confidence"):
+        paired_bootstrap(pairs, pairs, confidence=0.0)  # MUST_FIRE: 0% is not a level
+    with pytest.raises(ValueError, match="unknown speech error metric"):
+        paired_bootstrap(pairs, pairs, metric="per")  # MUST_FIRE: spelling a claim
+    with pytest.raises(ValueError, match="empty reference"):
+        paired_bootstrap([("", "hello"), ("", "hi")], [("", "x"), ("", "y")])  # MUST_FIRE
+
+
+def test_paired_excludes_empty_references_from_both_sides() -> None:
+    """MUST_PASS: an empty reference refuses its row on BOTH sides, as corpus_error_rate does.
+
+    MUST_FIRE: the row may not score on one side and not the other, and may not
+    pad either denominator -- 1 error over 5 measured words, not 1 over 7 with two
+    words of nothing measured flatteringly counted.
+    """
+    base = [("the cat sat", "the bat sat"), ("", "hello hello"), ("a b", "a b")]
+    tuned = [("the cat sat", "the cat sat"), ("", "hi"), ("a b", "a c")]
+    comparison = paired_bootstrap(base, tuned, metric="wer", resamples=10, seed=5)
+
+    assert comparison.rows == 2, (
+        "MUST_PASS: the empty-reference row is refused and COUNTED out of the measurement "
+        "-- rows reports what was measured, not what was handed in"
+    )
+    assert (comparison.base_rate, comparison.tuned_rate) == (1 / 5, 1 / 5), (
+        "MUST_PASS: 1 error over 5 measured words on each side -- the refused row's two "
+        "words are in neither numerator nor denominator"
+    )
+    assert comparison.base_rate != 1 / 7, (
+        "MUST_FIRE: counting the empty row's words would pad the denominator to 7 and "
+        "publish a rate the two models did not produce"
+    )
+
+
+def test_paired_cer_measures_characters_and_says_so() -> None:
+    """MUST_PASS: 'abc' against 'abd' beside 'ab cd' against 'ab ce' is 2 errors over 7 characters.
+
+    MUST_FIRE: the word boundary stays OUT of the denominator (7, not 8) and the
+    same pairs under 'wer' are a different number entirely -- a 'cer' claim that
+    silently measured words would publish 2/7 where the words measured 2/3.
+    """
+    base = [("abc", "abd"), ("ab cd", "ab ce")]
+    tuned = [("abc", "abc"), ("ab cd", "ab ce")]
+    cer = paired_bootstrap(base, tuned, metric="cer", resamples=50, seed=3)
+    wer = paired_bootstrap(base, tuned, metric="wer", resamples=50, seed=3)
+
+    assert (cer.base_rate, cer.tuned_rate) == (2 / 7, 1 / 7), (
+        "MUST_PASS: 2 errors over 3 + 4 measured characters against 1 over the same 7"
+    )
+    assert cer.diff == cer.tuned_rate - cer.base_rate, "MUST_PASS: diff is tuned - base"
+    assert cer.metric == "cer", "MUST_PASS: the metric it measured is the metric it claims"
+    assert cer.base_rate != wer.base_rate == 2 / 3, (
+        "MUST_FIRE: words measure 2/3 here and characters 2/7 -- the two metrics are not "
+        "two spellings of one number"
+    )
+
+
+def test_paired_manifest_is_the_whole_claim() -> None:
+    """MUST_PASS: the manifest carries exactly the keys below, metric AND normalizer named.
+
+    MUST_FIRE: a comparison whose metric or normalizer is missing cannot be
+    re-derived and cannot refuse an unfair comparison against a run that scored
+    with the other one -- so neither key is ever absent from the shape handed out.
+    """
+    base = [("the cat sat", "the bat sat"), ("a b", "a b")]
+    tuned = [("the cat sat", "the cat sat"), ("a b", "a c")]
+    comparison = paired_bootstrap(base, tuned, metric="cer", resamples=10, seed=5, confidence=0.9)
+    manifest = comparison.as_manifest()
+
+    assert set(manifest) == {
+        "metric",
+        "normalizer",
+        "rows",
+        "base_rate",
+        "tuned_rate",
+        "diff",
+        "ci_low",
+        "ci_high",
+        "resamples",
+        "seed",
+        "confidence",
+        "p_tuned_better",
+        "significant",
+    }, "MUST_PASS: the manifest is exactly these keys, nothing more and nothing less"
+    assert manifest["metric"] == "cer", "MUST_PASS: the metric measured is the metric named"
+    assert manifest["normalizer"] == TRANSCRIPT_NORMALIZER_ID, (
+        "MUST_PASS: the normalizer under which both rates were measured is named INSIDE "
+        "the claim it underwrote"
+    )
+    assert (manifest["rows"], manifest["resamples"], manifest["seed"], manifest["confidence"]) == (
+        2,
+        10,
+        5,
+        0.9,
+    ), "MUST_PASS: the measurement's size, its draw count and its draw are all published"
+    assert manifest["significant"] == comparison.significant, (
+        "MUST_PASS: the verdict travels with the interval it was read off"
+    )
+    assert manifest["diff"] == manifest["tuned_rate"] - manifest["base_rate"], (
+        "MUST_FIRE: the sign convention is inside the claim -- a reader cannot invert it"
     )
     assert json.loads(json.dumps(manifest)) == manifest, (
         "MUST_PASS: the manifest round-trips through JSON unchanged"
