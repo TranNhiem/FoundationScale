@@ -11,7 +11,9 @@ substitute for it -- see the task's GPU-proof runs (a)/(b).
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -85,6 +87,66 @@ def test_build_peft_fsdp1_skeleton_factory_returns_a_zero_arg_callable() -> None
     # before FSDP can touch the live model); only the meta-device CONSTRUCTION
     # is deferred to save time, which is why calling the factory itself needs
     # real torch/peft and is exercised by the GPU proof instead of here.
+
+
+def test_factory_builds_the_meta_skeleton_before_peft_and_does_not_swallow_its_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Calling the returned factory: construction-order and error-propagation, with real torch.
+
+    Real ``torch`` is used (CPU, meta device -- no allocation, no CUDA needed);
+    only ``peft`` is stubbed, via the same ``sys.modules`` stand-in pattern
+    ``tests/train/test_train_precision_adapter.py`` uses for the same package.
+    The base class is built under ``torch.device("meta")`` -- proven by
+    recording the device active inside its own ``__init__`` -- STRICTLY BEFORE
+    ``peft.get_peft_model`` is ever called, and a failure raised by
+    ``get_peft_model`` propagates verbatim rather than being caught and
+    re-guessed: ``FsdpPeftSaveTrainer._save`` (fsdp_peft_save.py) calls
+    ``factory()`` with no try/except of its own, so a defect here must surface
+    loudly, never silently, at the one place -- checkpoint save time -- this
+    whole module exists to get right.
+    """
+    calls: list[str] = []
+
+    class _FakeBaseCls:
+        def __init__(self, config: object) -> None:
+            calls.append("base_cls")
+            self.config = config
+            # Proves the skeleton really is built with no live storage: the
+            # context manager set by `with torch.device("meta"):` makes this
+            # the default device for any tensor this constructor might make.
+            import torch
+
+            assert torch.get_default_device() == torch.device("meta")
+
+    def _boom_get_peft_model(skeleton: object, config: object, *, adapter_name: str) -> None:
+        calls.append("get_peft_model")
+        raise RuntimeError("peft refused this skeleton")
+
+    peft_module = ModuleType("peft")
+    peft_module.get_peft_model = _boom_get_peft_model  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "peft", peft_module)
+
+    # get_base_model()'s result only needs to answer `type(...)` as
+    # `_FakeBaseCls` (so the factory reconstructs THAT class) and `.config` --
+    # built via `object.__new__` so capturing it does not itself ring the
+    # constructor's own `calls.append("base_cls")`, which must fire exactly
+    # once, inside the factory, under the meta-device context manager.
+    base_model_stub = object.__new__(_FakeBaseCls)
+    base_model_stub.config = object()
+
+    peft_model = _FakePeftModel({"default": object()})
+    monkeypatch.setattr(peft_model, "get_base_model", lambda: base_model_stub)
+    factory = build_peft_fsdp1_skeleton_factory(peft_model)
+
+    with pytest.raises(RuntimeError, match="peft refused this skeleton"):
+        factory()
+
+    # ORDER is the load-bearing assertion: the skeleton exists before peft is
+    # ever asked to wrap it, exactly as the module docstring's THE FIX section
+    # describes ("Build a FRESH PeftModel skeleton ... and hand it the
+    # ALREADY-CORRECT state_dict").
+    assert calls == ["base_cls", "get_peft_model"]
 
 
 # ---------------------------------------------------------------------------
