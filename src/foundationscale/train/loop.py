@@ -498,6 +498,53 @@ def _declared_untrainable_modality(
     return None
 
 
+def _fold_video_split(
+    split: Any,
+    *,
+    dataset: str,
+    video_column: str | None,
+    image_column: str | None,
+    budget: Any,
+    cache_dir: str | None,
+) -> Any:
+    """``split`` with every clip folded into frame images, or a refusal string.
+
+    Relative clip paths and the default frame cache both live beside a local
+    dataset (its directory, or a data file's parent); a hub dataset id resolves
+    against the working directory. A missing column, a missing clip and an
+    undecodable clip all refuse -- a row trained on its text alone under a video
+    declaration is the silent drop this plane exists to prevent.
+    """
+    import functools  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from foundationscale import video  # noqa: PLC0415
+
+    if video_column is None or image_column is None:
+        return "video fold called without a declared video and image column"
+    if video_column not in split.column_names:
+        return (
+            f"video column {video_column!r} is declared but dataset {dataset!r} has "
+            f"columns {split.column_names}. Training anyway would run text-only under "
+            "a video label -- the silent-drop defect this plane refuses"
+        )
+    local = Path(dataset)
+    base = local if local.is_dir() else local.parent if local.is_file() else Path.cwd()
+    cache = Path(cache_dir) if cache_dir else base / ".fs_video_frames"
+    fold = functools.partial(
+        video.fold_video_row,
+        video_column=video_column,
+        image_column=image_column,
+        budget=budget,
+        cache_dir=str(cache),
+        base_dir=str(base),
+    )
+    try:
+        return split.map(fold)
+    except (video.VideoDecodeError, FileNotFoundError) as exc:
+        return f"video column {video_column!r}: a clip could not become frames: {exc}"
+
+
 def _untrainable_modality_refusal(modality: str, var: str, declared: str) -> str:
     """The refusal text, which has to do more than carry the right exit code.
 
@@ -519,6 +566,12 @@ def _untrainable_modality_refusal(modality: str, var: str, declared: str) -> str
         f"{modality} silently and report success under {article} {modality} label, "
         f"which is the defect this refuses. Unset {var} to train text-only on the "
         "same corpus"
+        + (
+            ", or declare FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES=N to train each clip as N "
+            "uniformly sampled frames on the image arm"
+            if modality == "video"
+            else ""
+        )
     )
 
 
@@ -4593,6 +4646,36 @@ def _train(cfg: TrainConfig) -> int:
     # costs nothing and cannot be confounded by an unloadable corpus -- that
     # confound is what made T1-23's original exit 96 unreadable.
     _untrainable = _declared_untrainable_modality(_os.environ)
+    # Video becomes trainable when a FRAME BUDGET is declared beside the column:
+    # each clip is sampled to that many frames and the frames ride the image arm
+    # (foundationscale.video). The column alone still refuses below -- how many
+    # frames, spaced how, is a dataset decision no default may make.
+    from foundationscale import video as _video  # noqa: PLC0415
+
+    VIDEO_COLUMN: str | None = None
+    _video_budget: Any = None
+    if _untrainable is not None and _untrainable[0] == "video":
+        try:
+            _video_budget = _video.budget_from_env(_os.environ)
+        except ValueError as exc:
+            _mark(Step.REFUSE, f"video frame budget is not a budget: {exc}")
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={"exit": EXIT_REFUSE, "video_column": _untrainable[2]},
+            )
+            return EXIT_REFUSE
+        if _video_budget is not None:
+            VIDEO_COLUMN = _untrainable[2]
+            _untrainable = None
+            if IMAGE_COLUMN is None:
+                IMAGE_COLUMN = _video.VIDEO_FRAMES_COLUMN
+            _mark(
+                Step.DATA,
+                f"video column {VIDEO_COLUMN!r} declared with frame budget "
+                f"{_video_budget.key}: each clip becomes {_video_budget.frames} "
+                f"{_video_budget.sampling} frames on image column {IMAGE_COLUMN!r}",
+            )
     if _untrainable is not None:
         _modality, _var, _declared = _untrainable
         _mark(Step.REFUSE, _untrainable_modality_refusal(_modality, _var, _declared))
@@ -4956,6 +5039,25 @@ def _train(cfg: TrainConfig) -> int:
                 "the thin path requires a 'text' column",
             )
             return EXIT_REFUSE
+        if _video_budget is not None and CONVERSATIONS_COLUMN is None:
+            _folded = _fold_video_split(
+                raw[split],
+                dataset=cfg.dataset,
+                video_column=VIDEO_COLUMN,
+                image_column=IMAGE_COLUMN,
+                budget=_video_budget,
+                cache_dir=_os.environ.get(_video.VIDEO_CACHE_ENV) or None,
+            )
+            if isinstance(_folded, str):
+                _mark(Step.REFUSE, _folded)
+                _emit_manifest(
+                    cfg,
+                    stage="refused",
+                    extra={"exit": EXIT_REFUSE, "video_column": VIDEO_COLUMN},
+                )
+                return EXIT_REFUSE
+            raw[split] = _folded
+            columns = raw[split].column_names
         if IMAGE_COLUMN is None and AUDIO_COLUMN is None and CONVERSATIONS_COLUMN is None:
             # #490: say what is being dropped. A console line only -- the arm
             # below stays byte-identical, which is what makes it safe to add

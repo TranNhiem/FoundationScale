@@ -207,7 +207,15 @@ workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.m
   still trained. The discriminator is bit-exact, so there is no tolerance to argue about.
   Declaring **audio** or **video** REFUSES with exit 96 and names the modality — this
   plane has no audio or video arm, and it says so rather than dropping the column in
-  silence. An omni checkpoint's untrainable towers are **carried, not trained**, and the
+  silence. Video gets an arm once its sampling is DECLARED: with
+  `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES=N` beside the column, each clip becomes N
+  centred-uniform frames on the image arm (measured through the processor: 16 frames of
+  a real clip cost 264 tokens each on `gemma-4-E4B-it`). Trained on that model at 8
+  frames per clip, full fine-tune sharded over four GPUs of one GB200 tray, 40 steps:
+  160 of 659 vision-tower tensors moved; over the same rows with no video declared,
+  0 of 659 moved while the language tower still trained. 16 frames does not fit a full
+  fine-tune of this model on one tray, because its shared-KV layers rule out gradient
+  checkpointing. An omni checkpoint's untrainable towers are **carried, not trained**, and the
   run announces which ones by name, because "trained a multimodal model" and "carried two
   thirds of one unchanged" are different claims. *Not* declaring them is no longer silent
   either: a corpus that folds its media reference into the text — the shape conversion
@@ -522,14 +530,14 @@ itself, from the Makefile's own accounting:
 
 ## 23. Project structure
 
-`src/` = 75737 LOC across 112 files. `launchers/` contains 10231 shell LOC plus 1615 Python
+`src/` = 61678 LOC across 80 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 34169 Python LOC and 6706 shell LOC on top of the
-package. `tools/` contains 10183 Python LOC. 355259 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 10183 Python LOC. 323913 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (103689 .py LOC); conftest carries the skip guard
+tests/                 the test suite (89061 .py LOC); conftest carries the skip guard
 tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
                        real_checkpoint_probe, preflight/, mutate, census)
 checks/                standalone repository gates: countables drift, packaging
