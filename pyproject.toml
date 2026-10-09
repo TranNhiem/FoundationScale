@@ -138,6 +138,10 @@ foundationscale-controls = "foundationscale.gates.controls:main"
 # `python -m foundationscale.train.cli`. Two tests asserted the STRING appeared
 # in the output; neither asked the packaging system whether the name resolved.
 foundationscale-train = "foundationscale.train.cli:main"
+# Slice 5: the agentic RL CLI, same registration pattern (and the same #224
+# lesson) as foundationscale-train above -- argparse's prog= already says this
+# name, so it had better resolve.
+foundationscale-agentic-rl = "foundationscale.agentic_rl.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -28,7 +28,11 @@ the trainer, which call this kernel only on already-priced rows); any
 convergence, benchmark, or paper-equivalence property; or that this
 module is torch-free -- it is not, by design.
 
-COVERAGE, MEASURED: a 14-row mutation battery over this file kills 13.
+COVERAGE, MEASURED: a 14-row mutation battery over this file kills 13, and
+the four ``prompt_mean`` arms added with the fourth reduction are pinned
+by ``tests/rl/test_prompt_mean.py`` with a named dying mutant each (the
+row-weight plane ignored, its length not cross-checked, it accepted under
+another reduction, and the missing-weights refusal absent).
 The survivor is the ``.clamp(min=0.0)`` on the k3 term. It survives
 because it is UNFALSIFIABLE here, not because the tests are weak: a sweep
 of ``expm1(x) - x`` over 50 magnitudes in float32 and float64 produced no
@@ -36,7 +40,7 @@ negative value, so no input reaching this kernel can distinguish the
 clamped form from the unclamped one. It is retained as parity with the
 oracle's own roundoff clamp and is declared here rather than left to read
 as a verified guard. Every other axis -- loss sign, both ratio scopes,
-all three reductions, the clip bounds INCLUDING the asymmetric upper
+all four reductions, the clip bounds INCLUDING the asymmetric upper
 bound only DAPO declares, the k3 direction, the supervision mask, the
 empty-row refusal and the finiteness guard -- has a mutant that dies.
 """
@@ -104,7 +108,11 @@ class TensorPolicyLoss:
     * ``objective.reduction`` -- ``"token_mean"`` divides the summed
       surrogate by the supervised-token count; ``"sequence_mean"`` divides
       each row by its own supervised count then means over rows;
-      ``"constant"`` divides by ``rows * objective.constant_length``.
+      ``"constant"`` divides by ``rows * objective.constant_length``;
+      ``"prompt_mean"`` multiplies each row's masked terms by its
+      ``reduction_row_weights`` entry and sums -- the per-group denominator
+      is carried by that plane because this call signature has no group ids.
+      These are FOUR reductions and the refusal below enumerates four.
     * ``getattr(objective, "kl_weight", 0.0)`` -- when non-zero, the k3
       estimator ``exp(ref - cur) - (ref - cur) - 1`` over supervised tokens,
       denominated by the supervised-token mean exactly as the oracle
@@ -120,7 +128,13 @@ class TensorPolicyLoss:
     ``advantages``, which is ``(rows,)`` (one scalar weight per row,
     broadcast over tokens) or ``(rows, tokens)`` (the advantage estimator's
     per-token weight rows, which already carry a literal 0.0 at masked
-    positions). ``current_logprobs`` MUST require grad; every other input
+    positions), and ``reduction_row_weights``, an OPTIONAL ``(rows,)``
+    vector carrying the ``prompt_mean`` denominator. That plane is refused
+    with both counts named when it is missing under
+    ``reduction="prompt_mean"``, when its length disagrees with the row
+    count, or when it is supplied under ANY other reduction -- one
+    countable, one owner, and for the other three reductions the owner is
+    this kernel. ``current_logprobs`` MUST require grad; every other input
     is detached here. The batch passed in must already be restricted to
     the estimator's USED rows -- row dropping is the estimator's affair,
     not this kernel's.
@@ -144,6 +158,7 @@ class TensorPolicyLoss:
         advantages: torch.Tensor,
         mask: torch.Tensor,
         reference_logprobs: torch.Tensor | None = None,
+        reduction_row_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # torch is imported HERE, not at module scope, because the packaging
         # census forbids an import-time torch import anywhere under src/:
@@ -274,6 +289,14 @@ class TensorPolicyLoss:
         surrogate_terms = torch.minimum(ratio * adv, clipped * adv) * mask_f
 
         reduction = objective.reduction
+        if reduction != "prompt_mean" and reduction_row_weights is not None:
+            raise BatchRefusal(
+                f"{origin} declares reduction={reduction!r} but was handed "
+                f"1 reduction_row_weights plane over {rows} rows; one "
+                f"countable gets one owner, and the {reduction!r} "
+                f"denominator is priced inside the kernel, never by a "
+                f"caller-supplied plane"
+            )
         if reduction == "token_mean":
             surrogate = surrogate_terms.sum() / supervised_total
         elif reduction == "sequence_mean":
@@ -288,11 +311,46 @@ class TensorPolicyLoss:
                     f"positive integer length"
                 )
             surrogate = surrogate_terms.sum() / float(rows * constant_length)
+        elif reduction == "prompt_mean":
+            if reduction_row_weights is None:
+                raise BatchRefusal(
+                    f"{origin} declares reduction='prompt_mean' but 0 of 1 "
+                    f"required reduction_row_weights inputs were supplied "
+                    f"for {rows} rows; an active prompt_mean denominator "
+                    f"requires the caller-built row-weight plane, because "
+                    f"the group ids it was built from never reach this seam"
+                )
+            if not isinstance(reduction_row_weights, torch.Tensor):
+                raise BatchRefusal(
+                    f"reduction_row_weights is a {type(reduction_row_weights).__name__}, "
+                    f"not a torch.Tensor: the prompt_mean plane is one (rows,) "
+                    f"tensor of weights, and a sequence here would be priced "
+                    f"without its length or device ever being checked"
+                )
+            row_weights = reduction_row_weights.detach().to(dtype=current_logprobs.dtype)
+            if row_weights.dim() != 1:
+                raise BatchRefusal(
+                    f"reduction_row_weights has shape "
+                    f"{tuple(reduction_row_weights.shape)} "
+                    f"({reduction_row_weights.dim()} dims); the "
+                    f"prompt_mean reduction requires one (rows,) vector of "
+                    f"one weight per batch row"
+                )
+            if row_weights.shape[0] != rows:
+                raise BatchRefusal(
+                    f"reduction_row_weights has {int(row_weights.shape[0])} "
+                    f"entries but current_logprobs has {rows} rows for "
+                    f"{origin}; 1 of 1 prompt_mean weight vectors must "
+                    f"carry one weight per batch row, and both counts are "
+                    f"named so a positional mismatch cannot weight the "
+                    f"wrong row"
+                )
+            surrogate = (surrogate_terms * row_weights.unsqueeze(-1)).sum()
         else:
             raise BatchRefusal(
                 f"{origin} declares reduction={reduction!r}; the kernel "
-                f"knows 3 reductions ('token_mean', 'sequence_mean', "
-                f"'constant') and this is none of them"
+                f"knows 4 reductions ('token_mean', 'sequence_mean', "
+                f"'constant', 'prompt_mean') and this is none of them"
             )
 
         loss = -weight * surrogate

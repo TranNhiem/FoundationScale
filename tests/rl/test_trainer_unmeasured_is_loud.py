@@ -60,11 +60,27 @@ def _trainer_source() -> str:
 
 
 def test_every_unmeasured_exit_from_one_step_is_announced() -> None:
-    total, silent = _silent_unmeasured_exits(_trainer_source(), "_one_step")
+    # Slice 4a extracted _one_step's kept-planes-onward pricing (logprobs,
+    # advantage, loss, backward, report) verbatim into RLTrainer._priced_tail
+    # so the externally generated multi-turn rows leg (_one_step_rows) can
+    # share it; every UNMEASURED `return None` this control pins moved there
+    # with it. _one_step itself keeps exactly one (the all-abstained
+    # generation leg), still announced -- see
+    # test_the_tail_keeps_one_announced_exit_of_its_own below.
+    total, silent = _silent_unmeasured_exits(_trainer_source(), "_priced_tail")
     # The count is asserted so this cannot pass by matching nothing: if the
     # function is renamed or its early exits are restructured away, the control
     # fails rather than reporting a clean zero over an empty set.
-    assert total >= 4, f"expected at least 4 bare `return None` in _one_step, found {total}"
+    assert total >= 4, f"expected at least 4 bare `return None` in _priced_tail, found {total}"
+    assert silent == [], f"UNMEASURED steps leave silently at line(s) {silent}"
+
+
+def test_the_tail_keeps_one_announced_exit_of_its_own() -> None:
+    # _one_step's own leg (encode -> generate -> decode -> score) keeps the
+    # single UNMEASURED exit that belongs to IT: every rollout abstained
+    # before any row ever reached _priced_tail.
+    total, silent = _silent_unmeasured_exits(_trainer_source(), "_one_step")
+    assert total >= 1, f"expected at least 1 bare `return None` in _one_step, found {total}"
     assert silent == [], f"UNMEASURED steps leave silently at line(s) {silent}"
 
 

@@ -1,8 +1,9 @@
-"""Group-relative policy objectives: GSPO, Dr.GRPO, and DAPO arithmetic.
+"""Group-relative policy objectives: GSPO, Dr.GRPO, DAPO and agentic-GRPO
+arithmetic.
 
-This module holds the three LOSS OBJECTS; the protocol they satisfy
+This module holds the four LOSS OBJECTS; the protocol they satisfy
 (``SequenceObjective``), the family binding (``SequencePolicyAlgorithm``), and
-the three factories live in the sibling ``group_policy.py``. The arithmetic
+the four factories live in the sibling ``group_policy.py``. The arithmetic
 here is recognisably the same family as :class:`GRPOPolicyLoss`: the same
 guards, the same abstention behaviour, and the same treatment of an empty or
 fully-masked batch -- what differs is exactly the two declarations the axes
@@ -41,6 +42,7 @@ denominator, and that is carried by the separate ``reduction`` property.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -50,6 +52,7 @@ from foundationscale.rl.advantage import (
     AdvantageResult,
     CentredAdvantage,
     GroupNormalisedAdvantage,
+    SessionGroupAdvantage,
 )
 from foundationscale.rl.algorithm import AlgorithmSemantics
 from foundationscale.rl.interfaces import (
@@ -63,9 +66,11 @@ from foundationscale.rl.interfaces import (
 )
 
 __all__ = (
+    "AgenticGRPOLoss",
     "DAPOLoss",
     "DrGRPOLoss",
     "GSPOLoss",
+    "prompt_mean_row_weights",
 )
 
 
@@ -1250,6 +1255,302 @@ class DAPOLoss:
                 f"report a perfect loss over no gradient"
             )
         policy_contribution = -self.weight * (surrogate_total / supervised)
+        components = (
+            LossComponent(
+                name=self.component_name,
+                weight=self.weight,
+                observed=True,
+                contribution=policy_contribution,
+            ),
+        )
+        return (
+            LossOutput(loss=policy_contribution, components=components),
+            prices.advantage,
+        )
+
+
+def prompt_mean_row_weights(
+    group_ids: Sequence[str],
+    supervised_tokens: Sequence[int],
+) -> tuple[float, ...]:
+    """Row weights that realise the ``prompt_mean`` reduction, torch-free.
+
+        WHAT IS CLAIMED: the returned vector ``w`` satisfies
+        ``sum(w[row] * row_terms[row]) == (1 / P) * sum_g(terms_g / tokens_g)``
+        for ANY per-row scalar ``row_terms``, where ``P`` is the number of ACTIVE
+        groups (groups holding at least one supervised token) and ``tokens_g`` is
+        the supervised-token count of group ``g``. A row with zero supervised
+    tokens gets a literal 0.0: it contributes no term and cannot move the
+    denominator.
+
+        This function is the ONE owner of the denominator shape. The oracle
+        (:class:`AgenticGRPOLoss`) and the trainer both call it, and the tensor
+        kernel receives its output verbatim as ``reduction_row_weights``, so
+        this torch-free arithmetic is the source of truth and the kernel only
+        mirrors it.
+
+        WHAT IS NOT CLAIMED: that the weights are the DDP-scaled ones. Under
+        gradient averaging the CMD trades ``P_local`` for ``P_global`` and scales
+        by ``world_size`` so the GLOBAL objective stays the prompt mean over
+        every rank's groups; that rescale lives with the trainer, which alone
+        knows the world size and the collective.
+
+        Length disagreement, a bool/non-int/negative supervised-token count and
+        an unhashable group id are ``BatchRefusal``; ``P == 0`` is
+        ``SupervisionRefusal`` -- an empty supervision denominator is
+        UNMEASURED, never 0.0.
+    """
+    ids = _outer_sequence(group_ids, field_name="group_ids", refusal=BatchRefusal)
+    raw_counts = _outer_sequence(
+        supervised_tokens,
+        field_name="supervised_tokens",
+        refusal=BatchRefusal,
+    )
+    if len(ids) != len(raw_counts):
+        raise BatchRefusal(
+            f"group_ids and supervised_tokens disagree on the row count: "
+            f"{len(ids)} group ids and {len(raw_counts)} supervised-token "
+            f"counts; one count per priced row is required, because a "
+            f"silent mismatch would weight the wrong row"
+        )
+    counts: list[int] = []
+    for row, raw in enumerate(raw_counts):
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            raise BatchRefusal(
+                f"supervised_tokens[{row}]={raw!r} ({type(raw).__name__}): "
+                f"a supervised-token count must be an int of at least 0; "
+                f"1 is not True, so a bool is not a count either"
+            )
+        if raw < 0:
+            raise BatchRefusal(
+                f"supervised_tokens[{row}]={raw}: a supervised-token count "
+                f"cannot be negative; a negative denominator moves the "
+                f"reduction the wrong way"
+            )
+        counts.append(raw)
+    groups: dict[Any, list[int]] = {}
+    for row, key in enumerate(ids):
+        try:
+            groups.setdefault(key, []).append(row)
+        except TypeError as exc:
+            raise BatchRefusal(
+                f"group id at row {row} is {key!r}, which is not hashable "
+                f"({type(key).__name__}); group ids partition the priced "
+                f"rows into prompt groups, so each must group"
+            ) from exc
+    totals = {key: sum(counts[row] for row in rows) for key, rows in groups.items()}
+    active = sum(1 for total in totals.values() if total > 0)
+    if active == 0:
+        raise SupervisionRefusal(
+            f"0 of {len(groups)} prompt group(s) carry a supervised token; "
+            f"the prompt_mean reduction is unmeasured over an empty "
+            f"supervision denominator and never 0.0"
+        )
+    weights: list[float] = []
+    for row, key in enumerate(ids):
+        weights.append(0.0 if counts[row] == 0 else 1.0 / (active * totals[key]))
+    return tuple(weights)
+
+
+@dataclass(frozen=True, slots=True)
+class AgenticGRPOLoss:
+    """Agentic GRPO: token ratio, centred session baseline, prompt-mean reduction.
+
+        Per supervised token, over each priced row::
+
+            ratio = exp(current_logprob - old_logprob)
+            score = min(ratio * advantage, clip(ratio, low, high) * advantage)
+
+        and the reduction is ``prompt_mean``::
+
+            loss = -weight * (1 / P) * SUM over active groups g of
+                   (SUM of score over g's supervised tokens)
+                        / (g's supervised-token count)
+
+        ``P`` is the number of ACTIVE groups -- groups holding at least one
+        supervised token -- and a zero-token group contributes to neither side.
+        ``P == 0`` is UNMEASURED and refuses (via
+        :func:`prompt_mean_row_weights`); it is never a zero loss. The row-weight
+        vector that realises the formula is built ONCE per evaluation by that
+        same function and is the quantity ``TensorPolicyLoss`` receives as
+        ``reduction_row_weights`` -- the kernel has no group ids and must not
+        re-derive a denominator. Under DDP the CMD rescales those weights to
+        ``world_size / (P_global * tokens_g)`` so the GLOBAL objective is the
+        prompt mean over every rank's groups; that rescale is the trainer's and
+        is stated in its own docstring.
+
+        The advantage estimator is the concrete :class:`SessionGroupAdvantage`:
+        one row is one session, ``prompt_ids`` carries the session key (and the
+        caller's optional ``::harness`` suffix), and a ``None`` reward excludes
+        its row rather than scoring it 0.0. The clip default is the SYMMETRIC
+        +-0.2 PPO interval -- the absolute bounds ``(0.8, 1.2)``, stored as two
+        ``clip_low``/``clip_high`` fields exactly as :class:`DAPOLoss` stores its
+        asymmetric ``(0.8, 1.28)``, because ``_clipped_term`` prices ratio
+        bounds, not epsilons.
+
+        There is NO ``kl_weight`` field at all -- deliberately absent, not
+        defaulted to zero, for :class:`DAPOLoss`'s reason: a present-but-zero
+        field invites a caller to build a configuration no measured record
+    describes, and an absent field makes it unrepresentable. So
+        ``required_columns`` is GRPO's set minus the reference column and
+        ``semantics()`` abstains (kl_estimator ``None``, ``reference_free``
+    True).
+
+        WHAT IS CLAIMED: token ratio scope, the configured symmetric clip, the
+        concrete :class:`SessionGroupAdvantage` with its min-group-size
+        agreement check, a ``prompt_mean`` denominator owned by
+        :func:`prompt_mean_row_weights`, and no KL term under any configuration.
+        ``expects_dynamic_sampling`` is False (declared, and
+        ``filter_groups`` arrives in a later slice).
+
+        WHAT IS NOT CLAIMED: any rollout-side behaviour, dynamic sampling,
+        overlong reward shaping, or convergence/benchmark/paper equivalence --
+        this objective has never been trained here.
+    """
+
+    group_size: int = 2
+    clip_low: float = 0.8
+    clip_high: float = 1.2
+    weight: float = 1.0
+    prompt_id_column: str = "prompt_ids"
+    reward_column: str = "rewards"
+    mask_column: str = "loss_mask"
+    old_logprob_column: str = "old_logprobs"
+    component_name: str = "agentic_grpo_policy_loss"
+    advantage_fn: SessionGroupAdvantage = field(default_factory=SessionGroupAdvantage)
+
+    def __post_init__(self) -> None:
+        _validate_common(
+            group_size=self.group_size,
+            clip_low=self.clip_low,
+            clip_high=self.clip_high,
+            weight=self.weight,
+            kl_weight=None,
+            reference_logprob_column=None,
+            origin="agentic_grpo",
+        )
+        for field_name, name_value in (
+            ("prompt_id_column", self.prompt_id_column),
+            ("reward_column", self.reward_column),
+            ("mask_column", self.mask_column),
+            ("old_logprob_column", self.old_logprob_column),
+            ("component_name", self.component_name),
+        ):
+            _checked_name(field_name, name_value)
+        if not isinstance(self.advantage_fn, SessionGroupAdvantage):
+            raise LossConfigRefusal(
+                f"advantage_fn={self.advantage_fn!r}: agentic_grpo binds "
+                f"SessionGroupAdvantage; 1 of 1 estimator slots must carry "
+                f"the session-group estimator -- the one that admits an "
+                f"abstained reward as None -- and an undeclared substitute "
+                f"would either refuse the batch outright or invent a 0.0"
+            )
+        if self.advantage_fn.min_group_size != self.group_size:
+            raise LossConfigRefusal(
+                f"group_size={self.group_size} and "
+                f"advantage_fn.min_group_size="
+                f"{self.advantage_fn.min_group_size}: 1 configured "
+                f"agentic_grpo group size disagrees with 1 estimator minimum"
+            )
+
+    @property
+    def expects_dynamic_sampling(self) -> bool:
+        """False: filter_groups arrives in a later slice and is not declared here."""
+        return False
+
+    @property
+    def ratio_scope(self) -> Literal["token", "sequence"]:
+        return "token"
+
+    @property
+    def reduction(
+        self,
+    ) -> Literal["token_mean", "sequence_mean", "constant", "prompt_mean"]:
+        return "prompt_mean"
+
+    @property
+    def clip_bounds(self) -> tuple[float, float]:
+        return (float(self.clip_low), float(self.clip_high))
+
+    @property
+    def required_columns(self) -> tuple[str, ...]:
+        # GRPO's schema minus the reference column -- the objective is
+        # structurally reference-free.
+        return (
+            self.prompt_id_column,
+            self.reward_column,
+            self.mask_column,
+            self.old_logprob_column,
+        )
+
+    def declaration(self) -> LossDeclaration:
+        # One unconditional component whose weight is validated strictly
+        # positive: a zero-component declaration is unreachable.
+        return LossDeclaration(components=(self.component_name,))
+
+    def semantics(self) -> AlgorithmSemantics:
+        # kl_estimator is None -- abstention in the house sense: agentic_grpo
+        # carries no KL term structurally, so "which KL estimator" is a
+        # question the objective refuses to pose.
+        return AlgorithmSemantics(
+            group_size=self.group_size,
+            ratio_scope="token",
+            kl_estimator=None,
+            clip_bounds=self.clip_bounds,
+            reference_free=True,
+        )
+
+    def __call__(self, forward_fn: ForwardFn, batch: ExperienceBatch) -> LossOutput:
+        output, _advantage = self.compute_with_report(forward_fn, batch)
+        return output
+
+    def compute_with_report(
+        self, forward_fn: ForwardFn, batch: ExperienceBatch
+    ) -> tuple[LossOutput, AdvantageResult]:
+        prices = _price_rows(
+            forward_fn=forward_fn,
+            batch=batch,
+            advantage_fn=self.advantage_fn,
+            group_size=self.group_size,
+            prompt_id_column=self.prompt_id_column,
+            reward_column=self.reward_column,
+            mask_column=self.mask_column,
+            old_logprob_column=self.old_logprob_column,
+            reference_logprob_column=None,
+            origin="agentic_grpo",
+        )
+        prompt_id_values = _outer_sequence(
+            batch.column(self.prompt_id_column),
+            field_name=self.prompt_id_column,
+            refusal=BatchRefusal,
+        )
+        group_ids = [prompt_id_values[row] for row in prices.batch_rows]
+        supervised_tokens = [sum(1 for entry in mask_row if entry) for mask_row in prices.mask_rows]
+        row_weights = prompt_mean_row_weights(group_ids, supervised_tokens)
+        surrogate_total = 0.0
+        for index, batch_row in enumerate(prices.batch_rows):
+            mask = prices.mask_rows[index]
+            weights = prices.weight_rows[index]
+            current = prices.current_rows[index]
+            old = prices.old_rows[index]
+            row_total = 0.0
+            for position, is_supervised in enumerate(mask):
+                if not is_supervised:
+                    continue
+                ratio = _ratio(
+                    current[position] - old[position],
+                    batch_row,
+                    position,
+                    "agentic_grpo",
+                )
+                row_total += _clipped_term(
+                    ratio,
+                    weights[position],
+                    self.clip_low,
+                    self.clip_high,
+                )
+            surrogate_total += row_weights[index] * row_total
+        policy_contribution = -self.weight * surrogate_total
         components = (
             LossComponent(
                 name=self.component_name,

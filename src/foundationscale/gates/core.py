@@ -106,6 +106,23 @@ class Lifecycle(str, Enum):
     PROMOTE = "promote"
     """Before an artifact is declared servable. The last gate before the blast radius."""
 
+    ROLLOUT = "rollout"
+    """After an agentic RL rollout batch is flattened: per-row trajectory integrity
+    (loss mask, per-token column alignment, INFRA-row shape, reward/abstention
+    biconditional) and the infra-abstention rate. See
+    :mod:`foundationscale.gates.agentic_gates`."""
+
+    EPISODE = "episode"
+    """Reserved for a future gate over one agentic RL episode in isolation (inside a
+    single rollout attempt, before it is flattened into a batch row). No gate is
+    registered for this event yet; it is declared now, append-only, so a later slice
+    does not have to widen this enum again."""
+
+    WEIGHT_SYNC = "weight_sync"
+    """After a trained policy's weights are pushed to the generation fleet: staleness
+    (is the fleet caught up, and by how many steps) and engine/learner logprob
+    parity. See :mod:`foundationscale.gates.agentic_gates`."""
+
 
 class Verdict(str, Enum):
     """The outcome of a gate.
