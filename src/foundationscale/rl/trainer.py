@@ -46,11 +46,12 @@ correctly tuned; or that any row survives scoring on any given step.
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never executed at runtime
-    from collections.abc import Callable, Iterable, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Sequence
 
     import torch
 
@@ -364,6 +365,339 @@ def _expand_video_samples(samples: Sequence[Sample], config: Any) -> tuple[Sampl
     return tuple(expanded)
 
 
+# The only adapter kind either trainer in this module wires. A second kind
+# that someone types into a config dict and silently gets ignored is exactly
+# the class of defect __init__'s validation exists to turn into a refusal.
+_ADAPTERS: tuple[str, ...] = ("lora",)
+
+
+class _AdapterDisabledReference:
+    """A frozen reference forward, read off the SAME peft-wrapped policy.
+
+    WHY THIS EXISTS: under ``adapter='lora'`` the base weights ARE the
+    frozen reference -- peft's LoRA delta is the only trained quantity --
+    so loading a second full model copy would duplicate every frozen byte
+    next to the one already resident, which is exactly the memory
+    ``wrap_fsdp2``'s own module docstring says FSDP2 exists to avoid for the
+    full-parameter case. ``model.disable_adapter()`` (a peft context
+    manager) already turns every LoRA module's forward back into the bare
+    base-model computation for its duration; this class makes that context
+    manager answer the SAME calling convention every ``ref_model(...)``
+    call site in this package already uses (``ref_model(input_ids=...,
+    attention_mask=..., **kwargs).logits``), so none of those call sites --
+    ``_one_step``, ``_priced_tail``, ``ppo_step.forward_rows``,
+    ``online_pref_step.summed_logprobs`` -- change at all.
+
+    Puts ``policy_model`` into ``eval()`` for the duration of the call and
+    restores whatever mode it found before returning: peft's own
+    ``disable_adapter()`` toggles only the adapter, not dropout/train-vs-
+    eval behaviour, and the step-0 "reference equals policy" invariant
+    (grpo's k3 term, DPO's margin) needs the SAME deterministic forward the
+    real second-copy path got from a freshly loaded, ``.eval()``'d model.
+
+    WHAT IS CLAIMED: one call is one forward of the base model (no LoRA
+    delta applied), under ``torch.no_grad()``, and the policy model's
+    training mode and adapter are both restored before the call returns --
+    this proxy never leaves the policy model in a different state than it
+    found it.
+
+    WHAT IS NOT CLAIMED: that ``.eval()``/``.parameters()`` return anything
+    meaningful. The only caller that wants the reference's OWN parameter
+    list is ``maybe_refresh_reference``'s periodic resync (iterative DPO),
+    and the call site that would hand it this proxy refuses first instead
+    (see its comment in ``RLTrainer.run``) -- a resync has no base weights
+    to copy TO here, since disabling the adapter always reads the one,
+    unchanging base checkpoint.
+
+    Unwraps one ``.module`` on construction when present: under
+    ``sharding='ddp'`` the caller's ``model`` is a
+    ``DistributedDataParallel`` instance, which does NOT proxy arbitrary
+    attributes (``disable_adapter``, peft's own methods) through to the
+    wrapped module the way this package's own ``getattr(model, "module",
+    model)`` idiom (``save_checkpoint``, ``_one_step``'s generate call)
+    already has to account for -- calling ``.disable_adapter()`` on the DDP
+    wrapper itself would raise ``AttributeError``. Reading the raw module
+    directly is also the CORRECT choice, not merely the one that does not
+    crash: the reference forward runs under ``torch.no_grad()``, so there is
+    no gradient for DDP's wrapper to synchronise and no reason to pay its
+    hook overhead. FSDP2's ``fully_shard`` needs no such unwrap -- it
+    augments the SAME module object in place rather than wrapping it in a
+    container, which is exactly why GPU proof (a) (sharding='fsdp') did not
+    surface this; ddp would have hit it on its first reference call.
+    """
+
+    def __init__(self, policy_model: Any) -> None:
+        self._policy_model = getattr(policy_model, "module", policy_model)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        import torch  # function-local: see module docstring
+
+        policy = self._policy_model
+        was_training = bool(policy.training)
+        policy.eval()
+        try:
+            with torch.no_grad(), policy.disable_adapter():
+                return policy(*args, **kwargs)
+        finally:
+            policy.train(was_training)
+
+    def eval(self) -> _AdapterDisabledReference:
+        # No persistent mode to flip: __call__ already brackets every
+        # forward in eval()/train() around the policy model itself.
+        return self
+
+    def parameters(self) -> Iterable[Any]:
+        # Deliberately empty, not the policy's own parameters: handing
+        # those out would let a caller expecting an INDEPENDENT reference
+        # silently read (or, worse, write) the policy's live tensors.
+        return iter(())
+
+
+def _apply_lora_adapter(
+    model: Any,
+    *,
+    adapter: str | None,
+    adapter_rank: int | None,
+    adapter_alpha: float | None,
+    adapter_targets: tuple[str, ...] | None,
+    adapter_dropout: float | None,
+    log_prefix: str,
+) -> tuple[Any, dict[str, str]]:
+    """Wrap ``model`` with peft LoRA, or return it unchanged when ``adapter`` is None.
+
+    Reuses the SAME family-registry target selection
+    ``train/loop.py``'s SFT plane uses (:func:`foundationscale.families.plan_adapter_targets`),
+    so a VLM's vision tower is excluded and target coverage is checked the
+    identical way on both planes -- this policy lives in ``families``
+    precisely so no second copy of it could drift from the first.
+
+    Call this AFTER the model is loaded and BEFORE any FSDP/DDP wrap: peft
+    replaces specific ``nn.Linear`` leaves in place, which ``wrap_fsdp2``
+    (composable ``fully_shard``) and ``find_decoder_blocks`` (class-name
+    matching on the surrounding decoder block, untouched by the leaf swap)
+    both tolerate; wrapping the other way round would hand peft an
+    already-sharded DTensor tree to replace leaves inside, which it does
+    not support.
+
+    Refuses (exit 96, via ``_refuse_exit_96``) when: peft is not installed;
+    the family/target plan itself refuses (no family and no declared
+    targets, or a declared target that resolves nothing); or the adapter
+    attaches to 0 modules. A ``get_peft_model`` construction exception is
+    DELIBERATELY left to propagate uncaught -- same classification
+    ``train/loop.py`` gives it and for the same reason stated there: it
+    rewrites an already-constructed model in memory and opens no file and
+    no socket, so there is no environment errno for a refusal classifier to
+    read, and a branch here would be unfireable by any test.
+    """
+    if adapter is None:
+        return model, {}
+    if adapter not in _ADAPTERS:  # pragma: no cover -- callers validate first
+        _refuse_exit_96(f"adapter={adapter!r} is not one of {_ADAPTERS}")
+    try:
+        from peft import LoraConfig, get_peft_model
+    except ImportError:
+        _refuse_exit_96(
+            f"adapter={adapter!r} is declared but the optional dependency "
+            "'peft' is not installed. Refusing rather than silently running "
+            "a full fine-tune"
+        )
+    from foundationscale.families import plan_adapter_targets, torch_linear_predicate
+
+    lora_config: dict[str, Any] = {"r": adapter_rank}
+    if adapter_alpha is not None:
+        lora_config["lora_alpha"] = adapter_alpha
+    family_config: Any = {}
+    config_to_dict = getattr(getattr(model, "config", None), "to_dict", None)
+    if callable(config_to_dict):
+        as_dict = config_to_dict()
+        if isinstance(as_dict, dict):
+            family_config = as_dict
+    plan = plan_adapter_targets(
+        family_config,
+        adapter_targets,
+        model.named_modules(),
+        torch_linear_predicate(),
+    )
+    for line in plan.announcements:
+        print(f"{log_prefix} adapter: {line}", file=sys.stderr)
+    if plan.refusal is not None:
+        _refuse_exit_96(f"adapter={adapter!r}: {plan.refusal}")
+    lora_config["target_modules"] = list(plan.targets)
+    if adapter_dropout is not None:
+        lora_config["lora_dropout"] = adapter_dropout
+    model = get_peft_model(model, LoraConfig(**lora_config))
+    lora_param_names = [name for name, _ in model.named_parameters() if ".lora_" in name]
+    attached_modules = sorted({name.split(".lora_")[0] for name in lora_param_names})
+    if not attached_modules:
+        _refuse_exit_96(
+            f"adapter={adapter!r} attached to 0 modules (targets="
+            f"{list(adapter_targets) if adapter_targets is not None else None!r}); "
+            "refusing as vacuous -- an adapter that targets nothing trains "
+            "nothing while looking like it trained"
+        )
+    trainable = sum(int(p.numel()) for _, p in model.named_parameters() if p.requires_grad)
+    total_params = sum(int(p.numel()) for _, p in model.named_parameters())
+    notes = {
+        "adapter.mode": adapter,
+        "adapter.rank": str(adapter_rank),
+        "adapter.alpha": str(adapter_alpha),
+        "adapter.targets_declared": (
+            ",".join(adapter_targets) if adapter_targets is not None else "(peft defaults)"
+        ),
+        "adapter.attached_modules": str(len(attached_modules)),
+        "adapter.resolved_targets": ",".join(attached_modules),
+        "adapter.trainable_params": str(trainable),
+        "adapter.total_params": str(total_params),
+    }
+    print(
+        f"{log_prefix} adapter: lora attached to {len(attached_modules)} module(s); "
+        f"{trainable}/{total_params} parameters trainable; undeclared knobs left "
+        "to peft defaults",
+        file=sys.stderr,
+    )
+    return model, notes
+
+
+def _trainable_parameters(model: Any) -> Iterable[Any]:
+    """Parameters an optimizer should step: ``requires_grad`` only.
+
+    A no-op filter for a full fine-tune -- every parameter already requires
+    grad there, so the filtered generator yields the exact same parameters
+    in the exact same order as ``model.parameters()`` -- and the difference,
+    under ``adapter='lora'``, between training only the LoRA delta and
+    quietly handing AdamW (or ``MasterWeightOptimizer``, which already
+    filters internally -- see its own docstring -- making this a harmless
+    second pass there) optimiser state for every frozen base tensor too.
+    """
+    return (p for p in model.parameters() if p.requires_grad)
+
+
+def _reference_plan(
+    *,
+    adapter: str | None,
+    reference_model: str | None,
+    model: str,
+    refresh_every: int,
+) -> str:
+    """Which reference strategy a trainer's reference-loading block should use.
+
+    Returns ``"disable_adapter"`` when the frozen reference should be read
+    off the SAME policy with its LoRA adapter disabled (see
+    :class:`_AdapterDisabledReference`) -- true exactly when an adapter is
+    declared AND the reference is this run's OWN model (``reference_model``
+    is ``None`` or equal to ``model``; a distinct ``reference_model`` is a
+    genuinely different checkpoint that disabling an adapter cannot reach).
+    Returns ``"second_copy"`` for every other case, INCLUDING ``adapter is
+    None`` -- the historical, unconditional second-model-load path, so a
+    caller branching on this return value reproduces that path byte for
+    byte when no adapter is declared.
+
+    Raises :class:`TrainerRefusal` when the resolved strategy is
+    ``"disable_adapter"`` but ``refresh_every > 0``: iterative-DPO-style
+    periodic reference refresh copies the CURRENT policy into the
+    reference, and under LoRA disabling the adapter always reads the
+    ORIGINAL, unchanging base checkpoint -- there is no policy drift for a
+    refresh to capture, so running one would silently do nothing while
+    reporting a refresh.
+    """
+    reference_is_this_model = reference_model is None or reference_model == model
+    if adapter is not None and reference_is_this_model:
+        if refresh_every > 0:
+            raise TrainerRefusal(
+                f"a reference refresh every {refresh_every} step(s) "
+                f"(ref_refresh_steps={refresh_every}) was requested, but "
+                "adapter='lora' with no distinct reference_model makes the "
+                "reference model.disable_adapter() -- always the ORIGINAL "
+                "frozen base, which cannot be refreshed to track the "
+                "policy's LoRA updates. Set ref_refresh_steps=0, declare "
+                "adapter=None, or name a distinct reference_model"
+            )
+        return "disable_adapter"
+    return "second_copy"
+
+
+@contextmanager
+def _generation_mode(model: Any) -> Iterator[Any]:
+    """Put ``model`` into the state ``generate()`` needs, and restore it after.
+
+    MEASURED ROOT CAUSE (gemma-4-12B-it, GRPO rollout, 2026-10-09): every
+    online algorithm's rollout calls ``.generate()`` while the model is
+    still in ``.train()`` mode -- set once, before the step loop starts, and
+    never toggled for the rollout -- because ``gradient_checkpointing_enable()``
+    (called once at setup) leaves ``model.config.use_cache = False`` and
+    ``.train()`` is what the surrounding code calls after wrapping.
+    ``Gemma4UnifiedTextDecoderLayer.forward`` checks ``self.training and
+    self.gradient_checkpointing`` and, when both are true, drops its KV
+    cache and sets ``past_key_values=None`` -- CORRECT for a training
+    forward (checkpointing recomputes activations and a cache would be
+    stale by the recompute), but ``generate()``'s incremental decode loop
+    assumes a working cache: each new token is produced from ONLY the
+    single newest input id plus whatever the cache remembers, so a cache
+    silently dropped mid-generation conditions every token after the first
+    on almost no context. MEASURED: the first generated token is correct
+    (full-prompt forward, no cache needed yet) and every token after it is
+    near-random -- ``'A Sqh有意х 나오"--ᇲο¬一切 ...'`` instead of a bare
+    letter. This is SILENT: ``generate()`` raises nothing and returns a
+    full-shaped tensor, so a caller that does not read the decoded text
+    never learns the rollout was corrupted -- exactly the failure class
+    this repository's doctrine refuses to let ship unmeasured.
+
+    THE FIX: bracket the ``generate()`` call in ``.eval()`` (so
+    ``self.training`` is False throughout the generated module tree,
+    including every decoder layer, for the duration of the call -- peft's
+    LoRA layers and the adapter's enabled/disabled state are UNCHANGED by
+    eval/train, so rollouts still sample the POLICY, adapter included) and
+    in ``config.use_cache = True`` when the family exposes that attribute
+    (checked via ``hasattr``, never assumed -- a family with no ``config``
+    or no ``use_cache`` field is left alone rather than crashing or
+    fabricating the attribute). Both are restored to their EXACT prior
+    values before this returns, so a caller resuming training afterward
+    sees byte-identical state to what it would have without this fix:
+    ``.train(was_training)`` (not unconditionally ``.train()`` -- a caller
+    already in eval for some other reason must not be flipped to train),
+    and ``config.use_cache = prior_use_cache`` (not unconditionally
+    restored to False -- a caller that never set it at all must not gain a
+    new attribute).
+
+    Unwraps ``.module`` first, the same idiom ``save_checkpoint`` and every
+    ``.generate(`` call site already use: under ``sharding='ddp'`` the live
+    ``model`` is a ``DistributedDataParallel`` instance, and toggling
+    ``.training``/``.config`` on the wrapper reads/writes the SAME
+    underlying attributes as the wrapped module (DDP does forward plain
+    attribute access for ``training``, unlike the custom methods
+    ``_AdapterDisabledReference`` has to unwrap for), but unwrapping once
+    here keeps this function's contract identical regardless of sharding,
+    rather than relying on that forwarding behaviour implicitly.
+
+    Also explicitly unshards every FSDP2 unit for the duration (see
+    :func:`foundationscale.rl.distributed.unshard_for_generation`'s
+    docstring for the measured reason a forward-hook-only fix is not
+    enough: a submodule ``generate()``'s multimodal preprocessing reaches
+    directly, before the root's own first forward, can leave the root's
+    OWN unit un-materialised on its very next regular call). A no-op on
+    DDP/single-process models -- :func:`unshard_for_generation` finds zero
+    FSDP2 units on either.
+    """
+    from foundationscale.rl.distributed import unshard_for_generation
+
+    target = getattr(model, "module", model)
+    was_training = bool(target.training)
+    config: Any = getattr(target, "config", None)
+    has_use_cache = hasattr(config, "use_cache")
+    prior_use_cache = config.use_cache if has_use_cache else None
+    target.eval()
+    if has_use_cache:
+        config.use_cache = True
+    reshard = unshard_for_generation(target)
+    try:
+        yield target
+    finally:
+        reshard()
+        if has_use_cache:
+            config.use_cache = prior_use_cache
+        target.train(was_training)
+
+
 @dataclass
 class RLTrainConfig:
     """Configuration for one RL training run.
@@ -423,6 +757,17 @@ class RLTrainConfig:
     # operator decision and is recorded either way.
     master_weights: bool | None = None
     max_steps: int = 10
+    # Measured 2026-10-09 (gemma-4-12B-it, ScienceQA, terminal-pattern reward
+    # "Answer: X"): this default truncates the model's own reasoning before it
+    # reaches the answer line on effectively every rollout -- 0/20 sampled
+    # completions reached a parseable answer at max_new_tokens=64, 5/20 at 200,
+    # 17/20 at 400. A terminal-pattern reward needs enough budget for the
+    # model to FINISH its chain of thought, not just name an answer; callers
+    # using MCQLetterReward-shaped rewards should raise this explicitly rather
+    # than rely on the default. Left at 64 rather than changed here because
+    # not every reward shape needs long completions and the right budget is
+    # reward- and model-specific -- silently raising the default would just
+    # move the silent-default problem rather than remove it.
     max_new_tokens: int = 64
     # #370: sampling is DECLARED here, never inherited. Before this the trainer
     # called generate(do_sample=True) with no temperature/top_p/top_k, so the
@@ -491,6 +836,16 @@ class RLTrainConfig:
     video_sampling: str = "uniform"
     video_max_side: int | None = None
     video_cache_dir: str | None = None
+    # Declared adapter mode. None means FULL FINE-TUNE, stated as data rather
+    # than implied by the absence of peft wiring -- the SAME convention
+    # train/loop.py's SFT plane uses. Every adapter_* knob is None by default,
+    # and a partial specification (one set while adapter is None, or adapter
+    # set without adapter_rank) is refused in RLTrainer.__init__.
+    adapter: str | None = None
+    adapter_rank: int | None = None
+    adapter_alpha: float | None = None
+    adapter_targets: tuple[str, ...] | None = None
+    adapter_dropout: float | None = None
 
 
 class RLTrainer:
@@ -546,6 +901,44 @@ class RLTrainer:
                 f"save_every={config.save_every}: a negative interval is not "
                 f"meaningful; use 0 for final-only saving"
             )
+        if config.adapter is not None and config.adapter not in _ADAPTERS:
+            raise TrainerRefusal(f"adapter={config.adapter!r} is not one of {_ADAPTERS}")
+        if config.adapter is None:
+            # A partial specification is a refusal, not a hint: every
+            # adapter_* field with adapter unset is a statement about nothing.
+            for field_name in (
+                "adapter_rank",
+                "adapter_alpha",
+                "adapter_targets",
+                "adapter_dropout",
+            ):
+                value = getattr(config, field_name)
+                if value is not None:
+                    raise TrainerRefusal(
+                        f"{field_name}={value!r} is set while adapter is None: a "
+                        f"partial adapter specification is refused. Set adapter to "
+                        f"one of {_ADAPTERS}, or clear {field_name}"
+                    )
+        elif (
+            config.adapter_rank is None
+            or isinstance(config.adapter_rank, bool)
+            or (not isinstance(config.adapter_rank, int) or int(config.adapter_rank) < 1)
+        ):
+            raise TrainerRefusal(
+                f"adapter={config.adapter!r} requires adapter_rank to be a "
+                f"positive int; got adapter_rank={config.adapter_rank!r}. A "
+                "missing or non-positive rank silently defines the adapter's "
+                "capacity, which is exactly the unrecorded-config failure"
+            )
+        if config.adapter_targets is not None:
+            config.adapter_targets = tuple(config.adapter_targets)
+            if not config.adapter_targets:
+                # all([]) is True, and an adapter that targets nothing trains
+                # nothing while looking like it trained.
+                raise TrainerRefusal(
+                    "adapter_targets=() is refused as vacuous: name at least "
+                    "one target, or pass None to use peft's per-model defaults"
+                )
         self.config = config
         # reinforce_baseline's carried EMA state: None means UNSEEDED (no
         # batch priced yet), never a baseline of 0.0. The tail seeds it from
@@ -846,10 +1239,32 @@ class RLTrainer:
             return loaded
 
         model = _load_causal_lm(self.config.model)
+        # adapter_notes is a dict a manifest-keeping caller could consume;
+        # this loop has no manifest of its own (unlike train/loop.py's SFT
+        # plane) -- _apply_lora_adapter already PRINTS the same facts to
+        # stderr, which is this loop's existing "record the config" surface
+        # (see the optimizer= print a few lines down).
+        model, _adapter_notes = _apply_lora_adapter(
+            model,
+            adapter=self.config.adapter,
+            adapter_rank=self.config.adapter_rank,
+            adapter_alpha=self.config.adapter_alpha,
+            adapter_targets=self.config.adapter_targets,
+            adapter_dropout=self.config.adapter_dropout,
+            log_prefix="[trainer]",
+        )
         if self.config.gradient_checkpointing:
             model.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": False}
             )
+            if self.config.adapter is not None:
+                # peft freezes every base-model parameter, so the first
+                # (embedding) activation in the checkpointed chain carries
+                # requires_grad=False and torch.utils.checkpoint has nothing
+                # to build a backward graph through. This hooks the input
+                # embedding's output to require grad regardless -- the
+                # standard peft + gradient-checkpointing pairing.
+                model.enable_input_require_grads()
             # Training forwards must not cache; generate() is called with
             # use_cache=True independently below.
             model.config.use_cache = False
@@ -922,24 +1337,42 @@ class RLTrainer:
         online_pref = is_online_pref(objective)
         refresh_every = refresh_cadence(objective, self.config.ref_refresh_steps)
         if needs_reference or self.config.reference_policy or online_pref:
-            # The frozen reference plane: loaded before any optimizer step so
-            # it IS the initial policy -- which is what makes the step-1 k3
-            # contribution exactly zero. Only an objective declaring a
-            # non-zero kl_weight (or an operator forcing reference_policy=True)
-            # pays this memory; _resolve_objective already refused the
-            # needs-one-but-forbidden combination.
-            ref_model = _load_causal_lm(self.config.reference_model or self.config.model)
-            if self.config.sharding == "fsdp":
-                # Sharded too: a frozen full-size replica on each rank would
-                # rescale memory exactly the way fsdp exists to prevent. DDP
-                # keeps it plain -- no gradient averaging is wanted over a
-                # frozen model, so no DDP wrapper.
-                ref_model = wrap_fsdp2(ref_model, ctx)
+            try:
+                plan = _reference_plan(
+                    adapter=self.config.adapter,
+                    reference_model=self.config.reference_model,
+                    model=self.config.model,
+                    refresh_every=refresh_every,
+                )
+            except TrainerRefusal as exc:
+                _refuse_exit_96(str(exc))
+            if plan == "disable_adapter":
+                ref_model = _AdapterDisabledReference(model)
+                print(
+                    "[trainer] reference: adapter='lora', no distinct "
+                    "reference_model -- reusing the policy with the adapter "
+                    "disabled instead of loading a second model copy",
+                    file=sys.stderr,
+                )
             else:
-                ref_model.to(device)
-            ref_model.eval()
-            for parameter in ref_model.parameters():
-                parameter.requires_grad_(False)
+                # The frozen reference plane: loaded before any optimizer step
+                # so it IS the initial policy -- which is what makes the
+                # step-1 k3 contribution exactly zero. Only an objective
+                # declaring a non-zero kl_weight (or an operator forcing
+                # reference_policy=True) pays this memory; _resolve_objective
+                # already refused the needs-one-but-forbidden combination.
+                ref_model = _load_causal_lm(self.config.reference_model or self.config.model)
+                if self.config.sharding == "fsdp":
+                    # Sharded too: a frozen full-size replica on each rank
+                    # would rescale memory exactly the way fsdp exists to
+                    # prevent. DDP keeps it plain -- no gradient averaging is
+                    # wanted over a frozen model, so no DDP wrapper.
+                    ref_model = wrap_fsdp2(ref_model, ctx)
+                else:
+                    ref_model.to(device)
+                ref_model.eval()
+                for parameter in ref_model.parameters():
+                    parameter.requires_grad_(False)
         reward = MCQLetterReward(answer_pattern=self.config.answer_pattern)
         use_ppo = is_ppo(objective)
         loss_fn = None if online_pref or use_ppo else TensorPolicyLoss(objective=objective)
@@ -970,10 +1403,12 @@ class RLTrainer:
             )
         optimizer: Any
         if use_masters:
-            optimizer = MasterWeightOptimizer(model.parameters(), lr=self.config.learning_rate)
+            optimizer = MasterWeightOptimizer(
+                _trainable_parameters(model), lr=self.config.learning_rate
+            )
         else:
             optimizer = torch.optim.AdamW(  # noqa: B014
-                model.parameters(), lr=self.config.learning_rate
+                _trainable_parameters(model), lr=self.config.learning_rate
             )
         print(
             "[trainer] optimizer="
@@ -1199,11 +1634,14 @@ class RLTrainer:
         # prompt_width still comes from the encoded tensor, and the extra
         # modality keys are group-expanded and forwarded to the scorer below.
         prompt_ids = encode_prompts(surface, chunk, device)
-        with torch.no_grad():
+        with torch.no_grad(), _generation_mode(model) as gen_model:
             # Under DDP the generative path bypasses the wrapper (no_grad --
             # no grad sharing is wanted during rollout); under fsdp the
-            # wrapper IS the module generate must run on.
-            generated = getattr(model, "module", model).generate(
+            # wrapper IS the module generate must run on. _generation_mode
+            # unwraps .module either way and restores eval/use_cache state
+            # on return -- see its docstring for the measured reason this
+            # is not optional under gradient_checkpointing.
+            generated = gen_model.generate(
                 **prompt_ids,
                 max_new_tokens=self.config.max_new_tokens,
                 num_return_sequences=self.config.group_size,
