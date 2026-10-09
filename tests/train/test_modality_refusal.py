@@ -180,3 +180,9 @@ def test_the_kept_column_is_not_reported_as_dropped() -> None:
     notice = loop._dropped_column_notice(["text", "label"])
     assert notice is not None
     assert "['label']" in notice, "the dropped list must be exactly the dropped columns"
+
+
+def test_the_video_refusal_names_the_frame_budget_way_in() -> None:
+    msg = loop._untrainable_modality_refusal("video", VIDEO_VAR, "clip")
+    assert "FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES" in msg
+    assert "FRAMES" not in loop._untrainable_modality_refusal("audio", AUDIO_VAR, "clip")
