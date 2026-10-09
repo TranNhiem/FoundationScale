@@ -311,6 +311,9 @@ trained on mismatched audio (a clip-naming collision) and was retracted. New:
 Reporting default (2026-10-09): `validation_campaigns/speech_eval/compare.py` reports both checkpoints
 from the eval files' own records, the paired-bootstrap CI (`speech_metrics.paired_bootstrap`) and
 the runaway verdict for any base/fine-tune pair.
+DDP (2026-10-09, `validation_campaigns/speech_ddp`): 2 GPUs give 1.74x the samples/s of one. The
+speech coverage gates had audited only the writing rank's rows; the census is now summed over the
+ranks right after `Trainer.train()` (verified: 624/624 on 2 GPUs, where 312 was reported before).
 
 ### P4, more families and Lane B
 

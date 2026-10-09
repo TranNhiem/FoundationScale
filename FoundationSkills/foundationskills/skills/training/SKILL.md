@@ -117,7 +117,7 @@ Playbook keys:
 | `divergence_nan` | NaN loss — lower LR, gradient clipping, validate records |
 | `oom` | batch/seq too big, optimizer not sharded — micro-batch 1 + accumulation, full→lora, halve seq (never pp/ep: refused) |
 | `reward_hacking` | exploitable verifier — harden answer_pattern, raise group_size |
-| `reward_saturation_unmeasured_steps` | FS prints "UNMEASURED step N" when all advantages are zero — raise group_size/temperature, use harder prompts |
+| `reward_saturation_unmeasured_steps` | FS prints "UNMEASURED step N" when all advantages are zero — filter prompts with data_engine `difficulty_filter`, raise group_size/temperature |
 | `entropy_collapse` | RL LR too high / sampling too narrow |
 | `moe_router_imbalance` | aux loss too small / over-specialised routing |
 | `slow_throughput` | dataloader starvation / over-estimated MFU / wrong sharding |
@@ -129,7 +129,10 @@ Playbook keys:
 
 - entries: `foundationscale-train` (supervised stages; `--dry-run` validates
   with 0 GPUs), `fskills-rl` (RL driver around
-  `foundationscale.rl.trainer.RLTrainer(RLTrainConfig).run()`).
+  `foundationscale.rl.trainer.RLTrainer(RLTrainConfig).run()`). The driver
+  exits 95 when measured steps / max_steps is below
+  `goal.rl_min_measured_fraction`, a floor the operator declares and the planner
+  never guesses. Without the floor, any measured step passes.
 - emits: `training_plan`; the sibling skill `training.emit` renders
   `fs_launch_spec` payloads (+ sbatch with the GB200 IMEX-fabric preamble and
   `--time=10-00:00:00 --exclude=r01gb200...` cluster rules).

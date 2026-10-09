@@ -200,6 +200,12 @@
         "qlora"
       ],
       "description": "operator override of the training method; the rules still run and the override is logged"
+    },
+    "rl_min_measured_fraction": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "description": "RL verdict floor: the run is UNMEASURED (95) when measured steps / max_steps falls below it. Declared, never guessed; absent = any measured step passes."
     }
   }
 }

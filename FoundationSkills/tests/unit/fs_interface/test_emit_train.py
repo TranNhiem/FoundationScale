@@ -94,7 +94,7 @@ def test_hparam_flag_mapping(tmp_path):
         micro_batch=2, grad_accum=8, max_steps=120, precision="bf16",
         grad_ckpt=True, sharding="fsdp", save_interval=25, seed=7,
     )
-    spec = call(stage, caps, dataset(tmp_path=tmp_path), tmp_path)
+    spec = call(stage, caps, dataset(tmp_path=tmp_path), tmp_path, gpus=4)  # fsdp needs a distributed launch
     assert spec["executable"] is True
     argv = spec["argv"]
     assert float(flag_value(argv, "--learning-rate")) == pytest.approx(1e-4)
@@ -259,3 +259,13 @@ def test_max_steps_counts_rows_when_dataset_has_counts():
           "gradient_accumulation_steps": 8}
     assert _derive_max_steps({}, dict(hp), 3) == 349
     assert _derive_max_steps({}, dict(hp), 3, {"num_records": 5562, "num_tokens": 17_131_785}) == 464
+
+
+def test_single_gpu_fsdp_is_emitted_as_ddp(tmp_path):
+    """1 GPU launches as plain python; transformers refuses fsdp outside distributed (FS rc=96, GB200 2026-10-09)."""
+    stage = base_stage(lr=1e-4, max_steps=10, sharding="fsdp")
+    spec = call(stage, make_caps(), dataset(tmp_path=tmp_path), tmp_path, gpus=1)
+    argv = spec["argv"]
+    assert "torchrun" not in argv[0]
+    assert flag_value(argv, "--sharding-strategy") == "ddp"
+    assert any("fsdp -> ddp" in note for note in spec["notes"])
