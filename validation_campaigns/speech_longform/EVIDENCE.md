@@ -67,3 +67,31 @@ The runaway gate PASSES in every run (no call reaches 2x the reference length).
   fix: segments built from consecutive clips of a call, so the model sees 30-40 s targets.
   Decoding-side repetition penalties stay out of the measured comparison unless the base gets
   them too.
+
+## Training-side fix: long segments (30-40 s)
+
+`build_earnings_long.py` joins consecutive train segments of one call (ordered by `start_ts`)
+into 1,456 examples: 14.5 h, 36 s on average, 5.1 segments each, from all 119 non-test calls (459
+test-call segments excluded). Model L is arm A's recipe plus these segments: 1,500 steps, clips up
+to 40 s (`nemo_finetune.py --max-duration 40`). Census 19,456/19,456, adjudication PASS.
+
+| whole calls, 40 s chunks | base | arm A (clips up to 25 s) | **L (+ long segments)** |
+|---|---|---|---|
+| 4432298 | 21.1 | 25.4 | 23.1 |
+| 4450488 | 16.1 | 13.9 | **12.9** |
+| 4470290 | 19.6 | 19.8 | **16.0** |
+| 4479741 | 18.1 | 23.2 | 21.1 |
+| 4483338 | 17.3 | 14.5 | **11.8** |
+| 4485244 | 14.9 | 10.7 | **8.1** |
+| **all 6 calls** | 17.30 | 16.77 | **14.47** |
+| loop words | 0 | 1,428 | 1,164 |
+| `speech.repetition_loops` | -- | FAIL | **FAIL** |
+
+On clips L matches A on Earnings (11.35 vs 11.33) and dev-clean (1.58 vs 1.48), and is a little
+worse on AMI (14.33 vs 13.58).
+
+Long targets recover most of the long-form gain: 4 of 6 calls are clearly better than both base and
+A. They do **not** remove the loops. The same two calls still loop (1,164 words), and the loop
+gate correctly still blocks the model. Next: find what those two calls share. Both have converted
+audio (24 kHz mono and 16 kHz stereo), and the fine-tune also emits fillers that base does not,
+so look at where in those calls the loops start.
