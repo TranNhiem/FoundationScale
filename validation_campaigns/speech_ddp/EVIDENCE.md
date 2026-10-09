@@ -34,3 +34,16 @@ refusal buckets keyed by `AUDIO_LOAD_REASONS`, so a reason seen on only one rank
 Verified on the same tray, 2 GPUs, 30 steps: **624/624** audio rows and 624/624 placeholders,
 exactly 2 x (30 x 8 + 72). Exit 0, no hang. Tests: injected two-rank sums, a real two-process
 gloo all-reduce, and a test that `finish_speech_run` never reaches a collective.
+
+## 3. Scaling on a clean tray (2026-10-09)
+
+The same run (150 steps, per-device batch 8) on a tray with no other jobs:
+
+| GPUs | it/s | samples/s | scaling | `speech.audio_row_coverage` |
+|---|---|---|---|---|
+| 1 | 1.63 | 13.0 | 1.00x | 1272/1272 |
+| 2 | 1.38 | 22.1 | 1.70x (85%) | 2544/2544 |
+| 4 | 1.40 | 44.8 | **3.44x (86%)** | **5088/5088** |
+
+Efficiency holds at about 85% from 2 to 4 GPUs. The coverage census equals the predicted run-wide
+count at every size (N x 1,272), so every rank's rows are audited.

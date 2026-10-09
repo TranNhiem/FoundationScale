@@ -95,3 +95,27 @@ A. They do **not** remove the loops. The same two calls still loop (1,164 words)
 gate correctly still blocks the model. Next: find what those two calls share. Both have converted
 audio (24 kHz mono and 16 kHz stereo), and the fine-tune also emits fillers that base does not,
 so look at where in those calls the loops start.
+
+## Why those two calls loop, and decoding
+
+`loop_chunks.py` transcribes the two looping calls chunk by chunk with model L: 14 of 159 chunks
+loop. Loudness does not explain it: some looping chunks are loud speech (-22 dBFS, 10% silence).
+What the looping chunks share is heavily disfluent speakers ("um so so ...", "in uh in a scenario
+where where ..."). Immediate word repeats per 1,000 words: LibriSpeech train 4.6, AMI train 4.2,
+**Earnings train 15.4**, Earnings test references 13.4. The fine-tune learned to transcribe
+repetitions, which these references contain, and base Canary never does. Under greedy decoding a
+repeat makes the next repeat more likely, and on a disfluent speaker it does not stop. A separate
+failure: an all-silent chunk (-114 dBFS) came out as "1 1 1 ...".
+
+Beam search (`decoding.strategy=beam decoding.beam.beam_size=4`, applied to every model):
+
+| whole calls, beam 4 | WER | loop words (greedy -> beam 4) | `speech.repetition_loops` |
+|---|---|---|---|
+| base | 17.36 | 0 -> 0 | -- |
+| A (clips up to 25 s) | 15.48 | 1,428 -> 172 | PASS (limit 252) |
+| **L (+ long segments)** | **12.81** | 1,164 -> 285 | **FAIL** (limit 252) |
+
+Beam 4 removes 80-88% of the loops and the silence artifact. L reaches 12.81 on whole calls
+(-4.55 points against base, the best long-form result). It still exceeds the declared loop limit,
+with "the" runs on call 4432298 and "in" runs on 4479741, so the gate correctly blocks it. The
+threshold is a declared policy and is not loosened to admit a model.
