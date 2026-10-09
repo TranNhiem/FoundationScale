@@ -335,13 +335,16 @@ def test_atomic_overwrite_uses_a_real_rename(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     replace_calls: list[tuple[str, str]] = []
-    real_replace = os.replace
+    real_replace = Path.replace
 
-    def _recording_replace(src: str, dst: str) -> None:
-        replace_calls.append((src, dst))
-        real_replace(src, dst)
+    # Recorded at Path.replace, not os.replace: on Python 3.10 pathlib binds
+    # os.replace inside its accessor at import time, so patching os.replace
+    # never sees the call there (3.12+ calls os.replace directly).
+    def _recording_replace(self: Path, target: str | os.PathLike[str]) -> Path:
+        replace_calls.append((str(self), str(target)))
+        return real_replace(self, target)
 
-    monkeypatch.setattr(os, "replace", _recording_replace)
+    monkeypatch.setattr(Path, "replace", _recording_replace)
     calls: list[tuple[str, dict]] = []
     _atomically_overwrite_adapter(_FakeSkeleton(calls), str(tmp_path), {})
     assert len(replace_calls) == 1

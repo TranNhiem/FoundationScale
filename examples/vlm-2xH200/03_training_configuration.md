@@ -201,4 +201,5 @@ Verified on gemma-4-12B-it and Qwen3.6-27B: **loads with no missing keys**. (Ear
 
 Not yet measured on this VM: video + text (frame budget and segment sampling pending), long runs, the evaluation loop, and the RL/preference algorithms with LoRA — treat any of their behaviour as **TODO(verify)**.
 
-**Next: 04 — Training algorithms**
+
+**Next:** [04 — Training algorithms](04_training_algorithms.md)
