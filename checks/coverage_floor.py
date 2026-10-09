@@ -315,7 +315,7 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/train/__init__.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/train/audio.py": 96,  # set by --update; measured 97.0%
     "src/foundationscale/train/cli.py": 98,  # set by --update; measured 98.9%
-    "src/foundationscale/train/conversation.py": 94,  # measured 95.3% (GB200, CI venv); 1 pt CI slack
+    "src/foundationscale/train/conversation.py": 94,  # measured 95.3%; 1 pt CI slack
     "src/foundationscale/train/sdp_backend.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/train/speech_adjudication.py": 97,  # measured 98.1%; 1 pt CI slack
     "src/foundationscale/train/speech_kinds.py": 94,  # measured 95.9%; 1 pt CI slack
