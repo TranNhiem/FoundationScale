@@ -739,5 +739,161 @@
       "must_survive": true,
       "why": "Anchor chosen mechanically: the exact line occurs once in tools/bridge_fqn_map.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a correct suite can go red on it."
     }
+  ],
+  "agentic_contracts": [
+    {
+      "name": "agentic_contracts.loss-mask-inverts-the-supervision-flag",
+      "what": "The per-token supervision predicate is negated before it is written into loss_mask, so every generated ASSISTANT/TOOL_CALL token comes out 0 and every injected tool result, observation and user token comes out 1. Nothing raises: the tuple is still one entry per response token and every alignment check in flatten passes, while the loss silently trains the policy on harness-rendered text it never sampled and credits not a single token it did. supervised_token_count compounds it by reporting exactly the number of injected tokens, so any supervision-rate gate reads the inverse of reality. Caught by: test_must_multi_turn_trajectory_flattens_and_supervises_only_sampled_turns",
+      "anchor": "            supervised = turn.generated and turn.kind in _SUPERVISED_KINDS\n",
+      "replacement": "            supervised = not (turn.generated and turn.kind in _SUPERVISED_KINDS)\n"
+    },
+    {
+      "name": "agentic_contracts.repetition-mask-ors-flag-with-provenance",
+      "what": "The repetition mask computes generated or repetition_hit instead of and, flagging every token of every generated turn whether or not the harness ever flagged a repetition. The column stays aligned and typed and never raises, so the whole repetition gate silently reads every sampled token as degenerate while every injected token stays clean. In production the defect is invisible until a degeneracy gate mass-fails on healthy samples, and no amount of re-reading the batch shows which turns the harness actually flagged. Caught by: test_must_multi_turn_trajectory_flattens_and_supervises_only_sampled_turns",
+      "anchor": "            mask.extend([int(turn.generated and turn.repetition_hit)] * len(turn.token_ids))\n",
+      "replacement": "            mask.extend([int(turn.generated or turn.repetition_hit)] * len(turn.token_ids))\n"
+    },
+    {
+      "name": "agentic_contracts.tool-call-error-mask-counts-successes-as-failures",
+      "what": "The error mask tests call.parse_error is None -- the SUCCESS verdict -- instead of is not None, so a turn whose calls all parsed is flagged and a turn whose calls all failed is clean. The mask is still turn-granular, still one entry per response token and still zero everywhere it cannot decide, so nothing downstream can tell the polarity flipped from inside the batch. The tool-parse gate then silently rewards malformed calls and punishes good ones, exactly inverting the measurement it exists to report. Caught by: test_trajectory_masks_stay_per_turn_and_align_with_the_response",
+      "anchor": "                call.parse_error is not None for call in turn.tool_calls\n",
+      "replacement": "                call.parse_error is None for call in turn.tool_calls\n"
+    },
+    {
+      "name": "agentic_contracts.rollout-logprobs-fills-absence-with-zero",
+      "what": "Where the engine reported nothing the column now writes 0.0 instead of None -- precisely the absent-is-not-zero substitution the docstring forbids, since 0.0 is a real logprob meaning p=1. The column keeps its exact length and float dtype so every alignment and schema check passes, and no exception exists on the path; the only symptom is that an unreported sampling probability now reads as a confidently reported one. Any off-policy correction built on this column silently weights unreported tokens at maximum importance instead of skipping them. Caught by: test_must_multi_turn_trajectory_flattens_and_supervises_only_sampled_turns",
+      "anchor": "                values.extend([None] * len(turn.token_ids))\n",
+      "replacement": "                values.extend([0.0] * len(turn.token_ids))\n"
+    },
+    {
+      "name": "agentic_contracts.flatten-identity-includes-the-row-position",
+      "what": "The duplicate-attempt key gains the row index beside uid and session_id, so every key is unique by construction and the (uid, session_id) collision check can never fire. flatten then silently emits one row per call site for the same attempt, and every rate counts it once per row while every group mean scores its reward that many times -- the exact double-count the identity pair exists to refuse. Nothing raises and the duplicate check's own message can never be produced, so the batch looks perfectly healthy while its denominators lie. Caught by: test_flatten_refuses_duplicate_attempts_naming_both_rows",
+      "anchor": "        identity = (trajectory.uid, trajectory.session_id)\n",
+      "replacement": "        identity = (trajectory.uid, trajectory.session_id, row_index)\n"
+    },
+    {
+      "name": "agentic_contracts.trajectory-index-order-allows-ties",
+      "what": "The strict-increasing comparison is weakened from <= to <, silently admitting equal turn indices across prompt_turns + turns. Construction succeeds and the sequence anything walking per-token turn_index sees now contains two turns claiming the same position, so grouping sampled tokens by turn merges or misattributes them with no exception anywhere. The refusal that names both indices can still fire on a strictly decreasing pair, which is why the tie case reads as accepted-by-design rather than as a missing check. Caught by: test_trajectory_turn_indices_are_strictly_increasing",
+      "anchor": "            if current.index <= previous.index:\n",
+      "replacement": "            if current.index < previous.index:\n"
+    },
+    {
+      "name": "agentic_contracts.policy-version-type-guard-needs-both-wrong",
+      "what": "The real-int guard on the policy version pair requires BOTH sides to be non-ints (or becomes and), so a bool -- or any other wrong value -- on exactly one side is admitted. True silently records as policy version 1 and its bounds are written verbatim into the batch, so a drift or importance correction is measured against a policy the run never declared and the int type is not even preserved in the message. No refusal fires and no comparison downstream can recover which value the caller meant. Caught by: test_trajectory_policy_versions_must_be_real_non_negative_ints_in_order",
+      "anchor": "            if not _is_int(minimum) or not _is_int(maximum):\n",
+      "replacement": "            if not _is_int(minimum) and not _is_int(maximum):\n"
+    },
+    {
+      "name": "agentic_contracts.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is agentic_contracts's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "    return type(value) is int\n",
+      "replacement": "    return type(value) is int  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/agentic_rl/contracts.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
+    }
+  ],
+  "agentic_gates": [
+    {
+      "name": "agentic_gates.loss-mask-bool-type-guard-dropped",
+      "what": "Drops the `type(value) is bool` half of the loss-mask domain guard, leaving only `value not in (0, 1)`. Since `True == 1` and `False == 0`, a boolean mask entry silently passes the remaining test and the row keeps full coverage with a green verdict, even though this plane's doctrine is literally that 1 is not True. In production that is exactly the mask-type drift that makes every later `== 1` probe pick a different supervision set than the mask actually meant -- no exception, no evidence write, nothing but a wrong gradient. Caught by: test_loss_mask_bool_entry_fails_one_is_not_true",
+      "anchor": "                if type(value) is bool or value not in (0, 1):\n",
+      "replacement": "                if value not in (0, 1):\n"
+    },
+    {
+      "name": "agentic_gates.infra-mask-probe-all-not-any",
+      "what": "Swaps `any(v != 0 ...)` for `all(v != 0 ...)` in the INFRA-row mask probe, so it fires only when EVERY token is supervised and goes silent on the real defect shape, an INFRA row carrying a mixed mask such as (0, 1). A row the run killed mid-decode keeps live supervision on its later tokens, yet the gate passes over it with ordinary row coverage: the termination string matches, the reward/abstention biconditional still holds, and nothing in the verdict hints at the defect. In production this quietly trains the policy on tokens that were never its choices -- precisely the incident this gate exists to refuse. Caught by: test_infra_row_with_nonzero_loss_mask_fails",
+      "anchor": "            if termination == _INFRA_TERMINATION and any(v != 0 for v in loss_mask_row):\n",
+      "replacement": "            if termination == _INFRA_TERMINATION and all(v != 0 for v in loss_mask_row):\n"
+    },
+    {
+      "name": "agentic_gates.reward-abstention-biconditional-one-sided",
+      "what": "Collapses the reward/abstention biconditional `reward_is_none != abstains` into the one-sided `reward_is_none and not abstains`, checking only the 'never scored and never explained' half. A row that simultaneously scores a reward AND names an abstention reason -- a duplicate-counted trajectory that inflates the infra signal while staying in the gradient -- now sails through with full row coverage, no exception and no evidence entry. In production rows are assembled by adapters outside contracts.flatten, exactly the seam this gate watches, so the double count misstates both the reward mean and the abstention rate with zero diagnostic noise. Caught by: test_reward_abstention_biconditional_violation_fails",
+      "anchor": "            if reward_is_none != abstains:\n",
+      "replacement": "            if reward_is_none and not abstains:\n"
+    },
+    {
+      "name": "agentic_gates.infra-prefix-never-matches",
+      "what": "Tightens the infra-abstention probe to `reason.startswith(\"INFRA:\")`, a prefix the contract's real reasons ('infra:transport', 'infra:EnvInfraError') never carry. The predicate therefore counts zero infra rows on any genuine batch: the measured rate pins at 0.0, the comparison against the declared bound can never exceed it, and the gate PASSes every burst of infrastructure failures while still naming plausible-looking counts. During a production infra storm the rate silently reads clean and the abort-this-run signal this gate exists to raise is never raised. Caught by: test_rate_exceeding_bound_fails_naming_both_counts",
+      "anchor": "            if isinstance(reason, str) and reason.startswith(\"infra:\")\n",
+      "replacement": "            if isinstance(reason, str) and reason.startswith(\"INFRA:\")\n"
+    },
+    {
+      "name": "agentic_gates.lag-sign-inverted",
+      "what": "Inverts the lag computation to `lag = version - ctx.policy_version`, so a rollout session running an OLDER policy yields a negative lag and `lag > declared_max_lag` can never fire in the stale direction. Measured-stale and unmeasured checks still pass, healthy pushes still PASS with their full coverage, and the reason template still renders -- a fleet running arbitrarily old weights just gets reported as lagging by −4 instead of trailing by 4. This is the exact capacity-drift failure the gate exists to refuse: the trained policy publishes while in-flight sessions keep sampling from hours-old weights, silently overestimating how on-policy the batch is. Caught by: test_lag_exceeded_fails_naming_both_counts",
+      "anchor": "            lag = ctx.policy_version - version\n",
+      "replacement": "            lag = version - ctx.policy_version\n"
+    },
+    {
+      "name": "agentic_gates.offered-bool-looks-like-zero",
+      "what": "Drops the `type(offered) is bool` half of the offered-count guard, leaving `not isinstance(offered, int) or offered < 0`. Because bool subclasses int and `False == 0` and `False < 0` is False, a malformed look-alike zero passes the guard and buys the `offered == 0` no-sync-offered door, so a refused denominator silently becomes a declared 'no sync happened' with a non-blocking NOT_APPLICABLE skip. In production the WEIGHT_SYNC event then loses its only fail-closed result for that push -- the malformed count is laundered into an honest absence of work instead of a blocking vacuity. Caught by: test_malformed_offered_bool_is_vacuous_never_buys_not_applicable",
+      "anchor": "        if type(offered) is bool or not isinstance(offered, int) or offered < 0:\n",
+      "replacement": "        if not isinstance(offered, int) or offered < 0:\n"
+    },
+    {
+      "name": "agentic_gates.worst-diff-tracks-minimum",
+      "what": "Reverses the worst-token tracking comparison to `diff < worst_diff`, so starting from `worst_diff = -1.0` no non-negative difference can ever be recorded and the tracked worst stays −1 forever. The final `worst_diff > declared_parity_atol` comparison can then never fire on ANY measured divergence, and every parity probe returns PASS over its full token coverage while the message cheerfully reports a max diff of 0.0 as if the sync were clean. In production that is silent training on weights whose engine/learner logprobs have drifted arbitrarily far apart -- the parity flash this gate exists to catch on the first save after a bad merge. Caught by: test_diff_exceeding_atol_fails_naming_the_worst_token",
+      "anchor": "                if diff > worst_diff:\n",
+      "replacement": "                if diff < worst_diff:\n"
+    },
+    {
+      "name": "agentic_gates.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is agentic_gates's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "    n = len(response_ids)\n",
+      "replacement": "    n = len(response_ids)  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/gates/agentic_gates.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
+    }
+  ],
+  "agentic_servable": [
+    {
+      "name": "agentic_servable.architectures-equality-comparison-inverted",
+      "what": "Inverts the early-out comparison, so a published checkpoint whose `architectures` DIFFER from the base model's -- exactly the text-only-vs-multimodal case this module exists to fix -- short-circuits to the no-op `already_servable` report and touches nothing on disk. No exception is raised and the exit code is 0, so production gets a confident 'nothing was needed' for a directory a fresh load still rejects with \"Invalid type of HuggingFace config\", while the true no-op case falls through into needless rewriting. Caught by: test_completed_extracts_exactly_the_missing_keys",
+      "anchor": "    if published_architectures == base_architectures:\n",
+      "replacement": "    if published_architectures != base_architectures:\n"
+    },
+    {
+      "name": "agentic_servable.extras-key-set-intersection-not-difference",
+      "what": "Extracts the INTERSECTION of the base and published tensor names into the extras file instead of the set difference, so the extras file is populated with the base model's UNTRAINED language tensors and the merged index then routes the trained language names at it. All the counts still look right -- the report's `extras_keys` and the provenance's `extras_key_count` both come out at 2 on the fixture, since the language pair counts as two keys just like the vision pair -- no name is missing and every shape matches, so nothing anywhere signals that a loader reading embed_tokens/lm_head through the published index silently receives pre-training weights. That is precisely the stale-policy serving the module's single invariant forbids, and it is invisible by construction. Caught by: test_completed_published_language_tensors_are_what_a_loader_sees",
+      "anchor": "    extras_keys = sorted(set(base_map) - set(published_map))\n",
+      "replacement": "    extras_keys = sorted(set(base_map) & set(published_map))\n"
+    },
+    {
+      "name": "agentic_servable.base-config-copied-over-backup-not-publish-config",
+      "what": "Shuffles the two config copies: the base model's config.json is written onto the BACKUP path a second time instead of over the published config.json, destroying the trained text-only config's backup and leaving the completed directory wearing the very config.json whose text-only architecture makes a fresh load fail. Every shutil.copy2 succeeds and the function returns status \"completed\" with a complete provenance record, so production sees a green completion of a directory that is still structurally unloadable -- the exact failure this module exists to remove survives silently. Caught by: test_completed_copies_config_and_keeps_a_backup",
+      "anchor": "    shutil.copy2(base / \"config.json\", publish / \"config.json\")\n",
+      "replacement": "    shutil.copy2(base / \"config.json\", backup_path)\n"
+    },
+    {
+      "name": "agentic_servable.tensor-bytes-adds-dims-instead-of-multiplying",
+      "what": "Accumulates each shape dimension by addition instead of multiplication, so `_tensor_bytes` returns itemsize + sum(dims) rather than itemsize × Π(dims) -- a tiny bogus number for any real tensor. Nothing raises and safetensors never validates the index's `metadata.total_size`, so the merged index silently declares a byte count orders of magnitude too small and every consumer that allocates, receipts or audits against it does so on fabricated metadata. Caught by: test_tensor_bytes_multiplies_shape_by_the_declared_itemsize",
+      "anchor": "        size *= dim\n",
+      "replacement": "        size += dim\n"
+    },
+    {
+      "name": "agentic_servable.unrecognised-dtype-guessed-instead-of-refused",
+      "what": "Silently assumes a 4-byte element width for any dtype string outside the declared safetensors vocabulary instead of refusing -- guessing exactly the width the code says it will never guess. A checkpoint carrying a newer or unknown dtype therefore flows straight through and contributes a confident but wrong byte count to the merged index's total_size, with exit code 0 and no ServableRefusal anywhere. Caught by: test_tensor_bytes_refuses_an_unrecognised_dtype",
+      "anchor": "    itemsize = _DTYPE_BYTES.get(info.dtype)\n",
+      "replacement": "    itemsize = _DTYPE_BYTES.get(info.dtype, 4)\n"
+    },
+    {
+      "name": "agentic_servable.shape-mismatch-check-ignores-leading-dim",
+      "what": "Compares every shape dimension EXCEPT the leading one when auditing published tensors against the base model's, so a published tensor whose leading dim is wrong -- a resized embedding or a truncated head -- is silently waved through the refusal. The run completes with status \"completed\" and a full provenance record while the completed directory carries weights whose geometry contradicts the config and the tensors around them; the contradiction surfaces only much later as an inscrutable engine-side load/dim failure far from the bytes that caused it. Caught by: test_refuses_shape_mismatch",
+      "anchor": "        name for name in published_map if published_map[name].shape != base_map[name].shape\n",
+      "replacement": "        name for name in published_map if published_map[name].shape[1:] != base_map[name].shape[1:]\n"
+    },
+    {
+      "name": "agentic_servable.hardlink-reported-as-copy-in-provenance",
+      "what": "Labels the extras placement a byte \"copy\" in the provenance whenever os.link actually succeeded and the file was hard-linked. The completion itself is byte-identical and nothing raises, so production's one record of whether `publish_dir` aliases the extraction cache silently lies in the dangerous direction: an operator who trusts it prunes or rewrites the cache believing `publish_dir` owns its own bytes, and thereby mutates or drops the weights a fresh serve reads. Caught by: test_completed_writes_provenance",
+      "anchor": "    return \"hardlink\", None\n",
+      "replacement": "    return \"copy\", None\n"
+    },
+    {
+      "name": "agentic_servable.inert-control-must-pass",
+      "what": "MUST SURVIVE: a trailing comment changes no behaviour, so the suite MUST stay green. This is agentic_servable's MUST-PASS half (doctrine 3), and it exists because #242 shards the battery per module: a shard that runs MUST_FIRE rows alone cannot tell 'the suite detected the fault' from 'the suite reports detection whether or not there is a fault'. If the battery reports this killed, its attribution machinery is proven unsound and the whole shard is void -- exit 2.",
+      "anchor": "    index_path = directory / _INDEX_FILENAME\n",
+      "replacement": "    index_path = directory / _INDEX_FILENAME  # inert must-pass control\n",
+      "why": "Anchor chosen mechanically: the exact line occurs once in src/foundationscale/agentic_rl/servable.py, is a single-line simple statement outside any string literal, and carries no comment. The tokenizer discards the appended comment, so the compiled module is byte-identical -- there is no route by which a test could see it. Predicted SURVIVED; a kill means the run mis-attributes.",
+      "must_survive": true
+    }
   ]
 }

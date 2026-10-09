@@ -82,10 +82,6 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
-    "src/foundationscale/agentic_rl/servable.py": (
-        "serving completion of published checkpoints (extras extraction, config copy, index): "
-        "line-covered by tests/agentic_rl, but no mutation row yet."
-    ),
     "src/foundationscale/agentic_rl/cli.py": (
         "agentic RL console front end (dry-run, real-run wiring, exit taxonomy): line-covered "
         "by tests/agentic_rl, but no mutation row yet proves a flipped exit mapping would be "
@@ -98,11 +94,6 @@ PENDING_ENROLMENT: dict[str, str] = {
     "src/foundationscale/agentic_rl/engines/vllm.py": (
         "token-in/token-out vLLM client with strict response validation and weight reload: "
         "line-covered by tests/agentic_rl, but no mutation row yet."
-    ),
-    "src/foundationscale/gates/agentic_gates.py": (
-        "five agentic gates (trajectory integrity, rollout abstention, staleness, weight-sync "
-        "parity, prompt bytes) with their own MUST_FIRE/MUST_PASS controls, but no mutation row"
-        " yet in this battery."
     ),
     "src/foundationscale/agentic_rl/engines/fleet.py": (
         "engine server lifecycle (spawn, health poll, process-group stop) and round-robin "
@@ -178,11 +169,6 @@ PENDING_ENROLMENT: dict[str, str] = {
         "disk weight sync realising the WeightSync contract, publish-dir pruning: line-covered "
         "by tests/agentic_rl, but no mutation row yet proves a flipped rule here would be "
         "caught."
-    ),
-    "src/foundationscale/agentic_rl/contracts.py": (
-        "agentic trajectory contracts (Turn/Trajectory validation, loss_mask, flatten "
-        "to DECLARED_COLUMNS): 100% line-covered with a refusal test per field, but no "
-        "mutation row yet proves a flipped mask rule or a dropped refusal is caught."
     ),
     "src/foundationscale/agentic_rl/token_trace.py": (
         "multi-turn token trace (prompt/observation/generated appends, budget, finalize "

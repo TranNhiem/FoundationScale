@@ -1,6 +1,6 @@
 # D7 — Prioritized improvement roadmap
 
-Scope and denominators come from the census and the adjudicated findings: `src/` = 74110 LOC across 110 files, the test suite (101830 .py LOC), `tools/` contains 10183 Python LOC. Findings referenced by their adjudication IDs (T2, D_checkpoint_verify, C_gates_domain, B_gate_engine, A_front_door, F1/F2_docs, E_provenance, T3_skeptic); the themes and Keep/Redesign classifications are from D3 and D4. Where an item's own inputs were not measured, the row says so.
+Scope and denominators come from the census and the adjudicated findings: `src/` = 74110 LOC across 110 files, the test suite (101835 .py LOC), `tools/` contains 10192 Python LOC. Findings referenced by their adjudication IDs (T2, D_checkpoint_verify, C_gates_domain, B_gate_engine, A_front_door, F1/F2_docs, E_provenance, T3_skeptic); the themes and Keep/Redesign classifications are from D3 and D4. Where an item's own inputs were not measured, the row says so.
 
 Ordering rule for P0: every row unblocks the row below it. The chain is stated after each table.
 
