@@ -282,7 +282,7 @@ and Qwen2-Audio-7B train through `train()` via model-kind dispatch (`train/speec
 
 Status (2026-10-06): **P5 DONE** (`validation_campaigns/speech_p5`): out-of-domain WER on VoxPopuli,
 AMI and Earnings-22 for all four models (LibriSpeech-only fine-tuning moves OOD WER little; AMI
-improves for all four), LoRA wrap points measured and registered for Whisper and Qwen2-Audio, and a
+improves for all four on 300 rows; at scale, all but Whisper, see `speech_p7`), LoRA wrap points measured and registered for Whisper and Qwen2-Audio, and a
 real Qwen2-Audio placeholder check (248/248 verified). Canary: design note `speech_canary.md`.
 
 Status (2026-10-07): **Canary lane + P6 DONE** (`validation_campaigns/speech_canary`, `speech_p6`): Canary
@@ -298,8 +298,16 @@ AMI 10.5%, Earnings-22 19.5%, beating the fine-tuned Canary-1B-flash out of doma
 through NeMo with the released scope and FoundationScale-adjudicated (frozen LLM bit-identical
 310/310, encoder/projector/LoRA moved), but the LS+AMI recipe gives no gain. A paired
 bootstrap on larger sets finds AMI-2000 -0.1 points (not significant) and full dev-clean +0.12
-points (a significant regression). Earnings-domain
+points (a significant regression). Every earlier fine-tune claim was re-scored the same way
+(`speech_p7` section 5). The Gemma-4, Qwen2-Audio, Whisper dev-clean and Parakeet AMI gains hold,
+at about half to two-thirds of the 300-row size. Whisper's AMI gain is not significant. Earnings-domain
 training data (SPGISpeech) is gated behind terms the user must accept.
+
+Status (2026-10-08): **P8 DONE** (`validation_campaigns/speech_p8`): leak-free open Earnings data
+(the 6 test calls excluded by `source_id`). Canary-1B-flash on held-out Earnings-22 calls drops
+from 19.4% to 11.3% WER (-8.05, 95% CI [-8.66, -7.42]); AMI drops from 16.9% to 13.6%. A first round
+trained on mismatched audio (a clip-naming collision) and was retracted. New:
+`speech.runaway_hypotheses` gate and refusal of repeated audio paths.
 
 ### P4, more families and Lane B
 

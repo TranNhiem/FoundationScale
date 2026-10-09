@@ -1,6 +1,6 @@
-"""Speech gates: audio-row coverage, placeholder coverage, and tower movement at SAVE.
+"""Speech gates: audio-row coverage, placeholder coverage, tower movement, runaways.
 
-Three gates auditing a speech training job's checkpoint at :attr:`Lifecycle.SAVE`:
+Four gates auditing a speech training job's checkpoint at :attr:`Lifecycle.SAVE`:
 
 * :class:`AudioRowCoverageGate` — every declared audio row was either loaded into
   the artifact or refused-and-counted (and any refusal leaking into the save under
@@ -13,6 +13,10 @@ Three gates auditing a speech training job's checkpoint at :attr:`Lifecycle.SAVE
   under ``tower_prefix`` that is not a runtime buffer) actually moved off their base
   digests iff the run declared them exercised; the dormant negative control
   (``exercised=False``) requires the inverse.
+* :class:`RunawayHypothesisGate` — the eval rows the run measured at save stay
+  within ``2 * base_runaway + ceil(0.005 * rows_checked)`` runaway hypotheses: a
+  decoder that stopped listening (repetition loops, hallucinated domain text) is
+  invisible to every artifact gate, and the base model's own rate is the yardstick.
 
 Registration at import time is doctrine (mirroring ``checkpoint_gates.py``): the
 ``@register`` class decorator adds each gate to the process-wide :data:`REGISTRY`,
@@ -25,6 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from math import ceil
 from typing import Any, ClassVar
 
 from .core import (
@@ -671,5 +676,237 @@ class TowerMovementGate(Gate):
                 "clean pass state under the dormant negative control (still "
                 "affirms healthy input — the gate accepts a correctly-static "
                 "untrained tower)",
+            ),
+        ]
+
+
+@dataclass(frozen=True)
+class RunawayHypothesisContext:
+    """Runaway census over one eval run's rows, for the base and the tuned model.
+
+    ``rows_expected`` is the corpus's declared size (2504 for Earnings-22) and
+    must come from OUTSIDE the eval artifact — a run's summary can claim any
+    number of rows, which is exactly the audited disaster the framework names.
+    ``rows_checked`` counts the rows whose (reference, hypothesis) pairs were
+    actually measured; ``base_runaway`` and ``tuned_runaway`` count the rows
+    ``train.speech_metrics.is_runaway`` flagged for the base and the tuned
+    model over those same rows.
+
+    The accounting invariants — every count non-negative, neither runaway count
+    larger than ``rows_checked`` — are REFUSED (``ValueError``), never priced: a
+    census that cannot describe any real run corrupts the measurement, and a
+    limit derived from it would launder the miscount into a verdict about the
+    model. That is the same refusal ``Coverage``'s own constructor makes over a
+    negative count, one field earlier.
+    """
+
+    rows_expected: int
+    rows_checked: int
+    base_runaway: int
+    tuned_runaway: int
+
+
+@register
+class RunawayHypothesisGate(Gate):
+    """The tuned model's runaway rows stay near the base rate, or the run blocks.
+
+    Defect class: a decoder that stopped listening and kept emitting. The
+    measured case is a Canary-1B fine-tune whose training rows pointed at the
+    wrong audio (a data-builder bug left 6,000 rows on 820 files). It passed
+    every adjudication gate and still ran 122 of its 2504 Earnings-22
+    hypotheses into repetition loops and hallucinated domain text
+    (``"So, uh, that's a good question."``) where the base model ran 3 and a
+    clean LibriSpeech+AMI fine-tune ran 7.
+    Nothing is malformed in such a run: the tower moved, every audio row is
+    accounted for, the save lines up — so movement and coverage gates report a
+    healthy artifact. The hypothesis LENGTHS against the base model's own
+    runaway count are the only trace a stopped decoder leaves behind.
+
+    The allowance is ``limit = 2 * base_runaway + ceil(0.005 * rows_checked)``:
+    double the base drift, plus half a percent of the measured rows for
+    segmentation noise (the per-row slack of ``RUNAWAY_SLACK_WORDS`` is spent
+    inside ``is_runaway``; this is the corpus-level slack). RED (FAIL, blocking)
+    iff ``tuned_runaway > limit`` — landing exactly on the limit is inside it.
+    The base model is the yardstick rather than a hard ceiling because a corpus
+    the base reads just as badly must not block on length alone.
+
+    Coverage is the row census: (rows_checked, rows_expected) in ``"eval rows"``,
+    so zero measured rows is VACUOUS and a short sweep is UNDERCOVERED — both
+    blocking, exactly as :class:`AudioRowCoverageGate` reports its rows.
+
+    Counts that cannot describe a run are refused ``ValueError`` before any
+    limit is derived: a negative count, or a runaway count over more rows than
+    were checked. Malformed input is corruption of the measurement, not a fact
+    about the model.
+    """
+
+    id: ClassVar[str] = "speech.runaway_hypotheses"
+    description: ClassVar[str] = (
+        "The tuned model's runaway hypotheses stay within the limit of "
+        "2 * base_runaway + ceil(0.005 * rows_checked) at save: a decoder that "
+        "stopped listening and ran away into repetition loops or hallucinated "
+        "domain text is invisible to every artifact gate and only this count "
+        "sees it"
+    )
+    events: ClassVar[tuple[Lifecycle, ...]] = (Lifecycle.SAVE,)
+    context_type: ClassVar[type | None] = RunawayHypothesisContext
+
+    def check(self, ctx: Any) -> GateResult:
+        c = ctx
+        rows_expected = c.rows_expected
+        rows_checked = c.rows_checked
+        base_runaway = c.base_runaway
+        tuned_runaway = c.tuned_runaway
+
+        # Refusing impossible input BEFORE any limit is derived, exactly as
+        # Coverage's constructor refuses a negative count. A census that cannot
+        # describe any real run is corruption of the measurement; computing a
+        # limit over it would launder the miscount into a verdict about the
+        # model, so this is a ValueError (fail closed through Gate.run), never a
+        # priced FAIL about rows that were never measured.
+        if min(rows_expected, rows_checked, base_runaway, tuned_runaway) < 0:
+            raise ValueError(
+                "runaway counts cannot be negative: rows_expected="
+                f"{rows_expected}, rows_checked={rows_checked}, "
+                f"base_runaway={base_runaway}, tuned_runaway={tuned_runaway} — "
+                "a negative count describes no run at all"
+            )
+        if base_runaway > rows_checked or tuned_runaway > rows_checked:
+            raise ValueError(
+                "a runaway count cannot outrun the rows it counts over: "
+                f"rows_checked={rows_checked}, base_runaway={base_runaway}, "
+                f"tuned_runaway={tuned_runaway} — the census is impossible and "
+                "is refused, never priced"
+            )
+
+        # The per-spec Coverage formula (checked = rows measured, expected =
+        # manifest). It serves every branch below except rows_checked == 0,
+        # which deliberately overrides it to Coverage.none for the same reason
+        # AudioRowCoverageGate does: forcing checked=0 is the only way to make
+        # the framework's ok() downgrade yield the mandated VACUOUS verdict.
+        coverage = Coverage(
+            checked=rows_checked,
+            unit="eval rows",
+            expected=rows_expected,
+        )
+
+        if rows_checked == 0:
+            # First rule of this gate and absolute: zero measured rows attests
+            # nothing, whatever hangs off it (the refusals above have already
+            # forbidden any runaway count here). Through self.ok over
+            # Coverage.none this is the framework's VACUOUS downgrade — the only
+            # sanctioned way to produce it without hand-assembling a result.
+            return self.ok(
+                f"no eval row was measured (0 of {rows_expected} expected) — "
+                "nothing to attest about for runaway hypotheses",
+                Coverage.none("eval rows"),
+                evidence={
+                    "rows_expected": rows_expected,
+                    "rows_checked": rows_checked,
+                    "base_runaway": base_runaway,
+                    "tuned_runaway": tuned_runaway,
+                },
+            )
+
+        # Double the base drift plus the corpus slack. Both arms are spelled out
+        # in every message: the limit IS the claim, and a threshold a reader
+        # cannot recompute is a threshold nobody can audit.
+        limit = 2 * base_runaway + ceil(0.005 * rows_checked)
+
+        if tuned_runaway > limit:
+            return self.fail(
+                f"{tuned_runaway} of {rows_checked} rows ran away against the "
+                f"limit of {limit} (2 * base_runaway {base_runaway} + "
+                f"ceil(0.005 * {rows_checked})) — the tuned decoder stopped "
+                f"listening where the base model stayed with the transcript",
+                coverage,
+                evidence={
+                    "rows_checked": rows_checked,
+                    "base_runaway": base_runaway,
+                    "tuned_runaway": tuned_runaway,
+                    "limit": limit,
+                },
+            )
+
+        return self.ok(
+            f"{tuned_runaway} of {rows_checked} rows ran away against the limit "
+            f"of {limit} (2 * base_runaway {base_runaway} + ceil(0.005 * "
+            f"{rows_checked})) — the decoder kept listening",
+            coverage,
+            evidence={
+                "rows_checked": rows_checked,
+                "base_runaway": base_runaway,
+                "tuned_runaway": tuned_runaway,
+                "limit": limit,
+            },
+        )
+
+    def controls(self) -> list[Control]:
+        return [
+            Control(
+                name="earnings-22-collapse",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: RunawayHypothesisContext(
+                    rows_expected=2504,
+                    rows_checked=2504,
+                    base_runaway=3,
+                    tuned_runaway=122,
+                ),
+                note="the measured collapse (a fine-tune trained on rows whose "
+                "audio did not match their transcripts): 122 of 2504 "
+                "Earnings-22 rows ran away where the base model ran 3 (limit 19 = 2 * 3 + "
+                "ceil(0.005 * 2504)) — must RED-block naming both counts and "
+                "the limit",
+            ),
+            Control(
+                name="earnings-22-clean-finetune",
+                kind=ControlKind.MUST_PASS,
+                make_ctx=lambda: RunawayHypothesisContext(
+                    rows_expected=2504,
+                    rows_checked=2504,
+                    base_runaway=3,
+                    tuned_runaway=7,
+                ),
+                note="the measured healthy run over the same corpus: a clean "
+                "LibriSpeech+AMI fine-tune, 7 rows against 3 base runaways, "
+                "inside the limit of 19",
+            ),
+            Control(
+                name="no-rows-vacuous",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: RunawayHypothesisContext(
+                    rows_expected=5,
+                    rows_checked=0,
+                    base_runaway=0,
+                    tuned_runaway=0,
+                ),
+                note="0 rows measured against 5 expected: must block as VACUOUS "
+                "with zero coverage (no attestation over zero rows)",
+            ),
+            Control(
+                name="undercover-row-count",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: RunawayHypothesisContext(
+                    rows_expected=5,
+                    rows_checked=3,
+                    base_runaway=1,
+                    tuned_runaway=1,
+                ),
+                note="3 of 5 rows measured, runaways inside the limit (2 * 1 + "
+                "ceil(0.005 * 3) = 3): the shortfall of 2 must block as "
+                "UNDERCOVERED (framework downgrade over Coverage(3, 5))",
+            ),
+            Control(
+                name="runaway-beyond-checked",
+                kind=ControlKind.MUST_FIRE,
+                make_ctx=lambda: RunawayHypothesisContext(
+                    rows_expected=5,
+                    rows_checked=3,
+                    base_runaway=0,
+                    tuned_runaway=4,
+                ),
+                note="4 runaway rows counted over 3 checked rows: the census "
+                "cannot describe any run and must be refused (ValueError, "
+                "blocking) before any limit is derived from it",
             ),
         ]

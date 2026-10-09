@@ -1,4 +1,4 @@
-"""Tests for the speech gates: audio-row coverage, placeholder coverage, tower movement.
+"""Tests for the speech gates: audio-row coverage, placeholder coverage, movement, runaways.
 
 Two layers of coverage per gate:
 
@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 from foundationscale.gates.core import (
+    REGISTRY,
     AbstentionKind,
     GateRegistry,
     Verdict,
@@ -29,6 +30,8 @@ from foundationscale.gates.speech_gates import (
     AudioPlaceholderCoverageGate,
     AudioRowCoverageContext,
     AudioRowCoverageGate,
+    RunawayHypothesisContext,
+    RunawayHypothesisGate,
     TowerMovementContext,
     TowerMovementGate,
 )
@@ -371,3 +374,155 @@ def test_tower_prefix_matches_whole_segments_only() -> None:
     result = TowerMovementGate().check(ctx)
     assert result.coverage.checked == 1
     assert result.coverage.expected == 1
+
+
+class TestRunawayHypothesisGate:
+    def _gate(self) -> RunawayHypothesisGate:
+        return RunawayHypothesisGate()
+
+    def test_measured_collapse_fails(self):
+        # The measured failure that motivated the gate: a Canary-1B fine-tune
+        # that passed every adjudication gate and still ran 122 of 2504
+        # Earnings-22 hypotheses into repetition loops / hallucinated domain
+        # text where the base model ran 3. limit = 2 * 3 + ceil(0.005 * 2504)
+        # = 6 + 13 = 19 < 122.
+        ctx = RunawayHypothesisContext(
+            rows_expected=2504,
+            rows_checked=2504,
+            base_runaway=3,
+            tuned_runaway=122,
+        )
+        result = self._gate().check(ctx)
+        assert result.verdict is Verdict.FAIL
+        assert result.blocking
+        assert result.coverage.checked == 2504
+        assert result.coverage.expected == 2504
+        assert result.coverage.unit == "eval rows"
+        # The detail must name both counts and the limit they were judged with.
+        assert "122 of 2504 rows ran away" in result.detail
+        assert "limit of 19" in result.detail
+        assert "2 * base_runaway 3" in result.detail
+        assert result.evidence["limit"] == 19
+
+    def test_measured_healthy_run_passes(self):
+        # The measured healthy run over the same corpus (a clean LibriSpeech+AMI
+        # fine-tune): 7 of 2504 rows against 3 base runaways -- inside the limit of 19.
+        ctx = RunawayHypothesisContext(
+            rows_expected=2504,
+            rows_checked=2504,
+            base_runaway=3,
+            tuned_runaway=7,
+        )
+        result = self._gate().check(ctx)
+        assert result.verdict is Verdict.PASS
+        assert result.coverage.checked == 2504
+        assert result.coverage.expected == 2504
+        assert result.coverage.unit == "eval rows"
+
+    def test_limit_boundary_is_inclusive(self):
+        # base 3 over 2504 rows: limit = 2 * 3 + ceil(0.005 * 2504) = 19.
+        # Landing exactly on the limit is inside it (entirely declared drift);
+        # one row past it is the first row outside the run's allowance and must
+        # block.
+        at_limit = RunawayHypothesisContext(
+            rows_expected=2504,
+            rows_checked=2504,
+            base_runaway=3,
+            tuned_runaway=19,
+        )
+        over_limit = RunawayHypothesisContext(
+            rows_expected=2504,
+            rows_checked=2504,
+            base_runaway=3,
+            tuned_runaway=20,
+        )
+        result = self._gate().check(at_limit)
+        assert result.verdict is Verdict.PASS, "tuned == limit is inside the limit"
+        result = self._gate().check(over_limit)
+        assert result.verdict is Verdict.FAIL
+        assert result.blocking, "tuned == limit + 1 must block"
+
+    def test_no_rows_vacuous(self):
+        ctx = RunawayHypothesisContext(
+            rows_expected=5,
+            rows_checked=0,
+            base_runaway=0,
+            tuned_runaway=0,
+        )
+        result = self._gate().check(ctx)
+        assert result.verdict is Verdict.VACUOUS
+        assert result.blocking
+        assert result.coverage.checked == 0
+        assert result.coverage.unit == "eval rows"
+
+    def test_undercover_row_count_blocks(self):
+        # 3 of 5 rows measured and the runaways inside the limit (2 * 1 +
+        # ceil(0.005 * 3) = 3): the shortfall of 2 must block via the
+        # framework's self.ok() downgrade.
+        ctx = RunawayHypothesisContext(
+            rows_expected=5,
+            rows_checked=3,
+            base_runaway=1,
+            tuned_runaway=1,
+        )
+        result = self._gate().check(ctx)
+        assert result.verdict is Verdict.UNDERCOVERED
+        assert result.blocking
+        assert result.coverage.checked == 3
+        assert result.coverage.expected == 5
+
+    def test_overcover_row_count_blocks(self):
+        # runaways inside the limit (2 * 0 + ceil(0.005 * 5) = 1), but the row
+        # census contradicts its own denominator.
+        ctx = RunawayHypothesisContext(
+            rows_expected=3,
+            rows_checked=5,
+            base_runaway=0,
+            tuned_runaway=1,
+        )
+        result = self._gate().check(ctx)
+        assert result.verdict is Verdict.OVERCOVERED
+        assert result.blocking
+        assert result.coverage.checked == 5
+        assert result.coverage.expected == 3
+
+    def test_impossible_census_is_refused(self):
+        # A negative count, or a runaway count over more rows than were checked,
+        # describes no run at all: refused as ValueError (the idiom Coverage's
+        # own constructor uses for a negative count) and never priced as a
+        # verdict about the model.
+        with pytest.raises(ValueError, match="cannot be negative"):
+            self._gate().check(
+                RunawayHypothesisContext(
+                    rows_expected=5,
+                    rows_checked=5,
+                    base_runaway=-1,
+                    tuned_runaway=1,
+                )
+            )
+        for base_runaway, tuned_runaway in ((6, 1), (0, 6)):
+            with pytest.raises(ValueError, match="cannot outrun"):
+                self._gate().check(
+                    RunawayHypothesisContext(
+                        rows_expected=5,
+                        rows_checked=5,
+                        base_runaway=base_runaway,
+                        tuned_runaway=tuned_runaway,
+                    )
+                )
+
+    def test_verify_controls_per_gate(self):
+        registry = GateRegistry()
+        registry.register(RunawayHypothesisGate())
+        failures = verify_controls(registry, gate_ids=["speech.runaway_hypotheses"])
+        assert failures == [], f"controls for speech.runaway_hypotheses did not hold: {failures}"
+
+    def test_registered_under_declared_id(self):
+        # @register must have the gate in the process-wide REGISTRY at import
+        # time, under its declared id and wired to its own context type.
+        gate = REGISTRY.get("speech.runaway_hypotheses")
+        assert isinstance(gate, RunawayHypothesisGate), (
+            f"speech.runaway_hypotheses must resolve to the runaway gate in "
+            f"REGISTRY, got {type(gate).__name__}"
+        )
+        assert gate.context_type is RunawayHypothesisContext

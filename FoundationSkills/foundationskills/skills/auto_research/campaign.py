@@ -43,8 +43,10 @@ AXIS_CATEGORIES: dict[str, tuple[str, ...]] = {
 }
 
 # M3 proposer block (AR-IN-008): which proposer may suggest axes and its floor rows.
-PROPOSER_NAMES = ("catalog", "optuna", "optuna-cma")
-_PROPOSER_KEYS = {"name", "min_rows", "require_model", "seed"}
+PROPOSER_NAMES = ("catalog", "optuna", "optuna-cma", "llm")
+_PROPOSER_KEYS = {"name", "min_rows", "require_model", "seed", "llm"}
+_LLM_KEYS = ("pool_key", "model", "max_cards", "max_calls",
+             "max_evidence_chars", "parse_spec_version", "sampling")
 
 UNSUPPORTED_AXES: dict[str, str] = {
     "parallel.tp": "tensor parallelism is planned, not a tunable axis in the measured FS",
@@ -225,7 +227,10 @@ def check_proposer_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     if name is not None and (not isinstance(name, str) or name not in PROPOSER_NAMES):
         problems.append(("AR-IN-008", f"proposer.name {name!r} not in {list(PROPOSER_NAMES)}"))
     min_rows = raw.get("min_rows")
-    if min_rows is not None and (not _is_int(min_rows) or int(min_rows) < 1):
+    if name == "llm":  # the llm proposer is the <=10-row proposer: min_rows may be 0
+        if min_rows is not None and (not _is_int(min_rows) or int(min_rows) < 0):
+            problems.append(("AR-IN-008", f"proposer.min_rows must be an int >= 0 (got {min_rows!r})"))
+    elif min_rows is not None and (not _is_int(min_rows) or int(min_rows) < 1):
         problems.append(("AR-IN-008", f"proposer.min_rows must be an int >= 1 (got {min_rows!r})"))
     require_model = raw.get("require_model")
     if require_model is not None and not isinstance(require_model, bool):
@@ -236,10 +241,51 @@ def check_proposer_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     extra = {str(k) for k in set(raw) - _PROPOSER_KEYS}
     if extra:
         problems.append(("AR-IN-008", f"proposer has unknown key(s) {sorted(extra)}"))
+    if name != "llm" and "llm" in raw:
+        problems.append(("AR-IN-008", "proposer.llm is only valid with name 'llm'"))
     if name == "optuna-cma":  # AR-PR-002 (C3): CMA-ES is numeric-only - a categorical axis REFUSES, never drops
         for axis in spec.get("axes") or []:
             if isinstance(axis, dict) and axis.get("type") == "categorical":
                 problems.append(("AR-PR-002", f"proposer_axis_unsupported:optuna-cma:{axis.get('key')}"))
+    return problems
+
+
+def check_llm_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
+    """AR-IN-010: llm proposer config block; findings only for proposer.name == 'llm'."""
+    raw = spec.get("proposer")
+    if not isinstance(raw, dict) or raw.get("name") != "llm":
+        return []
+    llm = raw.get("llm")
+    if not isinstance(llm, dict):  # missing or not a mapping: stop here
+        return [("AR-IN-010", "llm_config:block")]
+    problems: list[tuple[str, str]] = []
+    pool_key = llm.get("pool_key")
+    if not isinstance(pool_key, str) or not pool_key:
+        problems.append(("AR-IN-010", "llm_config:pool_key"))
+    model = llm.get("model")
+    if not isinstance(model, str) or not model:
+        problems.append(("AR-IN-010", "llm_config:model"))
+    budget = _block(spec, "budget")
+    max_runs = budget.get("max_runs")
+    if "max_cards" in llm:
+        max_cards = llm["max_cards"]
+        bad = not _is_int(max_cards) or int(max_cards) < 1
+        if not bad and _is_int(max_runs) and int(max_cards) > int(max_runs):  # bools are not ints
+            bad = True
+        if bad:
+            problems.append(("AR-IN-010", "llm_config:max_cards"))
+    for key in ("max_calls", "max_evidence_chars", "parse_spec_version"):
+        if key in llm and (not _is_int(llm[key]) or int(llm[key]) < 1):
+            problems.append(("AR-IN-010", f"llm_config:{key}"))
+    if "sampling" in llm and not isinstance(llm["sampling"], dict):
+        problems.append(("AR-IN-010", "llm_config:sampling"))
+    unknown = sorted({str(key) for key in llm} - set(_LLM_KEYS))
+    if unknown:
+        problems.append(("AR-IN-010", f"llm_config:unknown:{unknown}"))
+    for field in ("pool_key", "model"):
+        value = llm.get(field)
+        if isinstance(value, str) and "://" in value:  # a URL never belongs in the spec
+            problems.append(("AR-IN-010", f"llm_config:url_shaped:{field}"))
     return problems
 
 
@@ -364,6 +410,7 @@ def check_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     problems.extend(check_proposer_spec(spec))
     # AR-IN-009 (M5a): the optional objectives block validates only when present (M4 path is byte-identical).
     problems.extend(check_objectives_spec(spec))
+    problems.extend(check_llm_spec(spec))
     return problems
 
 

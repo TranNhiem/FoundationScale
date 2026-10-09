@@ -205,9 +205,9 @@ workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.m
   tray, 600 steps: with an image column declared, 149 of 658 vision-tower tensors moved;
   over the same rows with the image key removed, 0 of 658 moved while the language tower
   still trained. The discriminator is bit-exact, so there is no tolerance to argue about.
-  Declaring **audio** or **video** REFUSES with exit 96 and names the modality — this
-  plane has no audio or video arm, and it says so rather than dropping the column in
-  silence. An omni checkpoint's untrainable towers are **carried, not trained**, and the
+  Declaring **video** REFUSES with exit 96 and names the modality — this plane has no
+  video arm, and it says so rather than dropping the column in silence. **Audio** trains
+  through the speech plane (next item). An omni checkpoint's untrainable towers are **carried, not trained**, and the
   run announces which ones by name, because "trained a multimodal model" and "carried two
   thirds of one unchanged" are different claims. *Not* declaring them is no longer silent
   either: a corpus that folds its media reference into the text — the shape conversion
@@ -216,6 +216,30 @@ workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.m
   run still exits 0. The fold is legitimate and the marker can be ordinary prose, so what
   was missing was the disclosure, not a refusal.
   [-> validation_campaigns/verification_matrix, rows T1-20 through T1-23]
+* **Speech (ASR) — measured on GB200, not asserted**: declare the audio column with
+  `FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN` and the same `train()` path fine-tunes three model
+  kinds: audio-LLMs (Gemma-4 E4B, Qwen2-Audio-7B), seq2seq (Whisper-large-v3, with a
+  declared language whose prefix tokens are verified in the labels) and CTC
+  (Parakeet-CTC-1.1B). Full fine-tune and LoRA are supported, using the measured wrap points
+  per family, and CTC models get encoder-layer LoRA. The loader is strict: it accepts 16 kHz
+  only and never resamples or truncates; every refused row is counted by reason. Three gates
+  fire on save: `speech.audio_row_coverage` (rows checked of rows expected),
+  `speech.audio_placeholder_coverage` (audio tokens per row match what the processor
+  expands) and `speech.tower_movement` (the audio tower's saved tensors moved, bit-exact).
+  NVIDIA Canary-1B-flash and Canary-Qwen-2.5B train in their own NeMo loop, and
+  FoundationScale feeds the data and adjudicates the saved model with the same gates.
+  Held-out results use the full LibriSpeech dev-clean (2,683 utterances) and 2,000 AMI
+  meeting utterances, with paired-bootstrap confidence intervals. Word error rate drops for
+  Gemma-4 from 4.07% to 2.71% (full FT) and 2.96% (LoRA), and on AMI from 28.2% to 24.5%.
+  Whisper drops from 2.25% to 1.70%, Qwen2-Audio from 35.6% to 1.79%, and Parakeet on AMI
+  from 17.9% to 17.4%. Gains that did not survive the larger sets are recorded as such,
+  including Whisper on AMI and a Canary-Qwen fine-tune. A run can also train exactly what
+  it declared on the wrong audio. A data-builder bug once pointed 6,000 transcripts at 820
+  files and every artifact gate passed. So repeated audio paths are refused, and
+  `speech.runaway_hypotheses` blocks a fine-tune whose hypotheses run away far past the base
+  model's count on the same eval rows. With the data fixed, Canary-1B-flash on held-out
+  Earnings-22 calls drops from 19.4% to 11.3% WER.
+  [-> docs/research/speech.md, validation_campaigns/speech_p7/EVIDENCE.md, validation_campaigns/speech_p8/EVIDENCE.md]
 * **Via the launchers as reference material**: one full fine-tune and one LoRA workflow
   (`launchers/launch_g4e4b_fullft_1tray.sh`, `launchers/launch_g4e4b_lora_1tray.sh`),
   estate-parameterized through environment variables rather than hard-coded paths.
@@ -522,14 +546,14 @@ itself, from the Makefile's own accounting:
 
 ## 23. Project structure
 
-`src/` = 73777 LOC across 110 files. `launchers/` contains 10231 shell LOC plus 1615 Python
+`src/` = 74110 LOC across 110 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 34169 Python LOC and 6706 shell LOC on top of the
-package. `tools/` contains 10183 Python LOC. 348816 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 10183 Python LOC. 352358 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (101554 .py LOC); conftest carries the skip guard
+tests/                 the test suite (101830 .py LOC); conftest carries the skip guard
 tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
                        real_checkpoint_probe, preflight/, mutate, census)
 checks/                standalone repository gates: countables drift, packaging

@@ -93,3 +93,36 @@ PASS, which is what surfaced the real name, `perception.proj`.
   That is the user's decision, so it was not done on autopilot.
 - `revdotcom/earnings22` and `distil-whisper/earnings22` are the Earnings-22 evaluation data
   itself. Training on them would leak the test set.
+
+## 5. Re-verifying the earlier HF-native results at scale
+
+Section 3 showed that 300-row sets can manufacture a gain, so every earlier fine-tune claim was
+re-scored on full dev-clean (2683 rows) and AMI-2000. Each comparison uses a paired bootstrap
+over the same utterances. `speech_p4/eval_wer.py` now writes every row (`all`), which the
+bootstrap needs, and `run_hf_bigeval.sh` spreads the jobs over 8 GPUs with an idle guard per
+launch. The checkpoints are the ones the committed results came from, read from each result's
+recorded `args`.
+
+| model (claim) | dev-clean full: base -> FT, diff [95% CI] | AMI-2000: base -> FT, diff [95% CI] |
+|---|---|---|
+| Gemma-4 E4B full FT (P3) | 4.07 -> **2.71**, -1.36 [-1.54, -1.18] | 28.24 -> **24.50**, -3.74 [-4.72, -2.67] |
+| Gemma-4 E4B LoRA (P3) | 4.07 -> **2.96**, -1.11 [-1.30, -0.93] | 28.24 -> **24.85**, -3.40 [-4.92, -1.32] |
+| Gemma-4 LoRA vs full FT | +0.25 [+0.13, +0.37], full FT better | +0.35 [-1.32, +2.52], not significant |
+| Whisper-large-v3 FT (P4/P5) | 2.25 -> **1.70**, -0.55 [-0.67, -0.43] | 20.15 -> 20.75, +0.60 [-0.49, +2.51], **not significant** |
+| Parakeet-CTC-1.1B full FT (P4/P5) | 1.86 -> 1.80, -0.06 [-0.11, -0.01] | 17.93 -> **17.41**, -0.52 [-0.81, -0.26] |
+| Parakeet-CTC-1.1B encoder LoRA (P6) | 1.86 -> 1.81, -0.05 [-0.11, -0.00] | 17.93 -> **17.53**, -0.40 [-0.67, -0.14] |
+| Qwen2-Audio-7B FT (P4/P5) | 35.63 -> **1.79** | 99.91 -> **18.18** (base mostly answers instead of transcribing) |
+
+What changes:
+- **Holds, with smaller effects:** the Gemma-4 full and LoRA gains, Whisper on dev-clean,
+  Qwen2-Audio, and the Parakeet AMI gains (full and LoRA). The 300-row sets overstated most of
+  these by roughly 1.5-2x.
+- **Corrected:** P5's "AMI improves for all four" does not hold for Whisper (not significant).
+  P4's "Parakeet: no gain" is a small but significant -0.06 points on full dev-clean.
+- **Newly resolved:** full fine-tuning beats LoRA on dev-clean for Gemma-4. On AMI the two are
+  indistinguishable.
+
+Process note: a first pass picked Gemma-4 run directories by name and timestamp. Those were
+30-step runs from later experiments, and they produced a spurious "LoRA is worse than base".
+The rerun reads the checkpoint from each committed result's recorded `args`. Those first-pass
+results were discarded (kept apart under `artifacts/speech/big`, not cited).
