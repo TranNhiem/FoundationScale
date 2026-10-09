@@ -210,7 +210,12 @@ workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.m
   silence. Video gets an arm once its sampling is DECLARED: with
   `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES=N` beside the column, each clip becomes N
   centred-uniform frames on the image arm (measured through the processor: 16 frames of
-  a real clip cost 264 tokens each on `gemma-4-E4B-it`). An omni checkpoint's untrainable towers are **carried, not trained**, and the
+  a real clip cost 264 tokens each on `gemma-4-E4B-it`). Trained on that model at 8
+  frames per clip, full fine-tune sharded over four GPUs of one GB200 tray, 40 steps:
+  160 of 659 vision-tower tensors moved; over the same rows with no video declared,
+  0 of 659 moved while the language tower still trained. 16 frames does not fit a full
+  fine-tune of this model on one tray, because its shared-KV layers rule out gradient
+  checkpointing. An omni checkpoint's untrainable towers are **carried, not trained**, and the
   run announces which ones by name, because "trained a multimodal model" and "carried two
   thirds of one unchanged" are different claims. *Not* declaring them is no longer silent
   either: a corpus that folds its media reference into the text — the shape conversion
