@@ -637,6 +637,32 @@ def test_accepts_declared_max_infra_rate_boundaries(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize("bad_value", ["", 0, object()])
+def test_rejects_bad_servable_base_model_dir(tmp_path: Path, bad_value: object) -> None:
+    with pytest.raises(RolloutHostRefusal, match="field 'servable_base_model_dir'"):
+        _host(
+            tmp_path,
+            uids=["taskA"],
+            client_factory=lambda index: SubmitClient(),
+            servable_base_model_dir=bad_value,
+        )
+
+
+def test_accepts_none_and_a_non_empty_str_servable_base_model_dir(tmp_path: Path) -> None:
+    _host(
+        tmp_path,
+        uids=["taskA"],
+        client_factory=lambda index: SubmitClient(),
+        servable_base_model_dir=None,
+    )
+    _host(
+        tmp_path,
+        uids=["taskA"],
+        client_factory=lambda index: SubmitClient(),
+        servable_base_model_dir="/some/base/model/dir",
+    )
+
+
 def test_rollout_rejects_bad_step(tmp_path: Path) -> None:
     host = _host(tmp_path, uids=["taskA"], client_factory=lambda index: SubmitClient())
     with pytest.raises(RolloutHostRefusal):
@@ -715,6 +741,111 @@ def test_publish_calls_the_save_path_every_rank_but_pushes_only_rank_zero(
         assert remaining == {"step_000007"}
     finally:
         fleet.stop_all()
+
+
+def test_publish_completes_for_serving_before_the_push_when_declared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # servable_base_model_dir=None (every other publish test here) means
+    # complete_for_serving is never even imported -- this is the one test
+    # exercising the opt-in path, and pinning its ORDER: the published
+    # directory must be made servable BEFORE the fleet is asked to reload it.
+    from foundationscale.rl.weightsync import SyncReport
+
+    order: list[str] = []
+    monkeypatch.setattr(
+        "foundationscale.rl.distributed.save_checkpoint",
+        lambda *a, **k: Path(a[2]).mkdir(parents=True, exist_ok=True) or True,
+    )
+
+    def fake_complete_for_serving(publish_dir: str, base_model_dir: str, *, cache_dir: str) -> Any:
+        order.append("complete_for_serving")
+        assert base_model_dir == "/fake/base/model"
+        assert cache_dir == f"{tmp_path / 'publish'}/.serving_cache"
+        from foundationscale.agentic_rl.servable import ServableReport
+
+        return ServableReport(
+            status="completed", extras_keys=3, extras_bytes=12, copied_files=("config.json",)
+        )
+
+    monkeypatch.setattr(
+        "foundationscale.agentic_rl.servable.complete_for_serving", fake_complete_for_serving
+    )
+
+    def fake_push(self: DiskWeightSync, path: str) -> SyncReport:
+        order.append("push")
+        return SyncReport(
+            transport="disk",
+            offered=("server_0",),
+            transferred=("server_0",),
+            skipped=(),
+            failed_ranks=(),
+            bytes_moved=None,
+            seconds=0.01,
+            is_stale=False,
+        )
+
+    monkeypatch.setattr(DiskWeightSync, "push", fake_push)
+
+    fake_module = write_fake_server(tmp_path)
+    spec = make_server_spec(tmp_path, fake_module, port=free_port())
+    fleet = EngineFleet(servers=(SGLangServer(spec),))
+    publish_root = tmp_path / "publish"
+    publish_root.mkdir()
+    sync = DiskWeightSync(publish_root=str(publish_root), fleet=fleet)
+    host = _host(
+        tmp_path,
+        uids=["taskA"],
+        client_factory=lambda index: SubmitClient(),
+        weight_sync=sync,
+        servable_base_model_dir="/fake/base/model",
+    )
+    host.publish(object(), object(), SimpleNamespace(rank=0), step=0)
+    assert order == ["complete_for_serving", "push"]
+
+
+def test_publish_never_calls_complete_for_serving_when_not_declared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from foundationscale.rl.weightsync import SyncReport
+
+    monkeypatch.setattr(
+        "foundationscale.rl.distributed.save_checkpoint",
+        lambda *a, **k: Path(a[2]).mkdir(parents=True, exist_ok=True) or True,
+    )
+
+    def boom(*args: object, **kwargs: object) -> Any:
+        raise AssertionError("complete_for_serving must not be called when not declared")
+
+    monkeypatch.setattr("foundationscale.agentic_rl.servable.complete_for_serving", boom)
+
+    def fake_push(self: DiskWeightSync, path: str) -> SyncReport:
+        return SyncReport(
+            transport="disk",
+            offered=("server_0",),
+            transferred=("server_0",),
+            skipped=(),
+            failed_ranks=(),
+            bytes_moved=None,
+            seconds=0.01,
+            is_stale=False,
+        )
+
+    monkeypatch.setattr(DiskWeightSync, "push", fake_push)
+
+    fake_module = write_fake_server(tmp_path)
+    spec = make_server_spec(tmp_path, fake_module, port=free_port())
+    fleet = EngineFleet(servers=(SGLangServer(spec),))
+    publish_root = tmp_path / "publish"
+    publish_root.mkdir()
+    sync = DiskWeightSync(publish_root=str(publish_root), fleet=fleet)
+    host = _host(
+        tmp_path,
+        uids=["taskA"],
+        client_factory=lambda index: SubmitClient(),
+        weight_sync=sync,
+    )
+    host.publish(object(), object(), SimpleNamespace(rank=0), step=0)  # must not raise
 
 
 def test_publish_raises_when_the_push_is_not_complete(

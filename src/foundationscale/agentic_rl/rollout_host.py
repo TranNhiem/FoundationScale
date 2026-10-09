@@ -142,6 +142,15 @@ class RolloutHost:
     gates: bool = True
     declared_max_infra_rate: float | None = None
     declared_max_lag: int = 1
+    # The multimodal base model dir the trainer actually loaded (e.g. a
+    # Qwen3.5-VL checkpoint loaded as a text-only CausalLM) -- None means
+    # "do not try to complete the published checkpoint for serving" (either
+    # the base model IS already text-only, or policy.servable_publish=False
+    # declared the opt-out; see cli.py and
+    # foundationscale.agentic_rl.servable). When given, `publish` calls
+    # `servable.complete_for_serving` on rank 0 between the collective save
+    # and the push -- see `publish`'s own docstring.
+    servable_base_model_dir: str | None = None
 
     def __post_init__(self) -> None:
         where = "RolloutHost"
@@ -189,6 +198,14 @@ class RolloutHost:
                     f"fraction of a batch's rows and cannot exceed 1.0"
                 )
         _real_int_at_least(self.declared_max_lag, 0, where=where, name="declared_max_lag")
+        if self.servable_base_model_dir is not None and (
+            not isinstance(self.servable_base_model_dir, str) or not self.servable_base_model_dir
+        ):
+            raise RolloutHostRefusal(
+                f"{where}: field 'servable_base_model_dir' is "
+                f"{_described(self.servable_base_model_dir)}: it must be None or a "
+                f"non-empty str"
+            )
 
     def _client_for(self, session_index: int) -> GenerationClient:
         if self.client_factory is not None:
@@ -342,15 +359,24 @@ class RolloutHost:
         ``cli.py``, even for ``--dry-run``) never imports torch.
 
         ``save_checkpoint`` is COLLECTIVE and is called on EVERY rank,
-        unconditionally; only ``ctx.rank == 0`` additionally pushes to the
-        fleet -- see ``weight_sync.DiskWeightSync``'s module docstring for why
-        ``sync`` itself must not be called on just one rank here. A push that
-        does not fully succeed (a fleet member unreachable, a reload that
-        reported failure) raises -- CONTINUING training on an unreplaced
-        checkpoint would serve the OLD policy's rollouts as if they were
-        on-policy, silently, for every step after this one; the trainer's own
-        total exit-code boundary (``agentic_rl.cli._run``) adjudicates this
-        RED, the correct verdict for an infra fault discovered mid-run.
+        unconditionally; only ``ctx.rank == 0`` additionally completes the
+        checkpoint for serving (when ``servable_base_model_dir`` is set) and
+        pushes to the fleet -- see ``weight_sync.DiskWeightSync``'s module
+        docstring for why ``sync`` itself must not be called on just one rank
+        here. ``servable.complete_for_serving`` runs AFTER the collective save
+        and BEFORE the push, so the fleet never reloads/restarts from a
+        directory a fresh engine process could not itself load from cold --
+        see ``foundationscale.agentic_rl.servable``'s module docstring for why
+        a multimodal base model trained as text-only needs this at all; it is
+        imported lazily here for the same reason ``save_checkpoint`` is
+        (``safetensors.torch`` pulls in torch, and this module must stay
+        importable, torch-free, for ``cli.py --dry-run``). A push that does
+        not fully succeed (a fleet member unreachable, a reload that reported
+        failure) raises -- CONTINUING training on an unreplaced checkpoint
+        would serve the OLD policy's rollouts as if they were on-policy,
+        silently, for every step after this one; the trainer's own total
+        exit-code boundary (``agentic_rl.cli._run``) adjudicates this RED, the
+        correct verdict for an infra fault discovered mid-run.
         """
         if type(step) is not int or step < 0:
             raise RolloutHostRefusal(
@@ -365,6 +391,14 @@ class RolloutHost:
         path = self.weight_sync.path_for(target_step)
         save_checkpoint(model, tokenizer, path, ctx, sharding=self.sharding, step=target_step)
         if ctx.rank == 0:
+            if self.servable_base_model_dir is not None:
+                from foundationscale.agentic_rl.servable import complete_for_serving
+
+                complete_for_serving(
+                    path,
+                    self.servable_base_model_dir,
+                    cache_dir=f"{self.weight_sync.publish_root}/.serving_cache",
+                )
             report = self.weight_sync.push(path)
             if not report.complete:
                 raise RolloutHostRefusal(

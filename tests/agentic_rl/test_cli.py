@@ -492,6 +492,28 @@ def test_real_run_multi_step_with_weight_sync_is_not_refused(
     assert code == EXIT_PASS
 
 
+def test_build_real_run_wires_servable_base_model_dir_from_policy(tmp_path: Path) -> None:
+    # policy.servable_publish (default True) decides whether RolloutHost gets
+    # a servable_base_model_dir to complete each published checkpoint for
+    # serving (see servable.py) -- True names policy.model_path itself,
+    # False is a declared opt-out (RolloutHost.publish then skips it).
+    import foundationscale.agentic_rl.cli as cli_module
+
+    tasks_path = _write_tasks(tmp_path)
+
+    config_default = build_config(_raw_config(tasks_path), {})
+    host_default = cli_module._build_real_run(config_default)
+    assert host_default.servable_base_model_dir == "Qwen/Qwen2.5-1.5B-Instruct"
+
+    raw_opt_out = _raw_config(
+        tasks_path,
+        policy={"model_path": "Qwen/Qwen2.5-1.5B-Instruct", "servable_publish": False},
+    )
+    config_opt_out = build_config(raw_opt_out, {})
+    host_opt_out = cli_module._build_real_run(config_opt_out)
+    assert host_opt_out.servable_base_model_dir is None
+
+
 def test_real_run_zero_reports_is_unmeasured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

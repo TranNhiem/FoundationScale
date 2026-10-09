@@ -105,6 +105,27 @@ def test_provenance_distinguishes_config_cli_and_default() -> None:
     assert config.trainer["learning_rate"] == 1e-6
 
 
+def test_policy_servable_publish_defaults_to_true_with_default_provenance() -> None:
+    config = build_config(_raw_config(), {})
+    assert config.policy.servable_publish is True
+    assert config.provenance["policy.servable_publish"] == "default"
+
+
+def test_policy_servable_publish_from_config_file() -> None:
+    raw = _raw_config(policy={"model_path": "m", "servable_publish": False})
+    config = build_config(raw, {})
+    assert config.policy.servable_publish is False
+    assert config.provenance["policy.servable_publish"] == "config"
+
+
+def test_policy_servable_publish_cli_override_wins_over_config_file() -> None:
+    raw = _raw_config(policy={"model_path": "m", "servable_publish": False})
+    overrides = parse_set_overrides(["policy.servable_publish=true"])
+    config = build_config(raw, overrides)
+    assert config.policy.servable_publish is True
+    assert config.provenance["policy.servable_publish"] == "cli"
+
+
 def test_as_json_round_trips_through_json_dumps() -> None:
     config = build_config(_raw_config(), {})
     dumped = json.dumps(config.as_json())

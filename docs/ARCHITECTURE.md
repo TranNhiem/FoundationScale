@@ -238,7 +238,7 @@ Around that sit the support modules named in README §1:
 
 ## The RL plane: `src/foundationscale/rl/`
 
-The RL plane is 41 modules; `src/foundationscale/rl/` measures 29686 lines and
+The RL plane is 41 modules; `src/foundationscale/rl/` measures 29635 lines and
 the default install registers 19 algorithm names. Those three numbers are
 derived by `tools/countables_census.py` and anchored by
 `checks/countables_drift.py`, so a restatement that drifts here is a gate
@@ -453,19 +453,19 @@ working home fails a test rather than an import at a user's site.
 
 ## Around the package
 
-`src/` is 79441 LOC across 120 files; `tests/` adds 108515 `.py` LOC (its
+`src/` is 74595 LOC across 110 files; `tests/` adds 102463 `.py` LOC (its
 conftest carries the skip guard). Beside the package:
 
 | Tree | Contents |
 |---|---|
-| `tools/` | 10183 Python LOC of CLIs over the package: `emit_run_manifest`, `live_save_gate`, `real_checkpoint_probe`, `preflight/`, `mutate`, `census`. |
+| `tools/` | 10192 Python LOC of CLIs over the package: `emit_run_manifest`, `live_save_gate`, `real_checkpoint_probe`, `preflight/`, `mutate`, `census`. |
 | `checks/` | Standalone repository gates: countables drift, packaging reachability, `bash -lc` sweep, workflow YAML audit. |
 | `launchers/` | The estate launch plane (13008 shell LOC) plus two bash contract suites and Python helpers (lora target census, peft override replay) — 1615 Python LOC. |
 | `validation_campaigns/h100_validation/` | The experimental H100 harness (34169 Python, 6706 shell LOC): build script, `gate_*.py`, `patch_*.py`, its own tests, and the published `h100/` deliverables. **Evidence campaigns, not framework code — read as lab notebooks.** |
 | `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 368356 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 355053 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 

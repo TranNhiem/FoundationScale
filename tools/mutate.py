@@ -237,6 +237,15 @@ MODULE_PATHS = {
     # of refused, turns a real completeness check back into a vacuous one with
     # no other symptom.
     "bridge_fqn_map": "tools/bridge_fqn_map.py",
+    # Agentic RL: promoted out of PENDING_ENROLMENT with their rows, on the
+    # families_* argument -- every defect in these three is SILENT. A flipped
+    # loss mask or a zero-filled rollout logprob still trains; a one-sided
+    # abstention check or an inverted staleness lag still exits 0; a servable
+    # completion that extracts the wrong keys still serves. None of them has a
+    # failure mode an ordinary run would notice.
+    "agentic_contracts": "src/foundationscale/agentic_rl/contracts.py",
+    "agentic_gates": "src/foundationscale/gates/agentic_gates.py",
+    "agentic_servable": "src/foundationscale/agentic_rl/servable.py",
 }
 
 _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")

@@ -70,9 +70,9 @@ ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml"
 MUTATE_PY = ROOT / "tools" / "mutate.py"
 MUTATIONS_JSON = ROOT / "tools" / "mutations.json"
 
-JSON_ROWS, JSON_MODS = 111, 15
+JSON_ROWS, JSON_MODS = 135, 18
 EMBEDDED_ROWS, EMBEDDED_MODS = 9, 1
-TOTAL_ROWS, TOTAL_MODS = 120, 16
+TOTAL_ROWS, TOTAL_MODS = 144, 19
 # Rows are the corpus denominator; distinct (module, anchor) pairs are the
 # DISTINGUISHABILITY denominator. They differ because `core` publishes 9 rows
 # over 6 anchors, so a green verdict there resolves the anchor set and cannot
@@ -91,7 +91,10 @@ TOTAL_ROWS, TOTAL_MODS = 120, 16
 # #543 enrols tools/bridge_fqn_map.py with six MUST_FIRE rows and its inert
 # MUST_PASS control, seven fresh anchors: 113 -> 120 rows, 109 -> 116 pairs,
 # gap still four.
-DISTINCT_ANCHORS = 116
+# Agentic RL enrols contracts, agentic_gates and servable with seven MUST_FIRE
+# rows and one inert MUST_PASS control each, every one on a fresh anchor:
+# 120 -> 144 rows, 116 -> 140 pairs, gap still four.
+DISTINCT_ANCHORS = 140
 # Row-shape counts are pins, not prose trivia. They are the reason the
 # insertion composition control and deletion exactly-once control exercise
 # real shipped shapes. Do not set either pin to 0 merely to pass after a
