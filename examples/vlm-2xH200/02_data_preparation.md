@@ -371,5 +371,5 @@ Use `refuse` for your first run so a bad setting shows up immediately; switch to
 
 ## Next
 
-[03_training.md](./03_training.md) — TODO(verify) chapter 03's title and file name (data manifest handed to the trainer / first training run on 2x H200).
+**Next:** 03 — Training configuration (model selection, LoRA, context length and memory tuning on 2x H200).
 </parameter>

@@ -325,4 +325,4 @@ Expected output: `TODO(verify)` (the model's weight/config files in `models/Qwen
 
 ---
 
-**Next:** [chapter 02 — `TODO(verify)`](02_TODO-verify.md) (`TODO(verify)`: fill in the real file name and title of the next chapter in `examples/vlm-2xH200/`)
+**Next:** [02 — Data preparation](02_data_preparation.md)
