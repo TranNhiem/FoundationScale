@@ -14,10 +14,23 @@ host always succeeds. A host without either dependency is refused
 (exit-contract 96) with the missing dependency NAMED, never an unraised
 ImportError and never a silent fall-back.
 
-No model-family branching exists anywhere here. Model loading tries
-``AutoModelForCausalLM`` and falls back to ``AutoModelForImageTextToText``
-only (transformers 5.x removed ``AutoModelForVision2Seq``, and it is the
-successor class Gemma-4 registers under);
+Model loading is family-aware only for media-declared corpora: a text-only
+corpus loads exactly as before (``AutoModelForCausalLM``, falling back to
+``AutoModelForImageTextToText`` only on an exception -- byte-identical to
+every run before this paragraph was true). A corpus whose samples carry
+images picks the auto class with ``train/loop.py``'s own
+``_media_capable_auto_class``/``_model_can_consume_pixels`` (imported, never
+duplicated) instead of the try/except fallback: MEASURED on transformers
+5.18.0, ``AutoModelForCausalLM.from_pretrained`` on a qwen3_5/qwen3_5_moe
+checkpoint SUCCEEDS with a text-only class
+(``Qwen3_5ForCausalLM``/``Qwen3_5MoeForCausalLM``) that skips
+``model.visual`` on load and absorbs ``pixel_values``/``image_grid_thw``
+through a bare ``**kwargs`` without reading them, so the try/except never
+fires and ``generate()`` either trains on silently-dropped images or raises
+late on an unused-kwargs ValueError. A media-declared load whose selected
+class still cannot consume pixels REFUSES (exit 96) naming the model type,
+rather than training blind. Gemma-4 is unaffected either way: both auto
+mappings already resolve it to the same ``ForConditionalGeneration`` class.
 prompt templating goes exclusively through ``tokenizer.apply_chat_template``
 -- a tokenizer without a chat template is REFUSED, because silently
 concatenating strings would silently change the prompt distribution the
@@ -616,6 +629,304 @@ def _reference_plan(
     return "second_copy"
 
 
+def _load_causal_lm(model_id: str, *, needs_images: bool) -> Any:
+    """Load ``model_id`` under the auto class the corpus actually needs.
+
+    Module level (not a closure inside ``run()``) so the policy load and the
+    frozen reference load -- two call sites that must never drift -- share
+    ONE decision, and so this function is directly unit-testable the same
+    way ``_expand_video_samples``/``_reference_plan`` are, with no need to
+    drive a whole ``run()``.
+
+    Text-only corpora (``needs_images=False``) are untouched: the historical
+    try-``AutoModelForCausalLM``-except-try-``AutoModelForImageTextToText``
+    fallback, byte-identical to every run before this function existed.
+    That fallback is deliberately NOT reused for media-declared corpora --
+    doing so is the defect this closes. MEASURED on transformers 5.18.0:
+    ``AutoModelForCausalLM.from_pretrained`` on a qwen3_5/qwen3_5_moe
+    checkpoint (Qwen3.6-27B/35B-A3B) SUCCEEDS, handing back
+    ``Qwen3_5ForCausalLM``/``Qwen3_5MoeForCausalLM`` -- text-only classes
+    that skip ``model.visual`` on load and absorb
+    ``pixel_values``/``image_grid_thw``/``mm_token_type_ids`` through a bare
+    ``**kwargs`` without reading them -- so the try/except never raises and
+    the mismatch surfaces later, at the first ``generate()``, as "model_kwargs
+    are not used by the model", or worse: silent, pixel-free training under a
+    multimodal label.
+
+    A media-declared corpus instead asks ``train/loop.py``'s own
+    ``_media_capable_auto_class`` (imported, never duplicated -- the SFT
+    plane already fixed this exact defect, see
+    tests/train/test_model_auto_class_selection.py) which auto class to use,
+    BEFORE calling ``from_pretrained``, then proves the loaded instance can
+    actually consume pixels with ``_model_can_consume_pixels`` and REFUSES
+    (exit 96, naming the model type) rather than training blind if it
+    cannot. ``gemma4_unified`` is unaffected: both auto-mappings already
+    resolve it to the one ``Gemma4UnifiedForConditionalGeneration`` class.
+
+    Annotated Any: transformers 5.x wraps ``from_pretrained`` in a decorator
+    whose return type does not survive inference, so a caller's subsequent
+    ``.to(device)`` would resolve against the wrapper rather than the model
+    and report the device string as a bad `self`. The alternative -- a cast
+    to PreTrainedModel -- would assert a class neither branch promises.
+    """
+    if not needs_images:
+        from transformers import (  # noqa: PLC0415
+            AutoModelForCausalLM,
+            AutoModelForImageTextToText,
+        )
+
+        try:
+            loaded: Any = AutoModelForCausalLM.from_pretrained(model_id)
+        except Exception:
+            try:
+                loaded = AutoModelForImageTextToText.from_pretrained(model_id)
+            except Exception as exc:  # noqa: BLE001
+                _refuse_exit_96(
+                    f"model load failed for {model_id!r} under both auto classes: {exc}"
+                )
+        return loaded
+
+    # Media-declared: decide the class BEFORE from_pretrained, deterministically
+    # -- never via try/except-after-the-fact, which is exactly how the
+    # Qwen3_5 defect this closes went undetected (AutoModelForCausalLM's own
+    # from_pretrained call never raises on that family).
+    from transformers import AutoConfig  # noqa: PLC0415
+
+    from foundationscale.train.loop import (  # noqa: PLC0415
+        _family_config_mapping,
+        _media_capable_auto_class,
+        _model_can_consume_pixels,
+    )
+
+    try:
+        model_config = AutoConfig.from_pretrained(model_id)
+    except Exception as exc:  # noqa: BLE001
+        _refuse_exit_96(f"config load failed for {model_id!r}: {exc}")
+    auto_class, auto_class_name, verify_pixel_capability = _media_capable_auto_class(
+        model_config, media_declared=True
+    )
+    try:
+        loaded = auto_class.from_pretrained(model_id)
+    except Exception as exc:  # noqa: BLE001
+        _refuse_exit_96(f"model load failed for {model_id!r} under {auto_class_name}: {exc}")
+    if verify_pixel_capability and not _model_can_consume_pixels(loaded):
+        # Read through the SAME mapping _model_can_consume_pixels' own family
+        # resolution uses (handles both a real transformers config object and
+        # a plain-dict double identically) -- naming the model_type here must
+        # not invent a second, narrower reading of "config" than the check
+        # it is reporting on.
+        model_type = _family_config_mapping(loaded).get("model_type")
+        _refuse_exit_96(
+            f"model_id={model_id!r} carries images in this corpus "
+            f"(needs_images=True) and model_type={model_type!r} is registered "
+            f"under AutoModelForImageTextToText, but the loaded "
+            f"{auto_class_name} instance cannot consume pixels: its forward() "
+            "names no pixel_values parameter, or its family registry's "
+            "declared image tower does not resolve on the loaded module "
+            "tree. Training anyway would silently drop every image under a "
+            "multimodal label -- refusing rather than training blind"
+        )
+    return loaded
+
+
+# (flattened-patch value key, its per-image patch-count key). MEASURED
+# transformers 5.18.0 naming on Qwen2-VL/Qwen2.5-VL/Qwen3-VL-family
+# processors; a family without a matching pair (gemma-4's pixel_values is
+# already per-image, no *_grid_thw key at all) is untouched by this table.
+_FLATTENED_PATCH_PAIRS: tuple[tuple[str, str], ...] = (
+    ("pixel_values", "image_grid_thw"),
+    ("pixel_values_videos", "video_grid_thw"),
+)
+
+
+def _expand_modality_kwargs_for_group(
+    modality_kwargs: dict[str, torch.Tensor], *, group: int, kept_indices: torch.Tensor
+) -> dict[str, torch.Tensor]:
+    """Expand one row of modality tensors per PROMPT into one per KEPT, grouped row.
+
+    MEASURED (GRPO+images, Qwen3.6-27B/35B-A3B): not every per-image key has
+    one row per prompt. gemma-4's ``pixel_values`` does -- shape
+    ``(n_images, ...)``, one image per row -- so repeating rows ``group``
+    times and narrowing to ``kept_indices`` (both indexed in the SAME
+    group-expanded row space ``group_policy``/``generate()`` use) is exactly
+    right, and is what this function still does for every key with no
+    flattened-patch pairing below.
+
+    Qwen2-VL/Qwen2.5-VL/Qwen3-VL's own ``pixel_values``, though, is
+    FLATTENED PATCHES across the whole encoded chunk: shape
+    ``(sum_i patches_i, patch_dim)``, with ``image_grid_thw`` (shape
+    ``(n_images, 3)``, each row ``(t, h, w)``) giving each image's own
+    ``patches_i = t*h*w`` contiguous block length. Row-wise
+    ``repeat_interleave``/``index_select`` on that tensor slices by RAW
+    PATCH position, not by image -- MEASURED, confirmed by printing shapes
+    at this exact call site before this fix existed: two images with patch
+    counts ``[320, 288]`` (608 total rows) and ``kept_indices=[0, 1]`` (both
+    group-expanded rows mapping to prompt 0) produced a 2-row
+    ``pixel_values`` (two individual duplicated PATCHES, not prompt 0's 320)
+    against an ``image_grid_thw`` still correctly claiming 2 images of 320
+    patches each (640) -- exactly the
+    ``RuntimeError: size of tensor a (2) must match b (640)`` the vision
+    tower's position-embedding add raised.
+
+    The fix: for a (value, count) pair whose value width equals the count
+    tensor's ``prod(-1).sum()`` -- i.e. is genuinely flattened patches, not
+    coincidentally already per-row -- the ORIGINAL per-image block
+    boundaries are read off ``image_grid_thw`` (cumulative ``prod(-1)``), and
+    each KEPT, group-expanded row's own image block (``kept_indices //
+    group`` recovers the original image index: ONE image per prompt is this
+    plane's only declared shape, the same arithmetic ``group_ids`` already
+    uses) is concatenated in order -- never repeated/selected by raw patch
+    position. ``image_grid_thw`` itself is expanded the same row-wise way
+    every other per-image key is (its own width IS one row per image), so
+    the two stay in lockstep by construction, not by coincidence.
+
+    WHAT IS NOT CLAIMED: more than one image per prompt. A future corpus
+    declaring that would need ``kept_indices // group`` replaced with a real
+    per-prompt image-count mapping; this function has no such input and
+    would mis-divide silently, which is why the shape-equality test above is
+    the ONLY detector -- a family whose flattened-patch total does not match
+    is left on the per-row path rather than guessed into this one.
+    """
+    import torch  # function-local: see module docstring
+
+    flattened_keys: set[str] = set()
+    expanded: dict[str, torch.Tensor] = {}
+    source_images = torch.div(kept_indices, group, rounding_mode="floor")
+
+    for value_key, count_key in _FLATTENED_PATCH_PAIRS:
+        value = modality_kwargs.get(value_key)
+        counts = modality_kwargs.get(count_key)
+        if value is None or counts is None:
+            continue
+        patch_counts = counts.prod(dim=-1).to(torch.long)
+        if int(value.shape[0]) != int(patch_counts.sum().item()):
+            # Not actually flattened patches on this family/build (e.g.
+            # already per-row) -- left for the generic path below rather
+            # than block-expanded on a guess.
+            continue
+        offsets = torch.cumsum(torch.cat([patch_counts.new_zeros(1), patch_counts]), dim=0)
+        blocks = [value[offsets[i] : offsets[i + 1]] for i in source_images.tolist()]
+        expanded[value_key] = (
+            torch.cat(blocks, dim=0) if blocks else value.new_zeros((0, *value.shape[1:]))
+        )
+        expanded[count_key] = counts.index_select(0, source_images)
+        flattened_keys.add(value_key)
+        flattened_keys.add(count_key)
+
+    for key, value in modality_kwargs.items():
+        if key in flattened_keys:
+            continue
+        expanded[key] = value.repeat_interleave(group, dim=0).index_select(0, kept_indices)
+
+    return expanded
+
+
+def _narrow_modality_kwargs_by_row(
+    modality_kwargs: dict[str, torch.Tensor], *, start: int, end: int
+) -> dict[str, torch.Tensor]:
+    """Row-range-narrow modality tensors, treating flattened-patch keys as BLOCKS.
+
+    MEASURED (GRPO+images, Qwen3.6-27B/35B-A3B, ``logprob_micro_batch``
+    slicing): after :func:`_expand_modality_kwargs_for_group`,
+    ``image_grid_thw``/``video_grid_thw`` has exactly ONE row per kept
+    training row -- ``forward_logprob_slice``'s plain
+    ``value.narrow(0, start, end - start)`` is already correct for it, the
+    same as ``input_ids``/``attention``. Its paired flattened-patch value
+    (``pixel_values``/``pixel_values_videos``) is still the concatenation of
+    each row's own patch BLOCK in row order; row-wise narrowing it the same
+    way truncates to the first ``end - start`` raw PATCHES, not the patches
+    belonging to rows ``[start, end)``. MEASURED on GPU: a 1-row logprob
+    slice over a 320-patch image produced a 1-patch ``hidden_states`` against
+    a 320-patch ``pos_embeds`` inside the vision tower's position-embedding
+    add (``RuntimeError: size of tensor a (1) must match b (320)``; a 2-row
+    slice gave ``(2)`` vs ``(640)``) -- the SAME flattened-vs-per-row
+    confusion :func:`_expand_modality_kwargs_for_group` closes for the
+    group-expansion step, recurring here at the micro-batch-slicing step.
+
+    The fix: for a (value, count) pair whose value width equals the count
+    tensor's ``prod(-1).sum()``, the per-row block boundaries are read off
+    the count tensor (cumulative ``prod(-1)``, already in row order by
+    construction) and the SINGLE contiguous span covering rows
+    ``[start, end)`` is sliced out -- no gather needed, unlike the
+    group-expansion step, because the blocks are already laid out in that
+    exact order.
+    """
+    import torch  # function-local: see module docstring
+
+    narrowed: dict[str, torch.Tensor] = {}
+    patch_keys: set[str] = set()
+
+    for value_key, count_key in _FLATTENED_PATCH_PAIRS:
+        value = modality_kwargs.get(value_key)
+        counts = modality_kwargs.get(count_key)
+        if value is None or counts is None:
+            continue
+        patch_counts = counts.prod(dim=-1).to(torch.long)
+        if int(value.shape[0]) != int(patch_counts.sum().item()):
+            continue
+        offsets = torch.cumsum(torch.cat([patch_counts.new_zeros(1), patch_counts]), dim=0)
+        narrowed[value_key] = value[int(offsets[start].item()) : int(offsets[end].item())]
+        patch_keys.add(value_key)
+
+    for key, value in modality_kwargs.items():
+        if key in patch_keys:
+            continue
+        narrowed[key] = value.narrow(0, start, end - start)
+
+    return narrowed
+
+
+def _align_modality_keys_to_scored_width(
+    modality_kwargs: dict[str, torch.Tensor], *, prompt_width: int, sequence_width: int
+) -> dict[str, torch.Tensor]:
+    """Extend per-token modality tensors from prompt width to the scored width.
+
+    MEASURED (GRPO+images, Qwen3.6-27B/35B-A3B): every key ``_one_step`` pulls
+    out of ``prompt_ids`` comes from the SAME processor call as
+    ``prompt_ids["input_ids"]`` and so is produced at PROMPT width -- but not
+    all of those keys are per-TOKEN. ``pixel_values``/``image_grid_thw`` are
+    per-IMAGE: their non-batch dims (patch features, ``(t, h, w)``) have
+    nothing to do with sequence length and must pass through unchanged.
+    ``mm_token_type_ids`` (Qwen3VL) and ``image_position_ids`` (gemma-4) ARE
+    per-token: shape ``(rows, prompt_width)``, one entry per prompt token.
+    The scorer forward, though, runs over ``kept_sequences`` -- prompt_width
+    + max_new_tokens columns, since #371 scores the GENERATED completion
+    too -- while this dict was only ever repeat_interleaved/index_selected
+    along the ROW axis, never extended along the sequence axis. Qwen3.5's own
+    ``get_rope_index`` then indexes a full-width attention_mask against a
+    prompt-width ``mm_token_type_ids`` and raises: MEASURED, mask shape
+    ``[927]`` vs tensor shape ``[527]`` on one rank and ``[787]`` vs ``[387]``
+    on another, same step -- both exactly that rank's prompt_width plus the
+    400-token completion, confirmed by printing the shapes at the call site
+    before this fix existed.
+
+    A per-token key is told apart from a per-image key by shape alone --
+    there is no family-registry lookup available this deep in the generic
+    scoring path -- and this holds for both measured per-token keys above
+    because they share ``prompt_ids["input_ids"]``'s exact width by
+    construction. The completion columns are always actually-generated TEXT
+    (never a second image), so they are padded with 0 -- plain text's own
+    value in Qwen3VL's token-type convention. gemma-4 was never observed to
+    crash on this (its rope path does not index by ``image_position_ids`` the
+    way qwen3_5's does), so this is behaviourally a no-op for it either way;
+    the pad only removes a silently-truncated tensor that some OTHER reader
+    could trip on later.
+    """
+    import torch  # function-local: see module docstring
+
+    if sequence_width <= prompt_width:
+        return modality_kwargs
+    pad_width = sequence_width - prompt_width
+    aligned: dict[str, Any] = {}
+    for key, value in modality_kwargs.items():
+        if value.dim() >= 2 and value.shape[1] == prompt_width:
+            pad = value.new_zeros((value.shape[0], pad_width, *value.shape[2:]))
+            aligned[key] = torch.cat([value, pad], dim=1)
+        else:
+            aligned[key] = value
+    return aligned
+
+
 @contextmanager
 def _generation_mode(model: Any) -> Iterator[Any]:
     """Put ``model`` into the state ``generate()`` needs, and restore it after.
@@ -1153,10 +1464,7 @@ class RLTrainer:
                 "needs it and no pure-python fall-back exists for weight updates"
             )
         try:
-            from transformers import (
-                AutoModelForCausalLM,
-                AutoModelForImageTextToText,
-            )
+            import transformers  # noqa: F401 -- probe only; _load_causal_lm imports its own names
         except ImportError:
             _refuse_exit_96(
                 "1 of 2 required dependencies absent: transformers; models are "
@@ -1218,27 +1526,7 @@ class RLTrainer:
         except Exception as exc:  # noqa: BLE001 -- load surface failure is a refusal
             _refuse_exit_96(f"tokenizer load failed for {self.config.model!r}: {exc}")
 
-        def _load_causal_lm(model_id: str) -> Any:
-            # Annotated Any: transformers 5.x wraps ``from_pretrained`` in a
-            # decorator whose return type does not survive inference, so the
-            # subsequent ``.to(device)`` resolves against the wrapper rather
-            # than the model and reports the device string as a bad `self`.
-            # The alternative -- a cast to PreTrainedModel -- would assert a
-            # class the auto-loader does not promise across both branches.
-            # Shared by the policy and the frozen reference copy: two inline
-            # copies of this try/except would be two chances for them to drift.
-            try:
-                loaded: Any = AutoModelForCausalLM.from_pretrained(model_id)
-            except Exception:
-                try:
-                    loaded = AutoModelForImageTextToText.from_pretrained(model_id)
-                except Exception as exc:  # noqa: BLE001
-                    _refuse_exit_96(
-                        f"model load failed for {model_id!r} under both auto classes: {exc}"
-                    )
-            return loaded
-
-        model = _load_causal_lm(self.config.model)
+        model = _load_causal_lm(self.config.model, needs_images=needs_images)
         # adapter_notes is a dict a manifest-keeping caller could consume;
         # this loop has no manifest of its own (unlike train/loop.py's SFT
         # plane) -- _apply_lora_adapter already PRINTS the same facts to
@@ -1361,7 +1649,9 @@ class RLTrainer:
                 # declaring a non-zero kl_weight (or an operator forcing
                 # reference_policy=True) pays this memory; _resolve_objective
                 # already refused the needs-one-but-forbidden combination.
-                ref_model = _load_causal_lm(self.config.reference_model or self.config.model)
+                ref_model = _load_causal_lm(
+                    self.config.reference_model or self.config.model, needs_images=needs_images
+                )
                 if self.config.sharding == "fsdp":
                     # Sharded too: a frozen full-size replica on each rank
                     # would rescale memory exactly the way fsdp exists to
@@ -1733,15 +2023,31 @@ class RLTrainer:
             if key not in _TEXT_KEYS and hasattr(value, "index_select")
         }
         if modality_kwargs:
-            # generate() expanded each prompt into group_size rows; the modality
-            # tensors are still one row per PROMPT, so they are repeated to
-            # match and then narrowed to the kept rows, in that order. Doing it
-            # the other way round selects against the wrong axis silently.
+            # generate() expanded each prompt into group_size rows; most
+            # modality tensors are still one row per PROMPT, so they are
+            # repeated to match and then narrowed to the kept rows, in that
+            # order -- doing it the other way round selects against the wrong
+            # axis silently. A flattened-patch key (Qwen-VL family
+            # pixel_values) is NOT one row per prompt, though -- see
+            # _expand_modality_kwargs_for_group's docstring for the measured
+            # defect this avoids.
             group = self.config.group_size
-            modality_kwargs = {
-                key: value.repeat_interleave(group, dim=0).index_select(0, kept_indices)
-                for key, value in modality_kwargs.items()
-            }
+            modality_kwargs = _expand_modality_kwargs_for_group(
+                modality_kwargs, group=group, kept_indices=kept_indices
+            )
+            # MEASURED: per-TOKEN keys (mm_token_type_ids,
+            # image_position_ids) are still PROMPT width here; the scorer
+            # below is called over kept_sequences, prompt_width +
+            # max_new_tokens wide. Extending them keeps every per-token
+            # modality tensor the same width the model actually scores --
+            # per-IMAGE keys (pixel_values, image_grid_thw) are untouched by
+            # this call, see its docstring for the shape test that tells them
+            # apart.
+            modality_kwargs = _align_modality_keys_to_scored_width(
+                modality_kwargs,
+                prompt_width=prompt_width,
+                sequence_width=kept_sequences.shape[1],
+            )
             print(
                 "[trainer] forwarding modality keys to the scorer: "
                 + ", ".join(sorted(modality_kwargs)),
@@ -1848,13 +2154,16 @@ class RLTrainer:
         ) -> torch.Tensor:
             # Every tensor with a per-row leading dimension follows the same
             # half-open row range: the generated ids, their full-width
-            # attention mask, the shifted targets and every modality tensor.
-            # ``narrow`` names dimension 0 explicitly; silently slicing a
-            # modality's feature axis would score a different condition.
+            # attention mask, the shifted targets and every per-row modality
+            # tensor. A flattened-patch modality tensor (Qwen-VL family
+            # pixel_values) is NOT per-row, though -- see
+            # _narrow_modality_kwargs_by_row's docstring for the measured
+            # defect this avoids (a micro-batch slice truncating raw patches
+            # instead of selecting the sliced rows' own patch blocks).
             width = end - start
-            sliced_modalities = {
-                key: value.narrow(0, start, width) for key, value in modality_kwargs.items()
-            }
+            sliced_modalities = _narrow_modality_kwargs_by_row(
+                modality_kwargs, start=start, end=end
+            )
             # The scorer defaults to the policy; the frozen reference is the
             # only other caller, and every per-row tensor still follows the
             # same half-open row range.
