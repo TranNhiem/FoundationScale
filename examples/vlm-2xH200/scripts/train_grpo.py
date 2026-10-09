@@ -15,9 +15,9 @@ Launch line (exactly as validated):
 Concretely, e.g.:
 
     torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29500 \
-        train_grpo.py --model /workspace/fs-vlm/models/gemma-4-12B-it \
-                      --data /workspace/fs-vlm/data/rl_scienceqa/scienceqa_train.jsonl \
-                      --output-dir /workspace/fs-vlm/runs/grpo_lora_proof_v2
+        train_grpo.py --model models/gemma-4-12B-it \
+                      --data data/rl_scienceqa/scienceqa_train.jsonl \
+                      --output-dir runs/grpo
 
 Why --master_addr 127.0.0.1: on the competition VM `localhost` is IPv6-only
 (::1), so the torch rendezvous on `localhost` fails to bind/connect; 127.0.0.1
