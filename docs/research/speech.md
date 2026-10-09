@@ -308,6 +308,9 @@ Status (2026-10-08): **P8 DONE** (`validation_campaigns/speech_p8`): leak-free o
 from 19.4% to 11.3% WER (-8.05, 95% CI [-8.66, -7.42]); AMI drops from 16.9% to 13.6%. A first round
 trained on mismatched audio (a clip-naming collision) and was retracted. New:
 `speech.runaway_hypotheses` gate and refusal of repeated audio paths.
+Reporting default (2026-10-09): `validation_campaigns/speech_eval/compare.py` reports both checkpoints
+from the eval files' own records, the paired-bootstrap CI (`speech_metrics.paired_bootstrap`) and
+the runaway verdict for any base/fine-tune pair.
 
 ### P4, more families and Lane B
 
