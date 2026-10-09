@@ -9,6 +9,8 @@ statistic computed over nothing raises with the file and value named.
 
 from __future__ import annotations
 
+from foundationscale.vla.chunking import ChunkError, ChunkSpec, valid_anchor_indices
+from foundationscale.vla.frames import FrameDecodeError, decode_frames
 from foundationscale.vla.lerobot import (
     SUPPORTED_CODEBASE_VERSIONS,
     EpisodeMeta,
@@ -33,8 +35,18 @@ from foundationscale.vla.norm import (
     stats_from_json,
     stats_to_json,
 )
+from foundationscale.vla.sample import Normalizer, SampleError, VlaSample, build_sample
 
 __all__ = [
+    "ChunkError",
+    "ChunkSpec",
+    "FrameDecodeError",
+    "Normalizer",
+    "SampleError",
+    "VlaSample",
+    "build_sample",
+    "decode_frames",
+    "valid_anchor_indices",
     "DEGENERATE_STD",
     "STAT_NAMES",
     "SUPPORTED_CODEBASE_VERSIONS",
