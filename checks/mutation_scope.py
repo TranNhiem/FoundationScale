@@ -82,6 +82,14 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/upstream/vla_models.py": (
+        "VLA model registry (GR00T, openpi SUPPORTED on reproduced LIBERO results) and the "
+        "binomial tolerance rule: line-covered by tests/upstream, no mutation row yet."
+    ),
+    "src/foundationscale/vla/eval/__main__.py": (
+        "Level 3 VLA entry point: published-protocol table, server lifecycle, report payload, exit "
+        "codes 0/95/96: line-covered by tests/vla, no mutation row yet."
+    ),
     "src/foundationscale/vla/adapters/gr00t/libero.py": (
         "GR00T LIBERO policy adapter (observation batching, float32 state, normalize-then-invert "
         "gripper): pinned against stand-in upstream modules and run on GB200, no mutation row yet."

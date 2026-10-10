@@ -26,6 +26,8 @@ __all__ = ["DecodeStep", "Verdict", "judge", "level3_plan"]
 _TASK_MANIFESTS = {
     "librispeech_test_clean": "librispeech_test_clean.jsonl",
     "librispeech_test_other": "librispeech_test_other.jsonl",
+    # VLA: the "manifest" is the LIBERO suite the FS harness (foundationscale.vla.eval) rolls out.
+    "libero_spatial": "libero_spatial",
 }
 
 
@@ -33,7 +35,7 @@ _TASK_MANIFESTS = {
 class DecodeStep:
     model_id: str
     upstream_ref: str  # HF repo id or NeMo pretrained name (HF steps resolve it to local weights)
-    backend: str  # "hf" | "nemo": which container runs the step
+    backend: str  # "hf" | "nemo" | "gr00t" | "openpi": which environment runs the step
     entry_point: str  # python -m module (nemo) or campaign script path (hf)
     args: tuple[str, ...]  # with {model}, {manifest}, {out} placeholders for the runner
     manifest: str
@@ -70,6 +72,22 @@ def _entry_point(entry: ModelEntry) -> tuple[str, tuple[str, ...]]:
                 "--processor",
                 "{model}",
                 "--manifest",
+                "{manifest}",
+                "--out",
+                "{out}",
+            ),
+        )
+    if entry.kind is ModelKind.VLA and entry.backend in (Backend.GR00T, Backend.OPENPI):
+        # The FS-owned LIBERO harness drives the backend's own policy server; it rolls out the
+        # upstream's published protocol for this backend and reports the success rate in points.
+        return (
+            "foundationscale.vla.eval",
+            (
+                "--backend",
+                entry.backend.value,
+                "--model",
+                "{model}",
+                "--suite",
                 "{manifest}",
                 "--out",
                 "{out}",
@@ -135,5 +153,9 @@ class Verdict:
 
 
 def judge(step: DecodeStep, measured_wer_whisper_normalizer: float) -> Verdict:
-    """The Level 3 verdict for one step, from its WER under the card's normalizer (in points)."""
+    """The Level 3 verdict for one step, from its metric in the card's units (in points).
+
+    For speech steps that is WER under the card's normalizer; for VLA steps it is the success
+    rate in percentage points that ``foundationscale.vla.eval`` writes to its report.
+    """
     return Verdict(step.model_id, measured_wer_whisper_normalizer, step.card_value, step.tolerance)

@@ -78,6 +78,7 @@ Seven git trees exist under the project folder besides `fs-repo`. Four had uncom
 | `train/loop.py` video/conversation seam (`_fold_video_split` call site, `train_conversation_collator_or_refuse` `frames_for` wiring) | VLA lane (Mac, branch `vla`) | Phase −1: merge of `video-frames` + `vlm-competition`, then one frame decoder for both arms | RELEASED 2026-10-10: main's native conversation video (video.frames_for_row) adopted; VLA lane no longer edits this seam |
 | `rl/trainer.py::RLTrainConfig` (`rollout_source` + `video_*` fields) | VLA lane | merge union only, no behaviour change | RELEASED 2026-10-10: main's version adopted |
 | `families/registry.py::KNOWN_MODALITIES` + new Qwen3-VL family entry, `models/adapters.py` VLA dialect rows | VLA lane | Phase −1 extension-points commit (one commit) | claimed 2026-10-09 |
+| `upstream/models.py` (`Backend.GR00T`/`OPENPI`, `ModelKind.VLA` members only) + `upstream/levels.py` (one VLA `_entry_point` branch, `libero_spatial` task key) | VLA lane | additive; the speech `MODELS` table and its tests untouched; VLA entries live in `upstream/vla_models.py` | claimed 2026-10-10 |
 | `provenance/manifest.py` (`weights_license`, `weight_set` fields) | VLA lane | Phase 1, additive fields only | claimed 2026-10-09, not started |
 | `README.md`, `docs/ARCHITECTURE.md`, `docs/review/D*.md` countables | VLA lane | restatement via the census only | claimed 2026-10-09 (census restatement only) |
 
