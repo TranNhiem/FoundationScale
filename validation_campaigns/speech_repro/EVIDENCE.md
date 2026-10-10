@@ -49,6 +49,13 @@ profiles the per-step loss differs by at most 0.007, already at step 1 (0.2597 v
 any update), so this is a deterministic change in transformers' forward numerics, not
 nondeterminism. It is small and decode still reproduces the card, so it is accepted and recorded.
 
+Whisper-large-v3 under both profiles (2026-10-11, `artifacts/speech/whisper_ab`): the P4 recipe
+(500 steps, 1 GPU x batch 8, lr 1e-5, seed 0, `FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE=en`), each
+checkpoint scored by `speech_p4/eval_wer.py` on full dev-clean (2,683 rows). Both read 2.25 -> 1.69,
+with a paired difference of +0.00 [-0.02, +0.02]; losses agree to three decimals (0.343 at step
+10, 0.042 at step 250). A Whisper regression reported from a transformers 5.18 / torch 2.13 /
+peft 0.21.2 VM (2.25 -> 3.34) is therefore not caused by transformers alone.
+
 Reproduced on both splits, so the registry entry `qwen3-asr-1.7b` is `supported`. It is
 decode-only, with no FamilySpec. Training support waits for the HF lane to move to a transformers
 version that carries the class.

@@ -224,6 +224,27 @@ def _cmd_hash(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_export_skills(args: argparse.Namespace) -> int:
+    """`fskills export-skills` -- generate (or verify) the Agent Skills export tree."""
+    from foundationskills.agent import export_skills as es_
+
+    try:
+        repo_root, plugin_root = es_._roots()
+        if getattr(args, "check", False):
+            problems = es_.check_tree(repo_root, plugin_root)
+            if problems:
+                print(json.dumps({"status": "RED", "problems": problems}))
+                return 5
+            print(json.dumps({"status": "PASS"}))
+            return 0
+        written = es_.write_tree(repo_root, plugin_root)
+        print(json.dumps({"status": "PASS", "written": written}))
+        return 0
+    except es_.ExportRefused as exc:
+        print(json.dumps({"status": "REFUSED", "reason": str(exc)}))
+        return 96
+
+
 def _cmd_routing_eval(args: argparse.Namespace) -> int:
     from foundationskills.agent import routing_eval as re_
     from foundationskills.skills.data_engine.llm_backend import LLMOpError, make_backend
@@ -598,6 +619,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_discover.add_argument("--stage", required=True)
     p_discover.add_argument("--domain", default=None)
     p_discover.set_defaults(func=_cmd_datasets)
+
+    p = sub.add_parser("export-skills", help="generate the spec-compliant skill export tree + plugin manifests")
+    p.add_argument("--check", action="store_true",
+                   help="do not write: report the drift of the export tree (exit 5 on drift)")
+    p.set_defaults(func=_cmd_export_skills)
 
     return parser
 

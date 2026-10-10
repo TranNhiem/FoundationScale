@@ -63,6 +63,8 @@ __all__ = (
     "build_arg_parser",
     "collate_mock_batch",
     "group_relative_advantages",
+    "lane_hparams",
+    "lane_objective_context",
     "load_mock_rollouts",
     "main",
     "needs_reference",
@@ -695,6 +697,53 @@ class MegatronRLTrainer:
         return {**token_scale, "param_hash": param_hash(self.model)}
 
 
+def lane_hparams(args: argparse.Namespace, optimizer: Any) -> dict[str, Any]:
+    """The objective hyperparameters in force, read live: what ``hparam_drift`` compares.
+
+    The learning rate comes from the optimizer's own param group, not ``args``: the
+    lane builds no scheduler, so a rate that moved is a defect the save gate should
+    see, and re-reading the flag would compare the run's configuration with itself.
+    """
+    return {
+        "algorithm": args.algorithm,
+        "learning_rate": float(optimizer.param_groups[0]["lr"]),
+        "gbs": args.gbs,
+        "mbs": args.mbs,
+        "seq_len": args.seq_len,
+        "group_size": args.group_size,
+        "prompts_per_step": args.prompts_per_step,
+        "max_new_tokens": args.max_new_tokens,
+        "temperature": args.temperature,
+    }
+
+
+def lane_objective_context(
+    step0_hparams: Any, step0_fingerprint: str, current_hparams: dict[str, Any]
+) -> Any:
+    """The save-time objective context: the step-0 hyperparameter record and the live one.
+
+    Only ``objective.hparam_drift`` reads it on SAVE. The loss is a placeholder with an
+    unobserved component and a NaN scalar, the shape the SFT loop uses: the save is not
+    a step, and a plausible number here would pass for a measurement.
+    """
+    from foundationscale.rl.interfaces import (
+        LossComponent,
+        LossOutput,
+        build_objective_gate_context,
+    )
+
+    placeholder = LossComponent(name="policy_loss", weight=1.0, observed=False, contribution=None)
+    return build_objective_gate_context(
+        LossOutput(loss=float("nan"), components=(placeholder,)),
+        objective=None,
+        declared_components=("policy_loss",),
+        current_hparams=current_hparams,
+        step0_fingerprint=step0_fingerprint,
+        step0_hparams=step0_hparams,
+        origin="<megatron-lane>",
+    )
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="foundationscale.rl.megatron.driver")
     ap.add_argument("--hf-model", required=True, help="HF model dir inside the Bridge container")
@@ -822,10 +871,12 @@ def _run_online(
     the broadcast rows, so no rank can diverge into a collective the others skip).
     """
     import time
+    from types import MappingProxyType
 
     import torch
     import torch.distributed as dist
 
+    from foundationscale.gates.objective_gates import fingerprint_hparams
     from foundationscale.rl.corpus import load_sharegpt
     from foundationscale.rl.megatron import online
     from foundationscale.rl.megatron.normalization import compute_denominators
@@ -923,6 +974,11 @@ def _run_online(
             print(f"HELDOUT_{tag.upper()} {json.dumps(result)}", flush=True)
 
         defaults_parser = build_arg_parser()
+        # The STEP-0 RECORD, taken once and frozen: hparam_drift compares every save's
+        # live values against it. Re-deriving it at save time would compare the run
+        # with itself and the gate would pass vacuously.
+        step0_hparams = MappingProxyType(lane_hparams(args, trainer.optimizer))
+        step0_fingerprint = fingerprint_hparams(step0_hparams)
 
         def _save(tag: str, step: int, unwritten: int) -> None:
             # Called on EVERY rank right after a refit, so the writer's HF copy IS
@@ -956,6 +1012,9 @@ def _run_online(
                 ),
                 config=vars(args),
                 defaults={k: defaults_parser.get_default(k) for k in vars(args)},
+                objective=lane_objective_context(
+                    step0_hparams, step0_fingerprint, lane_hparams(args, trainer.optimizer)
+                ),
             )
 
         # Resume AFTER the reference snapshot above: the frozen reference must stay the

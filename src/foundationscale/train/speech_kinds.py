@@ -115,6 +115,7 @@ _SPEECH_KIND_BY_MODEL_TYPE: Mapping[str, str] = {
     "hubert": "ctc",
     "gemma4": "audio_llm",
     "qwen2_audio": "audio_llm",
+    "qwen3_asr": "audio_llm",
 }
 
 # Geometry -> the transformers Auto class whose from_pretrained carries it. The
@@ -798,6 +799,35 @@ def speech_plane_refusal(kind: str | None, family: Any, processor: Any) -> str |
     return speech_support_refusal(kind, processor)
 
 
+def speech_tower_resolution_refusal(family: Any, model: Any) -> str | None:
+    """Refuse (96) before a step when a declared audio tower is absent from the loaded model.
+
+    FamilySpec paths are exact module paths, and transformers moves them between releases:
+    Qwen2-Audio's ``audio_tower`` (5.5) is ``model.audio_tower`` in 5.18 and 5.19. An
+    unresolved tower used to surface only after training, as a VACUOUS tower-movement gate;
+    naming it here costs nothing and spends no GPU time on a run that cannot pass.
+    """
+    from foundationscale.families.towers import resolve_module_path  # noqa: PLC0415
+
+    towers = getattr(family, "towers", None) or ()
+    missing = [
+        path
+        for path, modality in towers
+        if modality == "audio" and resolve_module_path(model, path) is None
+    ]
+    if not missing:
+        return None
+    children = getattr(model, "named_children", None)
+    top = sorted(name for name, _ in children()) if callable(children) else []
+    return (
+        f"family {getattr(family, 'name', None)!r} declares audio tower(s) {missing} that do "
+        f"not resolve on the loaded model (its top-level modules: {top}). The module layout "
+        "differs from the one the FamilySpec was measured on -- usually a transformers "
+        "version that nests the model differently. Re-measure the module paths for this "
+        "transformers version and update FamilySpec.towers. Refusing (96) before training"
+    )
+
+
 def build_speech_collator(
     kind: str,
     surface: Any,
@@ -809,16 +839,28 @@ def build_speech_collator(
 ) -> Any:
     """The train collator for ``kind``, built from the loaded model's own config.
 
-    audio_llm reuses the chat-template collator in train/audio.py unchanged. seq2seq
-    caps label length at the decoder's ``max_target_positions`` when the config has
+    audio_llm reuses the collators in train/audio.py: the request-API transcription
+    collator for processors exposing ``apply_transcription_request`` (Qwen3-ASR), the
+    chat-template collator otherwise. seq2seq caps label length at the decoder's
+    ``max_target_positions`` when the config has
     one (Whisper: 448), because a longer label would overrun the decoder's position
     table; ctc pads labels with the config's ``pad_token_id`` (its blank, see
     :func:`train_ctc_collator_or_refuse`).
     """
-    from foundationscale.train.audio import train_audio_collator_or_refuse  # noqa: PLC0415
+    from foundationscale.train.audio import (  # noqa: PLC0415
+        train_audio_collator_or_refuse,
+        train_transcription_collator_or_refuse,
+    )
 
     processor = surface.surface
     if kind == "audio_llm":
+        if callable(getattr(processor, "apply_transcription_request", None)):
+            return train_transcription_collator_or_refuse(
+                surface,
+                audio_column=audio_column,
+                max_length=max_length,
+                language=language,
+            )
         return train_audio_collator_or_refuse(
             surface, audio_column=audio_column, max_length=max_length
         )

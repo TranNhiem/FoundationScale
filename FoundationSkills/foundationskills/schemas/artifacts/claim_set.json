@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "required": ["verdict", "claims"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "UNMEASURED"]
+    },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "claim", "status"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["MEASURED", "UNMEASURED"]
+          },
+          "evidence": {
+            "type": ["string", "null"]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,156 @@
+[
+  {
+    "id": "fskills-probe-first-positive-001",
+    "question": "We wrote the plan before probing. Check plan drafts/plans/q27.json against the probe JSON at artifacts/probe.json and tell me if it stands.",
+    "expected_skill": "fskills-probe-first",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the probe-first skill and gates the plan draft on the measured probe JSON: it requires a probe JSON and REFUSES (exit 96) naming PF-IN-001 when that probe was skipped, otherwise emits probe_report.<id>.json with provenance and reports exit codes 0/5/95/96.",
+    "expected_behavior": [
+      "The agent read probe_first/SKILL.md before acting",
+      "The agent required a probe JSON and refused with PF-IN-001 when it was absent",
+      "The agent wrote probe_report with provenance",
+      "The agent reported exit codes 0/5/95/96"
+    ]
+  },
+  {
+    "id": "fskills-probe-first-positive-002",
+    "question": "The plan assumes parallel.axis.pp; the probe says that axis is unmeasured. What happens?",
+    "expected_skill": "fskills-probe-first",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the probe-first skill and explains PF-IN-002 (a missing/unmeasured capability claimed as available/PASS): the check returns a 'missing: …' reason on the measured probe while the plan lists it as PASS, so the run is REFUSED with exit 96 and nothing is written.",
+    "expected_behavior": [
+      "The agent read probe_first/SKILL.md before acting",
+      "The agent cited PF-IN-002 (a missing/unmeasured capability claimed as available/PASS)",
+      "The agent stated the outcome is REFUSED with exit 96",
+      "The agent said absence of evidence is never PASS (UNMEASURED is never treated as PASS)"
+    ]
+  },
+  {
+    "id": "fskills-probe-first-positive-003",
+    "question": "Our probe run was shallow (not --deep) but every capability the plan needs came out measured. Verdict?",
+    "expected_skill": "fskills-probe-first",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the probe-first skill and explains PF-HO-001 (WARN): a partial/unmeasured probe (errors recorded, FS unavailable, or a needed parallel axis unmeasured) means the vetted report cannot PASS, so the verdict is UNMEASURED exit 95 - never PASS.",
+    "expected_behavior": [
+      "The agent read probe_first/SKILL.md before acting",
+      "The agent cited PF-HO-001 (WARN) for a vetted report that cannot PASS",
+      "The agent said the result is UNMEASURED (95), never PASS, and that PASS needs measured evidence for every check"
+    ]
+  },
+  {
+    "id": "fskills-probe-first-positive-004",
+    "question": "I gave you the plan draft at drafts/plans/q31.json and the probe JSON, but the draft has no checks block and I didn't pass any checks argument. What does the gate do, and how do I fix the draft?",
+    "expected_skill": "fskills-probe-first",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the probe-first skill and cites PF-IN-003: when the plan names no checks and the checks input is absent, the run REFUSES with exit 96 and nothing is written, and the fix is to name the checks the plan actually needs.",
+    "expected_behavior": [
+      "The agent read probe_first/SKILL.md before acting",
+      "The agent cited PF-IN-003 for the case where no requested checks are named anywhere",
+      "The agent stated the outcome is REFUSED with exit 96 and no artifact is written",
+      "The agent told the user to add the needed checks to the plan or pass the checks input"
+    ]
+  },
+  {
+    "id": "fskills-probe-first-positive-005",
+    "question": "After you wrote artifacts/probe_report.q27.json, someone tweaked it on disk and the sha256 no longer matches what you computed. What status does that plan carry into handoff?",
+    "expected_skill": "fskills-probe-first",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the probe-first skill and cites PF-HO-002: a probe_report artifact that is missing or altered (sha256 mismatch) at handoff makes the result RED with exit 5, never PASS, and the skill must be re-run before the plan is handed on.",
+    "expected_behavior": [
+      "The agent read probe_first/SKILL.md before acting",
+      "The agent cited PF-HO-002 for a missing or altered probe_report artifact at handoff",
+      "The agent said the result is RED with exit 5, not PASS and not UNMEASURED",
+      "The agent said to re-run the skill before handing the plan on downstream"
+    ]
+  },
+  {
+    "id": "fskills-probe-first-positive-006",
+    "question": "The probe output we got back from the estate has \"available\": false and a non-empty errors list. Vet it against drafts/plans/q33.json and give me the exact exit code you'd return.",
+    "expected_skill": "fskills-probe-first",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the probe-first skill and explains PF-HO-001: a present-but-unusable probe (available false, errors non-empty) still yields an emitted probe_report, but that report cannot PASS, so the verdict is UNMEASURED with exit 95.",
+    "expected_behavior": [
+      "The agent read probe_first/SKILL.md before acting",
+      "The agent cited PF-HO-001 (WARN) because the vetted report cannot PASS given available=false and errors",
+      "The agent said the probe_report is still emitted but the verdict is UNMEASURED (exit 95)",
+      "The agent distinguished this from PF-IN-001, since a probe JSON exists and nothing is refused"
+    ]
+  },
+  {
+    "id": "fskills-probe-first-negative-001",
+    "question": "Score this checkpoint against its base on mmlu and write eval_report.json.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Checkpoint scoring against its base is fskills-evaluation's job; probe_first only vetts plan drafts against the measured probe and produces no eval report.",
+    "expected_behavior": [
+      "The agent did not read or activate probe_first/SKILL.md for checkpoint scoring",
+      "The agent routed the request to fskills-evaluation"
+    ]
+  },
+  {
+    "id": "fskills-probe-first-negative-002",
+    "question": "Summarize this meeting transcript into action items.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Meeting summarization is not plan-draft vetting, dataset building, training launching or checkpoint scoring, so no FoundationSkills skill should be triggered.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate probe_first/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-probe-first-negative-003",
+    "question": "Turn my goal_spec for continued pretraining of the 8B VLM into an auditable training_plan — this is a fresh draft, there's no probe involved and no existing plan to check.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Authoring a new auditable training_plan from a goal_spec is fskills-training's job, while probe_first only gates an existing plan draft against a measured probe output.",
+    "expected_behavior": [
+      "The agent routed the request to fskills-training",
+      "The agent did not read or activate probe_first/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-probe-first-negative-004",
+    "question": "This claim set is all written PASS but most entries have no artifact field behind them. Rewrite it so anything without a resolvable measured evidence pointer gets emitted as UNMEASURED and seal the corrected claim_set with provenance.",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": false,
+    "ground_truth": "Rewriting a claim set down to UNMEASURED where no measured evidence pointer exists is fskills-measured-or-unmeasured's job; probe_first vetts plan drafts against a probe JSON and never rewrites claims.",
+    "expected_behavior": [
+      "The agent routed the request to fskills-measured-or-unmeasured",
+      "The agent did not read or activate probe_first/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-probe-first-negative-005",
+    "question": "Build the instruction dataset for q29 from the pdf doc directory at data/sources and write the data manifest — we just need the JSONL ready for the training run.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Turning raw sources into a prepared dataset with a manifest is fskills-data-engine's job; probe_first does no dataset building and only vets plan drafts against a measured probe.",
+    "expected_behavior": [
+      "The agent routed the request to fskills-data-engine",
+      "The agent did not read or activate probe_first/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-probe-first-negative-006",
+    "question": "The timezone test in our plain Python report module is failing on CI — patch the bug and update the test.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A routine bug fix in a non-ML-training Python service is out of scope for every FoundationSkills skill, including probe_first.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate probe_first/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-probe-first-negative-007",
+    "question": "Draft a short status email to my manager summarizing what my team shipped this sprint.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Writing a status email is an ordinary non-ML-training request and matches no FoundationSkills skill's scope, so nothing should trigger.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate probe_first/SKILL.md"
+    ]
+  }
+]

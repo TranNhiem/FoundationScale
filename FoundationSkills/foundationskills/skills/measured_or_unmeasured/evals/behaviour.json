@@ -1,0 +1,95 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fskills-measured-or-unmeasured-oracle-MU-IN-001",
+      "skill": "measured_or_unmeasured",
+      "rule_id": "MU-IN-001",
+      "severity": "WARN",
+      "phase": "input",
+      "description": "a claim asserts a measured PASS (or measured: true) with no evidence pointer (emitted UNMEASURED)",
+      "fixture": {
+        "expected": "UNMEASURED 95 with MU-IN-001; claim c1 written UNMEASURED, never PASS",
+        "request": {
+          "claims": [
+            {
+              "asserted_status": "PASS",
+              "claim": "sft holds general ability",
+              "id": "c1"
+            }
+          ]
+        }
+      },
+      "fixture_sha256": "cd407e50288e47903ce8d23de1d90d7b8b702525836311fdaa50461ad7c94a88",
+      "expected_behavior": [
+        "Identifies the problem: a claim asserts a measured PASS (or measured: true) with no evidence pointer (emitted UNMEASURED)",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule MU-IN-001"
+      ],
+      "ground_truth": "measured_or_unmeasured: rule MU-IN-001 (WARN, input phase) fires: a claim asserts a measured PASS (or measured: true) with no evidence pointer (emitted UNMEASURED).",
+      "trigger_facts": [],
+      "question": "Please run this through the measured_or_unmeasured rewrite: I have one claim, id c1, \"sft holds general ability\", currently asserted as PASS, and no artifact pointer attached to it anywhere in my working directory. I want the rewritten claim set back with each claim either keeping PASS and carrying a resolvable `<artifact path>#<json field>` evidence pointer I can verify on disk, or coming back as UNMEASURED — no quiet PASS. Send me the full rewritten JSON so I can see what c1 lands on and what evidence pointer it ends up pointing at.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-measured-or-unmeasured-oracle-MU-IN-002",
+      "skill": "measured_or_unmeasured",
+      "rule_id": "MU-IN-002",
+      "severity": "WARN",
+      "phase": "input",
+      "description": "an evidence pointer is malformed or names no measured value on disk (claim demoted)",
+      "fixture": {
+        "expected": "UNMEASURED 95 with MU-IN-002 (malformed/unresolvable evidence pointer)",
+        "request": {
+          "claims": [
+            {
+              "asserted_status": "PASS",
+              "claim": "sft holds general ability",
+              "evidence": "just-trust-me",
+              "id": "c1"
+            }
+          ]
+        }
+      },
+      "fixture_sha256": "6735e212a14bbe426a4e61ac8703ffd1e85ded6d38e8d18964a17bc3272aaf86",
+      "expected_behavior": [
+        "Identifies the problem: an evidence pointer is malformed or names no measured value on disk (claim demoted)",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule MU-IN-002"
+      ],
+      "ground_truth": "measured_or_unmeasured: rule MU-IN-002 (WARN, input phase) fires: an evidence pointer is malformed or names no measured value on disk (claim demoted).",
+      "trigger_facts": [],
+      "question": "I have a claim set with one entry: id c1, claim \"sft holds general ability\", asserted_status PASS, and evidence \"just-trust-me\". Please rewrite it so that any claim whose evidence isn't a resolvable `<artifact path>#<json field>` pointer on disk gets emitted as UNMEASURED rather than quietly keeping PASS. Send back the rewritten claim set and tell me what the outcome is for c1.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-measured-or-unmeasured-oracle-MU-IN-003",
+      "skill": "measured_or_unmeasured",
+      "rule_id": "MU-IN-003",
+      "severity": "WARN",
+      "phase": "input",
+      "description": "a claim carries no verdict at all (absence of evidence emitted as UNMEASURED)",
+      "fixture": {
+        "expected": "UNMEASURED 95 with MU-IN-003 (no verdict, no evidence)",
+        "request": {
+          "claims": [
+            {
+              "claim": "sft holds general ability",
+              "id": "c1"
+            }
+          ]
+        }
+      },
+      "fixture_sha256": "6edc4a33791a7e38f9feff4b35c63a812eb825dacbed6f8df127bf28349298b7",
+      "expected_behavior": [
+        "Identifies the problem: a claim carries no verdict at all (absence of evidence emitted as UNMEASURED)",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule MU-IN-003"
+      ],
+      "ground_truth": "measured_or_unmeasured: rule MU-IN-003 (WARN, input phase) fires: a claim carries no verdict at all (absence of evidence emitted as UNMEASURED).",
+      "trigger_facts": [],
+      "question": "I have a claim set with exactly one entry: id `c1`, claim text \"sft holds general ability\". There are no staged files here and no `<artifact path>#<json field>` pointer anywhere in the payload, so nothing in this claim resolves to a measurement I can look up on disk. Please rewrite the claim set so that `c1` is emitted as UNMEASURED instead of a silent PASS, and show me the resulting output.",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

@@ -62,6 +62,7 @@ TORCH_FREE_MODULES = {
         "SessionGroupAdvantage",
         "TemporalAdvantageFn",
     ),
+    "foundationscale.rl.hf_format": ("can_save_original_format", "save_format_kwargs"),
     "foundationscale.rl.distributed": (
         "DistContext",
         "agree_all",

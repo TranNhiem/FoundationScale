@@ -8,18 +8,12 @@ description: 'Turns raw sources (JSONL/JSON/CSV/parquet, txt/html/pdf doc dirs, 
   Also embedding semantic dedup, tool-calling trace normalization (OpenAI/ShareGPT/Hermes/Glaive/xLAM/Llama-3/Mistral)
   and video ingest (frames + Whisper ASR). Do NOT use for training launches (fskills-training) or checkpoint evals
   (fskills-evaluation), nor for synthesizing new examples from nothing (phase 2; use llm_enhance on existing records).'
-when_to_use:
-- Turn these raw PDFs, HTML docs and JSONL files into a CPT corpus for gemma4
-- Build an SFT dataset from my Alpaca-style JSONL with the gemma4 chat template
-- Convert this HF dataset into RL verifiable prompts with gold answers
-- Dedup, clean and quality-filter my parquet dumps and show me per-stage drop counts
-- My training plan handed off to data_engine with a target_format — prepare the dataset
-- Scan my corpus for benchmark contamination before we spend GPU hours
-- Make preference pairs (prompt/chosen/rejected rows) from my judged data
-- Give me a readiness report and stats.json for this dataset — is it PASS, RED or UNMEASURED?
-- Remove paraphrase-level near-duplicates from my SFT set with embeddings, not just MinHash
-- Normalize my Hermes/Glaive/xLAM tool-calling traces into one OpenAI tool_calls schema
-- Turn these lecture videos into frame + transcript records for multimodal SFT
+compatibility: "Requires Python>=3.10 and the foundationskills package (fskills CLI); launches additionally need FoundationScale on a Slurm GPU cluster. Without them the skill reports REFUSED or UNMEASURED and gives the install step instead of improvising."
+metadata:
+  version: "0.1.0"
+  invocation: "model"
+  fs_status_doctrine: "PASS/RED/UNMEASURED/REFUSED (exit 0/5/95/96)"
+  when_to_use: '["Turn these raw PDFs, HTML docs and JSONL files into a CPT corpus for gemma4","Build an SFT dataset from my Alpaca-style JSONL with the gemma4 chat template","Convert this HF dataset into RL verifiable prompts with gold answers","Dedup, clean and quality-filter my parquet dumps and show me per-stage drop counts","My training plan handed off to data_engine with a target_format — prepare the dataset","Scan my corpus for benchmark contamination before we spend GPU hours","Make preference pairs (prompt/chosen/rejected rows) from my judged data","Give me a readiness report and stats.json for this dataset — is it PASS, RED or UNMEASURED?","Remove paraphrase-level near-duplicates from my SFT set with embeddings, not just MinHash","Normalize my Hermes/Glaive/xLAM tool-calling traces into one OpenAI tool_calls schema","Turn these lecture videos into frame + transcript records for multimodal SFT"]'
 ---
 
 # Data Engine
