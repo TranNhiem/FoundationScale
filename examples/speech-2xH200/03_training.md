@@ -184,7 +184,7 @@ rather than demonstrate ASR fine-tuning.
 | parakeet-ctc-1.1b | full FT, 2 GPUs | 0 | 14.3 | 0.44 | 245 s |
 | whisper-large-v3 | full FT, 2 GPUs (batch 4/GPU) | 0 | 27.6 | 0.41 | 230 s |
 | whisper-large-v3 | full FT, 1 GPU (batch 8, owner's recipe, sentence-cased targets) | 0 | not cleanly isolated (shared-VM contention) | 0.73 | 364 s |
-| gemma-4-E4B-it | LoRA r16/a32, raw-case targets (not re-verified sentence-cased, see below) | 0 | 89.8 | 0.97 | 511 s |
+| gemma-4-E4B-it | LoRA r16/a32 + towers in full, sentence-cased targets, 2 GPUs | 0 | 86.2 | 0.94 | 470 s |
 
 **MEASURED, 2026-10-10/11, 2x H200.** `peak GB/GPU` is the single highest sample from a 3–5 second
 `nvidia-smi` poll during each run; `s/step` is `transformers.Trainer`'s own reported
@@ -232,15 +232,15 @@ reference text. `eval_wer.py`'s scorer (`foundationscale.train.speech_metrics.no
 casefolds both the reference and the hypothesis before computing WER, so an upper-case reference scores
 identically to a sentence-cased one; only the TRAINING target's case mattered, never the eval reference's.
 
-`google/gemma-4-E4B-it` was not re-verified on the sentence-cased manifest: re-attempting it on this VM's
-current FoundationScale checkout hit a new, separately-reproducible refusal
-(`speech_tower_resolution_refusal` firing on the LoRA-wrapped model, whose top-level module becomes
-`base_model` after `peft.get_peft_model()` — the same check that correctly catches Qwen2-Audio's nesting
-mismatch appears to also misfire on an already-working LoRA family once wrapped) that blocked every retry
-attempted, independent of the manifest. This is a framework-level issue outside this tutorial's scope to
-fix (no CLI flag routes around it); Gemma-4's numbers below are carried over from the last successful run
-(raw-case targets) and are not directly comparable to Whisper's or Parakeet's post-fix numbers. Report this
-upstream before re-attempting.
+`google/gemma-4-E4B-it` was re-verified on the sentence-cased manifest once the speech-plane owner fixed a
+separate issue upstream: `speech_tower_resolution_refusal` had been firing on the LoRA-wrapped model (whose
+top-level module becomes `base_model` after `peft.get_peft_model()`), misfiring on an already-working LoRA
+family instead of only catching Qwen2-Audio's genuine nesting mismatch. The fix resolves FamilySpec tower
+paths via `model.get_base_model()` instead. Re-running the owner's exact recipe (LoRA r16/alpha32, lr 1e-4,
+global batch 16, 500 steps, no gradient checkpointing) on the sentence-cased manifest: exit 0, all speech
+gates PASS (`speech.audio_row_coverage` 8016/8016, `speech.audio_placeholder_coverage` 8016/8016,
+`speech.tower_movement` 271/271 moved 220 + 1/1 moved 1), dev-clean WER **4.04% -> 2.99%**
+(CI [-1.24, -0.85] pts, significantly better) — within 0.03 points of the owner's own 4.07% -> 2.96%.
 
 ## 7. Reading the output
 
@@ -288,12 +288,10 @@ tokenizer/processor files, pass `--processor` pointing at the original base mode
   means an older manifest or a hand-rolled builder is in use. Not fixed by GPU count, warmup, or more
   steps/data (all ruled out before the real cause was found).
 - **`gemma-4-E4B-it` (or any LoRA + audio-tower family) refuses with exit 96 naming unresolved audio
-  towers, even though the SAME recipe worked before** — a separate issue from Qwen2-Audio's (§5):
-  `speech_tower_resolution_refusal` appears to run against the model AFTER `peft.get_peft_model()` wraps
-  it, whose top-level module becomes `base_model`, so a family's otherwise-correct tower paths (e.g.
-  `model.audio_tower`) stop resolving post-wrap. This was reproduced reliably on this VM's checkout and is
-  a framework-level ordering issue, not a config mistake — there is no CLI flag to route around it. Report
-  it upstream rather than attempting a workaround.
+  towers** — this was a real FoundationScale bug (`speech_tower_resolution_refusal` resolving tower paths
+  against the `peft`-wrapped model, whose top-level module is `base_model`, instead of the unwrapped one),
+  **fixed upstream**: the check now resolves via `model.get_base_model()`. If you see this on an older
+  FoundationScale checkout, `git pull` first rather than working around it.
 - **Training hangs at rendezvous** — `--master_addr` must be `127.0.0.1`, not `localhost`.
 - **Port already in use** — this tutorial reserves `29880`; the vlm tutorial uses `29500`. Don't run two
   speech launches at once on the same box.

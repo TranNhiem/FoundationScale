@@ -89,17 +89,17 @@ jq '.all | length' eval_logs/parakeet_base.json
 | --- | --- | --- | --- | --- | --- | --- |
 | parakeet-ctc-1.1b | full FT | 1.87% | 1.77% | -0.09 | [-0.14, -0.05] | **significantly BETTER**; P(diff<0)=1.000 |
 | whisper-large-v3 | full FT, sentence-cased targets | 2.25% | **1.72%** | **-0.53** | [-0.65, -0.41] | **significantly BETTER**; P(diff<0)=1.000 |
-| gemma-4-E4B-it | LoRA r16/a32, raw-case targets (see caveat below) | 4.04% | 3.78% | -0.26 | [-0.51, +0.02] | favourable, borderline (CI nearly excludes 0); P(diff<0)=0.966 |
+| gemma-4-E4B-it | LoRA r16/a32 + towers in full, sentence-cased targets | 4.04% | **2.99%** | **-1.05** | [-1.24, -0.85] | **significantly BETTER**; P(diff<0)=1.000 |
 
 Read that table honestly. **parakeet-ctc-1.1b improves and essentially matches this repo's own longer-campaign
 ceiling** (`speech_p7`: 1.86% -> 1.80%). **whisper-large-v3 improves from 2.25% to 1.72%** — within 0.03
 points of the speech-plane owner's own reference run (1.69%) — once the recipe lesson below is applied.
-**gemma-4-E4B-it moves in the right direction** (repo's longer campaign, `speech_p7`: 4.07% -> 2.96% LoRA)
-but was not re-verified on sentence-cased targets: a separate, newly-encountered framework refusal
-(`speech_tower_resolution_refusal` misfiring on the LoRA-wrapped model) blocked every rerun attempt,
-independent of the manifest — see chapter 03 for the full story. Its 4.04% -> 3.78% number here is carried
-over from the earlier raw-case-target run and is not on the same footing as Whisper's or Parakeet's
-post-fix numbers.
+**gemma-4-E4B-it improves from 4.04% to 2.99%** — within 0.03 points of the repo's own longer-campaign
+number (`speech_p7`: 4.07% -> 2.96% LoRA). This result needed a FoundationScale fix first:
+`speech_tower_resolution_refusal` was resolving tower paths against the `peft`-wrapped model (top-level
+`base_model`) instead of the unwrapped one, misfiring on this otherwise-working LoRA family; the fix
+resolves via `model.get_base_model()` — see chapter 03 for the full story. Speech gates confirmed PASS:
+`speech.audio_row_coverage` 8016/8016, `speech.tower_movement` 271/271 (220 moved) + 1/1 (1 moved).
 
 **The Whisper story, in full: this was never a software-stack bug.** Earlier rounds measured
 whisper-large-v3 REGRESSING (2.25% -> 3.32-3.58% depending on configuration) and ran diagnostics that ruled

@@ -20,11 +20,16 @@ re-verifies the speech-plane owner's recipe end to end on a fresh 2x H200 VM. Fo
 - **Round 4** (2026-10-11, same stack): root cause found with the owner -- the training manifest's
   `answer` field was LibriSpeech's raw upper case, not sentence-cased like the owner's own
   `speech_p3`/`speech_p6` manifests. Fixed in `scripts/prepare_librispeech.py`, train manifest rebuilt,
-  Whisper re-run on the owner's exact recipe: **2.25% -> 1.72%**, matching the owner's 1.69%. See "Round 4"
-  below for the full before/after and the separate Gemma-4 issue this round also surfaced.
+  Whisper re-run on the owner's exact recipe: **2.25% -> 1.72%**, matching the owner's 1.69%. This round
+  also surfaced a NEW `speech_tower_resolution_refusal` misfire blocking Gemma-4-E4B-it's rerun.
+- **Round 5** (2026-10-11, FoundationScale `ead0980`): the speech-plane owner fixed the Round 4
+  tower-resolution misfire upstream (`692101b`: resolves FamilySpec paths via `model.get_base_model()`).
+  Pulled the fix, re-ran Gemma-4-E4B-it's LoRA + full-towers recipe on the sentence-cased manifest: all
+  speech gates PASS, dev-clean WER **4.04% -> 2.99%**, matching the owner's 2.96%.
 
-All WER numbers below are Round 2 unless stated otherwise; Round 3/4 are labelled explicitly where they
-apply. Round 4 numbers SUPERSEDE Round 1-3's Whisper numbers.
+All WER numbers below are Round 2 unless stated otherwise; Round 3/4/5 are labelled explicitly where they
+apply. Round 4 numbers SUPERSEDE Round 1-3's Whisper numbers; Round 5 numbers SUPERSEDE Round 2's Gemma-4
+number.
 
 ## STEP 1 diagnostics (run before any 500-step commitment, as requested)
 
@@ -119,15 +124,14 @@ pointing at that evidence file; not part of the measured table below.
 |---|---|---|---|---|---|---|---|---|
 | parakeet-ctc-1.1b | ctc | full FT (stock config, no manual edit) | 0 | 14.3 | 0.44 | 1.87% | **1.77%** | [-0.14,-0.05] significantly better |
 | whisper-large-v3 | seq2seq | full FT, raw-case targets (SUPERSEDED, see Round 4) | 0 | 27.6 | 0.41 | 2.25% | 3.34% | [+0.89,+1.28] significantly worse -- target-format artifact, not a stack bug |
-| gemma-4-E4B-it | audio_llm | LoRA r16/a32 (LM) + audio tower/projector full | 0 | 89.8 | 0.97 | 4.04% | **3.78%** | [-0.51,+0.02] favourable, borderline (P(diff<0)=0.966) |
+| gemma-4-E4B-it | audio_llm | LoRA r16/a32 (LM) + audio tower/projector full, raw-case targets (SUPERSEDED, see Round 5) | 0 | 89.8 | 0.97 | 4.04% | 3.78% | [-0.51,+0.02] favourable, borderline -- pre-fix, raw-case run |
 | qwen2-audio-7b-instruct | audio_llm | -- | **96 (REFUSE, by design)** | -- | -- | -- | -- | not applicable -- see fix #2 above |
 
 Parakeet essentially matches the owner's stated ceiling (1.86%->1.80% "at best"; we measured
-1.87%->1.77%, a hair better). Gemma-4-E4B-it moves in the owner's stated direction (4.07%->2.96% LoRA)
-but stops short of it at 500 steps on this VM (4.04%->3.78%); not re-verified on sentence-cased targets
-(see Round 4 -- a separate framework refusal blocked the rerun). Qwen2-Audio is a clean REFUSE, not a
-measurement -- see fix #2. **Whisper's Round 2 number is SUPERSEDED by Round 4 below: it was a
-target-format artifact, not a stack bug.**
+1.87%->1.77%, a hair better). Qwen2-Audio is a clean REFUSE, not a measurement -- see fix #2.
+**Whisper's Round 2 number is SUPERSEDED by Round 4 below** (target-format artifact, not a stack bug)
+**and Gemma-4-E4B-it's Round 2 number is SUPERSEDED by Round 5 below** (re-verified on sentence-cased
+targets after an upstream fix: 4.04%->2.99%, matching the owner's 4.07%->2.96%).
 
 ### Whisper's regression (Round 1-3): NOT a transformers-version issue -- resolved in Round 4 below
 
@@ -261,8 +265,9 @@ transformers >= 5.18" or "regresses on this VM's stack"** -- both were tested ex
 cause was always the target text format, confirmed by reproducing the owner's own fine-tuned result once
 the format matched.
 
-**Gemma-4-E4B-it was NOT re-verified on the sentence-cased manifest.** Re-attempting its LoRA + full-towers
-recipe on this VM's current FoundationScale checkout hit a NEW, separately-reproducible refusal:
+**Gemma-4-E4B-it was NOT re-verified on the sentence-cased manifest in Round 4.** Re-attempting its LoRA +
+full-towers recipe on this VM's then-current FoundationScale checkout hit a NEW, separately-reproducible
+refusal (resolved in Round 5 below):
 
 ```
 [fs:train:refuse]  family 'gemma4' declares audio tower(s) ['model.audio_tower', 'model.embed_audio']
@@ -282,9 +287,48 @@ misfire for ANY LoRA + audio-tower family, not just the ones whose paths are gen
 times (via `train_speech.sh`, and twice via direct `torchrun` invocation with a 5-step smoke run), on the
 unmodified `ced0c5c` checkout with cleared `__pycache__` -- deterministic, not a race condition. No CLI flag
 routes around it (declaring `--adapter-target` only affects LoRA target selection, which already succeeds;
-the failing check is the separate tower-resolution one). **This is reported upstream for the owner's
-attention rather than worked around.** Gemma-4-E4B-it's 4.04% -> 3.78% number in this file is carried over
-from the earlier raw-case-target run (Round 2) and has not been re-verified on sentence-cased targets.
+the failing check is the separate tower-resolution one). **This was reported upstream for the owner's
+attention rather than worked around** -- see Round 5 for the fix and the re-verified result.
+
+## Round 5: Gemma-4-E4B-it re-verified after the upstream tower-resolution fix
+
+**The speech-plane owner fixed the Round 4 misfire upstream**, commit `692101b` ("speech: resolve towers on
+the unwrapped model under an adapter"), merged to `origin/main` as `ead0980`: `speech_tower_resolution_refusal`
+now resolves FamilySpec tower paths via `model.get_base_model()` rather than against the `peft`-wrapped
+model directly, so a family's bare `model.audio_tower`/`model.embed_audio` paths resolve correctly whether
+or not LoRA has wrapped the model.
+
+**Pulled the fix** (VM: `git -C FoundationScale fetch && git -C FoundationScale reset --hard origin/main`
+-> `ead0980`; Mac worktree: `git fetch && git merge origin/main`, fast-forward, no amend) and **re-ran the
+owner's exact Gemma-4-E4B-it recipe** on the sentence-cased manifest: LoRA r16/alpha32 on the language
+model with the audio tower + `embed_audio` projector trained in full, lr 1e-4, global batch 16
+(per-device 8 x dp 2), 500 steps, no gradient checkpointing, `GROUP_BY_DURATION` off.
+
+**Training: exit 0, PASS.** `train_runtime` 470.2 s / 500 steps = 0.94 s/step. Peak memory (clean, no
+shared-VM contention this run): 86.2 GiB / 78.1 GiB per GPU. Speech gates, all PASS:
+
+```
+[fs:train:adjudicate]  [PASS] speech.audio_row_coverage: 8016/8016 audio rows -- 8016 of 8016 expected
+audio rows loaded (no refusals)
+[fs:train:adjudicate]  [PASS] speech.audio_placeholder_coverage: 8016/8016 audio rows -- 8016 of 8016
+audio row placeholder markers verified (0 unmeasured)
+[fs:train:adjudicate]  [PASS] speech.tower_movement: 271/271 tower parameters -- 220 of 271 tower
+parameters moved from base to saved
+[fs:train:adjudicate]  [PASS] speech.tower_movement: 1/1 tower parameters -- 1 of 1 tower parameters
+moved from base to saved
+```
+
+`checkpoint.save_complete`: 1268/1268 tensors present.
+
+**WER result**, full 2,683-row dev-clean, `eval_wer.py` + `paired_bootstrap.py` vs the unchanged base:
+
+```
+n=2683 fields=(errors,reference_length) base=0.0404 tuned=0.0299 diff=-0.0105 95%CI=[-0.0124,-0.0085] P(diff<0)=1.000
+```
+
+**4.04% -> 2.99%**, within 0.03 points of the owner's own 4.07% -> 2.96% -- confirmed, significantly better
+(CI excludes zero, P(diff<0)=1.000). This number SUPERSEDES the Round 2 raw-case-target number
+(4.04% -> 3.78%) in every other section of this file and in the tutorial's README/chapters.
 
 ## Troubleshooting note added per the owner
 
@@ -320,9 +364,9 @@ would. Re-verify timing-sensitive numbers if reproducing this campaign in isolat
 - Qwen2-Audio-7B-Instruct is not currently reproducible through FoundationScale's verified path on this
   VM's transformers release; do not re-attempt the Round 1 workarounds (`--adapter-target` enumeration,
   FSDP full fine-tune) -- they bypass a gap the framework now formally refuses for exactly this reason.
-- Gemma-4-E4B-it's number in the Round 2 table is from BEFORE the sentence-case fix and has not been
-  re-verified against it; a separate, newly-encountered `speech_tower_resolution_refusal` misfire (Round 4)
-  blocked every rerun attempt, independent of the manifest.
+- Gemma-4-E4B-it's Round 2 number was from BEFORE the sentence-case fix; Round 4 hit a separate
+  `speech_tower_resolution_refusal` misfire blocking the rerun; Round 5 re-verified it after the owner
+  fixed that misfire upstream (4.04% -> 2.99%, matching the owner's 2.96%). Use the Round 5 number.
 - Parakeet-CTC was NOT re-run on the sentence-cased manifest: its vocabulary/decoding is case-INsensitive
   (CTC outputs a fixed token vocabulary, not case-aware BPE pieces the way Whisper's tokenizer is), so the
   Whisper-specific failure mode (upper-case BPE fragmentation) does not apply, and its Round 2 number

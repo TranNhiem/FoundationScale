@@ -77,7 +77,7 @@ WER/CI come from `eval_wer.py` + `paired_bootstrap.py` on identical held-out row
 |---|---|---|---|---|---|---|
 | parakeet-ctc-1.1b | full FT | 0 | 14.3 | 0.44 | 1.87% -> 1.77% | [-0.14, -0.05] (significantly better) |
 | whisper-large-v3 | full FT, sentence-cased targets | 0 | n/a (1 GPU, see ch.03) | 0.73 | 2.25% -> **1.72%** | [-0.65, -0.41] (significantly better) |
-| gemma-4-E4B-it | LoRA r16/a32, raw-case targets (not re-verified, see note) | 0 | 89.8 | 0.97 | 4.04% -> 3.78% | [-0.51, +0.02] (favourable, borderline) |
+| gemma-4-E4B-it | LoRA r16/a32 + towers in full, sentence-cased targets | 0 | 86.2 | 0.94 | 4.04% -> **2.99%** | [-1.24, -0.85] (significantly better) |
 
 - **parakeet-ctc-1.1b**: a clean win — 1.87% -> 1.77% with a CI of [-0.14, -0.05], significantly better,
   and it essentially matches this repo's own longer-campaign ceiling
@@ -95,14 +95,13 @@ WER/CI come from `eval_wer.py` + `paired_bootstrap.py` on identical held-out row
   recipe lesson and before/after numbers, and
   [`validation_campaigns/speech_2xh200/EVIDENCE.md`](../../validation_campaigns/speech_2xh200/EVIDENCE.md)
   for the diagnostic trail that found it.
-- **gemma-4-E4B-it**: 4.04% -> 3.78% with a CI of [-0.51, +0.02] — it moves in the right direction, short
-  of the repo's longer-campaign number
+- **gemma-4-E4B-it**: **4.04% -> 2.99%**, CI [-1.24, -0.85], significantly better — within 0.03 points of
+  the repo's own longer-campaign number
   ([`validation_campaigns/speech_p7/EVIDENCE.md`](../../validation_campaigns/speech_p7/EVIDENCE.md):
-  4.07% -> 2.96%), but this number is from the earlier raw-case-target run and was **not re-verified** on
-  sentence-cased targets: re-attempting it hit a separate, newly-encountered framework refusal
-  (`speech_tower_resolution_refusal` misfiring once `peft` wraps the model for LoRA) that blocked every
-  retry, independent of the manifest. See chapter 03 for details; this is reported upstream, not routed
-  around.
+  4.07% -> 2.96%). A FoundationScale fix (`speech_tower_resolution_refusal` now resolves FamilySpec paths
+  via `get_base_model()`, landing after this tutorial's first Gemma-4 round) resolved a separate refusal
+  that had blocked re-verifying on sentence-cased targets; gates confirmed PASS
+  (`speech.audio_row_coverage` 8016/8016, `speech.tower_movement` 271/271 + 1/1).
 - **qwen2-audio-7b-instruct**: **NOT in this table.** It REFUSES (exit 96) before training on this VM —
   `transformers==5.18.0` nests its audio tower one level deeper than FoundationScale's `qwen2_audio`
   `FamilySpec` currently declares, and FoundationScale now correctly refuses rather than train against an
