@@ -55,6 +55,7 @@ __all__ = (
     "generate_kwargs_for",
     "init_distributed",
     "is_main",
+    "keep_experts_switchable",
     "save_checkpoint",
     "save_sharded_dcp",
     "shard_indices",
@@ -507,6 +508,35 @@ def _find_tower_modules(model: Any) -> list[Any]:
     return found
 
 
+def _switchable() -> bool:
+    return True
+
+
+def keep_experts_switchable(model: Any, original_cls: type) -> bool:
+    """Let an ``FSDP<Name>`` wrapper class switch MoE expert kernels like its original.
+
+    transformers 5.x ``generate()`` swaps ``grouped_mm`` experts for ``batched_mm``
+    around decoding and back afterwards, after asking the class whether it may:
+    ``_can_set_experts_implementation`` greps the source of the module the class
+    is defined in for ``@use_experts_implementation``. ``fully_shard`` re-types the
+    model to a dynamic ``FSDP<Name>`` subclass defined in torch's FSDP module, so
+    the grep fails and the first rollout dies (measured: Gemma-4 26B-A4B,
+    ``FSDPGemma4ForConditionalGeneration does not support setting experts
+    implementation``). Pinning ``batched_mm`` up front instead avoided the error but
+    ran prefill on the per-token kernel and OOMed (56 GiB for one allocation), so the
+    wrapper inherits the original class's answer and HF's own swap runs unchanged.
+
+    Returns True when the answer was carried over; a model that was not re-typed, or
+    whose original class cannot switch kernels, is left alone (False).
+    """
+    wrapped_cls = type(model)
+    can_set = getattr(original_cls, "_can_set_experts_implementation", None)
+    if wrapped_cls is original_cls or can_set is None or not can_set():
+        return False
+    wrapped_cls._can_set_experts_implementation = staticmethod(_switchable)
+    return True
+
+
 def wrap_fsdp2(
     model: Any,
     ctx: DistContext,
@@ -545,6 +575,7 @@ def wrap_fsdp2(
         )
     from torch.distributed.device_mesh import init_device_mesh
 
+    original_cls = type(model)
     model = model.to(dtype=torch.float32)
     mesh = init_device_mesh("cuda", (ctx.world_size,))
     mp_policy = MixedPrecisionPolicy(param_dtype=param_dtype, reduce_dtype=reduce_dtype)
@@ -568,6 +599,12 @@ def wrap_fsdp2(
         mp_policy=mp_policy,
         reshard_after_forward=reshard_after_forward,
     )
+    if keep_experts_switchable(model, original_cls) and is_main(ctx):
+        print(
+            f"[distributed] wrap_fsdp2: {type(model).__name__} keeps "
+            f"{original_cls.__name__}'s expert-kernel switching for generate()",
+            file=sys.stderr,
+        )
     return model
 
 
