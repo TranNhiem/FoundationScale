@@ -342,6 +342,9 @@ PENDING_ENROLMENT: dict[str, str] = {
         "the speech model registry and its consistency checks (families exist, scopes, no "
         "supported entry without a reproduced reference)"
     ),
+    "src/foundationscale/upstream/profiles.py": (
+        "upstream profiles: pinned backend versions, installed-version measurement and mismatches"
+    ),
     "src/foundationscale/upstream/contracts.py": (
         "owned speech contracts: manifest row validation with counted problem codes, "
         "duplicate id/audio detection, the NeMo AED row translation and the strict run config"

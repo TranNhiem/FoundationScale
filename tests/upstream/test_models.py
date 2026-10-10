@@ -226,31 +226,30 @@ def test_upstream_refs_are_transcribed_exactly_as_upstream_spells_them() -> None
     }
 
 
-def test_every_reference_targets_the_card_test_set_with_a_fixed_tolerance() -> None:
-    """Each claim is registered (task, tolerance, provenance) while both numbers stay absent."""
+def test_every_reference_targets_a_card_test_set_with_a_fixed_tolerance() -> None:
+    """Each claim names the card's own LibriSpeech test split and a tolerance set in advance."""
     for entry in MODELS:
         reference = entry.reference
         assert reference is not None, f"{entry.id} declares no reference"
-        assert reference.task == "librispeech_test_clean"
+        assert reference.task in ("librispeech_test_clean", "librispeech_test_other")
         assert reference.metric == "wer"
-        assert reference.upstream_value is None
-        assert reference.source == ""
         assert reference.tolerance == 0.3
-        assert reference.measured is None
-        # Our dev-clean readings live in the note with their provenance -- in the place
-        # a consumer of `reproduced` cannot mistake for the card's test-clean number.
-        assert reference.measured_note.startswith("dev-clean")
 
 
-def test_every_registered_model_is_experimental() -> None:
-    """None of these cards has been reproduced on its own test set: we hold dev-clean,
-    the cards report test-clean, and a cross-split number is not a reproduction."""
+def test_supported_means_reproduced_and_only_reproduced_models_are_supported() -> None:
+    """Rule 4: the three models whose cards publish a LibriSpeech result were reproduced on the
+    full split (validation_campaigns/speech_repro, 2026-10-10); the others publish none and stay
+    experimental."""
     assert len(MODELS) == 6
+    supported = {e.id for e in MODELS if e.status is SupportStatus.SUPPORTED}
+    assert supported == {"parakeet-ctc-1.1b", "canary-1b-flash", "canary-qwen-2.5b"}
     for entry in MODELS:
-        assert entry.status is SupportStatus.EXPERIMENTAL, (
-            f"{entry.id} claims status {entry.status.value!r} while its model card's own "
-            "test set has not been reproduced"
-        )
+        assert entry.reference is not None
+        if entry.status is SupportStatus.SUPPORTED:
+            assert entry.reference.reproduced, entry.id
+            assert entry.reference.source.startswith("https://huggingface.co/")
+        else:
+            assert entry.reference.upstream_value is None and entry.reference.measured is None
 
 
 def test_entries_for_backend_counts() -> None:

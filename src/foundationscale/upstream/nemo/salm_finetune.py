@@ -218,6 +218,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    # Record the upstream this run actually ran on (rule 3: profiles), next to its outputs.
+    from foundationscale.upstream.profiles import write_profile_record
+
+    write_profile_record(out, "nemo-26.08")
     # "pnc" is a Canary AED field; lhotse_as_conversation reads audio_filepath/duration/text only.
     coverage = convert(Path(args.train), out / "train_manifest.json", "no")
     (out / "coverage.json").write_text(json.dumps(coverage, indent=2))

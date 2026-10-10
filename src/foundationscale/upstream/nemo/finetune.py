@@ -268,6 +268,10 @@ def main(argv: list[str] | None = None) -> int:
         cfg = parse_args(argv)
         out = Path(cfg.out_dir)
         out.mkdir(parents=True, exist_ok=True)
+        # Record the upstream this run actually ran on (rule 3: profiles), next to its outputs.
+        from foundationscale.upstream.profiles import write_profile_record
+
+        write_profile_record(out, "nemo-26.08")
         coverage = convert(
             Path(cfg.train_manifest), out / "train_manifest.json", cfg.pnc, cfg.max_duration
         )

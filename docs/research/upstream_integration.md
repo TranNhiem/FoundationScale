@@ -100,3 +100,15 @@ set yet (we hold LibriSpeech dev-clean; the cards report test-clean).
 Both NeMo adjudicators take `--model-id` and read their scopes from the registry (defaults unchanged).
 Verified on GB200: registry-driven re-adjudication of the Canary (arm B, frozen decoder) and
 Canary-Qwen fine-tunes reproduces the recorded verdict lines byte for byte.
+
+## Phase 3 (part 1): profiles and the first reproductions (2026-10-10)
+
+- `src/foundationscale/upstream/profiles.py`: the exact versions of both backend containers
+  (`nemo-26.08`: torch 2.13 / transformers 5.12 / peft 0.21 / NeMo 3.1; `hf-26.04`: torch 2.11 /
+  transformers 5.5 / peft 0.18), `installed_versions()` and `profile_mismatches()`. The NeMo
+  fine-tune workers write `upstream_profile.json` next to every run. Image digests are not visible
+  from the job environment and are recorded as "unrecorded".
+- Rule 4 in practice (`validation_campaigns/speech_repro`): Canary-Qwen-2.5B, Parakeet-CTC-1.1B and
+  Canary-1B-flash reproduce their model-card LibriSpeech WER within 0.02 points, scored with the
+  card's normalizer, and are now `supported` in the registry. Our stricter normalizer reads about
+  0.2 points higher.

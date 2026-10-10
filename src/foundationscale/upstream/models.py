@@ -264,12 +264,16 @@ MODELS: tuple[ModelEntry, ...] = (
         reference=ReferenceResult(
             task="librispeech_test_clean",
             metric="wer",
-            upstream_value=None,
-            source="",
+            upstream_value=1.83,
+            source="https://huggingface.co/nvidia/parakeet-ctc-1.1b",
             tolerance=0.3,
-            measured=None,
-            measured_note="dev-clean full 1.86 zero-shot",
+            measured=1.846,
+            measured_note=(
+                "full split, Whisper EnglishTextNormalizer (the card's); FS normalizer reads "
+                "2.054 -- validation_campaigns/speech_repro, 2026-10-10"
+            ),
         ),
+        status=SupportStatus.SUPPORTED,
     ),
     ModelEntry(
         id="canary-1b-flash",
@@ -285,14 +289,18 @@ MODELS: tuple[ModelEntry, ...] = (
         trainable_prefixes=("encoder", "transf_decoder"),
         requires=(("nemo_toolkit", ">=3.1"),),
         reference=ReferenceResult(
-            task="librispeech_test_clean",
+            task="librispeech_test_other",
             metric="wer",
-            upstream_value=None,
-            source="",
+            upstream_value=2.87,
+            source="https://huggingface.co/nvidia/canary-1b-flash",
             tolerance=0.3,
-            measured=None,
-            measured_note="dev-clean full 1.37 zero-shot",
+            measured=2.874,
+            measured_note=(
+                "full split, Whisper EnglishTextNormalizer (the card's); FS normalizer reads "
+                "3.084 -- validation_campaigns/speech_repro, 2026-10-10"
+            ),
         ),
+        status=SupportStatus.SUPPORTED,
     ),
     ModelEntry(
         id="canary-qwen-2.5b",
@@ -314,12 +322,16 @@ MODELS: tuple[ModelEntry, ...] = (
         reference=ReferenceResult(
             task="librispeech_test_clean",
             metric="wer",
-            upstream_value=None,
-            source="",
+            upstream_value=1.61,
+            source="https://huggingface.co/nvidia/canary-qwen-2.5b",
             tolerance=0.3,
-            measured=None,
-            measured_note="dev-clean 300 rows 1.54 zero-shot",
+            measured=1.624,
+            measured_note=(
+                "full split, Whisper EnglishTextNormalizer (the card's); FS normalizer reads "
+                "1.801 -- validation_campaigns/speech_repro, 2026-10-10"
+            ),
         ),
+        status=SupportStatus.SUPPORTED,
     ),
 )
 
