@@ -82,6 +82,39 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/vla/adapters/gr00t/contract.py": (
+        "GR00T checkpoint contract reader (processor_config.json -> embodiment contract, "
+        "ChunkSpec, observation dict): line-covered by tests/vla and bit-exact against GR00T's "
+        "loader on a real checkpoint, but no mutation row yet."
+    ),
+    "src/foundationscale/vla/chunking.py": (
+        "GR00T delta_indices temporal contract and anchor ranges per declared pad mode: "
+        "line-covered by tests/vla, but no mutation row yet proves a shifted range would be "
+        "caught."
+    ),
+    "src/foundationscale/vla/frames.py": (
+        "frame decode at exact indices with count/range refusals and a read-only episode "
+        "cache: line-covered through an injected decoder, real AV1 decode measured on GB200, "
+        "but no mutation row yet."
+    ),
+    "src/foundationscale/vla/sample.py": (
+        "VLA training sample assembly and the Normalizer (mean_std/q01_q99/min_max): "
+        "line-covered by tests/vla and round-trip-checked on LIBERO, but no mutation row yet "
+        "proves a flipped normalisation would be caught."
+    ),
+    "src/foundationscale/vla/lerobot.py": (
+        "LeRobot v2 episode reader and its format refusals: line-covered by tests/vla and "
+        "bit-matched against GR00T on LIBERO, but no mutation row yet proves a dropped refusal "
+        "would be caught."
+    ),
+    "src/foundationscale/vla/modality.py": (
+        "GR00T-style modality config and its coverage/overlap refusals: line-covered by "
+        "tests/vla, but no mutation row yet proves a dropped refusal would be caught."
+    ),
+    "src/foundationscale/vla/norm.py": (
+        "per-dimension norm stats (GR00T semantics), JSON round-trip and digest: line-covered "
+        "by tests/vla, but no mutation row yet proves a shifted statistic would be caught."
+    ),
     "src/foundationscale/agentic_rl/cli.py": (
         "agentic RL console front end (dry-run, real-run wiring, exit taxonomy): line-covered "
         "by tests/agentic_rl, but no mutation row yet proves a flipped exit mapping would be "
