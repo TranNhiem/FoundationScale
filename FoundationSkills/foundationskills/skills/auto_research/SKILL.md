@@ -290,7 +290,7 @@ Once `campaign_closed` is on the ledger every action except `check` and `close` 
 
 - `record` takes named evidence instead of trusting the caller: `evidence: {run_manifests: [<path>...],
   eval_report: <path>}`. The result is derived from those files (`derive_result`): the run manifests give the
-  training verdict and `rl_measured_fraction` (measured steps / steps), the eval report gives each metric's
+  training verdict and `rl_measured_fraction` (the manifest's `measured_fraction`, min over runs), the eval report gives each metric's
   `value`/`se`, and the eval must name the checkpoint the run saved (else AR-IN-012). Each file is stored by
   path and `sha256:` digest; missing/unreadable evidence is AR-IN-011.
 - The stored row gains `evidence`, `evidence_class` (`bound` | `asserted` | `crash`), `metric_sources` (per metric
@@ -304,7 +304,9 @@ Once `campaign_closed` is on the ledger every action except `check` and `close` 
   (`is_rl_stage`). Then a claim over a caller-asserted row is AR-RS-009; legacy campaigns keep the M2-M5
   claim behaviour. An unmeasured row never grounds a claim in any campaign.
 - An rl-stage campaign must declare `rl_min_measured_fraction` and the `rl_measured_fraction` guardrail
-  (direction `max`: the fraction must not drop below the reference) - AR-IN-013 at `check`.
+  (direction `max`). The guardrail is judged against the declared floor on the candidate's own rows (every
+  confirm row >= `rl_min_measured_fraction`, else `guardrail:rl_measured_fraction:below_floor`), never paired
+  against the reference - the base model has no RL fraction. AR-IN-013 at `check`.
 - `close` re-hashes every bound row's evidence; a missing or changed file degrades that row to unmeasured
   (AR-HO-004 path); where evidence is required an asserted row is likewise unmeasured at close
   (`asserted_unbound:<trial>:<seed>`). Asserted rows left in the ledger are listed by AR-HO-010.

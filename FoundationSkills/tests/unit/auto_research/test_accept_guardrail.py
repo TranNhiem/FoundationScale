@@ -61,3 +61,40 @@ class TestUnmeasuredGuardrail:
         assert decision["verdict"] == "accepted_gain"
         assert not any(r.startswith("guardrail_unmeasured:") or r.startswith("guardrail_skipped:")
                        for r in decision["reasons"])
+
+
+class TestRlFloorGuardrail:
+    """M6 (D6 revised): rl_measured_fraction is checked against the declared floor, never paired with a base
+    model that has no RL fraction (the GPU campaign closed UNMEASURED on every rl spec before this)."""
+
+    RL_SPEC = {**SPEC, "rl_min_measured_fraction": 0.5,
+               "confirm": {**SPEC["confirm"], "guardrails": ["rl_measured_fraction"],
+                           "guardrail_directions": {"rl_measured_fraction": "max"}}}
+    RL_BASE = [result("b", "baseline", s, v) for s, v in ((1, 0.5), (2, 0.502), (3, 0.501))]
+
+    def _cand(self, fractions, value=0.9):
+        return [result("t1", "candidate", s, value + s * 0.001, guard=f, guard_metric="rl_measured_fraction", se=0.0)
+                for s, f in zip((1, 2, 3), fractions)]
+
+    def test_base_model_without_fraction_is_measured(self):
+        decision = decide(self.RL_SPEC, self.RL_BASE, self._cand([0.66, 0.76, 0.74]), "val_accuracy")
+        assert decision["verdict"] == "accepted_gain"
+        assert not any(r.startswith("guardrail_unmeasured") for r in decision["reasons"])
+
+    def test_candidate_row_below_floor_breaches(self):
+        decision = decide(self.RL_SPEC, self.RL_BASE, self._cand([0.66, 0.4, 0.74]), "val_accuracy")
+        assert decision["verdict"] == "rejected_regress"
+        assert any(r.startswith("guardrail:rl_measured_fraction:below_floor:0.4<0.5") for r in decision["reasons"])
+
+    def test_too_few_candidate_fractions_stay_unmeasured(self):
+        cand = self._cand([0.66, 0.76, 0.74])
+        for row in cand[1:]:
+            del row["metrics"]["rl_measured_fraction"]
+        decision = decide(self.RL_SPEC, self.RL_BASE, cand, "val_accuracy")
+        assert decision["verdict"] == "unmeasured"
+        assert "guardrail_unmeasured:rl_measured_fraction:1 candidate rows" in decision["reasons"]
+
+    def test_without_declared_floor_the_guard_stays_paired(self):
+        spec = {k: v for k, v in self.RL_SPEC.items() if k != "rl_min_measured_fraction"}
+        decision = decide(spec, self.RL_BASE, self._cand([0.66, 0.76, 0.74]), "val_accuracy")
+        assert "guardrail_unmeasured:rl_measured_fraction:0 pairs" in decision["reasons"]

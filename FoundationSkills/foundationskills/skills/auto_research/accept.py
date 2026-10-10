@@ -8,6 +8,7 @@ from typing import Any
 SIGNS = {"max": 1.0, "min": -1.0}
 ROBUST_N = 3
 ROBUST_SCALE = 1.4826
+RL_GUARD = "rl_measured_fraction"
 
 
 def _point(result: dict[str, Any], metric: str) -> dict[str, float] | None:
@@ -112,19 +113,10 @@ def decide(
     se_band = k * math.sqrt(_mean_sq(pairs, 0) + _mean_sq(pairs, 1))
     tau = max(floor or 0.0, rel * abs(mean_ref), se_band)
 
-    breaches: list[str] = []
-    for guard in guards:
-        gpairs = paired(baseline, candidate, guard)
-        if len(gpairs) < 2:
-            unmeasured.append(f"guardrail_unmeasured:{guard}:{len(gpairs)} pairs")
-            continue
-        # The drop sign is the GUARD metric's own direction (higher-is-better "max" by default,
-        # confirm.guardrail_directions overrides); it is never the objective's outcome sign.
-        gsign = SIGNS.get(guard_dirs.get(guard, "max"), 1.0)
-        drop = statistics.fmean([gsign * (ref["value"] - cand["value"]) for ref, cand in gpairs])
-        band = max(guard_eps, k * math.sqrt(_mean_sq(gpairs, 0) + _mean_sq(gpairs, 1)))
-        if drop > band:
-            breaches.append(f"guardrail:{guard}")
+    breaches, guard_unmeasured = _guard_checks(
+        baseline, candidate, guards, guard_dirs, k, guard_eps, rl_floor=spec.get("rl_min_measured_fraction")
+    )
+    unmeasured.extend(guard_unmeasured)
     reasons.extend(breaches)
 
     simpler = any(bool(row.get("simpler")) for row in candidate)
@@ -155,11 +147,23 @@ def _guard_checks(
     guard_dirs: dict[str, str],
     k: float,
     guard_eps: float,
+    rl_floor: Any = None,
 ) -> tuple[list[str], list[str]]:
-    """Guardrail bands exactly as :func:`decide` computes them: ``(breaches, unmeasured markers)``."""
+    """Guardrail bands shared by :func:`decide` and :func:`decide_multi`: ``(breaches, unmeasured markers)``.
+
+    ``rl_measured_fraction`` is judged against the declared ``rl_floor`` on the candidate's own rows (M6, D6
+    revised): the reference is usually the untrained base model, which has no RL fraction to pair with.
+    """
     breaches: list[str] = []
     unmeasured: list[str] = []
     for guard in guards:
+        if guard == RL_GUARD and rl_floor is not None:
+            measured = values(candidate, guard)
+            if len(measured) < 2:
+                unmeasured.append(f"guardrail_unmeasured:{guard}:{len(measured)} candidate rows")
+            elif min(measured) < float(rl_floor):
+                breaches.append(f"guardrail:{guard}:below_floor:{min(measured):.6g}<{float(rl_floor):.6g}")
+            continue
         gpairs = paired(baseline, candidate, guard)
         if len(gpairs) < 2:
             unmeasured.append(f"guardrail_unmeasured:{guard}:{len(gpairs)} pairs")
@@ -273,7 +277,9 @@ def decide_multi(
         per_objective[metric] = {"mean_delta": delta_j, "tau": tau_j, "class": class_j, "n_pairs": len(pairs)}
         summaries.append(f"{metric}: delta {delta_j:.6g} vs tau {tau_j:.6g} -> {class_j}")
 
-    breaches, guard_unmeasured = _guard_checks(baseline, candidate, guards, guard_dirs, k, guard_eps)
+    breaches, guard_unmeasured = _guard_checks(
+        baseline, candidate, guards, guard_dirs, k, guard_eps, rl_floor=spec.get("rl_min_measured_fraction")
+    )
     unmeasured.extend(guard_unmeasured)
     reasons.extend(breaches)
 
