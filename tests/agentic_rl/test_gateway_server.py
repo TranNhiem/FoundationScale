@@ -1296,3 +1296,74 @@ def test_valid_reward_event_is_accepted_and_reaches_the_episode() -> None:
     ).json_body
     assert episode["reward_events"][0]["scope"] == "episode"
     assert episode["reward_events"][0]["value"] == 1.0
+
+
+def test_serve_replaces_a_port_zero_placeholder_with_the_bound_port() -> None:
+    """Session base_urls point at the live port, never at the port-0 placeholder."""
+    core, _, _, _ = make_core()
+    server = serve(core, "127.0.0.1", 0)
+    try:
+        port = server.server_address[1]
+        body = create_session(core)
+        assert body["base_urls"]["chat_completions"].startswith(f"http://127.0.0.1:{port}/")
+    finally:
+        server.server_close()
+
+
+def _two_turns(core: GatewayCore, assistant_echo: str) -> tuple[Any, Any]:
+    """Turn 1, then turn 2 echoing the assistant reply as ``assistant_echo`` plus a new user msg."""
+    create_session(core)
+    first = [{"role": "user", "content": "hi"}]
+    assert _chat(core, chat_body(first)).status == 200
+    second = [
+        *first,
+        {"role": "assistant", "content": assistant_echo},
+        {"role": "user", "content": "more"},
+    ]
+    assert _chat(core, chat_body(second)).status == 200
+    calls = core.store.get(SESSION_ID).calls
+    return calls[0], calls[1]
+
+
+def test_echoed_history_continues_on_the_cached_sampled_tokens() -> None:
+    """Turn 2's prompt is turn-1 prompt + sampled output + only the new message's delta."""
+    core, _, _, _ = make_core()
+    one, two = _two_turns(core, "decoded-text")
+    prefix = one.prompt_ids + one.output_ids
+    assert two.prompt_ids[: len(prefix)] == prefix
+    assert len(two.prompt_ids) > len(prefix)
+
+
+def test_rewritten_history_falls_back_to_a_full_render() -> None:
+    """If the client edits the assistant turn, the gateway renders afresh (a new segment)."""
+    core, _, _, _ = make_core()
+    one, two = _two_turns(core, "something the model never said")
+    prefix = one.prompt_ids + one.output_ids
+    assert two.prompt_ids[: len(prefix)] != prefix
+
+
+def test_reasoning_is_split_out_and_an_echo_without_it_still_continues() -> None:
+    """<think> goes to reasoning_content; a client that drops it from history still continues."""
+    core, _, _, _ = make_core(decode=lambda ids: "<think>plan it</think>Answer")
+    create_session(core)
+    first = [{"role": "user", "content": "hi"}]
+    message = _chat(core, chat_body(first)).json_body["choices"][0]["message"]
+    assert message["content"] == "Answer"
+    assert message["reasoning_content"] == "plan it"
+    second = [*first, {"role": "assistant", "content": "Answer"}, {"role": "user", "content": "go"}]
+    assert _chat(core, chat_body(second)).status == 200
+    one, two = core.store.get(SESSION_ID).calls
+    assert (
+        two.prompt_ids[: len(one.prompt_ids) + len(one.output_ids)]
+        == one.prompt_ids + one.output_ids
+    )
+
+
+def test_end_of_turn_marker_never_reaches_the_client() -> None:
+    """A decoded trailing <|im_end|> is stripped from content (the sampled ids keep it)."""
+    core, _, _, _ = make_core(decode=lambda ids: "Answer<|im_end|>")
+    create_session(core)
+    message = _chat(core).json_body["choices"][0]["message"]
+    assert message["content"] == "Answer"
+    (call,) = core.store.get(SESSION_ID).calls
+    assert call.output_ids == (11, 12, 13)

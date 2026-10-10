@@ -31,6 +31,7 @@ import hmac
 import json
 import re
 import threading
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -352,6 +353,81 @@ def _sampling_params(engine_params: Mapping[str, Any]) -> SamplingParams:
     )
 
 
+# End-of-turn markers of the chat templates FS serves (Qwen/ChatML, Llama 3, Gemma, generic).
+_END_OF_TURN_TEXTS = ("<|im_end|>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>", "</s>")
+
+
+def _strip_end_of_turn(text: str) -> str:
+    """Remove trailing end-of-turn marker text (and surrounding whitespace) from decoded text."""
+    stripped = text.rstrip()
+    changed = True
+    while changed:
+        changed = False
+        for marker in _END_OF_TURN_TEXTS:
+            if stripped.endswith(marker):
+                stripped = stripped[: -len(marker)].rstrip()
+                changed = True
+    return stripped
+
+
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+
+
+def _split_reasoning(text: str | None) -> tuple[str | None, str | None]:
+    """Split one leading ``<think>...</think>`` block off the decoded text.
+
+    Returns ``(reasoning, visible)``. Text without a closed leading block is returned whole
+    as visible content (an unterminated block is the model's output, not reasoning).
+    """
+    if text is None:
+        return None, None
+    stripped = text.lstrip()
+    if not stripped.startswith(_THINK_OPEN):
+        return None, text
+    end = stripped.find(_THINK_CLOSE)
+    if end < 0:
+        return None, text
+    reasoning = stripped[len(_THINK_OPEN) : end].strip() or None
+    visible = stripped[end + len(_THINK_CLOSE) :].lstrip() or None
+    return reasoning, visible
+
+
+def _arguments(raw: str) -> Any:
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
+
+
+def _same_message(served: CanonicalMessage, echoed: CanonicalMessage) -> bool:
+    """Has the client echoed back the message we served (or sent), up to cosmetic edits?
+
+    Assistant turns compare by tool calls (name + parsed arguments) and visible text with
+    any reasoning ignored -- clients routinely drop reasoning from history. Everything
+    else compares role, content and tool_call_id exactly.
+    """
+    if served.role != echoed.role:
+        return False
+    if served.role == "assistant":
+        _r, echoed_visible = _split_reasoning(echoed.content)
+        if (served.content or "").strip() != (echoed_visible or "").strip():
+            return False
+        if len(served.tool_calls) != len(echoed.tool_calls):
+            return False
+        return all(
+            a.name == b.name and _arguments(a.arguments_raw) == _arguments(b.arguments_raw)
+            for a, b in zip(served.tool_calls, echoed.tool_calls, strict=True)
+        )
+    return served.content == echoed.content and served.tool_call_id == echoed.tool_call_id
+
+
+def _same_history(served: Sequence[CanonicalMessage], echoed: Sequence[CanonicalMessage]) -> bool:
+    return len(served) == len(echoed) and all(
+        _same_message(a, b) for a, b in zip(served, echoed, strict=True)
+    )
+
+
 class GatewayCore:
     """Pure request router for the agentic-RL gateway."""
 
@@ -367,6 +443,9 @@ class GatewayCore:
         if not isinstance(config, GatewayConfig):
             _refuse("GatewayCore.config to be a GatewayConfig", config)
         self.config = config
+        # The URL advertised in session base_urls; serve() replaces a port-0 placeholder with
+        # the port it actually bound, so clients are never handed an unreachable address.
+        self.advertised_base_url = config.base_url.rstrip("/")
         self.client = client
         self.tokenizer = tokenizer
         self.parser = parser
@@ -377,6 +456,13 @@ class GatewayCore:
         )
         self._swap = ReadersWriterLock()
         self._swap_open = False
+        # Per-session continuation: the canonical messages already served and the EXACT
+        # token ids (prompt + sampled output) behind them. A follow-up whose history starts
+        # with those messages reuses the tokens and renders only the new messages as a
+        # template delta -- the model's own turns are never re-rendered (NativeToolLoop's
+        # rule), so tool-call markup and reasoning stay exactly as sampled.
+        self._continuations: dict[str, tuple[tuple[CanonicalMessage, ...], tuple[int, ...]]] = {}
+        self._continuation_lock = threading.Lock()
         self._policy_version = 0
         self._inflight = threading.BoundedSemaphore(config.max_inflight)
 
@@ -526,7 +612,7 @@ class GatewayCore:
         except SessionRefusal as exc:
             return _error_response(400, "invalid_request", str(exc))
 
-        base = self.config.base_url.rstrip("/")
+        base = self.advertised_base_url
         sid = session.session_id
         return _json_response(
             201,
@@ -630,6 +716,40 @@ class GatewayCore:
 
     # -- model calls --------------------------------------------------------
 
+    def _prompt_ids(
+        self,
+        session_id: str,
+        canonical: Sequence[CanonicalMessage],
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+    ) -> list[int]:
+        """Cached tokens + template delta when the history continues; else a full render."""
+        with self._continuation_lock:
+            cached = self._continuations.get(session_id)
+        if cached is not None:
+            cached_msgs, cached_ids = cached
+            n = len(cached_msgs)
+            if len(canonical) > n and _same_history(cached_msgs, canonical[:n]):
+                render = self.tokenizer.render
+                before = render(messages[:n], tools=tools, add_generation_prompt=False)
+                after = render(messages, tools=tools, add_generation_prompt=False)
+                with_header = render(messages, tools=tools, add_generation_prompt=True)
+                if after[: len(before)] == before and with_header[: len(after)] == after:
+                    return list(cached_ids) + list(with_header[len(before) :])
+        # No continuation (first call, rewritten history, or a template that is not
+        # prefix-stable): render everything; build_segments will open a new segment.
+        return list(self.tokenizer.render(messages, tools=tools, add_generation_prompt=True))
+
+    def _remember(
+        self,
+        session_id: str,
+        canonical: Sequence[CanonicalMessage],
+        reply: CanonicalMessage,
+        token_ids: Sequence[int],
+    ) -> None:
+        with self._continuation_lock:
+            self._continuations[session_id] = ((*canonical, reply), tuple(token_ids))
+
     def _handle_model_call(
         self,
         *,
@@ -687,11 +807,7 @@ class GatewayCore:
         messages = _openai_messages(request.messages)
         tools = _openai_tools(request.tools)
         try:
-            prompt_ids = self.tokenizer.render(
-                messages,
-                tools=tools,
-                add_generation_prompt=True,
-            )
+            prompt_ids = self._prompt_ids(session.session_id, request.messages, messages, tools)
         except Exception as exc:  # noqa: BLE001 - engine/template failures are 502
             return _error_response(502, "engine_error", str(exc))
 
@@ -750,7 +866,9 @@ class GatewayCore:
             )
         if generation.finish_reason == "abort":
             return _error_response(502, "engine_error", "engine aborted the generation")
-        text = self.decode(generation.token_ids)
+        # The sampled ids keep their end-of-turn token (it is part of what was trained); the
+        # client-visible text must not, or it leaks into content and breaks history echoes.
+        text = _strip_end_of_turn(self.decode(generation.token_ids))
         parsed, remainder = self.parser.parse(text)
 
         tool_calls: list[CanonicalToolCall] = []
@@ -806,10 +924,22 @@ class GatewayCore:
         except (SessionClosed, SessionNotFound, SessionRefusal) as exc:
             return _error_response(409, "session_closed", str(exc))
 
+        reasoning, visible = _split_reasoning(content)
+        self._remember(
+            session.session_id,
+            request.messages,
+            CanonicalMessage(
+                role="assistant",
+                content=visible,
+                tool_calls=tuple(tool_calls),
+                reasoning=reasoning,
+            ),
+            (*prompt_ids, *generation.token_ids),
+        )
         result = CanonicalResult(
-            text=content,
+            text=visible,
             tool_calls=tuple(tool_calls),
-            reasoning=None,
+            reasoning=reasoning,
             finish_reason=finish_reason,
             prompt_tokens=len(prompt_ids),
             completion_tokens=len(generation.token_ids),
@@ -941,4 +1071,8 @@ def serve(core: GatewayCore, host: str, port: int) -> ThreadingHTTPServer:
         _refuse("serve.port to be an int in [0, 65535]", port)
 
     handler = type("_BoundGatewayHandler", (_GatewayHandler,), {"core": core})
-    return ThreadingHTTPServer((host, port), handler)
+    server = ThreadingHTTPServer((host, port), handler)
+    if urllib.parse.urlsplit(core.advertised_base_url).port == 0:
+        bound_port = int(server.server_address[1])
+        core.advertised_base_url = f"http://{host}:{bound_port}"
+    return server
