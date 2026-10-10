@@ -280,11 +280,11 @@ def test_entries_for_backend_counts() -> None:
 def test_every_hf_family_is_a_registered_family() -> None:
     """The registry's family names must point at real FamilySpec registrations, and the
     NeMo entries must not carry a family at all (their architecture is ``nemo_class``).
-    A decode-only HF entry (its own ``eval_script``, no FamilySpec yet) is the exception."""
+    A decode-only HF entry (its own ``eval_script``, no FamilySpec yet) may carry none."""
     for entry in MODELS:
-        if entry.backend is Backend.HF and entry.eval_script:
-            assert entry.family == ""
-        elif entry.backend is Backend.HF:
+        if entry.backend is Backend.HF and entry.eval_script and not entry.family:
+            continue
+        if entry.backend is Backend.HF:
             assert entry.family in _FAMILY_NAMES, (
                 f"{entry.id} declares family {entry.family!r}, which no FamilySpec "
                 f"registers; registered names are {sorted(_FAMILY_NAMES)}"

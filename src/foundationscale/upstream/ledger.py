@@ -150,6 +150,20 @@ LEDGER: tuple[LedgerEntry, ...] = (
         expiry_check="Qwen2AudioProcessor exposes a public per-row audio token count",
     ),
     LedgerEntry(
+        id="hf-qwen3-asr-token-formula",
+        kind=LedgerKind.COPY,
+        framework="transformers",
+        path="src/foundationscale/train/audio.py",
+        anchor='_MASK_LENGTH_TOKEN_FORMULAS["Qwen3ASRProcessor"] = _qwen3_asr_tokens',
+        why=(
+            "Qwen3ASRProcessor's per-clip count is the private _get_audio_token_length, so its "
+            "chunked formula (13 tokens per 100-frame chunk plus three stride-2 convolutions "
+            "over the remainder) is copied to verify placeholders per row."
+        ),
+        upstream_version="transformers 5.19.0",
+        expiry_check="Qwen3ASRProcessor exposes a public per-row audio token count",
+    ),
+    LedgerEntry(
         id="hf-gemma-private-audio-token-count",
         kind=LedgerKind.PRIVATE_API,
         framework="transformers",

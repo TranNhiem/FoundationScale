@@ -38,10 +38,12 @@ import torch
 from foundationscale.train.audio import (
     AUDIO_FEATURES_KEY,
     AudioLoadError,
+    _qwen3_asr_tokens,
     load_audio,
     max_audio_seconds,
     refuse_if_audio_features_dropped,
     train_audio_collator_or_refuse,
+    train_transcription_collator_or_refuse,
 )
 
 
@@ -627,3 +629,278 @@ def test_max_audio_seconds_reads_the_caps_off_the_processor() -> None:
     # And the UNMEASURED arm: when either attribute is unreadable, the return
     # is None -- UNMEASURED, not unlimited-as-measured.
     assert max_audio_seconds(SimpleNamespace()) is None
+
+
+# ---------------------------------------------------------------------------
+# Qwen3-ASR: the request-API transcription collator
+# (processor.apply_transcription_request). Same fake-surface style as above:
+# the fake fulfils -- and only fulfils -- the contract this collator reads, and
+# the pair-check must be able to genuinely fire on a processor/model
+# disagreement rather than on a stub artefact.
+# ---------------------------------------------------------------------------
+
+
+class _FakeTranscriptionTokenizer:
+    """Stable-id tokenizer stub: the answer cell in, deterministic ids out.
+
+    ``pad_token_id`` is 0 exactly so it collides with content id 0 -- labels
+    masked by pad-id equality would silently eat a supervised token (the #450
+    lesson), so the tests below pin the mask-based masking through this id.
+    """
+
+    pad_token_id = 0
+    eos_token_id = 42
+
+    def __call__(self, text: str, *, add_special_tokens: bool) -> Any:
+        assert add_special_tokens is False
+        words = text.split() if text.strip() else []
+        return SimpleNamespace(input_ids=[_stable_word_id(word) for word in words])
+
+
+class Qwen3ASRProcessor:
+    """FAKE transformers-5.19 Qwen3ASRProcessor: the request-API surface only.
+
+    The CLASS NAME is load-bearing: ``_MASK_LENGTH_TOKEN_FORMULAS`` looks the
+    pair-check's expansion up by ``type(processor).__name__``, so a renamed stub
+    would quietly take the UNMEASURED branch and make every MUST_PASS leg
+    vacuous.
+
+    ``apply_transcription_request(audio=[w1, w2], language=...)`` renders
+    ``[OPEN] + audio_pl * N + [CLOSE, PREFILL]`` per row (the user turn is audio
+    only -- a decoy text field never moves a prompt length) and pads the REQUEST
+    LEFT by default (``padding_side="right"`` pads right instead), so the
+    collator's attention-mask read is what recovers the prompt.
+
+    N is ``_qwen3_asr_tokens(mask_length)`` -- the REAL registered formula over
+    ``mask_length = len(wave) // 320`` feature frames -- plus
+    ``placeholder_prediction_error`` to break the pair-check on purpose: with a
+    nonzero error the emitted placeholder count DISAGREES with the formula the
+    collator reads from ``_MASK_LENGTH_TOKEN_FORMULAS``.
+    """
+
+    AUDIO_OPEN_TOKEN = 5001
+    AUDIO_CLOSE_TOKEN = 5002
+    PREFILL_TOKEN = 5005
+    AUDIO_TOKEN_ID = 7777
+    FRAMES_PER_SAMPLE = 320
+
+    def __init__(
+        self, *, placeholder_prediction_error: int = 0, padding_side: str = "left"
+    ) -> None:
+        self.audio_token_id = self.AUDIO_TOKEN_ID
+        self.feature_extractor = SimpleNamespace(sampling_rate=16000)
+        self.tokenizer = _FakeTranscriptionTokenizer()
+        self.placeholder_prediction_error = placeholder_prediction_error
+        self.padding_side = padding_side
+        self.received_requests: list[tuple[int, str]] = []
+
+    def apply_transcription_request(self, audio: Any, *, language: str) -> dict[str, Any]:
+        assert language is not None
+        self.received_requests.append((len(audio), language))
+        per_row_ids: list[list[int]] = []
+        mask_lengths: list[int] = []
+        for wave in audio:
+            mask_length = int(len(wave)) // self.FRAMES_PER_SAMPLE
+            n_placeholder = _qwen3_asr_tokens(mask_length) + self.placeholder_prediction_error
+            mask_lengths.append(mask_length)
+            per_row_ids.append(
+                [self.AUDIO_OPEN_TOKEN]
+                + [self.AUDIO_TOKEN_ID] * n_placeholder
+                + [self.AUDIO_CLOSE_TOKEN, self.PREFILL_TOKEN]
+            )
+
+        batch_size = len(per_row_ids)
+        width = max((len(ids) for ids in per_row_ids), default=0)
+        input_ids = torch.full((batch_size, width), self.tokenizer.pad_token_id, dtype=torch.long)
+        attention_mask = torch.zeros(batch_size, width, dtype=torch.long)
+        for index, ids in enumerate(per_row_ids):
+            offset = width - len(ids) if self.padding_side == "left" else 0
+            input_ids[index, offset : offset + len(ids)] = torch.tensor(ids, dtype=torch.long)
+            attention_mask[index, offset : offset + len(ids)] = 1
+
+        feat_width = max(mask_lengths, default=0) or 1
+        input_features = torch.zeros(batch_size, feat_width, 128, dtype=torch.float32)
+        input_features_mask = torch.zeros(batch_size, feat_width, dtype=torch.bool)
+        for index, mask_length in enumerate(mask_lengths):
+            if not mask_length:
+                continue
+            if self.padding_side == "left":
+                input_features_mask[index, feat_width - mask_length :] = True
+            else:
+                input_features_mask[index, :mask_length] = True
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "input_features": input_features,
+            "input_features_mask": input_features_mask,
+        }
+
+
+def test_transcription_batch_masks_the_prompt_and_tail_pads_right(tmp_path: Path) -> None:
+    processor = Qwen3ASRProcessor()
+    collate = train_transcription_collator_or_refuse(
+        _FakeSurface(processor), audio_column="audio", max_length=256, language="en"
+    )
+    wave_short = _make_wav(tmp_path / "short.wav", 0.25)  # 4000 samples -> 12 frames
+    wave_long = _make_wav(tmp_path / "long.wav", 1.0)  # 16000 samples -> 50 frames
+    rows = [
+        {
+            "audio": str(tmp_path / "short.wav"),
+            "text": "DECOY PROMPT WORDS THIS COLLATOR MUST NEVER READ",
+            "answer": "short answer",
+        },
+        {
+            "audio": str(tmp_path / "long.wav"),
+            "text": "another decoy with more words",
+            "answer": "long target here",
+        },
+    ]
+    batch = collate(rows)
+
+    # The REAL registered formula the pair-check reads (the fake is named
+    # Qwen3ASRProcessor so that table lookup resolves) is pinned here so a
+    # formula drift cannot be absorbed by both halves shifting together.
+    short_frames = len(wave_short) // Qwen3ASRProcessor.FRAMES_PER_SAMPLE
+    long_frames = len(wave_long) // Qwen3ASRProcessor.FRAMES_PER_SAMPLE
+    assert _qwen3_asr_tokens(short_frames) == 2
+    assert _qwen3_asr_tokens(long_frames) == 7
+
+    # ONE batched request: two rows in, one call out, language forwarded.
+    assert processor.received_requests == [(2, "en")]
+
+    # prompt = [OPEN, audio_pl x N, CLOSE, PREFILL]; target = answer ids + eos.
+    p_short, a_short = 5, 3
+    p_long, a_long = 10, 4
+    # 14 = 10 + 4 is derived WITHOUT the decoy prompt text (4 + 3 words): if the
+    # prompt text column were read the rows would be longer and this fails.
+    assert batch["input_ids"].shape == (2, p_long + a_long)
+
+    input_ids = batch["input_ids"]
+    labels = batch["labels"]
+    attention_mask = batch["attention_mask"]
+    eos = _FakeTranscriptionTokenizer.eos_token_id
+
+    # --- Prompt: -100 over the left-padded request's attended prefix ---------
+    assert torch.all(labels[0, :p_short] == -100)
+    assert torch.all(labels[1, :p_long] == -100)
+    assert not torch.any(labels == Qwen3ASRProcessor.AUDIO_TOKEN_ID)
+
+    # --- Target: answer ids + eos, supervised -------------------------------
+    short_tail = [_stable_word_id("short"), _stable_word_id("answer"), eos]
+    long_tail = [_stable_word_id("long"), _stable_word_id("target"), _stable_word_id("here"), eos]
+    assert labels[0, p_short : p_short + a_short].tolist() == short_tail
+    assert input_ids[0, p_short : p_short + a_short].tolist() == short_tail
+    assert labels[1, p_long : p_long + a_long].tolist() == long_tail
+    assert input_ids[1, p_long : p_long + a_long].tolist() == long_tail
+
+    # --- Re-padding: RIGHT, pad id in input_ids, 0 in attention, -100 labels --
+    pad_id = _FakeTranscriptionTokenizer.pad_token_id
+    assert torch.all(input_ids[0, p_short + a_short :] == pad_id)
+    assert torch.all(attention_mask[0, p_short + a_short :] == 0)
+    assert torch.all(labels[0, p_short + a_short :] == -100)
+    assert torch.all(attention_mask[1] == 1)
+
+    # --- Features pass through untouched (12 and 50 frames per row) ----------
+    assert batch["input_features"].shape == (2, 50, 128)
+    assert int(batch["input_features_mask"][0].sum()) == 12
+    assert int(batch["input_features_mask"][1].sum()) == 50
+
+    # --- Coverage closes over the two rows, pair-check included --------------
+    assert collate.coverage.rows_checked == 2
+    assert collate.coverage.rows_expected == 2
+    assert collate.coverage.verdict() == "COVERED"
+
+
+def test_transcription_prompt_recovery_is_padding_side_agnostic(tmp_path: Path) -> None:
+    # A RIGHT-padded request must recover the SAME prompt/target boundary the
+    # left-padded default does, or the two families would disagree about which
+    # tokens are supervised.
+    processor = Qwen3ASRProcessor(padding_side="right")
+    collate = train_transcription_collator_or_refuse(
+        _FakeSurface(processor), audio_column="audio", max_length=256, language="en"
+    )
+    _make_wav(tmp_path / "short.wav", 0.25)
+    rows = [{"audio": str(tmp_path / "short.wav"), "text": "IGNORED", "answer": "short answer"}]
+    batch = collate(rows)
+    eos = _FakeTranscriptionTokenizer.eos_token_id
+    short_tail = [_stable_word_id("short"), _stable_word_id("answer"), eos]
+    assert batch["input_ids"].shape == (1, 8)
+    assert batch["labels"][0, :5].tolist() == [-100] * 5
+    assert batch["labels"][0, 5:8].tolist() == short_tail
+
+
+def test_transcription_collator_refuses_a_null_language_at_construction(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A run that never declared FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE must not
+    # silently default: it would train one language under another's label.
+    with pytest.raises(SystemExit) as excinfo:
+        train_transcription_collator_or_refuse(
+            _FakeSurface(Qwen3ASRProcessor()),
+            audio_column="audio",
+            max_length=256,
+            language=None,
+        )
+    assert excinfo.value.code == 96
+    err = capsys.readouterr().err
+    assert "FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE" in err
+
+
+def test_transcription_collator_refuses_a_non_processor_surface(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Same construction-time rule as the chat-template collator: a tokenizer
+    # would encode the text and drop the waveform with no signal.
+    with pytest.raises(SystemExit) as excinfo:
+        train_transcription_collator_or_refuse(
+            _FakeSurface(Qwen3ASRProcessor(), kind="tokenizer"),
+            audio_column="audio",
+            max_length=256,
+            language="en",
+        )
+    assert excinfo.value.code == 96
+    assert "tokenizer" in capsys.readouterr().err
+
+
+def test_transcription_batch_wider_than_max_length_refuses_never_truncates(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The 1.0 s row renders prompt 10 + target 4 = 14 tokens; max_length=8 is
+    # unmeasurably small. NO truncation anywhere: truncating the prompt drops
+    # measured sound, truncating the target drops the learned transcript.
+    processor = Qwen3ASRProcessor()
+    collate = train_transcription_collator_or_refuse(
+        _FakeSurface(processor), audio_column="audio", max_length=8, language="en"
+    )
+    _make_wav(tmp_path / "long.wav", 1.0)
+    rows = [{"audio": str(tmp_path / "long.wav"), "text": "IGNORED", "answer": "long target here"}]
+    with pytest.raises(SystemExit) as excinfo:
+        collate(rows)
+    assert excinfo.value.code == 96
+    err = capsys.readouterr().err
+    assert "'audio'" in err
+    assert "reached 14 tokens" in err
+    assert "max_length=8" in err
+
+
+def test_transcription_placeholder_mismatch_refuses_naming_row(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # FAILING INPUT: the fake inserts ONE MORE placeholder than the registered
+    # Qwen3ASRProcessor expansion over input_features_mask predicts (2 expected,
+    # 3 actual on a 12-frame row) -- processor and model pair out of contract,
+    # and the batch cannot be trusted to line up with the audio tower. Refusing
+    # 96 names the row and both numbers.
+    processor = Qwen3ASRProcessor(placeholder_prediction_error=1)
+    collate = train_transcription_collator_or_refuse(
+        _FakeSurface(processor), audio_column="audio", max_length=256, language="en"
+    )
+    _make_wav(tmp_path / "short.wav", 0.25)
+    rows = [{"audio": str(tmp_path / "short.wav"), "text": "IGNORED", "answer": "short answer"}]
+    with pytest.raises(SystemExit) as excinfo:
+        collate(rows)
+    assert excinfo.value.code == 96
+    err = capsys.readouterr().err
+    assert "train-row[0]" in err
+    assert "3 audio placeholders" in err  # ACTUAL
+    assert "expects 2." in err  # REGISTERED expansion's prediction

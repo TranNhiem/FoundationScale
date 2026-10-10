@@ -727,6 +727,28 @@ def _text_column_or_none(split: Any) -> Sequence[str] | None:
     return column
 
 
+def _declared_layerdrop(config: Any) -> list[str]:
+    """``name=value`` for every positive ``layerdrop`` on the config or one sub-config level.
+
+    Parakeet-CTC declares it on ``encoder_config``; Whisper-style configs on the top level
+    (``encoder_layerdrop``/``decoder_layerdrop``). Non-numeric values read as absent.
+    """
+    found: list[str] = []
+    if config is None:
+        return found
+    scopes: list[tuple[str, Any]] = [("", config)]
+    for name, value in vars(config).items():
+        if hasattr(value, "to_dict") and not isinstance(value, type):
+            scopes.append((f"{name}.", value))
+    for prefix, scope in scopes:
+        for name, value in vars(scope).items():
+            if not name.endswith("layerdrop") or isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)) and value > 0:
+                found.append(f"{prefix}{name}={value}")
+    return found
+
+
 def _kv_shared_layer_count(config: Any) -> int:
     """How many decoder layers reuse another layer's key/value states, from the config.
 
@@ -5875,9 +5897,14 @@ def _train(cfg: TrainConfig) -> int:
         # the resolved family and the loaded processor. A family with no audio
         # tower, or a processor that cannot place audio tokens, is a REFUSAL --
         # training on would fit the text and leave the waveform unread.
-        from foundationscale.train.speech_kinds import speech_plane_refusal  # noqa: PLC0415
+        from foundationscale.train.speech_kinds import (  # noqa: PLC0415
+            speech_plane_refusal,
+            speech_tower_resolution_refusal,
+        )
 
-        _audio_refusal = speech_plane_refusal(_speech_kind, _family, prompt_surface.surface)
+        _audio_refusal = speech_plane_refusal(
+            _speech_kind, _family, prompt_surface.surface
+        ) or speech_tower_resolution_refusal(_family, model)
         if _audio_refusal is not None:
             _mark(Step.REFUSE, _audio_refusal)
             _emit_manifest(
@@ -5938,6 +5965,17 @@ def _train(cfg: TrainConfig) -> int:
             f"declaration (image_column={IMAGE_COLUMN!r}, audio_column="
             f"{AUDIO_COLUMN!r}); DDP told to expect "
             "unused parameters. Their weights are CARRIED, not trained",
+        )
+    _layerdrop = _declared_layerdrop(getattr(model, "config", None))
+    if _layerdrop:
+        # Layerdrop skips whole layers at random each step, so a skipped layer's parameters
+        # get no gradient and DDP aborts on the first backward (Parakeet-CTC ships 0.1).
+        # Telling DDP to expect it keeps the upstream recipe; zeroing it would change it.
+        kwargs["ddp_find_unused_parameters"] = True
+        _mark(
+            Step.VALIDATED,
+            f"[   ok] model.layerdrop: {_layerdrop} declares layerdrop; DDP told to expect "
+            "unused parameters (the skipped layers), the recipe left as upstream ships it",
         )
     # The declared precision is wired into the flags EXPLICITLY (1b). fp32 sets
     # both off rather than omitting them: an environment-leaning default behind

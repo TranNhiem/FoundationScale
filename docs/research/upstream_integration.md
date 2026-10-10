@@ -152,6 +152,13 @@ validation_campaigns/speech_repro/EVIDENCE.md). The registry gained two optional
 this without a new abstraction. `profile` names the upstream profile an entry runs in, and Level 3
 runs that step in it. `eval_script` declares a decode-only HF entry's own script, so a model FS
 cannot train yet (no FamilySpec) can still be supported for decoding and regression-tested.
-`hf-cand-519` is not promoted to the HF lane: it lacks peft and accelerate, so the trainer cannot
-run there. Promoting it, and training Qwen3-ASR, is the next step.
+Follow-up (2026-10-11): the candidate now reaches hf-26.04's own peft and accelerate, and the FS
+trainer runs there. A seeded Parakeet fine-tune is bit-deterministic within each profile, and the
+two profiles differ by at most 0.007 loss. Qwen3-ASR gained a FamilySpec and a collator that wraps
+`apply_transcription_request`. Fine-tuned in FS on Earnings-22, it goes 14.54 -> 9.66 on the
+held-out calls (validation_campaigns/speech_q3asr).
 
+**Blockers before `hf-cand-519` replaces hf-26.04 as the HF lane:**
+1. Re-measure the qwen2_audio FamilySpec. Transformers 5.18+ nests the model under `model.`, and
+   FS now refuses (96) on an unresolvable tower instead of training into a VACUOUS gate.
+2. Re-run the training-lane regression for Whisper and Gemma-4, not only Parakeet.

@@ -61,7 +61,8 @@ def step_load(args: argparse.Namespace) -> tuple[Any, Any]:
     """
     from transformers import AutoModelForMultimodalLM, AutoProcessor
 
-    processor = AutoProcessor.from_pretrained(args.model)
+    # fine-tuned checkpoints carry weights only; their processor is the base model's
+    processor = AutoProcessor.from_pretrained(args.processor or args.model)
     # no device_map: it needs a newer accelerate than the hf-26.04 container ships
     model = AutoModelForMultimodalLM.from_pretrained(args.model, dtype=torch.bfloat16)
     model.to("cuda").eval()
@@ -105,6 +106,7 @@ def step_generate(
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
+    ap.add_argument("--processor", default=None)
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--batch-size", type=int, default=16)

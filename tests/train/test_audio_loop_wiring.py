@@ -220,3 +220,20 @@ def test_resolve_audio_surface_loads_processor_surface(monkeypatch) -> None:
     assert surface.supports_images is False
     assert "corpus carries audio" in surface.reason
     assert surface.surface is fake_processor
+
+
+def test_declared_layerdrop_is_found_on_the_config_and_one_sub_config() -> None:
+    from types import SimpleNamespace
+
+    from foundationscale.train.loop import _declared_layerdrop
+
+    class Sub(SimpleNamespace):
+        def to_dict(self) -> dict[str, object]:
+            return dict(vars(self))
+
+    parakeet = SimpleNamespace(encoder_config=Sub(layerdrop=0.1), vocab_size=1025)
+    whisper = SimpleNamespace(encoder_layerdrop=0.0, decoder_layerdrop=0.0)
+    assert _declared_layerdrop(parakeet) == ["encoder_config.layerdrop=0.1"]
+    assert _declared_layerdrop(whisper) == []
+    assert _declared_layerdrop(None) == []
+    assert _declared_layerdrop(SimpleNamespace(layerdrop=True)) == []
