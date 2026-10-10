@@ -189,3 +189,20 @@ triggered by particular speakers, and a dev set without such a speaker cannot sc
 Selection lowers the risk; the gate still catches what it misses. A robust long-form recipe
 needs a decoding-side guard that every model gets (a cap on identical-token runs at decode time),
 not only training and selection.
+
+## Decoding-side guard: cap identical-token runs at 3
+
+A declared output filter, applied identically to every model: a run of one token is kept up to 3
+(the references contain genuine triples, about 1.3 per 1,000 words). The gates keep judging the
+**raw** decoder output; otherwise the guard would hide the loops they exist to catch. The guarded
+WER is reported separately, as the product-level number.
+
+| test calls, beam 4 | raw WER | cap-3 guarded WER | `speech.repetition_loops` (raw) |
+|---|---|---|---|
+| base | 17.36 | 17.36 | -- |
+| Ls1 (selected on dev6) | 13.00 | **12.18** | FAIL (460) |
+
+**Long-form recipe:** 30-40 s training segments + beam 4 + selection under the gates on held-out
+calls + the cap-3 guard. On whole held-out Earnings-22 calls it scores **12.18 WER against base
+17.36 (-5.2 points)**. The raw-output gate stays the disclosure that this model still loops on
+one disfluent speaker. Fixing that in the decoder (a repetition-aware beam search) remains open.
