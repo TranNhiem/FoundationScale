@@ -63,3 +63,18 @@ Shared now: worker isolation with file contracts, the run manifest with profile 
 the model registry, the ledger, the reference-run regression harness, profiles and the Level 1-3
 process. Candidates (extracted when a second user appears): checkpoint converters, a technique
 plugin layer. Speech only: audio contract, speech metrics, long-form chunking.
+
+## Phase 1.2a: the NeMo AED (Canary) lane as a worker adapter (2026-10-10)
+
+`src/foundationscale/upstream/nemo/{census,finetune,decode,adjudicate}.py`, runnable as
+`python -m foundationscale.upstream.nemo.<module>` inside the NeMo container. The campaign scripts
+are thin wrappers. NeMo is imported only inside the functions that call it; the census, config
+translation, argument parsing and verdict assembly are pure and tested in CI. Verified on GB200:
+
+- decode, old script vs new package on the same node: identical (0 of 2,504 transcripts differ;
+  WER equal to 6 decimals). Recorded numbers from another node differ slightly (batched bf16 decoding
+  is node-sensitive), so equivalence is always checked on one node.
+- adjudication of an existing run: identical verdict lines.
+- fine-tune: identical census. Found and fixed: `--seed` did not make training reproducible (two
+  old-script runs with one seed differed at step 1), because lhotse's `shard_seed` defaults to
+  true randomness. Seeded runs now pin it, and two seeded runs on different GPUs give identical losses.

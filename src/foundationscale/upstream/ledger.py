@@ -41,7 +41,11 @@ class LedgerEntry:
 
 
 _SALM = "validation_campaigns/speech_canary/salm_finetune.py"
-_CANARY = "validation_campaigns/speech_canary/nemo_finetune.py"
+# PHASE 1.2a (docs/research/upstream_integration.md): the Canary AED lane moved from
+# ``validation_campaigns/speech_canary/nemo_finetune.py`` to the worker-side adapter at
+# ``src/foundationscale/upstream/nemo/finetune.py``. The two Canary entries below point at
+# the new path with the SAME anchor strings (they are preserved verbatim in the move).
+_CANARY_AED_FINETUNE = "src/foundationscale/upstream/nemo/finetune.py"
 _NEMO_SEEN = "nemo 3.1 (container nemo-26.08)"
 _HF_SEEN = "transformers 5.5"
 
@@ -97,7 +101,7 @@ LEDGER: tuple[LedgerEntry, ...] = (
         id="nemo-canary-train-cfg-strip",
         kind=LedgerKind.WORKAROUND,
         framework="nemo",
-        path=_CANARY,
+        path=_CANARY_AED_FINETUNE,
         anchor='"bucket_duration_bins",',
         why=(
             "The released Canary train_ds config carries tarred/bucketing keys for NVIDIA's own "
@@ -113,7 +117,7 @@ LEDGER: tuple[LedgerEntry, ...] = (
         id="nemo-canary-text-field",
         kind=LedgerKind.WORKAROUND,
         framework="nemo",
-        path=_CANARY,
+        path=_CANARY_AED_FINETUNE,
         anchor='train_cfg.text_field = "text"',
         why=(
             "The released train_ds names the transcript field 'answer' while our NeMo manifests "

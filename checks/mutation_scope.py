@@ -317,6 +317,18 @@ PENDING_ENROLMENT: dict[str, str] = {
         "speech model-kind dispatch (audio_llm / seq2seq / ctc): the loader class per kind, "
         "per-kind processor refusals, Whisper prompt-prefix verification and CTC blank padding"
     ),
+    "src/foundationscale/upstream/nemo/adjudicate.py": (
+        "NeMo worker: FS verdicts on a NeMo checkpoint (coverage, tower movement, frozen identity)"
+    ),
+    "src/foundationscale/upstream/nemo/census.py": (
+        "NeMo worker: strict audio census with counted refusal reasons before NeMo sees a row"
+    ),
+    "src/foundationscale/upstream/nemo/decode.py": (
+        "NeMo worker: transcribe a manifest and write the owned eval JSON"
+    ),
+    "src/foundationscale/upstream/nemo/finetune.py": (
+        "NeMo worker: train_ds/optimizer translation and the NeMo-owned fine-tune loop"
+    ),
     "src/foundationscale/upstream/contracts.py": (
         "owned speech contracts: manifest row validation with counted problem codes, "
         "duplicate id/audio detection, the NeMo AED row translation and the strict run config"
