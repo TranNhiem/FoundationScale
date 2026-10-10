@@ -153,6 +153,28 @@ and an English article "A" could be read as option A. The script now defaults to
 unparsable count and read a few raw outputs before trusting a benchmark number; raise
 `--max-tokens` to 1024 for reasoning-heavy benchmarks.
 
+## Longer training: 300-step LoRA SFT on all five models (measured)
+
+16K context, unpadded, gradient accumulation 4, on a 2,400-row image + video + text train mix
+made with `prepare_data.py split` + `mix`. Held-out = 171 rows the models never saw (110 image,
+40 video, 21 text). MMStar = all 1,498 questions, vLLM, `--max-tokens 512`.
+
+| model | held-out NLL base | held-out NLL tuned | MMStar base | MMStar tuned |
+|---|---|---|---|---|
+| gemma-4-12B-it | 1.433 | 0.505 | 64.02% | 61.88% |
+| gemma-4-26B-A4B-it | 3.027 | 0.525 | 65.42% | 65.35% |
+| gemma-4-31B-it | 1.878 | 0.449 | 72.63% | 69.96% |
+| Qwen3.6-27B | 0.822 | 0.366 | 71.50% | 72.63% |
+| Qwen3.6-35B-A3B | 0.874 | 0.405 | 69.29% | 68.69% |
+
+Every model fits the target data much better (held-out NLL down 54-83%), while general English
+perception (MMStar) moves between -2.7 and +1.1 points. Watch both numbers when you train.
+
+GRPO with images and `--group-size 8 --prompts-per-step 8` (30 steps, ScienceQA train): updates on
+13/30 steps for gemma-4-12B-it and 12/30 for Qwen3.6-27B, versus 3/20 with group size 4. Per-step
+reward stays noisy over 30 steps (gemma 0.13-0.86, Qwen 0.50-0.83), so treat this as "RL runs and
+learns", not as a measured improvement.
+
 ## Not yet measured
 
 131072-token context runs beyond this setup (they need context parallelism or CPU offload
