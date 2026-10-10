@@ -197,8 +197,8 @@ def test_published_behaviour_reports_match_the_current_skill_md_and_evals():
         match = re.search(r"against SKILL\.md ([0-9a-f]{12}) and eval cases ([0-9a-f]{12})",
                           path.read_text(encoding="utf-8"))
         assert match, f"{package}/BEHAVIOUR.md is not a generated behaviour report"
-    assert (match.group(1), match.group(2)) == current[package], \
-        f"{package}/BEHAVIOUR.md measured another SKILL.md bundle (SKILL.md + references/scripts/assets) or eval set; re-run behaviour-eval"
+        assert (match.group(1), match.group(2)) == current[package], \
+            f"{package}/BEHAVIOUR.md measured another SKILL.md bundle (SKILL.md + references/scripts/assets) or eval set; re-run behaviour-eval"
 
 
 @pytest.mark.parametrize("package", sorted(PACKAGES))
@@ -225,8 +225,8 @@ def test_published_oracle_behaviour_reports_match_the_current_skill_md_and_cases
         match = re.search(r"against SKILL\.md ([0-9a-f]{12}) and oracle cases ([0-9a-f]{12})",
                           path.read_text(encoding="utf-8"))
         assert match, f"{package}/BEHAVIOUR_ORACLE.md is not a generated behaviour report"
-    assert (match.group(1), match.group(2)) == (entry["skill_bundle_sha256"][:12], cases_sha[:12]), \
-        f"{package}/BEHAVIOUR_ORACLE.md measured another SKILL.md bundle (SKILL.md + references/scripts/assets) or oracle case set; re-run behaviour-eval"
+        assert (match.group(1), match.group(2)) == (entry["skill_bundle_sha256"][:12], cases_sha[:12]), \
+            f"{package}/BEHAVIOUR_ORACLE.md measured another SKILL.md bundle (SKILL.md + references/scripts/assets) or oracle case set; re-run behaviour-eval"
 
 
 

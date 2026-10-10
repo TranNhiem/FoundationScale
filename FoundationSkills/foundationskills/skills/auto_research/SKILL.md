@@ -284,6 +284,31 @@ Once `campaign_closed` is on the ledger every action except `check` and `close` 
   `frontier {entries, excluded, order: "presentation_only"}`. The frontier is a non-dominated listing for
   humans; it never feeds accept or claim.
 
+## Evidence-bound results (M6a)
+
+- `record` takes named evidence instead of trusting the caller: `evidence: {run_manifests: [<path>...],
+  eval_report: <path>}`. The result is derived from those files (`derive_result`): the run manifests give the
+  training verdict and `rl_measured_fraction` (the manifest's `measured_fraction`, min over runs), the eval report gives each metric's
+  `value`/`se`, and the eval must name the checkpoint the run saved (else AR-IN-012). Each file is stored by
+  path and `sha256:` digest; missing/unreadable evidence is AR-IN-011.
+- The stored row gains `evidence`, `evidence_class` (`bound` | `asserted` | `crash`), `metric_sources` (per metric
+  `eval_report` | `run_manifest` | `asserted` | `absent`) and `derived`. A metric that cannot be derived and was not supplied is
+  `{value: null, se: null}` with source `absent` - never a guessed number. A caller-supplied field that disagrees
+  with the derivation is AR-IN-012, never an overwrite.
+- Status domain is `ok | crash | unmeasured`. A training verdict of UNMEASURED, or `rl_measured_fraction` below
+  the declared `rl_min_measured_fraction`, stores the row as `unmeasured`; `decide` reports such a trial as
+  `unmeasured` (`manifest_unmeasured:<tag>`), never as a gain or a regression.
+- Evidence is required when `spec.evidence_required` is true, or by default when the campaign is rl-stage
+  (`is_rl_stage`). Then a claim over a caller-asserted row is AR-RS-009; legacy campaigns keep the M2-M5
+  claim behaviour. An unmeasured row never grounds a claim in any campaign.
+- An rl-stage campaign must declare `rl_min_measured_fraction` and the `rl_measured_fraction` guardrail
+  (direction `max`). The guardrail is judged against the declared floor on the candidate's own rows (every
+  confirm row >= `rl_min_measured_fraction`, else `guardrail:rl_measured_fraction:below_floor`), never paired
+  against the reference - the base model has no RL fraction. AR-IN-013 at `check`.
+- `close` re-hashes every bound row's evidence; a missing or changed file degrades that row to unmeasured
+  (AR-HO-004 path); where evidence is required an asserted row is likewise unmeasured at close
+  (`asserted_unbound:<trial>:<seed>`). Asserted rows left in the ledger are listed by AR-HO-010.
+
 ## Validation rules
 
 Outcome semantics (shared with `core/contract.py`): an **input** BLOCK refuses before any work - status
@@ -304,6 +329,9 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-IN-008 | input | BLOCK | proposer config invalid (name outside `catalog`/`optuna`/`optuna-cma`/`llm`, `min_rows` < 1 (>= 0 allowed for `llm`), `require_model` not a bool, `seed` not an int, unknown keys) |
 | AR-IN-009 | input | BLOCK | spec.objectives invalid (not 2-4 `{metric, direction}` entries, objectives[0] != objective, a duplicate metric, a metric outside eval_policy.metrics, or a guardrail used as an objective) |
 | AR-IN-010 | input | BLOCK | the `proposer.llm` block is malformed (missing `pool_key`/`model`, `max_cards` outside 1..budget.max_runs, `max_calls` invalid, `parse_spec_version` != 1, bad `sampling`, a URL-shaped value, or unknown keys) |
+| AR-IN-011 | input | BLOCK | named trial evidence (`evidence.run_manifests`, `evidence.eval_report`) is missing, unreadable or unrecognised, or a training/eval verdict is outside PASS/UNMEASURED |
+| AR-IN-012 | input | BLOCK | a caller-asserted result field contradicts its bound evidence, or the eval is not bound to the trained checkpoint - REFUSED, the ledger is unchanged |
+| AR-IN-013 | input | BLOCK | an rl-stage campaign does not declare `rl_min_measured_fraction` (0 < f <= 1) and the `rl_measured_fraction` guardrail |
 | AR-AP-001 | input | BLOCK | campaign_confirm missing/wrong hash, ledger approved a different hash, or no approver to open the envelope |
 | AR-LN-001 | input | BLOCK | delta outside spec.axes, nodes/gpus/partition outside spec.cluster, or a `base`/`model` override |
 | AR-LN-002 | input | BLOCK | budget.max_runs reached, gpu-hour budget exceeded, or a non-confirm run dips into the reserve |
@@ -318,6 +346,7 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-LG-002 | input | BLOCK | a mutating action after `campaign_closed` (close is final: only `check`/`close` stay open) |
 | AR-RS-007 | input | BLOCK | claim over an incomplete/unmeasured confirm set (missing, pending, crashed, limited or unpaired seed) or of a decision that is not `accepted_gain` |
 | AR-RS-008 | input | BLOCK | multi-objective claim of a candidate whose decision is not `accepted_gain` (a trade-off or worse never claims: `claim_refused_not_dominating:<trial>`) |
+| AR-RS-009 | input | BLOCK | a claim's confirm set holds an unmeasured row (always) or a caller-asserted, unbound row (when the campaign requires evidence) |
 | AR-PR-001 | input | BLOCK | `proposer.require_model` set and the model proposer is unavailable (below `min_rows`, extra missing, no axes, model error, no in-axes cards) or its replay is not byte-identical |
 | AR-PR-002 | input | BLOCK | the optuna-cma proposer cannot hold a categorical axis (refused, never dropped) |
 | AR-PR-003 | handoff | BLOCK | an llm response named a forbidden command (pkill -u / scancel / killall) or a quarantined node: the WHOLE response is tainted (non-strict -> catalog fallback `llm_response_tainted:<i>`, strict -> propose REFUSEDs at input); also the close-time audit of recorded responses |
@@ -332,6 +361,7 @@ exit 95); INFO travels with a PASS result. Precedence when several apply: REFUSE
 | AR-HO-007 | handoff | BLOCK | a recorded proposal does not replay byte-identically at close (search provenance drifted) |
 | AR-HO-008 | handoff | INFO | a multi-objective close found only trade-offs (no dominating candidate); they are listed, never claimed, and the outcome stays `no_gain` |
 | AR-HO-009 | handoff | BLOCK | a recorded llm response re-parses differently at close (`parse_drifted` in `replay_report`, llm campaigns only, the model is never called again) - RED, the outcome never moves |
+| AR-HO-010 | handoff | INFO | the closed ledger holds caller-asserted (unbound) results; each is named and counted |
 
 Close outcomes: improved (accepted gain) / flat_simplified / no_gain / regressed / unmeasured, decided in
 that order after the ledger check: ledger broken -> RED (AR-HO-003); unmeasured evidence that could change
@@ -428,6 +458,8 @@ gain/flat -> RED (AR-HO-001).
 - **M5b (done)**: LLM proposer (`proposer.llm`, AR-IN-010; request-only endpoint `llm_pool`/`llm_pool_file` + AR-PR-005;
   typed cards that drop, never clamp; record-and-audit = AR-PR-003/-004 + AR-HO-009; `llm_usage` budgets); Ray Tune /
   Vizier stay reference-only.
+- **M6a (done)**: evidence-bound `record` (`evidence.run_manifests`/`eval_report`, AR-IN-011/-012), the rl-stage
+  floor + guardrail (AR-IN-013), unmeasured/asserted claim refusal (AR-RS-009), close-time re-hash and AR-HO-010.
 
 ## Worked examples
 1. Validate a campaign before signing anything:

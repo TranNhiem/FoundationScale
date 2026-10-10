@@ -343,6 +343,56 @@ def check_objectives_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     return problems
 
 
+def is_rl_stage(spec: dict[str, Any]) -> bool:
+    """An rl-stage campaign: ``stage == "rl"`` or any ``rl.*`` axis."""
+    axes = [dict(axis or {}) for axis in (spec.get("axes") or [])]
+    return spec.get("stage") == "rl" or any(str(axis.get("key") or "").startswith("rl.") for axis in axes)
+
+
+def evidence_required(spec: dict[str, Any]) -> bool:
+    """M6 (D1): ``spec.evidence_required`` when a bool, else on for rl-stage campaigns (legacy campaigns keep M5 claims)."""
+    value = spec.get("evidence_required")
+    return value if isinstance(value, bool) else is_rl_stage(spec)
+
+
+def check_rl_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
+    """AR-IN-013 (M6, D5/D6): rl-stage campaigns declare their measured-fraction floor and guardrail."""
+    problems: list[tuple[str, str]] = []
+    rl_stage = is_rl_stage(spec)
+    floor_raw = spec.get("rl_min_measured_fraction")
+    floor_ok = (
+        _is_num(floor_raw)
+        and not isinstance(floor_raw, bool)
+        and math.isfinite(float(floor_raw))
+        and 0.0 < float(floor_raw) <= 1.0
+    )
+    if rl_stage and floor_raw is None:
+        problems.append(("AR-IN-013", "rl_floor_undeclared: spec must declare rl_min_measured_fraction"))
+    elif floor_raw is not None and not floor_ok:
+        problems.append(("AR-IN-013", f"rl_floor_invalid:{floor_raw!r}"))
+    if rl_stage:
+        confirm = _block(spec, "confirm")
+        eval_policy = _block(spec, "eval_policy")
+        guards = [str(g) for g in (confirm.get("guardrails") or [])]
+        directions = {
+            str(name): str(mode)
+            for name, mode in dict(confirm.get("guardrail_directions") or {}).items()
+        }
+        if "rl_measured_fraction" not in guards or directions.get("rl_measured_fraction") != "max":
+            problems.append(
+                ("AR-IN-013",
+                 "rl_guardrail_undeclared: confirm.guardrails must carry rl_measured_fraction "
+                 "with guardrail_directions 'max'")
+            )
+        metrics = [str(m) for m in (eval_policy.get("metrics") or [])]
+        if "rl_measured_fraction" not in metrics:
+            problems.append(
+                ("AR-IN-013",
+                 "rl_guardrail_metric_undeclared: eval_policy.metrics must carry rl_measured_fraction")
+            )
+    return problems
+
+
 def check_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     """(rule_id, message) problems in the campaign spec; [] means the spec is launchable."""
     problems: list[tuple[str, str]] = []
@@ -411,6 +461,7 @@ def check_spec(spec: dict[str, Any]) -> list[tuple[str, str]]:
     # AR-IN-009 (M5a): the optional objectives block validates only when present (M4 path is byte-identical).
     problems.extend(check_objectives_spec(spec))
     problems.extend(check_llm_spec(spec))
+    problems.extend(check_rl_spec(spec))
     return problems
 
 
