@@ -1,0 +1,301 @@
+# 03 — Training configuration: models, LoRA and memory on 2x H200
+
+This chapter is the whole training interface for the speech/ASR tutorial: one launch script
+(`scripts/train_speech.sh`) and one dotenv file per model (`configs/*.env`). Everything below is
+**MEASURED** on a real 2x H200 VM verification run on **2026-10-10/11** (this VM's `transformers` is
+**5.18.0**, FoundationScale is origin/main **`ced0c5c`**), with the exact numbers from that run — no
+rounding, no extrapolation. Anything unproven is marked TODO(verify).
+
+The measured stack is: 2x NVIDIA H200 (140 GiB per GPU), `torchrun --nnodes 1 --nproc_per_node 2`,
+`foundationscale.train`, three models (`nvidia/parakeet-ctc-1.1b`, `openai/whisper-large-v3`,
+`google/gemma-4-E4B-it`), 500 steps, full train-clean-100 (28,539 rows,
+`data/librispeech/manifests/train_full.jsonl`), dp=2.
+
+## 1. The launch command
+
+One script, one config file — the same shape as `../vlm-2xH200/scripts/train_sft.sh`:
+
+```bash
+bash examples/speech-2xH200/scripts/train_speech.sh examples/speech-2xH200/configs/parakeet-ctc-1.1b.env
+```
+
+That is the entire interface. The config file sets exactly five things:
+
+| variable | meaning |
+|---|---|
+| `MODEL` | local weights directory (predownloaded; see chapter 01) |
+| `DATASET` | manifest path (the JSONL built in chapter 02) — the measured recipe uses `data/librispeech/manifests/train_full.jsonl` (28,539 rows) |
+| `OUTPUT_DIR` | where `checkpoint-<N>/` and `final/` land |
+| `MODEL_KIND` | one of `ctc` \| `seq2seq` \| `audio_llm` — **pure shell branching, never passed to the training CLI** |
+| `ADAPTER` | empty = full fine-tune, or `lora` |
+
+Everything else is a shell-overridable tunable with a default, so a one-off experiment never needs a new
+config file. `train_speech.sh` itself defaults to `STEPS=500`, `LR=1e-5`, `BATCH=4`, `WARMUP=0`,
+`GPUS=2` when a config doesn't specify otherwise:
+
+| variable | default | meaning |
+|---|---|---|
+| `STEPS` | `500` | `--max_steps` |
+| `LR` | `1e-5` | learning rate |
+| `BATCH` | `4` | per-device batch size |
+| `GRAD_ACCUM` | `1` | gradient accumulation steps |
+| `SAVE_EVERY` | `500` | checkpoint every N steps |
+| `RANK` | `16` | LoRA rank |
+| `ALPHA` | `32` | LoRA alpha |
+| `WARMUP` | `0` | warmup steps |
+| `GPUS` | `2` | `--nproc_per_node` |
+| `WORKERS` | `0` | dataloader workers (`--dataloader-num-workers`, `0` throughout) |
+| `GROUP_BY_DURATION` | `0` | set `1` to enable `FOUNDATIONSCALE_TRAIN_AUDIO_GROUP_BY_DURATION`; the measured recipe runs **without** it (see §2) |
+
+Each model's own `configs/<name>.env` supplies its launch tunables as defaults using the
+`: "${VAR:=default}"` shell idiom, so a shell-level override still wins over the config file. The
+measured per-model tunables, exactly:
+
+| model | STEPS | LR | BATCH (per-device) | WARMUP | GPUS |
+|---|---|---|---|---|---|
+| `nvidia/parakeet-ctc-1.1b` | 500 | 5e-5 | 4 | 50 | 2 |
+| `openai/whisper-large-v3` | 500 | 1e-5 | 4 | 0 | 2 |
+| `google/gemma-4-E4B-it` | 500 | 1e-4 | 8 | 0 | 2 |
+
+(global batch 8, 8 and 16 respectively). The LR scheduler is FoundationScale's default (linear) — this
+tutorial passes **no** `--lr-scheduler-type` override.
+
+Override on the command line, before the script:
+
+```bash
+STEPS=500 LR=2e-5 bash examples/speech-2xH200/scripts/train_speech.sh examples/speech-2xH200/configs/whisper-large-v3.env
+```
+
+Inside, the script runs exactly this shape:
+
+```bash
+torchrun --nnodes 1 --nproc_per_node "$GPUS" --master_addr 127.0.0.1 --master_port 29880 \
+  -m foundationscale.train ...
+```
+
+Two details there are load-bearing:
+
+- `--master_addr 127.0.0.1`, **never `localhost`**. This VM class resolves `localhost` to IPv6 only (see
+  chapter 01), and the rendezvous then hangs forever instead of failing loudly.
+- `--master_port 29880` is reserved for this tutorial so it never collides with the vlm tutorial's own
+  launcher (port `29500`) when both run on the same box.
+
+## 2. Declaring the data: the `FOUNDATIONSCALE_TRAIN_AUDIO_*` environment variables
+
+The training CLI itself has no audio-specific flags — audio behaviour is entirely env-var declared. These
+are the **only** ones this tutorial uses:
+
+| variable | values | note |
+|---|---|---|
+| `FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN` | `audio` | always set; names the JSONL column holding the audio path. Required or training is refused. |
+| `FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE` | `en` | **required** for multilingual seq2seq tokenizers whose prompt carries a language token — Whisper (`seq2seq`) in this tutorial, and also Qwen3-ASR (not used here, see §5) — omitting it is a REFUSAL, exit 96. Must be **unset** for `ctc` and `audio_llm` (`parakeet-ctc-1.1b`, `gemma-4-E4B-it`), whose tokenizers don't carry one. |
+| `FOUNDATIONSCALE_TRAIN_AUDIO_GROUP_BY_DURATION` | `1` | **off by default** in the measured recipe. Optional: set `GROUP_BY_DURATION=1` to enable it and bucket batches by the manifest's `duration` field for less padding. A throughput nicety, not a correctness requirement — the manifest from chapter 02 always has `duration`, so it's safe to turn on anywhere, but the measured numbers below were taken with it off. |
+| `HF_HUB_OFFLINE` | `1` | always set; weights are predownloaded, no network calls at train/eval time. |
+
+The row schema itself uses hardcoded `text` (prompt) / `answer` (target) column names inside FoundationScale
+— there is no env var to rename those, and chapter 02's manifest already matches.
+
+### the pre-pass: validate and measure before touching a GPU
+
+`scripts/train_speech.sh` itself does no manifest validation of its own — it is a thin `torchrun` wrapper,
+same as `../vlm-2xH200/scripts/train_sft.sh`. The validation happens one layer down, inside
+`foundationscale.train`'s own startup prologue, every run, before the first batch: topology is checked
+against the declared profile, `memory.weights_fit` confirms the model fits before loading it, and the
+family registry resolves the model's kind and adapter scope. A malformed manifest or an undeclared audio
+column fails there (a REFUSAL, exit 96), before any GPU memory is touched — see the `[fs:train:validated]`
+and `[fs:train:refuse]` lines in every log below for what that looks like in practice.
+
+## 3. The three models and what each needs
+
+| model | kind | fine-tune method | special env/flags |
+|---|---|---|---|
+| `nvidia/parakeet-ctc-1.1b` | `ctc` | full fine-tune | none beyond the table above |
+| `openai/whisper-large-v3` | `seq2seq` | full fine-tune | `FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE=en` (required) |
+| `google/gemma-4-E4B-it` | `audio_llm` | LoRA r16/alpha32 on the language model | see "why no gradient checkpointing" below |
+
+For `google/gemma-4-E4B-it`, the LoRA adapter covers the language model only — but the `gemma4`
+FamilySpec trains the audio tower and the `embed_audio` projector in **full** automatically alongside it.
+That is not an extra flag and not an extra config knob; it happens by family declaration.
+
+For `nvidia/parakeet-ctc-1.1b`, FoundationScale **freezes the model's BatchNorm running statistics**
+during speech training automatically (affine weights still train) — small, zero-padded audio batches
+corrupt BatchNorm's running mean/variance otherwise, and this is measured elsewhere in this repo
+(`validation_campaigns/speech_p4`) to cost real WER if it isn't done. That freeze is why the recipe above
+"just works" with no BatchNorm-specific flag in `configs/parakeet-ctc-1.1b.env`: it is not something you
+need to set up, FoundationScale does it for every `ctc`-kind run.
+
+`MODEL_KIND` is consumed only by shell branching in `scripts/train_speech.sh` (which env vars to set/unset,
+which CLI flags to emit). It is never handed to `foundationscale.train`, which infers the family from the
+model itself.
+
+## 4. LoRA settings and why no `--gradient-checkpointing`, ever
+
+`--gradient-checkpointing` is **deliberately never passed**, for any of the 3 models, by design (one uniform
+code path): `google/gemma-4-E4B-it` has 18 KV-shared decoder layers whose forward is only correct with the
+KV cache ON; `transformers.Trainer` sets `use_cache=False` by default, and FoundationScale pins it back to
+`True` for this family — but gradient checkpointing would re-break that invariant, so it is refused rather
+than silently miscomputed. None of the 3 models in this tutorial need checkpointing at these step
+counts/batch sizes (peak memory stayed under 90 GiB of 140 GiB per GPU in every run below), so leaving it
+off uniformly costs nothing and removes a whole class of model-specific exceptions from the script.
+
+LoRA itself is `RANK`/`ALPHA` (16/32 in every measured run) with `ADAPTER=lora`; an empty `ADAPTER` is a
+full fine-tune. The defaults just work for all three models — there is no per-model adapter plumbing left
+in `scripts/train_speech.sh`.
+
+## 5. Qwen2-Audio-7B-Instruct: a clean REFUSE, not a result
+
+**MEASURED, 2026-10-11, this VM's transformers 5.18.0, FoundationScale origin/main `ced0c5c`.**
+`Qwen/Qwen2-Audio-7B-Instruct` is **not** part of this tutorial's measured or recommended path. On this VM
+it refuses before training, verbatim:
+
+```
+[fs:train:refuse]  family 'qwen2_audio' declares audio tower(s) ['audio_tower', 'multi_modal_projector']
+that do not resolve on the loaded model (its top-level modules: ['lm_head', 'model']). The module layout
+differs from the one the FamilySpec was measured on -- usually a transformers version that nests the
+model differently. Re-measure the module paths for this transformers version and update
+FamilySpec.towers. Refusing (96) before training
+```
+
+Root cause in plain terms: `Qwen2AudioForConditionalGeneration` nests its towers one level deeper
+(`model.audio_tower`, `model.multi_modal_projector`, `model.language_model`) on this VM's
+`transformers==5.18.0`, while the `qwen2_audio` FamilySpec declares the bare names `audio_tower` /
+`multi_modal_projector` / `language_model`. FoundationScale (as of origin/main `ced0c5c`) resolves the
+declared tower names against the loaded model's top-level modules and, when they do not resolve, **refuses
+rather than training against an unresolved tower**. This replaces an earlier, now-retracted workaround that
+bypassed this exact gap via `--adapter-target`; that workaround and everything it produced are retracted
+and must not be re-attempted.
+
+Cost of the refusal: it fires in **~20 seconds**, before any GPU training time is spent, and it produces
+**NO checkpoint**.
+
+This is pending a FamilySpec re-measurement for `transformers >= 5.18` — the speech-plane owner's call,
+out of scope for an `examples/`-only tutorial. Do not attempt the old workaround.
+
+One alternative worth knowing about: `Qwen3-ASR-1.7B` is an audio-LLM that **does** train on this stack
+(`transformers >= 5.13`), verified in `validation_campaigns/speech_q3asr/EVIDENCE.md`. It is not used with
+this tutorial's LibriSpeech manifests, though, because its training format needs cased, punctuated targets
+and LibriSpeech's upper-case, unpunctuated references would only retrain its casing/punctuation style
+rather than demonstrate ASR fine-tuning.
+
+## 6. Memory and throughput, measured (500 steps, 2x H200)
+
+| model | fine-tune | exit | peak GB/GPU | s/step | wall (500 steps) |
+|---|---|---|---|---|---|
+| parakeet-ctc-1.1b | full FT, 2 GPUs | 0 | 14.3 | 0.44 | 245 s |
+| whisper-large-v3 | full FT, 2 GPUs (batch 4/GPU) | 0 | 27.6 | 0.41 | 230 s |
+| whisper-large-v3 | full FT, 1 GPU (batch 8, owner's recipe, sentence-cased targets) | 0 | not cleanly isolated (shared-VM contention) | 0.73 | 364 s |
+| gemma-4-E4B-it | LoRA r16/a32, raw-case targets (not re-verified sentence-cased, see below) | 0 | 89.8 | 0.97 | 511 s |
+
+**MEASURED, 2026-10-10/11, 2x H200.** `peak GB/GPU` is the single highest sample from a 3–5 second
+`nvidia-smi` poll during each run; `s/step` is `transformers.Trainer`'s own reported
+`train_runtime / max_steps`. All three runs stayed comfortably under 140 GiB per H200, so none of the
+memory levers `../vlm-2xH200` documents (fused-loss, FSDP sharding) were needed at this scale — a longer
+run or a bigger model would need to revisit that chapter.
+
+**Shared-VM caveat:** this VM runs other, unrelated jobs outside this campaign's GPU-lock protocol, so
+timing numbers can vary run to run under contention. The peak-memory numbers above were filtered to this
+campaign's own process PIDs (`nvidia-smi --query-compute-apps`) where contention was detected.
+
+### The recipe lesson: train on sentence-cased targets, not raw LibriSpeech upper case
+
+`openai/whisper-large-v3` fine-tuning initially **regressed** dev-clean WER on this VM (2.25% -> 3.32-3.58%
+across several configurations) — root-caused, with the speech-plane owner, to the TRAINING TARGET FORMAT,
+not the software stack:
+
+| cause tried | tuned WER | diff vs base (2.2543%) |
+|---|---|---|
+| raw LibriSpeech upper case (this tutorial's early rounds, several configs) | 3.32% – 3.58% | +1.07 to +1.33 pts |
+| **sentence-cased targets** (`"Marguerite to be unable..."`, not `"MARGUERITE..."`) | **1.72%** | **-0.53 pts** |
+
+Diagnostics that ruled out the wrong explanations first (kept here as the record of how this was found):
+GPU count (owner's 1-GPU/per-device-batch-8 recipe reproduced the same regression, 3.32%, as 2-GPU/batch-4
+— not a GPU-count effect); `model.config._attn_implementation` was `sdpa`, the expected default; training
+loss tracked the owner's reference closely at every configuration (not diverging). Reading hypotheses row
+by row then showed WHY: training on LibriSpeech's raw upper-case transcripts pushes Whisper onto upper-case
+BPE pieces it rarely uses, which **fragments words it already transcribes correctly zero-shot** —
+`"Sweetwater"` -> `"SWEET WATER"`, `"mountebank"` -> `"MOUNTAIN BANK"`, `"Gwynplaine"` -> `"GUINPLAIN"` — a
+real degradation concentrated on proper nouns and uncommon words, net-negative across the full 2,683-row
+eval set despite healthy aggregate training loss. Loss alone cannot see this: it scores teacher-forced
+next-token prediction, not autoregressive generation quality on rare vocabulary.
+
+**The fix**: `scripts/prepare_librispeech.py` writes training targets SENTENCE-CASED —
+`" ".join(text.split()).lower().capitalize()` — whitespace collapsed, lower-cased, then only the first
+character upper-cased, no punctuation added. This is the same transform this repo's own
+`validation_campaigns/speech_p3`/`speech_p6` LibriSpeech/AMI campaigns have always used; this tutorial's
+early rounds simply didn't match it. Re-running the exact owner's recipe (1 GPU, per-device batch 8, 500
+steps, lr 1e-5, seed 0) on sentence-cased targets reproduced the owner's own loss trajectory almost exactly
+(step 10/250/500: this VM 0.3314/0.04538/0.04485 vs owner's reference 0.3434/0.0424/0.0450) and landed WER
+at **1.72%**, within 0.03 points of the owner's own 1.69% — **confirmed fix, not a coincidence.**
+
+**The eval manifest is intentionally NOT rebuilt** with this change — it keeps LibriSpeech's raw upper-case
+reference text. `eval_wer.py`'s scorer (`foundationscale.train.speech_metrics.normalize_transcript`)
+casefolds both the reference and the hypothesis before computing WER, so an upper-case reference scores
+identically to a sentence-cased one; only the TRAINING target's case mattered, never the eval reference's.
+
+`google/gemma-4-E4B-it` was not re-verified on the sentence-cased manifest: re-attempting it on this VM's
+current FoundationScale checkout hit a new, separately-reproducible refusal
+(`speech_tower_resolution_refusal` firing on the LoRA-wrapped model, whose top-level module becomes
+`base_model` after `peft.get_peft_model()` — the same check that correctly catches Qwen2-Audio's nesting
+mismatch appears to also misfire on an already-working LoRA family once wrapped) that blocked every retry
+attempted, independent of the manifest. This is a framework-level issue outside this tutorial's scope to
+fix (no CLI flag routes around it); Gemma-4's numbers below are carried over from the last successful run
+(raw-case targets) and are not directly comparable to Whisper's or Parakeet's post-fix numbers. Report this
+upstream before re-attempting.
+
+## 7. Reading the output
+
+Artifacts land in two places per run:
+
+- `$OUTPUT_DIR/checkpoint-<N>/` — intermediate checkpoints, every `SAVE_EVERY` steps.
+- `$OUTPUT_DIR/final/` — the end-of-run artifact.
+
+Contents depend on `ADAPTER`:
+
+- full fine-tune (`ADAPTER` empty): `config.json` + `model.safetensors`.
+- LoRA (`ADAPTER=lora`): `adapter_config.json` + `adapter_model.safetensors`, **no base weights**.
+
+Exit-code semantics: `0` means every gate passed; `1` from torchrun wrapping FoundationScale's own exit `5`
+means **some gate failed** — RED is not automatically "harmless", and it is not automatically "the
+checkpoint is fine" either. Find out WHICH gate failed before trusting anything: it can be a save gate
+such as `checkpoint.save_complete` (the write itself was incomplete — do not use that checkpoint) or a
+VACUOUS measurement gate on an unrelated axis (e.g. `speech.tower_movement` reporting it couldn't prove
+movement) while the checkpoint itself is fully intact. Read the gate name and its own reported reason in
+the log before deciding whether to evaluate the checkpoint or discard it. A refusal is **REFUSED (exit
+96)** and writes no checkpoint at all. Remember that torchrun's own exit code is not the FoundationScale
+verdict (see the first Troubleshooting bullet below).
+
+When evaluating a LoRA run, point `eval_wer.py --model` at the ORIGINAL base model dir and `--adapter` at
+`$OUTPUT_DIR/final` (chapter 04). When evaluating a full-fine-tune run whose `final/` directory lacks
+tokenizer/processor files, pass `--processor` pointing at the original base model dir.
+
+## 8. Troubleshooting
+
+- **`torchrun` reports a bare `exit 1` (or some other wrapper code) and you can't tell which
+  FoundationScale verdict it was** — the wrapper's own exit code is NOT the FS verdict. Read the
+  `exitcode : N` line inside torchrun's own failure report instead (e.g. `exitcode : 5 (pid: ...)` under
+  "Root Cause (first observed failure)") — that N is the real 5/95/96 FoundationScale code.
+- **librosa / layerdrop traps** — already covered in chapter 01; see that chapter rather than repeating them
+  here.
+- **Qwen2-Audio-7B-Instruct refuses with exit 96 naming unresolved audio towers** — that is by design on
+  this VM's `transformers==5.18.0`; see §5. Do not attempt the old `--adapter-target` workaround (it has
+  been removed from `train_speech.sh` along with all Qwen2-Audio-specific plumbing).
+- **Whisper refuses with exit 96 naming `AUDIO_LANGUAGE`** — set `FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE=en`
+  (and make sure it is unset for the other kinds).
+- **Whisper fine-tunes but WER gets worse** — check your manifest's `answer` field is SENTENCE-CASED
+  (`"Sweetwater..."`), not LibriSpeech's raw upper case (`"SWEETWATER..."`). Raw upper-case targets
+  measurably regress Whisper's WER on this stack by fragmenting words into upper-case BPE pieces it rarely
+  uses — see §6. `scripts/prepare_librispeech.py` writes sentence-cased targets by default; this symptom
+  means an older manifest or a hand-rolled builder is in use. Not fixed by GPU count, warmup, or more
+  steps/data (all ruled out before the real cause was found).
+- **`gemma-4-E4B-it` (or any LoRA + audio-tower family) refuses with exit 96 naming unresolved audio
+  towers, even though the SAME recipe worked before** — a separate issue from Qwen2-Audio's (§5):
+  `speech_tower_resolution_refusal` appears to run against the model AFTER `peft.get_peft_model()` wraps
+  it, whose top-level module becomes `base_model`, so a family's otherwise-correct tower paths (e.g.
+  `model.audio_tower`) stop resolving post-wrap. This was reproduced reliably on this VM's checkout and is
+  a framework-level ordering issue, not a config mistake — there is no CLI flag to route around it. Report
+  it upstream rather than attempting a workaround.
+- **Training hangs at rendezvous** — `--master_addr` must be `127.0.0.1`, not `localhost`.
+- **Port already in use** — this tutorial reserves `29880`; the vlm tutorial uses `29500`. Don't run two
+  speech launches at once on the same box.
+
+**Next:** [04 — Evaluation](04_evaluation.md)
