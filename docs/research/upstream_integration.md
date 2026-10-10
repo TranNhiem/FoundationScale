@@ -86,3 +86,17 @@ translation, argument parsing and verdict assembly are pure and tested in CI. Ve
 scripts: decode identical (0 of 300 transcripts differ), re-adjudication of the Canary-Qwen
 fine-tune identical (6 of 6 lines), census identical. New `--seed` pins lhotse's seed and
 `shard_seed` (default behaviour unchanged): two seeded runs give identical losses.
+
+## Phase 2: the model registry (2026-10-10)
+
+`src/foundationscale/upstream/models.py`: one typed entry per speech model (backend, upstream
+reference, kind, license, scopes, requirements, reference result, status). HF entries link to their
+existing `families/registry.py` FamilySpec by name, so nothing is duplicated; NeMo entries carry the
+trainable/frozen scopes that adjudication reads. `registry_problems()` checks the families exist, the
+scopes are consistent, and that no entry is `supported` without a measured reproduction inside
+tolerance. All 6 entries are `experimental`: none has been reproduced on its model card's own test
+set yet (we hold LibriSpeech dev-clean; the cards report test-clean).
+
+Both NeMo adjudicators take `--model-id` and read their scopes from the registry (defaults unchanged).
+Verified on GB200: registry-driven re-adjudication of the Canary (arm B, frozen decoder) and
+Canary-Qwen fine-tunes reproduces the recorded verdict lines byte for byte.

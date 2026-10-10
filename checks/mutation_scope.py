@@ -338,6 +338,10 @@ PENDING_ENROLMENT: dict[str, str] = {
     "src/foundationscale/upstream/nemo/salm_finetune.py": (
         "NeMo worker: SALM data/optimizer config and the NeMo-owned fine-tune loop"
     ),
+    "src/foundationscale/upstream/models.py": (
+        "the speech model registry and its consistency checks (families exist, scopes, no "
+        "supported entry without a reproduced reference)"
+    ),
     "src/foundationscale/upstream/contracts.py": (
         "owned speech contracts: manifest row validation with counted problem codes, "
         "duplicate id/audio detection, the NeMo AED row translation and the strict run config"

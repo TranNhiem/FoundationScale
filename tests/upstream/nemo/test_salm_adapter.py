@@ -279,3 +279,30 @@ def test_modules_import_with_nemo_absent(monkeypatch: pytest.MonkeyPatch) -> Non
         module = importlib.import_module(name)
         assert callable(module.main)
         assert callable(module.parse_args)
+
+
+def test_scopes_come_from_the_registry_and_equal_the_released_scope() -> None:
+    """Phase 2: --model-id reads the scopes from the model registry; unchanged for Canary-Qwen."""
+    import pytest
+
+    from foundationscale.upstream.nemo.salm_adjudicate import DEFAULT_SCOPES, scopes_for_model
+
+    assert scopes_for_model("canary-qwen-2.5b") == DEFAULT_SCOPES
+    with pytest.raises(ValueError, match="not a NeMo speech_llm"):
+        scopes_for_model("canary-1b-flash")
+    with pytest.raises(ValueError):
+        scopes_for_model("no-such-model")
+
+
+def test_snapshot_digests_follow_the_declared_scopes() -> None:
+    import torch
+
+    from foundationscale.upstream.nemo.salm_adjudicate import SalmScopes, snapshot_digests
+
+    t = torch.zeros(2)
+    items = [("a.w", t), ("b.w", t), ("c.w", t), ("c.w.lora_A", t)]
+    snap = snapshot_digests(items, SalmScopes(trainable=("a", "b"), frozen=("c",)))
+    assert list(snap["trainable"]) == ["a", "b"]
+    assert set(snap["lora"]) == {"c.w.lora_A"}
+    assert set(snap["frozen"]) == {"c.w"}
+    assert snap["names"] == {"a.w", "b.w", "c.w", "c.w.lora_A"}

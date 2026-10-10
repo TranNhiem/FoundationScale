@@ -711,3 +711,14 @@ def test_no_module_level_heavy_import_statements_anywhere_in_the_package() -> No
                 ):
                     offenders.append(f"{py.name}:{lineno}: {raw!r}")
     assert not offenders, "top-level heavy imports found:\n" + "\n".join(offenders)
+
+
+def test_towers_come_from_the_registry_and_equal_canarys_towers() -> None:
+    """Phase 2: --model-id reads the towers from the model registry; unchanged for Canary."""
+    import pytest
+
+    from foundationscale.upstream.nemo.adjudicate import TOWERS, towers_for_model
+
+    assert towers_for_model("canary-1b-flash") == TOWERS
+    with pytest.raises(ValueError, match="not a NeMo AED"):
+        towers_for_model("canary-qwen-2.5b")

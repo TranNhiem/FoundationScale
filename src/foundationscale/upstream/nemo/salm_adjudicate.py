@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,9 @@ __all__ = [
     "names_line",
     "parse_args",
     "snapshot",
+    "DEFAULT_SCOPES",
+    "SalmScopes",
+    "scopes_for_model",
     "snapshot_digests",
 ]
 
@@ -79,26 +83,56 @@ def digests(
     return digests_from_named_tensors(lora_filter(items, lora), list(prefixes))
 
 
-def snapshot_digests(items: Sequence[tuple[str, Any]]) -> dict[str, Any]:
+@dataclass(frozen=True)
+class SalmScopes:
+    """Which parameters must move and which must stay bit-identical (Phase 2: from the registry).
+
+    ``trainable`` prefixes are checked for movement; ``frozen`` prefixes must be bit-identical
+    except PEFT tensors (``.lora_``), which must move. LoRA lives under the first frozen prefix.
+    """
+
+    trainable: tuple[str, ...]
+    frozen: tuple[str, ...]
+
+
+# Canary-Qwen's released scope; equal to the registry entry "canary-qwen-2.5b".
+DEFAULT_SCOPES = SalmScopes(
+    trainable=("perception.encoder", "perception.proj"), frozen=("llm", "embed_tokens")
+)
+
+
+def scopes_for_model(model_id: str) -> SalmScopes:
+    """The scopes the model registry declares for ``model_id`` (a NeMo speech_llm entry)."""
+    from foundationscale.upstream.models import Backend, ModelKind, get_model
+
+    entry = get_model(model_id)
+    if entry.backend is not Backend.NEMO or entry.kind is not ModelKind.SPEECH_LLM:
+        raise ValueError(f"{model_id!r} is not a NeMo speech_llm registry entry")
+    if not entry.trainable_prefixes or not entry.frozen_prefixes:
+        raise ValueError(f"{model_id!r} declares no trainable/frozen scopes to adjudicate")
+    return SalmScopes(trainable=entry.trainable_prefixes, frozen=entry.frozen_prefixes)
+
+
+def snapshot_digests(
+    items: Sequence[tuple[str, Any]], scopes: SalmScopes = DEFAULT_SCOPES
+) -> dict[str, Any]:
     """Everything the verdicts below need of one model, from its ``(name, tensor)`` pairs. Pure.
 
-    Keys are the lane's verdict namespaces: ``names``, ``encoder`` (perception.encoder), ``proj``
-    (perception.proj), ``lora`` (PEFT tensors under llm) and ``frozen`` (non-LoRA llm +
-    embed_tokens). Prefix lists are the campaign's, verbatim.
+    Keys: ``names``; ``trainable`` (prefix -> digests, in declared order); ``lora`` (PEFT tensors
+    under the frozen scope) and ``frozen`` (non-LoRA tensors under the frozen scope).
     """
     return {
         "names": {n for n, _ in items},
-        "encoder": digests(items, ["perception.encoder"]),
-        "proj": digests(items, ["perception.proj"]),
-        "lora": digests(items, ["llm"], lora="only"),
-        "frozen": digests(items, ["llm", "embed_tokens"], lora="none"),
+        "trainable": {p: digests(items, [p]) for p in scopes.trainable},
+        "lora": digests(items, list(scopes.frozen), lora="only"),
+        "frozen": digests(items, list(scopes.frozen), lora="none"),
     }
 
 
-def snapshot(model: object) -> dict[str, Any]:
+def snapshot(model: object, scopes: SalmScopes = DEFAULT_SCOPES) -> dict[str, Any]:
     """Everything the verdicts below need of one model, so the next model may be loaded (each is
     ~2.5B params; only the digests fit in memory side by side)."""
-    return snapshot_digests(list(model.named_parameters()))  # type: ignore[attr-defined]
+    return snapshot_digests(list(model.named_parameters()), scopes)  # type: ignore[attr-defined]
 
 
 def fmt(result: object, label: str | None = None) -> str:
@@ -149,6 +183,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--finetuned", required=True)
     ap.add_argument("--coverage", required=True)
     ap.add_argument("--out", required=True)
+    # Phase 2: scopes from the model registry; without it, Canary-Qwen's released scope.
+    ap.add_argument("--model-id", default=None)
     return ap.parse_args(argv)
 
 
@@ -177,22 +213,24 @@ def main(argv: list[str] | None = None) -> int:
 
     # SALM.from_pretrained is HFHubMixin's and takes no map_location; HF already loads to CPU and
     # .to("cpu") pins it so the digests hash saved values, not a GPU copy.
-    base_snap = snapshot(SALM.from_pretrained(args.base).to("cpu"))
+    scopes = scopes_for_model(args.model_id) if args.model_id else DEFAULT_SCOPES
+    base_snap = snapshot(SALM.from_pretrained(args.base).to("cpu"), scopes)
     tuned_model = SALM.from_pretrained(args.finetuned).to("cpu")
-    tuned_snap = snapshot(tuned_model)
+    tuned_snap = snapshot(tuned_model, scopes)
     del tuned_model  # the temporary is released at statement end; this one is not.
 
-    checks = (
-        ("encoder", "perception.encoder", "tower_movement/perception.encoder"),
-        ("proj", "perception.proj", "tower_movement/perception.proj"),
-        ("lora", "llm", "lora"),  # tower_prefix is the PEFT namespace; the line says what it is
-    )
-    for key, prefix, label in checks:
+    checks = [
+        (base_snap["trainable"][p], tuned_snap["trainable"][p], p, f"tower_movement/{p}")
+        for p in scopes.trainable
+    ]
+    # tower_prefix is the PEFT namespace (LoRA lives under the first frozen prefix).
+    checks.append((base_snap["lora"], tuned_snap["lora"], scopes.frozen[0], "lora"))
+    for base_d, tuned_d, prefix, label in checks:
         r = TowerMovementGate().run(
             TowerMovementContext(
                 tower_prefix=prefix,
-                base_digests=base_snap[key],
-                saved_digests=tuned_snap[key],
+                base_digests=base_d,
+                saved_digests=tuned_d,
                 exercised=True,
             )
         )

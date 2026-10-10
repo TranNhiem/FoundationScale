@@ -133,7 +133,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--coverage", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--frozen", action="append", default=[])
+    # Phase 2: towers from the model registry; without it, Canary's two towers.
+    ap.add_argument("--model-id", default=None)
     return ap.parse_args(argv)
+
+
+def towers_for_model(model_id: str) -> tuple[str, ...]:
+    """The towers the model registry declares for ``model_id`` (a NeMo AED entry)."""
+    from foundationscale.upstream.models import Backend, ModelKind, get_model
+
+    entry = get_model(model_id)
+    if entry.backend is not Backend.NEMO or entry.kind is not ModelKind.AED:
+        raise ValueError(f"{model_id!r} is not a NeMo AED registry entry")
+    if not entry.trainable_prefixes:
+        raise ValueError(f"{model_id!r} declares no towers to adjudicate")
+    return entry.trainable_prefixes
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -144,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     from foundationscale.train.speech_adjudication import digests_from_named_tensors
 
     cov = json.loads(Path(args.coverage).read_text())
-    towers = TOWERS
+    towers = towers_for_model(args.model_id) if args.model_id else TOWERS
 
     def digests(model: object) -> dict[str, str]:
         return digests_from_named_tensors(model.named_parameters(), list(towers))  # type: ignore[attr-defined]
