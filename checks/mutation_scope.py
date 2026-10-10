@@ -82,6 +82,15 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/agentic_rl/sandbox/enroot.py": (
+        "enroot sandbox (per-trial containers, no-network via unshare, private /tmp, contained "
+        "file transfer): line-covered by tests/agentic_rl/test_sandbox_enroot.py and run on a "
+        "GB200 tray, but no mutation row yet proves a dropped containment check is caught."
+    ),
+    "src/foundationscale/agentic_rl/sandbox/build.py": (
+        "arm64 sandbox image builder from a Dockerfile subset: line-covered by "
+        "tests/agentic_rl/test_sandbox_build.py and run on a GB200 tray, but no mutation row yet."
+    ),
     "src/foundationscale/agentic_rl/stability.py": (
         "rollout-reward collapse guard (EMA, peak, best-k, stop/warn): line-covered by "
         "tests/agentic_rl/test_stability.py incl. the measured 100-step collapse shape, but no "
