@@ -14,6 +14,7 @@ from foundationscale.upstream.models import (
     SupportStatus,
     registry_problems,
 )
+from foundationscale.upstream.profiles import get_profile
 from foundationscale.upstream.vla_models import VLA_MODELS, binomial_tolerance
 
 
@@ -61,6 +62,8 @@ def test_level3_plan_schedules_each_vla_model_through_the_fs_harness() -> None:
         assert step.manifest == "libero_spatial"
         assert step.args[:2] == ("--backend", step.backend)
         assert {"{model}", "{manifest}", "{out}"} <= set(step.args)
+        # each VLA step runs in its own backend's recorded environment (rule 3)
+        assert get_profile(step.profile).backend == step.backend
 
 
 def test_speech_level3_plan_is_unchanged_by_the_vla_branch() -> None:

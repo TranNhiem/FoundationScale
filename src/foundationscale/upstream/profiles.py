@@ -48,7 +48,7 @@ TRACKED_PACKAGES: tuple[str, ...] = (
 @dataclass(frozen=True)
 class UpstreamProfile:
     name: str
-    backend: str  # "hf" | "nemo"
+    backend: str  # "hf" | "nemo" | "gr00t" | "openpi"
     container: str  # enroot container name the backend runs in
     python: str
     packages: Mapping[str, str | None] = field(default_factory=dict)  # None: must be absent
@@ -116,6 +116,47 @@ PROFILES: tuple[UpstreamProfile, ...] = (
             "lightning": None,
             "omegaconf": None,
             "soundfile": "0.13.1",
+            "numpy": "1.26.4",
+        },
+        captured="2026-10-10",
+    ),
+    # VLA lanes (rule 3: one environment per backend). Each is a plain venv beside the upstream
+    # checkout, not a container yet; versions measured in the venvs that reproduced the cards
+    # (docs/research/vla.md).
+    UpstreamProfile(
+        name="gr00t-n17",
+        backend="gr00t",
+        container="venv Isaac-GR00T d2b7e75 (aarch64, SDPA)",
+        python="3.12.2",
+        packages={
+            "torch": "2.9.0+cu128",
+            "transformers": "4.57.3",
+            "peft": "0.17.1",
+            "accelerate": "1.15.0",
+            "nemo_toolkit": None,
+            "lhotse": None,
+            "lightning": None,
+            "omegaconf": "2.3.0",
+            "soundfile": None,
+            "numpy": "1.26.4",
+        },
+        captured="2026-10-10",
+    ),
+    UpstreamProfile(
+        name="openpi-215abfb",
+        backend="openpi",
+        container="venv openpi 215abfb (uv sync, torch reinstalled cu128)",
+        python="3.11.14",
+        packages={
+            "torch": "2.7.1+cu128",
+            "transformers": "4.53.2",
+            "peft": None,
+            "accelerate": None,
+            "nemo_toolkit": None,
+            "lhotse": None,
+            "lightning": None,
+            "omegaconf": "2.3.0",
+            "soundfile": None,
             "numpy": "1.26.4",
         },
         captured="2026-10-10",
