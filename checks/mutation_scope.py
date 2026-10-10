@@ -374,6 +374,10 @@ PENDING_ENROLMENT: dict[str, str] = {
     "src/foundationscale/upstream/levels.py": (
         "Level 3 regression plan from the registry and the per-model reproduction verdict"
     ),
+    "src/foundationscale/upstream/tracker.py": (
+        "read-only upstream release/model tracker: PyPI version comparison, server-side model "
+        "filtering, degrade-not-die digest"
+    ),
     "src/foundationscale/upstream/models.py": (
         "the speech model registry and its consistency checks (families exist, scopes, no "
         "supported entry without a reproduced reference)"

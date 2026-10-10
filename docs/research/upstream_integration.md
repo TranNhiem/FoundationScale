@@ -130,3 +130,15 @@ evaluated in the HF lane), and neither container ships an upstream converter (tr
 conversion scripts out of the installed package). A converter is built when the first real
 cross-ecosystem workflow needs one, by wrapping upstream's script plus an FS equivalence check
 (identical outputs on real audio).
+
+## Phase 5: the release tracker (2026-10-10)
+
+`python -m foundationscale.upstream.tracker --profile nemo-26.08 --since 2026-04-01 [--json] [--markdown]`:
+a read-only digest of upstream releases newer than the profile's pins and of new speech models from
+nvidia / Qwen / openai / google, each flagged if already in the registry. Versions come from PyPI, not
+GitHub tags: NeMo tags container builds (`25.09-alpha.rc2`) that compared as "newer" than pip's 3.1.0
+in the first live run. New models are filtered server-side per speech tag: filtering an org's latest
+50 uploads missed speech models among nvidia's text and robotics releases. One dead source is
+recorded and does not abort the digest. First live digest: transformers 5.13-5.19 newer than the
+pinned 5.12.1; new unregistered speech models Qwen3-ASR-0.6B/1.7B (apache-2.0),
+nemotron-3.5-asr-streaming-0.6b and parakeet-unified-en-0.6b.
