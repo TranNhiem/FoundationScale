@@ -314,6 +314,10 @@ the runaway verdict for any base/fine-tune pair.
 DDP (2026-10-09, `validation_campaigns/speech_ddp`): 2 GPUs give 1.74x the samples/s of one. The
 speech coverage gates had audited only the writing rank's rows; the census is now summed over the
 ranks right after `Trainer.train()` (verified: 624/624 on 2 GPUs, where 312 was reported before).
+Long-form (2026-10-09, `validation_campaigns/speech_longform`): on whole Earnings-22 calls the
+Earnings fine-tune's gain (17.30 -> 14.14 with loops collapsed) is hidden by local repetition loops
+inside chunks (17.30 -> 16.77). New gate `speech.repetition_loops` catches them where
+`speech.runaway_hypotheses` cannot.
 
 ### P4, more families and Lane B
 

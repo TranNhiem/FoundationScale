@@ -28,7 +28,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from foundationscale.rl.advantage import SessionGroupAdvantage  # noqa: E402
+from foundationscale.rl.advantage import AdvantageRefusal, SessionGroupAdvantage  # noqa: E402
 from foundationscale.rl.group_policy_objectives import (  # noqa: E402
     AgenticGRPOLoss,
     prompt_mean_row_weights,
@@ -36,6 +36,7 @@ from foundationscale.rl.group_policy_objectives import (  # noqa: E402
 from foundationscale.rl.interfaces import (  # noqa: E402
     BatchRefusal,
     ExperienceBatch,
+    LossConfigRefusal,
     SupervisionRefusal,
 )
 from foundationscale.rl.torch_backend import TensorPolicyLoss  # noqa: E402
@@ -387,3 +388,75 @@ def test_prompt_mean_row_weights_that_are_not_a_tensor_refuse_naming_the_type() 
             mask=torch.ones((2, 3)),
             reduction_row_weights=[0.5, 0.5],
         )
+
+
+# ---------------------------------------------------------------------------
+# The token_mean ablation arm: same objective, one batch-wide denominator
+# ---------------------------------------------------------------------------
+
+
+def _hand_batch() -> ExperienceBatch:
+    return _experience(
+        {
+            "prompt_ids": ("a", "a", "b", "b"),
+            "rewards": (0.0, 2.0, 0.0, 6.0),
+            "loss_mask": ((1, 0), (1, 1), (1, 1), (1, 1)),
+            "old_logprobs": ((-1.0, -1.0), (-1.0, -1.0), (-1.0, -1.0), (-1.0, -1.0)),
+        }
+    )
+
+
+def test_agentic_grpo_token_mean_loss_matches_the_hand_computation() -> None:
+    """The prompt_mean oracle's batch, re-priced with ONE denominator.
+
+    Row terms are -1, +2, -6, +6 (sum 1) over 1 + 2 + 2 + 2 = 7 supervised
+    tokens, so the surrogate is 1/7 and the loss -1/7 -- distinct from the
+    prompt_mean arm's -1/6 on the same batch, which is what makes the A/B
+    measure the reduction.
+    """
+    objective = AgenticGRPOLoss(group_size=2, reduction_mode="token_mean")
+    assert objective.reduction == "token_mean"
+    output, _advantage = objective.compute_with_report(
+        lambda _batch: ((-1.0, -1.0), (-1.0, -1.0), (-1.0, -1.0), (-1.0, -1.0)),
+        _hand_batch(),
+    )
+    assert output.loss == pytest.approx(-1.0 / 7.0)
+
+
+def test_agentic_grpo_default_reduction_stays_prompt_mean() -> None:
+    assert AgenticGRPOLoss(group_size=2).reduction == "prompt_mean"
+
+
+@pytest.mark.parametrize("mode", ["sequence_mean", "TOKEN_MEAN", "", None, 1])
+def test_agentic_grpo_refuses_an_undeclared_reduction_mode(mode: Any) -> None:
+    with pytest.raises(LossConfigRefusal, match="1 of 2 reductions"):
+        AgenticGRPOLoss(group_size=2, reduction_mode=mode)
+
+
+def test_agentic_grpo_token_mean_never_prices_an_unsupervised_row() -> None:
+    """The token_mean denominator is never 0: an unsupervised row is refused upstream."""
+    objective = AgenticGRPOLoss(group_size=2, reduction_mode="token_mean")
+    batch = _experience(
+        {
+            "prompt_ids": ("a", "a"),
+            "rewards": (0.0, 2.0),
+            "loss_mask": ((0, 0), (0, 0)),
+            "old_logprobs": ((-1.0, -1.0), (-1.0, -1.0)),
+        }
+    )
+    with pytest.raises(AdvantageRefusal, match="supervises 0 of 2 positions"):
+        objective.compute_with_report(lambda _batch: ((-1.0, -1.0), (-1.0, -1.0)), batch)
+
+
+def test_token_mean_registry_binding_differs_only_in_the_reduction() -> None:
+    from foundationscale.rl.group_policy import (
+        agentic_grpo_algorithm,
+        agentic_grpo_token_mean_algorithm,
+    )
+
+    control = agentic_grpo_algorithm()._objective
+    arm = agentic_grpo_token_mean_algorithm()._objective
+    assert (control.reduction, arm.reduction) == ("prompt_mean", "token_mean")
+    assert arm.clip_bounds == control.clip_bounds
+    assert arm.group_size == control.group_size
+    assert arm.advantage_fn == control.advantage_fn

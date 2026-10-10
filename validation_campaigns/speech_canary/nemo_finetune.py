@@ -19,7 +19,9 @@ import json
 from pathlib import Path
 
 
-def convert(train_jsonl: Path, out_manifest: Path, pnc: str) -> dict[str, object]:
+def convert(
+    train_jsonl: Path, out_manifest: Path, pnc: str, max_duration: float = 25.0
+) -> dict[str, object]:
     import soundfile as sf
 
     refused: dict[str, int] = {}
@@ -38,7 +40,7 @@ def convert(train_jsonl: Path, out_manifest: Path, pnc: str) -> dict[str, object
                 reason = "sample_rate_mismatch"
             elif info.channels != 1:
                 reason = "not_mono"
-            elif not (1.0 <= info.duration <= 25.0):
+            elif not (1.0 <= info.duration <= max_duration):
                 reason = "duration_out_of_range"
             elif not str(r.get("answer", "")).strip():
                 reason = "empty_text"
@@ -80,15 +82,24 @@ def main() -> None:
     ap.add_argument("--warmup", type=int, default=50)
     ap.add_argument("--pnc", default="no")
     ap.add_argument("--save-every", type=int, default=0)
+    # Longest clip accepted, in seconds. 25 s is the clip recipe; long-form training raises it
+    # to 40 s (speech_longform), and a longer clip is refused and counted, never truncated.
+    ap.add_argument("--max-duration", type=float, default=25.0)
+    # Unset keeps the earlier runs' behaviour; set, it seeds Lightning and the lhotse shuffle so a
+    # result can be replicated across seeds (one seed per arm cannot separate an effect from noise).
+    ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--freeze", action="append", default=[])
     args = ap.parse_args()
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    coverage = convert(Path(args.train), out / "train_manifest.json", args.pnc)
+    coverage = convert(Path(args.train), out / "train_manifest.json", args.pnc, args.max_duration)
     (out / "coverage.json").write_text(json.dumps(coverage, indent=2))
     print("COVERAGE", json.dumps(coverage))
 
     import lightning.pytorch as pl
+
+    if args.seed is not None:
+        pl.seed_everything(args.seed, workers=True)
     from nemo.collections.asr.models import ASRModel
     from omegaconf import OmegaConf, open_dict
 
@@ -103,8 +114,10 @@ def main() -> None:
         train_cfg.use_lhotse = True
         train_cfg.batch_size = args.batch_size
         train_cfg.shuffle = True
+        if args.seed is not None:
+            train_cfg.seed = args.seed
         train_cfg.num_workers = 4
-        train_cfg.max_duration = 25.0
+        train_cfg.max_duration = args.max_duration
         train_cfg.prompt_format = model.cfg.get("prompt_format", train_cfg.get("prompt_format"))
         # The checkpoint's own train_ds names the transcript field "answer"; this manifest writes
         # it as "text". Left inherited, NeMo reads an absent field: targets would be empty and

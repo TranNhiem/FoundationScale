@@ -1418,6 +1418,10 @@ class AgenticGRPOLoss:
     old_logprob_column: str = "old_logprobs"
     component_name: str = "agentic_grpo_policy_loss"
     advantage_fn: SessionGroupAdvantage = field(default_factory=SessionGroupAdvantage)
+    # ``token_mean`` is the ABLATION arm, not an alternative default: it keeps
+    # every other choice of this objective and swaps only the denominator, so
+    # an A/B against ``prompt_mean`` measures the reduction and nothing else.
+    reduction_mode: Literal["prompt_mean", "token_mean"] = "prompt_mean"
 
     def __post_init__(self) -> None:
         _validate_common(
@@ -1429,6 +1433,15 @@ class AgenticGRPOLoss:
             reference_logprob_column=None,
             origin="agentic_grpo",
         )
+        # Read through ``object``: the Literal annotation is a promise to the
+        # type checker, not to a caller building this from a config file.
+        mode: object = self.reduction_mode
+        if type(mode) is not str or mode not in ("prompt_mean", "token_mean"):
+            raise LossConfigRefusal(
+                f"reduction_mode={mode!r}: agentic_grpo declares "
+                f"1 of 2 reductions ('prompt_mean', 'token_mean'); an undeclared "
+                f"reduction would be priced by a denominator nobody named"
+            )
         for field_name, name_value in (
             ("prompt_id_column", self.prompt_id_column),
             ("reward_column", self.reward_column),
@@ -1466,7 +1479,7 @@ class AgenticGRPOLoss:
     def reduction(
         self,
     ) -> Literal["token_mean", "sequence_mean", "constant", "prompt_mean"]:
-        return "prompt_mean"
+        return self.reduction_mode
 
     @property
     def clip_bounds(self) -> tuple[float, float]:
@@ -1526,7 +1539,13 @@ class AgenticGRPOLoss:
         )
         group_ids = [prompt_id_values[row] for row in prices.batch_rows]
         supervised_tokens = [sum(1 for entry in mask_row if entry) for mask_row in prices.mask_rows]
-        row_weights = prompt_mean_row_weights(group_ids, supervised_tokens)
+        if self.reduction_mode == "prompt_mean":
+            row_weights = prompt_mean_row_weights(group_ids, supervised_tokens)
+        else:
+            # Never 1/0: _price_rows refuses any row with zero supervised
+            # positions, so every priced row adds at least 1 to the total.
+            total = sum(supervised_tokens)
+            row_weights = tuple(1.0 / total for _ in supervised_tokens)
         surrogate_total = 0.0
         for index, batch_row in enumerate(prices.batch_rows):
             mask = prices.mask_rows[index]
