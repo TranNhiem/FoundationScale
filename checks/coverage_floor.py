@@ -323,6 +323,9 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/train/speech_metrics.py": 98,  # measured 99.2%; 1 pt CI slack
     "src/foundationscale/video.py": 97,  # measured 98.1%; 1 pt CI slack (decoders via fakes)
     "src/foundationscale/vla/__init__.py": 100,  # re-exports only; measured 100.0%
+    "src/foundationscale/vla/adapters/__init__.py": 100,  # docstring only; measured 100.0%
+    "src/foundationscale/vla/adapters/gr00t/contract.py": 98,  # measured 99.5%; 1 pt CI slack
+    "src/foundationscale/vla/adapters/gr00t/__init__.py": 100,  # re-exports only; measured 100.0%
     "src/foundationscale/vla/frames.py": 99,  # measured 100.0% (decoder via fake av); 1 pt slack
     "src/foundationscale/vla/sample.py": 99,  # measured 100.0%; 1 pt CI slack
     "src/foundationscale/verify/__init__.py": 100,  # set by --update; measured 100.0%

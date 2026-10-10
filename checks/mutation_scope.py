@@ -82,6 +82,11 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/vla/adapters/gr00t/contract.py": (
+        "GR00T checkpoint contract reader (processor_config.json -> embodiment contract, "
+        "ChunkSpec, observation dict): line-covered by tests/vla and bit-exact against GR00T's "
+        "loader on a real checkpoint, but no mutation row yet."
+    ),
     "src/foundationscale/vla/chunking.py": (
         "GR00T delta_indices temporal contract and anchor ranges per declared pad mode: "
         "line-covered by tests/vla, but no mutation row yet proves a shifted range would be "
