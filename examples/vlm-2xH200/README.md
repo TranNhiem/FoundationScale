@@ -31,11 +31,10 @@ evidence is in [`validation_campaigns/vlm_2xh200/EVIDENCE.md`](../../validation_
 Get the tutorial and run everything from the repository root `FoundationScale/`:
 
 ```bash
-git clone --branch vlm-competition https://github.com/TranNhiem/FoundationScale.git && cd FoundationScale
+git clone https://github.com/TranNhiem/FoundationScale.git && cd FoundationScale
 bash examples/vlm-2xH200/scripts/train_sft.sh examples/vlm-2xH200/configs/gemma-4-12B-it_16k.env
 ```
 
-(The tutorial lives on branch `vlm-competition` until it is merged into `main`.)
 
 Measured by a fresh user on 2x H200: data prep < 1 min on the sample files, 20-step SFT of
 gemma-4-12B-it ~12 min (add `STEPS=20` for that smoke run), DPO 5 steps 92 s, GRPO 5 steps 198 s,

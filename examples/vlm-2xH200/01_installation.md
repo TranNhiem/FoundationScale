@@ -29,10 +29,10 @@ Use these names for downloads and later runs:
 Run everything from the repository root unless stated otherwise.
 
 ```bash
-git clone --branch vlm-competition https://github.com/TranNhiem/FoundationScale.git && cd FoundationScale
+git clone https://github.com/TranNhiem/FoundationScale.git && cd FoundationScale
 ```
 
-Note: the tutorial lives on branch `vlm-competition` until it is merged into `main`, so the clone always picks that branch. From here on, every command runs from the repository root `FoundationScale/` unless stated.
+From here on, every command runs from the repository root `FoundationScale/` unless stated.
 
 ---
 
