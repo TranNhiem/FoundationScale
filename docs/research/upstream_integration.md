@@ -112,3 +112,46 @@ Canary-Qwen fine-tunes reproduces the recorded verdict lines byte for byte.
   Canary-1B-flash reproduce their model-card LibriSpeech WER within 0.02 points, scored with the
   card's normalizer, and are now `supported` in the registry. Our stricter normalizer reads about
   0.2 points higher.
+
+## Phase 3 (part 2): Level 3 as one command (2026-10-10)
+
+`foundationscale.upstream.levels.level3_plan()` turns the registry into the regression plan: one step
+per `supported` model, with its backend, decode entry point, upstream ref, reference split, card value
+and tolerance. `validation_campaigns/speech_repro/run_levels.sh SRC OUT` runs each step in its own
+backend container on an idle GPU, scores with the card's normalizer and judges with
+`levels.judge()`; it exits 0 when every model passes and 5 on any regression. Promoting a model to
+`supported` adds it to the run with no other edit. First full run on GB200 (current profiles): all 3
+PASS with the same numbers as the reproduction (gaps +0.016, +0.004, +0.014).
+
+## Phase 4: deferred (rule 5)
+
+No current workflow moves a checkpoint between NeMo and Hugging Face (Parakeet is trained and
+evaluated in the HF lane), and neither container ships an upstream converter (transformers keeps its
+conversion scripts out of the installed package). A converter is built when the first real
+cross-ecosystem workflow needs one, by wrapping upstream's script plus an FS equivalence check
+(identical outputs on real audio).
+
+## Phase 5: the release tracker (2026-10-10)
+
+`python -m foundationscale.upstream.tracker --profile nemo-26.08 --since 2026-04-01 [--json] [--markdown]`:
+a read-only digest of upstream releases newer than the profile's pins and of new speech models from
+nvidia / Qwen / openai / google, each flagged if already in the registry. Versions come from PyPI, not
+GitHub tags: NeMo tags container builds (`25.09-alpha.rc2`) that compared as "newer" than pip's 3.1.0
+in the first live run. New models are filtered server-side per speech tag: filtering an org's latest
+50 uploads missed speech models among nvidia's text and robotics releases. One dead source is
+recorded and does not abort the digest. First live digest: transformers 5.13-5.19 newer than the
+pinned 5.12.1; new unregistered speech models Qwen3-ASR-0.6B/1.7B (apache-2.0),
+nemotron-3.5-asr-streaming-0.6b and parakeet-unified-en-0.6b.
+
+## The first adoption: Qwen3-ASR-1.7B (2026-10-10)
+
+The tracker found it; the process ran end to end. A candidate profile `hf-cand-519` was built
+(transformers 5.19.0), Level 3 passed under it for the supported HF model, and Qwen3-ASR reproduced
+Qwen's README numbers (test-clean 1.643 vs 1.63, test-other 3.368 vs 3.38;
+validation_campaigns/speech_repro/EVIDENCE.md). The registry gained two optional fields to express
+this without a new abstraction. `profile` names the upstream profile an entry runs in, and Level 3
+runs that step in it. `eval_script` declares a decode-only HF entry's own script, so a model FS
+cannot train yet (no FamilySpec) can still be supported for decoding and regression-tested.
+`hf-cand-519` is not promoted to the HF lane: it lacks peft and accelerate, so the trainer cannot
+run there. Promoting it, and training Qwen3-ASR, is the next step.
+

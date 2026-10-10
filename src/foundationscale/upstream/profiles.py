@@ -95,6 +95,28 @@ PROFILES: tuple[UpstreamProfile, ...] = (
         },
         captured="2026-10-10",
     ),
+    # Candidate for the HF lane: the hf-26.04 container plus a venv carrying transformers 5.19
+    # (torch unchanged). Decode-only for now: peft and accelerate are not visible in the venv,
+    # so the FS trainer cannot run here. Parakeet-CTC reproduces its card under it (Level 3).
+    UpstreamProfile(
+        name="hf-cand-519",
+        backend="hf",
+        container="fs-g4e4b-nemo-automodel-26-04_compute + venv hf-cand-519",
+        python="3.12.3",
+        packages={
+            "torch": "2.11.0a0+eb65b36914.nv26.2",
+            "transformers": "5.19.0",
+            "peft": None,
+            "accelerate": None,
+            "nemo_toolkit": None,
+            "lhotse": None,
+            "lightning": None,
+            "omegaconf": None,
+            "soundfile": "0.13.1",
+            "numpy": "1.26.4",
+        },
+        captured="2026-10-10",
+    ),
 )
 
 

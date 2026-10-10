@@ -2,7 +2,7 @@
 
 Three things must hold here and nothing may quietly stop holding:
 
-* the six real entries are self-consistent -- ``registry_problems() == []`` against the
+* the real entries are self-consistent -- ``registry_problems() == []`` against the
   REAL family registry (the lazy default import is exercised, not bypassed), so the
   tree's own catalogue can never accumulate a contradiction;
 * every refusal code fires on a deliberately broken entry -- a code that can never fire
@@ -10,9 +10,8 @@ Three things must hold here and nothing may quietly stop holding:
   invariant from a missing one. Each crafted entry breaks exactly one rule so the
   reported code is attributable;
 * ``reproduced`` compares numbers the way acceptance must: inclusive at the boundary,
-  False whenever either side of the comparison is missing. The real entries sit at the
-  failure end of that -- every card reports test-clean while we hold dev-clean -- so all
-  six are EXPERIMENTAL and none claims reproduction.
+  False whenever either side of the comparison is missing. An entry is SUPPORTED only once
+  its card's number is reproduced on the card's own LibriSpeech test split.
 """
 
 from __future__ import annotations
@@ -201,9 +200,9 @@ def test_reproduced_with_no_numbers_at_all_fails() -> None:
     assert not _reference(upstream_value=None, measured=None).reproduced
 
 
-def test_registry_holds_the_six_speech_models() -> None:
+def test_registry_holds_the_seven_speech_models() -> None:
     """Pin the transcription itself: ids, in declaration order."""
-    assert len(MODELS) == 6
+    assert len(MODELS) == 7
     assert [entry.id for entry in MODELS] == [
         "gemma-4-e4b-it",
         "whisper-large-v3",
@@ -211,6 +210,7 @@ def test_registry_holds_the_six_speech_models() -> None:
         "parakeet-ctc-1.1b",
         "canary-1b-flash",
         "canary-qwen-2.5b",
+        "qwen3-asr-1.7b",
     ]
 
 
@@ -223,6 +223,7 @@ def test_upstream_refs_are_transcribed_exactly_as_upstream_spells_them() -> None
         "parakeet-ctc-1.1b": "nvidia/parakeet-ctc-1.1b",
         "canary-1b-flash": "nvidia/canary-1b-flash",
         "canary-qwen-2.5b": "nvidia/canary-qwen-2.5b",
+        "qwen3-asr-1.7b": "Qwen/Qwen3-ASR-1.7B-hf",
     }
 
 
@@ -238,11 +239,16 @@ def test_every_reference_targets_a_card_test_set_with_a_fixed_tolerance() -> Non
 
 def test_supported_means_reproduced_and_only_reproduced_models_are_supported() -> None:
     """Rule 4: the three models whose cards publish a LibriSpeech result were reproduced on the
-    full split (validation_campaigns/speech_repro, 2026-10-10); the others publish none and stay
-    experimental."""
-    assert len(MODELS) == 6
+    full split (validation_campaigns/speech_repro, 2026-10-10), as was Qwen3-ASR from its README
+    table; the others publish none and stay experimental."""
+    assert len(MODELS) == 7
     supported = {e.id for e in MODELS if e.status is SupportStatus.SUPPORTED}
-    assert supported == {"parakeet-ctc-1.1b", "canary-1b-flash", "canary-qwen-2.5b"}
+    assert supported == {
+        "parakeet-ctc-1.1b",
+        "canary-1b-flash",
+        "canary-qwen-2.5b",
+        "qwen3-asr-1.7b",
+    }
     for entry in MODELS:
         assert entry.reference is not None
         if entry.status is SupportStatus.SUPPORTED:
@@ -253,18 +259,19 @@ def test_supported_means_reproduced_and_only_reproduced_models_are_supported() -
 
 
 def test_entries_for_backend_counts() -> None:
-    """4 HF transformers entries, 2 NeMo entries, in registry order for both spellings."""
+    """5 HF transformers entries, 2 NeMo entries, in registry order for both spellings."""
     assert [entry.id for entry in entries_for_backend(Backend.HF)] == [
         "gemma-4-e4b-it",
         "whisper-large-v3",
         "qwen2-audio-7b-instruct",
         "parakeet-ctc-1.1b",
+        "qwen3-asr-1.7b",
     ]
     assert [entry.id for entry in entries_for_backend(Backend.NEMO)] == [
         "canary-1b-flash",
         "canary-qwen-2.5b",
     ]
-    assert len(entries_for_backend(Backend.HF)) == 4
+    assert len(entries_for_backend(Backend.HF)) == 5
     assert len(entries_for_backend(Backend.NEMO)) == 2
     assert entries_for_backend("hf") == entries_for_backend(Backend.HF)
     assert entries_for_backend("nemo") == entries_for_backend(Backend.NEMO)
@@ -272,9 +279,12 @@ def test_entries_for_backend_counts() -> None:
 
 def test_every_hf_family_is_a_registered_family() -> None:
     """The registry's family names must point at real FamilySpec registrations, and the
-    NeMo entries must not carry a family at all (their architecture is ``nemo_class``)."""
+    NeMo entries must not carry a family at all (their architecture is ``nemo_class``).
+    A decode-only HF entry (its own ``eval_script``, no FamilySpec yet) is the exception."""
     for entry in MODELS:
-        if entry.backend is Backend.HF:
+        if entry.backend is Backend.HF and entry.eval_script:
+            assert entry.family == ""
+        elif entry.backend is Backend.HF:
             assert entry.family in _FAMILY_NAMES, (
                 f"{entry.id} declares family {entry.family!r}, which no FamilySpec "
                 f"registers; registered names are {sorted(_FAMILY_NAMES)}"
@@ -309,3 +319,18 @@ def test_real_models_pass_registry_problems() -> None:
     AND against the names read here -- the two paths must agree."""
     assert registry_problems() == []
     assert registry_problems(MODELS, family_names=_FAMILY_NAMES) == []
+
+
+def test_reproduced_boundary_survives_float_addition() -> None:
+    """1.61 + 0.3 is 1.9100000000000001 in floating point; exactly-at-tolerance must still pass."""
+    assert _reference(upstream_value=1.61, measured=1.61 + 0.3, tolerance=0.3).reproduced
+    assert not _reference(upstream_value=1.61, measured=1.61 + 0.31, tolerance=0.3).reproduced
+
+
+def test_decode_only_hf_entry_needs_its_own_eval_script() -> None:
+    decode_only = replace(_BASE_HF, family="", eval_script="validation_campaigns/x/eval.py")
+    assert _problems(decode_only) == []
+
+
+def test_unknown_profile_is_named() -> None:
+    assert _problems(replace(_BASE_HF, profile="hf-99")) == ["unknown_profile:base-hf:hf-99"]
