@@ -282,6 +282,16 @@ class DiskWeightSync:
         OWN resolved path is a direct child of that canonical root -- so a symlink
         planted under ``publish_root``, or any other escape, can never point this
         deletion anywhere else. Never touches a non-matching entry.
+
+        This also means ``{publish_root}/.serving_cache`` (``servable.
+        complete_for_serving``'s extras-file cache, when ``RolloutHost.
+        servable_base_model_dir`` is set) is NEVER pruned here: its name never
+        matches ``_STEP_DIR_RE``, by construction, not by an extra exclusion
+        this function would have to remember to keep. A pruned step directory
+        may hold one of that cache's files as a hard link
+        (``model-serving-extras.safetensors``); deleting the directory only
+        removes THIS link -- the cache's own copy, and the inode, survive as
+        long as the cache keeps its link to it.
         """
         root = Path(self.publish_root)
         if not root.is_dir():

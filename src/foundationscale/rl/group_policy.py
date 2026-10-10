@@ -738,3 +738,26 @@ def agentic_grpo_algorithm() -> SequencePolicyAlgorithm:
         ),
     )
     return SequencePolicyAlgorithm(name="agentic_grpo", objective=objective)
+
+
+def agentic_grpo_token_mean_algorithm() -> SequencePolicyAlgorithm:
+    """Construct the ``agentic_grpo_token_mean`` ablation binding.
+
+    WHAT IS CLAIMED: identical to :func:`agentic_grpo_algorithm` -- the same
+    session-group estimator, shrink policy, ``min_valid=2`` and (0.8, 1.2)
+    clip -- except that the reduction is ``token_mean`` (one denominator over
+    every supervised token in the batch) instead of ``prompt_mean``. It exists
+    so an A/B measures the reduction and nothing else.
+
+    WHAT IS NOT CLAIMED: that ``token_mean`` is a recommended default for
+    agentic runs; it is the control arm of that comparison.
+    """
+    objective = AgenticGRPOLoss(
+        advantage_fn=SessionGroupAdvantage(
+            normalise_by_std=False,
+            partial_group_policy="shrink",
+            min_valid=2,
+        ),
+        reduction_mode="token_mean",
+    )
+    return SequencePolicyAlgorithm(name="agentic_grpo_token_mean", objective=objective)

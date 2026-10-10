@@ -25,6 +25,7 @@ manifest schema.
 from __future__ import annotations
 
 import hashlib
+import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -456,6 +457,231 @@ def adjudicate_speech(
     )
 
 
+# The counts reduce_coverage_across_ranks sums, in the order its packed row
+# carries them. The order IS the contract: a rank that packs another order sums
+# its rows into another rank's seconds and publishes refusals no row produced.
+_COVERAGE_COUNT_KEYS = (
+    "rows_expected",
+    "rows_checked",
+    "rows_refused",
+    "seconds_total",
+    "placeholder_rows_verified",
+    "placeholder_rows_unmeasured",
+)
+
+# The compact census adjudicate_speech's docstring names as the manifest's
+# required keys: all of them are refused (ValueError) when absent, because a
+# count that is absent cannot be summed and zero-filling it would publish a
+# census no row produced. seconds_total is deliberately NOT among them -- it
+# rides AudioCoverage.as_manifest's schema and is summed when present, but a
+# manifest that declares no seconds stays without them rather than being handed
+# an invented 0.0.
+_REQUIRED_COVERAGE_KEYS = (
+    "rows_expected",
+    "rows_checked",
+    "rows_refused",
+    "refused",
+    "placeholder_rows_verified",
+    "placeholder_rows_unmeasured",
+)
+
+
+def _coverage_counts_vector(coverage_manifest: Mapping[str, Any]) -> list[float]:
+    """One packed float64 row: the six counts, then one slot per refusal reason.
+
+    The refusal buckets ride as one slot per ``AUDIO_LOAD_REASONS`` entry --
+    audio.py's canonical vocabulary, exported there (it is the same tuple
+    ``SharedAudioCoverage`` keys its shared refusal Array by) -- and NOT as "the
+    reasons this rank saw". Per-rank buckets would give ranks of different
+    widths (gloo would fail the shape and nccl would sum whatever it is handed)
+    and, worse, a rank whose ``unreadable`` lands in another rank's ``too_long``
+    slot manufactures a refusal reason no row ever produced.
+
+    A reason outside the vocabulary therefore raises: it has no bucket to be
+    merged into, and dropping it would report a run that lost no rows -- the
+    same refusal ``SharedAudioCoverage.record_refused`` makes, and for the same
+    reason. ``seconds_total`` packs as 0.0 when the manifest does not carry it
+    (a wire slot, never a claim on the manifest): see
+    :func:`reduce_coverage_across_ranks`, where a census without seconds stays
+    without them.
+    """
+    from foundationscale.train.audio import AUDIO_LOAD_REASONS  # noqa: PLC0415
+
+    vector = [
+        # Only seconds_total can be missing here -- reduce_coverage_across_ranks
+        # already refused an absent count key.
+        float(coverage_manifest[key]) if key in coverage_manifest else 0.0
+        for key in _COVERAGE_COUNT_KEYS
+    ]
+    index_of = {reason: index for index, reason in enumerate(AUDIO_LOAD_REASONS)}
+    buckets = [0.0] * len(AUDIO_LOAD_REASONS)
+    for reason, count in dict(coverage_manifest["refused"]).items():
+        index = index_of.get(reason)
+        if index is None:
+            raise ValueError(
+                f"refusal reason {reason!r} is not one of {list(AUDIO_LOAD_REASONS)}: "
+                "the ranks merge refusals one bucket per vocabulary token, so a reason "
+                "with no bucket would lose its rows from the manifest (the same "
+                "refusal SharedAudioCoverage.record_refused makes)"
+            )
+        buckets[index] += float(count)
+    return vector + buckets
+
+
+def _all_reduce_coverage_vector(vector: list[float]) -> tuple[list[float], int]:
+    """``vector`` summed over the default process group; ``(vector, 1)`` when there is no group.
+
+    torch is read through ``sys.modules`` and imported nowhere here -- the way
+    :mod:`foundationscale.train.loop`'s rank helper finds the process's rank --
+    because this module must import under a bare interpreter (see the module
+    docstring) and a run that is not distributed must be able to pass a manifest
+    through without a tensor framework arriving to copy six integers. "torch is
+    loaded but its group is not initialized" is the same case: there are no peers
+    to sum with.
+
+    The row goes through ONE float64 tensor and ONE ``all_reduce(SUM)``. float64
+    so the sums stay exact up to 2**53 rows (float32 rounds at 2**24 and would
+    publish a coverage claim nobody measured). The device follows the backend:
+    the current CUDA device for NCCL (NCCL has no CPU tensors, and a CPU tensor
+    there is an error rather than a slow path) and CPU otherwise (gloo sums CPU
+    tensors and refuses a CUDA one out loud).
+    """
+    torch_module = sys.modules.get("torch")
+    if torch_module is None:
+        return list(vector), 1
+    dist = getattr(torch_module, "distributed", None)
+    if dist is None or not dist.is_available() or not dist.is_initialized():
+        return list(vector), 1
+    ranks = int(dist.get_world_size())
+    if ranks < 2:
+        return list(vector), 1
+    # torch is loaded by now (its distributed submodule just answered). Backend
+    # spellings differ between builds -- "nccl" in some, "Backend.NCCL" from the
+    # Backend object's __repr__ in others -- so the stable part is the suffix.
+    device = (
+        torch_module.device("cuda", torch_module.cuda.current_device())
+        if str(dist.get_backend()).lower().endswith("nccl")
+        else torch_module.device("cpu")
+    )
+    row = torch_module.tensor(vector, dtype=torch_module.float64, device=device)
+    dist.all_reduce(row, op=dist.ReduceOp.SUM)
+    return [float(value) for value in row.to("cpu").tolist()], ranks
+
+
+def reduce_coverage_across_ranks(
+    coverage_manifest: Mapping[str, Any],
+    *,
+    all_reduce_sum: Callable[[list[float]], list[float]] | None = None,
+    world_size: int | None = None,
+) -> dict[str, Any]:
+    """Sum one rank's coverage manifest over the ranks of the run. A COLLECTIVE.
+
+    EVERY RANK MUST CALL THIS, in the same order. :func:`coverage_after_train` is
+    the caller: ``train()`` reaches it on every rank right after ``Trainer.train()``
+    returns. :func:`finish_speech_run` must NOT call it -- only the writing rank gets
+    there, and a collective on one rank deadlocks (measured). The default path is ONE
+    ``all_reduce(SUM)`` over one packed float64 row: it blocks until every rank
+    of the group arrives and pairs the entries POSITIONALLY, so a rank that
+    skips the call hangs the run (NCCL would rather time out in flames than let
+    it continue with half a census), and a rank that packs a different width or
+    order sums one rank's rows into another rank's seconds.
+
+    MEASURED defect (GB200, 2026-10-09): the speech gates audited only the LOCAL
+    rank's rows. ``SharedAudioCoverage`` shares counters across one rank's
+    DataLoader WORKERS and never across ranks, so under ``torchrun --nproc-per-node
+    2`` every rank handed :func:`finish_speech_run` its own
+    ``data_collator.coverage.as_manifest()`` and that was adjudicated as the
+    corpus: a 150-step run at per-device batch 8 trained 2,400 rows on two GPUs
+    while ``speech.audio_row_coverage`` claimed "1272/1272 audio rows" -- the
+    1-GPU count (1,200 trained rows plus 72 prefetched) -- and rank 1's rows,
+    refusals and placeholder checks were never adjudicated at all. COVERED over
+    half the census is the most expensive lie this framework can publish, and the
+    placeholder gate carried the same defect, repaired by the same call.
+
+    The return is a NEW manifest (the input is never written to): ``rows_expected``,
+    ``rows_checked``, ``rows_refused``, ``seconds_total``,
+    ``placeholder_rows_verified``, ``placeholder_rows_unmeasured`` and every
+    ``refused[reason]`` are the SUM over the ranks (buckets only where the sum is
+    non-zero, as ``AudioCoverage.as_manifest`` reports them); ``"verdict"`` is
+    RECOMPUTED from the summed counts with audio.py's own
+    :func:`foundationscale.train.audio._coverage_verdict` (a verdict stamped
+    before the ranks were summed is a verdict over one rank and must not
+    survive); ``sampling_rate`` is kept as it was measured; a ``seconds_total``
+    the manifest never carried stays absent -- sums invent no duration; and
+    ``"ranks"`` is the world size the sums describe.
+
+    "Required" keys are :func:`adjudicate_speech`'s compact census --
+    ``rows_expected``, ``rows_checked``, ``rows_refused``, ``refused``,
+    ``placeholder_rows_verified``, ``placeholder_rows_unmeasured`` -- and one
+    missing raises :class:`ValueError` before anything is summed. ``seconds_total``
+    is counted when it is present and is not one of them: it is no gate's
+    denominator, so a compact census has none to give and none is fabricated for
+    it (the collator's ``as_manifest`` always writes one, and that one is summed
+    like every other count).
+
+    ``all_reduce_sum``/``world_size`` stand in for the ``torch.distributed``
+    handle -- this is how unit tests drive the sum: ``all_reduce_sum`` takes the
+    local packed row and returns the summed one. The default path never imports
+    torch (see :func:`_all_reduce_coverage_vector`), so a single-process run --
+    or one where no group is initialized -- gets a copy of its manifest with
+    ``"ranks": 1``, which is a scope statement and not a coverage claim made
+    smaller.
+    """
+    from foundationscale.train.audio import AUDIO_LOAD_REASONS, _coverage_verdict  # noqa: PLC0415
+
+    missing = [key for key in _REQUIRED_COVERAGE_KEYS if key not in coverage_manifest]
+    if missing:
+        raise ValueError(
+            f"coverage manifest is missing required count key(s): {', '.join(missing)} -- "
+            "a count that is absent cannot be summed across ranks, and zero-filling it "
+            "would publish a census no row produced (the reduction refuses, it does not guess)"
+        )
+    packed = _coverage_counts_vector(coverage_manifest)
+    if all_reduce_sum is None:
+        summed, ranks = _all_reduce_coverage_vector(packed)
+    else:
+        if world_size is None:
+            raise ValueError(
+                "all_reduce_sum is given without world_size: a count summed without saying "
+                "over how many ranks is not a coverage claim, and 'ranks' is how the reduced "
+                "manifest states it"
+            )
+        summed = [float(value) for value in all_reduce_sum(packed)]
+        ranks = int(world_size)
+    if len(summed) != len(packed):
+        raise ValueError(
+            f"the reduction returned {len(summed)} values for a packed row of {len(packed)}: "
+            "a row whose width changes mid-collective pairs one rank's rows with another "
+            "rank's seconds"
+        )
+    if ranks < 2:
+        # No peers to sum with: the manifest IS the census. Exactly a copy, so a
+        # caller that keeps counting cannot rewrite what the adjudication read.
+        copy = dict(coverage_manifest)
+        copy["refused"] = dict(coverage_manifest["refused"])
+        copy["ranks"] = 1
+        return copy
+
+    reduced = dict(coverage_manifest)
+    for index, key in enumerate(_COVERAGE_COUNT_KEYS):
+        if key == "seconds_total" and key not in coverage_manifest:
+            continue  # measured nowhere -> reported nowhere (no invented 0.0)
+        reduced[key] = float(summed[index]) if key == "seconds_total" else int(summed[index])
+    merged: dict[str, int] = {}
+    for reason, value in zip(AUDIO_LOAD_REASONS, summed[len(_COVERAGE_COUNT_KEYS) :], strict=True):
+        count = int(value)
+        if count:
+            merged[reason] = count
+    reduced["refused"] = merged
+    reduced["verdict"] = _coverage_verdict(
+        rows_checked=reduced["rows_checked"],
+        rows_expected=reduced["rows_expected"],
+        refused_total=reduced["rows_refused"],
+    )
+    reduced["ranks"] = ranks
+    return reduced
+
+
 SUPERSEDE_NOTE = (
     "speech plane: the speech.* gates reported SKIP in the save sweep "
     "(no context there) are adjudicated here with their contexts"
@@ -558,13 +784,26 @@ def prepare_speech_run(
     return towers, base, line
 
 
+def coverage_after_train(collator: Any, *, audio_declared: bool) -> dict[str, Any] | None:
+    """The run-wide audio census, summed over the ranks; ``None`` when no audio is declared.
+
+    ``train()`` calls this on EVERY rank right after ``Trainer.train()`` returns -- the
+    last point all ranks are guaranteed to reach. The final adjudication runs on the
+    writing rank alone, so a census read there is that rank's rows reported as the run:
+    measured on GB200 with 2 ranks, 1272 of 2544 loaded rows audited as "1272/1272".
+    """
+    if not audio_declared:
+        return None
+    return reduce_coverage_across_ranks(collator.coverage.as_manifest())
+
+
 def finish_speech_run(
     *,
     rc: int,
     done: str,
     final_dir: Path,
     has_safetensors: bool,
-    coverage_manifest: Mapping[str, Any],
+    coverage_manifest: Mapping[str, Any] | None,
     base_digests: Mapping[str, str] | None,
     towers: Sequence[tuple[str, bool]],
     adapter: str | None,
@@ -572,10 +811,26 @@ def finish_speech_run(
 ) -> tuple[int, str, list[str], str]:
     """After the final save: adjudicate, fold into the run verdict, and render.
 
+    ``coverage_manifest`` is THIS RANK's collator manifest and is reduced across
+    the ranks before anything reads it
+    (:func:`reduce_coverage_across_ranks` -- the collective lands here, where
+    every rank arrives exactly once), so the gates adjudicate the corpus the run
+    trained and not the half of it this rank happens to hold.
+
     Returns ``(rc, done, lines_to_print, manifest_json)``.
     """
     import json  # noqa: PLC0415
 
+    # No collective here: this runs on the WRITING rank only (the other ranks abstain
+    # before the final adjudication), so an all_reduce in this function deadlocks --
+    # measured on GB200, rank 0 spinning at 100% while rank 1 had exited. The census
+    # arrives already summed by coverage_after_train, which train() calls right after
+    # Trainer.train() returns, while every rank is still present.
+    if coverage_manifest is None:
+        raise ValueError(
+            "no run-wide audio coverage census: train() must sum it over the ranks "
+            "(coverage_after_train) before the final adjudication"
+        )
     speech = run_final_speech_adjudication(
         final_dir=final_dir,
         has_safetensors=has_safetensors,

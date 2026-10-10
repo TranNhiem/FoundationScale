@@ -458,7 +458,7 @@ conftest carries the skip guard). Beside the package:
 
 | Tree | Contents |
 |---|---|
-| `tools/` | 10183 Python LOC of CLIs over the package: `emit_run_manifest`, `live_save_gate`, `real_checkpoint_probe`, `preflight/`, `mutate`, `census`. |
+| `tools/` | 10192 Python LOC of CLIs over the package: `emit_run_manifest`, `live_save_gate`, `real_checkpoint_probe`, `preflight/`, `mutate`, `census`. |
 | `checks/` | Standalone repository gates: countables drift, packaging reachability, `bash -lc` sweep, workflow YAML audit. |
 | `launchers/` | The estate launch plane (13008 shell LOC) plus two bash contract suites and Python helpers (lora target census, peft override replay) — 1615 Python LOC. |
 | `validation_campaigns/h100_validation/` | The experimental H100 harness (34169 Python, 6706 shell LOC): build script, `gate_*.py`, `patch_*.py`, its own tests, and the published `h100/` deliverables. **Evidence campaigns, not framework code — read as lab notebooks.** |

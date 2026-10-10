@@ -308,6 +308,16 @@ Status (2026-10-08): **P8 DONE** (`validation_campaigns/speech_p8`): leak-free o
 from 19.4% to 11.3% WER (-8.05, 95% CI [-8.66, -7.42]); AMI drops from 16.9% to 13.6%. A first round
 trained on mismatched audio (a clip-naming collision) and was retracted. New:
 `speech.runaway_hypotheses` gate and refusal of repeated audio paths.
+Reporting default (2026-10-09): `validation_campaigns/speech_eval/compare.py` reports both checkpoints
+from the eval files' own records, the paired-bootstrap CI (`speech_metrics.paired_bootstrap`) and
+the runaway verdict for any base/fine-tune pair.
+DDP (2026-10-09, `validation_campaigns/speech_ddp`): 2 GPUs give 1.74x the samples/s of one. The
+speech coverage gates had audited only the writing rank's rows; the census is now summed over the
+ranks right after `Trainer.train()` (verified: 624/624 on 2 GPUs, where 312 was reported before).
+Long-form (2026-10-09, `validation_campaigns/speech_longform`): on whole Earnings-22 calls the
+Earnings fine-tune's gain (17.30 -> 14.14 with loops collapsed) is hidden by local repetition loops
+inside chunks (17.30 -> 16.77). New gate `speech.repetition_loops` catches them where
+`speech.runaway_hypotheses` cannot.
 
 ### P4, more families and Lane B
 

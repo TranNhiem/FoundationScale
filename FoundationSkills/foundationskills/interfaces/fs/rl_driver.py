@@ -7,14 +7,17 @@ with no entry point; this driver is the smallest honest wrapper around it.
 Status lines are one line each, ``[fskills:rl:<status>] <reason>``, and the
 exit codes are the contract's own:
 
-* 0  PASS   -- the run measured at least one step;
+* 0  PASS   -- the run measured at least one step and, when the config
+  declares ``min_measured_fraction``, at least that fraction of max_steps;
 * 5  RED    -- an exception escaped the training loop;
-* 95 UNMEASURED -- zero measured steps, or a required final checkpoint that
+* 95 UNMEASURED -- zero measured steps, a measured fraction below the declared
+  ``min_measured_fraction`` (zero-variance GRPO groups are UNMEASURED in FS, so
+  a saturated corpus trains on a sliver of its steps), or a required final checkpoint that
   could not be produced. ``save_final`` hands FS its native ``save_dir`` (the
   trainer writes ``<output_dir>/final``) when the installed RLTrainConfig has
   one; an older trainer that only holds the model in a local variable of
   ``run()`` genuinely cannot save and says so instead of pretending;
-* 96 REFUSED -- unknown config keys, a missing foundationscale module, an
+* 96 REFUSED -- unknown config keys, a ``min_measured_fraction`` outside (0, 1], a missing foundationscale module, an
   unparseable config file, or an FS ``TrainerRefusal``/exit-96 passthrough.
 """
 from __future__ import annotations
@@ -39,7 +42,7 @@ _RL_FIELDS: frozenset[str] = frozenset(
         "prompts_per_step", "seed", "device",
     }
 )
-_FSKILLS_FIELDS: frozenset[str] = frozenset({"output_dir", "save_final", "trainer"})
+_FSKILLS_FIELDS: frozenset[str] = frozenset({"output_dir", "save_final", "trainer", "min_measured_fraction"})
 # trainer kind -> (module, trainer class, config class). "preference" is FS's
 # offline PreferenceTrainer (dpo/ipo/kto/orpo/simpo/cpo; main e17c1b2).
 _TRAINERS: dict[str, tuple[str, str, str]] = {
@@ -191,6 +194,16 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         _line("refuse", f"unknown config keys: {', '.join(unknown)} (allowed: {', '.join(sorted(rl_fields | _FSKILLS_FIELDS))})")
         return 96
+    floor = config.get("min_measured_fraction")
+    if floor is not None:
+        # A declared number, never a coerced one: float(True) == 1.0 and float("0.5") == 0.5.
+        if isinstance(floor, bool) or not isinstance(floor, (int, float)):
+            floor = float("nan")
+        else:
+            floor = float(floor)
+        if not 0.0 < floor <= 1.0:  # NaN fails too
+            _line("refuse", f"min_measured_fraction must be in (0, 1], got {config.get('min_measured_fraction')!r}")
+            return 96
 
     fs_fields = {key: value for key, value in config.items() if key in rl_fields}
     native_save = bool(config.get("save_final", False)) and "save_dir" in rl_fields and not fs_fields.get("save_dir")
@@ -268,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
         "finished_at": _utc_now(),
         "steps_measured": measured,
         "steps_unmeasured": unmeasured,
+        "measured_fraction": round(measured / max_steps, 4) if max_steps > 0 else None,
+        "min_measured_fraction": floor,
     }
 
     # Final checkpoint. The shipped RLTrainer keeps the model in a LOCAL
@@ -301,6 +316,19 @@ def main(argv: list[str] | None = None) -> int:
         manifest["status"] = "UNMEASURED: 0 measured steps"
         _write_json(output_dir / f"fskills_{kind}_manifest.json", manifest)
         _line("unmeasured", f"0 of {max_steps} step(s) produced a measurable update; a run that trained nothing is not a pass")
+        return 95
+    if floor is not None and max_steps <= 0:
+        manifest["status"] = f"UNMEASURED: declared floor {floor} cannot be evaluated against max_steps {max_steps}"
+        _write_json(output_dir / f"fskills_{kind}_manifest.json", manifest)
+        _line("unmeasured", f"min_measured_fraction {floor} was declared but max_steps is {max_steps}; "
+                            "the measured fraction has no denominator")
+        return 95
+    if floor is not None and measured / max_steps < floor:
+        manifest["status"] = f"UNMEASURED: measured fraction {measured}/{max_steps} below declared floor {floor}"
+        _write_json(output_dir / f"fskills_{kind}_manifest.json", manifest)
+        _line("unmeasured", f"{measured} of {max_steps} step(s) measured ({unmeasured} unmeasured: every row abstained "
+                            f"or every group had zero reward variance), below the declared floor {floor}; "
+                            "filter saturated prompts (data_engine difficulty_filter) or lower the floor")
         return 95
     if save_final and model_obj is None:
         manifest["status"] = "UNMEASURED: save_final requested but no model attribute is exposed"

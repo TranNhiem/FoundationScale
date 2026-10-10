@@ -6732,6 +6732,11 @@ def _train(cfg: TrainConfig) -> int:
             return EXIT_REFUSE
         _mark(Step.RED, f"Trainer.train() raised: {exc!r}")
         return EXIT_RED
+    # Speech plane: the audio census is summed over the ranks HERE, the last point every
+    # rank reaches; the final adjudication below runs on the writing rank only.
+    from foundationscale.train.speech_adjudication import coverage_after_train  # noqa: PLC0415
+
+    speech_coverage = coverage_after_train(data_collator, audio_declared=AUDIO_COLUMN is not None)
     if objective_callback.blocked:
         _mark(
             Step.RED,
@@ -7088,7 +7093,7 @@ def _train(cfg: TrainConfig) -> int:
             done=done,
             final_dir=Path(final_dir),
             has_safetensors=bool(shards),
-            coverage_manifest=data_collator.coverage.as_manifest(),
+            coverage_manifest=speech_coverage,
             base_digests=_speech_base_digests,
             towers=_speech_towers,
             adapter=cfg.adapter,

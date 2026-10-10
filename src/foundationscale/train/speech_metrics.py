@@ -43,22 +43,30 @@ this module is part of that plane.
 
 from __future__ import annotations
 
+import math
+import random
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 __all__ = [
+    "LOOP_MIN_RUN",
     "RUNAWAY_RATIO",
     "RUNAWAY_SLACK_WORDS",
     "TRANSCRIPT_NORMALIZER_ID",
     "CorpusErrorRate",
     "EditCounts",
+    "LoopCount",
+    "PairedComparison",
     "RunawayCount",
     "align",
     "char_errors",
     "corpus_error_rate",
+    "count_loop_words",
     "count_runaway",
     "is_runaway",
+    "loop_words",
     "normalize_transcript",
+    "paired_bootstrap",
     "word_errors",
 ]
 
@@ -349,6 +357,227 @@ def corpus_error_rate(
     )
 
 
+@dataclass(frozen=True)
+class PairedComparison:
+    """Two corpus rates over the SAME utterances, and the gap between them.
+
+    A 300-row eval can manufacture a "gain" that vanishes at 2,000-2,700 rows:
+    two models scored on two different subsets of a corpus disagree about the
+    subsets' difficulty, not about the models, and NO arithmetic on two
+    independent corpus rates can tell the difference. Only a PAIRED comparison
+    can -- one row per utterance under each model, the gap resampled over
+    utterances -- and this is everything such a comparison is allowed to publish.
+
+    ``diff`` is ``tuned - base``: a NEGATIVE diff is a gain the tuned model made,
+    the sign convention named in the claim itself rather than left to the
+    reader's memory of which side was subtracted from which. ``rows`` is the rows
+    MEASURED (rows whose reference normalizes to nothing are refused exactly as
+    ``corpus_error_rate`` refuses them and are not counted), and ``significant``
+    is not an opinion about the gap: it is the interval's own statement about
+    whether zero is still possible on this corpus.
+
+    Frozen because these numbers ARE the measurement: a rate that mutates in
+    place is a number whose provenance nobody can state.
+    """
+
+    rows: int
+    base_rate: float
+    tuned_rate: float
+    diff: float
+    ci_low: float
+    ci_high: float
+    resamples: int
+    seed: int
+    confidence: float
+    p_tuned_better: float
+    metric: str = "wer"
+
+    @property
+    def significant(self) -> bool:
+        """True iff the bootstrap interval excludes zero.
+
+        An interval CONTAINING zero is not evidence of any direction of gap: the
+        resampled corpora saw the sign flip often enough that "the tuned model is
+        better" would be a claim about the draw, not about the models. That is
+        precisely the 300-row "win" this exists to refuse.
+        """
+        return self.ci_low > 0.0 or self.ci_high < 0.0
+
+    def as_manifest(self) -> dict[str, int | float | str | bool]:
+        """The JSON-ready claim, metric AND normalizer named INSIDE it.
+
+        Both names travel because both halves decide whether the number is
+        reproducible: the rate is only a ``wer`` claim under
+        ``TRANSCRIPT_NORMALIZER_ID`` and a ``cer`` claim refuses to be
+        re-derived as one. ``diff`` keeps its ``tuned - base`` sign so a script
+        reading this cannot invert the comparison by accident.
+        """
+        return {
+            "metric": self.metric,
+            "normalizer": TRANSCRIPT_NORMALIZER_ID,
+            "rows": self.rows,
+            "base_rate": self.base_rate,
+            "tuned_rate": self.tuned_rate,
+            "diff": self.diff,
+            "ci_low": self.ci_low,
+            "ci_high": self.ci_high,
+            "resamples": self.resamples,
+            "seed": self.seed,
+            "confidence": self.confidence,
+            "p_tuned_better": self.p_tuned_better,
+            "significant": self.significant,
+        }
+
+
+def paired_bootstrap(
+    pairs_base: Sequence[tuple[str, str]],
+    pairs_tuned: Sequence[tuple[str, str]],
+    *,
+    metric: str = "wer",
+    resamples: int = 2000,
+    seed: int = 0,
+    confidence: float = 0.95,
+) -> PairedComparison:
+    """``pairs_base`` against ``pairs_tuned`` as one gap, resampled over utterances.
+
+    The two sequences are ALIGNED BY POSITION: entry i of each is the SAME
+    utterance (the references match) heard by a different model. That alignment
+    is the whole point and protecting it is the main refusal here -- a comparison
+    over two different utterance sets measures the sets, and the "gains" that
+    vanished when a 300-row eval grew to 2,000-2,700 rows were exactly this
+    defect wearing a percentage sign. The bootstrap then draws UTTERANCES WITH
+    REPLACEMENT from the paired rows: ONE draw serves both models, so the draw
+    cannot hand one model an easier subset, which is what two independent
+    bootstraps would permit.
+
+    Per-row error counts and reference lengths are computed ONCE
+    (``word_errors`` or ``char_errors``, the reference length of
+    ``char_errors`` included), and both corpus rates are micro-averages exactly
+    as ``corpus_error_rate`` publishes them: sum of errors over sum of reference
+    length, never the mean of per-utterance rates. Each resample's gap is
+    ``tuned_rate - base_rate`` over the drawn rows; the interval is the
+    percentile band of the ``resamples`` gaps at indices
+    ``floor(alpha / 2 * R)`` .. ``ceil((1 - alpha / 2) * R) - 1``, clamped into
+    the sorted list, and ``p_tuned_better`` is the fraction of gaps strictly
+    below zero.
+
+    Empty references are handled exactly the way ``corpus_error_rate`` handles
+    them: a reference that normalizes to nothing cannot carry a rate, so that
+    row is excluded from BOTH sides (it is one row -- the references match) and
+    ``PairedComparison.rows`` reports what was measured rather than what was
+    handed in. A pair list whose every reference is empty is therefore a refusal
+    and not a 0.0, and no resample can divide by zero afterwards: every measured
+    row carries reference length >= 1 and every draw is a full ``rows`` long.
+
+    Raises on pair lists of different length, on ANY position whose two
+    references differ (misalignment is the defect this guards), on empty pair
+    lists, on ``resamples < 1``, on a ``confidence`` outside (0, 1), and on a
+    metric this module does not measure. Deterministic: a fixed ``seed`` fixes
+    the entire resample stream.
+    """
+    if metric == "wer":
+        per_utterance = word_errors
+    elif metric == "cer":
+        per_utterance = char_errors
+    else:
+        raise ValueError(f'unknown speech error metric {metric!r}: expected "wer" or "cer"')
+    if resamples < 1:
+        raise ValueError(
+            f"paired bootstrap refuses {resamples} resamples: an interval needs at least "
+            "one draw, and one draw is a number rather than a confidence"
+        )
+    if not 0.0 < confidence < 1.0:
+        raise ValueError(
+            f"paired bootstrap refuses confidence {confidence!r}: the level must be "
+            "strictly between 0 and 1"
+        )
+    if len(pairs_base) != len(pairs_tuned):
+        raise ValueError(
+            f"paired comparison misaligned: {len(pairs_base)} base pairs against "
+            f"{len(pairs_tuned)} tuned pairs -- a paired comparison scores the SAME "
+            "utterances and refuses two lists of different length"
+        )
+    if not pairs_base:
+        raise ValueError(
+            "paired comparison refuses an empty pair list: zero rows is "
+            "not a gap of 0.0 and cannot be resampled into one"
+        )
+    for position, (base_row, tuned_row) in enumerate(zip(pairs_base, pairs_tuned, strict=True)):
+        if base_row[0] != tuned_row[0]:
+            raise ValueError(
+                f"paired comparison misaligned at row {position}: references differ -- "
+                f"the base side recorded {base_row[0]!r} and the tuned side "
+                f"{tuned_row[0]!r}, which is two different utterances wearing one index"
+            )
+
+    rows_base: list[tuple[int, int]] = []
+    rows_tuned: list[tuple[int, int]] = []
+    refused = 0
+    for (ref, hyp_base), (_, hyp_tuned) in zip(pairs_base, pairs_tuned, strict=True):
+        if not normalize_transcript(ref):
+            # The corpus_error_rate refusal lane, mirrored: the row is dropped from
+            # BOTH sides and counted, so the denominators cannot drift apart.
+            refused += 1
+            continue
+        base_counts = per_utterance(ref, hyp_base)
+        tuned_counts = per_utterance(ref, hyp_tuned)
+        rows_base.append((base_counts.errors, base_counts.reference_length))
+        rows_tuned.append((tuned_counts.errors, tuned_counts.reference_length))
+    rows = len(rows_base)
+    if rows == 0:
+        raise ValueError(
+            f"paired comparison refused all {refused} rows: every reference is empty "
+            "once normalized, and an empty reference has no words to have measured"
+        )
+
+    def rate_over(per_row: Sequence[tuple[int, int]], draw: Sequence[int]) -> float:
+        """Sum of errors over sum of reference length on ``draw``: the micro-average.
+
+        Every measured row carries reference length >= 1 (the refusal lane above
+        removed exactly the rows whose reference has nothing in it) and every
+        draw is ``rows`` long, so a resample's denominator cannot reach zero.
+        The refusal below states that as a contract instead of leaving it to be
+        believed: an empty denominator is never a 0.0.
+        """
+        errors = sum(per_row[i][0] for i in draw)
+        length = sum(per_row[i][1] for i in draw)
+        if length == 0:
+            raise ValueError(
+                "error rate is undefined: the drawn rows have a zero reference length "
+                "in sum and that draw has no words to have measured"
+            )
+        return errors / length
+
+    full = list(range(rows))
+    base_rate = rate_over(rows_base, full)
+    tuned_rate = rate_over(rows_tuned, full)
+
+    rng = random.Random(seed)
+    sampled: list[float] = []
+    for _ in range(resamples):
+        draw = [rng.randrange(rows) for _ in range(rows)]
+        sampled.append(rate_over(rows_tuned, draw) - rate_over(rows_base, draw))
+
+    ascending = sorted(sampled)
+    alpha = 1.0 - confidence
+    low_index = min(max(int(math.floor(alpha / 2.0 * resamples)), 0), resamples - 1)
+    high_index = min(max(int(math.ceil((1.0 - alpha / 2.0) * resamples)) - 1, 0), resamples - 1)
+
+    return PairedComparison(
+        rows=rows,
+        base_rate=base_rate,
+        tuned_rate=tuned_rate,
+        diff=tuned_rate - base_rate,
+        ci_low=ascending[low_index],
+        ci_high=ascending[high_index],
+        resamples=resamples,
+        seed=seed,
+        confidence=confidence,
+        p_tuned_better=sum(1 for gap in sampled if gap < 0.0) / resamples,
+        metric=metric,
+    )
+
+
 RUNAWAY_RATIO = 2.0
 """How many times the reference's words a hypothesis may reach before it runs away.
 
@@ -438,3 +667,136 @@ def count_runaway(pairs: Iterable[tuple[str, str]]) -> RunawayCount:
         if is_runaway(ref, hyp):
             runaway += 1
     return RunawayCount(rows_checked=checked, rows_runaway=runaway)
+
+
+LOOP_MIN_RUN = 4
+"""How many identical tokens in a row make a repetition loop the metrics must count.
+
+The run-length arm of the LOCAL loop detector (``loop_words`` is the only place
+the formula is stated). Motivated by a failure no row-level detector saw: a
+Canary-1B Earnings fine-tune, decoded with NeMo's chunked long-form inference,
+fell into LOCAL repetition loops INSIDE chunks (``"the the the ..."``,
+``"uh uh uh ..."``) across six whole Earnings-22 calls -- 1,428 loop words
+beside 50,400 reference words where the base model looped none, turning a
+17.30 -> 14.14 WER gain (the loops collapsed, a diagnostic measurement) into the
+real 17.30 -> 16.77. ``is_runaway`` passed over that output and correctly so:
+it judges whole rows (past twice the row's reference length) and a loop inside
+one 40 s chunk of an hour-long call adds only 4-12% of that call's words. Loops
+must be counted locally, in words, against the base model -- and four is the run
+where ``"the the the ..."`` stops having a stuttering speaker in it.
+
+The threshold travels in every manifest it underwrites
+(``LoopCount.as_manifest``): a threshold nobody can state is a threshold nobody
+can reproduce.
+"""
+
+
+def loop_words(tokens: Sequence[str]) -> int:
+    """Tokens inside maximal runs of ONE identical token, of length >= ``LOOP_MIN_RUN``.
+
+    Every token of a qualifying run counts -- a run of five ``"the"`` is 5 loop
+    words -- because each is a word the decoder emitted where the audio carried
+    another. A shorter run contributes NOTHING (a run of 3 is 0, and 0 for the
+    whole run rather than partial credit for its tail): a stutter is not a
+    decoder that lost the transcript, and charging runs only at ``LOOP_MIN_RUN``
+    keeps the boundary honest in both directions -- a run of 4 is 4 and a run of
+    5 is 5, the loop length IS the measurement and no per-run cap shrinks it.
+    Maximal runs separated by ANY other token add (a call that loops twice has
+    looped twice), while a short run between two loops bridges neither.
+
+    ``tokens`` are NORMALIZED words (``normalize_transcript``): the caller runs
+    the normalizer first, so ``"The the THE the"`` is one run of four and no
+    loop can hide in case or punctuation while another shows through it. This is
+    a census of words -- no denominator and no refusals: an empty token list is
+    0 loop words and a fact about nothing said, not a 0.0 about everything.
+    """
+    total = 0
+    run_length = 0
+    previous: str | None = None
+    for token in tokens:
+        if token == previous:
+            run_length += 1
+        else:
+            if run_length >= LOOP_MIN_RUN:
+                total += run_length
+            run_length = 1
+            previous = token
+    if run_length >= LOOP_MIN_RUN:
+        total += run_length
+    return total
+
+
+@dataclass(frozen=True)
+class LoopCount:
+    """Rows measured against the local loop detector, and the loop words in each side.
+
+    The counting sibling of ``RunawayCount`` with the words it needs beside the
+    rows: ``reference_words`` is the summed NORMALIZED reference length (the
+    yardstick a gate's corpus slack is spent against) and the two loop-word sums
+    are what ``loop_words`` counted inside the hypotheses and inside the
+    references of those rows. A reference can loop too (a transcript artifact, a
+    genuinely repeated utterance) and its loops are COUNTED rather than assumed
+    away: the base-vs-tuned comparison needs both sides' dirt.
+
+    Frozen because these numbers ARE the measurement: a sum that mutates in
+    place is a number whose provenance nobody can state.
+    """
+
+    rows_checked: int
+    reference_words: int
+    hypothesis_loop_words: int
+    reference_loop_words: int
+
+    def as_manifest(self) -> dict[str, int | str]:
+        """The JSON-ready count claim with the detector's arm named INSIDE it.
+
+        ``loop_min_run`` and the normalizer travel with the numbers counted
+        under them: ``loop_words`` counts normalized words, so two runs' counts
+        are comparable only under one normalizer
+        (``TRANSCRIPT_NORMALIZER_ID``) and re-derivable only from the run length
+        the manifest itself publishes -- a reader counting runs of three would
+        re-derive a different census from these same four numbers.
+        """
+        return {
+            "rows_checked": self.rows_checked,
+            "reference_words": self.reference_words,
+            "hypothesis_loop_words": self.hypothesis_loop_words,
+            "reference_loop_words": self.reference_loop_words,
+            "loop_min_run": LOOP_MIN_RUN,
+            "normalizer": TRANSCRIPT_NORMALIZER_ID,
+        }
+
+
+def count_loop_words(pairs: Iterable[tuple[str, str]]) -> LoopCount:
+    """Every ``(reference, hypothesis)`` TEXT pair folded into one loop-word census.
+
+    Both sides run ``normalize_transcript`` before ``loop_words``, so the counts
+    are only ever comparable with counts whose normalizer is the one named in
+    ``TRANSCRIPT_NORMALIZER_ID``. Rows whose reference is empty are COUNTED --
+    they contribute 0 reference words and 0 reference loop words -- and are
+    never refused here: nothing on this side of the file divides by the
+    reference, so an empty reference is a row examined with zero words in it,
+    and dropping it in silence would lose the very hypothesis loops it may still
+    carry (an empty recording is not a well-behaved one). No ``rows_expected``
+    denominator either: ``rows_checked`` is the rows actually examined, and the
+    gate that consumes these counts takes its coverage denominator from outside
+    the eval artifact, exactly as ``count_runaway`` leaves it to
+    ``RunawayHypothesisGate``.
+    """
+    checked = 0
+    reference_words = 0
+    hypothesis_loop_words = 0
+    reference_loop_words = 0
+    for ref, hyp in pairs:
+        checked += 1
+        ref_tokens = normalize_transcript(ref)
+        hyp_tokens = normalize_transcript(hyp)
+        reference_words += len(ref_tokens)
+        hypothesis_loop_words += loop_words(hyp_tokens)
+        reference_loop_words += loop_words(ref_tokens)
+    return LoopCount(
+        rows_checked=checked,
+        reference_words=reference_words,
+        hypothesis_loop_words=hypothesis_loop_words,
+        reference_loop_words=reference_loop_words,
+    )
