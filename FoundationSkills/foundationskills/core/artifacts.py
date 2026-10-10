@@ -26,6 +26,10 @@ class ArtifactType(str, Enum):
     CHECKPOINT = "checkpoint"
     EVAL_REPORT = "eval_report"
     AUTO_RESEARCH_REPORT = "auto_research_report"
+    PROBE_REPORT = "probe_report"
+    CLAIM_SET = "claim_set"
+    CONFIRMATION_RECORD = "confirmation_record"
+    FINDING_SET = "finding_set"
 
     def __str__(self) -> str:
         return self.value

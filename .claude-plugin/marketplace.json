@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "foundationscale",
+  "owner": {
+    "name": "TranNhiem",
+    "url": "https://github.com/TranNhiem"
+  },
+  "plugins": [
+    {
+      "name": "foundationskills",
+      "source": "./FoundationSkills",
+      "version": "0.1.0",
+      "description": "FoundationSkills: probe-first, refusal-honest agent skills for planning, launching, evaluating and researching FoundationScale training runs (statuses PASS/RED/UNMEASURED/REFUSED).",
+      "license": "MIT",
+      "skills": [
+        "./skills/fskills-auto-research",
+        "./skills/fskills-confirm-before-launch",
+        "./skills/fskills-data-engine",
+        "./skills/fskills-evaluation",
+        "./skills/fskills-measured-or-unmeasured",
+        "./skills/fskills-probe-first",
+        "./skills/fskills-refusal-surface",
+        "./skills/fskills-training"
+      ]
+    }
+  ]
+}

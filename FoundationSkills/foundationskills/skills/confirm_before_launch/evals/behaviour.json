@@ -1,0 +1,110 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fskills-confirm-before-launch-oracle-CB-HO-001",
+      "skill": "confirm_before_launch",
+      "rule_id": "CB-HO-001",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "the spec drifted on disk between the input recompute and the record seal (the second plan_hash differs)",
+      "fixture": {
+        "expected": "REFUSED 96 naming CB-HO-001, no confirmation_record written",
+        "request": {
+          "launch_spec": "launch/fs_launch_spec.q27.json",
+          "user_plan_hash": "<the hash the user read back>"
+        },
+        "tamper": "the spec was rewritten on disk between the input recompute and the record seal"
+      },
+      "fixture_sha256": "badff44410b73a63313fd83068ed0fc330e372984afff3ef58e1b138fb3ede10",
+      "expected_behavior": [
+        "Identifies the problem: the spec drifted on disk between the input recompute and the record seal (the second plan_hash differs)",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule CB-HO-001"
+      ],
+      "ground_truth": "confirm_before_launch: rule CB-HO-001 (BLOCK, handoff phase) fires: the spec drifted on disk between the input recompute and the record seal (the second plan_hash differs).",
+      "trigger_facts": [
+        {
+          "path": "tamper",
+          "value": "the spec was rewritten on disk between the input recompute and the record seal"
+        }
+      ],
+      "question": "I want to run confirm_before_launch on `launch/fs_launch_spec.q27.json`, with `user_plan_hash` set to `<the hash the user read back>`. One thing I saw happen: the spec was rewritten on disk between the input recompute and the record seal. Please confirm the plan hash against what I supplied and seal the confirmation record with `confirmed_by=user` and `auto_filled=false` if it matches, without submitting anything or echoing the expected hash. Given the rewrite on disk mid-run, what's the outcome here?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-confirm-before-launch-oracle-CB-IN-001",
+      "skill": "confirm_before_launch",
+      "rule_id": "CB-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "user_plan_hash absent or empty (launch without re-showing the hash; never auto-filled)",
+      "fixture": {
+        "expected": "REFUSED 96 naming CB-IN-001; no confirmation_record written and the plan hash never echoed",
+        "request": {
+          "launch_spec": "launch/fs_launch_spec.q27.json"
+        }
+      },
+      "fixture_sha256": "ddcaece7ea2aae4568dbc5dacce6c2fb88734d8d2c4f3a2f31571ceed441d3a4",
+      "expected_behavior": [
+        "Identifies the problem: user_plan_hash absent or empty (launch without re-showing the hash; never auto-filled)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule CB-IN-001"
+      ],
+      "ground_truth": "confirm_before_launch: rule CB-IN-001 (BLOCK, input phase) fires: user_plan_hash absent or empty (launch without re-showing the hash; never auto-filled).",
+      "trigger_facts": [],
+      "question": "I want to confirm `launch/fs_launch_spec.q27.json` before anything goes out — recompute the plan hash with `fskills hash --spec` (the same token `fskills launch --confirm` wants) and only seal a `confirmation_record` with `confirmed_by=user` and `auto_filled=false` if my supplied hash matches. Right now I haven't given you a hash at all, so go ahead and run the confirmation on that spec and tell me what the outcome is. Don't submit the launch and don't auto-fill anything on my behalf.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-confirm-before-launch-oracle-CB-IN-002",
+      "skill": "confirm_before_launch",
+      "rule_id": "CB-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "the supplied user_plan_hash is not the plan hash recomputed from the spec",
+      "fixture": {
+        "expected": "REFUSED 96 naming CB-IN-002",
+        "request": {
+          "launch_spec": "launch/fs_launch_spec.q27.json",
+          "user_plan_hash": "0000000000000000"
+        }
+      },
+      "fixture_sha256": "57c67d8a28a25cbb2896b1b7916d9878dd580d9e6c86ff4a4172393a9332f246",
+      "expected_behavior": [
+        "Identifies the problem: the supplied user_plan_hash is not the plan hash recomputed from the spec",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule CB-IN-002"
+      ],
+      "ground_truth": "confirm_before_launch: rule CB-IN-002 (BLOCK, input phase) fires: the supplied user_plan_hash is not the plan hash recomputed from the spec.",
+      "trigger_facts": [],
+      "question": "Please run confirm_before_launch on `launch/fs_launch_spec.q27.json` with my user plan hash `0000000000000000`. Gate the launch spec behind that hash and, if it matches, seal the confirmation record with `confirmed_by=user` and `auto_filled=false`. Don't submit anything — just tell me what the outcome is.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-confirm-before-launch-oracle-CB-IN-003",
+      "skill": "confirm_before_launch",
+      "rule_id": "CB-IN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "the fs_launch_spec is missing, unreadable or not an fs_launch_spec (nothing to hash)",
+      "fixture": {
+        "expected": "REFUSED 96 naming CB-IN-003",
+        "request": {
+          "launch_spec": "missing.json",
+          "user_plan_hash": "ffffffffffffffff"
+        }
+      },
+      "fixture_sha256": "828325e6a26026e1e65762c4fe9d91cb508d2baccf5d5039c40db4f237042ea8",
+      "expected_behavior": [
+        "Identifies the problem: the fs_launch_spec is missing, unreadable or not an fs_launch_spec (nothing to hash)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule CB-IN-003"
+      ],
+      "ground_truth": "confirm_before_launch: rule CB-IN-003 (BLOCK, input phase) fires: the fs_launch_spec is missing, unreadable or not an fs_launch_spec (nothing to hash).",
+      "trigger_facts": [],
+      "question": "I want to run confirm_before_launch on my launch spec `missing.json`, with my user plan hash `ffffffffffffffff` — that's the hash I confirmed for this plan. Please recompute the hash from the spec using `fskills hash --spec` and compare it against what I gave you. If they match, seal the confirmation record with confirmed_by=user and auto_filled=false; don't submit anything and don't echo the expected hash. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

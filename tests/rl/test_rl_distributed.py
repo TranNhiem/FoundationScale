@@ -339,3 +339,51 @@ def test_fewer_pairs_than_ranks_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_
     )
     with pytest.raises(TrainerRefusal, match="pairs_per_step"):
         trainer.run()
+
+
+class _Switchable:
+    """Stands in for a transformers MoE class: answers the experts-kernel probe."""
+
+    can = True
+
+    @classmethod
+    def _can_set_experts_implementation(cls) -> bool:
+        return cls.can
+
+
+def _rewrap(original: type) -> type:
+    """What fully_shard does: a dynamic subclass the source-grep probe cannot see."""
+    return type(
+        f"FSDP{original.__name__}",
+        (original,),
+        {"_can_set_experts_implementation": classmethod(lambda cls: False)},
+    )
+
+
+def test_fsdp_wrapper_inherits_the_original_kernel_switching() -> None:
+    from foundationscale.rl.distributed import keep_experts_switchable
+
+    wrapped = _rewrap(_Switchable)()
+    assert not type(wrapped)._can_set_experts_implementation()  # the failure mode
+    assert keep_experts_switchable(wrapped, _Switchable) is True
+    assert type(wrapped)._can_set_experts_implementation()
+    assert _Switchable._can_set_experts_implementation()  # original untouched
+
+
+def test_unwrapped_or_non_switchable_models_are_left_alone() -> None:
+    from foundationscale.rl.distributed import keep_experts_switchable
+
+    assert keep_experts_switchable(_Switchable(), _Switchable) is False
+
+    class _Fixed(_Switchable):
+        can = False
+
+    wrapped = _rewrap(_Fixed)()
+    assert keep_experts_switchable(wrapped, _Fixed) is False
+    assert not type(wrapped)._can_set_experts_implementation()
+
+    class _Dense:
+        pass
+
+    dense_wrapped = type("FSDP_Dense", (_Dense,), {})()
+    assert keep_experts_switchable(dense_wrapped, _Dense) is False
