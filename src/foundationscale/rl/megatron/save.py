@@ -166,7 +166,9 @@ def save_policy_checkpoint(
     return out
 
 
-def run_policy_save_gates(out_dir: str | os.PathLike[str], *, first: bool) -> Any:
+def run_policy_save_gates(
+    out_dir: str | os.PathLike[str], *, first: bool, objective: Any = None
+) -> Any:
     """Run every registered save gate over the checkpoint at ``out_dir``.
 
     ``first`` selects the ``FIRST_SAVE`` event (which adds the one-shot
@@ -175,13 +177,22 @@ def run_policy_save_gates(out_dir: str | os.PathLike[str], *, first: bool) -> An
     gate from another context family is reported unwired, not handed a context
     it cannot read. Returns the :class:`~foundationscale.gates.core.GateReport`;
     its ``ok`` is the verdict.
+
+    ``objective`` is the run's :class:`~foundationscale.gates.objective_gates.
+    ObjectiveGateContext` for this save (the step-0 hyperparameter record and the
+    live values). ``objective.hparam_drift`` is the one objective gate on SAVE; with
+    no context it answers SKIP, which is an abstention, not a measurement.
     """
     from foundationscale.gates.checkpoint_gates import CheckpointGateContext
     from foundationscale.gates.core import REGISTRY, Lifecycle, run_event
+    from foundationscale.gates.objective_gates import ObjectiveGateContext
 
     event = Lifecycle.FIRST_SAVE if first else Lifecycle.SAVE
     ctx = CheckpointGateContext.from_path(Path(out_dir))
-    return run_event(REGISTRY, event, ctx, missing_ctx="report-skip")
+    if objective is None:
+        return run_event(REGISTRY, event, ctx, missing_ctx="report-skip")
+    contexts = {CheckpointGateContext: ctx, ObjectiveGateContext: objective}
+    return run_event(REGISTRY, event, contexts, missing_ctx="report-skip")
 
 
 def save_and_adjudicate(
@@ -198,6 +209,7 @@ def save_and_adjudicate(
     topology: Mapping[str, int],
     config: Mapping[str, object],
     defaults: Mapping[str, object] | None = None,
+    objective: Any = None,
 ) -> tuple[dict[str, Any], str]:
     """Writer-side save step: write, adjudicate, and return ``(record, refusal)``.
 
@@ -231,7 +243,7 @@ def save_and_adjudicate(
                 config=config,
                 defaults=defaults,
             )
-            report = run_policy_save_gates(path, first=first)
+            report = run_policy_save_gates(path, first=first, objective=objective)
             record["gates"] = {r.gate_id: r.verdict.value for r in report.results}
             if not report.ok:
                 refusal = f"save gates refused {path}:\n{report}"
@@ -269,6 +281,7 @@ def run_lane_save(
     topology: Mapping[str, int],
     config: Mapping[str, object],
     defaults: Mapping[str, object] | None = None,
+    objective: Any = None,
 ) -> None:
     """One lane save on EVERY rank: the writer saves and adjudicates, all ranks agree.
 
@@ -296,6 +309,7 @@ def run_lane_save(
             topology=topology,
             config=config,
             defaults=defaults,
+            objective=objective,
         )
         metrics.write(json.dumps(record) + "\n")
         metrics.flush()
