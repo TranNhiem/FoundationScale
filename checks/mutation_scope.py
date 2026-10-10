@@ -82,6 +82,11 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/agentic_rl/gateway/server.py": (
+        "gateway request routing, control plane and HTTP front end: line-covered by "
+        "tests/agentic_rl/test_gateway_server.py (fakes + one real-socket smoke), but no mutation "
+        "row yet proves a dropped logprob refusal or an unguarded weight commit would be caught."
+    ),
     "src/foundationscale/agentic_rl/gateway/session.py": (
         "gateway sampling contract, session store and episode assembly: line-covered by "
         "tests/agentic_rl/test_gateway_session.py, but no mutation row yet proves a dropped "
