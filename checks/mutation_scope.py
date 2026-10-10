@@ -82,6 +82,11 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/agentic_rl/gateway/wire.py": (
+        "gateway wire-format translation (OpenAI Chat/Responses, Anthropic Messages, Gemini <-> "
+        "canonical; responses and SSE): line-covered by tests/agentic_rl/test_gateway_wire.py, "
+        "but no mutation row yet proves a dropped refusal or a mis-ordered message is caught."
+    ),
     "src/foundationscale/agentic_rl/trajectory_v2.py": (
         "fs.trajectory/v2 contract (segments, per-token planes, reward events, v1 adapters, "
         "flatten_v2): line-covered by tests/agentic_rl/test_trajectory_v2.py, but no mutation "

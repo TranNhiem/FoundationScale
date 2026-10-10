@@ -241,6 +241,8 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/agentic_rl/contracts.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/agentic_rl/token_trace.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/agentic_rl/engines/__init__.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/agentic_rl/gateway/__init__.py": 100,  # set by hand; measured 100.0%
+    "src/foundationscale/agentic_rl/gateway/wire.py": 98,  # set by hand; measured 98.97%
     "src/foundationscale/agentic_rl/engines/fleet.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/agentic_rl/engines/sglang.py": 97,  # set by --update; measured 97.5%
     "src/foundationscale/agentic_rl/envs/__init__.py": 100,  # set by --update; measured 100.0%
