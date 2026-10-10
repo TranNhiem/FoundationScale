@@ -666,6 +666,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="do not write: report the drift of the export tree (exit 5 on drift)")
     p.set_defaults(func=_cmd_export_skills)
 
+    from foundationskills.vetting.cli import add_parser as _add_vet_parser
+
+    _add_vet_parser(sub)  # `fskills vet`: the A6.1 third-party skill vetting gate (VG-01..VG-15)
+
     return parser
 
 
