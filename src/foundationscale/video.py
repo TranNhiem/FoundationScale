@@ -49,8 +49,8 @@ __all__ = [
     "VideoDecodeError",
     "available_backends",
     "budget_from_env",
-    "conversation_frames_for",
     "fold_video_row",
+    "frames_for_row",
     "sample_times",
     "video_frame_paths",
 ]
@@ -101,11 +101,53 @@ class FrameBudget:
         return f"f{self.frames}-{self.sampling}-s{self.max_side or 0}"
 
 
-def sample_times(duration: float, frames: int) -> list[float]:
-    """Centred-uniform instants (seconds) for ``frames`` samples of a clip."""
+def _check_segment_bounds(start: float | None, end: float | None) -> None:
+    """Both ``start``/``end`` given, or neither -- never just one.
+
+    Shared by :func:`sample_times` (which also knows the duration, so it can
+    additionally refuse ``start`` at or past it) and :func:`video_frame_paths`
+    (which calls this FIRST, before touching the cache or any backend, so an
+    obviously bad declaration costs nothing).
+    """
+    if (start is None) != (end is None):
+        raise VideoDecodeError(
+            f"video segment needs both start and end seconds, or neither "
+            f"(got start={start!r}, end={end!r})"
+        )
+    if start is not None and end is not None and end <= start:
+        raise VideoDecodeError(f"segment end {end}s must be greater than start {start}s")
+
+
+def sample_times(
+    duration: float, frames: int, *, start: float | None = None, end: float | None = None
+) -> list[float]:
+    """Centred-uniform instants (seconds) for ``frames`` samples of a clip.
+
+    With no ``start``/``end`` this is unchanged: ``frames`` instants spanning
+    the whole ``[0, duration]`` clip. With both given, the SAME centred-uniform
+    rule applies inside ``[start, end]`` instead -- the segment a row's
+    conversation describes within a longer clip -- clamped to the decoded
+    ``duration`` so a segment that slightly overruns a clip's measured length
+    (a common corpus rounding artifact) still samples rather than refuses.
+    Refuses (:class:`VideoDecodeError`) when only one of ``start``/``end`` is
+    given, when ``end <= start``, or when ``start`` is at or past ``duration``
+    -- a segment this module cannot locate in the clip at all, as opposed to
+    one it can merely clamp.
+    """
     if not duration > 0:
         raise VideoDecodeError(f"clip duration {duration!r} is not positive")
-    return [(index + 0.5) * duration / frames for index in range(frames)]
+    _check_segment_bounds(start, end)
+    if start is None:
+        return [(index + 0.5) * duration / frames for index in range(frames)]
+    assert end is not None  # _check_segment_bounds already paired them
+    if start >= duration:
+        raise VideoDecodeError(
+            f"segment start {start}s is at or beyond the clip duration {duration}s"
+        )
+    clamped_start = max(0.0, start)
+    clamped_end = min(duration, end)
+    span = clamped_end - clamped_start
+    return [clamped_start + (index + 0.5) * span / frames for index in range(frames)]
 
 
 # -- decoder backends: each returns (frames as PIL images, backend duration) ------
@@ -117,17 +159,22 @@ def _pil_from_array(array: Any) -> Any:
     return Image.fromarray(array)
 
 
-def _decode_torchcodec(path: str, frames: int) -> list[Any]:
+def _decode_torchcodec(
+    path: str, frames: int, *, start: float | None = None, end: float | None = None
+) -> list[Any]:
     from torchcodec.decoders import VideoDecoder  # type: ignore[import-not-found]
 
     decoder = VideoDecoder(path)
     duration = float(decoder.metadata.duration_seconds or 0.0)
-    batch = decoder.get_frames_played_at(seconds=sample_times(duration, frames))
+    instants = sample_times(duration, frames, start=start, end=end)
+    batch = decoder.get_frames_played_at(seconds=instants)
     data = batch.data.permute(0, 2, 3, 1).cpu().numpy()  # N,C,H,W -> N,H,W,C
     return [_pil_from_array(frame) for frame in data]
 
 
-def _decode_av(path: str, frames: int) -> list[Any]:
+def _decode_av(
+    path: str, frames: int, *, start: float | None = None, end: float | None = None
+) -> list[Any]:
     import av  # type: ignore[import-not-found]
 
     with av.open(path) as container:
@@ -137,7 +184,7 @@ def _decode_av(path: str, frames: int) -> list[Any]:
         else:
             duration = float(container.duration or 0) / 1_000_000
         images = []
-        for instant in sample_times(duration, frames):
+        for instant in sample_times(duration, frames, start=start, end=end):
             container.seek(int(instant / stream.time_base), stream=stream, backward=True)
             chosen = None
             for frame in container.decode(stream):
@@ -150,7 +197,9 @@ def _decode_av(path: str, frames: int) -> list[Any]:
     return images
 
 
-def _decode_cv2(path: str, frames: int) -> list[Any]:
+def _decode_cv2(
+    path: str, frames: int, *, start: float | None = None, end: float | None = None
+) -> list[Any]:
     import cv2  # type: ignore[import-not-found]
 
     capture = cv2.VideoCapture(path)
@@ -161,7 +210,7 @@ def _decode_cv2(path: str, frames: int) -> list[Any]:
         count = float(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
         duration = count / fps if fps > 0 else 0.0
         images = []
-        for instant in sample_times(duration, frames):
+        for instant in sample_times(duration, frames, start=start, end=end):
             capture.set(cv2.CAP_PROP_POS_MSEC, instant * 1000.0)
             ok, bgr = capture.read()
             if not ok:
@@ -178,7 +227,9 @@ def _ffmpeg_bins() -> tuple[str, str] | None:
     return (ffmpeg, ffprobe) if ffmpeg and ffprobe else None
 
 
-def _decode_ffmpeg(path: str, frames: int) -> list[Any]:
+def _decode_ffmpeg(
+    path: str, frames: int, *, start: float | None = None, end: float | None = None
+) -> list[Any]:
     import io
 
     from PIL import Image
@@ -199,7 +250,7 @@ def _decode_ffmpeg(path: str, frames: int) -> list[Any]:
         detail = probe.stderr.strip()
         raise VideoDecodeError(f"{path}: ffprobe gave no duration ({detail})") from exc
     images = []
-    for instant in sample_times(duration, frames):
+    for instant in sample_times(duration, frames, start=start, end=end):
         grab = subprocess.run(
             [ffmpeg, "-v", "error", "-ss", f"{instant:.6f}", "-i", path, "-frames:v", "1"]
             + ["-f", "image2pipe", "-vcodec", "png", "-"],
@@ -214,7 +265,7 @@ def _decode_ffmpeg(path: str, frames: int) -> list[Any]:
     return images
 
 
-_DECODERS: dict[str, Callable[[str, int], list[Any]]] = {
+_DECODERS: dict[str, Callable[..., list[Any]]] = {
     "torchcodec": _decode_torchcodec,
     "av": _decode_av,
     "cv2": _decode_cv2,
@@ -261,23 +312,46 @@ def _resize(image: Any, max_side: int | None) -> Any:
     return image
 
 
+def _cache_key(budget: FrameBudget, start: float | None, end: float | None) -> str:
+    """``budget.key``, or one further split per segment so two segments of the
+    SAME clip (and the same budget) never share a cache directory."""
+    if start is None:
+        return budget.key
+    assert end is not None  # callers already ran _check_segment_bounds
+    return f"{budget.key}-seg{start:.3f}-{end:.3f}"
+
+
 def video_frame_paths(
     path: str | os.PathLike[str],
     budget: FrameBudget,
     cache_dir: str | os.PathLike[str],
     *,
     backends: Sequence[str] | None = None,
+    start: float | None = None,
+    end: float | None = None,
 ) -> list[str]:
     """The ``budget.frames`` frame files for ``path``, decoding once if not cached.
 
+    With no ``start``/``end`` this is UNCHANGED from before segments existed:
+    same cache path, same decoder call shape (``decoder(path, frames)``, two
+    positional arguments, nothing more) -- callers that never mention a
+    segment see byte-identical behaviour. With both given, the frames are
+    centred-uniform instants inside ``[start, end]`` (see
+    :func:`sample_times`) and the cache key folds in the segment (see
+    :func:`_cache_key`), so a second segment of the same file decodes its own
+    frames rather than silently reusing the first segment's.
+
     Raises :class:`VideoDecodeError` naming every backend tried when none can
-    produce the frames, or ``FileNotFoundError`` for a missing clip -- the caller
-    turns either into its refusal; nothing here substitutes a blank frame.
+    produce the frames (or, before any backend is touched, for a segment
+    declaration that cannot be one -- see :func:`_check_segment_bounds`), or
+    ``FileNotFoundError`` for a missing clip -- the caller turns either into
+    its refusal; nothing here substitutes a blank frame.
     """
+    _check_segment_bounds(start, end)
     clip = Path(path)
     if not clip.is_file():
         raise FileNotFoundError(f"video {clip} does not exist")
-    target = Path(cache_dir) / _clip_id(clip) / budget.key
+    target = Path(cache_dir) / _clip_id(clip) / _cache_key(budget, start, end)
     record = target / _RECORD
     if record.is_file():
         cached = json.loads(record.read_text(encoding="utf-8"))
@@ -298,7 +372,10 @@ def video_frame_paths(
     used = ""
     for name in order:
         try:
-            images = _DECODERS[name](str(clip), budget.frames)
+            if start is None:
+                images = _DECODERS[name](str(clip), budget.frames)
+            else:
+                images = _DECODERS[name](str(clip), budget.frames, start=start, end=end)
             used = name
             break
         except Exception as exc:  # noqa: BLE001 -- try the next backend, report all
@@ -322,6 +399,8 @@ def video_frame_paths(
                 "backend": used,
                 "times": [round(t, 6) for t in _times_or_empty(images, budget)],
                 "files": names,
+                "start": start,
+                "end": end,
             }
         ),
         encoding="utf-8",
@@ -374,10 +453,17 @@ def _as_list(value: Any) -> list[str]:
     return [str(item) for item in value if item]
 
 
-def _clip_path(clip: str, base_dir: str | os.PathLike[str]) -> Path:
-    """``clip`` as a path; a relative one resolves against ``base_dir``."""
-    path = Path(clip)
-    return path if path.is_absolute() else Path(base_dir) / path
+def _row_segment(row: Mapping[str, Any]) -> tuple[float | None, float | None]:
+    """The optional ``start``/``end`` seconds a row declares, or ``(None, None)``.
+
+    Absent on both sides is a valid, common row (the whole clip); absent on
+    only one side is a malformed row, and :func:`video_frame_paths` is the one
+    that refuses it (via :func:`_check_segment_bounds`) -- this helper only
+    reads what is there, it does not validate it.
+    """
+    start = row.get("start")
+    end = row.get("end")
+    return (None if start is None else float(start)), (None if end is None else float(end))
 
 
 def fold_video_row(
@@ -397,57 +483,86 @@ def fold_video_row(
     now enter as image content blocks and a marker left behind would be a
     placeholder nothing resolves. A row with no clip passes through with its
     images unchanged, so a mixed corpus keeps its text-only and image rows.
+
+    An optional ``start``/``end`` (seconds) on the row scopes EVERY clip it
+    lists to that one segment, rather than the whole file -- the shape a row
+    describing a short action inside a longer clip takes. A row without
+    either key is unaffected (the whole clip, exactly as before segments
+    existed).
     """
     out = dict(row)
+    start, end = _row_segment(row)
     frames: list[str] = []
     for clip in _as_list(row.get(video_column)):
-        frames.extend(video_frame_paths(_clip_path(clip, base_dir), budget, cache_dir))
+        path = Path(clip)
+        if not path.is_absolute():
+            path = Path(base_dir) / path
+        frames.extend(video_frame_paths(path, budget, cache_dir, start=start, end=end))
     out[image_column] = _as_list(row.get(image_column)) + frames
     if frames and isinstance(out.get("text"), str):
         out["text"] = out["text"].replace(_VIDEO_MARKER, "").strip()
     return out
 
 
-def conversation_frames_for(
+def frames_for_row(
+    row: Mapping[str, Any],
+    *,
+    video_column: str,
     budget: FrameBudget,
     cache_dir: str | os.PathLike[str],
-    *,
     base_dir: str | os.PathLike[str],
-    video_column: str,
-    backends: Sequence[str] | None = None,
-) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
-    """The ``frames_for`` callable the conversation arm needs, from a declared budget.
+) -> dict[str, Any]:
+    """One row's clip -> NATIVE video frames + metadata, for the conversation path.
 
-    The image arm folds clips into frame FILES on the image column
-    (:func:`fold_video_row`); the conversation arm instead hands the processor a
-    native ``videos=`` input, so it needs the frames themselves. Both go through
-    the same :func:`video_frame_paths` cache and the same relative-path rule, so
-    one clip yields the same instants on either arm.
+    Unlike :func:`fold_video_row` (which turns a clip into ``budget.frames``
+    separate IMAGES on the image arm), this keeps the clip as ONE video: the
+    returned ``{"frames": [...], "fps": ..., "frames_indices": [...],
+    "duration": ...}`` is exactly the shape
+    ``train/conversation.py``'s ``frames_for`` hook documents, passed to the
+    processor as native ``videos=``/``video_metadata=`` input
+    (``do_sample_frames=False``) rather than re-expanded as N image blocks.
 
-    The callable returns ``{"frames": [...], "frames_indices": [...]}`` -- RGB
-    images, exactly ``budget.frames`` of them. No ``fps`` or ``duration`` is
-    reported: the cache records normalised instants, and inventing either would be
-    a guess. It raises rather than substituting: ``FileNotFoundError`` for a
-    missing clip, :class:`VideoDecodeError` when no decoder can read it, and
-    ``ValueError`` for a row carrying more than one clip (the conversation arm
-    supports one ``<video>`` per row). The caller turns each into its refusal.
+    REQUIRES both ``start`` and ``end`` (seconds) on ``row`` -- the segment the
+    row's conversation describes inside a longer clip, the shape
+    ``prepare_data.py``'s video rows carry. There is no whole-clip arm here: a
+    video row with neither key is a declaration gap, not an invitation to
+    assume "the whole file" -- :func:`fold_video_row` (the plain image arm)
+    remains the whole-clip path. Raises :class:`VideoDecodeError` for a row
+    missing the segment, for the same reason :func:`video_frame_paths` refuses
+    a declaration it cannot locate rather than guessing one.
+
+    ``fps`` and ``frames_indices`` describe the SAMPLED clip alone --
+    ``budget.frames`` frames at ``budget.frames / (end - start)`` fps, indices
+    ``0..budget.frames - 1`` -- not the source video's native frame rate: the
+    two processor families this plane trains read these fields only to place
+    frames in TIME relative to EACH OTHER (the per-frame timestamps embedded
+    in the rendered prompt), which this self-consistent framing gives them
+    without this module probing a native fps it has no other use for.
     """
-
-    def frames_for(row: Mapping[str, Any]) -> dict[str, Any]:
-        from PIL import Image  # noqa: PLC0415
-
-        clips = _as_list(row.get(video_column))
-        if len(clips) != 1:
-            raise ValueError(
-                f"expected exactly one clip in column {video_column!r}, found {len(clips)}"
-            )
-        files = video_frame_paths(
-            _clip_path(clips[0], base_dir), budget, cache_dir, backends=backends
+    clip_value = row.get(video_column)
+    path = Path(_as_list(clip_value)[0])
+    if not path.is_absolute():
+        path = Path(base_dir) / path
+    start, end = _row_segment(row)
+    if start is None or end is None:
+        raise VideoDecodeError(
+            f"video {clip_value!r} (column {video_column!r}) has no 'start'/'end' segment "
+            f"declared on its row (got start={start!r}, end={end!r}); the conversation "
+            "path's native-video frames require the segment the row describes -- "
+            "fold_video_row (the image arm) is the whole-clip path, not this one"
         )
-        frames = []
-        for name in files:
-            with Image.open(name) as image:
-                frames.append(image.convert("RGB"))
-        return {"frames": frames, "frames_indices": list(range(len(frames)))}
+    paths = video_frame_paths(path, budget, cache_dir, start=start, end=end)
+    from PIL import Image  # noqa: PLC0415
 
-    return frames_for
+    images = []
+    for file_path in paths:
+        image = Image.open(file_path)
+        image.load()  # decode NOW: a lazy handle failing mid-batch is quieter
+        images.append(image)
+    span = end - start
+    return {
+        "frames": images,
+        "fps": budget.frames / span,
+        "frames_indices": list(range(budget.frames)),
+        "duration": span,
+    }

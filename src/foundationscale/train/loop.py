@@ -274,6 +274,101 @@ def _model_ties_word_embeddings(model: Any) -> bool:
     return bool(getattr(text_config, "tie_word_embeddings", False))
 
 
+def _media_capable_auto_class(config: Any, *, media_declared: bool) -> tuple[Any, str, bool]:
+    """(auto_class, its name, whether to VERIFY it after load) for ``cfg.model``.
+
+    Text-only runs (``media_declared=False``) always get
+    ``AutoModelForCausalLM`` and no verification -- byte-identical to every
+    run before this function existed, because nothing about loading a plain
+    LLM needed to change.
+
+    A media-declared run uses ``AutoModelForImageTextToText`` when ``config``'s
+    own class is registered there (checked via ``type(config) in
+    AutoModelForImageTextToText._model_mapping``, the same membership test
+    transformers' own dispatch uses -- not a private submodule's model_type
+    table, which breaks under any harness that replaces ``sys.modules
+    ["transformers"]`` with a flat fake). MEASURED: transformers 5.18.0
+    registers ``"qwen3_5"``/``"qwen3_5_moe"`` under ``AutoModelForCausalLM``
+    ONLY as the text-only "VLM compatibility" classes
+    ``Qwen3_5ForCausalLM``/``Qwen3_5MoeForCausalLM`` -- which explicitly skip
+    ``model.visual.*`` weights on load (``_keys_to_ignore_on_load_unexpected``)
+    and silently absorb ``pixel_values``/``pixel_values_videos`` through a
+    bare ``**kwargs`` without ever reading them, so a media-declared run
+    trains with the pixels silently dropped. ``gemma4_unified`` has no such
+    split: both auto-mappings already resolve it to the one
+    ``Gemma4UnifiedForConditionalGeneration`` class, so this is a no-op for
+    every gemma4 family on this estate.
+
+    The third element is True only when ``AutoModelForImageTextToText`` was
+    actually selected -- :func:`_model_can_consume_pixels` then PROVES the
+    loaded instance really can consume pixels (defends against a future class
+    registered-but-still-incapable the same way qwen3_5's causal class was).
+    A ``config`` whose class is in NEITHER mapping (a plain text checkpoint,
+    an unregistered family, or any double this plane's own fake-transformers
+    test harnesses construct) is left on ``AutoModelForCausalLM`` with NO
+    verification: declaring media on a checkpoint that never claimed vision
+    capability is a narrower, pre-existing gap this change does not newly
+    police, and every double built before this function existed already
+    assumes an unverified load here.
+
+    Both transformers lookups are defensive (``ImportError`` on the class
+    itself; bare ``Exception`` on ``_model_mapping``, which a stand-in
+    ``Auto*`` double will not define at all) so a harness that fakes
+    ``transformers`` down to a flat module with no
+    ``AutoModelForImageTextToText`` degrades to the unchanged
+    ``AutoModelForCausalLM`` path rather than an uncaught crash reaching no
+    refusal at all.
+    """
+    from transformers import AutoModelForCausalLM  # noqa: PLC0415
+
+    if not media_declared:
+        return AutoModelForCausalLM, "AutoModelForCausalLM", False
+    try:
+        from transformers import AutoModelForImageTextToText  # noqa: PLC0415
+    except ImportError:
+        return AutoModelForCausalLM, "AutoModelForCausalLM", False
+    try:
+        in_mapping = type(config) in AutoModelForImageTextToText._model_mapping
+    except Exception:  # noqa: BLE001 -- a stand-in Auto* double has no mapping at all
+        in_mapping = False
+    if in_mapping:
+        return AutoModelForImageTextToText, "AutoModelForImageTextToText", True
+    return AutoModelForCausalLM, "AutoModelForCausalLM", False
+
+
+def _model_can_consume_pixels(model: Any) -> bool:
+    """Whether ``model``'s own forward can actually consume pixel input.
+
+    Two independent signals, BOTH required (MEASURED gap: Qwen3_5ForCausalLM
+    satisfies neither): a declared image-modality tower must resolve on the
+    loaded module tree (the same lookup :func:`_dormant_modality_towers`
+    uses), AND ``forward``'s own signature must NAME a ``pixel_values``
+    parameter explicitly -- a bare ``**kwargs`` catch-all (measured on that
+    exact class) accepts ``pixel_values`` without raising and without ever
+    reading it, so "does not crash when given pixels" is not "does consume
+    them".
+    """
+    import inspect
+
+    forward = getattr(type(model), "forward", None)
+    has_pixel_param = False
+    if forward is not None:
+        try:
+            has_pixel_param = "pixel_values" in inspect.signature(forward).parameters
+        except (TypeError, ValueError):
+            has_pixel_param = False
+    family = resolve_family(_family_config_mapping(model))
+    has_image_tower = False
+    if family is not None:
+        for path, modality in family.towers:
+            if modality != "image":
+                continue
+            if resolve_module_path(model, path) is not None:
+                has_image_tower = True
+                break
+    return has_pixel_param and has_image_tower
+
+
 def _parallelism_backend() -> tuple[Any, str | None]:
     """accelerate's ParallelismConfig class, or the reason this build has none.
 
@@ -516,15 +611,21 @@ def _fold_video_split(
     declaration is the silent drop this plane exists to prevent.
     """
     import functools  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
 
     from foundationscale import video  # noqa: PLC0415
 
     if video_column is None or image_column is None:
         return "video fold called without a declared video and image column"
-    missing = _video_column_missing(split, dataset=dataset, video_column=video_column)
-    if missing is not None:
-        return missing
-    base, cache = _video_base_and_cache(dataset, cache_dir)
+    if video_column not in split.column_names:
+        return (
+            f"video column {video_column!r} is declared but dataset {dataset!r} has "
+            f"columns {split.column_names}. Training anyway would run text-only under "
+            "a video label -- the silent-drop defect this plane refuses"
+        )
+    local = Path(dataset)
+    base = local if local.is_dir() else local.parent if local.is_file() else Path.cwd()
+    cache = Path(cache_dir) if cache_dir else base / ".fs_video_frames"
     fold = functools.partial(
         video.fold_video_row,
         video_column=video_column,
@@ -537,61 +638,6 @@ def _fold_video_split(
         return split.map(fold)
     except (video.VideoDecodeError, FileNotFoundError) as exc:
         return f"video column {video_column!r}: a clip could not become frames: {exc}"
-
-
-def _video_column_missing(split: Any, *, dataset: str, video_column: str) -> str | None:
-    """The refusal for a declared video column the dataset lacks, or None.
-
-    Every row would otherwise train on its text alone under a video declaration,
-    on whichever arm carries the clips.
-    """
-    if video_column in split.column_names:
-        return None
-    return (
-        f"video column {video_column!r} is declared but dataset {dataset!r} has "
-        f"columns {split.column_names}. Training anyway would run text-only under "
-        "a video label -- the silent-drop defect this plane refuses"
-    )
-
-
-def _video_base_and_cache(dataset: str, cache_dir: str | None) -> tuple[Any, Any]:
-    """Where relative clip paths resolve, and where frames are cached, for ``dataset``.
-
-    Both live beside a local dataset (its directory, or a data file's parent); a
-    hub dataset id resolves against the working directory. The image arm's fold
-    and the conversation arm's ``frames_for`` share this one rule, so a clip
-    resolves -- and caches -- identically on either arm.
-    """
-    from pathlib import Path  # noqa: PLC0415
-
-    local = Path(dataset)
-    base = local if local.is_dir() else local.parent if local.is_file() else Path.cwd()
-    cache = Path(cache_dir) if cache_dir else base / ".fs_video_frames"
-    return base, cache
-
-
-def _conversation_frames_for(
-    split: Any,
-    *,
-    dataset: str,
-    video_column: str,
-    budget: Any,
-    cache_dir: str | None,
-) -> Any:
-    """The conversation arm's ``frames_for`` for a declared budget, or a refusal string.
-
-    A declared video column the dataset does not carry refuses with the same words
-    as the image arm's fold (:func:`_video_column_missing`).
-    """
-    from foundationscale import video  # noqa: PLC0415
-
-    missing = _video_column_missing(split, dataset=dataset, video_column=video_column)
-    if missing is not None:
-        return missing
-    base, cache = _video_base_and_cache(dataset, cache_dir)
-    return video.conversation_frames_for(
-        budget, str(cache), base_dir=str(base), video_column=video_column
-    )
 
 
 def _untrainable_modality_refusal(modality: str, var: str, declared: str) -> str:
@@ -4703,9 +4749,6 @@ def _train(cfg: TrainConfig) -> int:
 
     VIDEO_COLUMN: str | None = None
     _video_budget: Any = None
-    # frames_for + video_column for the conversation arm; empty unless a budget
-    # is declared there, so the arm's video rows keep refusing by default.
-    _conversation_video_kwargs: dict[str, Any] = {}
     if _untrainable is not None and _untrainable[0] == "video":
         try:
             _video_budget = _video.budget_from_env(_os.environ)
@@ -4720,21 +4763,39 @@ def _train(cfg: TrainConfig) -> int:
         if _video_budget is not None:
             VIDEO_COLUMN = _untrainable[2]
             _untrainable = None
-            # The conversation arm takes clips as a native ``videos=`` input
-            # (frames_for), so it needs no synthetic image column; inventing one
-            # there would name a column no row carries.
-            if _os.environ.get("FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN"):
-                _video_target = "the conversation arm's videos input"
+            # Conversations (declared below) take video NATIVELY through
+            # train/conversation.py's frames_for hook -- a clip stays one
+            # video, never folded into N separate images -- so the auto-
+            # fallback that rides video on the image arm must not fire for
+            # that path: it would set IMAGE_COLUMN to a column name
+            # (VIDEO_FRAMES_COLUMN) the raw conversation dataset never has,
+            # and the image-arm refusal just below would then fire on every
+            # conversation+video run that declares no SEPARATE image column.
+            # The env is read directly (not CONVERSATIONS_COLUMN itself,
+            # resolved further down) because nothing else this declaration
+            # needs is ready yet, and the raw presence of the var is all this
+            # check needs.
+            _conversations_declared = bool(
+                _os.environ.get("FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN")
+            )
+            if _conversations_declared:
+                _mark(
+                    Step.DATA,
+                    f"video column {VIDEO_COLUMN!r} declared with frame budget "
+                    f"{_video_budget.key}: each clip becomes {_video_budget.frames} "
+                    f"{_video_budget.sampling} frames, sampled NATIVELY for the "
+                    "conversation path (FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN "
+                    "is declared) rather than folded onto an image column",
+                )
             else:
                 if IMAGE_COLUMN is None:
                     IMAGE_COLUMN = _video.VIDEO_FRAMES_COLUMN
-                _video_target = f"image column {IMAGE_COLUMN!r}"
-            _mark(
-                Step.DATA,
-                f"video column {VIDEO_COLUMN!r} declared with frame budget "
-                f"{_video_budget.key}: each clip becomes {_video_budget.frames} "
-                f"{_video_budget.sampling} frames on {_video_target}",
-            )
+                _mark(
+                    Step.DATA,
+                    f"video column {VIDEO_COLUMN!r} declared with frame budget "
+                    f"{_video_budget.key}: each clip becomes {_video_budget.frames} "
+                    f"{_video_budget.sampling} frames on image column {IMAGE_COLUMN!r}",
+                )
     if _untrainable is not None:
         _modality, _var, _declared = _untrainable
         _mark(Step.REFUSE, _untrainable_modality_refusal(_modality, _var, _declared))
@@ -4810,6 +4871,18 @@ def _train(cfg: TrainConfig) -> int:
             return EXIT_REFUSE
         _conversation_declared_sources["conversations_column"] = "declared"
         _conversation_declared_sources["overlong"] = "declared"
+        # VIDEO_COLUMN/_video_budget were already resolved above (shared with
+        # the non-conversation video arm); recorded here as declared/
+        # undeclared rather than a value+source like the axes above, because
+        # there is no separate env-parsing step of its own at this point --
+        # FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN and FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES
+        # own that.
+        _conversation_declared_sources["video_column"] = (
+            "declared" if VIDEO_COLUMN is not None else "undeclared"
+        )
+        _conversation_declared_sources["frame_budget"] = (
+            "declared" if _video_budget is not None else "undeclared"
+        )
         _pad_raw = _os.environ.get("FOUNDATIONSCALE_TRAIN_PAD_TO_MAX_LENGTH") or None
         PAD_TO_MAX_LENGTH, _pad_refusal = _conversation_pad_to_max_length_or_refusal(_pad_raw)
         if _pad_refusal is not None:
@@ -4971,6 +5044,12 @@ def _train(cfg: TrainConfig) -> int:
 
             prompt_surface = resolve_prompt_surface(cfg.model, needs_images=True)
             tokenizer = getattr(prompt_surface.surface, "tokenizer", prompt_surface.surface)
+        # Recorded regardless of which branch below runs (and even if the
+        # audio branch's own class selection is reached instead), so the
+        # manifest always carries a real value -- never set only on the path
+        # this change touches.
+        _model_auto_class_name = "AutoModelForCausalLM"
+        _verify_pixel_capability = False
         try:
             if AUDIO_COLUMN is not None:
                 # Speech plane: the model KIND decides the class. AutoModelForCausalLM
@@ -4992,7 +5071,30 @@ def _train(cfg: TrainConfig) -> int:
                     else AutoModelForCausalLM.from_pretrained(cfg.model, **model_kwargs)
                 )
             else:
-                model = AutoModelForCausalLM.from_pretrained(cfg.model, **model_kwargs)
+                # #<video>: media (image and/or video, via either declaration
+                # shape) picks AutoModelForImageTextToText whenever the
+                # checkpoint's own config class is registered there -- see
+                # _media_capable_auto_class's docstring for the Qwen3_5
+                # defect this exists to close and why an unregistered
+                # model_type is left on the unchanged path instead of newly
+                # policed. The extra AutoConfig.from_pretrained call this
+                # needs is made ONLY when media is declared: a text-only run
+                # must reach from_pretrained with the EXACT SAME single call
+                # it always has, never a new config fetch ahead of it, or
+                # "text-only is byte-identical" (#410's own rule) would stop
+                # being true the moment this function existed.
+                _media_declared = IMAGE_COLUMN is not None or VIDEO_COLUMN is not None
+                _model_config_for_class: Any = None
+                if _media_declared:
+                    from transformers import AutoConfig  # noqa: PLC0415
+
+                    _model_config_for_class = AutoConfig.from_pretrained(cfg.model)
+                _model_auto_class, _model_auto_class_name, _verify_pixel_capability = (
+                    _media_capable_auto_class(
+                        _model_config_for_class, media_declared=_media_declared
+                    )
+                )
+                model = _model_auto_class.from_pretrained(cfg.model, **model_kwargs)
         except (ValueError, TypeError, ImportError) as exc:
             if cfg.attn_implementation is None and cfg.precision is None:
                 raise
@@ -5025,6 +5127,40 @@ def _train(cfg: TrainConfig) -> int:
                     "exit": EXIT_REFUSE,
                     "attn_implementation": cfg.attn_implementation,
                     "precision": cfg.precision,
+                },
+            )
+            return EXIT_REFUSE
+        if _verify_pixel_capability and not _model_can_consume_pixels(model):
+            # The checkpoint's own config class IS registered under
+            # AutoModelForImageTextToText (that is the only way
+            # _verify_pixel_capability is True), so this is a defect, not a
+            # declaration-time expectation this plane invented: the class the
+            # auto-mapping itself chose cannot see the media it was chosen
+            # for. Training anyway would be the Qwen3_5ForCausalLM shape
+            # again -- pixels silently dropped under a multimodal label.
+            _model_type_for_refusal = getattr(getattr(model, "config", None), "model_type", None)
+            _mark(
+                Step.REFUSE,
+                f"media is declared (image_column={IMAGE_COLUMN!r}, "
+                f"video_column={VIDEO_COLUMN!r}) and model_type="
+                f"{_model_type_for_refusal!r} is registered under "
+                f"AutoModelForImageTextToText, but the loaded "
+                f"{_model_auto_class_name} instance cannot consume pixels: "
+                "its forward() names no pixel_values parameter, or its "
+                "family registry's declared image tower does not resolve on "
+                "the loaded module tree. Training anyway would silently "
+                "drop every image/video under a multimodal label -- "
+                "refusing rather than training blind",
+            )
+            _emit_manifest(
+                cfg,
+                stage="refused",
+                extra={
+                    "exit": EXIT_REFUSE,
+                    "model_auto_class": _model_auto_class_name,
+                    "model_type": _model_type_for_refusal,
+                    "image_column": IMAGE_COLUMN,
+                    "video_column": VIDEO_COLUMN,
                 },
             )
             return EXIT_REFUSE
@@ -5098,6 +5234,8 @@ def _train(cfg: TrainConfig) -> int:
                 "the thin path requires a 'text' column",
             )
             return EXIT_REFUSE
+        # The conversation path takes video natively through frames_for, so the
+        # fold into frame images applies only to the plain image arm.
         if _video_budget is not None and CONVERSATIONS_COLUMN is None:
             _folded = _fold_video_split(
                 raw[split],
@@ -5200,41 +5338,70 @@ def _train(cfg: TrainConfig) -> int:
                     },
                 )
                 return EXIT_REFUSE
+            if VIDEO_COLUMN is not None and VIDEO_COLUMN not in columns:
+                _mark(
+                    Step.REFUSE,
+                    f"video column {VIDEO_COLUMN!r} is declared alongside conversations "
+                    f"but dataset {cfg.dataset!r} split {split!r} has columns {columns}. "
+                    "Training anyway would run text-only under a multimodal label -- "
+                    "the silent-drop defect this plane refuses",
+                )
+                _emit_manifest(
+                    cfg,
+                    stage="refused",
+                    extra={
+                        "exit": EXIT_REFUSE,
+                        "conversations_column": CONVERSATIONS_COLUMN,
+                        "video_column": VIDEO_COLUMN,
+                    },
+                )
+                return EXIT_REFUSE
             from foundationscale.train.conversation import (  # noqa: PLC0415
                 conversation_prepass_or_refuse,
             )
 
+            # Video rides the conversation path NATIVELY (frames_for), never
+            # folded into images -- built once here and reused unchanged at
+            # collator-construction time below, so the pre-pass measures
+            # EXACTLY the frame count/metadata the collator will later use.
+            # None when no video is declared at all, matching frames_for's
+            # own contract (a None here means "this run carries no video",
+            # not "guess a budget").
+            _frames_for: Any = None
+            if _video_budget is not None and VIDEO_COLUMN is not None:
+                import functools as _functools  # noqa: PLC0415
+
+                _video_local = Path(cfg.dataset)
+                _video_base = (
+                    _video_local
+                    if _video_local.is_dir()
+                    else _video_local.parent
+                    if _video_local.is_file()
+                    else Path.cwd()
+                )
+                _video_cache_dir = _os.environ.get(_video.VIDEO_CACHE_ENV) or str(
+                    _video_base / ".fs_video_frames"
+                )
+                _frames_for = _functools.partial(
+                    _video.frames_for_row,
+                    video_column=VIDEO_COLUMN,
+                    budget=_video_budget,
+                    cache_dir=_video_cache_dir,
+                    base_dir=str(_video_base),
+                )
             # OVERLONG was refused above (REQUIRED alongside
             # CONVERSATIONS_COLUMN) unless it resolved to a real value; this
             # states that fact where the type checker can use it too.
             assert OVERLONG is not None
-            _video_kwargs: dict[str, Any] = {}
-            if _video_budget is not None and VIDEO_COLUMN is not None:
-                _frames_for = _conversation_frames_for(
-                    raw[split],
-                    dataset=cfg.dataset,
-                    video_column=VIDEO_COLUMN,
-                    budget=_video_budget,
-                    cache_dir=_os.environ.get(_video.VIDEO_CACHE_ENV) or None,
-                )
-                if isinstance(_frames_for, str):
-                    _mark(Step.REFUSE, _frames_for)
-                    _emit_manifest(
-                        cfg,
-                        stage="refused",
-                        extra={"exit": EXIT_REFUSE, "video_column": VIDEO_COLUMN},
-                    )
-                    return EXIT_REFUSE
-                _video_kwargs = {"video_column": VIDEO_COLUMN, "frames_for": _frames_for}
-            _conversation_video_kwargs = _video_kwargs
             _prepass = conversation_prepass_or_refuse(
                 raw[split],
                 prompt_surface.surface,
                 conversations_column=CONVERSATIONS_COLUMN,
                 image_column=IMAGE_COLUMN,
+                video_column=VIDEO_COLUMN,
                 max_length=cfg.max_sequence_length,
                 overlong=OVERLONG,
-                **_video_kwargs,
+                frames_for=_frames_for,
             )
             _conversation_prepass_stats = {
                 "rows_seen": _prepass.rows_seen,
@@ -5739,7 +5906,13 @@ def _train(cfg: TrainConfig) -> int:
     _dormant_towers = _dormant_modality_towers(
         model,
         family=_family,
-        image_declared=IMAGE_COLUMN is not None,
+        # Native video (CONVERSATIONS_COLUMN+VIDEO_COLUMN, no separate
+        # IMAGE_COLUMN) exercises the SAME vision/patch tower an image
+        # declaration does -- both families route video frames through it --
+        # so VIDEO_COLUMN counts as "image" exercised here too; without this,
+        # a video-only conversation run would wrongly CLAIM the tower dormant
+        # (image_column=None) while every rank actually trains it.
+        image_declared=IMAGE_COLUMN is not None or VIDEO_COLUMN is not None,
         audio_declared=AUDIO_COLUMN is not None,
     )
     if _family is None:
@@ -6204,15 +6377,21 @@ def _train(cfg: TrainConfig) -> int:
         # images on every row, and a row that still carries an <image>
         # marker refuses (naming the missing declaration) rather than
         # silently training it text-only under a conversations label.
+        # video_column/frames_for mirror the pre-pass's own call exactly
+        # (_frames_for was built once, above, right before
+        # conversation_prepass_or_refuse) -- the collator must measure/encode
+        # video with the SAME budget and the SAME cache the pre-pass already
+        # used, never a second, independently-built callable.
         data_collator = train_conversation_collator_or_refuse(
             prompt_surface.surface,
             conversations_column=CONVERSATIONS_COLUMN,
             image_column=IMAGE_COLUMN,
+            video_column=VIDEO_COLUMN,
             max_length=cfg.max_sequence_length,
             overlong=OVERLONG,
             pad_to_max_length=PAD_TO_MAX_LENGTH,
+            frames_for=_frames_for,
             inject_dummy_media=INJECT_DUMMY_MEDIA,
-            **_conversation_video_kwargs,
         )
         # Trainer's default strips dataset columns its model signature does
         # not name -- with this collator the raw conversations column (and,
@@ -6937,6 +7116,15 @@ def _train(cfg: TrainConfig) -> int:
             else None
         ),
         "precision_verdict": agreement.status if agreement is not None else None,
+        # The class actually resolved to load cfg.model -- "AutoModelForCausalLM"
+        # on every text-only run and every media-declared run whose model_type
+        # is not registered under AutoModelForImageTextToText (unchanged,
+        # byte-identical to before this axis existed), else
+        # "AutoModelForImageTextToText". Recorded unconditionally so a reader
+        # never has to infer which class trained from the declared columns
+        # alone -- that inference is exactly what the Qwen3_5ForCausalLM gap
+        # this axis closes made silently wrong.
+        "model_auto_class": _model_auto_class_name,
     }
     if speech_manifest is not None:
         done_extra["speech_gates"] = speech_manifest
@@ -6963,6 +7151,14 @@ def _train(cfg: TrainConfig) -> int:
                 "inject_dummy_media": {
                     "value": INJECT_DUMMY_MEDIA,
                     "source": _conversation_declared_sources.get("inject_dummy_media"),
+                },
+                "video_column": {
+                    "value": VIDEO_COLUMN,
+                    "source": _conversation_declared_sources.get("video_column"),
+                },
+                "frame_budget": {
+                    "value": _video_budget.key if _video_budget is not None else None,
+                    "source": _conversation_declared_sources.get("frame_budget"),
                 },
             },
             sort_keys=True,

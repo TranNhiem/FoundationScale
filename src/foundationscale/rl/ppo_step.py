@@ -184,8 +184,8 @@ def ppo_step(
     golds: list[str | None] = [sample.gold for sample in chunk]
 
     prompt_ids = trainer_mod.encode_prompts(surface, chunk, device)
-    with torch.no_grad():
-        generated = getattr(model, "module", model).generate(
+    with torch.no_grad(), trainer_mod._generation_mode(model) as gen_model:
+        generated = gen_model.generate(
             **prompt_ids,
             max_new_tokens=cfg.max_new_tokens,
             num_return_sequences=group_size,

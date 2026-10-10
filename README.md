@@ -214,9 +214,7 @@ workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.m
   160 of 659 vision-tower tensors moved; over the same rows with no video declared,
   0 of 659 moved while the language tower still trained. 16 frames does not fit a full
   fine-tune of this model on one tray, because its shared-KV layers rule out gradient
-  checkpointing. When a conversations column is declared, the same budget and frame cache
-  feed the conversation arm's native video input instead (CPU-tested; not yet measured
-  on GPU). **Audio** trains through the speech plane (next item). An omni
+  checkpointing. **Audio** trains through the speech plane (next item). An omni
   checkpoint's untrainable towers are **carried, not trained**, and the
   run announces which ones by name, because "trained a multimodal model" and "carried two
   thirds of one unchanged" are different claims. *Not* declaring them is no longer silent
@@ -557,14 +555,14 @@ itself, from the Makefile's own accounting:
 
 ## 23. Project structure
 
-`src/` = 80955 LOC across 124 files. `launchers/` contains 10231 shell LOC plus 1615 Python
+`src/` = 80525 LOC across 117 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 34169 Python LOC and 6706 shell LOC on top of the
-package. `tools/` contains 10192 Python LOC. 372869 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 10192 Python LOC. 375615 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (110792 .py LOC); conftest carries the skip guard
+tests/                 the test suite (110231 .py LOC); conftest carries the skip guard
 tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
                        real_checkpoint_probe, preflight/, mutate, census)
 checks/                standalone repository gates: countables drift, packaging

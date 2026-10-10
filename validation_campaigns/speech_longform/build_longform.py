@@ -5,7 +5,10 @@ Open ASR Leaderboard Earnings-22 test split are kept, so nothing overlaps the Ea
 data (speech_p8 excluded exactly these calls). Audio is written as 16 kHz mono FLAC; a clip at
 another rate or channel count is converted here, at build time, and the conversion is recorded
 in its manifest row and printed (the eval itself never resamples).
-Usage: build_longform.py   (writes manifests/longform_earnings22_test6.json, NeMo format)
+--dev N picks N other calls instead (a long-form DEV set for checkpoint/seed selection): the
+first N non-test calls by file_id whose length is 25-75 min. Their segments must then be removed from
+training (see filter_calls.py).
+Usage: build_longform.py [--dev 6]   (writes manifests/longform_earnings22_{test6|devN}.json)
 """
 
 from __future__ import annotations
@@ -36,10 +39,26 @@ def test_calls(fs: HfFileSystem) -> set[str]:
 
 
 def main() -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dev", type=int, default=0)
+    args = ap.parse_args()
     fs = HfFileSystem(token=False)
-    wanted = test_calls(fs)
-    if len(wanted) != 6:
-        raise SystemExit(f"REFUSE (96): expected the 6 Earnings-22 test calls, found {sorted(wanted)}")
+    test = test_calls(fs)
+    if len(test) != 6:
+        raise SystemExit(f"REFUSE (96): expected the 6 Earnings-22 test calls, found {sorted(test)}")
+    wanted = set(test)
+    if args.dev:
+        meta: list[tuple[str, int]] = []
+        for f in sorted(fs.glob(f"datasets/{REPO}/full/test-*.parquet")):
+            with fs.open(f) as h:
+                t = pq.read_table(h, columns=["file_id", "file_length"]).to_pylist()
+            meta += [(r["file_id"], int(r["file_length"])) for r in t]
+        pool = sorted(fid for fid, sec in meta if fid not in test and 1500 <= sec <= 4500)
+        wanted = set(pool[: args.dev])
+        if len(wanted) != args.dev:
+            raise SystemExit(f"REFUSE (96): only {len(wanted)} eligible dev calls")
     (ROOT / "flac").mkdir(parents=True, exist_ok=True)
     rows, seen = [], set()
     for f in sorted(fs.glob(f"datasets/{REPO}/full/test-*.parquet")):
@@ -64,7 +83,7 @@ def main() -> None:
     missing = wanted - seen
     if missing:
         raise SystemExit(f"REFUSE (96): test calls absent from the full set: {sorted(missing)}")
-    out = MAN / "longform_earnings22_test6.json"
+    out = MAN / (f"longform_earnings22_dev{args.dev}.json" if args.dev else "longform_earnings22_test6.json")
     out.write_text("".join(json.dumps(x) + "\n" for x in rows))
     print(json.dumps({"manifest": str(out), "calls": len(rows),
                       "hours": round(sum(x["duration"] for x in rows) / 3600, 2),

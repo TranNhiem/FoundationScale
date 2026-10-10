@@ -250,12 +250,25 @@ def _declared_images(data: Mapping[str, Any], image_column: str | None) -> list[
     return _media_list(data.get(image_column))
 
 
+def _declared_video(data: Mapping[str, Any], video_column: str | None) -> Any:
+    """``data.get(video_column)``, but safe for ``video_column=None``.
+
+    Mirrors :func:`_declared_images`'s rule: ``video_column=None`` means no
+    video column is declared at all (``FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN`` is
+    unset), NOT "guess the column is named 'video'" -- so this returns
+    ``None`` directly rather than reaching into ``data``.
+    """
+    if video_column is None:
+        return None
+    return data.get(video_column)
+
+
 def normalize_conversation(
     row: Any,
     *,
     conversations_column: str,
     image_column: str | None,
-    video_column: str,
+    video_column: str | None,
     row_index: int = 0,
 ) -> list[dict[str, Any]]:
     """ShareGPT (or ``{role,content}``) turns -> HF content-block messages.
@@ -266,12 +279,14 @@ def normalize_conversation(
     plain mapping or a namespace-like object (``vars()`` is used in the
     latter case), matching the other train-plane collators.
 
-    ``image_column=None`` means no image column is declared at all (the
-    operator never ran ``FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN``), NOT "guess
-    the column is named 'image'": ``data.get(None)`` always misses, so
-    ``images`` is always empty, and a row that still carries an ``<image>``
-    marker refuses below rather than silently training text-only under a
-    conversations label that implied otherwise.
+    ``image_column=None`` (``video_column=None`` likewise) means no image
+    (video) column is declared at all (the operator never ran
+    ``FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN``/``FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN``),
+    NOT "guess the column is named 'image'/'video'": ``_declared_images``/
+    ``_declared_video`` always answer empty/``None`` for an undeclared column,
+    so a row that still carries an ``<image>``/``<video>`` marker refuses
+    below, naming the missing declaration, rather than silently training text-
+    only under a conversations label that implied otherwise.
 
     Refuses (96) when:
       * a turn names a role this module does not recognize;
@@ -293,7 +308,7 @@ def normalize_conversation(
         )
 
     images = _declared_images(data, image_column)
-    video_value = data.get(video_column)
+    video_value = _declared_video(data, video_column)
     has_video = bool(video_value)
 
     messages: list[dict[str, Any]] = []
@@ -346,6 +361,14 @@ def normalize_conversation(
         )
     expected_video_markers = 1 if has_video else 0
     if video_marker_count != expected_video_markers:
+        if video_column is None and video_marker_count > 0:
+            _refuse_exit_96(
+                f"row {row_index}: {video_marker_count} <video> marker(s) in the human "
+                "turns, but no video column is declared "
+                "(FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN is unset): declare the video column "
+                "rather than training this row text-only under a conversations label "
+                "that implies otherwise"
+            )
         _refuse_exit_96(
             f"row {row_index}: {video_marker_count} <video> marker(s) across the human "
             f"turns but {'a video is' if has_video else 'no video is'} declared in "
@@ -606,16 +629,26 @@ def _render_conversation_row(
     *,
     conversations_column: str,
     image_column: str | None,
-    video_column: str,
+    video_column: str | None,
     processor: Any,
     frames_for: Callable[[Mapping[str, Any]], dict[str, Any]] | None,
-) -> tuple[str, list[Any], list[Any], int]:
-    """Render one row to ``(text, loaded_images, video_frames, assistant_turn_count)``.
+) -> tuple[str, list[Any], list[Any], list[dict[str, Any]], int]:
+    """Render one row to ``(text, loaded_images, video_frames, video_metadata,
+    assistant_turn_count)``.
 
     The ONE rendering path both :func:`train_conversation_collator_or_refuse`
     and :func:`conversation_prepass_or_refuse` call -- a row's prepass-measured
     length is the row's collate-time length because they are the same
     computation, not two implementations kept in sync by hand.
+
+    ``video_metadata`` is a list of 0 or 1 dict (mirroring ``video_frames``'s
+    own 0-or-1-video-per-row shape): ``{"total_num_frames", "fps",
+    "frames_indices", "duration"}``, the fields
+    ``transformers.video_utils.VideoMetadata`` accepts, built from
+    ``frames_for``'s own ``{"frames", "fps", "frames_indices", "duration"}``
+    result -- passed alongside ``video_frames`` so the processor can place
+    NATIVE video frames in time (``do_sample_frames=False``) instead of
+    re-sampling them itself.
     """
     data = _as_dict(row)
     messages = normalize_conversation(
@@ -630,8 +663,9 @@ def _render_conversation_row(
     image_paths = _declared_images(data, image_column)
     loaded_images = [_load_image_or_refuse(f"row[{index}]", str(p)) for p in image_paths]
 
-    video_value = data.get(video_column)
+    video_value = _declared_video(data, video_column)
     video_frames: list[Any] = []
+    video_metadata: list[dict[str, Any]] = []
     if video_value:
         if frames_for is None:
             _refuse_exit_96(
@@ -643,19 +677,33 @@ def _render_conversation_row(
 
         try:
             frame_info = frames_for(data)
-        except (FileNotFoundError, ValueError, VideoDecodeError) as exc:
+        except (VideoDecodeError, FileNotFoundError) as exc:
             _refuse_exit_96(
-                f"row {index}: the video in column {video_column!r} could not be turned "
-                f"into frames: {exc}"
+                f"row {index}: video in column {video_column!r} could not become frames: {exc}"
             )
-        video_frames = list(frame_info["frames"])
+        # ONE entry per VIDEO this row carries (at most one, per the <video>
+        # marker contract) -- each entry is itself the list of that video's
+        # frames, the same "outer=per-row, inner=per-ITEM" shape `images`
+        # already uses with inner=per-IMAGE. A flat list of frames here would
+        # desync the per-video video_metadata nesting below the moment a clip
+        # decodes to more than one frame.
+        frames = list(frame_info["frames"])
+        video_frames = [frames]
+        video_metadata = [
+            {
+                "total_num_frames": len(frames),
+                "fps": frame_info["fps"],
+                "frames_indices": list(frame_info["frames_indices"]),
+                "duration": frame_info["duration"],
+            }
+        ]
 
     assistant_turn_count = sum(1 for m in messages if m["role"] == "assistant")
     has_reasoning = any("reasoning_content" in m for m in messages if m["role"] == "assistant")
     text = str(
         processor.apply_chat_template(messages, tokenize=False, enable_thinking=has_reasoning)
     )
-    return text, loaded_images, video_frames, assistant_turn_count
+    return text, loaded_images, video_frames, video_metadata, assistant_turn_count
 
 
 def _conversation_processor_batch_call(
@@ -663,6 +711,7 @@ def _conversation_processor_batch_call(
     texts: list[str],
     images_by_row: list[list[Any]],
     videos_by_row: list[list[Any]],
+    video_metadata_by_row: list[list[dict[str, Any]]],
     *,
     max_length: int,
     pad_to_max: bool,
@@ -672,6 +721,9 @@ def _conversation_processor_batch_call(
     See :func:`train_conversation_collator_or_refuse`'s docstring for the two
     MEASURED media-kwarg shapes this depends on (nested per-row lists when
     any row carries media, the kwarg OMITTED entirely when none do).
+    ``video_metadata_by_row`` mirrors ``videos_by_row``'s own per-row nesting
+    exactly (MEASURED, transformers 5.18.0: both families flatten the two in
+    the same order), and rides alongside it only when a video is present.
     """
     kwargs: dict[str, Any] = {"text": texts, "return_tensors": "pt", "padding_side": "right"}
     if pad_to_max:
@@ -683,6 +735,7 @@ def _conversation_processor_batch_call(
         kwargs["images"] = images_by_row
     if any(videos_by_row):
         kwargs["videos"] = videos_by_row
+        kwargs["video_metadata"] = video_metadata_by_row
         kwargs["do_sample_frames"] = False
     return processor(**kwargs)
 
@@ -697,7 +750,7 @@ def train_conversation_collator_or_refuse(
     *,
     conversations_column: str = "conversations",
     image_column: str | None = "image",
-    video_column: str = "video",
+    video_column: str | None = "video",
     max_length: int,
     overlong: str = "drop",
     pad_to_max_length: bool = False,
@@ -800,12 +853,23 @@ def train_conversation_collator_or_refuse(
     A row that declares a video but no ``frames_for`` is refused (96) the
     moment that row is seen, BEFORE the processor is touched at all -- the
     declaration alone is enough to know the row cannot be collated, and this
-    module does not guess a frame budget. When ``frames_for`` IS given, its
-    ``{"frames": [...], "fps": ..., "frames_indices": [...], "duration":
-    ...}`` result is passed as a native ``videos=`` input (frames only; the
-    real decoder, timestamp math and ``video_metadata`` plumbing are owned
-    by a separate piece of work. This is a basic path, not the full video
-    contract).
+    module does not guess a frame budget. ``video_column=None`` means no video
+    column is declared at all (mirroring ``image_column=None``): a row that
+    still carries a ``<video>`` marker refuses, naming
+    ``FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN``, rather than training text-only
+    under a conversations label that implied otherwise. When ``frames_for``
+    IS given, its ``{"frames": [...], "fps": ..., "frames_indices": [...],
+    "duration": ...}`` result is passed as NATIVE video: ``videos=`` nested
+    one sub-list per row (the identical shape ``images=`` already uses) plus
+    a matching ``video_metadata=`` nesting built from the same result
+    (``total_num_frames``, ``fps``, ``frames_indices``, ``duration`` --
+    the fields ``transformers.video_utils.VideoMetadata`` accepts), with
+    ``do_sample_frames=False`` so the processor places the SUPPLIED frames in
+    time rather than re-sampling its own. A :class:`foundationscale.video.VideoDecodeError`
+    or ``FileNotFoundError`` raised by ``frames_for`` itself (a clip that
+    cannot be decoded, or has gone missing) is caught here and turned into the
+    same exit-96 refusal, naming the row and the column -- never an uncaught
+    exception one layer up.
     """
     if overlong not in ("drop", "refuse"):
         _refuse_exit_96(
@@ -824,7 +888,9 @@ def train_conversation_collator_or_refuse(
 
     stats: dict[str, int] = {"rows_seen": 0, "dropped_overlong": 0, "dummy_media_batches": 0}
 
-    def _render_row(index: int, row: Any) -> tuple[str, list[Any], list[Any], int]:
+    def _render_row(
+        index: int, row: Any
+    ) -> tuple[str, list[Any], list[Any], list[dict[str, Any]], int]:
         return _render_conversation_row(
             index,
             row,
@@ -881,6 +947,7 @@ def train_conversation_collator_or_refuse(
         final_texts: list[str],
         final_images: list[list[Any]],
         final_videos: list[list[Any]],
+        final_video_metadata: list[list[dict[str, Any]]],
         lengths: list[float],
     ) -> tuple[Any, int, tuple[int, int]]:
         """Splice one dummy image into whichever surviving row has room.
@@ -907,7 +974,11 @@ def train_conversation_collator_or_refuse(
             trial_texts[local_idx] = modified_text
             trial_images[local_idx] = [dummy_image]
             trial = _batch_call(
-                trial_texts, trial_images, final_videos, pad_to_max=pad_to_max_length
+                trial_texts,
+                trial_images,
+                final_videos,
+                final_video_metadata,
+                pad_to_max=pad_to_max_length,
             )
             real_length = int(trial["attention_mask"][local_idx].sum())
             if real_length > max_length:
@@ -932,6 +1003,7 @@ def train_conversation_collator_or_refuse(
         texts: list[str],
         images_by_row: list[list[Any]],
         videos_by_row: list[list[Any]],
+        video_metadata_by_row: list[list[dict[str, Any]]],
         *,
         pad_to_max: bool,
     ) -> Any:
@@ -940,6 +1012,7 @@ def train_conversation_collator_or_refuse(
             texts,
             images_by_row,
             videos_by_row,
+            video_metadata_by_row,
             max_length=max_length,
             pad_to_max=pad_to_max,
         )
@@ -953,18 +1026,22 @@ def train_conversation_collator_or_refuse(
         texts: list[str] = []
         images_by_row: list[list[Any]] = []
         videos_by_row: list[list[Any]] = []
+        video_metadata_by_row: list[list[dict[str, Any]]] = []
         assistant_turn_counts: list[int] = []
         for index, row in enumerate(rows):
-            text, images, videos, assistant_turns = _render_row(index, row)
+            text, images, videos, video_meta, assistant_turns = _render_row(index, row)
             texts.append(text)
             images_by_row.append(images)
             videos_by_row.append(videos)
+            video_metadata_by_row.append(video_meta)
             assistant_turn_counts.append(assistant_turns)
 
         # Pass 1: measure every row's own expanded length (dynamic padding;
         # the padded WIDTH here is irrelevant, only the per-row
         # attention_mask sum is read).
-        measured = _batch_call(texts, images_by_row, videos_by_row, pad_to_max=False)
+        measured = _batch_call(
+            texts, images_by_row, videos_by_row, video_metadata_by_row, pad_to_max=False
+        )
         lengths = measured["attention_mask"].sum(dim=-1).tolist()
         overlong_indices = [i for i, length in enumerate(lengths) if length > max_length]
 
@@ -990,18 +1067,30 @@ def train_conversation_collator_or_refuse(
         final_texts = [texts[i] for i in survivors]
         final_images = [images_by_row[i] for i in survivors]
         final_videos = [videos_by_row[i] for i in survivors]
+        final_video_metadata = [video_metadata_by_row[i] for i in survivors]
         needs_second_pass = bool(overlong_indices) or pad_to_max_length
 
         dummy_row_index: int | None = None
         dummy_span: tuple[int, int] | None = None
         if inject_dummy_media and not any(final_images) and not any(final_videos):
             final, dummy_row_index, dummy_span = _inject_dummy_media(
-                rows, survivors, texts, final_texts, final_images, final_videos, lengths
+                rows,
+                survivors,
+                texts,
+                final_texts,
+                final_images,
+                final_videos,
+                final_video_metadata,
+                lengths,
             )
             stats["dummy_media_batches"] += 1
         elif needs_second_pass:
             final = _batch_call(
-                final_texts, final_images, final_videos, pad_to_max=pad_to_max_length
+                final_texts,
+                final_images,
+                final_videos,
+                final_video_metadata,
+                pad_to_max=pad_to_max_length,
             )
         else:
             final = measured
@@ -1074,7 +1163,7 @@ def conversation_prepass_or_refuse(
     *,
     conversations_column: str,
     image_column: str | None,
-    video_column: str = "video",
+    video_column: str | None = "video",
     max_length: int,
     overlong: str,
     frames_for: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
@@ -1140,7 +1229,7 @@ def conversation_prepass_or_refuse(
             row = {key: batch[key][i] for key in columns}
             idx = indices[i]
             try:
-                text, images, videos, _turns = _render_conversation_row(
+                text, images, videos, video_meta, _turns = _render_conversation_row(
                     idx,
                     row,
                     conversations_column=conversations_column,
@@ -1159,6 +1248,7 @@ def conversation_prepass_or_refuse(
                 [text],
                 [images],
                 [videos],
+                [video_meta],
                 max_length=max_length,
                 pad_to_max=False,
             )

@@ -369,10 +369,29 @@ def _sample(rid: str, gold: str | None = "A") -> Sample:
 
 
 class _GenModel:
-    """model.generate fabricates 4 fixed rows; model() fabricates log-probs to match."""
+    """model.generate fabricates 4 fixed rows; model() fabricates log-probs to match.
+
+    ``training``/``eval``/``train``/``modules`` are the minimal surface
+    ``_generation_mode`` (trainer.py) needs to bracket every ``.generate()``
+    call site in eval mode and explicitly unshard any FSDP2 units (none,
+    for this bare fake -- an empty ``modules()`` is itself a correct
+    not-FSDP2-wrapped answer) -- added alongside that fix, not incidental:
+    this fake now represents what ANY model handed to ``_one_step`` must
+    support, the same way it already had to support ``.generate``/``__call__``.
+    """
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.training = True
+
+    def eval(self) -> None:
+        self.training = False
+
+    def train(self, mode: bool = True) -> None:
+        self.training = mode
+
+    def modules(self) -> Any:
+        return iter(())
 
     def generate(self, **kwargs: Any) -> Any:
         import torch

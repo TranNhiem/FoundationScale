@@ -350,6 +350,14 @@ PENDING_ENROLMENT: dict[str, str] = {
         "speech model-kind dispatch (audio_llm / seq2seq / ctc): the loader class per kind, "
         "per-kind processor refusals, Whisper prompt-prefix verification and CTC blank padding"
     ),
+    "src/foundationscale/upstream/contracts.py": (
+        "owned speech contracts: manifest row validation with counted problem codes, "
+        "duplicate id/audio detection, the NeMo AED row translation and the strict run config"
+    ),
+    "src/foundationscale/upstream/ledger.py": (
+        "the copy/workaround/private-API ledger and its check that every entry's file and "
+        "anchor still exist in the tree"
+    ),
     "src/foundationscale/train/speech_metrics.py": (
         "transcript normalisation and Levenshtein word/character error counting with the "
         "micro-averaged corpus rate and its checked-vs-expected utterance verdict"

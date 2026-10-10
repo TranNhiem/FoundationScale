@@ -10,6 +10,7 @@ substitute for it -- see the task's GPU-proof runs (a)/(b).
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -336,10 +337,10 @@ def test_atomic_overwrite_uses_a_real_rename(
     replace_calls: list[tuple[str, str]] = []
     real_replace = Path.replace
 
-    # Path.replace is patched on the class, not os.replace: Python 3.10's
-    # pathlib binds os.replace at import, so an os-level patch never sees the
-    # rename there (the 3.10 CI leg failed exactly this way).
-    def _recording_replace(self: Path, target: Path) -> Path:
+    # Recorded at Path.replace, not os.replace: on Python 3.10 pathlib binds
+    # os.replace inside its accessor at import time, so patching os.replace
+    # never sees the call there (3.12+ calls os.replace directly).
+    def _recording_replace(self: Path, target: str | os.PathLike[str]) -> Path:
         replace_calls.append((str(self), str(target)))
         return real_replace(self, target)
 

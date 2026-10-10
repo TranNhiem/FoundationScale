@@ -14,10 +14,23 @@ host always succeeds. A host without either dependency is refused
 (exit-contract 96) with the missing dependency NAMED, never an unraised
 ImportError and never a silent fall-back.
 
-No model-family branching exists anywhere here. Model loading tries
-``AutoModelForCausalLM`` and falls back to ``AutoModelForImageTextToText``
-only (transformers 5.x removed ``AutoModelForVision2Seq``, and it is the
-successor class Gemma-4 registers under);
+Model loading is family-aware only for media-declared corpora: a text-only
+corpus loads exactly as before (``AutoModelForCausalLM``, falling back to
+``AutoModelForImageTextToText`` only on an exception -- byte-identical to
+every run before this paragraph was true). A corpus whose samples carry
+images picks the auto class with ``train/loop.py``'s own
+``_media_capable_auto_class``/``_model_can_consume_pixels`` (imported, never
+duplicated) instead of the try/except fallback: MEASURED on transformers
+5.18.0, ``AutoModelForCausalLM.from_pretrained`` on a qwen3_5/qwen3_5_moe
+checkpoint SUCCEEDS with a text-only class
+(``Qwen3_5ForCausalLM``/``Qwen3_5MoeForCausalLM``) that skips
+``model.visual`` on load and absorbs ``pixel_values``/``image_grid_thw``
+through a bare ``**kwargs`` without reading them, so the try/except never
+fires and ``generate()`` either trains on silently-dropped images or raises
+late on an unused-kwargs ValueError. A media-declared load whose selected
+class still cannot consume pixels REFUSES (exit 96) naming the model type,
+rather than training blind. Gemma-4 is unaffected either way: both auto
+mappings already resolve it to the same ``ForConditionalGeneration`` class.
 prompt templating goes exclusively through ``tokenizer.apply_chat_template``
 -- a tokenizer without a chat template is REFUSED, because silently
 concatenating strings would silently change the prompt distribution the
@@ -46,11 +59,12 @@ correctly tuned; or that any row survives scoring on any given step.
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never executed at runtime
-    from collections.abc import Callable, Iterable, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Sequence
 
     import torch
 
@@ -364,6 +378,637 @@ def _expand_video_samples(samples: Sequence[Sample], config: Any) -> tuple[Sampl
     return tuple(expanded)
 
 
+# The only adapter kind either trainer in this module wires. A second kind
+# that someone types into a config dict and silently gets ignored is exactly
+# the class of defect __init__'s validation exists to turn into a refusal.
+_ADAPTERS: tuple[str, ...] = ("lora",)
+
+
+class _AdapterDisabledReference:
+    """A frozen reference forward, read off the SAME peft-wrapped policy.
+
+    WHY THIS EXISTS: under ``adapter='lora'`` the base weights ARE the
+    frozen reference -- peft's LoRA delta is the only trained quantity --
+    so loading a second full model copy would duplicate every frozen byte
+    next to the one already resident, which is exactly the memory
+    ``wrap_fsdp2``'s own module docstring says FSDP2 exists to avoid for the
+    full-parameter case. ``model.disable_adapter()`` (a peft context
+    manager) already turns every LoRA module's forward back into the bare
+    base-model computation for its duration; this class makes that context
+    manager answer the SAME calling convention every ``ref_model(...)``
+    call site in this package already uses (``ref_model(input_ids=...,
+    attention_mask=..., **kwargs).logits``), so none of those call sites --
+    ``_one_step``, ``_priced_tail``, ``ppo_step.forward_rows``,
+    ``online_pref_step.summed_logprobs`` -- change at all.
+
+    Puts ``policy_model`` into ``eval()`` for the duration of the call and
+    restores whatever mode it found before returning: peft's own
+    ``disable_adapter()`` toggles only the adapter, not dropout/train-vs-
+    eval behaviour, and the step-0 "reference equals policy" invariant
+    (grpo's k3 term, DPO's margin) needs the SAME deterministic forward the
+    real second-copy path got from a freshly loaded, ``.eval()``'d model.
+
+    WHAT IS CLAIMED: one call is one forward of the base model (no LoRA
+    delta applied), under ``torch.no_grad()``, and the policy model's
+    training mode and adapter are both restored before the call returns --
+    this proxy never leaves the policy model in a different state than it
+    found it.
+
+    WHAT IS NOT CLAIMED: that ``.eval()``/``.parameters()`` return anything
+    meaningful. The only caller that wants the reference's OWN parameter
+    list is ``maybe_refresh_reference``'s periodic resync (iterative DPO),
+    and the call site that would hand it this proxy refuses first instead
+    (see its comment in ``RLTrainer.run``) -- a resync has no base weights
+    to copy TO here, since disabling the adapter always reads the one,
+    unchanging base checkpoint.
+
+    Unwraps one ``.module`` on construction when present: under
+    ``sharding='ddp'`` the caller's ``model`` is a
+    ``DistributedDataParallel`` instance, which does NOT proxy arbitrary
+    attributes (``disable_adapter``, peft's own methods) through to the
+    wrapped module the way this package's own ``getattr(model, "module",
+    model)`` idiom (``save_checkpoint``, ``_one_step``'s generate call)
+    already has to account for -- calling ``.disable_adapter()`` on the DDP
+    wrapper itself would raise ``AttributeError``. Reading the raw module
+    directly is also the CORRECT choice, not merely the one that does not
+    crash: the reference forward runs under ``torch.no_grad()``, so there is
+    no gradient for DDP's wrapper to synchronise and no reason to pay its
+    hook overhead. FSDP2's ``fully_shard`` needs no such unwrap -- it
+    augments the SAME module object in place rather than wrapping it in a
+    container, which is exactly why GPU proof (a) (sharding='fsdp') did not
+    surface this; ddp would have hit it on its first reference call.
+    """
+
+    def __init__(self, policy_model: Any) -> None:
+        self._policy_model = getattr(policy_model, "module", policy_model)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        import torch  # function-local: see module docstring
+
+        policy = self._policy_model
+        was_training = bool(policy.training)
+        policy.eval()
+        try:
+            with torch.no_grad(), policy.disable_adapter():
+                return policy(*args, **kwargs)
+        finally:
+            policy.train(was_training)
+
+    def eval(self) -> _AdapterDisabledReference:
+        # No persistent mode to flip: __call__ already brackets every
+        # forward in eval()/train() around the policy model itself.
+        return self
+
+    def parameters(self) -> Iterable[Any]:
+        # Deliberately empty, not the policy's own parameters: handing
+        # those out would let a caller expecting an INDEPENDENT reference
+        # silently read (or, worse, write) the policy's live tensors.
+        return iter(())
+
+
+def _apply_lora_adapter(
+    model: Any,
+    *,
+    adapter: str | None,
+    adapter_rank: int | None,
+    adapter_alpha: float | None,
+    adapter_targets: tuple[str, ...] | None,
+    adapter_dropout: float | None,
+    log_prefix: str,
+) -> tuple[Any, dict[str, str]]:
+    """Wrap ``model`` with peft LoRA, or return it unchanged when ``adapter`` is None.
+
+    Reuses the SAME family-registry target selection
+    ``train/loop.py``'s SFT plane uses (:func:`foundationscale.families.plan_adapter_targets`),
+    so a VLM's vision tower is excluded and target coverage is checked the
+    identical way on both planes -- this policy lives in ``families``
+    precisely so no second copy of it could drift from the first.
+
+    Call this AFTER the model is loaded and BEFORE any FSDP/DDP wrap: peft
+    replaces specific ``nn.Linear`` leaves in place, which ``wrap_fsdp2``
+    (composable ``fully_shard``) and ``find_decoder_blocks`` (class-name
+    matching on the surrounding decoder block, untouched by the leaf swap)
+    both tolerate; wrapping the other way round would hand peft an
+    already-sharded DTensor tree to replace leaves inside, which it does
+    not support.
+
+    Refuses (exit 96, via ``_refuse_exit_96``) when: peft is not installed;
+    the family/target plan itself refuses (no family and no declared
+    targets, or a declared target that resolves nothing); or the adapter
+    attaches to 0 modules. A ``get_peft_model`` construction exception is
+    DELIBERATELY left to propagate uncaught -- same classification
+    ``train/loop.py`` gives it and for the same reason stated there: it
+    rewrites an already-constructed model in memory and opens no file and
+    no socket, so there is no environment errno for a refusal classifier to
+    read, and a branch here would be unfireable by any test.
+    """
+    if adapter is None:
+        return model, {}
+    if adapter not in _ADAPTERS:  # pragma: no cover -- callers validate first
+        _refuse_exit_96(f"adapter={adapter!r} is not one of {_ADAPTERS}")
+    try:
+        from peft import LoraConfig, get_peft_model
+    except ImportError:
+        _refuse_exit_96(
+            f"adapter={adapter!r} is declared but the optional dependency "
+            "'peft' is not installed. Refusing rather than silently running "
+            "a full fine-tune"
+        )
+    from foundationscale.families import plan_adapter_targets, torch_linear_predicate
+
+    lora_config: dict[str, Any] = {"r": adapter_rank}
+    if adapter_alpha is not None:
+        lora_config["lora_alpha"] = adapter_alpha
+    family_config: Any = {}
+    config_to_dict = getattr(getattr(model, "config", None), "to_dict", None)
+    if callable(config_to_dict):
+        as_dict = config_to_dict()
+        if isinstance(as_dict, dict):
+            family_config = as_dict
+    plan = plan_adapter_targets(
+        family_config,
+        adapter_targets,
+        model.named_modules(),
+        torch_linear_predicate(),
+    )
+    for line in plan.announcements:
+        print(f"{log_prefix} adapter: {line}", file=sys.stderr)
+    if plan.refusal is not None:
+        _refuse_exit_96(f"adapter={adapter!r}: {plan.refusal}")
+    lora_config["target_modules"] = list(plan.targets)
+    if adapter_dropout is not None:
+        lora_config["lora_dropout"] = adapter_dropout
+    model = get_peft_model(model, LoraConfig(**lora_config))
+    lora_param_names = [name for name, _ in model.named_parameters() if ".lora_" in name]
+    attached_modules = sorted({name.split(".lora_")[0] for name in lora_param_names})
+    if not attached_modules:
+        _refuse_exit_96(
+            f"adapter={adapter!r} attached to 0 modules (targets="
+            f"{list(adapter_targets) if adapter_targets is not None else None!r}); "
+            "refusing as vacuous -- an adapter that targets nothing trains "
+            "nothing while looking like it trained"
+        )
+    trainable = sum(int(p.numel()) for _, p in model.named_parameters() if p.requires_grad)
+    total_params = sum(int(p.numel()) for _, p in model.named_parameters())
+    notes = {
+        "adapter.mode": adapter,
+        "adapter.rank": str(adapter_rank),
+        "adapter.alpha": str(adapter_alpha),
+        "adapter.targets_declared": (
+            ",".join(adapter_targets) if adapter_targets is not None else "(peft defaults)"
+        ),
+        "adapter.attached_modules": str(len(attached_modules)),
+        "adapter.resolved_targets": ",".join(attached_modules),
+        "adapter.trainable_params": str(trainable),
+        "adapter.total_params": str(total_params),
+    }
+    print(
+        f"{log_prefix} adapter: lora attached to {len(attached_modules)} module(s); "
+        f"{trainable}/{total_params} parameters trainable; undeclared knobs left "
+        "to peft defaults",
+        file=sys.stderr,
+    )
+    return model, notes
+
+
+def _trainable_parameters(model: Any) -> Iterable[Any]:
+    """Parameters an optimizer should step: ``requires_grad`` only.
+
+    A no-op filter for a full fine-tune -- every parameter already requires
+    grad there, so the filtered generator yields the exact same parameters
+    in the exact same order as ``model.parameters()`` -- and the difference,
+    under ``adapter='lora'``, between training only the LoRA delta and
+    quietly handing AdamW (or ``MasterWeightOptimizer``, which already
+    filters internally -- see its own docstring -- making this a harmless
+    second pass there) optimiser state for every frozen base tensor too.
+    """
+    return (p for p in model.parameters() if p.requires_grad)
+
+
+def _reference_plan(
+    *,
+    adapter: str | None,
+    reference_model: str | None,
+    model: str,
+    refresh_every: int,
+) -> str:
+    """Which reference strategy a trainer's reference-loading block should use.
+
+    Returns ``"disable_adapter"`` when the frozen reference should be read
+    off the SAME policy with its LoRA adapter disabled (see
+    :class:`_AdapterDisabledReference`) -- true exactly when an adapter is
+    declared AND the reference is this run's OWN model (``reference_model``
+    is ``None`` or equal to ``model``; a distinct ``reference_model`` is a
+    genuinely different checkpoint that disabling an adapter cannot reach).
+    Returns ``"second_copy"`` for every other case, INCLUDING ``adapter is
+    None`` -- the historical, unconditional second-model-load path, so a
+    caller branching on this return value reproduces that path byte for
+    byte when no adapter is declared.
+
+    Raises :class:`TrainerRefusal` when the resolved strategy is
+    ``"disable_adapter"`` but ``refresh_every > 0``: iterative-DPO-style
+    periodic reference refresh copies the CURRENT policy into the
+    reference, and under LoRA disabling the adapter always reads the
+    ORIGINAL, unchanging base checkpoint -- there is no policy drift for a
+    refresh to capture, so running one would silently do nothing while
+    reporting a refresh.
+    """
+    reference_is_this_model = reference_model is None or reference_model == model
+    if adapter is not None and reference_is_this_model:
+        if refresh_every > 0:
+            raise TrainerRefusal(
+                f"a reference refresh every {refresh_every} step(s) "
+                f"(ref_refresh_steps={refresh_every}) was requested, but "
+                "adapter='lora' with no distinct reference_model makes the "
+                "reference model.disable_adapter() -- always the ORIGINAL "
+                "frozen base, which cannot be refreshed to track the "
+                "policy's LoRA updates. Set ref_refresh_steps=0, declare "
+                "adapter=None, or name a distinct reference_model"
+            )
+        return "disable_adapter"
+    return "second_copy"
+
+
+def _load_causal_lm(model_id: str, *, needs_images: bool) -> Any:
+    """Load ``model_id`` under the auto class the corpus actually needs.
+
+    Module level (not a closure inside ``run()``) so the policy load and the
+    frozen reference load -- two call sites that must never drift -- share
+    ONE decision, and so this function is directly unit-testable the same
+    way ``_expand_video_samples``/``_reference_plan`` are, with no need to
+    drive a whole ``run()``.
+
+    Text-only corpora (``needs_images=False``) are untouched: the historical
+    try-``AutoModelForCausalLM``-except-try-``AutoModelForImageTextToText``
+    fallback, byte-identical to every run before this function existed.
+    That fallback is deliberately NOT reused for media-declared corpora --
+    doing so is the defect this closes. MEASURED on transformers 5.18.0:
+    ``AutoModelForCausalLM.from_pretrained`` on a qwen3_5/qwen3_5_moe
+    checkpoint (Qwen3.6-27B/35B-A3B) SUCCEEDS, handing back
+    ``Qwen3_5ForCausalLM``/``Qwen3_5MoeForCausalLM`` -- text-only classes
+    that skip ``model.visual`` on load and absorb
+    ``pixel_values``/``image_grid_thw``/``mm_token_type_ids`` through a bare
+    ``**kwargs`` without reading them -- so the try/except never raises and
+    the mismatch surfaces later, at the first ``generate()``, as "model_kwargs
+    are not used by the model", or worse: silent, pixel-free training under a
+    multimodal label.
+
+    A media-declared corpus instead asks ``train/loop.py``'s own
+    ``_media_capable_auto_class`` (imported, never duplicated -- the SFT
+    plane already fixed this exact defect, see
+    tests/train/test_model_auto_class_selection.py) which auto class to use,
+    BEFORE calling ``from_pretrained``, then proves the loaded instance can
+    actually consume pixels with ``_model_can_consume_pixels`` and REFUSES
+    (exit 96, naming the model type) rather than training blind if it
+    cannot. ``gemma4_unified`` is unaffected: both auto-mappings already
+    resolve it to the one ``Gemma4UnifiedForConditionalGeneration`` class.
+
+    Annotated Any: transformers 5.x wraps ``from_pretrained`` in a decorator
+    whose return type does not survive inference, so a caller's subsequent
+    ``.to(device)`` would resolve against the wrapper rather than the model
+    and report the device string as a bad `self`. The alternative -- a cast
+    to PreTrainedModel -- would assert a class neither branch promises.
+    """
+    if not needs_images:
+        from transformers import (  # noqa: PLC0415
+            AutoModelForCausalLM,
+            AutoModelForImageTextToText,
+        )
+
+        try:
+            loaded: Any = AutoModelForCausalLM.from_pretrained(model_id)
+        except Exception:
+            try:
+                loaded = AutoModelForImageTextToText.from_pretrained(model_id)
+            except Exception as exc:  # noqa: BLE001
+                _refuse_exit_96(
+                    f"model load failed for {model_id!r} under both auto classes: {exc}"
+                )
+        return loaded
+
+    # Media-declared: decide the class BEFORE from_pretrained, deterministically
+    # -- never via try/except-after-the-fact, which is exactly how the
+    # Qwen3_5 defect this closes went undetected (AutoModelForCausalLM's own
+    # from_pretrained call never raises on that family).
+    from transformers import AutoConfig  # noqa: PLC0415
+
+    from foundationscale.train.loop import (  # noqa: PLC0415
+        _family_config_mapping,
+        _media_capable_auto_class,
+        _model_can_consume_pixels,
+    )
+
+    try:
+        model_config = AutoConfig.from_pretrained(model_id)
+    except Exception as exc:  # noqa: BLE001
+        _refuse_exit_96(f"config load failed for {model_id!r}: {exc}")
+    auto_class, auto_class_name, verify_pixel_capability = _media_capable_auto_class(
+        model_config, media_declared=True
+    )
+    try:
+        loaded = auto_class.from_pretrained(model_id)
+    except Exception as exc:  # noqa: BLE001
+        _refuse_exit_96(f"model load failed for {model_id!r} under {auto_class_name}: {exc}")
+    if verify_pixel_capability and not _model_can_consume_pixels(loaded):
+        # Read through the SAME mapping _model_can_consume_pixels' own family
+        # resolution uses (handles both a real transformers config object and
+        # a plain-dict double identically) -- naming the model_type here must
+        # not invent a second, narrower reading of "config" than the check
+        # it is reporting on.
+        model_type = _family_config_mapping(loaded).get("model_type")
+        _refuse_exit_96(
+            f"model_id={model_id!r} carries images in this corpus "
+            f"(needs_images=True) and model_type={model_type!r} is registered "
+            f"under AutoModelForImageTextToText, but the loaded "
+            f"{auto_class_name} instance cannot consume pixels: its forward() "
+            "names no pixel_values parameter, or its family registry's "
+            "declared image tower does not resolve on the loaded module "
+            "tree. Training anyway would silently drop every image under a "
+            "multimodal label -- refusing rather than training blind"
+        )
+    return loaded
+
+
+# (flattened-patch value key, its per-image patch-count key). MEASURED
+# transformers 5.18.0 naming on Qwen2-VL/Qwen2.5-VL/Qwen3-VL-family
+# processors; a family without a matching pair (gemma-4's pixel_values is
+# already per-image, no *_grid_thw key at all) is untouched by this table.
+_FLATTENED_PATCH_PAIRS: tuple[tuple[str, str], ...] = (
+    ("pixel_values", "image_grid_thw"),
+    ("pixel_values_videos", "video_grid_thw"),
+)
+
+
+def _expand_modality_kwargs_for_group(
+    modality_kwargs: dict[str, torch.Tensor], *, group: int, kept_indices: torch.Tensor
+) -> dict[str, torch.Tensor]:
+    """Expand one row of modality tensors per PROMPT into one per KEPT, grouped row.
+
+    MEASURED (GRPO+images, Qwen3.6-27B/35B-A3B): not every per-image key has
+    one row per prompt. gemma-4's ``pixel_values`` does -- shape
+    ``(n_images, ...)``, one image per row -- so repeating rows ``group``
+    times and narrowing to ``kept_indices`` (both indexed in the SAME
+    group-expanded row space ``group_policy``/``generate()`` use) is exactly
+    right, and is what this function still does for every key with no
+    flattened-patch pairing below.
+
+    Qwen2-VL/Qwen2.5-VL/Qwen3-VL's own ``pixel_values``, though, is
+    FLATTENED PATCHES across the whole encoded chunk: shape
+    ``(sum_i patches_i, patch_dim)``, with ``image_grid_thw`` (shape
+    ``(n_images, 3)``, each row ``(t, h, w)``) giving each image's own
+    ``patches_i = t*h*w`` contiguous block length. Row-wise
+    ``repeat_interleave``/``index_select`` on that tensor slices by RAW
+    PATCH position, not by image -- MEASURED, confirmed by printing shapes
+    at this exact call site before this fix existed: two images with patch
+    counts ``[320, 288]`` (608 total rows) and ``kept_indices=[0, 1]`` (both
+    group-expanded rows mapping to prompt 0) produced a 2-row
+    ``pixel_values`` (two individual duplicated PATCHES, not prompt 0's 320)
+    against an ``image_grid_thw`` still correctly claiming 2 images of 320
+    patches each (640) -- exactly the
+    ``RuntimeError: size of tensor a (2) must match b (640)`` the vision
+    tower's position-embedding add raised.
+
+    The fix: for a (value, count) pair whose value width equals the count
+    tensor's ``prod(-1).sum()`` -- i.e. is genuinely flattened patches, not
+    coincidentally already per-row -- the ORIGINAL per-image block
+    boundaries are read off ``image_grid_thw`` (cumulative ``prod(-1)``), and
+    each KEPT, group-expanded row's own image block (``kept_indices //
+    group`` recovers the original image index: ONE image per prompt is this
+    plane's only declared shape, the same arithmetic ``group_ids`` already
+    uses) is concatenated in order -- never repeated/selected by raw patch
+    position. ``image_grid_thw`` itself is expanded the same row-wise way
+    every other per-image key is (its own width IS one row per image), so
+    the two stay in lockstep by construction, not by coincidence.
+
+    WHAT IS NOT CLAIMED: more than one image per prompt. A future corpus
+    declaring that would need ``kept_indices // group`` replaced with a real
+    per-prompt image-count mapping; this function has no such input and
+    would mis-divide silently, which is why the shape-equality test above is
+    the ONLY detector -- a family whose flattened-patch total does not match
+    is left on the per-row path rather than guessed into this one.
+    """
+    import torch  # function-local: see module docstring
+
+    flattened_keys: set[str] = set()
+    expanded: dict[str, torch.Tensor] = {}
+    source_images = torch.div(kept_indices, group, rounding_mode="floor")
+
+    for value_key, count_key in _FLATTENED_PATCH_PAIRS:
+        value = modality_kwargs.get(value_key)
+        counts = modality_kwargs.get(count_key)
+        if value is None or counts is None:
+            continue
+        patch_counts = counts.prod(dim=-1).to(torch.long)
+        if int(value.shape[0]) != int(patch_counts.sum().item()):
+            # Not actually flattened patches on this family/build (e.g.
+            # already per-row) -- left for the generic path below rather
+            # than block-expanded on a guess.
+            continue
+        offsets = torch.cumsum(torch.cat([patch_counts.new_zeros(1), patch_counts]), dim=0)
+        blocks = [value[offsets[i] : offsets[i + 1]] for i in source_images.tolist()]
+        expanded[value_key] = (
+            torch.cat(blocks, dim=0) if blocks else value.new_zeros((0, *value.shape[1:]))
+        )
+        expanded[count_key] = counts.index_select(0, source_images)
+        flattened_keys.add(value_key)
+        flattened_keys.add(count_key)
+
+    for key, value in modality_kwargs.items():
+        if key in flattened_keys:
+            continue
+        expanded[key] = value.repeat_interleave(group, dim=0).index_select(0, kept_indices)
+
+    return expanded
+
+
+def _narrow_modality_kwargs_by_row(
+    modality_kwargs: dict[str, torch.Tensor], *, start: int, end: int
+) -> dict[str, torch.Tensor]:
+    """Row-range-narrow modality tensors, treating flattened-patch keys as BLOCKS.
+
+    MEASURED (GRPO+images, Qwen3.6-27B/35B-A3B, ``logprob_micro_batch``
+    slicing): after :func:`_expand_modality_kwargs_for_group`,
+    ``image_grid_thw``/``video_grid_thw`` has exactly ONE row per kept
+    training row -- ``forward_logprob_slice``'s plain
+    ``value.narrow(0, start, end - start)`` is already correct for it, the
+    same as ``input_ids``/``attention``. Its paired flattened-patch value
+    (``pixel_values``/``pixel_values_videos``) is still the concatenation of
+    each row's own patch BLOCK in row order; row-wise narrowing it the same
+    way truncates to the first ``end - start`` raw PATCHES, not the patches
+    belonging to rows ``[start, end)``. MEASURED on GPU: a 1-row logprob
+    slice over a 320-patch image produced a 1-patch ``hidden_states`` against
+    a 320-patch ``pos_embeds`` inside the vision tower's position-embedding
+    add (``RuntimeError: size of tensor a (1) must match b (320)``; a 2-row
+    slice gave ``(2)`` vs ``(640)``) -- the SAME flattened-vs-per-row
+    confusion :func:`_expand_modality_kwargs_for_group` closes for the
+    group-expansion step, recurring here at the micro-batch-slicing step.
+
+    The fix: for a (value, count) pair whose value width equals the count
+    tensor's ``prod(-1).sum()``, the per-row block boundaries are read off
+    the count tensor (cumulative ``prod(-1)``, already in row order by
+    construction) and the SINGLE contiguous span covering rows
+    ``[start, end)`` is sliced out -- no gather needed, unlike the
+    group-expansion step, because the blocks are already laid out in that
+    exact order.
+    """
+    import torch  # function-local: see module docstring
+
+    narrowed: dict[str, torch.Tensor] = {}
+    patch_keys: set[str] = set()
+
+    for value_key, count_key in _FLATTENED_PATCH_PAIRS:
+        value = modality_kwargs.get(value_key)
+        counts = modality_kwargs.get(count_key)
+        if value is None or counts is None:
+            continue
+        patch_counts = counts.prod(dim=-1).to(torch.long)
+        if int(value.shape[0]) != int(patch_counts.sum().item()):
+            continue
+        offsets = torch.cumsum(torch.cat([patch_counts.new_zeros(1), patch_counts]), dim=0)
+        narrowed[value_key] = value[int(offsets[start].item()) : int(offsets[end].item())]
+        patch_keys.add(value_key)
+
+    for key, value in modality_kwargs.items():
+        if key in patch_keys:
+            continue
+        narrowed[key] = value.narrow(0, start, end - start)
+
+    return narrowed
+
+
+def _align_modality_keys_to_scored_width(
+    modality_kwargs: dict[str, torch.Tensor], *, prompt_width: int, sequence_width: int
+) -> dict[str, torch.Tensor]:
+    """Extend per-token modality tensors from prompt width to the scored width.
+
+    MEASURED (GRPO+images, Qwen3.6-27B/35B-A3B): every key ``_one_step`` pulls
+    out of ``prompt_ids`` comes from the SAME processor call as
+    ``prompt_ids["input_ids"]`` and so is produced at PROMPT width -- but not
+    all of those keys are per-TOKEN. ``pixel_values``/``image_grid_thw`` are
+    per-IMAGE: their non-batch dims (patch features, ``(t, h, w)``) have
+    nothing to do with sequence length and must pass through unchanged.
+    ``mm_token_type_ids`` (Qwen3VL) and ``image_position_ids`` (gemma-4) ARE
+    per-token: shape ``(rows, prompt_width)``, one entry per prompt token.
+    The scorer forward, though, runs over ``kept_sequences`` -- prompt_width
+    + max_new_tokens columns, since #371 scores the GENERATED completion
+    too -- while this dict was only ever repeat_interleaved/index_selected
+    along the ROW axis, never extended along the sequence axis. Qwen3.5's own
+    ``get_rope_index`` then indexes a full-width attention_mask against a
+    prompt-width ``mm_token_type_ids`` and raises: MEASURED, mask shape
+    ``[927]`` vs tensor shape ``[527]`` on one rank and ``[787]`` vs ``[387]``
+    on another, same step -- both exactly that rank's prompt_width plus the
+    400-token completion, confirmed by printing the shapes at the call site
+    before this fix existed.
+
+    A per-token key is told apart from a per-image key by shape alone --
+    there is no family-registry lookup available this deep in the generic
+    scoring path -- and this holds for both measured per-token keys above
+    because they share ``prompt_ids["input_ids"]``'s exact width by
+    construction. The completion columns are always actually-generated TEXT
+    (never a second image), so they are padded with 0 -- plain text's own
+    value in Qwen3VL's token-type convention. gemma-4 was never observed to
+    crash on this (its rope path does not index by ``image_position_ids`` the
+    way qwen3_5's does), so this is behaviourally a no-op for it either way;
+    the pad only removes a silently-truncated tensor that some OTHER reader
+    could trip on later.
+    """
+    import torch  # function-local: see module docstring
+
+    if sequence_width <= prompt_width:
+        return modality_kwargs
+    pad_width = sequence_width - prompt_width
+    aligned: dict[str, Any] = {}
+    for key, value in modality_kwargs.items():
+        if value.dim() >= 2 and value.shape[1] == prompt_width:
+            pad = value.new_zeros((value.shape[0], pad_width, *value.shape[2:]))
+            aligned[key] = torch.cat([value, pad], dim=1)
+        else:
+            aligned[key] = value
+    return aligned
+
+
+@contextmanager
+def _generation_mode(model: Any) -> Iterator[Any]:
+    """Put ``model`` into the state ``generate()`` needs, and restore it after.
+
+    MEASURED ROOT CAUSE (gemma-4-12B-it, GRPO rollout, 2026-10-09): every
+    online algorithm's rollout calls ``.generate()`` while the model is
+    still in ``.train()`` mode -- set once, before the step loop starts, and
+    never toggled for the rollout -- because ``gradient_checkpointing_enable()``
+    (called once at setup) leaves ``model.config.use_cache = False`` and
+    ``.train()`` is what the surrounding code calls after wrapping.
+    ``Gemma4UnifiedTextDecoderLayer.forward`` checks ``self.training and
+    self.gradient_checkpointing`` and, when both are true, drops its KV
+    cache and sets ``past_key_values=None`` -- CORRECT for a training
+    forward (checkpointing recomputes activations and a cache would be
+    stale by the recompute), but ``generate()``'s incremental decode loop
+    assumes a working cache: each new token is produced from ONLY the
+    single newest input id plus whatever the cache remembers, so a cache
+    silently dropped mid-generation conditions every token after the first
+    on almost no context. MEASURED: the first generated token is correct
+    (full-prompt forward, no cache needed yet) and every token after it is
+    near-random -- ``'A Sqh有意х 나오"--ᇲο¬一切 ...'`` instead of a bare
+    letter. This is SILENT: ``generate()`` raises nothing and returns a
+    full-shaped tensor, so a caller that does not read the decoded text
+    never learns the rollout was corrupted -- exactly the failure class
+    this repository's doctrine refuses to let ship unmeasured.
+
+    THE FIX: bracket the ``generate()`` call in ``.eval()`` (so
+    ``self.training`` is False throughout the generated module tree,
+    including every decoder layer, for the duration of the call -- peft's
+    LoRA layers and the adapter's enabled/disabled state are UNCHANGED by
+    eval/train, so rollouts still sample the POLICY, adapter included) and
+    in ``config.use_cache = True`` when the family exposes that attribute
+    (checked via ``hasattr``, never assumed -- a family with no ``config``
+    or no ``use_cache`` field is left alone rather than crashing or
+    fabricating the attribute). Both are restored to their EXACT prior
+    values before this returns, so a caller resuming training afterward
+    sees byte-identical state to what it would have without this fix:
+    ``.train(was_training)`` (not unconditionally ``.train()`` -- a caller
+    already in eval for some other reason must not be flipped to train),
+    and ``config.use_cache = prior_use_cache`` (not unconditionally
+    restored to False -- a caller that never set it at all must not gain a
+    new attribute).
+
+    Unwraps ``.module`` first, the same idiom ``save_checkpoint`` and every
+    ``.generate(`` call site already use: under ``sharding='ddp'`` the live
+    ``model`` is a ``DistributedDataParallel`` instance, and toggling
+    ``.training``/``.config`` on the wrapper reads/writes the SAME
+    underlying attributes as the wrapped module (DDP does forward plain
+    attribute access for ``training``, unlike the custom methods
+    ``_AdapterDisabledReference`` has to unwrap for), but unwrapping once
+    here keeps this function's contract identical regardless of sharding,
+    rather than relying on that forwarding behaviour implicitly.
+
+    Also explicitly unshards every FSDP2 unit for the duration (see
+    :func:`foundationscale.rl.distributed.unshard_for_generation`'s
+    docstring for the measured reason a forward-hook-only fix is not
+    enough: a submodule ``generate()``'s multimodal preprocessing reaches
+    directly, before the root's own first forward, can leave the root's
+    OWN unit un-materialised on its very next regular call). A no-op on
+    DDP/single-process models -- :func:`unshard_for_generation` finds zero
+    FSDP2 units on either.
+    """
+    from foundationscale.rl.distributed import unshard_for_generation
+
+    target = getattr(model, "module", model)
+    was_training = bool(target.training)
+    config: Any = getattr(target, "config", None)
+    has_use_cache = hasattr(config, "use_cache")
+    prior_use_cache = config.use_cache if has_use_cache else None
+    target.eval()
+    if has_use_cache:
+        config.use_cache = True
+    reshard = unshard_for_generation(target)
+    try:
+        yield target
+    finally:
+        reshard()
+        if has_use_cache:
+            config.use_cache = prior_use_cache
+        target.train(was_training)
+
+
 @dataclass
 class RLTrainConfig:
     """Configuration for one RL training run.
@@ -423,6 +1068,17 @@ class RLTrainConfig:
     # operator decision and is recorded either way.
     master_weights: bool | None = None
     max_steps: int = 10
+    # Measured 2026-10-09 (gemma-4-12B-it, ScienceQA, terminal-pattern reward
+    # "Answer: X"): this default truncates the model's own reasoning before it
+    # reaches the answer line on effectively every rollout -- 0/20 sampled
+    # completions reached a parseable answer at max_new_tokens=64, 5/20 at 200,
+    # 17/20 at 400. A terminal-pattern reward needs enough budget for the
+    # model to FINISH its chain of thought, not just name an answer; callers
+    # using MCQLetterReward-shaped rewards should raise this explicitly rather
+    # than rely on the default. Left at 64 rather than changed here because
+    # not every reward shape needs long completions and the right budget is
+    # reward- and model-specific -- silently raising the default would just
+    # move the silent-default problem rather than remove it.
     max_new_tokens: int = 64
     # #370: sampling is DECLARED here, never inherited. Before this the trainer
     # called generate(do_sample=True) with no temperature/top_p/top_k, so the
@@ -491,6 +1147,16 @@ class RLTrainConfig:
     video_sampling: str = "uniform"
     video_max_side: int | None = None
     video_cache_dir: str | None = None
+    # Declared adapter mode. None means FULL FINE-TUNE, stated as data rather
+    # than implied by the absence of peft wiring -- the SAME convention
+    # train/loop.py's SFT plane uses. Every adapter_* knob is None by default,
+    # and a partial specification (one set while adapter is None, or adapter
+    # set without adapter_rank) is refused in RLTrainer.__init__.
+    adapter: str | None = None
+    adapter_rank: int | None = None
+    adapter_alpha: float | None = None
+    adapter_targets: tuple[str, ...] | None = None
+    adapter_dropout: float | None = None
 
 
 class RLTrainer:
@@ -546,6 +1212,44 @@ class RLTrainer:
                 f"save_every={config.save_every}: a negative interval is not "
                 f"meaningful; use 0 for final-only saving"
             )
+        if config.adapter is not None and config.adapter not in _ADAPTERS:
+            raise TrainerRefusal(f"adapter={config.adapter!r} is not one of {_ADAPTERS}")
+        if config.adapter is None:
+            # A partial specification is a refusal, not a hint: every
+            # adapter_* field with adapter unset is a statement about nothing.
+            for field_name in (
+                "adapter_rank",
+                "adapter_alpha",
+                "adapter_targets",
+                "adapter_dropout",
+            ):
+                value = getattr(config, field_name)
+                if value is not None:
+                    raise TrainerRefusal(
+                        f"{field_name}={value!r} is set while adapter is None: a "
+                        f"partial adapter specification is refused. Set adapter to "
+                        f"one of {_ADAPTERS}, or clear {field_name}"
+                    )
+        elif (
+            config.adapter_rank is None
+            or isinstance(config.adapter_rank, bool)
+            or (not isinstance(config.adapter_rank, int) or int(config.adapter_rank) < 1)
+        ):
+            raise TrainerRefusal(
+                f"adapter={config.adapter!r} requires adapter_rank to be a "
+                f"positive int; got adapter_rank={config.adapter_rank!r}. A "
+                "missing or non-positive rank silently defines the adapter's "
+                "capacity, which is exactly the unrecorded-config failure"
+            )
+        if config.adapter_targets is not None:
+            config.adapter_targets = tuple(config.adapter_targets)
+            if not config.adapter_targets:
+                # all([]) is True, and an adapter that targets nothing trains
+                # nothing while looking like it trained.
+                raise TrainerRefusal(
+                    "adapter_targets=() is refused as vacuous: name at least "
+                    "one target, or pass None to use peft's per-model defaults"
+                )
         self.config = config
         # reinforce_baseline's carried EMA state: None means UNSEEDED (no
         # batch priced yet), never a baseline of 0.0. The tail seeds it from
@@ -760,10 +1464,7 @@ class RLTrainer:
                 "needs it and no pure-python fall-back exists for weight updates"
             )
         try:
-            from transformers import (
-                AutoModelForCausalLM,
-                AutoModelForImageTextToText,
-            )
+            import transformers  # noqa: F401 -- probe only; _load_causal_lm imports its own names
         except ImportError:
             _refuse_exit_96(
                 "1 of 2 required dependencies absent: transformers; models are "
@@ -825,31 +1526,33 @@ class RLTrainer:
         except Exception as exc:  # noqa: BLE001 -- load surface failure is a refusal
             _refuse_exit_96(f"tokenizer load failed for {self.config.model!r}: {exc}")
 
-        def _load_causal_lm(model_id: str) -> Any:
-            # Annotated Any: transformers 5.x wraps ``from_pretrained`` in a
-            # decorator whose return type does not survive inference, so the
-            # subsequent ``.to(device)`` resolves against the wrapper rather
-            # than the model and reports the device string as a bad `self`.
-            # The alternative -- a cast to PreTrainedModel -- would assert a
-            # class the auto-loader does not promise across both branches.
-            # Shared by the policy and the frozen reference copy: two inline
-            # copies of this try/except would be two chances for them to drift.
-            try:
-                loaded: Any = AutoModelForCausalLM.from_pretrained(model_id)
-            except Exception:
-                try:
-                    loaded = AutoModelForImageTextToText.from_pretrained(model_id)
-                except Exception as exc:  # noqa: BLE001
-                    _refuse_exit_96(
-                        f"model load failed for {model_id!r} under both auto classes: {exc}"
-                    )
-            return loaded
-
-        model = _load_causal_lm(self.config.model)
+        model = _load_causal_lm(self.config.model, needs_images=needs_images)
+        # adapter_notes is a dict a manifest-keeping caller could consume;
+        # this loop has no manifest of its own (unlike train/loop.py's SFT
+        # plane) -- _apply_lora_adapter already PRINTS the same facts to
+        # stderr, which is this loop's existing "record the config" surface
+        # (see the optimizer= print a few lines down).
+        model, _adapter_notes = _apply_lora_adapter(
+            model,
+            adapter=self.config.adapter,
+            adapter_rank=self.config.adapter_rank,
+            adapter_alpha=self.config.adapter_alpha,
+            adapter_targets=self.config.adapter_targets,
+            adapter_dropout=self.config.adapter_dropout,
+            log_prefix="[trainer]",
+        )
         if self.config.gradient_checkpointing:
             model.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": False}
             )
+            if self.config.adapter is not None:
+                # peft freezes every base-model parameter, so the first
+                # (embedding) activation in the checkpointed chain carries
+                # requires_grad=False and torch.utils.checkpoint has nothing
+                # to build a backward graph through. This hooks the input
+                # embedding's output to require grad regardless -- the
+                # standard peft + gradient-checkpointing pairing.
+                model.enable_input_require_grads()
             # Training forwards must not cache; generate() is called with
             # use_cache=True independently below.
             model.config.use_cache = False
@@ -922,24 +1625,44 @@ class RLTrainer:
         online_pref = is_online_pref(objective)
         refresh_every = refresh_cadence(objective, self.config.ref_refresh_steps)
         if needs_reference or self.config.reference_policy or online_pref:
-            # The frozen reference plane: loaded before any optimizer step so
-            # it IS the initial policy -- which is what makes the step-1 k3
-            # contribution exactly zero. Only an objective declaring a
-            # non-zero kl_weight (or an operator forcing reference_policy=True)
-            # pays this memory; _resolve_objective already refused the
-            # needs-one-but-forbidden combination.
-            ref_model = _load_causal_lm(self.config.reference_model or self.config.model)
-            if self.config.sharding == "fsdp":
-                # Sharded too: a frozen full-size replica on each rank would
-                # rescale memory exactly the way fsdp exists to prevent. DDP
-                # keeps it plain -- no gradient averaging is wanted over a
-                # frozen model, so no DDP wrapper.
-                ref_model = wrap_fsdp2(ref_model, ctx)
+            try:
+                plan = _reference_plan(
+                    adapter=self.config.adapter,
+                    reference_model=self.config.reference_model,
+                    model=self.config.model,
+                    refresh_every=refresh_every,
+                )
+            except TrainerRefusal as exc:
+                _refuse_exit_96(str(exc))
+            if plan == "disable_adapter":
+                ref_model = _AdapterDisabledReference(model)
+                print(
+                    "[trainer] reference: adapter='lora', no distinct "
+                    "reference_model -- reusing the policy with the adapter "
+                    "disabled instead of loading a second model copy",
+                    file=sys.stderr,
+                )
             else:
-                ref_model.to(device)
-            ref_model.eval()
-            for parameter in ref_model.parameters():
-                parameter.requires_grad_(False)
+                # The frozen reference plane: loaded before any optimizer step
+                # so it IS the initial policy -- which is what makes the
+                # step-1 k3 contribution exactly zero. Only an objective
+                # declaring a non-zero kl_weight (or an operator forcing
+                # reference_policy=True) pays this memory; _resolve_objective
+                # already refused the needs-one-but-forbidden combination.
+                ref_model = _load_causal_lm(
+                    self.config.reference_model or self.config.model, needs_images=needs_images
+                )
+                if self.config.sharding == "fsdp":
+                    # Sharded too: a frozen full-size replica on each rank
+                    # would rescale memory exactly the way fsdp exists to
+                    # prevent. DDP keeps it plain -- no gradient averaging is
+                    # wanted over a frozen model, so no DDP wrapper.
+                    ref_model = wrap_fsdp2(ref_model, ctx)
+                else:
+                    ref_model.to(device)
+                ref_model.eval()
+                for parameter in ref_model.parameters():
+                    parameter.requires_grad_(False)
         reward = MCQLetterReward(answer_pattern=self.config.answer_pattern)
         use_ppo = is_ppo(objective)
         loss_fn = None if online_pref or use_ppo else TensorPolicyLoss(objective=objective)
@@ -970,10 +1693,12 @@ class RLTrainer:
             )
         optimizer: Any
         if use_masters:
-            optimizer = MasterWeightOptimizer(model.parameters(), lr=self.config.learning_rate)
+            optimizer = MasterWeightOptimizer(
+                _trainable_parameters(model), lr=self.config.learning_rate
+            )
         else:
             optimizer = torch.optim.AdamW(  # noqa: B014
-                model.parameters(), lr=self.config.learning_rate
+                _trainable_parameters(model), lr=self.config.learning_rate
             )
         print(
             "[trainer] optimizer="
@@ -1199,11 +1924,14 @@ class RLTrainer:
         # prompt_width still comes from the encoded tensor, and the extra
         # modality keys are group-expanded and forwarded to the scorer below.
         prompt_ids = encode_prompts(surface, chunk, device)
-        with torch.no_grad():
+        with torch.no_grad(), _generation_mode(model) as gen_model:
             # Under DDP the generative path bypasses the wrapper (no_grad --
             # no grad sharing is wanted during rollout); under fsdp the
-            # wrapper IS the module generate must run on.
-            generated = getattr(model, "module", model).generate(
+            # wrapper IS the module generate must run on. _generation_mode
+            # unwraps .module either way and restores eval/use_cache state
+            # on return -- see its docstring for the measured reason this
+            # is not optional under gradient_checkpointing.
+            generated = gen_model.generate(
                 **prompt_ids,
                 max_new_tokens=self.config.max_new_tokens,
                 num_return_sequences=self.config.group_size,
@@ -1295,15 +2023,31 @@ class RLTrainer:
             if key not in _TEXT_KEYS and hasattr(value, "index_select")
         }
         if modality_kwargs:
-            # generate() expanded each prompt into group_size rows; the modality
-            # tensors are still one row per PROMPT, so they are repeated to
-            # match and then narrowed to the kept rows, in that order. Doing it
-            # the other way round selects against the wrong axis silently.
+            # generate() expanded each prompt into group_size rows; most
+            # modality tensors are still one row per PROMPT, so they are
+            # repeated to match and then narrowed to the kept rows, in that
+            # order -- doing it the other way round selects against the wrong
+            # axis silently. A flattened-patch key (Qwen-VL family
+            # pixel_values) is NOT one row per prompt, though -- see
+            # _expand_modality_kwargs_for_group's docstring for the measured
+            # defect this avoids.
             group = self.config.group_size
-            modality_kwargs = {
-                key: value.repeat_interleave(group, dim=0).index_select(0, kept_indices)
-                for key, value in modality_kwargs.items()
-            }
+            modality_kwargs = _expand_modality_kwargs_for_group(
+                modality_kwargs, group=group, kept_indices=kept_indices
+            )
+            # MEASURED: per-TOKEN keys (mm_token_type_ids,
+            # image_position_ids) are still PROMPT width here; the scorer
+            # below is called over kept_sequences, prompt_width +
+            # max_new_tokens wide. Extending them keeps every per-token
+            # modality tensor the same width the model actually scores --
+            # per-IMAGE keys (pixel_values, image_grid_thw) are untouched by
+            # this call, see its docstring for the shape test that tells them
+            # apart.
+            modality_kwargs = _align_modality_keys_to_scored_width(
+                modality_kwargs,
+                prompt_width=prompt_width,
+                sequence_width=kept_sequences.shape[1],
+            )
             print(
                 "[trainer] forwarding modality keys to the scorer: "
                 + ", ".join(sorted(modality_kwargs)),
@@ -1410,13 +2154,16 @@ class RLTrainer:
         ) -> torch.Tensor:
             # Every tensor with a per-row leading dimension follows the same
             # half-open row range: the generated ids, their full-width
-            # attention mask, the shifted targets and every modality tensor.
-            # ``narrow`` names dimension 0 explicitly; silently slicing a
-            # modality's feature axis would score a different condition.
+            # attention mask, the shifted targets and every per-row modality
+            # tensor. A flattened-patch modality tensor (Qwen-VL family
+            # pixel_values) is NOT per-row, though -- see
+            # _narrow_modality_kwargs_by_row's docstring for the measured
+            # defect this avoids (a micro-batch slice truncating raw patches
+            # instead of selecting the sliced rows' own patch blocks).
             width = end - start
-            sliced_modalities = {
-                key: value.narrow(0, start, width) for key, value in modality_kwargs.items()
-            }
+            sliced_modalities = _narrow_modality_kwargs_by_row(
+                modality_kwargs, start=start, end=end
+            )
             # The scorer defaults to the policy; the frozen reference is the
             # only other caller, and every per-row tensor still follows the
             # same half-open row range.

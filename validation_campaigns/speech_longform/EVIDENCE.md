@@ -160,3 +160,49 @@ costs about 0.2-0.3 points on clips, consistently.
   best run, T2 seed 1, scores 11.99 on whole calls (base 17.36) with 45 loop words and passes
   both gates. A long-form recipe should select among seeds or checkpoints under the gate, not
   trust one run.
+
+## Selecting under the gates on held-out calls (dev6), then test once
+
+`dev6`: 6 more whole calls (5.6 h, `build_longform.py --dev 6`), none of them test calls. Their 408
+training rows were removed from every training manifest (`filter_calls.py`). Ten runs (T2 and L,
+seeds 1-5, 1,500 steps, snapshots at 500/1000) give 30 candidates. `select_under_gates.py` scores each
+on dev6 with beam 4: whole-call WER plus both speech gates against base, and picks the lowest WER
+among the candidates that pass. Test is never seen during selection.
+
+- Base dev WER 22.51. **10 of 30 candidates pass.** Every 500-step snapshot fails (591-4,443 loop
+  words) and most 1,000-step ones fail, so **loops are worst early and fall with training**.
+  Final checkpoints pass for L in 2 of 5 seeds and for T2 in 3 of 5 (mean loop words 397 vs 317).
+  With 5 seeds the keep-2 advantage is weaker than with 3; mostly the seed decides.
+- Chosen: **Ls1 final, dev WER 17.24 with 8 loop words.**
+
+Test, once (beam 4, whole calls):
+
+| | WER | loop words | `speech.repetition_loops` |
+|---|---|---|---|
+| base | 17.36 | 0 | -- |
+| **Ls1 (chosen on dev6)** | **13.00** | **460** | **FAIL** |
+
+Ls1 is better than base on 5 of 6 calls (14.9 -> 7.3, 18.1 -> 11.1, 17.3 -> 12.1), but it **loops on
+call 4432298** (25.9 WER, length ratio 1.09), the disfluent speaker that trapped earlier models.
+**Choosing loop-free models on held-out calls does not carry over to new calls**: loops are
+triggered by particular speakers, and a dev set without such a speaker cannot screen for them.
+Selection lowers the risk; the gate still catches what it misses. A robust long-form recipe
+needs a decoding-side guard that every model gets (a cap on identical-token runs at decode time),
+not only training and selection.
+
+## Decoding-side guard: cap identical-token runs at 3
+
+A declared output filter, applied identically to every model: a run of one token is kept up to 3
+(the references contain genuine triples, about 1.3 per 1,000 words). The gates keep judging the
+**raw** decoder output; otherwise the guard would hide the loops they exist to catch. The guarded
+WER is reported separately, as the product-level number.
+
+| test calls, beam 4 | raw WER | cap-3 guarded WER | `speech.repetition_loops` (raw) |
+|---|---|---|---|
+| base | 17.36 | 17.36 | -- |
+| Ls1 (selected on dev6) | 13.00 | **12.18** | FAIL (460) |
+
+**Long-form recipe:** 30-40 s training segments + beam 4 + selection under the gates on held-out
+calls + the cap-3 guard. On whole held-out Earnings-22 calls it scores **12.18 WER against base
+17.36 (-5.2 points)**. The raw-output gate stays the disclosure that this model still loops on
+one disfluent speaker. Fixing that in the decoder (a repetition-aware beam search) remains open.

@@ -81,6 +81,9 @@ _KNOWN_GATELESS_PACKAGES: frozenset[str] = frozenset(
     {
         "foundationscale.checkpoint",  # torch-backed readers; gates import it lazily
         "foundationscale.provenance",  # run-manifest types; declares no gates
+        # The upstream boundary: owned contracts (manifest/run-config validation) and the
+        # copy/workaround ledger. Plain data and checks; defines no Gate subclass.
+        "foundationscale.upstream",
         # The training entry CONSUMES the registry (FoundationScaleSaveGate wires
         # REGISTRY into Trainer's on_save); it defines no Gate subclass and calls
         # no register. Verified by AST over the package, not by reading: zero

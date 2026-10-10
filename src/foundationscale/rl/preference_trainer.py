@@ -81,13 +81,18 @@ from foundationscale.rl.preference_torch import (
 from foundationscale.rl.prompt_surface import resolve_prompt_surface
 from foundationscale.rl.registry import lookup_algorithm
 from foundationscale.rl.trainer import (
+    _ADAPTERS,
     MasterWeightOptimizer,
     TrainerRefusal,
+    _AdapterDisabledReference,
+    _apply_lora_adapter,
     _loss_components,
     _micro_batched_backward,
+    _reference_plan,
     _refuse_exit_96,
     _refuse_vacuous_run,
     _token_logprobs,
+    _trainable_parameters,
 )
 
 __all__ = (
@@ -189,6 +194,15 @@ class PreferenceTrainConfig:
     save_dir: str | None = None
     save_every: int = 0  # 0 = only a final save when save_dir is set
     gradient_checkpointing: bool = False
+    # Declared adapter mode. None means FULL FINE-TUNE -- the SAME convention
+    # train/loop.py's SFT plane and rl/trainer.py's RLTrainConfig use. Every
+    # adapter_* knob is None by default, and a partial specification is
+    # refused in PreferenceTrainer.__init__.
+    adapter: str | None = None
+    adapter_rank: int | None = None
+    adapter_alpha: float | None = None
+    adapter_targets: tuple[str, ...] | None = None
+    adapter_dropout: float | None = None
 
 
 def _record_kind(record: Mapping[str, Any]) -> tuple[bool, bool]:
@@ -455,6 +469,43 @@ class PreferenceTrainer:
                 f"reference point is required; a KL divergence cannot be "
                 f"negative or non-finite"
             )
+        if config.adapter is not None and config.adapter not in _ADAPTERS:
+            raise TrainerRefusal(f"field adapter={config.adapter!r} is not one of {_ADAPTERS}")
+        if config.adapter is None:
+            # A partial specification is a refusal, not a hint: every
+            # adapter_* field with adapter unset is a statement about nothing.
+            for field_name in (
+                "adapter_rank",
+                "adapter_alpha",
+                "adapter_targets",
+                "adapter_dropout",
+            ):
+                value = getattr(config, field_name)
+                if value is not None:
+                    raise TrainerRefusal(
+                        f"field {field_name}={value!r} is set while adapter is "
+                        f"None: a partial adapter specification is refused. Set "
+                        f"adapter to one of {_ADAPTERS}, or clear {field_name}"
+                    )
+        elif (
+            config.adapter_rank is None
+            or isinstance(config.adapter_rank, bool)
+            or (not isinstance(config.adapter_rank, int) or int(config.adapter_rank) < 1)
+        ):
+            raise TrainerRefusal(
+                f"field adapter={config.adapter!r} requires adapter_rank to be a "
+                f"positive int; got adapter_rank={config.adapter_rank!r}. A "
+                "missing or non-positive rank silently defines the adapter's "
+                "capacity, which is exactly the unrecorded-config failure"
+            )
+        if config.adapter_targets is not None:
+            config.adapter_targets = tuple(config.adapter_targets)
+            if not config.adapter_targets:
+                raise TrainerRefusal(
+                    "field adapter_targets=() is refused as vacuous: name at "
+                    "least one target, or pass None to use peft's per-model "
+                    "defaults"
+                )
         self.config = config
         self._objective = self._resolve_objective()
         self._paired = is_paired(self._objective)
@@ -1239,10 +1290,31 @@ class PreferenceTrainer:
             policy_model: Any = AutoModelForCausalLM.from_pretrained(self.config.model)
         except Exception as exc:  # noqa: BLE001 -- named model-load refusal
             _refuse_exit_96(f"policy model load failed for {self.config.model!r}: {exc}")
+        # adapter_notes is a dict a manifest-keeping caller could consume;
+        # this trainer has no manifest of its own -- _apply_lora_adapter
+        # already PRINTS the same facts to stderr, this module's existing
+        # "record the config" surface (see the optimizer= print below).
+        policy_model, _adapter_notes = _apply_lora_adapter(
+            policy_model,
+            adapter=self.config.adapter,
+            adapter_rank=self.config.adapter_rank,
+            adapter_alpha=self.config.adapter_alpha,
+            adapter_targets=self.config.adapter_targets,
+            adapter_dropout=self.config.adapter_dropout,
+            log_prefix="[preference_trainer]",
+        )
         if self.config.gradient_checkpointing:
             policy_model.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": False}
             )
+            if self.config.adapter is not None:
+                # peft freezes every base-model parameter, so the first
+                # (embedding) activation in the checkpointed chain carries
+                # requires_grad=False and torch.utils.checkpoint has nothing
+                # to build a backward graph through. This hooks the input
+                # embedding's output to require grad regardless -- the
+                # standard peft + gradient-checkpointing pairing.
+                policy_model.enable_input_require_grads()
         model_config = getattr(policy_model, "config", None)
         if model_config is not None:
             model_config.use_cache = False
@@ -1277,36 +1349,65 @@ class PreferenceTrainer:
 
         reference_model: Any | None = None
         if self._reference_required:
-            try:
-                # Same Any binding as the policy load, for the same
-                # wrapped-loader reason; the two-step build keeps the
-                # Optional plane free of the loader's inferred type.
-                loaded_reference: Any = AutoModelForCausalLM.from_pretrained(self.config.model)
-            except Exception as exc:  # noqa: BLE001
-                _refuse_exit_96(
-                    f"reference model load failed for "
-                    f"{self.config.model!r}: {exc}; objective "
-                    f"{type(self._objective).__name__} is "
-                    f"reference-anchored, so substituting the policy "
-                    f"readings would change its margin"
-                )
-            loaded_reference.eval()
-            loaded_reference.requires_grad_(False)
-            if self.config.sharding == "fsdp":
-                # The reference is sharded too; its no-grad forwards still
-                # all-gather, so every rank must issue the same calls.
-                loaded_reference = loaded_reference.float()
-                loaded_reference = wrap_fsdp2(loaded_reference, ctx)
-            else:
-                # ddp: the reference is a plain replica, never DDP-wrapped.
-                loaded_reference.to(device)
-            reference_model = loaded_reference
-            print(
-                f"[preference_trainer] reference model loaded for "
-                f"{type(self._objective).__name__}; reference scores are "
-                f"recomputed under torch.no_grad each step",
-                file=sys.stderr,
+            # This trainer has no distinct reference_model concept (unlike
+            # RLTrainConfig): the reference is always self.config.model's own
+            # initial weights, and there is no iterative refresh cadence
+            # either, so _reference_plan is called with both held at values
+            # that make it depend on adapter alone -- "disable_adapter" when
+            # an adapter is declared, "second_copy" (the historical path)
+            # when it is not. TrainerRefusal cannot actually fire here (that
+            # needs refresh_every > 0, fixed at 0), but calling through the
+            # shared function keeps the two trainers' dispatch provably the
+            # same decision rather than two hand-copies of it.
+            plan = _reference_plan(
+                adapter=self.config.adapter,
+                reference_model=None,
+                model=self.config.model,
+                refresh_every=0,
             )
+            if plan == "disable_adapter":
+                # adapter='lora': the frozen reference IS the base model
+                # peft already wraps (see _AdapterDisabledReference's
+                # docstring in rl/trainer.py).
+                reference_model = _AdapterDisabledReference(policy_model)
+                print(
+                    f"[preference_trainer] reference: adapter='lora' -- "
+                    f"reusing the policy with the adapter disabled instead "
+                    f"of loading a second model copy for "
+                    f"{type(self._objective).__name__}",
+                    file=sys.stderr,
+                )
+            else:
+                try:
+                    # Same Any binding as the policy load, for the same
+                    # wrapped-loader reason; the two-step build keeps the
+                    # Optional plane free of the loader's inferred type.
+                    loaded_reference: Any = AutoModelForCausalLM.from_pretrained(self.config.model)
+                except Exception as exc:  # noqa: BLE001
+                    _refuse_exit_96(
+                        f"reference model load failed for "
+                        f"{self.config.model!r}: {exc}; objective "
+                        f"{type(self._objective).__name__} is "
+                        f"reference-anchored, so substituting the policy "
+                        f"readings would change its margin"
+                    )
+                loaded_reference.eval()
+                loaded_reference.requires_grad_(False)
+                if self.config.sharding == "fsdp":
+                    # The reference is sharded too; its no-grad forwards still
+                    # all-gather, so every rank must issue the same calls.
+                    loaded_reference = loaded_reference.float()
+                    loaded_reference = wrap_fsdp2(loaded_reference, ctx)
+                else:
+                    # ddp: the reference is a plain replica, never DDP-wrapped.
+                    loaded_reference.to(device)
+                reference_model = loaded_reference
+                print(
+                    f"[preference_trainer] reference model loaded for "
+                    f"{type(self._objective).__name__}; reference scores are "
+                    f"recomputed under torch.no_grad each step",
+                    file=sys.stderr,
+                )
         else:
             print(
                 f"[preference_trainer] objective "
@@ -1334,12 +1435,12 @@ class PreferenceTrainer:
         optimizer: Any
         if use_masters:
             optimizer = MasterWeightOptimizer(
-                policy_model.parameters(),
+                _trainable_parameters(policy_model),
                 lr=self.config.learning_rate,
             )
         else:
             optimizer = torch.optim.AdamW(
-                policy_model.parameters(),
+                _trainable_parameters(policy_model),
                 lr=self.config.learning_rate,
             )
         print(
