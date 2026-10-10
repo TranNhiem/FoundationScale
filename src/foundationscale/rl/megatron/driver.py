@@ -880,7 +880,11 @@ def _run_online(
         from transformers import AutoModelForCausalLM
 
         hf_model = AutoModelForCausalLM.from_pretrained(args.hf_model, torch_dtype=torch.bfloat16)
-        hf_model.to(device)
+        # With offload, the copy stays on host until the first refit moves it: a resume
+        # allocates the optimizer's moments before that, and on a 26B model the two do not
+        # fit on rank 0 together (measured: OOM at 184 GiB with the copy resident).
+        if not args.offload_rollout_model:
+            hf_model.to(device)
     metrics_path = Path(args.metrics_out)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     heldout_max_new = args.heldout_max_new or args.max_new_tokens

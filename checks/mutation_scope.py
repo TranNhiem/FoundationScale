@@ -350,6 +350,34 @@ PENDING_ENROLMENT: dict[str, str] = {
         "speech model-kind dispatch (audio_llm / seq2seq / ctc): the loader class per kind, "
         "per-kind processor refusals, Whisper prompt-prefix verification and CTC blank padding"
     ),
+    "src/foundationscale/upstream/nemo/adjudicate.py": (
+        "NeMo worker: FS verdicts on a NeMo checkpoint (coverage, tower movement, frozen identity)"
+    ),
+    "src/foundationscale/upstream/nemo/census.py": (
+        "NeMo worker: strict audio census with counted refusal reasons before NeMo sees a row"
+    ),
+    "src/foundationscale/upstream/nemo/decode.py": (
+        "NeMo worker: transcribe a manifest and write the owned eval JSON"
+    ),
+    "src/foundationscale/upstream/nemo/finetune.py": (
+        "NeMo worker: train_ds/optimizer translation and the NeMo-owned fine-tune loop"
+    ),
+    "src/foundationscale/upstream/nemo/salm_adjudicate.py": (
+        "NeMo worker: FS verdicts on a SALM checkpoint (movement, frozen-LLM identity, key sets)"
+    ),
+    "src/foundationscale/upstream/nemo/salm_decode.py": (
+        "NeMo worker: SALM chat-prompt transcription to the owned eval JSON"
+    ),
+    "src/foundationscale/upstream/nemo/salm_finetune.py": (
+        "NeMo worker: SALM data/optimizer config and the NeMo-owned fine-tune loop"
+    ),
+    "src/foundationscale/upstream/models.py": (
+        "the speech model registry and its consistency checks (families exist, scopes, no "
+        "supported entry without a reproduced reference)"
+    ),
+    "src/foundationscale/upstream/profiles.py": (
+        "upstream profiles: pinned backend versions, installed-version measurement and mismatches"
+    ),
     "src/foundationscale/upstream/contracts.py": (
         "owned speech contracts: manifest row validation with counted problem codes, "
         "duplicate id/audio detection, the NeMo AED row translation and the strict run config"

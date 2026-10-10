@@ -63,3 +63,52 @@ Shared now: worker isolation with file contracts, the run manifest with profile 
 the model registry, the ledger, the reference-run regression harness, profiles and the Level 1-3
 process. Candidates (extracted when a second user appears): checkpoint converters, a technique
 plugin layer. Speech only: audio contract, speech metrics, long-form chunking.
+
+## Phase 1.2a: the NeMo AED (Canary) lane as a worker adapter (2026-10-10)
+
+`src/foundationscale/upstream/nemo/{census,finetune,decode,adjudicate}.py`, runnable as
+`python -m foundationscale.upstream.nemo.<module>` inside the NeMo container. The campaign scripts
+are thin wrappers. NeMo is imported only inside the functions that call it; the census, config
+translation, argument parsing and verdict assembly are pure and tested in CI. Verified on GB200:
+
+- decode, old script vs new package on the same node: identical (0 of 2,504 transcripts differ;
+  WER equal to 6 decimals). Recorded numbers from another node differ slightly (batched bf16 decoding
+  is node-sensitive), so equivalence is always checked on one node.
+- adjudication of an existing run: identical verdict lines.
+- fine-tune: identical census. Found and fixed: `--seed` did not make training reproducible (two
+  old-script runs with one seed differed at step 1), because lhotse's `shard_seed` defaults to
+  true randomness. Seeded runs now pin it, and two seeded runs on different GPUs give identical losses.
+
+## Phase 1.2b: the NeMo SALM (Canary-Qwen) lane (2026-10-10)
+
+`src/foundationscale/upstream/nemo/{salm_finetune,salm_decode,salm_adjudicate}.py`, same pattern as
+1.2a; the three SALM ledger entries follow the code. Verified on one GB200 node against the old
+scripts: decode identical (0 of 300 transcripts differ), re-adjudication of the Canary-Qwen
+fine-tune identical (6 of 6 lines), census identical. New `--seed` pins lhotse's seed and
+`shard_seed` (default behaviour unchanged): two seeded runs give identical losses.
+
+## Phase 2: the model registry (2026-10-10)
+
+`src/foundationscale/upstream/models.py`: one typed entry per speech model (backend, upstream
+reference, kind, license, scopes, requirements, reference result, status). HF entries link to their
+existing `families/registry.py` FamilySpec by name, so nothing is duplicated; NeMo entries carry the
+trainable/frozen scopes that adjudication reads. `registry_problems()` checks the families exist, the
+scopes are consistent, and that no entry is `supported` without a measured reproduction inside
+tolerance. All 6 entries are `experimental`: none has been reproduced on its model card's own test
+set yet (we hold LibriSpeech dev-clean; the cards report test-clean).
+
+Both NeMo adjudicators take `--model-id` and read their scopes from the registry (defaults unchanged).
+Verified on GB200: registry-driven re-adjudication of the Canary (arm B, frozen decoder) and
+Canary-Qwen fine-tunes reproduces the recorded verdict lines byte for byte.
+
+## Phase 3 (part 1): profiles and the first reproductions (2026-10-10)
+
+- `src/foundationscale/upstream/profiles.py`: the exact versions of both backend containers
+  (`nemo-26.08`: torch 2.13 / transformers 5.12 / peft 0.21 / NeMo 3.1; `hf-26.04`: torch 2.11 /
+  transformers 5.5 / peft 0.18), `installed_versions()` and `profile_mismatches()`. The NeMo
+  fine-tune workers write `upstream_profile.json` next to every run. Image digests are not visible
+  from the job environment and are recorded as "unrecorded".
+- Rule 4 in practice (`validation_campaigns/speech_repro`): Canary-Qwen-2.5B, Parakeet-CTC-1.1B and
+  Canary-1B-flash reproduce their model-card LibriSpeech WER within 0.02 points, scored with the
+  card's normalizer, and are now `supported` in the registry. Our stricter normalizer reads about
+  0.2 points higher.
