@@ -29,7 +29,7 @@ fskills-rl = "foundationskills.interfaces.fs.rl_driver:main"
 packages = { find = { where = ["."], include = ["foundationskills*"] } }
 
 [tool.setuptools.package-data]
-foundationskills = ["schemas/**/*.json", "**/*.yaml", "**/SKILL.md", "skills/*/evals/*.json", "skills/*/BENCHMARK.md", "skills/*/BEHAVIOUR.md", "skills/*/BEHAVIOUR_ORACLE.md"]
+  foundationskills = ["schemas/**/*.json", "**/*.yaml", "**/SKILL.md", "skills/*/evals/*.json", "skills/*/BENCHMARK.md", "skills/*/BEHAVIOUR.md", "skills/*/BEHAVIOUR_ORACLE.md", "skills/*/references/**/*", "skills/*/scripts/**/*", "skills/*/assets/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
