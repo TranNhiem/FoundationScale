@@ -26,6 +26,8 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from foundationscale.rl.hf_format import save_format_kwargs
+
 __all__ = [
     "MANIFEST_NAME",
     "lane_topology",
@@ -136,7 +138,11 @@ def save_policy_checkpoint(
             "overwrite another save's weights and provenance"
         )
     out.mkdir(parents=True, exist_ok=True)
-    hf_model.save_pretrained(out, safe_serialization=True)
+    hf_model.save_pretrained(
+        out,
+        safe_serialization=True,
+        **save_format_kwargs(hf_model),
+    )
     if callable(getattr(tokenizer, "save_pretrained", None)):
         tokenizer.save_pretrained(out)
 

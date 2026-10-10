@@ -38,6 +38,8 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from foundationscale.rl.hf_format import save_format_kwargs
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -801,13 +803,18 @@ def save_checkpoint(
             if is_peft:
                 _atomic_peft_save(target, str(out), state_dict)
             else:
-                target.save_pretrained(out, state_dict=state_dict, safe_serialization=True)
+                target.save_pretrained(
+                    out,
+                    state_dict=state_dict,
+                    safe_serialization=True,
+                    **save_format_kwargs(target),
+                )
     elif is_main(ctx):
         out.mkdir(parents=True, exist_ok=True)
         if is_peft:
             _atomic_peft_save(target, str(out), None)
         else:
-            target.save_pretrained(out, safe_serialization=True)
+            target.save_pretrained(out, safe_serialization=True, **save_format_kwargs(target))
     if is_main(ctx):
         out.mkdir(parents=True, exist_ok=True)
         if tokenizer_or_processor is not None and hasattr(

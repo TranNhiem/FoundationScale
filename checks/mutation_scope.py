@@ -253,6 +253,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "global loss denominators across DP/CP ranks for the Megatron lane: a local "
         "denominator silently rescales the gradient, and no mutation row pins it yet."
     ),
+    "src/foundationscale/rl/hf_format.py": (
+        "which on-disk format an HF policy can be saved back to: a dequantizing load "
+        "conversion (gpt-oss MXFP4) cannot be reversed by save_pretrained; CPU legs pin "
+        "the decision, but no mutation row yet kills an inverted check."
+    ),
     "src/foundationscale/rl/megatron/onboard.py": (
         "per-family onboarding verdict for the Megatron lane (parity, refit, step-1, save, "
         "resume) over run outputs; CPU legs pin each PASS/FAIL/UNMEASURED arm, but no "
