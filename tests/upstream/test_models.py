@@ -309,3 +309,9 @@ def test_real_models_pass_registry_problems() -> None:
     AND against the names read here -- the two paths must agree."""
     assert registry_problems() == []
     assert registry_problems(MODELS, family_names=_FAMILY_NAMES) == []
+
+
+def test_reproduced_boundary_survives_float_addition() -> None:
+    """1.61 + 0.3 is 1.9100000000000001 in floating point; exactly-at-tolerance must still pass."""
+    assert _reference(upstream_value=1.61, measured=1.61 + 0.3, tolerance=0.3).reproduced
+    assert not _reference(upstream_value=1.61, measured=1.61 + 0.31, tolerance=0.3).reproduced

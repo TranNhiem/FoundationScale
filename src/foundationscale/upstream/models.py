@@ -142,7 +142,8 @@ class ReferenceResult:
         return (
             self.measured is not None
             and self.upstream_value is not None
-            and abs(self.measured - self.upstream_value) <= self.tolerance
+            # the epsilon keeps the inclusive boundary inclusive under float addition
+            and abs(self.measured - self.upstream_value) <= self.tolerance + 1e-9
         )
 
 

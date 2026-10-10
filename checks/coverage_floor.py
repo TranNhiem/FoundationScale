@@ -323,8 +323,10 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/train/speech_metrics.py": 98,  # measured 99.2%; 1 pt CI slack
     "src/foundationscale/upstream/__init__.py": 99,  # measured 100%; 1 pt CI slack
     "src/foundationscale/upstream/contracts.py": 93,  # measured 94%; 1 pt CI slack
+    "src/foundationscale/upstream/levels.py": 97,  # measured 98%; 1 pt CI slack
     "src/foundationscale/upstream/models.py": 99,  # measured 100%; 1 pt CI slack
     "src/foundationscale/upstream/profiles.py": 99,  # measured 100%; 1 pt CI slack
+    "src/foundationscale/upstream/tracker.py": 87,  # measured 88%; 1 pt CI slack
     # NeMo worker: main() bodies need NeMo and run on the GPU trays (Phase 1.2a, verified
     # 2026-10-10 against recorded results); CI measures the pure census/config/verdict parts.
     "src/foundationscale/upstream/nemo/__init__.py": 99,  # measured 100% (docstring only)
