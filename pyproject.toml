@@ -285,7 +285,11 @@ warn_unreachable = true
 # --fused-loss liger path), absent in CI by design, reached only function-locally.
 # pyarrow joins it too: it ships no type stubs, and vla/lerobot.py imports it only
 # inside the parquet reader.
+# harbor joins it as an optional runtime: only agentic_rl/sandbox/harbor_env.py
+# imports it (Harbor loads that module by import path inside its own venv), and CI
+# exercises the module against stand-ins, never the real package.
 module = [
+    "harbor.*",
     "torch.*",
     "safetensors.*",
     "transformers.*",

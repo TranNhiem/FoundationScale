@@ -25,3 +25,30 @@ Hub, GHCR, PyPI and GitHub are reachable. `enroot` bind-mounts the host `/tmp` i
 **Security defects found in review and fixed before this run** (each now has a test that failed on the
 original code): directory uploads could write through an agent-planted symlink onto the host;
 directory downloads followed symlinks and could copy host files (e.g. a secrets file) into artifacts.
+
+## Harbor end-to-end trial (P0.4b)
+
+**What was run.** Harbor (pinned `harbor-framework/harbor@09f5b96`, installed in its own Python 3.12 venv
+on a GB200 tray) ran its `examples/tasks/hello-alpine` task with the `oracle` agent, loading the FS
+backend by import path:
+
+```
+harbor run --path <harbor>/examples/tasks/hello-alpine --agent oracle \
+  --environment-import-path foundationscale.agentic_rl.sandbox.harbor_env:EnrootEnvironment \
+  --ek data_root=<enroot data dir> --ek image_store=<image dir> --ek scratch_root=<scratch dir> \
+  --jobs-dir <jobs dir>
+```
+
+**Result (2026-10-11):** 1 trial, 0 exceptions, **reward 1.0**, 24 s. The task's `Dockerfile`
+(`FROM alpine:3.22`, `RUN apk add bash`, `WORKDIR /app`) was rebuilt for arm64 by `build_image`, the
+oracle solution ran in an `EnrootSandbox`, and the task's own verifier (which installs `curl` and `uv`
+from the internet and runs pytest) wrote the reward that Harbor collected through the backend's file
+transfer.
+
+**Defects this run found and fixed before the result above** (each now has a unit test):
+
+1. Harbor's convention directories `/logs/{agent,user-agent,verifier,artifacts}` did not exist: the
+   docker backend bind-mounts them, so the enroot backend now creates them at start.
+2. `WORKDIR` recorded the default directory but did not create it, so every exec failed at
+   `cd /app` -- Docker's `WORKDIR` creates the directory and the builder now does too. The earlier toy
+   build masked this because its `COPY` happened to create the workdir.

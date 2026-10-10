@@ -2112,3 +2112,11 @@ def test_build_env_substitution_in_env_space_form_braces_only_forth(tmp_path: Pa
     runner = FakeRunner()
     report = _build(tmp_path, "ARG V=9\nFROM alpine\nENV K ${V}\n", runner)
     assert report.env == {"K": "9"}
+
+
+def test_workdir_creates_its_directory_like_docker(tmp_path: Path) -> None:
+    """WORKDIR /app with no COPY into it still leaves /app in the exported rootfs."""
+    runner = FakeRunner()
+    _build(tmp_path, "FROM alpine\nWORKDIR /app\nRUN true\n", runner)
+    assert runner.exported_root is not None
+    assert (runner.exported_root / "app").is_dir()

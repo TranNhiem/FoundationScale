@@ -196,6 +196,8 @@ def build_image(
                 env.update(_parse_env(step, argument))
             elif instruction == "WORKDIR":
                 workdir = _parse_workdir(step, argument)
+                # Docker's WORKDIR creates the directory; every later exec does `cd <workdir>`.
+                sandbox.host_path(workdir).mkdir(parents=True, exist_ok=True)
             elif instruction == "RUN":
                 remaining = timeout_s - (time.monotonic() - started)
                 if remaining <= 0:

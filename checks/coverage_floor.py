@@ -271,6 +271,7 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/agentic_rl/sandbox/__init__.py": 100,  # set by hand; measured 100.0%
     "src/foundationscale/agentic_rl/sandbox/build.py": 98,  # set by hand; measured 98.6%
     "src/foundationscale/agentic_rl/sandbox/enroot.py": 98,  # set by hand; measured 98.5%
+    "src/foundationscale/agentic_rl/sandbox/harbor_env.py": 96,  # set by hand; measured 96.9%
     "src/foundationscale/agentic_rl/stability.py": 100,  # set by hand; measured 100.0%
     "src/foundationscale/agentic_rl/trajectory_v2.py": 99,  # set by hand; measured 99.7%
     "src/foundationscale/checkpoint/__init__.py": 100,  # set by --update; measured 100.0%
