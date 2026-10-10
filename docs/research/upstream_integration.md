@@ -161,4 +161,5 @@ held-out calls (validation_campaigns/speech_q3asr).
 **Blockers before `hf-cand-519` replaces hf-26.04 as the HF lane:**
 1. Re-measure the qwen2_audio FamilySpec. Transformers 5.18+ nests the model under `model.`, and
    FS now refuses (96) on an unresolvable tower instead of training into a VACUOUS gate.
-2. Re-run the training-lane regression for Whisper and Gemma-4, not only Parakeet.
+2. Re-run the training-lane regression for Gemma-4. Whisper is done: 1.69 under both profiles
+   (validation_campaigns/speech_repro).
