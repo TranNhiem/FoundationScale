@@ -326,6 +326,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "waveform loading with named refusals, per-row placeholder verification, and "
         "the checked-vs-expected audio row coverage verdict"
     ),
+    "src/foundationscale/video.py": (
+        "video as a declared frame budget: centred-uniform sampling, the per-clip frame "
+        "cache and its race-safe publish, the env declaration and the row fold; CPU legs "
+        "pin each refusal, but no mutation row yet kills a dropped frame or a shifted instant."
+    ),
     "tools/count_census_modules.py": (
         "is the production LoRA census denominator and accepts wrapped versus bare "
         "payload shapes and record forms"
