@@ -39,9 +39,18 @@ class DecodeStep:
     manifest: str
     card_value: float
     tolerance: float
+    profile: str  # upstream profile whose environment runs the step
+
+
+# The profile a step runs in when its entry does not name one.
+_DEFAULT_PROFILES = {Backend.HF: "hf-26.04", Backend.NEMO: "nemo-26.08"}
+
+_HF_DECODE_ARGS = ("--model", "{model}", "--manifest", "{manifest}", "--out", "{out}")
 
 
 def _entry_point(entry: ModelEntry) -> tuple[str, tuple[str, ...]]:
+    if entry.backend is Backend.HF and entry.eval_script:
+        return entry.eval_script, _HF_DECODE_ARGS
     if entry.backend is Backend.NEMO and entry.kind is ModelKind.AED:
         return (
             "foundationscale.upstream.nemo.decode",
@@ -105,6 +114,7 @@ def level3_plan(models: tuple[ModelEntry, ...] = MODELS) -> list[DecodeStep]:
                 manifest=manifest,
                 card_value=ref.upstream_value,
                 tolerance=ref.tolerance,
+                profile=entry.profile or _DEFAULT_PROFILES[entry.backend],
             )
         )
     return steps

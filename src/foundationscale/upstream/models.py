@@ -184,17 +184,14 @@ class ModelEntry:
     reference: ReferenceResult | None = None
     status: SupportStatus = SupportStatus.EXPERIMENTAL
     notes: str = ""
+    profile: str = ""  # upstream profile it runs in; "" = its backend's default profile
+    eval_script: str = ""  # own decode script (repo-relative); decode-only HF entries need one
 
 
-# PHASE 2a state of play, and why every entry below is EXPERIMENTAL: the six model
-# cards all report WER on LibriSpeech TEST-clean, and this estate holds LibriSpeech
-# DEV-clean -- a different split of the same corpus. We do have readings of the right
-# KIND on dev-clean (each reference's ``measured_note`` records its number and the
-# campaign that produced it), but reproducing a card means matching the card's own test
-# set, and ``measured`` is only ever filled for that. Until dev-vs-test is settled --
-# TEST-clean shipped for evaluation, or a tolerance stated across the split gap and a
-# reproduction contract agreed on it -- every entry stays EXPERIMENTAL, and callers must
-# treat each reference as an unreproduced claim.
+# Status rule (rule 4, "integrated" means "reproduced"): an entry is SUPPORTED only when its
+# card's own LibriSpeech TEST number was reproduced here on the full split under the card's
+# normalizer (validation_campaigns/speech_repro). Cards that publish no such number stay
+# EXPERIMENTAL; their ``measured_note`` records what we did measure, on dev-clean.
 MODELS: tuple[ModelEntry, ...] = (
     ModelEntry(
         id="gemma-4-e4b-it",
@@ -334,6 +331,33 @@ MODELS: tuple[ModelEntry, ...] = (
         ),
         status=SupportStatus.SUPPORTED,
     ),
+    ModelEntry(
+        id="qwen3-asr-1.7b",
+        backend=Backend.HF,
+        upstream_ref="Qwen/Qwen3-ASR-1.7B-hf",
+        kind=ModelKind.AUDIO_LLM,
+        license_weights="apache-2.0",
+        attribution="Qwen team, Alibaba Cloud, Qwen3-ASR-1.7B",
+        # Decode-only: no FamilySpec, because the class needs transformers >= 5.13 and the HF
+        # training lane (hf-26.04) has 5.5. It runs in the candidate profile with its own
+        # script until the HF lane moves to a transformers that carries it.
+        requires=(("transformers", ">=5.13"),),
+        reference=ReferenceResult(
+            task="librispeech_test_clean",
+            metric="wer",
+            upstream_value=1.63,
+            source="https://huggingface.co/Qwen/Qwen3-ASR-1.7B (README results table)",
+            tolerance=0.3,
+            measured=1.643,
+            measured_note=(
+                "full split, Whisper EnglishTextNormalizer; FS normalizer reads 1.883. "
+                "test_other 3.368 vs README 3.38 -- validation_campaigns/speech_repro, 2026-10-10"
+            ),
+        ),
+        status=SupportStatus.SUPPORTED,
+        profile="hf-cand-519",
+        eval_script="validation_campaigns/speech_repro/eval_qwen3_asr.py",
+    ),
 )
 
 
@@ -366,7 +390,8 @@ def registry_problems(
 
     Codes: ``duplicate_id:<id>``, ``empty_field:<id>:<field>`` (for the id,
     upstream_ref and license_weights fields that identification and licensing read),
-    ``hf_without_family:<id>``, ``unknown_family:<id>:<name>``,
+    ``hf_without_family:<id>`` (unless it declares its own ``eval_script``),
+    ``unknown_family:<id>:<name>``, ``unknown_profile:<id>:<name>``,
     ``hf_with_nemo_class:<id>``, ``nemo_without_class:<id>``,
     ``nemo_without_scopes:<id>``, ``overlapping_scopes:<id>``,
     ``lora_marker_without_frozen:<id>``, ``supported_without_reproduction:<id>``.
@@ -382,6 +407,9 @@ def registry_problems(
 
         family_names = tuple(spec.name for spec in _FAMILY_REGISTRY)
 
+    from foundationscale.upstream.profiles import PROFILES
+
+    profile_names = {p.name for p in PROFILES}
     problems: list[str] = []
     seen: set[str] = set()
     for entry in models:
@@ -392,8 +420,10 @@ def registry_problems(
             if not str(getattr(entry, field)).strip():
                 problems.append(f"empty_field:{entry.id}:{field}")
         if entry.backend == Backend.HF:
+            # no FamilySpec means FS cannot train it; it may still be decoded by its own script
             if not entry.family.strip():
-                problems.append(f"hf_without_family:{entry.id}")
+                if not entry.eval_script.strip():
+                    problems.append(f"hf_without_family:{entry.id}")
             elif entry.family not in family_names:
                 problems.append(f"unknown_family:{entry.id}:{entry.family}")
             if entry.nemo_class.strip():
@@ -412,6 +442,8 @@ def registry_problems(
         # an exception to nothing.
         if entry.lora_marker.strip() and not entry.frozen_prefixes:
             problems.append(f"lora_marker_without_frozen:{entry.id}")
+        if entry.profile and entry.profile not in profile_names:
+            problems.append(f"unknown_profile:{entry.id}:{entry.profile}")
         if entry.status == SupportStatus.SUPPORTED and not (
             entry.reference is not None and entry.reference.reproduced
         ):
