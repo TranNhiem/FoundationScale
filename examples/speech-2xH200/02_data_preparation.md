@@ -22,7 +22,7 @@ One row per utterance, one JSON object per line:
 | --- | --- | --- |
 | `id` | string | Globally unique utterance id. LibriSpeech's own `{speaker}-{chapter}-{utterance}` ids already are, so we keep them verbatim. |
 | `text` | string | The fixed literal prompt `"Transcribe this audio exactly."` — the training instruction. It is **never** derived from the data. |
-| `answer` | string | The ground-truth transcript, verbatim from the dataset: whitespace-stripped only, **no** case folding, **no** punctuation normalisation. |
+| `answer` | string | The ground-truth transcript, **sentence-cased**: whitespace collapsed, lower-cased, then only the first character upper-cased (`" ".join(text.split()).lower().capitalize()`) — **no** punctuation added. |
 | `audio` | string | **Absolute** path to a 16 kHz mono FLAC file on disk. |
 | `duration` | float | The real decoded duration in seconds, recomputed from the audio samples — never trusted from dataset metadata. |
 
@@ -34,8 +34,17 @@ Things worth internalising now:
   quietly handed audio whose provenance the manifest does not describe.
 - `text` is a constant. If you ever see a manifest where `text` varies per row, something upstream has
   leaked the transcript into the prompt.
-- `answer` is verbatim. WER is computed against the dataset's own spelling; normalising it here would
-  flatter the numbers and make them non-comparable to published LibriSpeech results.
+- **`answer` is sentence-cased, not LibriSpeech's raw upper case** (`"Marguerite to be unable..."`, not
+  `"MARGUERITE TO BE UNABLE..."`). This is a MEASURED fix, not a style choice: training Whisper-large-v3 on
+  raw upper-case targets pushes it onto upper-case BPE pieces it rarely uses, fragmenting words it already
+  transcribes correctly zero-shot (`"Sweetwater"` -> `"SWEET WATER"`) and regressing dev-clean WER from
+  2.25% to 3.32%. Switching the TRAINING target to sentence case alone took it to **1.72%** — see
+  chapter 03 §6 for the full before/after. This repo's own `speech_p3`/`speech_p6` campaigns always used
+  sentence-cased targets; this tutorial's early rounds did not, and paid the measured cost above.
+- The **eval** manifest (§3 below) is intentionally left with LibriSpeech's raw upper-case reference text
+  — it is NOT rebuilt with this change. `eval_wer.py`'s scorer casefolds both the reference and the
+  hypothesis before computing WER, so an upper-case reference scores identically to a sentence-cased one;
+  only the training target's case mattered.
 - `audio` is absolute at write time. Move the audio directory and the manifest goes stale (see
   Troubleshooting).
 

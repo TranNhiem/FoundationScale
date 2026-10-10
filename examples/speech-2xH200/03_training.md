@@ -181,9 +181,10 @@ rather than demonstrate ASR fine-tuning.
 
 | model | fine-tune | exit | peak GB/GPU | s/step | wall (500 steps) |
 |---|---|---|---|---|---|
-| parakeet-ctc-1.1b | full FT | 0 | 14.3 | 0.44 | 245 s |
-| whisper-large-v3 | full FT | 0 | 27.6 | 0.41 | 230 s |
-| gemma-4-E4B-it | LoRA r16/a32 | 0 | 89.8 | 0.97 | 511 s |
+| parakeet-ctc-1.1b | full FT, 2 GPUs | 0 | 14.3 | 0.44 | 245 s |
+| whisper-large-v3 | full FT, 2 GPUs (batch 4/GPU) | 0 | 27.6 | 0.41 | 230 s |
+| whisper-large-v3 | full FT, 1 GPU (batch 8, owner's recipe, sentence-cased targets) | 0 | not cleanly isolated (shared-VM contention) | 0.73 | 364 s |
+| gemma-4-E4B-it | LoRA r16/a32, raw-case targets (not re-verified sentence-cased, see below) | 0 | 89.8 | 0.97 | 511 s |
 
 **MEASURED, 2026-10-10/11, 2x H200.** `peak GB/GPU` is the single highest sample from a 3–5 second
 `nvidia-smi` poll during each run; `s/step` is `transformers.Trainer`'s own reported
@@ -195,69 +196,51 @@ run or a bigger model would need to revisit that chapter.
 timing numbers can vary run to run under contention. The peak-memory numbers above were filtered to this
 campaign's own process PIDs (`nvidia-smi --query-compute-apps`) where contention was detected.
 
-### Whisper: regresses on the VM stack; not reproduced on transformers 5.5 or 5.19; under investigation
+### The recipe lesson: train on sentence-cased targets, not raw LibriSpeech upper case
 
-`openai/whisper-large-v3` fine-tuning **regresses WER on this VM's stack** (transformers 5.18.0 / torch
-2.13.0+cu132 / peft 0.21.2) **in every configuration tried** — this is a real, measured finding:
+`openai/whisper-large-v3` fine-tuning initially **regressed** dev-clean WER on this VM (2.25% -> 3.32-3.58%
+across several configurations) — root-caused, with the speech-plane owner, to the TRAINING TARGET FORMAT,
+not the software stack:
 
-| run | GPUs | steps | train rows | warmup | tuned WER | diff vs base (2.2543%) |
-|---|---|---|---|---|---|---|
-| Round 1 | 2 | 100 | 4,078 | 0 | 3.58% | +1.33 pts |
-| Round 2 | 2 | 500 | 28,539 | 0 | 3.34% | +1.09 pts |
-| Round 2 (warmup probe) | 2 | 500 | 28,539 | 50 | 3.36% | +1.11 pts |
-| Round 2 (1-GPU, owner's exact recipe) | 1 | 500 | 28,539 | 0 | 3.32% | +1.07 pts |
+| cause tried | tuned WER | diff vs base (2.2543%) |
+|---|---|---|
+| raw LibriSpeech upper case (this tutorial's early rounds, several configs) | 3.32% – 3.58% | +1.07 to +1.33 pts |
+| **sentence-cased targets** (`"Marguerite to be unable..."`, not `"MARGUERITE..."`) | **1.72%** | **-0.53 pts** |
 
-**This is NOT a transformers-version issue** — the speech-plane owner reproduced 2.25% -> 1.69% on both
-transformers 5.5 and transformers 5.19 with torch 2.11 / peft 0.18.1 (paired diff +0.00 pt,
-CI [-0.02, +0.02]). The regression is specific to the software stack on this VM, not to a transformers
-release window. Four diagnostics were run, in order, to localise it:
+Diagnostics that ruled out the wrong explanations first (kept here as the record of how this was found):
+GPU count (owner's 1-GPU/per-device-batch-8 recipe reproduced the same regression, 3.32%, as 2-GPU/batch-4
+— not a GPU-count effect); `model.config._attn_implementation` was `sdpa`, the expected default; training
+loss tracked the owner's reference closely at every configuration (not diverging). Reading hypotheses row
+by row then showed WHY: training on LibriSpeech's raw upper-case transcripts pushes Whisper onto upper-case
+BPE pieces it rarely uses, which **fragments words it already transcribes correctly zero-shot** —
+`"Sweetwater"` -> `"SWEET WATER"`, `"mountebank"` -> `"MOUNTAIN BANK"`, `"Gwynplaine"` -> `"GUINPLAIN"` — a
+real degradation concentrated on proper nouns and uncommon words, net-negative across the full 2,683-row
+eval set despite healthy aggregate training loss. Loss alone cannot see this: it scores teacher-forced
+next-token prediction, not autoregressive generation quality on rare vocabulary.
 
-1. **GPU count.** The owner's recipe is 1 GPU x per-device batch 8, not 2 GPUs x per-device batch 4.
-   Re-ran exactly that (500 steps, lr 1e-5, seed 0, `AUDIO_LANGUAGE=en`, same train set, single GPU).
-   **Result: WER is still 3.32%, statistically indistinguishable from the 2-GPU run (3.34%). GPU count
-   does not explain the regression.**
-2. **Attention implementation.** `model.config._attn_implementation` is `sdpa` — the expected default, not
-   an anomaly (no `--attn-implementation` override is passed anywhere in this tutorial).
-3. **Training-loss comparison**, this VM's 1-GPU run vs the owner's reference:
+**The fix**: `scripts/prepare_librispeech.py` writes training targets SENTENCE-CASED —
+`" ".join(text.split()).lower().capitalize()` — whitespace collapsed, lower-cased, then only the first
+character upper-cased, no punctuation added. This is the same transform this repo's own
+`validation_campaigns/speech_p3`/`speech_p6` LibriSpeech/AMI campaigns have always used; this tutorial's
+early rounds simply didn't match it. Re-running the exact owner's recipe (1 GPU, per-device batch 8, 500
+steps, lr 1e-5, seed 0) on sentence-cased targets reproduced the owner's own loss trajectory almost exactly
+(step 10/250/500: this VM 0.3314/0.04538/0.04485 vs owner's reference 0.3434/0.0424/0.0450) and landed WER
+at **1.72%**, within 0.03 points of the owner's own 1.69% — **confirmed fix, not a coincidence.**
 
-   | step | this VM | owner's reference |
-   |---|---|---|
-   | 10 | 0.2993 | 0.3434 |
-   | 250 | 0.0617 | 0.0424 |
-   | 500 | 0.0594 | 0.0450 |
+**The eval manifest is intentionally NOT rebuilt** with this change — it keeps LibriSpeech's raw upper-case
+reference text. `eval_wer.py`'s scorer (`foundationscale.train.speech_metrics.normalize_transcript`)
+casefolds both the reference and the hypothesis before computing WER, so an upper-case reference scores
+identically to a sentence-cased one; only the TRAINING target's case mattered, never the eval reference's.
 
-   Same order of magnitude at every checkpoint, converging normally — **training is not diverging** on
-   this stack (torch 2.13).
-4. Per the owner's decision rule — *if the loss matches and WER is still worse, it's the saved checkpoint
-   or its eval* — the loss matches, so the checkpoint/eval was inspected directly. `generation_config.json`
-   is byte-identical to the base model's (only `transformers_version` differs), ruling out a
-   generation-config regression. Reading the actual hypotheses row by row (sorted by per-row WER
-   regression vs base) shows a consistent pattern: of 2,683 rows, 592 score worse after fine-tuning and
-   230 score better. The fine-tuned model **correctly learns the LibriSpeech ALL-CAPS, no-punctuation
-   target format** (base: `"Sweetwater, someone drew that weapon out."`; tuned:
-   `"SWEET WATER SOME ONE DREW THAT WEAPON OUT"`) — but on a recurring subset of proper nouns and uncommon
-   words it had PREVIOUSLY transcribed correctly zero-shot, the fine-tuned checkpoint is now wrong:
-   `Sweetwater` (correct, base) -> `SWEET WATER` (wrong, tuned, two instances); `mountebank` (correct,
-   base) -> `MOUNTAIN BANK` (wrong, tuned); `Gwynplaine` (correct, base) -> `GUINPLAIN`/`GWINPLAIN` (wrong,
-   tuned, two instances). At least one row also shows apostrophe characters replaced with a Unicode
-   replacement character (`�`) in the tuned hypothesis only. None of this is an eval-harness defect — the
-   WER scorer (`foundationscale.train.speech_metrics.normalize_transcript`) casefolds and strips
-   punctuation but does not merge/split compound words or convert digits to words, so it is scoring both
-   models identically and correctly; the fine-tuned MODEL itself is less accurate on this specific subset
-   of vocabulary at 500 steps (~0.14 epoch) on this stack, even though its aggregate training loss looks
-   healthy.
-
-**Wording for this finding, verified and intentional:** Whisper-large-v3 **regresses on the VM stack**
-(transformers 5.18 / torch 2.13 / peft 0.21.2); **not reproduced** on transformers 5.5 or 5.19 with torch
-2.11 (1.69% both); **under investigation**. Do not call this "a known issue on transformers >= 5.18" —
-that has been specifically ruled out. Do not present Whisper's fine-tune as a working quality demo on
-this VM until the stack-specific cause (torch 2.13 and/or peft 0.21.2 are the remaining suspects) is
-identified.
-
-`google/gemma-4-E4B-it`'s own shortfall (4.04% -> 3.78% here vs the owner's 4.07% -> 2.96%) is the same
-KIND of gap — a worse outcome on this VM's stack than the owner's reference run — but GPU count has now
-been ruled out as a general explanation (it did not fix Whisper), so it is not assumed to explain Gemma's
-gap either. Gemma's shortfall remains open and uninvestigated beyond what chapter 04 already states.
+`google/gemma-4-E4B-it` was not re-verified on the sentence-cased manifest: re-attempting it on this VM's
+current FoundationScale checkout hit a new, separately-reproducible refusal
+(`speech_tower_resolution_refusal` firing on the LoRA-wrapped model, whose top-level module becomes
+`base_model` after `peft.get_peft_model()` — the same check that correctly catches Qwen2-Audio's nesting
+mismatch appears to also misfire on an already-working LoRA family once wrapped) that blocked every retry
+attempted, independent of the manifest. This is a framework-level issue outside this tutorial's scope to
+fix (no CLI flag routes around it); Gemma-4's numbers below are carried over from the last successful run
+(raw-case targets) and are not directly comparable to Whisper's or Parakeet's post-fix numbers. Report this
+upstream before re-attempting.
 
 ## 7. Reading the output
 
@@ -298,10 +281,19 @@ tokenizer/processor files, pass `--processor` pointing at the original base mode
   been removed from `train_speech.sh` along with all Qwen2-Audio-specific plumbing).
 - **Whisper refuses with exit 96 naming `AUDIO_LANGUAGE`** — set `FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE=en`
   (and make sure it is unset for the other kinds).
-- **Whisper fine-tunes but WER gets worse** — measured on this VM's stack (transformers 5.18 / torch 2.13
-  / peft 0.21.2); not reproduced on transformers 5.5 or 5.19 with torch 2.11 (1.69% both); under
-  investigation. See §6. It is not fixed by GPU count, warmup, or more steps/data (all tried) — don't
-  spend time tweaking the launch command.
+- **Whisper fine-tunes but WER gets worse** — check your manifest's `answer` field is SENTENCE-CASED
+  (`"Sweetwater..."`), not LibriSpeech's raw upper case (`"SWEETWATER..."`). Raw upper-case targets
+  measurably regress Whisper's WER on this stack by fragmenting words into upper-case BPE pieces it rarely
+  uses — see §6. `scripts/prepare_librispeech.py` writes sentence-cased targets by default; this symptom
+  means an older manifest or a hand-rolled builder is in use. Not fixed by GPU count, warmup, or more
+  steps/data (all ruled out before the real cause was found).
+- **`gemma-4-E4B-it` (or any LoRA + audio-tower family) refuses with exit 96 naming unresolved audio
+  towers, even though the SAME recipe worked before** — a separate issue from Qwen2-Audio's (§5):
+  `speech_tower_resolution_refusal` appears to run against the model AFTER `peft.get_peft_model()` wraps
+  it, whose top-level module becomes `base_model`, so a family's otherwise-correct tower paths (e.g.
+  `model.audio_tower`) stop resolving post-wrap. This was reproduced reliably on this VM's checkout and is
+  a framework-level ordering issue, not a config mistake — there is no CLI flag to route around it. Report
+  it upstream rather than attempting a workaround.
 - **Training hangs at rendezvous** — `--master_addr` must be `127.0.0.1`, not `localhost`.
 - **Port already in use** — this tutorial reserves `29880`; the vlm tutorial uses `29500`. Don't run two
   speech launches at once on the same box.

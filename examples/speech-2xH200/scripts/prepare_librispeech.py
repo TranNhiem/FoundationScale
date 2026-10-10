@@ -284,9 +284,29 @@ def _build_id(row: Mapping[str, Any], fallback: str) -> str:
 
 
 def _answer_text(row: Mapping[str, Any]) -> str:
-    """Return the raw transcript, stripping only leading/trailing whitespace."""
+    """Return the transcript, SENTENCE-CASED, not LibriSpeech's raw upper case.
+
+    MEASURED, 2026-10-11: training Whisper-large-v3 on LibriSpeech's raw upper-case transcripts
+    (``"SWEETWATER SOMEONE DREW THAT WEAPON OUT"``) pushes it onto upper-case BPE pieces it rarely
+    uses, which fragments words it already transcribes correctly zero-shot into multiple pieces
+    (``"Sweetwater"`` -> ``"SWEET WATER"``, ``"mountebank"`` -> ``"MOUNTAIN BANK"``) -- a measured
+    WER regression (2.25% -> 3.32% on dev-clean) root-caused to this exact target format, not to
+    the training recipe or the software stack. Every LibriSpeech-trained result in this repo's own
+    speech_p3..p7 campaigns used sentence-cased targets instead: whitespace collapsed, lower-cased,
+    then only the first character upper-cased -- no punctuation added. This mirrors
+    ``validation_campaigns/speech_p3/build_librispeech_train.py`` and
+    ``validation_campaigns/speech_p6/build_ami_train.py``'s own transform exactly, so this script's
+    manifest trains the same target distribution those campaigns measured.
+
+    The EVAL manifest (chapter 02 §3) is NOT rebuilt with this change -- it keeps LibriSpeech's raw
+    upper-case reference text as-is. ``eval_wer.py``'s normalizer casefolds both the reference and
+    the hypothesis before scoring (``foundationscale.train.speech_metrics.normalize_transcript``),
+    so an upper-case reference scores identically to a sentence-cased one; only the TRAINING target
+    format mattered here, not the eval reference's case.
+    """
     raw = row.get("text")
-    return raw.strip() if isinstance(raw, str) else str(raw or "").strip()
+    text = raw.strip() if isinstance(raw, str) else str(raw or "").strip()
+    return " ".join(text.split()).lower().capitalize()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -88,32 +88,34 @@ jq '.all | length' eval_logs/parakeet_base.json
 | model | fine-tune | base WER | tuned WER | diff (pts) | 95% CI (paired bootstrap, pts) | verdict |
 | --- | --- | --- | --- | --- | --- | --- |
 | parakeet-ctc-1.1b | full FT | 1.87% | 1.77% | -0.09 | [-0.14, -0.05] | **significantly BETTER**; P(diff<0)=1.000 |
-| whisper-large-v3 | full FT | 2.25% | 3.34% | +1.09 | [+0.89, +1.28] | **significantly WORSE** (under investigation — see below); P(diff<0)=0.000 |
-| gemma-4-E4B-it | LoRA r16/a32 | 4.04% | 3.78% | -0.26 | [-0.51, +0.02] | favourable, borderline (CI nearly excludes 0); P(diff<0)=0.966 |
+| whisper-large-v3 | full FT, sentence-cased targets | 2.25% | **1.72%** | **-0.53** | [-0.65, -0.41] | **significantly BETTER**; P(diff<0)=1.000 |
+| gemma-4-E4B-it | LoRA r16/a32, raw-case targets (see caveat below) | 4.04% | 3.78% | -0.26 | [-0.51, +0.02] | favourable, borderline (CI nearly excludes 0); P(diff<0)=0.966 |
 
 Read that table honestly. **parakeet-ctc-1.1b improves and essentially matches this repo's own longer-campaign
-ceiling** (`speech_p7`: 1.86% -> 1.80%) — a real, if small, win that the paired bootstrap resolves cleanly at
-2,683 rows. **gemma-4-E4B-it moves in the right direction** — the repo's longer campaign
-(`speech_p7`: 4.07% -> 2.96% LoRA) shows where this model can go — **but stops short of it at 500 steps
-here** (4.04% -> 3.78%). The shortfall is plausibly a scheduler / data-order / transformers-version gap; it
-was not chased further; GPU count has since been ruled out as its explanation too (see below), so this
-gap remains open on its own. **whisper-large-v3 is the one that needs the strongest, most honest framing:
-it regresses on the VM stack (transformers 5.18 / torch 2.13 / peft 0.21.2) in every configuration tried**
-— 100 steps: +1.33 pts; 500 steps: +1.09 pts; 500 steps + 50-step warmup: +1.11 pts; 500 steps on 1 GPU
-with per-device batch 8 (the speech-plane owner's exact recipe): +1.07 pts. **This is NOT reproduced on
-transformers 5.5 or 5.19 with torch 2.11 / peft 0.18.1** — the owner measured 2.25% -> 1.69% on both
-(paired diff +0.00 pt, CI [-0.02, +0.02]). It is also not a GPU-count effect: re-running the owner's exact
-1-GPU / per-device-batch-8 recipe reproduced the same regression. Training loss tracks the owner's
-reference closely at steps 10/250/500 (this VM: 0.2993/0.0617/0.0594; owner's reference:
-0.3434/0.0424/0.0450) — training is not diverging. Row-by-row inspection shows the fine-tuned checkpoint
-correctly learns the target ALL-CAPS/no-punctuation format, but loses previously-correct zero-shot
-transcriptions of a recurring subset of proper nouns and uncommon words (`Sweetwater`->`SWEET WATER`,
-`mountebank`->`MOUNTAIN BANK`, `Gwynplaine`->`GUINPLAIN`), net-negative across 2,683 rows (592 worse,
-230 better) — a real degradation in the trained model on this stack, not an eval-harness or
-generation-config artifact (`generation_config.json` is byte-identical to the base model's). State it
-plainly: this **regresses on the VM stack; is not reproduced on transformers 5.5 or 5.19 with torch 2.11
-(1.69% both); and is under investigation** — never call it "a known issue on transformers >= 5.18", that
-hypothesis has been specifically ruled out. Do **not** present Whisper's fine-tune as a quality win here.
+ceiling** (`speech_p7`: 1.86% -> 1.80%). **whisper-large-v3 improves from 2.25% to 1.72%** — within 0.03
+points of the speech-plane owner's own reference run (1.69%) — once the recipe lesson below is applied.
+**gemma-4-E4B-it moves in the right direction** (repo's longer campaign, `speech_p7`: 4.07% -> 2.96% LoRA)
+but was not re-verified on sentence-cased targets: a separate, newly-encountered framework refusal
+(`speech_tower_resolution_refusal` misfiring on the LoRA-wrapped model) blocked every rerun attempt,
+independent of the manifest — see chapter 03 for the full story. Its 4.04% -> 3.78% number here is carried
+over from the earlier raw-case-target run and is not on the same footing as Whisper's or Parakeet's
+post-fix numbers.
+
+**The Whisper story, in full: this was never a software-stack bug.** Earlier rounds measured
+whisper-large-v3 REGRESSING (2.25% -> 3.32-3.58% depending on configuration) and ran diagnostics that ruled
+out GPU count, `_attn_implementation`, training divergence, save/load drift, and a generation-config defect
+— all clean, none explained it. The speech-plane owner then found the real cause: this tutorial's manifest
+builder wrote training targets in LibriSpeech's RAW UPPER CASE (`"SWEETWATER SOMEONE DREW..."`), which
+pushes Whisper onto upper-case BPE pieces it rarely uses and fragments words it already transcribes
+correctly zero-shot (`"Sweetwater"` -> `"SWEET WATER"`). Switching the training target to SENTENCE CASE
+(`"Sweetwater someone drew..."` — the same transform this repo's own `speech_p3`/`speech_p6` campaigns
+have always used) and re-running the owner's exact recipe (1 GPU, per-device batch 8, 500 steps, lr 1e-5,
+seed 0) reproduced the owner's own training-loss trajectory almost exactly (step 10/250/500: this VM
+0.3314/0.04538/0.04485 vs owner's reference 0.3434/0.0424/0.0450) and landed WER at 1.72% — confirming the
+target-case hypothesis, not a stack difference. **Never describe this as "a known issue on transformers >=
+5.18"** — that hypothesis was specifically tested and ruled out before the real cause was found. The lesson:
+always check the exact training-target TEXT FORMAT a reference recipe uses before assuming a stack or
+version difference when a fine-tune underperforms.
 
 > [!WARNING]
 > An earlier revision of this chapter listed a fourth model, qwen2-audio-7b. Those results are **RETRACTED**:

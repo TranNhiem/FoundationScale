@@ -3,7 +3,7 @@
 Verification run for `examples/speech-2xH200/`, the hands-on speech/ASR tutorial (mirrors
 `examples/vlm-2xH200/`). Not a new research campaign: reuses the recipe and traps already measured by
 `speech_p0` through `speech_p8`, `speech_ddp`, `speech_canary`, `speech_repro` and `speech_q3asr`, and
-re-verifies the speech-plane owner's recipe end to end on a fresh 2x H200 VM. Three measurement rounds:
+re-verifies the speech-plane owner's recipe end to end on a fresh 2x H200 VM. Four measurement rounds:
 
 - **Round 1** (2026-10-10, FoundationScale `9dd37b0`): a 100-step / 4,078-row quick-start slice on all
   four models, before the owner's fixes below landed.
@@ -16,8 +16,15 @@ re-verifies the speech-plane owner's recipe end to end on a fresh 2x H200 VM. Th
 - **Round 3** (2026-10-11, same stack as Round 2): a targeted Whisper diagnostic requested after the
   speech-plane owner reproduced 2.25% -> 1.69% on transformers 5.5 and 5.19 with torch 2.11 -- GPU count,
   `_attn_implementation`, and a step-by-step loss comparison against the owner's reference run (see
-  "Whisper's regression" below). All WER numbers below are Round 2 unless stated otherwise; Round 3 is
-  labelled explicitly where it applies.
+  "Whisper's regression" below).
+- **Round 4** (2026-10-11, same stack): root cause found with the owner -- the training manifest's
+  `answer` field was LibriSpeech's raw upper case, not sentence-cased like the owner's own
+  `speech_p3`/`speech_p6` manifests. Fixed in `scripts/prepare_librispeech.py`, train manifest rebuilt,
+  Whisper re-run on the owner's exact recipe: **2.25% -> 1.72%**, matching the owner's 1.69%. See "Round 4"
+  below for the full before/after and the separate Gemma-4 issue this round also surfaced.
+
+All WER numbers below are Round 2 unless stated otherwise; Round 3/4 are labelled explicitly where they
+apply. Round 4 numbers SUPERSEDE Round 1-3's Whisper numbers.
 
 ## STEP 1 diagnostics (run before any 500-step commitment, as requested)
 
@@ -111,20 +118,24 @@ pointing at that evidence file; not part of the measured table below.
 | Model | Kind | Fine-tune | Exit | Peak GB/GPU | s/step | Base WER | Tuned WER | 95% CI (pts) |
 |---|---|---|---|---|---|---|---|---|
 | parakeet-ctc-1.1b | ctc | full FT (stock config, no manual edit) | 0 | 14.3 | 0.44 | 1.87% | **1.77%** | [-0.14,-0.05] significantly better |
-| whisper-large-v3 | seq2seq | full FT | 0 | 27.6 | 0.41 | 2.25% | 3.34% | [+0.89,+1.28] significantly **worse** (under investigation, see below) |
+| whisper-large-v3 | seq2seq | full FT, raw-case targets (SUPERSEDED, see Round 4) | 0 | 27.6 | 0.41 | 2.25% | 3.34% | [+0.89,+1.28] significantly worse -- target-format artifact, not a stack bug |
 | gemma-4-E4B-it | audio_llm | LoRA r16/a32 (LM) + audio tower/projector full | 0 | 89.8 | 0.97 | 4.04% | **3.78%** | [-0.51,+0.02] favourable, borderline (P(diff<0)=0.966) |
 | qwen2-audio-7b-instruct | audio_llm | -- | **96 (REFUSE, by design)** | -- | -- | -- | -- | not applicable -- see fix #2 above |
 
 Parakeet essentially matches the owner's stated ceiling (1.86%->1.80% "at best"; we measured
 1.87%->1.77%, a hair better). Gemma-4-E4B-it moves in the owner's stated direction (4.07%->2.96% LoRA)
-but stops short of it at 500 steps on this VM (4.04%->3.78%); the gap may be scheduler, data-order or
-transformers-version related and was not chased further given the time budget. Qwen2-Audio is a clean
-REFUSE, not a measurement -- see fix #2.
+but stops short of it at 500 steps on this VM (4.04%->3.78%); not re-verified on sentence-cased targets
+(see Round 4 -- a separate framework refusal blocked the rerun). Qwen2-Audio is a clean REFUSE, not a
+measurement -- see fix #2. **Whisper's Round 2 number is SUPERSEDED by Round 4 below: it was a
+target-format artifact, not a stack bug.**
 
-### Whisper's regression: NOT a transformers-version issue -- localised to this VM's stack, root cause open
+### Whisper's regression (Round 1-3): NOT a transformers-version issue -- resolved in Round 4 below
 
-Whisper-large-v3 fine-tuning makes WER measurably WORSE on this VM's stack
-(`transformers==5.18.0`/`torch==2.13.0+cu132`/`peft==0.21.2`) in every configuration tried:
+Whisper-large-v3 fine-tuning made WER measurably WORSE on this VM's stack
+(`transformers==5.18.0`/`torch==2.13.0+cu132`/`peft==0.21.2`) in every configuration tried through Round 3.
+**This section is kept as the record of how the cause was found; the root cause and fix are in "Round 4"
+below -- it was a training-target text-format bug in this tutorial's own manifest builder, not a
+transformers/torch/peft stack issue.**
 
 | run | GPUs | steps | train rows | warmup | tuned WER | diff vs base (2.2543%) |
 |---|---|---|---|---|---|---|
@@ -189,14 +200,91 @@ less-reinforced signal (correct spelling/recognition of specific rare proper nou
 re-learns it. This is a real effect on this stack, not an eval-harness defect, not a save/load defect, and
 not a GPU-count effect.
 
-**Required wording (verified, use exactly this framing in all docs):** Whisper-large-v3 **regresses on the
-VM stack** (transformers 5.18 / torch 2.13 / peft 0.21.2); **not reproduced** on transformers 5.5 or 5.19
-with torch 2.11 (1.69% both); **under investigation**. Remaining suspects: torch 2.13 and/or peft 0.21.2
-(not yet isolated from each other). Do not present Whisper's fine-tune as a quality win on this VM.
+As of Round 3, the root cause was open: training loss matched the owner's reference, ruling out training
+divergence; GPU count, attention implementation, and generation-config drift were all ruled out too.
+Per the owner's decision rule (*loss matches + WER still worse => the saved checkpoint or its eval*), the
+checkpoint/eval was inspected directly (Round 3 point 4 above) and found a consistent pattern: the
+fine-tuned model correctly learned the LibriSpeech ALL-CAPS/no-punctuation target format but lost
+previously-correct zero-shot transcriptions of a recurring subset of proper nouns and uncommon words. This
+observation -- format transition working, vocabulary-specific regressions appearing -- was the clue the
+speech-plane owner used to find the real cause, below.
 
-**Gemma-4-E4B-it's own shortfall** (4.04% -> 3.78% here vs the owner's 4.07% -> 2.96%) is the same KIND of
-gap. GPU count has now been ruled out as a general explanation (it did not fix Whisper), so it is not
-assumed to explain Gemma's gap either -- Gemma's shortfall remains open and was not re-tested at 1 GPU.
+## Round 4: root cause found -- raw LibriSpeech upper case, not a stack bug; FIXED
+
+**The speech-plane owner identified the actual root cause**: their own LibriSpeech training manifest is
+built with sentence-cased targets --
+`answer = " ".join(text.split()).lower().capitalize()` -- the same transform as
+`validation_campaigns/speech_p3/build_librispeech_train.py` and
+`validation_campaigns/speech_p6/build_ami_train.py`. This tutorial's `prepare_librispeech.py` instead wrote
+LibriSpeech's RAW UPPER CASE transcripts as training targets (`"SWEETWATER SOMEONE DREW THAT WEAPON
+OUT"`). Raw upper-case targets push Whisper onto upper-case BPE pieces it rarely uses, which fragments
+words it already transcribes correctly zero-shot -- EXACTLY the proper-noun failure pattern Round 3 found
+(`"Sweetwater"` -> `"SWEET WATER"`, `"mountebank"` -> `"MOUNTAIN BANK"`).
+
+**Fix applied:** `scripts/prepare_librispeech.py`'s `_answer_text()` now applies
+`" ".join(text.split()).lower().capitalize()` to every training-manifest row, with a comment explaining the
+measured proper-noun breakage. The train manifest (`train_full.jsonl`, 28,539 rows) was rebuilt with this
+transform; the EVAL manifest (`eval.jsonl`) was deliberately left unchanged (LibriSpeech's raw upper-case
+reference text) because `eval_wer.py`'s scorer
+(`foundationscale.train.speech_metrics.normalize_transcript`) casefolds both the reference and the
+hypothesis before computing WER -- an upper-case reference scores identically to a sentence-cased one, so
+only the TRAINING target's case ever mattered.
+
+**Re-ran the owner's exact recipe** (1 GPU, per-device batch 8, 500 steps, lr 1e-5, seed 0,
+`FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE=en`) on the rebuilt, sentence-cased manifest:
+
+| step | this VM (sentence-cased) | owner's reference |
+|---|---|---|
+| 10 | 0.3314 | 0.3434 |
+| 250 | 0.04538 | 0.0424 |
+| 500 | 0.04485 | 0.0450 |
+
+Loss now matches the owner's reference closely at every checkpoint (compare Round 3's 0.2993/0.0617/0.0594
+on raw-case targets -- also close in magnitude, confirming loss alone could not distinguish the two target
+formats; WER could).
+
+**WER result**, full 2,683-row dev-clean, `eval_wer.py` + `paired_bootstrap.py` vs the unchanged base:
+
+```
+n=2683 fields=(errors,reference_length) base=0.0225 tuned=0.0172 diff=-0.0053 95%CI=[-0.0065,-0.0041] P(diff<0)=1.000
+```
+
+**2.25% -> 1.72%**, within 0.03 points of the owner's own 1.69% -- confirmed fix, significantly better
+(CI excludes zero, P(diff<0)=1.000). **This conclusively rules out the stack-specific hypothesis** (torch
+2.13 / peft 0.21.2): the SAME stack, SAME recipe, only the training-target TEXT FORMAT changed.
+
+**Required wording, superseding the Round 1-3 wording above:** Whisper-large-v3's apparent regression was
+a training-TARGET-FORMAT bug in this tutorial's own manifest builder (raw LibriSpeech upper case instead of
+sentence case), not a transformers/torch/peft stack issue. Fixed by sentence-casing training targets;
+2.25% -> 1.72%, matching the owner's 1.69%. **Never describe the ORIGINAL symptom as "a known issue on
+transformers >= 5.18" or "regresses on this VM's stack"** -- both were tested explicitly and are false; the
+cause was always the target text format, confirmed by reproducing the owner's own fine-tuned result once
+the format matched.
+
+**Gemma-4-E4B-it was NOT re-verified on the sentence-cased manifest.** Re-attempting its LoRA + full-towers
+recipe on this VM's current FoundationScale checkout hit a NEW, separately-reproducible refusal:
+
+```
+[fs:train:refuse]  family 'gemma4' declares audio tower(s) ['model.audio_tower', 'model.embed_audio']
+that do not resolve on the loaded model (its top-level modules: ['base_model']). The module layout differs
+from the one the FamilySpec was measured on -- usually a transformers version that nests the model
+differently. Re-measure the module paths for this transformers version and update FamilySpec.towers.
+Refusing (96) before training
+```
+
+This fires AFTER `peft.get_peft_model()` wraps the model for LoRA (confirmed: the preceding
+`[fs:train:adapter] lora attached to 258 module(s); 343638304/8284739136 parameters trainable` line prints
+successfully first), at which point the wrapped model's top-level module is `base_model`, so the family's
+otherwise-correct bare `model.audio_tower`/`model.embed_audio` paths no longer resolve.
+`speech_tower_resolution_refusal` (the same check that correctly catches Qwen2-Audio's genuine nesting
+mismatch, fix #2 above) appears to run against the POST-wrap model unconditionally, which would make it
+misfire for ANY LoRA + audio-tower family, not just the ones whose paths are genuinely wrong. Reproduced 3
+times (via `train_speech.sh`, and twice via direct `torchrun` invocation with a 5-step smoke run), on the
+unmodified `ced0c5c` checkout with cleared `__pycache__` -- deterministic, not a race condition. No CLI flag
+routes around it (declaring `--adapter-target` only affects LoRA target selection, which already succeeds;
+the failing check is the separate tower-resolution one). **This is reported upstream for the owner's
+attention rather than worked around.** Gemma-4-E4B-it's 4.04% -> 3.78% number in this file is carried over
+from the earlier raw-case-target run (Round 2) and has not been re-verified on sentence-cased targets.
 
 ## Troubleshooting note added per the owner
 
@@ -232,3 +320,10 @@ would. Re-verify timing-sensitive numbers if reproducing this campaign in isolat
 - Qwen2-Audio-7B-Instruct is not currently reproducible through FoundationScale's verified path on this
   VM's transformers release; do not re-attempt the Round 1 workarounds (`--adapter-target` enumeration,
   FSDP full fine-tune) -- they bypass a gap the framework now formally refuses for exactly this reason.
+- Gemma-4-E4B-it's number in the Round 2 table is from BEFORE the sentence-case fix and has not been
+  re-verified against it; a separate, newly-encountered `speech_tower_resolution_refusal` misfire (Round 4)
+  blocked every rerun attempt, independent of the manifest.
+- Parakeet-CTC was NOT re-run on the sentence-cased manifest: its vocabulary/decoding is case-INsensitive
+  (CTC outputs a fixed token vocabulary, not case-aware BPE pieces the way Whisper's tokenizer is), so the
+  Whisper-specific failure mode (upper-case BPE fragmentation) does not apply, and its Round 2 number
+  (1.87% -> 1.77%, stock config) stands unaffected.
