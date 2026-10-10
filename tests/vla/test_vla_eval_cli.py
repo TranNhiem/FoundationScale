@@ -192,3 +192,27 @@ def test_serve_cmd_starts_and_stops_the_server(monkeypatch: pytest.MonkeyPatch, 
         ]
     )
     assert rc == cli.EXIT_OK and seen["plan"].trials_per_task == 1
+
+
+def test_a_directory_out_is_refused_before_any_episode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def never(*_a: object, **_k: object) -> None:
+        raise AssertionError("an episode ran before --out was checked")
+
+    monkeypatch.setattr(cli, "run_libero", never)
+    rc = cli.main(
+        [
+            "--backend",
+            "gr00t",
+            "--model",
+            "m",
+            "--suite",
+            "libero_spatial",
+            "--out",
+            str(tmp_path),
+            "--port",
+            "1",
+        ]
+    )
+    assert rc == cli.EXIT_REFUSE

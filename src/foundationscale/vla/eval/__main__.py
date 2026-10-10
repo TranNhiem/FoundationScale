@@ -111,6 +111,13 @@ def main(argv: list[str] | None = None) -> int:
     except EvalPlanError as exc:
         print(f"REFUSAL (exit 96): {exc}", file=sys.stderr)
         return EXIT_REFUSE
+    if args.out.is_dir():
+        # refused before any episode runs: a rollout is minutes to hours of simulator time
+        print(
+            f"REFUSAL (exit 96): --out {args.out} is a directory, not a report file",
+            file=sys.stderr,
+        )
+        return EXIT_REFUSE
     proc = None
     if args.serve_cmd:
         command = args.serve_cmd.format(model=args.model, port=port)
