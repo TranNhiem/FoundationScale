@@ -75,11 +75,11 @@ Seven git trees exist under the project folder besides `fs-repo`. Four had uncom
 | `rl/trainer.py::_resolve_objective` | E1 and E2 both | refusal arms | COMPATIBLE, graft lane arm |
 | `train/loop.py` axis handling (`_effective_topology`, dp/tp/pp/ep/cp, sharding, offload) | E1 (6D lane) | do not edit without ping | unchanged |
 | `AGENTS.md` | E2 | doctrine | lane-only, must reach GitHub |
-| `train/loop.py` video/conversation seam (`_fold_video_split` call site, `train_conversation_collator_or_refuse` `frames_for` wiring) | VLA lane (Mac, branch `vla`) | Phase −1: merge of `video-frames` + `vlm-competition`, then one frame decoder for both arms | claimed 2026-10-09 |
-| `rl/trainer.py::RLTrainConfig` (`rollout_source` + `video_*` fields) | VLA lane | merge union only, no behaviour change | claimed 2026-10-09 |
+| `train/loop.py` video/conversation seam (`_fold_video_split` call site, `train_conversation_collator_or_refuse` `frames_for` wiring) | VLA lane (Mac, branch `vla`) | Phase −1: merge of `video-frames` + `vlm-competition`, then one frame decoder for both arms | RELEASED 2026-10-10: main's native conversation video (video.frames_for_row) adopted; VLA lane no longer edits this seam |
+| `rl/trainer.py::RLTrainConfig` (`rollout_source` + `video_*` fields) | VLA lane | merge union only, no behaviour change | RELEASED 2026-10-10: main's version adopted |
 | `families/registry.py::KNOWN_MODALITIES` + new Qwen3-VL family entry, `models/adapters.py` VLA dialect rows | VLA lane | Phase −1 extension-points commit (one commit) | claimed 2026-10-09 |
 | `provenance/manifest.py` (`weights_license`, `weight_set` fields) | VLA lane | Phase 1, additive fields only | claimed 2026-10-09, not started |
-| `README.md`, `docs/ARCHITECTURE.md`, `docs/review/D*.md` countables | VLA lane | restatement via the census only | claimed 2026-10-09 |
+| `README.md`, `docs/ARCHITECTURE.md`, `docs/review/D*.md` countables | VLA lane | restatement via the census only | claimed 2026-10-09 (census restatement only) |
 
 ## 7. Open decision for the operator
 
