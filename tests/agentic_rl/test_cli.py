@@ -784,3 +784,49 @@ def test_hf_chat_tokenizer_refuses_unreadable_shapes() -> None:
         _HFChatTokenizer(_BatchEncodingTokenizer([[1], [2]])).render(
             [], tools=None, add_generation_prompt=True
         )
+
+
+class _CollapsingRLTrainer(_FakeRLTrainer):
+    def run(self) -> list[_StepReport]:
+        from foundationscale.agentic_rl.stability import CollapseDetected
+
+        raise CollapseDetected("reward EMA fell to 0.10 of its peak")
+
+
+def test_real_run_collapse_stop_exits_red_with_a_named_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A guard stop surfaces as EXIT_RED with the [fs:agentic-rl:collapse] marker."""
+    monkeypatch.setattr("foundationscale.agentic_rl.cli.RLTrainer", _CollapsingRLTrainer)
+    code = main(["--config", _real_run_config_path(tmp_path)])
+    assert code == EXIT_RED
+    assert "[fs:agentic-rl:collapse]" in capsys.readouterr().err
+
+
+def test_stability_guard_is_built_from_the_declared_section(tmp_path: Path) -> None:
+    """A declared stability section yields a guard with exactly those thresholds."""
+    from foundationscale.agentic_rl.cli import _stability_guard
+    from foundationscale.agentic_rl.config import build_config
+
+    raw = _raw_config(_write_tasks(tmp_path))
+    assert _stability_guard(build_config(raw, {})) is None
+    raw["stability"] = {"best_k": 3, "drop_from_peak": 0.4, "action": "stop"}
+    guard = _stability_guard(build_config(raw, {}))
+    assert guard is not None
+    assert (guard.config.best_k, guard.config.drop_from_peak, guard.config.action) == (
+        3,
+        0.4,
+        "stop",
+    )
+
+
+def test_stability_best_k_with_keep_last_one_is_refused(tmp_path: Path) -> None:
+    """best_k needs keep_last >= 2: the checkpoint behind a best rollout is one step older."""
+    from foundationscale.agentic_rl.cli import _stability_guard
+    from foundationscale.agentic_rl.config import AgenticConfigRefusal, build_config
+
+    raw = _raw_config(_write_tasks(tmp_path))
+    raw["policy"] = {**raw["policy"], "keep_last": 1}
+    raw["stability"] = {"best_k": 2}
+    with pytest.raises(AgenticConfigRefusal, match="keep_last"):
+        _stability_guard(build_config(raw, {}))

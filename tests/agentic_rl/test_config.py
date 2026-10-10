@@ -569,3 +569,32 @@ def test_engine_request_timeout_defaults_long_and_is_provenance_tracked() -> Non
     cfg2 = build_config(raw, {})
     assert cfg2.engine.request_timeout_s == 1800.0
     assert cfg2.provenance["engine.request_timeout_s"] == "config"
+
+
+def test_retention_keys_default_and_resolve() -> None:
+    """policy.keep_last defaults to 2 and archive_every to None; both are declared keys."""
+    config = build_config(_raw_config(), {})
+    assert (config.policy.keep_last, config.policy.archive_every) == (2, None)
+    raw = _raw_config()
+    raw["policy"] = {**raw["policy"], "keep_last": 3, "archive_every": 10}
+    config = build_config(raw, {})
+    assert (config.policy.keep_last, config.policy.archive_every) == (3, 10)
+
+
+def test_stability_section_is_optional_and_resolved_with_defaults() -> None:
+    """Absent -> None (no guard); present -> every key resolved, defaults filled, in as_json."""
+    assert build_config(_raw_config(), {}).stability is None
+    raw = _raw_config()
+    raw["stability"] = {"best_k": 2, "min_steps": 4}
+    stab = build_config(raw, {}).stability
+    assert stab is not None
+    assert (stab.best_k, stab.min_steps, stab.ema_alpha, stab.action) == (2, 4, 0.3, "warn")
+    assert build_config(raw, {}).as_json()["stability"]["best_k"] == 2
+
+
+def test_stability_section_refuses_unknown_keys() -> None:
+    """A typo in the stability section is refused, never silently ignored."""
+    raw = _raw_config()
+    raw["stability"] = {"best_kk": 2}
+    with pytest.raises(AgenticConfigRefusal):
+        build_config(raw, {})

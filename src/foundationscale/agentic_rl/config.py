@@ -265,6 +265,11 @@ class PolicyConfig:
     # opt-out (e.g. model_path is already text-only, so there is nothing to
     # complete) recorded in provenance like every other key.
     servable_publish: bool = True
+    # Published-checkpoint retention (weight_sync.DiskWeightSync): the keep_last newest
+    # step dirs, plus every archive_every-th step when set, plus any step the stability
+    # guard protects as one of its best_k.
+    keep_last: int = 2
+    archive_every: int | None = None
 
 
 @dataclass(frozen=True)
@@ -370,6 +375,17 @@ class RewardConfig:
 
 
 @dataclass(frozen=True)
+class StabilityConfig:
+    """Optional collapse guard (``foundationscale.agentic_rl.stability.GuardConfig``)."""
+
+    ema_alpha: float = 0.3
+    drop_from_peak: float = 0.5
+    min_steps: int = 10
+    best_k: int = 0
+    action: str = "warn"
+
+
+@dataclass(frozen=True)
 class AgenticRLConfig:
     """The fully resolved, provenance-tracked configuration for one run.
 
@@ -393,6 +409,8 @@ class AgenticRLConfig:
     reward: RewardConfig
     publish_root: str
     provenance: Mapping[str, Provenance]
+    # None = the section was absent: no guard runs and nothing changes for old configs.
+    stability: StabilityConfig | None = None
 
     def as_json(self) -> dict[str, Any]:
         """The resolved config as a plain JSON-able dict, with ``provenance``
@@ -415,6 +433,7 @@ class AgenticRLConfig:
             "rollout": _section(self.rollout),
             "reward": _section(self.reward),
             "publish_root": self.publish_root,
+            "stability": None if self.stability is None else _section(self.stability),
             "provenance": dict(self.provenance),
         }
 
@@ -457,7 +476,9 @@ def _build_policy(
     section = _strip_doc(raw, dotted_prefix="policy")
     local_overrides = _section_overrides(overrides, section="policy")
     _refuse_unknown_keys(
-        section, frozenset({"model_path", "algorithm", "servable_publish"}), section="policy"
+        section,
+        frozenset({"model_path", "algorithm", "servable_publish", "keep_last", "archive_every"}),
+        section="policy",
     )
     model_path = _resolve_scalar(
         dotted_key="policy.model_path",
@@ -489,8 +510,32 @@ def _build_policy(
         required=False,
         provenance=provenance,
     )
+    keep_last = _resolve_scalar(
+        dotted_key="policy.keep_last",
+        field_name="keep_last",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=int,
+        default=2,
+        required=False,
+        provenance=provenance,
+    )
+    archive_every = _resolve_scalar(
+        dotted_key="policy.archive_every",
+        field_name="archive_every",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=int,
+        default=None,
+        required=False,
+        provenance=provenance,
+    )
     return PolicyConfig(
-        model_path=model_path, algorithm=algorithm, servable_publish=servable_publish
+        model_path=model_path,
+        algorithm=algorithm,
+        servable_publish=servable_publish,
+        keep_last=keep_last,
+        archive_every=archive_every,
     )
 
 
@@ -1101,6 +1146,35 @@ def _build_reward(
     return RewardConfig(kind="music", abc2midi_bin=abc2midi_bin, timeout_s=timeout_s)
 
 
+def _build_stability(
+    raw: Mapping[str, Any], overrides: dict[str, str], provenance: dict[str, Provenance]
+) -> StabilityConfig:
+    section = _strip_doc(raw, dotted_prefix="stability")
+    local_overrides = _section_overrides(overrides, section="stability")
+    types: dict[str, tuple[type, Any]] = {
+        "ema_alpha": (float, 0.3),
+        "drop_from_peak": (float, 0.5),
+        "min_steps": (int, 10),
+        "best_k": (int, 0),
+        "action": (str, "warn"),
+    }
+    _refuse_unknown_keys(section, frozenset(types), section="stability")
+    values = {
+        name: _resolve_scalar(
+            dotted_key=f"stability.{name}",
+            field_name=name,
+            section_raw=section,
+            overrides=local_overrides,
+            py_type=py_type,
+            default=default,
+            required=False,
+            provenance=provenance,
+        )
+        for name, (py_type, default) in types.items()
+    }
+    return StabilityConfig(**values)
+
+
 _SECTION_NAMES = (
     "policy",
     "trainer",
@@ -1119,7 +1193,7 @@ def build_config(raw_config: Mapping[str, Any], overrides: Mapping[str, str]) ->
     mapping plus parsed ``--set`` overrides (see :func:`parse_set_overrides`).
     """
     top = _strip_doc(raw_config, dotted_prefix="<config root>")
-    allowed_top = frozenset({*_SECTION_NAMES, "publish_root"})
+    allowed_top = frozenset({*_SECTION_NAMES, "publish_root", "stability"})
     unknown_top = sorted(set(top) - allowed_top)
     if unknown_top:
         raise AgenticConfigRefusal(f"unknown key(s): {', '.join(unknown_top)}")
@@ -1149,6 +1223,11 @@ def build_config(raw_config: Mapping[str, Any], overrides: Mapping[str, str]) ->
         required=True,
         provenance=provenance,
     )
+    stability = (
+        _build_stability(top["stability"], dict(overrides), provenance)
+        if "stability" in top
+        else None
+    )
     _refuse_unconsumed_overrides(overrides, provenance)
     return AgenticRLConfig(
         policy=sections["policy"],
@@ -1162,6 +1241,7 @@ def build_config(raw_config: Mapping[str, Any], overrides: Mapping[str, str]) ->
         reward=sections["reward"],
         publish_root=publish_root,
         provenance=provenance,
+        stability=stability,
     )
 
 

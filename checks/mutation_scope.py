@@ -82,6 +82,11 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/agentic_rl/stability.py": (
+        "rollout-reward collapse guard (EMA, peak, best-k, stop/warn): line-covered by "
+        "tests/agentic_rl/test_stability.py incl. the measured 100-step collapse shape, but no "
+        "mutation row yet proves a flipped alarm comparison would be caught."
+    ),
     "src/foundationscale/agentic_rl/gateway/server.py": (
         "gateway request routing, control plane and HTTP front end: line-covered by "
         "tests/agentic_rl/test_gateway_server.py (fakes + one real-socket smoke), but no mutation "
