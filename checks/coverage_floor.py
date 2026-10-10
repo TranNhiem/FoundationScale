@@ -321,7 +321,30 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/train/speech_adjudication.py": 97,  # measured 98.1%; 1 pt CI slack
     "src/foundationscale/train/speech_kinds.py": 94,  # measured 95.9%; 1 pt CI slack
     "src/foundationscale/train/speech_metrics.py": 98,  # measured 99.2%; 1 pt CI slack
+    "src/foundationscale/upstream/__init__.py": 99,  # measured 100%; 1 pt CI slack
+    "src/foundationscale/upstream/contracts.py": 93,  # measured 94%; 1 pt CI slack
+    "src/foundationscale/upstream/levels.py": 97,  # measured 98%; 1 pt CI slack
+    "src/foundationscale/upstream/models.py": 99,  # measured 100%; 1 pt CI slack
+    "src/foundationscale/upstream/profiles.py": 99,  # measured 100%; 1 pt CI slack
+    "src/foundationscale/upstream/tracker.py": 87,  # measured 88%; 1 pt CI slack
+    # NeMo worker: main() bodies need NeMo and run on the GPU trays (Phase 1.2a, verified
+    # 2026-10-10 against recorded results); CI measures the pure census/config/verdict parts.
+    "src/foundationscale/upstream/nemo/__init__.py": 99,  # measured 100% (docstring only)
+    "src/foundationscale/upstream/nemo/adjudicate.py": 58,  # measured 59%
+    "src/foundationscale/upstream/nemo/census.py": 90,  # measured 91%
+    "src/foundationscale/upstream/nemo/decode.py": 32,  # measured 33%
+    "src/foundationscale/upstream/nemo/finetune.py": 44,  # measured 45%
+    "src/foundationscale/upstream/nemo/salm_adjudicate.py": 60,  # measured 61%
+    "src/foundationscale/upstream/nemo/salm_decode.py": 36,  # measured 37%
+    "src/foundationscale/upstream/nemo/salm_finetune.py": 34,  # measured 35%
+    "src/foundationscale/upstream/ledger.py": 99,  # measured 100%; 1 pt CI slack
     "src/foundationscale/video.py": 97,  # measured 98.1%; 1 pt CI slack (decoders via fakes)
+    "src/foundationscale/vla/__init__.py": 100,  # re-exports only; measured 100.0%
+    "src/foundationscale/vla/adapters/__init__.py": 100,  # docstring only; measured 100.0%
+    "src/foundationscale/vla/adapters/gr00t/__init__.py": 100,  # re-exports only; measured 100.0%
+    "src/foundationscale/vla/adapters/gr00t/contract.py": 98,  # measured 99.5%; 1 pt CI slack
+    "src/foundationscale/vla/frames.py": 99,  # measured 100.0% (decoder via fake av); 1 pt slack
+    "src/foundationscale/vla/sample.py": 99,  # measured 100.0%; 1 pt CI slack
     "src/foundationscale/verify/__init__.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/verify/parity.py": 99,  # set by --update; measured 99.1%
     "tools/__init__.py": 100,  # set by --update; measured 100.0%

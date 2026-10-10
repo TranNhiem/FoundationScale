@@ -81,6 +81,9 @@ _KNOWN_GATELESS_PACKAGES: frozenset[str] = frozenset(
     {
         "foundationscale.checkpoint",  # torch-backed readers; gates import it lazily
         "foundationscale.provenance",  # run-manifest types; declares no gates
+        # The upstream boundary: owned contracts (manifest/run-config validation) and the
+        # copy/workaround ledger. Plain data and checks; defines no Gate subclass.
+        "foundationscale.upstream",
         # The training entry CONSUMES the registry (FoundationScaleSaveGate wires
         # REGISTRY into Trainer's on_save); it defines no Gate subclass and calls
         # no register. Verified by AST over the package, not by reading: zero
@@ -108,6 +111,14 @@ _KNOWN_GATELESS_PACKAGES: frozenset[str] = frozenset(
         # is deliberately not plumbed into it. AST-verified over the package:
         # zero ClassDef inherits Gate, zero call site is register/add_gate.
         "foundationscale.models",
+        # The VLA data plane (LeRobot reader, modality config, norm stats): data
+        # types and refusals that RAISE named errors; it defines no Gate subclass
+        # and calls no register/add_gate. The VLA gates the plan names (norm
+        # stats, embodiment contract, chunk horizon) will register from
+        # foundationscale.gates like every other gate, and this entry is revisited
+        # when they land. AST-verified over the package: zero ClassDef inherits
+        # Gate, zero call site is register/add_gate.
+        "foundationscale.vla",
         # The stage-1 RL contracts BUILD a gate context and register nothing:
         # `build_objective_gate_context` assembles the real
         # ObjectiveGateContext the objective gates already read, so the package

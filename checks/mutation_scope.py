@@ -82,6 +82,39 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/vla/adapters/gr00t/contract.py": (
+        "GR00T checkpoint contract reader (processor_config.json -> embodiment contract, "
+        "ChunkSpec, observation dict): line-covered by tests/vla and bit-exact against GR00T's "
+        "loader on a real checkpoint, but no mutation row yet."
+    ),
+    "src/foundationscale/vla/chunking.py": (
+        "GR00T delta_indices temporal contract and anchor ranges per declared pad mode: "
+        "line-covered by tests/vla, but no mutation row yet proves a shifted range would be "
+        "caught."
+    ),
+    "src/foundationscale/vla/frames.py": (
+        "frame decode at exact indices with count/range refusals and a read-only episode "
+        "cache: line-covered through an injected decoder, real AV1 decode measured on GB200, "
+        "but no mutation row yet."
+    ),
+    "src/foundationscale/vla/sample.py": (
+        "VLA training sample assembly and the Normalizer (mean_std/q01_q99/min_max): "
+        "line-covered by tests/vla and round-trip-checked on LIBERO, but no mutation row yet "
+        "proves a flipped normalisation would be caught."
+    ),
+    "src/foundationscale/vla/lerobot.py": (
+        "LeRobot v2 episode reader and its format refusals: line-covered by tests/vla and "
+        "bit-matched against GR00T on LIBERO, but no mutation row yet proves a dropped refusal "
+        "would be caught."
+    ),
+    "src/foundationscale/vla/modality.py": (
+        "GR00T-style modality config and its coverage/overlap refusals: line-covered by "
+        "tests/vla, but no mutation row yet proves a dropped refusal would be caught."
+    ),
+    "src/foundationscale/vla/norm.py": (
+        "per-dimension norm stats (GR00T semantics), JSON round-trip and digest: line-covered "
+        "by tests/vla, but no mutation row yet proves a shifted statistic would be caught."
+    ),
     "src/foundationscale/agentic_rl/cli.py": (
         "agentic RL console front end (dry-run, real-run wiring, exit taxonomy): line-covered "
         "by tests/agentic_rl, but no mutation row yet proves a flipped exit mapping would be "
@@ -316,6 +349,49 @@ PENDING_ENROLMENT: dict[str, str] = {
     "src/foundationscale/train/speech_kinds.py": (
         "speech model-kind dispatch (audio_llm / seq2seq / ctc): the loader class per kind, "
         "per-kind processor refusals, Whisper prompt-prefix verification and CTC blank padding"
+    ),
+    "src/foundationscale/upstream/nemo/adjudicate.py": (
+        "NeMo worker: FS verdicts on a NeMo checkpoint (coverage, tower movement, frozen identity)"
+    ),
+    "src/foundationscale/upstream/nemo/census.py": (
+        "NeMo worker: strict audio census with counted refusal reasons before NeMo sees a row"
+    ),
+    "src/foundationscale/upstream/nemo/decode.py": (
+        "NeMo worker: transcribe a manifest and write the owned eval JSON"
+    ),
+    "src/foundationscale/upstream/nemo/finetune.py": (
+        "NeMo worker: train_ds/optimizer translation and the NeMo-owned fine-tune loop"
+    ),
+    "src/foundationscale/upstream/nemo/salm_adjudicate.py": (
+        "NeMo worker: FS verdicts on a SALM checkpoint (movement, frozen-LLM identity, key sets)"
+    ),
+    "src/foundationscale/upstream/nemo/salm_decode.py": (
+        "NeMo worker: SALM chat-prompt transcription to the owned eval JSON"
+    ),
+    "src/foundationscale/upstream/nemo/salm_finetune.py": (
+        "NeMo worker: SALM data/optimizer config and the NeMo-owned fine-tune loop"
+    ),
+    "src/foundationscale/upstream/levels.py": (
+        "Level 3 regression plan from the registry and the per-model reproduction verdict"
+    ),
+    "src/foundationscale/upstream/tracker.py": (
+        "read-only upstream release/model tracker: PyPI version comparison, server-side model "
+        "filtering, degrade-not-die digest"
+    ),
+    "src/foundationscale/upstream/models.py": (
+        "the speech model registry and its consistency checks (families exist, scopes, no "
+        "supported entry without a reproduced reference)"
+    ),
+    "src/foundationscale/upstream/profiles.py": (
+        "upstream profiles: pinned backend versions, installed-version measurement and mismatches"
+    ),
+    "src/foundationscale/upstream/contracts.py": (
+        "owned speech contracts: manifest row validation with counted problem codes, "
+        "duplicate id/audio detection, the NeMo AED row translation and the strict run config"
+    ),
+    "src/foundationscale/upstream/ledger.py": (
+        "the copy/workaround/private-API ledger and its check that every entry's file and "
+        "anchor still exist in the tree"
     ),
     "src/foundationscale/train/speech_metrics.py": (
         "transcript normalisation and Levenshtein word/character error counting with the "
