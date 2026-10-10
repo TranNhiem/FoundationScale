@@ -1,0 +1,179 @@
+[
+  {
+    "id": "fskills-confirm-before-launch-positive-001",
+    "question": "The user read back 3f2c… for spec launch/fs_launch_spec.q27.json. Seal the confirmation.",
+    "expected_skill": "fskills-confirm-before-launch",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the confirm-before-launch skill and recomputes the plan hash (fskills hash --spec, the same token fskills launch --confirm requires) over the spec payload; matching the one the user read back, it seals a confirmation_record with confirmed_by=user and auto_filled=false and submits nothing.",
+    "expected_behavior": [
+      "The agent read confirm_before_launch/SKILL.md before acting",
+      "The agent recomputed the plan hash from the fs_launch_spec payload and matched it against the hash the user read back",
+      "The agent wrote a confirmation_record with confirmed_by=user and auto_filled=false (confirmed_hash verbatim from the user)",
+      "The agent never printed or filled the expected hash for the caller to copy"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-positive-002",
+    "question": "Just go ahead and launch fs_launch_spec.q27.json — you can fill in whatever hash is needed.",
+    "expected_skill": "fskills-confirm-before-launch",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the confirm-before-launch skill and refuses with CB-IN-001 (launch without re-showing the hash): REFUSED (96), no confirmation_record, and the expected hash is never auto-filled or echoed; the hash must come from the user.",
+    "expected_behavior": [
+      "The agent read confirm_before_launch/SKILL.md before acting",
+      "The agent refused with CB-IN-001 and stated the outcome is REFUSED (96) with no confirmation_record written",
+      "The agent never auto-filled or echoed the expected hash for the caller to copy",
+      "The agent pointed at `fskills hash --spec <launch_spec>` and repeating the confirmation with the user"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-positive-003",
+    "question": "The hash I have does not match the spec any more; which rule is firing?",
+    "expected_skill": "fskills-confirm-before-launch",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the confirm-before-launch skill and identifies CB-IN-002 (the supplied hash does not match the recomputed plan hash): REFUSED (96) with no record; when the spec instead drifted between the input recompute and the record seal, CB-HO-001 is the rule firing.",
+    "expected_behavior": [
+      "The agent read confirm_before_launch/SKILL.md before acting",
+      "The agent cited CB-IN-002 (mismatch) and said the outcome is REFUSED 96 with no record",
+      "The agent noted CB-HO-001 fires when the spec changed on disk between the input recompute and the record seal",
+      "The agent directed the caller to obtain the hash again, echoing no expected hash"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-negative-001",
+    "question": "Build the training plan and the launch spec for this goal and dataset.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Goal -> training_plan -> fs_launch_spec is fskills-training's job; the confirm-before-launch skill only gates an already-emitted spec behind the user-confirmed plan hash.",
+    "expected_behavior": [
+      "The agent did not read or activate confirm_before_launch/SKILL.md for planning or spec emission",
+      "The agent routed the request to the fskills-training skill"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-negative-002",
+    "question": "Explain what exit code 95 on my eval_report means.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Eval report exit semantics belong to fskills-evaluation (95 UNMEASURED there); confirm-before-launch only emits 0 PASS / 96 REFUSED confirmation records and does not explain eval results.",
+    "expected_behavior": [
+      "The agent did not read or activate confirm_before_launch/SKILL.md for eval report semantics",
+      "The agent routed the request to the fskills-evaluation skill"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-positive-101",
+    "question": "The gate refused because the fs_launch_spec at launch/fs_launch_spec.q27.json is missing or unreadable. Which rule fired and what can I give it instead?",
+    "expected_skill": "fskills-confirm-before-launch",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the confirm-before-launch skill and identifies CB-IN-003 (the fs_launch_spec is missing, unreadable or not an fs_launch_spec, so there is nothing to hash): REFUSED (96) with no confirmation_record; the fix is a readable fs_launch_spec.",
+    "expected_behavior": [
+      "The agent read confirm_before_launch/SKILL.md before acting",
+      "The agent cited CB-IN-003 for a missing/unreadable/not-an-fs_launch_spec spec and stated REFUSED 96 with no record",
+      "The agent asked for the path of a readable fs_launch_spec and then to repeat the confirmation"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-positive-102",
+    "question": "We sealed the confirmation for the q27 spec and then someone re-emitted that spec. Is the confirmation still good?",
+    "expected_skill": "fskills-confirm-before-launch",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the confirm-before-launch skill and explains CB-HO-001: the sealed spec_sha256 (sha256_file of the spec) is re-verified at handoff, a re-emitted spec no longer matches and the record stands invalid until the user confirms the fresh hash.",
+    "expected_behavior": [
+      "The agent read confirm_before_launch/SKILL.md before acting",
+      "The agent cited CB-HO-001 and explained the sealed spec_sha256 is compared against sha256_file(spec) at handoff",
+      "The agent said the record no longer stands and the confirmation must be repeated (hash obtained from the user again) before fskills launch --confirm"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-negative-101",
+    "question": "Tell me which FoundationScale capabilities our GB200 cluster actually measured for this plan — FSDP with pipeline parallel 2 and checkpointing.",
+    "expected_skill": "fskills-probe-first",
+    "should_trigger": false,
+    "ground_truth": "Measuring capabilities against a plan draft is fskills-probe-first's job (probe_report); confirm-before-launch never probes capabilities and only hashes an existing fs_launch_spec.",
+    "expected_behavior": [
+      "The agent did not read or activate confirm_before_launch/SKILL.md for capability probing",
+      "The agent routed the request to the fskills-probe-first skill"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-positive-103",
+    "question": "Our pipeline re-emits the launch spec while the confirmation step is mid-run. If the payload changes underneath us before the record gets written, what happens and what do you do about it?",
+    "expected_skill": "fskills-confirm-before-launch",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the confirm-before-launch skill and explains CB-HO-001: a drift between the input recompute and the record seal means the second plan_hash differs, so the outcome is REFUSED 96 with no confirmation_record and the user must supply a fresh hash.",
+    "expected_behavior": [
+      "The agent read confirm_before_launch/SKILL.md before acting",
+      "The agent cited CB-HO-001 (drift between the input recompute and the record seal) and stated REFUSED 96 with no record written",
+      "The agent said a fresh hash must be obtained from the user and the confirmation repeated",
+      "The agent never echoed or filled the expected hash for the caller to copy"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-positive-104",
+    "question": "Write the confirmation record for launch/fs_launch_spec.q27.json into artifacts/confirmations/ and tag it with confirmation_id q27-round2 — the user just read back 9ab3c1d4e5f60718 for it.",
+    "expected_skill": "fskills-confirm-before-launch",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the confirm-before-launch skill, recomputes the plan hash over the spec payload, matches 9ab3c1d4e5f60718, and seals confirmation_record.json into artifacts/confirmations/ with confirmed_by=user, auto_filled=false, confirmation_id q27-round2 and spec_sha256 as a drift seal, submitting nothing.",
+    "expected_behavior": [
+      "The agent read confirm_before_launch/SKILL.md before acting",
+      "The agent recomputed the plan hash and matched the user-supplied 16-hex token, storing it verbatim as confirmed_hash",
+      "The agent wrote the confirmation_record atomically into the requested directory with confirmed_by=user, auto_filled=false, the confirmation_id in provenance and spec_sha256 as a separate drift seal",
+      "The agent neither submitted a job nor printed or filled the expected hash"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-negative-102",
+    "question": "Draft the agenda for tomorrow's onboarding session and put the invite on the shared calendar for the new hires.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Scheduling and agenda writing is ordinary assistant work with no fs_launch_spec or plan hash involved, so no FoundationSkills skill should be triggered.",
+    "expected_behavior": [
+      "The agent did not read or activate confirm_before_launch/SKILL.md",
+      "The agent did not activate any FoundationSkills skill"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-negative-103",
+    "question": "Turn this CSV of quarterly sales into a bar chart and drop it into the slide deck for my board update.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A chart for a board deck is an ordinary data-visualization request, not launch confirmation or any ML-training task, so no FoundationSkills skill should take it.",
+    "expected_behavior": [
+      "The agent did not read or activate confirm_before_launch/SKILL.md",
+      "The agent did not activate any FoundationSkills skill"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-negative-104",
+    "question": "Refactor the checkout view in our plain Django service to async and update its unit tests to match.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A routine code refactor in an unrelated web service is out of scope for every FoundationSkills skill, including confirm-before-launch.",
+    "expected_behavior": [
+      "The agent did not read or activate confirm_before_launch/SKILL.md",
+      "The agent did not activate any FoundationSkills skill"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-negative-105",
+    "question": "Take the raw JSONL dumps and the pdf corpus in docs/ and turn them into a cleaned training dataset with provenance for stage 2 SFT.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Raw sources to a cleaned training dataset with provenance is exactly fskills-data-engine's scope; confirm-before-launch only gates an already-emitted fs_launch_spec behind the user-confirmed plan hash.",
+    "expected_behavior": [
+      "The agent did not read or activate confirm_before_launch/SKILL.md for dataset building",
+      "The agent routed the request to the fskills-data-engine skill"
+    ]
+  },
+  {
+    "id": "fskills-confirm-before-launch-negative-106",
+    "question": "Here is our claim set from the readiness run — rewrite it so any claim without a resolvable evidence pointer is emitted as UNMEASURED and seal it with provenance.",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": false,
+    "ground_truth": "Rewriting a claim set so unmeasured claims become UNMEASURED and sealing it is fskills-measured-or-unmeasured's job; confirm-before-launch never rewrites claims and only confirms a launch spec behind the user-supplied hash.",
+    "expected_behavior": [
+      "The agent did not read or activate confirm_before_launch/SKILL.md for claim rewriting",
+      "The agent routed the request to the fskills-measured-or-unmeasured skill"
+    ]
+  }
+]

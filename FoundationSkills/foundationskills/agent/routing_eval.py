@@ -39,6 +39,7 @@ from __future__ import annotations
 import hashlib
 import importlib.resources
 import json
+import warnings
 import os
 import sys
 from collections import Counter
@@ -123,6 +124,7 @@ def _read_package(package: str) -> dict:
         "when_to_use": front["when_to_use"],
         "evals": _parse_evals(evals_bytes, package),
         "skill_md_sha256": hashlib.sha256(md_bytes).hexdigest(),
+        "skill_bundle_sha256": skill_bundle_sha256(root),
         "evals_sha256": hashlib.sha256(evals_bytes).hexdigest(),
     }
 
@@ -140,16 +142,47 @@ def _parse_frontmatter(text: str, package: str) -> dict[str, Any]:
         raise RoutingEvalRefused(f"load_index: {package}: SKILL.md frontmatter is not valid YAML ({exc})") from exc
     if not isinstance(data, dict):
         raise RoutingEvalRefused(f"load_index: {package}: SKILL.md frontmatter is not a YAML mapping")
+    metadata = data.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise RoutingEvalRefused(f"load_index: {package}: SKILL.md frontmatter metadata must map str keys to str values")
     name = data.get("name")
     description = data.get("description")
-    when = data.get("when_to_use")
+    legacy_when = data.get("when_to_use")
+    meta_when = metadata.get("when_to_use") if metadata is not None else None
+    no_rules = f"load_index: {package}: SKILL.md frontmatter has no when_to_use list of strings"
+    if meta_when is not None and legacy_when is not None:
+        raise RoutingEvalRefused(f"load_index: {package}: SKILL.md has both top-level and metadata when_to_use")
+    when: list
+    if meta_when is not None:
+        bad = f"load_index: {package}: metadata.when_to_use is not a JSON array of non-empty strings"
+        if not isinstance(meta_when, str):
+            raise RoutingEvalRefused(bad)
+        try:
+            parsed = json.loads(meta_when)
+        except json.JSONDecodeError as exc:
+            raise RoutingEvalRefused(f"{bad} ({exc})") from exc
+        if not isinstance(parsed, list) or not parsed or not all(isinstance(rule, str) and rule for rule in parsed):
+            raise RoutingEvalRefused(bad)
+        when = list(parsed)
+    elif legacy_when is not None:
+        warnings.warn(
+            f"{package}: top-level when_to_use is deprecated under the Agent Skills spec (agentskills.io); "
+            f"move it to metadata.when_to_use as a JSON array string (one release dual-read window)",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if not isinstance(legacy_when, list) or not all(isinstance(rule, str) for rule in legacy_when):
+            raise RoutingEvalRefused(no_rules)
+        when = list(legacy_when)
+    else:
+        raise RoutingEvalRefused(no_rules)
+    if metadata is not None and not all(isinstance(k, str) and isinstance(v, str) for k, v in metadata.items()):
+        raise RoutingEvalRefused(f"load_index: {package}: SKILL.md frontmatter metadata must map str keys to str values")
     if not isinstance(name, str) or not name.strip():
         raise RoutingEvalRefused(f"load_index: {package}: SKILL.md frontmatter has no name")
     if not isinstance(description, str):
         raise RoutingEvalRefused(f"load_index: {package}: SKILL.md frontmatter has no description")
-    if not isinstance(when, list) or not all(isinstance(rule, str) for rule in when):
-        raise RoutingEvalRefused(f"load_index: {package}: SKILL.md frontmatter has no when_to_use list of strings")
-    return {"name": name.strip(), "description": description, "when_to_use": list(when)}
+    return {"name": name.strip(), "description": description, "when_to_use": when}
 
 
 def _parse_evals(data: bytes, package: str) -> list[dict]:
@@ -587,11 +620,52 @@ def _atomic_write_text(path: Path, text: str) -> None:
 # --- small formatting and hashing helpers -------------------------------------------------
 
 
+BUNDLE_DIRS = ("references", "scripts", "assets")
+
+
+def skill_bundle_sha256(root) -> str:
+    """Return the sha256 binding a whole skill bundle of ``root`` (a skill package dir).
+
+    The bundle is SKILL.md plus, recursively, every regular file under the ``references``,
+    ``scripts`` and ``assets`` directories when they exist; ``__pycache__`` directories and ``.pyc``
+    files are skipped. A bundle whose only file is SKILL.md hashes as the sha256 of the SKILL.md
+    bytes alone -- the backward-compatibility rule for skills without bundle directories. Every other
+    bundle hashes the utf-8 concatenation of one line per file -- relative posix path, NUL, the
+    file's sha256 hex digest, newline -- sorted by relative path. Walks the Traversable/Path API
+    only (``iterdir``/``is_dir``/``is_file``/``read_bytes``), so it also works on installed packages.
+    """
+    files: dict[str, bytes] = {"SKILL.md": root.joinpath("SKILL.md").read_bytes()}
+    for name in BUNDLE_DIRS:
+        subdir = root.joinpath(name)
+        if subdir.is_dir():
+            _collect_bundle_files(subdir, name, files)
+    if len(files) == 1:
+        return hashlib.sha256(files["SKILL.md"]).hexdigest()
+    lines = "".join(
+        f"{relpath}\x00{hashlib.sha256(data).hexdigest()}\n" for relpath, data in sorted(files.items())
+    )
+    return hashlib.sha256(lines.encode("utf-8")).hexdigest()
+
+
+def _collect_bundle_files(node: Any, relpath: str, files: dict[str, bytes]) -> None:
+    """Collect every regular file under the ``node`` directory into ``files`` (recursive), keyed by
+    relative posix path; skip ``__pycache__`` directories and ``.pyc`` files."""
+    for child in node.iterdir():
+        if child.name == "__pycache__":
+            continue
+        child_relpath = f"{relpath}/{child.name}"
+        if child.is_dir():
+            _collect_bundle_files(child, child_relpath, files)
+        elif child.is_file() and not child.name.endswith(".pyc"):
+            files[child_relpath] = child.read_bytes()
+
+
 def _index_view(entry: dict) -> dict:
     return {
         "package": entry["package"],
         "name": entry["name"],
         "skill_md_sha256": entry["skill_md_sha256"],
+        "skill_bundle_sha256": entry["skill_bundle_sha256"],
         "evals_sha256": entry["evals_sha256"],
         "cases": len(entry["evals"]),
     }

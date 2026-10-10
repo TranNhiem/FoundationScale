@@ -90,16 +90,44 @@ FRONTMATTER = {p: _frontmatter(p) for p in PACKAGES}
 PACKAGE_NAMES = {m.get("name") for m in FRONTMATTER.values()}
 
 
+def _when_to_use(meta: dict) -> list:
+    """The Agent Skills spec phrases: metadata.when_to_use holds a JSON array string."""
+    return json.loads(meta["metadata"]["when_to_use"])
+
+
 @pytest.mark.parametrize("package", sorted(PACKAGES))
 def test_skill_md_frontmatter_routes_the_package(package):
     meta = FRONTMATTER[package]
-    missing = [k for k in ("name", "license", "description", "when_to_use") if not meta.get(k)]
+    missing = [k for k in ("name", "license", "description", "metadata") if not meta.get(k)]
     assert not missing, f"{package}/SKILL.md frontmatter lacks {missing}"
+    assert meta["metadata"].get("when_to_use"), f"{package}/SKILL.md frontmatter lacks metadata.when_to_use"
     assert SKILL_NAME.match(meta["name"]) and len(meta["name"]) <= 64, meta["name"]
     assert isinstance(meta["description"], str) and len(meta["description"]) <= 1024
     assert "Do NOT use" in meta["description"], "description must say what the skill is not for"
-    when = meta["when_to_use"]
+    when = _when_to_use(meta)
     assert isinstance(when, list) and len(when) >= 3 and all(isinstance(w, str) and w for w in when)
+
+
+# agentskills.io: only these top-level keys, bounded field sizes, str->str metadata with the house doctrine.
+ALLOWED_MATTER_KEYS = {"name", "description", "license", "compatibility", "metadata", "allowed-tools"}
+SPEC_NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+
+@pytest.mark.parametrize("package", sorted(PACKAGES))
+def test_skill_md_frontmatter_is_agent_skills_spec_compliant(package):
+    meta = FRONTMATTER[package]
+    forbidden = sorted(set(meta) - ALLOWED_MATTER_KEYS)
+    assert not forbidden, f"{package}/SKILL.md frontmatter has keys the Agent Skills spec forbids: {forbidden}"
+    assert isinstance(meta["name"], str) and SPEC_NAME.match(meta["name"]) and 1 <= len(meta["name"]) <= 64, meta["name"]
+    assert isinstance(meta["description"], str) and 1 <= len(meta["description"]) <= 1024
+    assert isinstance(meta.get("compatibility"), str) and len(meta["compatibility"]) <= 500, \
+        f"{package}/SKILL.md frontmatter lacks a bounded compatibility line"
+    md = meta.get("metadata")
+    assert isinstance(md, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in md.items()), \
+        f"{package}/SKILL.md metadata must map str keys to str values"
+    assert "version" in md
+    assert md.get("invocation") in ("user", "model")
+    assert md.get("fs_status_doctrine") == "PASS/RED/UNMEASURED/REFUSED (exit 0/5/95/96)"
 
 
 def test_frontmatter_names_are_unique():
@@ -162,15 +190,15 @@ def test_published_behaviour_reports_match_the_current_skill_md_and_evals():
     stale; re-run `fskills behaviour-eval run ... --write-behaviour` rather than keep a stale number."""
     from foundationskills.agent import routing_eval
 
-    current = {e["package"]: (e["skill_md_sha256"][:12], e["evals_sha256"][:12]) for e in routing_eval.load_index()}
+    current = {e["package"]: (e["skill_bundle_sha256"][:12], e["evals_sha256"][:12]) for e in routing_eval.load_index()}
     for package in PACKAGES:
         path = importlib.resources.files(package).joinpath("BEHAVIOUR.md")
         assert path.is_file(), f"{package} has no {path.name}; a missing report is a failure, not a skip"
         match = re.search(r"against SKILL\.md ([0-9a-f]{12}) and eval cases ([0-9a-f]{12})",
                           path.read_text(encoding="utf-8"))
         assert match, f"{package}/BEHAVIOUR.md is not a generated behaviour report"
-        assert (match.group(1), match.group(2)) == current[package], \
-            f"{package}/BEHAVIOUR.md measured another SKILL.md or eval set; re-run behaviour-eval"
+    assert (match.group(1), match.group(2)) == current[package], \
+        f"{package}/BEHAVIOUR.md measured another SKILL.md bundle (SKILL.md + references/scripts/assets) or eval set; re-run behaviour-eval"
 
 
 @pytest.mark.parametrize("package", sorted(PACKAGES))
@@ -197,5 +225,14 @@ def test_published_oracle_behaviour_reports_match_the_current_skill_md_and_cases
         match = re.search(r"against SKILL\.md ([0-9a-f]{12}) and oracle cases ([0-9a-f]{12})",
                           path.read_text(encoding="utf-8"))
         assert match, f"{package}/BEHAVIOUR_ORACLE.md is not a generated behaviour report"
-        assert (match.group(1), match.group(2)) == (entry["skill_md_sha256"][:12], cases_sha[:12]), \
-            f"{package}/BEHAVIOUR_ORACLE.md measured another SKILL.md or oracle case set; re-run behaviour-eval"
+    assert (match.group(1), match.group(2)) == (entry["skill_bundle_sha256"][:12], cases_sha[:12]), \
+        f"{package}/BEHAVIOUR_ORACLE.md measured another SKILL.md bundle (SKILL.md + references/scripts/assets) or oracle case set; re-run behaviour-eval"
+
+
+
+def test_exported_skill_tree_is_in_sync():
+    """The generated Agent Skills export tree must mirror the packages exactly."""
+    from foundationskills.agent import export_skills
+
+    problems = export_skills.check_tree(*export_skills._roots())
+    assert problems == [], "run `fskills export-skills` and commit the result: " + "; ".join(problems)

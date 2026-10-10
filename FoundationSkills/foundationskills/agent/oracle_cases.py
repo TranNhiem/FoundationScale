@@ -242,7 +242,7 @@ def question_messages(case: Mapping[str, Any], skill_description: str) -> list[d
 
 
 _PLAIN_PREFIXES = (("fake_plan.", "the planner's output: "), ("harness.", "the harness result: "),
-                   ("capabilities.", "my cluster's capabilities: "), ("tamper", "what happened to the report"),
+                   ("capabilities.", "my cluster's capabilities: "), ("tamper", "what happened on disk"),
                    ("files.", "staged file "), ("version", "installed lm_eval version"))
 
 

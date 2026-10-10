@@ -1,0 +1,517 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fskills-probe-first-oracle-PF-HO-001",
+      "skill": "probe_first",
+      "rule_id": "PF-HO-001",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "the vetted report cannot PASS (probe unavailable, probe errors, or a needed unmeasured axis)",
+      "fixture": {
+        "expected": "UNMEASURED 95 with PF-HO-001 (the vetted report cannot PASS)",
+        "plan": {
+          "checks": [
+            {
+              "backend": "fsdp",
+              "stage": "sft"
+            }
+          ]
+        },
+        "probe": {
+          "available": true,
+          "axes_measured": false,
+          "backends": [
+            "fsdp"
+          ],
+          "errors": [
+            "probe: deep axis measurement failed"
+          ],
+          "executed_axes": [],
+          "families": {},
+          "fs_version": "x",
+          "notes": [],
+          "pref_adapter_support": null,
+          "pref_runnable": {},
+          "pref_saves_checkpoint": null,
+          "refused_axes": [],
+          "rl_adapter_support": null,
+          "rl_algorithms": [],
+          "rl_reward_kinds": [],
+          "rl_runnable": {},
+          "rl_saves_checkpoint": null,
+          "sharding_strategies": [],
+          "train_entry": "foundationscale-train",
+          "train_flag_choices": {},
+          "train_flags": [],
+          "train_objectives": [
+            "sft"
+          ]
+        },
+        "request": {
+          "checks": [
+            {
+              "backend": "fsdp",
+              "stage": "sft"
+            }
+          ],
+          "out": "artifacts",
+          "plan_draft": "plan.json"
+        }
+      },
+      "fixture_sha256": "724e44e5077b76e076b664758f3b1c244ddd187b1a9bc99bf88345be0525d12a",
+      "expected_behavior": [
+        "Identifies the problem: the vetted report cannot PASS (probe unavailable, probe errors, or a needed unmeasured axis)",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule PF-HO-001"
+      ],
+      "ground_truth": "probe_first: rule PF-HO-001 (WARN, handoff phase) fires: the vetted report cannot PASS (probe unavailable, probe errors, or a needed unmeasured axis).",
+      "trigger_facts": [
+        {
+          "path": "plan.checks[0].backend",
+          "value": "fsdp"
+        },
+        {
+          "path": "plan.checks[0].stage",
+          "value": "sft"
+        },
+        {
+          "path": "probe.available",
+          "value": true
+        },
+        {
+          "path": "probe.axes_measured",
+          "value": false
+        },
+        {
+          "path": "probe.backends[0]",
+          "value": "fsdp"
+        },
+        {
+          "path": "probe.errors[0]",
+          "value": "probe: deep axis measurement failed"
+        },
+        {
+          "path": "probe.fs_version",
+          "value": "x"
+        },
+        {
+          "path": "probe.pref_adapter_support",
+          "value": null
+        },
+        {
+          "path": "probe.pref_saves_checkpoint",
+          "value": null
+        },
+        {
+          "path": "probe.rl_adapter_support",
+          "value": null
+        },
+        {
+          "path": "probe.rl_saves_checkpoint",
+          "value": null
+        },
+        {
+          "path": "probe.train_entry",
+          "value": "foundationscale-train"
+        },
+        {
+          "path": "probe.train_objectives[0]",
+          "value": "sft"
+        }
+      ],
+      "question": "I ran `fskills probe --deep --json` and then wrote my FoundationScale plan draft to plan.json with checks[0].backend = \"fsdp\" and checks[0].stage = \"sft\". The probe came back with probe.available = true, probe.axes_measured = false, probe.backends[0] = \"fsdp\", probe.errors[0] = \"probe: deep axis measurement failed\", and probe.fs_version = \"x\". It also shows probe.train_entry = \"foundationscale-train\", probe.train_objectives[0] = \"sft\", probe.pref_adapter_support = null, probe.pref_saves_checkpoint = null, probe.rl_adapter_support = null, and probe.rl_saves_checkpoint = null. What is the outcome for this plan draft, and what ends up in artifacts?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-probe-first-oracle-PF-HO-002",
+      "skill": "probe_first",
+      "rule_id": "PF-HO-002",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "the emitted probe_report artifact is missing or altered on disk at handoff",
+      "fixture": {
+        "expected": "RED 5 with PF-HO-002 (probe_report missing on disk)",
+        "plan": {
+          "checks": [
+            {
+              "backend": "fsdp",
+              "stage": "sft"
+            }
+          ]
+        },
+        "probe": {
+          "available": true,
+          "axes_measured": false,
+          "backends": [
+            "fsdp"
+          ],
+          "errors": [],
+          "executed_axes": [],
+          "families": {},
+          "fs_version": "x",
+          "notes": [],
+          "pref_adapter_support": null,
+          "pref_runnable": {},
+          "pref_saves_checkpoint": null,
+          "refused_axes": [],
+          "rl_adapter_support": null,
+          "rl_algorithms": [],
+          "rl_reward_kinds": [],
+          "rl_runnable": {},
+          "rl_saves_checkpoint": null,
+          "sharding_strategies": [],
+          "train_entry": "foundationscale-train",
+          "train_flag_choices": {},
+          "train_flags": [],
+          "train_objectives": [
+            "sft"
+          ]
+        },
+        "request": {
+          "checks": [
+            {
+              "backend": "fsdp",
+              "stage": "sft"
+            }
+          ],
+          "out": "artifacts",
+          "plan_draft": "plan.json"
+        },
+        "tamper": "delete report before handoff"
+      },
+      "fixture_sha256": "3d51061ea890c8401576d6355108d3f206b87d89a40537e9f10ca7877a4300ff",
+      "expected_behavior": [
+        "Identifies the problem: the emitted probe_report artifact is missing or altered on disk at handoff",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule PF-HO-002"
+      ],
+      "ground_truth": "probe_first: rule PF-HO-002 (BLOCK, handoff phase) fires: the emitted probe_report artifact is missing or altered on disk at handoff.",
+      "trigger_facts": [
+        {
+          "path": "plan.checks[0].backend",
+          "value": "fsdp"
+        },
+        {
+          "path": "plan.checks[0].stage",
+          "value": "sft"
+        },
+        {
+          "path": "probe.available",
+          "value": true
+        },
+        {
+          "path": "probe.axes_measured",
+          "value": false
+        },
+        {
+          "path": "probe.backends[0]",
+          "value": "fsdp"
+        },
+        {
+          "path": "probe.fs_version",
+          "value": "x"
+        },
+        {
+          "path": "probe.pref_adapter_support",
+          "value": null
+        },
+        {
+          "path": "probe.pref_saves_checkpoint",
+          "value": null
+        },
+        {
+          "path": "probe.rl_adapter_support",
+          "value": null
+        },
+        {
+          "path": "probe.rl_saves_checkpoint",
+          "value": null
+        },
+        {
+          "path": "probe.train_entry",
+          "value": "foundationscale-train"
+        },
+        {
+          "path": "probe.train_objectives[0]",
+          "value": "sft"
+        },
+        {
+          "path": "tamper",
+          "value": "delete report before handoff"
+        }
+      ],
+      "question": "I've got a FoundationScale plan draft at `plan.json` with checks[0].backend = \"fsdp\" and checks[0].stage = \"sft\", and the probe I have on hand shows probe.available = true but probe.axes_measured = false, probe.backends[0] = \"fsdp\", probe.fs_version = \"x\", and probe.train_entry = \"foundationscale-train\" with probe.train_objectives[0] = \"sft\". Also on record: probe.pref_adapter_support = null, probe.pref_saves_checkpoint = null, probe.rl_adapter_support = null, and probe.rl_saves_checkpoint = null. And what happened to the report is \"delete report before handoff\". Given all that, what is the outcome here?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-probe-first-oracle-PF-IN-001",
+      "skill": "probe_first",
+      "rule_id": "PF-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "probe_report absent, unreadable, or not a measured probe JSON (the probe was skipped)",
+      "fixture": {
+        "expected": "REFUSED 96 naming PF-IN-001 (the probe was skipped; nothing written)",
+        "plan": {
+          "checks": [
+            {
+              "backend": "fsdp",
+              "stage": "sft"
+            }
+          ]
+        },
+        "probe": null,
+        "request": {
+          "checks": [
+            {
+              "backend": "fsdp",
+              "stage": "sft"
+            }
+          ],
+          "out": "artifacts",
+          "plan_draft": "plan.json"
+        }
+      },
+      "fixture_sha256": "3c7f4e0f2d145e374e881399ae74d83c63da70ca932382e2c70a8e2ea3de484b",
+      "expected_behavior": [
+        "Identifies the problem: probe_report absent, unreadable, or not a measured probe JSON (the probe was skipped)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule PF-IN-001"
+      ],
+      "ground_truth": "probe_first: rule PF-IN-001 (BLOCK, input phase) fires: probe_report absent, unreadable, or not a measured probe JSON (the probe was skipped).",
+      "trigger_facts": [
+        {
+          "path": "plan.checks[0].backend",
+          "value": "fsdp"
+        },
+        {
+          "path": "plan.checks[0].stage",
+          "value": "sft"
+        },
+        {
+          "path": "probe",
+          "value": null
+        }
+      ],
+      "question": "I've got a plan draft at `plan.json` with `plan.checks[0].backend = \"fsdp\"` and `plan.checks[0].stage = \"sft\"`, and my request targets `out = \"artifacts\"` with `plan_draft = \"plan.json\"`. I also know that `probe = null` — no `fskills probe --deep --json` output exists yet. What's the outcome here?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-probe-first-oracle-PF-IN-002",
+      "skill": "probe_first",
+      "rule_id": "PF-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "a requested check is missing/unmeasured on the measured probe, or the plan claims it available/PASS",
+      "fixture": {
+        "expected": "REFUSED 96 naming PF-IN-002 (an unmeasured axis claimed available/PASS)",
+        "plan": {
+          "checks": [
+            {
+              "backend": "fsdp",
+              "pp": 2,
+              "stage": "sft",
+              "status": "PASS"
+            }
+          ]
+        },
+        "probe": {
+          "available": true,
+          "axes_measured": false,
+          "backends": [
+            "fsdp"
+          ],
+          "errors": [],
+          "executed_axes": [],
+          "families": {},
+          "fs_version": "x",
+          "notes": [],
+          "pref_adapter_support": null,
+          "pref_runnable": {},
+          "pref_saves_checkpoint": null,
+          "refused_axes": [],
+          "rl_adapter_support": null,
+          "rl_algorithms": [],
+          "rl_reward_kinds": [],
+          "rl_runnable": {},
+          "rl_saves_checkpoint": null,
+          "sharding_strategies": [],
+          "train_entry": "foundationscale-train",
+          "train_flag_choices": {},
+          "train_flags": [],
+          "train_objectives": [
+            "sft"
+          ]
+        },
+        "request": {
+          "checks": [
+            {
+              "backend": "fsdp",
+              "pp": 2,
+              "stage": "sft"
+            }
+          ],
+          "out": "artifacts",
+          "plan_draft": "plan.json"
+        }
+      },
+      "fixture_sha256": "52efdc8c085b2319a2306b8df65b6e87182360a0bfbe284b7576976e0064723b",
+      "expected_behavior": [
+        "Identifies the problem: a requested check is missing/unmeasured on the measured probe, or the plan claims it available/PASS",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule PF-IN-002"
+      ],
+      "ground_truth": "probe_first: rule PF-IN-002 (BLOCK, input phase) fires: a requested check is missing/unmeasured on the measured probe, or the plan claims it available/PASS.",
+      "trigger_facts": [
+        {
+          "path": "plan.checks[0].backend",
+          "value": "fsdp"
+        },
+        {
+          "path": "plan.checks[0].pp",
+          "value": 2
+        },
+        {
+          "path": "plan.checks[0].stage",
+          "value": "sft"
+        },
+        {
+          "path": "plan.checks[0].status",
+          "value": "PASS"
+        },
+        {
+          "path": "probe.available",
+          "value": true
+        },
+        {
+          "path": "probe.axes_measured",
+          "value": false
+        },
+        {
+          "path": "probe.backends[0]",
+          "value": "fsdp"
+        },
+        {
+          "path": "probe.fs_version",
+          "value": "x"
+        },
+        {
+          "path": "probe.pref_adapter_support",
+          "value": null
+        },
+        {
+          "path": "probe.pref_saves_checkpoint",
+          "value": null
+        },
+        {
+          "path": "probe.rl_adapter_support",
+          "value": null
+        },
+        {
+          "path": "probe.rl_saves_checkpoint",
+          "value": null
+        },
+        {
+          "path": "probe.train_entry",
+          "value": "foundationscale-train"
+        },
+        {
+          "path": "probe.train_objectives[0]",
+          "value": "sft"
+        }
+      ],
+      "question": "I'm looking at a plan draft where plan.checks[0].backend = \"fsdp\", plan.checks[0].pp = 2, plan.checks[0].stage = \"sft\", and plan.checks[0].status = \"PASS\", against a probe with probe.available = true, probe.axes_measured = false, and probe.backends[0] = \"fsdp\". The probe also reports probe.fs_version = \"x\", probe.train_entry = \"foundationscale-train\", and probe.train_objectives[0] = \"sft\". Additionally I see probe.pref_adapter_support = null, probe.pref_saves_checkpoint = null, probe.rl_adapter_support = null, and probe.rl_saves_checkpoint = null. The request points at plan.json with out = \"artifacts\" for the fsdp/pp=2/sft check. Given all of that, what is the outcome — what do I end up with in artifacts and what happens to plan.json?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-probe-first-oracle-PF-IN-003",
+      "skill": "probe_first",
+      "rule_id": "PF-IN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "no requested checks named (the plan names none and request checks is absent)",
+      "fixture": {
+        "expected": "REFUSED 96 naming PF-IN-003 (no requested checks named)",
+        "plan": {},
+        "probe": {
+          "available": true,
+          "axes_measured": false,
+          "backends": [
+            "fsdp"
+          ],
+          "errors": [],
+          "executed_axes": [],
+          "families": {},
+          "fs_version": "x",
+          "notes": [],
+          "pref_adapter_support": null,
+          "pref_runnable": {},
+          "pref_saves_checkpoint": null,
+          "refused_axes": [],
+          "rl_adapter_support": null,
+          "rl_algorithms": [],
+          "rl_reward_kinds": [],
+          "rl_runnable": {},
+          "rl_saves_checkpoint": null,
+          "sharding_strategies": [],
+          "train_entry": "foundationscale-train",
+          "train_flag_choices": {},
+          "train_flags": [],
+          "train_objectives": []
+        },
+        "request": {
+          "out": "artifacts",
+          "plan_draft": "plan.json"
+        }
+      },
+      "fixture_sha256": "5a2e1989e72860f9296680e66043afee0b2d46227cc04293742e08c30729f609",
+      "expected_behavior": [
+        "Identifies the problem: no requested checks named (the plan names none and request checks is absent)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule PF-IN-003"
+      ],
+      "ground_truth": "probe_first: rule PF-IN-003 (BLOCK, input phase) fires: no requested checks named (the plan names none and request checks is absent).",
+      "trigger_facts": [
+        {
+          "path": "probe.available",
+          "value": true
+        },
+        {
+          "path": "probe.axes_measured",
+          "value": false
+        },
+        {
+          "path": "probe.backends[0]",
+          "value": "fsdp"
+        },
+        {
+          "path": "probe.fs_version",
+          "value": "x"
+        },
+        {
+          "path": "probe.pref_adapter_support",
+          "value": null
+        },
+        {
+          "path": "probe.pref_saves_checkpoint",
+          "value": null
+        },
+        {
+          "path": "probe.rl_adapter_support",
+          "value": null
+        },
+        {
+          "path": "probe.rl_saves_checkpoint",
+          "value": null
+        },
+        {
+          "path": "probe.train_entry",
+          "value": "foundationscale-train"
+        }
+      ],
+      "question": "I've got a plan draft at plan.json and want the vetted probe_report written to artifacts. From the probe I can see: probe.available = true, probe.axes_measured = false, probe.backends[0] = \"fsdp\", probe.fs_version = \"x\", probe.pref_adapter_support = null, probe.pref_saves_checkpoint = null, probe.rl_adapter_support = null, probe.rl_saves_checkpoint = null, and probe.train_entry = \"foundationscale-train\". Can you run the deep probe against this and tell me what the outcome is?",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}
