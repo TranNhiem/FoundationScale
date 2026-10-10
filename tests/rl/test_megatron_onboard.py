@@ -203,6 +203,19 @@ def test_check_save_fails_on_weak_gate() -> None:
     assert onboard.check_save([_save(gates=gates)]).verdict == onboard.FAIL
 
 
+def test_check_save_reads_a_skipped_gate_as_unmeasured() -> None:
+    # The 26B final save: ok, every checkpoint gate PASS, objective.hparam_drift SKIP.
+    gates = {"objective.hparam_drift": "SKIP", "checkpoint.save_complete": "PASS"}
+    check = onboard.check_save([_save(), _save(gates=gates)])
+    assert check.verdict == onboard.UNMEASURED
+    assert "objective.hparam_drift" in check.detail
+
+
+def test_check_save_blocking_gate_outranks_a_skip() -> None:
+    gates = {"objective.hparam_drift": "SKIP", "checkpoint.save_complete": "UNDERCOVERED"}
+    assert onboard.check_save([_save(gates=gates)]).verdict == onboard.FAIL
+
+
 def test_check_save_unmeasured_without_records() -> None:
     assert onboard.check_save([]).verdict == onboard.UNMEASURED
 
@@ -290,16 +303,16 @@ def test_main_parity_dump_delegates_to_parity_from_dump(
 ) -> None:
     dump = tmp_path / "dump.json"
     dump.write_text(json.dumps({"input_ids": [], "logprobs": []}))
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, bool]] = []
     rows: list[dict[str, float]] = [{"n": 2, "mean_abs": 0.0, "max_abs": 0.0}]
 
-    def fake(dump_path: str, hf_model: str) -> list[dict[str, float]]:
-        calls.append((dump_path, hf_model))
+    def fake(dump_path: str, hf_model: str, *, fp32: bool = False) -> list[dict[str, float]]:
+        calls.append((dump_path, hf_model, fp32))
         return rows
 
     monkeypatch.setattr(onboard, "parity_from_dump", fake)
-    assert onboard.main(["--parity-dump", str(dump), "--hf-model", "tiny-hf"]) == 95
-    assert calls == [(str(dump), "tiny-hf")]
+    assert onboard.main(["--parity-dump", str(dump), "--hf-model", "tiny-hf", "--fp32"]) == 95
+    assert calls == [(str(dump), "tiny-hf", True)]
 
 
 def test_parity_from_dump_excludes_pads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

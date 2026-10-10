@@ -18,7 +18,7 @@ This module turns the outputs of four short runs into one table:
     The first measured step is on-policy: ``ratio_mean`` ~ 1, ``clip_fraction`` ~ 0, a
     finite non-zero ``grad_norm``, and the optimizer step applied.
 ``save``
-    Every save record is ``ok`` with no gate below PASS.
+    Every save record is ``ok`` with no blocking gate verdict (a SKIP reads UNMEASURED).
 ``resume``
     A resumed run's ``RESUMED ... param_hash=`` equals the saved step's hash in the
     original run's metrics.
@@ -57,6 +57,7 @@ __all__ = [
 ]
 
 PASS, FAIL, UNMEASURED = "PASS", "FAIL", "UNMEASURED"
+_SKIP = "SKIP"
 _RESUMED = re.compile(r"RESUMED from \S*?step_(\d+) at step \d+ param_hash=([0-9a-f]+)")
 
 
@@ -97,8 +98,13 @@ def hf_token_logprobs(model: Any, ids: Sequence[int]) -> list[float]:
     return [float(v) for v in picked.detach().cpu()]
 
 
-def parity_from_dump(dump_path: str, hf_model: str) -> list[dict[str, float]]:
-    """compare_row for every row of a driver ``--parity-only`` dump against ``hf_model``."""
+def parity_from_dump(
+    dump_path: str, hf_model: str, *, fp32: bool = False
+) -> list[dict[str, float]]:
+    """compare_row for every row of a driver ``--parity-only`` dump against ``hf_model``.
+
+    ``fp32`` loads the HF model in float32 to match a ``--parity-only --fp32`` dump.
+    """
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -106,7 +112,9 @@ def parity_from_dump(dump_path: str, hf_model: str) -> list[dict[str, float]]:
     tokenizer = AutoTokenizer.from_pretrained(hf_model)
     pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model: Any = AutoModelForCausalLM.from_pretrained(hf_model, dtype=torch.bfloat16)
+    model: Any = AutoModelForCausalLM.from_pretrained(
+        hf_model, dtype=torch.float32 if fp32 else torch.bfloat16
+    )
     model = model.to(device).eval()
     return [
         compare_row(mc, hf_token_logprobs(model, ids), ids, pad)
@@ -171,18 +179,26 @@ def check_step1(
 
 
 def check_save(metrics: Iterable[Mapping[str, Any]]) -> Check:
+    """FAIL on a save that is not ``ok`` or carries a blocking gate verdict.
+
+    A gate that answered SKIP abstained: the save was not blocked, but nothing was
+    measured, so the check reads UNMEASURED and names the abstaining gates.
+    """
     saves = [r for r in metrics if "save" in r]
     if not saves:
         return Check("save", UNMEASURED, "no save record")
-    bad = []
+    bad, skipped = [], []
     for record in saves:
         gates = record.get("gates") or {}
-        weak = [g for g, v in gates.items() if v != PASS]
-        if not record.get("ok") or weak:
-            bad.append(f"{record['save']}: ok={record.get('ok')} non-PASS={weak}")
+        blocking = [g for g, v in gates.items() if v not in (PASS, _SKIP)]
+        skipped += [f"{record['save']}:{g}" for g, v in gates.items() if v == _SKIP]
+        if not record.get("ok") or blocking:
+            bad.append(f"{record['save']}: ok={record.get('ok')} blocking={blocking}")
     if bad:
         return Check("save", FAIL, "; ".join(bad))
     n_gates = sum(len(r.get("gates") or {}) for r in saves)
+    if skipped:
+        return Check("save", UNMEASURED, f"{len(saves)} saves ok; gates abstained: {skipped}")
     return Check("save", PASS, f"{len(saves)} saves, {n_gates} gate verdicts all PASS")
 
 
@@ -217,6 +233,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--parity", help="JSON list of compare_row results")
     ap.add_argument("--parity-dump", help="driver --parity-only dump to compare against HF")
     ap.add_argument("--hf-model", help="HF checkpoint for --parity-dump (needs a GPU or CPU torch)")
+    ap.add_argument("--fp32", action="store_true", help="load --hf-model in float32")
     ap.add_argument("--metrics", help="online run metrics JSONL (refit, step1, save, resume)")
     ap.add_argument("--resumed-log", help="stdout of the run resumed from --metrics' state")
     ap.add_argument("--mean-tol", type=float, default=0.05)
@@ -225,7 +242,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     metrics = _jsonl(args.metrics) if args.metrics else []
     parity = json.loads(Path(args.parity).read_text()) if args.parity else []
     if args.parity_dump and args.hf_model:
-        parity = parity_from_dump(args.parity_dump, args.hf_model)
+        parity = parity_from_dump(args.parity_dump, args.hf_model, fp32=args.fp32)
     log = Path(args.resumed_log).read_text(errors="replace") if args.resumed_log else ""
     checks = [
         check_parity(parity, mean_tol=args.mean_tol, max_tol=args.max_tol),
