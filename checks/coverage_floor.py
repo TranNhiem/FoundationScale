@@ -231,6 +231,7 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/rl/megatron/normalization.py": 77,  # set by --update; measured 77.1%
     "src/foundationscale/rl/megatron/pp_step.py": 58,  # set by --update; measured 58.7%
     "src/foundationscale/agentic_rl/__main__.py": 0,  # set by --update; measured 0.0%
+    "src/foundationscale/rl/megatron/onboard.py": 99,  # measured 100.0%
     "src/foundationscale/rl/megatron/resume.py": 96,  # set by --update; measured 96.0%
     "src/foundationscale/train/__main__.py": 0,  # set by --update; measured 0.0%
     # RATCHET -- 89 module(s) ABOVE the default band. These record what
