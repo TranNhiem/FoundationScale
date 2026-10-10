@@ -1,10 +1,15 @@
 """Built-in skill registration.
 
+Registered skill packages: the mandatory ``data_engine``; the tolerated
+``training`` (planner + emit), ``evaluation`` and ``auto_research``; and the
+four A3.1 discipline skills ``probe_first``, ``measured_or_unmeasured``,
+``confirm_before_launch`` and ``refusal_surface``.
+
 ``register_builtin_skills`` is idempotent (a skill whose name is already in
-the registry is skipped) and lazy (skill modules import only on call). The
-training/evaluation/auto-research skill imports are tolerated with ``ImportError``
-so this package works during partial checkouts; the data_engine skill is
-mandatory and its import errors propagate.
+the registry is skipped) and lazy (skill modules import only on call). Every
+skill import except ``data_engine`` is tolerated with ``ImportError`` so this
+package works during partial checkouts; the data_engine skill is mandatory
+and its import errors propagate.
 """
 from __future__ import annotations
 
@@ -48,6 +53,38 @@ def register_builtin_skills(registry: SkillRegistry = REGISTRY) -> list[str]:
 
         if AutoResearchSkill.name not in registry.names():
             registry.register(AutoResearchSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.probe_first.skill import ProbeFirstSkill
+
+        if ProbeFirstSkill.name not in registry.names():
+            registry.register(ProbeFirstSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.measured_or_unmeasured.skill import MeasuredOrUnmeasuredSkill
+
+        if MeasuredOrUnmeasuredSkill.name not in registry.names():
+            registry.register(MeasuredOrUnmeasuredSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.confirm_before_launch.skill import ConfirmBeforeLaunchSkill
+
+        if ConfirmBeforeLaunchSkill.name not in registry.names():
+            registry.register(ConfirmBeforeLaunchSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.refusal_surface.skill import RefusalSurfaceSkill
+
+        if RefusalSurfaceSkill.name not in registry.names():
+            registry.register(RefusalSurfaceSkill())
     except ImportError:
         pass
 

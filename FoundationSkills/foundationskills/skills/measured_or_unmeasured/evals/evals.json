@@ -1,0 +1,152 @@
+[
+  {
+    "id": "fskills-measured-or-unmeasured-positive-001",
+    "question": "Four claims here; two have eval_report pointers. Make an honest claim set where nothing unmeasured is a pass.",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the measured_or_unmeasured skill and rewrites the claim set: the two claims whose eval_report pointers resolve to a measured value are MEASURED, the unevidenced two are demoted to UNMEASURED citing MU-IN-001, and the sealed claim_set verdict is UNMEASURED (95), never PASS.",
+    "expected_behavior": [
+      "The agent read measured_or_unmeasured/SKILL.md before acting",
+      "The agent demoted the unevidenced claims to UNMEASURED citing MU-IN-001",
+      "The agent said the result is 95 UNMEASURED and never PASS"
+    ]
+  },
+  {
+    "id": "fskills-measured-or-unmeasured-positive-002",
+    "question": "This claim cites 'we ran it last week' as proof. Is that measured?",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the measured_or_unmeasured skill and explains that 'we ran it last week' is not an <artifact path>#<json field> pointer that resolves to a measured value on disk: MU-IN-002 (malformed/unresolvable pointer) fires and the claim is demoted to UNMEASURED.",
+    "expected_behavior": [
+      "The agent read measured_or_unmeasured/SKILL.md before acting",
+      "The agent cited MU-IN-002 (malformed/unresolvable evidence pointer)",
+      "The agent demoted the claim to UNMEASURED rather than letting it read as PASS"
+    ]
+  },
+  {
+    "id": "fskills-measured-or-unmeasured-positive-003",
+    "question": "Some claims carry no status at all — fill in what they are.",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the measured_or_unmeasured skill and explains that a claim with no verdict at all is emitted UNMEASURED (MU-IN-003: absence of evidence is never PASS), then writes the corrected claim_set with a reason per claim.",
+    "expected_behavior": [
+      "The agent read measured_or_unmeasured/SKILL.md before acting",
+      "The agent cited MU-IN-003 (no verdict at all ⇒ UNMEASURED)",
+      "The agent wrote the corrected claim_set with status MEASURED|UNMEASURED and a reason per claim"
+    ]
+  },
+  {
+    "id": "fskills-measured-or-unmeasured-positive-004",
+    "question": "Three of the five claims in this batch point at artifacts/eval/q27-sft/eval_report.json but the file isn't on this box anymore. Can we still call those five passes?",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the measured_or_unmeasured skill and explains that an evidence pointer to a file absent from disk is unresolvable (MU-IN-002), so those claims are demoted to UNMEASURED as a downgrade, never a guess, and the sealed verdict is 95 UNMEASURED.",
+    "expected_behavior": [
+      "The agent read measured_or_unmeasured/SKILL.md before acting",
+      "The agent cited MU-IN-002 and said a pointer to a missing file is a downgrade to UNMEASURED, not a PASS",
+      "The agent said the claim_set verdict is 95 UNMEASURED with a reason written per demoted claim"
+    ]
+  },
+  {
+    "id": "fskills-measured-or-unmeasured-positive-005",
+    "question": "Two claims say `measured: true` but their evidence fields just name a notebook. One claim's proof is `artifacts/claims/mu-abc123-claim_set.json#payload.claims.0.status` — check that one too and seal the result as mu-review-07.",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the measured_or_unmeasured skill, fires MU-IN-001 on the `measured: true` claims with no valid pointer, resolves the sealed-artifact pointer into its payload rather than its envelope, and seals the corrected claim_set under artifact_id mu-review-07 with provenance.",
+    "expected_behavior": [
+      "The agent read measured_or_unmeasured/SKILL.md before acting",
+      "The agent cited MU-IN-001 for `measured: true` claims lacking a resolvable pointer and demoted them to UNMEASURED",
+      "The agent pointed into the sealed artifact payload (claim_set.<id>.json#payload....) when judging the cited claim",
+      "The agent wrote claim_set.mu-review-07.json atomically with provenance and per-claim reasons"
+    ]
+  },
+  {
+    "id": "fskills-measured-or-unmeasured-positive-006",
+    "question": "I'm about to paste a claim set where c1 points at artifacts/eval/q27-sft/eval_report.json#benchmarks.0.score, c2 points at checkpoints/sft-report.json#loss (which has null there), and c3 has neither a score nor evidence. What verdict do we print and what exit code?",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the measured_or_unmeasured skill and reports that c1 is MEASURED, c2 is demoted by MU-IN-002 (null value on disk is not a measurement) and c3 by MU-IN-003 (no verdict at all), so the sealed verdict is UNMEASURED with exit 95 and never exit 0 PASS.",
+    "expected_behavior": [
+      "The agent read measured_or_unmeasured/SKILL.md before acting",
+      "The agent cited MU-IN-002 for the null field on disk and MU-IN-003 for the claim with no verdict or evidence",
+      "The agent said the worst-over-claims verdict is 95 UNMEASURED and that one demoted claim prevents a 0 PASS"
+    ]
+  },
+  {
+    "id": "fskills-measured-or-unmeasured-negative-001",
+    "question": "We wrote the plan before the probe; is it safe to launch as-is?",
+    "expected_skill": "fskills-probe-first",
+    "should_trigger": false,
+    "ground_truth": "Deciding whether a plan's capability claims match a measured probe belongs to fskills-probe-first, not claim-set measurement; measured_or_unmeasured never probes FoundationScale.",
+    "expected_behavior": [
+      "The agent did not read or activate measured_or_unmeasured/SKILL.md for the probe-versus-plan check",
+      "The agent routed the request to the fskills-probe-first skill"
+    ]
+  },
+  {
+    "id": "fskills-measured-or-unmeasured-negative-002",
+    "question": "Emit the Slurm job and submit it.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Building and submitting a Slurm training job is fskills-training's work; measured_or_unmeasured only rewrites claim sets and submits nothing.",
+    "expected_behavior": [
+      "The agent did not read or activate measured_or_unmeasured/SKILL.md for submission",
+      "The agent routed the request to the fskills-training skill and did no claim rewriting"
+    ]
+  },
+  {
+    "id": "fskills-measured-or-unmeasured-negative-003",
+    "question": "My SFT adapter finished overnight — run it against its base model on mmlu and give me the eval report.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Scoring a trained checkpoint against its base model is checkpoint evaluation, which is fskills-evaluation's job; measured_or_unmeasured never scores checkpoints and only consumes reports that already exist as evidence pointers.",
+    "expected_behavior": [
+      "The agent did not read or activate measured_or_unmeasured/SKILL.md for the scoring request",
+      "The agent routed the request to the fskills-evaluation skill"
+    ]
+  },
+  {
+    "id": "fskills-measured-or-unmeasured-negative-004",
+    "question": "Here is the fs_launch_spec and the plan hash I was given. Confirm the launch so fskills can submit it.",
+    "expected_skill": "fskills-confirm-before-launch",
+    "should_trigger": false,
+    "ground_truth": "Gating an fs_launch_spec behind the user-confirmed plan hash is fskills-confirm-before-launch's job; measured_or_unmeasured emits no launch spec and does not confirm launches.",
+    "expected_behavior": [
+      "The agent did not read or activate measured_or_unmeasured/SKILL.md for the launch confirmation",
+      "The agent routed the request to the fskills-confirm-before-launch skill"
+    ]
+  },
+  {
+    "id": "fskills-measured-or-unmeasured-negative-005",
+    "question": "Fix the typo in the README of our team's internal notes repo and open a PR.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A routine docs typo fix is out of scope for every FoundationSkills skill, including measured_or_unmeasured.",
+    "expected_behavior": [
+      "The agent did not read or activate measured_or_unmeasured/SKILL.md",
+      "The agent did not activate any FoundationSkills skill"
+    ]
+  },
+  {
+    "id": "fskills-measured-or-unmeasured-negative-006",
+    "question": "Turn this quarterly sales CSV into a week-by-week summary chart for the all-hands deck.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Business reporting over a sales CSV is not an LLM/VLM claim-set rewrite and not a dataset, training, evaluation, probe, launch, or refusal task, so no FoundationSkills skill should be triggered.",
+    "expected_behavior": [
+      "The agent did not read or activate measured_or_unmeasured/SKILL.md",
+      "The agent did not activate any FoundationSkills skill"
+    ]
+  },
+  {
+    "id": "fskills-measured-or-unmeasured-negative-007",
+    "question": "Draft a polite follow-up email to the vendor asking for the invoice number before Friday.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Writing routine business correspondence has nothing to do with claim sets or evidence pointers, so no FoundationSkills skill applies.",
+    "expected_behavior": [
+      "The agent did not read or activate measured_or_unmeasured/SKILL.md",
+      "The agent did not activate any FoundationSkills skill"
+    ]
+  }
+]

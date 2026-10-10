@@ -14,8 +14,12 @@
       "license": "MIT",
       "skills": [
         "./skills/fskills-auto-research",
+        "./skills/fskills-confirm-before-launch",
         "./skills/fskills-data-engine",
         "./skills/fskills-evaluation",
+        "./skills/fskills-measured-or-unmeasured",
+        "./skills/fskills-probe-first",
+        "./skills/fskills-refusal-surface",
         "./skills/fskills-training"
       ]
     }

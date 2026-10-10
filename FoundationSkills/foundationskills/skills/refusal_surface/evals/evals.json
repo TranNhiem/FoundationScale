@@ -1,0 +1,148 @@
+[
+  {
+    "id": "fskills-refusal-surface-positive-001",
+    "question": "Here are the RED findings from the last run — file them as a finding_set where every entry cites a real rule id.",
+    "expected_skill": "fskills-refusal-surface",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the refusal_surface skill and normalizes every incoming finding so its entry cites a rule id a registered skill declares (what arrived is kept in evidence.source_rule_id), then seals a finding_set.",
+    "expected_behavior": [
+      "The agent read refusal_surface/SKILL.md before acting",
+      "The agent normalized entries to declared ids and sealed a finding_set"
+    ]
+  },
+  {
+    "id": "fskills-refusal-surface-positive-002",
+    "question": "The failure output cites rule id PF-IN-999, which is not written down anywhere. What happens?",
+    "expected_skill": "fskills-refusal-surface",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the refusal_surface skill and identifies RS-HO-001 (BLOCK): an invented/undeclared rule id yields RED (exit 5), while the sealed entry records what arrived in evidence.source_rule_id and no Finding carries the invented id.",
+    "expected_behavior": [
+      "The agent read refusal_surface/SKILL.md before acting",
+      "The agent cited RS-HO-001 and said an invented/undeclared id yields RED (exit 5)"
+    ]
+  },
+  {
+    "id": "fskills-refusal-surface-positive-003",
+    "question": "This REFUSED finding has no rule id at all.",
+    "expected_skill": "fskills-refusal-surface",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the refusal_surface skill and identifies RS-HO-002 (WARN): an unattributed finding is attributed in the emitted set (entry rule_id RS-HO-002, unknown severity normalized to BLOCK) rather than dropped, so the run stays PASS (exit 0).",
+    "expected_behavior": [
+      "The agent read refusal_surface/SKILL.md before acting",
+      "The agent cited RS-HO-002 and said the emitted entry attributes it rather than dropping it"
+    ]
+  },
+  {
+    "id": "fskills-refusal-surface-negative-001",
+    "question": "Which claims in this claim set are actually measured?",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": false,
+    "ground_truth": "Separating measured from unmeasured claims in a claim set is claim rewriting for fskills-measured-or-unmeasured, not finding attribution; the refusal_surface skill only attributes/seals findings.",
+    "expected_behavior": [
+      "The agent did not read or activate refusal_surface/SKILL.md",
+      "The agent routed the request to fskills-measured-or-unmeasured for claim rewriting"
+    ]
+  },
+  {
+    "id": "fskills-refusal-surface-negative-002",
+    "question": "Debug why the Slurm job died mid-run with NaN loss.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Diagnosing training run failures (NaN, mid-run deaths) is fskills-training's diagnose playbook; the refusal_surface skill never diagnoses runs and never calls FoundationScale.",
+    "expected_behavior": [
+      "The agent did not read or activate refusal_surface/SKILL.md",
+      "The agent routed the request to fskills-training's diagnose playbook"
+    ]
+  },
+  {
+    "id": "fskills-refusal-surface-negative-003",
+    "question": "Gate my fs_launch_spec: I pasted the plan hash I copied out of the plan, go ahead and launch when it matches.",
+    "expected_skill": "fskills-confirm-before-launch",
+    "should_trigger": false,
+    "ground_truth": "Confirming a launch behind a user-confirmed plan hash is fskills-confirm-before-launch's job, not finding attribution; the refusal_surface skill never confirms launches and never submits anything.",
+    "expected_behavior": [
+      "The agent did not read or activate refusal_surface/SKILL.md",
+      "The agent routed the request to fskills-confirm-before-launch"
+    ]
+  },
+  {
+    "id": "fskills-refusal-surface-negative-004",
+    "question": "Here is my checkpoint at artifacts/sft/run12/adapter — score it against its base model on gsm8k.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Scoring a checkpoint against its base model is fskills-evaluation's job; the refusal_surface skill consumes findings and emits a finding_set but never scores checkpoints.",
+    "expected_behavior": [
+      "The agent did not read or activate refusal_surface/SKILL.md",
+      "The agent routed the request to fskills-evaluation for checkpoint scoring"
+    ]
+  },
+  {
+    "id": "fskills-refusal-surface-negative-005",
+    "question": "Convert our release notes markdown into a nicely formatted PDF for the customer newsletter.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A document formatting task is an ordinary non-ML-training request, so no FoundationSkills skill — including refusal_surface — should trigger.",
+    "expected_behavior": [
+      "The agent did not read or activate refusal_surface/SKILL.md",
+      "The agent did not activate any FoundationSkills skill"
+    ]
+  },
+  {
+    "id": "fskills-refusal-surface-negative-006",
+    "question": "Write a regex that strips ISO timestamps out of our service logs and unit-test it.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Writing and testing a regex is generic code work with finding sets nowhere in sight, so no FoundationSkills skill should take it.",
+    "expected_behavior": [
+      "The agent did not read or activate refusal_surface/SKILL.md",
+      "The agent did not activate any FoundationSkills skill"
+    ]
+  },
+  {
+    "id": "fskills-refusal-surface-negative-007",
+    "question": "Draft a three-bullet standup update from my branch diff and open PRs.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Summarizing one's own work into standup bullets is routine planning help, so no FoundationSkills skill should be triggered.",
+    "expected_behavior": [
+      "The agent did not read or activate refusal_surface/SKILL.md",
+      "The agent did not activate any FoundationSkills skill"
+    ]
+  },
+  {
+    "id": "fskills-refusal-surface-positive-004",
+    "question": "I called fskills surface --findings with nothing in the list and it refused. Which rule is that, and is anything written to disk?",
+    "expected_skill": "fskills-refusal-surface",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the refusal_surface skill and identifies RS-IN-001 (input-phase BLOCK): an empty finding list means nothing to surface, so it refuses with REFUSED (exit 96) and writes no finding_set artifact.",
+    "expected_behavior": [
+      "The agent read refusal_surface/SKILL.md before acting",
+      "The agent cited RS-IN-001 and said an empty findings list refuses with REFUSED (exit 96)",
+      "The agent said no finding_set artifact is written on this input-phase refusal"
+    ]
+  },
+  {
+    "id": "fskills-refusal-surface-positive-005",
+    "question": "Some failure json cites instruction ids our error template invented. What will fskills refuse_surface do with those entries?",
+    "expected_skill": "fskills-refusal-surface",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the refusal_surface skill and identifies that undeclared-cited entries drive RS-HO-001 (BLOCK): the sealed set is still written with the entry citing RS-HO-001 and the original kept in evidence.source_rule_id, but the outcome is RED (exit 5), never PASS.",
+    "expected_behavior": [
+      "The agent read refusal_surface/SKILL.md before acting",
+      "The agent cited RS-HO-001 and said an invented/undeclared cited id forces RED (exit 5) at handoff",
+      "The agent said the set is still sealed and written with the original id preserved in evidence"
+    ]
+  },
+  {
+    "id": "fskills-refusal-surface-positive-006",
+    "question": "One finding came in with severity 'fatal' and a rule id our checker doesn't recognize — what will the final entry look like?",
+    "expected_skill": "fskills-refusal-surface",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the refusal_surface skill and explains that under RS-HO-002 the finding is kept but attributed to a declared id with the unknown severity normalized to BLOCK (and unrecognized cited ids become RED per RS-HO-001 with the original kept in evidence.source_rule_id), so the entry is never dropped.",
+    "expected_behavior": [
+      "The agent read refusal_surface/SKILL.md before acting",
+      "The agent cited RS-HO-002 and said the message is kept and attributed rather than dropped",
+      "The agent said the unknown severity is normalized to BLOCK on the emitted entry"
+    ]
+  }
+]

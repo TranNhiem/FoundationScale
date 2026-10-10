@@ -8,7 +8,7 @@ description: 'Turns raw sources (JSONL/JSON/CSV/parquet, txt/html/pdf doc dirs, 
   Also embedding semantic dedup, tool-calling trace normalization (OpenAI/ShareGPT/Hermes/Glaive/xLAM/Llama-3/Mistral)
   and video ingest (frames + Whisper ASR). Do NOT use for training launches (fskills-training) or checkpoint evals
   (fskills-evaluation), nor for synthesizing new examples from nothing (phase 2; use llm_enhance on existing records).'
-compatibility: "Requires Python>=3.10 and the foundationskills package (fsskills CLI); launches additionally need FoundationScale on a Slurm GPU cluster. Without them the skill reports REFUSED or UNMEASURED and gives the install step instead of improvising."
+compatibility: "Requires Python>=3.10 and the foundationskills package (fskills CLI); launches additionally need FoundationScale on a Slurm GPU cluster. Without them the skill reports REFUSED or UNMEASURED and gives the install step instead of improvising."
 metadata:
   version: "0.1.0"
   invocation: "model"
