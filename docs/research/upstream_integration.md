@@ -142,3 +142,16 @@ in the first live run. New models are filtered server-side per speech tag: filte
 recorded and does not abort the digest. First live digest: transformers 5.13-5.19 newer than the
 pinned 5.12.1; new unregistered speech models Qwen3-ASR-0.6B/1.7B (apache-2.0),
 nemotron-3.5-asr-streaming-0.6b and parakeet-unified-en-0.6b.
+
+## The first adoption: Qwen3-ASR-1.7B (2026-10-10)
+
+The tracker found it; the process ran end to end. A candidate profile `hf-cand-519` was built
+(transformers 5.19.0), Level 3 passed under it for the supported HF model, and Qwen3-ASR reproduced
+Qwen's README numbers (test-clean 1.643 vs 1.63, test-other 3.368 vs 3.38;
+validation_campaigns/speech_repro/EVIDENCE.md). The registry gained two optional fields to express
+this without a new abstraction. `profile` names the upstream profile an entry runs in, and Level 3
+runs that step in it. `eval_script` declares a decode-only HF entry's own script, so a model FS
+cannot train yet (no FamilySpec) can still be supported for decoding and regression-tested.
+`hf-cand-519` is not promoted to the HF lane: it lacks peft and accelerate, so the trainer cannot
+run there. Promoting it, and training Qwen3-ASR, is the next step.
+

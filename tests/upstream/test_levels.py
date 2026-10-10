@@ -20,6 +20,8 @@ def test_plan_covers_exactly_the_supported_models() -> None:
     assert "--max-new-tokens" in by_id["canary-qwen-2.5b"].args
     assert by_id["parakeet-ctc-1.1b"].backend == "hf"
     assert by_id["parakeet-ctc-1.1b"].card_value == 1.83
+    assert by_id["qwen3-asr-1.7b"].profile == "hf-cand-519"
+    assert by_id["qwen3-asr-1.7b"].entry_point.endswith("eval_qwen3_asr.py")
     for step in steps:
         assert {"{model}", "{manifest}", "{out}"} <= set(step.args)
 
@@ -61,3 +63,14 @@ def test_steps_carry_the_registry_upstream_ref() -> None:
     refs = {s.model_id: s.upstream_ref for s in level3_plan()}
     assert refs["canary-qwen-2.5b"] == "nvidia/canary-qwen-2.5b"
     assert refs["parakeet-ctc-1.1b"] == "nvidia/parakeet-ctc-1.1b"
+
+
+def test_steps_run_in_the_entry_profile_or_the_backend_default() -> None:
+    entry = next(e for e in MODELS if e.id == "parakeet-ctc-1.1b")
+    (default,) = level3_plan((entry,))
+    assert default.profile == "hf-26.04"
+    own = dataclasses.replace(entry, profile="hf-cand-519", eval_script="campaign/eval.py")
+    (step,) = level3_plan((own,))
+    assert step.profile == "hf-cand-519"
+    assert step.entry_point == "campaign/eval.py"
+    assert {"{model}", "{manifest}", "{out}"} <= set(step.args)

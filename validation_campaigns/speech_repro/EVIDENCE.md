@@ -23,3 +23,38 @@ All three reproduce within 0.02 points. FoundationScale's normalizer is stricter
 reads about 0.2 points higher on every model; FS numbers elsewhere in the evidence use the FS
 normalizer and are comparable with each other, not with model cards. These runs are the
 regression tests for future upstream upgrades (Level 3 of the upgrade process).
+
+# The first model adopted through the upgrade process: Qwen3-ASR-1.7B (2026-10-10)
+
+The release tracker (Phase 5) surfaced Qwen/Qwen3-ASR-1.7B (Apache-2.0). Its class needs
+transformers >= 5.13 and the HF lane runs 5.5, so it went through the full upgrade process:
+
+1. **Candidate profile** `hf-cand-519`: the hf-26.04 container plus a venv with transformers 5.19.0,
+   torch unchanged. A `.pth` exposes the container's `/opt/venv` after the venv's own packages, so
+   peft 0.18.1, accelerate 1.11.0 and everything else are hf-26.04's.
+2. **Regress** under the candidate: Parakeet-CTC-1.1B, the supported HF model, reads 1.839 on
+   test-clean against its card's 1.83 (gap +0.009). FS's HF eval is unaffected by transformers 5.19.
+3. **Reproduce** with `eval_qwen3_asr.py` (bf16, greedy, max_new_tokens 1024, no forced language,
+   Qwen's published setting). The reference is the README results table; the card has no `model-index`.
+
+| split | Qwen README | ours, Whisper normalizer | gap | ours, FS normalizer |
+|---|---|---|---|---|
+| test-clean (2,620) | 1.63 | 1.643 | +0.013 | 1.883 |
+| test-other (2,939) | 3.38 | 3.368 | -0.012 | 3.660 |
+
+**Training-lane regression** (Parakeet-CTC-1.1B, 30 steps, seed 0, batch 8, train-clean-100, one
+GPU, `artifacts/speech/cand519_train`): both profiles PASS every gate (audio rows 248/248; tower
+movement 1352 vs 1350 of 1566). A same-seed rerun is bit-identical within each profile. Across
+profiles the per-step loss differs by at most 0.007, already at step 1 (0.2597 vs 0.2666, before
+any update), so this is a deterministic change in transformers' forward numerics, not
+nondeterminism. It is small and decode still reproduces the card, so it is accepted and recorded.
+
+Reproduced on both splits, so the registry entry `qwen3-asr-1.7b` is `supported`. It is
+decode-only, with no FamilySpec. Training support waits for the HF lane to move to a transformers
+version that carries the class.
+
+The first attempt read 11.4 / 14.2 because every hypothesis kept the model's
+`language English<asr_text>` header. In transformers 5.19 only `Qwen3ASRProcessor.decode` honours
+`return_format="transcription_only"`; `batch_decode` silently ignores it. The script now decodes
+row by row. This is the "integrated means reproduced" rule doing its job: the model loaded and
+produced fluent text, and only the comparison against the published number exposed the bug.

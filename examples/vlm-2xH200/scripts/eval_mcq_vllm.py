@@ -247,6 +247,12 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="JSON file that receives scores and per-row predictions.",
     )
     parser.add_argument(
+        "--max-num-seqs",
+        type=int,
+        default=256,
+        help="concurrent sequences in vLLM (Qwen3.6-27B needs <= 844 on one H200)",
+    )
+    parser.add_argument(
         "--max-tokens",
         type=int,
         default=512,
@@ -288,6 +294,10 @@ def main(argv=None) -> None:
         max_model_len=args.max_model_len,
         limit_mm_per_prompt={"image": 1},
         trust_remote_code=True,
+        # Qwen3.6's linear-attention layers need one cache block per running
+        # sequence; vLLM's default of 1024 exceeded the 844 blocks available for
+        # Qwen3.6-27B on one H200 and the engine refused to start.
+        max_num_seqs=args.max_num_seqs,
     )
     sampling = SamplingParams(temperature=0, max_tokens=args.max_tokens)
 
