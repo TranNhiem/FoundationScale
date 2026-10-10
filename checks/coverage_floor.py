@@ -330,6 +330,9 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/upstream/nemo/census.py": 90,  # measured 91%
     "src/foundationscale/upstream/nemo/decode.py": 32,  # measured 33%
     "src/foundationscale/upstream/nemo/finetune.py": 44,  # measured 45%
+    "src/foundationscale/upstream/nemo/salm_adjudicate.py": 52,  # measured 53%
+    "src/foundationscale/upstream/nemo/salm_decode.py": 36,  # measured 37%
+    "src/foundationscale/upstream/nemo/salm_finetune.py": 34,  # measured 35%
     "src/foundationscale/upstream/ledger.py": 99,  # measured 100%; 1 pt CI slack
     "src/foundationscale/video.py": 97,  # measured 98.1%; 1 pt CI slack (decoders via fakes)
     "src/foundationscale/verify/__init__.py": 100,  # set by --update; measured 100.0%

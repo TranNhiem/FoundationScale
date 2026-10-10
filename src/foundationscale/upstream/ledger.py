@@ -40,12 +40,16 @@ class LedgerEntry:
     issue: str = ""  # upstream issue or URL, when one is known
 
 
-_SALM = "validation_campaigns/speech_canary/salm_finetune.py"
 # PHASE 1.2a (docs/research/upstream_integration.md): the Canary AED lane moved from
 # ``validation_campaigns/speech_canary/nemo_finetune.py`` to the worker-side adapter at
 # ``src/foundationscale/upstream/nemo/finetune.py``. The two Canary entries below point at
 # the new path with the SAME anchor strings (they are preserved verbatim in the move).
 _CANARY_AED_FINETUNE = "src/foundationscale/upstream/nemo/finetune.py"
+# PHASE 1.2b (docs/research/upstream_integration.md): the NeMo speechlm2 SALM lane moved from
+# ``validation_campaigns/speech_canary/salm_finetune.py`` to the worker-side adapter at
+# ``src/foundationscale/upstream/nemo/salm_finetune.py``. The three SALM entries below point at
+# the new path with the SAME anchor strings (they are preserved verbatim in the move).
+_SALM_FINETUNE = "src/foundationscale/upstream/nemo/salm_finetune.py"
 _NEMO_SEEN = "nemo 3.1 (container nemo-26.08)"
 _HF_SEEN = "transformers 5.5"
 
@@ -54,7 +58,7 @@ LEDGER: tuple[LedgerEntry, ...] = (
         id="nemo-salm-strict-loading",
         kind=LedgerKind.WORKAROUND,
         framework="nemo",
-        path=_SALM,
+        path=_SALM_FINETUNE,
         anchor="class _StrictSALMDataset(SALMDataset):",
         why=(
             "NeMo's strict audio loading sets AudioSamples(fault_tolerant=False), which returns 2 "
@@ -72,7 +76,7 @@ LEDGER: tuple[LedgerEntry, ...] = (
         id="nemo-salm-cudnn-sdpa-off",
         kind=LedgerKind.WORKAROUND,
         framework="torch/cudnn (via nemo)",
-        path=_SALM,
+        path=_SALM_FINETUNE,
         anchor="torch.backends.cuda.enable_cudnn_sdp(False)",
         why=(
             "cuDNN fused attention fails in backward on the GB200 stack (cuDNN Frontend reshape "
@@ -88,7 +92,7 @@ LEDGER: tuple[LedgerEntry, ...] = (
         id="nemo-datamodule-null-validation",
         kind=LedgerKind.WORKAROUND,
         framework="nemo",
-        path=_SALM,
+        path=_SALM_FINETUNE,
         anchor="No validation_ds key at all",
         why=(
             "speechlm2 DataModule touches any present validation_ds key, so a null value "

@@ -329,6 +329,15 @@ PENDING_ENROLMENT: dict[str, str] = {
     "src/foundationscale/upstream/nemo/finetune.py": (
         "NeMo worker: train_ds/optimizer translation and the NeMo-owned fine-tune loop"
     ),
+    "src/foundationscale/upstream/nemo/salm_adjudicate.py": (
+        "NeMo worker: FS verdicts on a SALM checkpoint (movement, frozen-LLM identity, key sets)"
+    ),
+    "src/foundationscale/upstream/nemo/salm_decode.py": (
+        "NeMo worker: SALM chat-prompt transcription to the owned eval JSON"
+    ),
+    "src/foundationscale/upstream/nemo/salm_finetune.py": (
+        "NeMo worker: SALM data/optimizer config and the NeMo-owned fine-tune loop"
+    ),
     "src/foundationscale/upstream/contracts.py": (
         "owned speech contracts: manifest row validation with counted problem codes, "
         "duplicate id/audio detection, the NeMo AED row translation and the strict run config"

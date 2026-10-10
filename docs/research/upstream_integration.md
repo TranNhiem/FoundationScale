@@ -78,3 +78,11 @@ translation, argument parsing and verdict assembly are pure and tested in CI. Ve
 - fine-tune: identical census. Found and fixed: `--seed` did not make training reproducible (two
   old-script runs with one seed differed at step 1), because lhotse's `shard_seed` defaults to
   true randomness. Seeded runs now pin it, and two seeded runs on different GPUs give identical losses.
+
+## Phase 1.2b: the NeMo SALM (Canary-Qwen) lane (2026-10-10)
+
+`src/foundationscale/upstream/nemo/{salm_finetune,salm_decode,salm_adjudicate}.py`, same pattern as
+1.2a; the three SALM ledger entries follow the code. Verified on one GB200 node against the old
+scripts: decode identical (0 of 300 transcripts differ), re-adjudication of the Canary-Qwen
+fine-tune identical (6 of 6 lines), census identical. New `--seed` pins lhotse's seed and
+`shard_seed` (default behaviour unchanged): two seeded runs give identical losses.
