@@ -82,6 +82,11 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/agentic_rl/gateway/session.py": (
+        "gateway sampling contract, session store and episode assembly: line-covered by "
+        "tests/agentic_rl/test_gateway_session.py, but no mutation row yet proves a dropped "
+        "override record or a silent capacity drop would be caught."
+    ),
     "src/foundationscale/agentic_rl/gateway/wire.py": (
         "gateway wire-format translation (OpenAI Chat/Responses, Anthropic Messages, Gemini <-> "
         "canonical; responses and SSE): line-covered by tests/agentic_rl/test_gateway_wire.py, "
