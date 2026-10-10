@@ -82,6 +82,24 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/vla/adapters/gr00t/libero.py": (
+        "GR00T LIBERO policy adapter (observation batching, float32 state, normalize-then-invert "
+        "gripper): pinned against stand-in upstream modules and run on GB200, no mutation row yet."
+    ),
+    "src/foundationscale/vla/adapters/openpi/libero.py": (
+        "openpi LIBERO policy adapter (180-degree rotation, resize-with-pad, 8-d state): pinned "
+        "against stand-in upstream modules and run on GB200, no mutation row yet."
+    ),
+    "src/foundationscale/vla/eval/libero_runner.py": (
+        "FS-owned LIBERO rollout loop and report (init protocols, replan cadence, truncation is "
+        "failure, denominator never shrinks, Wilson CI): line-covered, no mutation row yet."
+    ),
+    "src/foundationscale/vla/eval/plan.py": (
+        "declared LIBERO episode plan and its refusals: line-covered, no mutation row yet."
+    ),
+    "src/foundationscale/vla/eval/protocol.py": (
+        "the PolicyAdapter structural contract: line-covered, no mutation row yet."
+    ),
     "src/foundationscale/vla/adapters/gr00t/contract.py": (
         "GR00T checkpoint contract reader (processor_config.json -> embodiment contract, "
         "ChunkSpec, observation dict): line-covered by tests/vla and bit-exact against GR00T's "

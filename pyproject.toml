@@ -284,7 +284,8 @@ warn_unreachable = true
 # liger_kernel joins the list for the same reason: optional (train/fused_loss.py's
 # --fused-loss liger path), absent in CI by design, reached only function-locally.
 # pyarrow joins it too: it ships no type stubs, and vla/lerobot.py imports it only
-# inside the parquet reader.
+# inside the parquet reader. The VLA backends (openpi_client, gr00t, libero, robosuite) run in
+# their own environments and are imported only inside foundationscale/vla/adapters and eval.
 module = [
     "torch.*",
     "safetensors.*",
@@ -295,6 +296,14 @@ module = [
     "liger_kernel.*",
     "pyarrow",
     "pyarrow.*",
+    "openpi_client",
+    "openpi_client.*",
+    "gr00t",
+    "gr00t.*",
+    "libero",
+    "libero.*",
+    "robosuite",
+    "robosuite.*",
 ]
 ignore_missing_imports = true
 
