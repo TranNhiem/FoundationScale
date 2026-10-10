@@ -90,6 +90,14 @@ PENDING_ENROLMENT: dict[str, str] = {
         "Level 3 VLA entry point: published-protocol table, server lifecycle, report payload, exit "
         "codes 0/95/96: line-covered by tests/vla, no mutation row yet."
     ),
+    "src/foundationscale/vla/adapters/gr00t/ddp_hook.py": (
+        "turns on GR00T's own DDP path before its launcher runs (upstream LEDGER workaround): "
+        "pinned against a stand-in gr00t package, no mutation row yet."
+    ),
+    "src/foundationscale/vla/adapters/gr00t/finetune.py": (
+        "GR00T fine-tune declaration, NVIDIA's published LIBERO recipe, checkpoint staging and "
+        "the torchrun argv: line-covered by tests/vla, no mutation row yet."
+    ),
     "src/foundationscale/vla/adapters/gr00t/libero.py": (
         "GR00T LIBERO policy adapter (observation batching, float32 state, normalize-then-invert "
         "gripper): pinned against stand-in upstream modules and run on GB200, no mutation row yet."
