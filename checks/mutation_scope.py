@@ -334,6 +334,22 @@ PENDING_ENROLMENT: dict[str, str] = {
         "waveform loading with named refusals, per-row placeholder verification, and "
         "the checked-vs-expected audio row coverage verdict"
     ),
+    "src/foundationscale/train/conversation.py": (
+        "decides which tokens of a multi-turn image/video/text row are supervised "
+        "(assistant spans from template-derived marker ids, span count checked against "
+        "the turn count), and which rows are dropped or refused as overlong before any "
+        "rank trains on them"
+    ),
+    "src/foundationscale/train/fused_loss.py": (
+        "replaces the loss computation for 32K context: model_type dispatch with a named "
+        "refusal, and an FS-owned gemma4_unified forward whose softcapping and label "
+        "handling must match the stock forward or every loss is silently different"
+    ),
+    "src/foundationscale/train/fsdp_peft_save.py": (
+        "decides whether an FSDP1 LoRA checkpoint is rewritten through a meta-device "
+        "skeleton; the measured alternative is a 40-byte adapter that the save gate "
+        "can only catch after training"
+    ),
     "src/foundationscale/video.py": (
         "video as a declared frame budget: centred-uniform sampling, the per-clip frame "
         "cache and its race-safe publish, the env declaration and the row fold; CPU legs "

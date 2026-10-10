@@ -172,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--adapter-dropout", type=float, default=None)
-    # --- The sixteen declaration axes ---------------------------------------
+    # --- The seventeen declaration axes --------------------------------------
     # Every flag below defaults to None for exactly the reason --precision does:
     # None means NOT DECLARED. An omitted flag applies the transformers engine
     # default (AdamW, accumulation 1, max_grad_norm 1.0, no recompute, linear LR
@@ -374,6 +374,22 @@ def build_parser() -> argparse.ArgumentParser:
             "one DCP shard per rank under pytorch_model_fsdp_0/, and is "
             "REFUSED (96) without --sharding-strategy fsdp because no other "
             "save path has a state_dict_type to set"
+        ),
+    )
+    p.add_argument(
+        "--fused-loss",
+        choices=("liger",),
+        default=None,
+        help=(
+            "fused linear cross-entropy kernel, applied to the model INSTANCE "
+            "before peft/FSDP wrap it. Required to reach long context at all on "
+            "a large-vocabulary model: measured, gemma-4-12B-it at 32768 tokens "
+            "OOMs allocating exactly 32 GiB (seq x vocab=262144 x 4 bytes fp32 "
+            "logits) with this unset. REFUSED (96) naming the model_type when "
+            "this plane's installed liger_kernel (plus its FS-owned "
+            "gemma4_unified patch) does not cover the loaded model -- never "
+            "silently trained unfused under a declared label. Omit: no patch, "
+            "the existing forward runs unchanged, and NOT recorded as a claim"
         ),
     )
     return p
@@ -620,6 +636,7 @@ def _build_config(argv: Sequence[str] | None, args: argparse.Namespace) -> Train
         logging_steps=args.logging_steps,
         sharding_strategy=args.sharding_strategy,
         fsdp_state_dict=args.fsdp_state_dict,
+        fused_loss=args.fused_loss,
     )
 
 

@@ -39,6 +39,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import torch
 
 __all__ = (
@@ -56,6 +58,7 @@ __all__ = (
     "save_checkpoint",
     "save_sharded_dcp",
     "shard_indices",
+    "unshard_for_generation",
     "wrap_ddp",
     "wrap_fsdp2",
 )
@@ -418,6 +421,92 @@ def find_decoder_blocks(model: Any) -> list[Any]:
     return list(largest.children())
 
 
+def _find_tower_modules(model: Any) -> list[Any]:
+    """Non-language-model submodules (vision/audio towers, MTP heads) that
+    need their OWN ``fully_shard`` unit, beyond the decoder blocks.
+
+    MEASURED ROOT CAUSE (gemma-4-12B-it, FSDP2 + images, 2026-10-09):
+    ``_no_split_modules`` on gemma4_unified names ONLY the text decoder
+    layer class (``Gemma4UnifiedTextDecoderLayer``), so
+    :func:`find_decoder_blocks` wraps the language model's blocks and
+    nothing else -- the vision embedder (``model.embed_vision``) stayed
+    inside the ROOT ``fully_shard`` unit, which only unshards its
+    parameters when the ROOT's own ``forward()`` runs. ``generate()``'s
+    multimodal preprocessing calls ``get_image_features()`` ->
+    ``self.embed_vision(...)`` directly, BEFORE the decode loop's first
+    ``forward()`` -- so the vision tower's parameters were still DTensor
+    shards, not real tensors, the moment its own forward ran, and
+    ``aten.native_layer_norm`` crashed on "mixed torch.Tensor and
+    DTensor". CONFIRMED pre-existing and independent of LoRA: reproduced
+    identically with ``adapter=None``.
+
+    Resolved from the SAME family registry the SFT plane's LoRA target
+    scoping already uses (:mod:`foundationscale.families`), not by name
+    guessing here: every ``(dotted_path, modality)`` in the model's
+    resolved ``FamilySpec.towers`` is tried via
+    :func:`foundationscale.families.towers.resolve_module_path`,
+    deduplicated by identity (a family may declare more than one dotted
+    path for the SAME checkpoint attribute across its ``model_type``
+    variants -- e.g. gemma4's ``model.vision_tower`` for E4B/26B/31B and
+    ``model.embed_vision`` for the 12B/unified variant -- only one
+    resolves on any given real checkpoint), and a resolved module with
+    zero parameters is dropped: nothing to shard, nothing to unshard.
+
+    Returns ``[]`` -- changing ``wrap_fsdp2``'s behaviour not at all --
+    when the model's config names no registered family (an unregistered
+    or text-only model has no declared extra towers) or the registered
+    family declares none. This is a SAFE degradation, unlike the LoRA
+    target selector's hard refusal for the same "family unknown" case: a
+    tower this function fails to find stays in the root unit exactly as
+    it does today, so the worst case is the SAME crash this function
+    exists to fix, surfaced loudly on the first affected ``generate()``
+    call -- never a silently wrong shard.
+
+    MEASURED SECOND BUG, same date: calling this on a peft-wrapped model
+    with ``model`` itself (rather than the ORIGINAL model peft wraps) made
+    the first version of this fix a silent no-op. ``PeftModel`` has no
+    ``.model`` attribute of its own; ``peft_model.model`` resolves through
+    ``__getattr__`` delegation to ``peft_model.base_model.model`` -- which
+    IS the original pre-peft model object, confirmed via
+    ``peft_model.model is raw_model``. So a registered path like
+    ``"model.embed_vision"``, meant to be read against the ORIGINAL model
+    (``raw_model.model.embed_vision``), instead resolved as
+    ``peft_model.model.embed_vision`` == ``raw_model.embed_vision`` -- one
+    segment short, which does not exist on ``raw_model`` directly, so
+    ``resolve_module_path`` correctly reported "absent" and this function
+    returned ``[]`` even though the tower was real and reachable. Fixed by
+    resolving against ``model.get_base_model()`` (peft's own accessor for
+    the wrapped object) when present -- confirmed to return the IDENTICAL
+    live module objects the wrapped tree actually holds
+    (``base.model.embed_vision is raw_model.model.embed_vision``), so
+    wrapping what this function finds really does wrap what
+    ``generate()`` will later call.
+    """
+    from foundationscale.families import resolve_family
+    from foundationscale.families.towers import resolve_module_path
+
+    config_to_dict = getattr(getattr(model, "config", None), "to_dict", None)
+    family_config: Any = config_to_dict() if callable(config_to_dict) else None
+    if not isinstance(family_config, dict):
+        family_config = {}
+    family = resolve_family(family_config)
+    if family is None:
+        return []
+    get_base_model = getattr(model, "get_base_model", None)
+    resolve_root = get_base_model() if callable(get_base_model) else model
+    found: list[Any] = []
+    seen_ids: set[int] = set()
+    for dotted_path, _modality in family.towers:
+        resolved = resolve_module_path(resolve_root, dotted_path)
+        if resolved is None or id(resolved) in seen_ids:
+            continue
+        if next(resolved.parameters(), None) is None:
+            continue
+        seen_ids.add(id(resolved))
+        found.append(resolved)
+    return found
+
+
 def wrap_fsdp2(
     model: Any,
     ctx: DistContext,
@@ -434,11 +523,13 @@ def wrap_fsdp2(
     IS the master-weight scheme -- it replaces ``MasterWeightOptimizer``
     under fsdp, whose host-side fp32 copies would break the DTensor plane.
 
-    Decoder blocks are sharded leaf-first and the root last, so parameters
-    outside any block (embeddings, tied lm_head, final norm) live in the
-    root unit and the tie survives. Cast before this call stays the
-    caller's choice; this function performs it because every trainer wants
-    exactly this order.
+    Decoder blocks AND any registered multimodal towers (see
+    :func:`_find_tower_modules` -- the measured fix for FSDP2 + images
+    crashing in ``generate()``) are sharded leaf-first and the root last,
+    so parameters outside any of those units (embeddings, tied lm_head,
+    final norm) live in the root unit and the tie survives. Cast before
+    this call stays the caller's choice; this function performs it because
+    every trainer wants exactly this order.
     """
     import torch
 
@@ -464,6 +555,13 @@ def wrap_fsdp2(
             mp_policy=mp_policy,
             reshard_after_forward=reshard_after_forward,
         )
+    for tower in _find_tower_modules(model):
+        fully_shard(
+            tower,
+            mesh=mesh,
+            mp_policy=mp_policy,
+            reshard_after_forward=reshard_after_forward,
+        )
     fully_shard(
         model,
         mesh=mesh,
@@ -471,6 +569,111 @@ def wrap_fsdp2(
         reshard_after_forward=reshard_after_forward,
     )
     return model
+
+
+def unshard_for_generation(model: Any) -> Callable[[], None]:
+    """Explicitly materialise the ROOT's (and every tower's) full
+    parameters, for the duration of a ``generate()`` call that never
+    triggers the root's own forward hook at all.
+
+    MEASURED (gemma-4-12B-it AND Qwen3.6-27B, GRPO rollout, 2026-10-09),
+    the ROOT CAUSE, found after three narrower-but-wrong theories (vision
+    tower timing, lazy-init call order) each explained ONE symptom but not
+    the next: ``peft.PeftModel.generate()`` is hard-coded to
+    ``return self.get_base_model().generate(*args, **kwargs)`` -- it calls
+    ``.generate()`` on the UNWRAPPED base model object, never on ``self``.
+    ``fully_shard(model, ...)`` in :func:`wrap_fsdp2` was applied to the
+    PEFT WRAPPER (``model`` there, at the point ``_apply_lora_adapter`` has
+    already run) -- so the FSDP2 forward-pre-hook that unshards the root's
+    own parameter group lives on the WRAPPER's ``__call__``, an object
+    ``generate()`` never touches. CONFIRMED on a TEXT-ONLY model
+    (Qwen3.6-27B, zero registered towers): the very same "mixed
+    torch.Tensor and DTensor" crash occurs at ``embed_tokens`` on the
+    FIRST ``generate()`` call, with no vision tower involved at all -- an
+    earlier version of this function special-cased "no tower, no-op",
+    which was precisely backwards; the root needs explicit unsharding for
+    EVERY peft+FSDP2 model that calls ``generate()``, regardless of
+    modality. (Decoder blocks and towers are each wrapped on the REAL
+    nested module object, which is identical whether reached through the
+    wrapper or through ``get_base_model()``, so their OWN per-unit hooks
+    fire normally either way -- only the ROOT'S hook is the one
+    ``generate()`` skips.)
+
+    Explicitly ``unshard()``-ing the root (via its own ``FSDPModule.unshard``)
+    before ``generate()`` materialises its group's parameters directly,
+    without relying on a hook that will not fire. Towers are unsharded
+    AFTER the root (not before): torch's ``_fsdp_state.py::_lazy_init``
+    determines "the root" as whichever FSDP state's lazy-init runs FIRST,
+    then walks that state's entire submodule tree marking every other FSDP
+    state non-root; unsharding a tower first lets the tower self-elect as
+    root instead, and the true root's later lazy-init then finds an
+    inconsistent tree and raises "already been lazily initialized".
+    Root-first avoids that: the true root's walk runs while every decoder
+    block and tower is still untouched.
+
+    A KNOWN REMAINING LIMITATION: on a real 30-step GRPO run with a vision
+    tower (gemma-4-12B-it), steps 0 and 1 (both UNMEASURED -- every
+    rollout row abstained, so neither reached a ``backward()``) completed
+    cleanly with this fix, then step 2's ``generate()`` raised the
+    "already lazily initialized" error again. torch's own docs
+    (``FSDPModule.reset_iter_state``) name a forward running without a
+    matching backward as leaving per-iteration trackers
+    (``iter_forward_root`` among them) in an "undefined condition" --
+    matching this plane's common case of consecutive forward-only
+    rollouts. Calling ``reset_iter_state()`` after every ``generate()`` to
+    clear that state was TRIED and made things WORSE: it raised
+    ``AttributeError: 'FSDPCommContext' object has no attribute
+    'all_gather_state'`` on the very first call, before any normal forward
+    had ever primed that attribute -- its own documented precondition
+    ("after an exception aborted a forward or backward mid-flight") is
+    violated by this plane's common all-abstained-step case. NOT shipped.
+    Until resolved, ``sharding='fsdp'`` for a VLM trained WITH images is
+    validated only for short runs; the GPU-proven path for a longer
+    VLM-with-images run today is ``sharding='ddp'``. TEXT-ONLY models are
+    NOT affected by this remaining limitation -- their only FSDP2 unit this
+    function touches is the root itself, which does not have the
+    tower-self-election race to begin with.
+
+    Returns a zero-argument callable that reshards every unit this
+    unsharded, restoring the sharded (memory-saving) state from before --
+    callers reshard in a ``finally`` so an exception inside ``generate()``
+    does not leave parameters permanently unsharded. Finds zero units (a
+    correct no-op) on a non-FSDP2 model: DDP and single-process runs never
+    wrap anything in ``FSDPModule``.
+    """
+    try:
+        from torch.distributed.fsdp import FSDPModule
+    except ImportError:  # torch < 2.6 kept it in the composable namespace
+        from torch.distributed._composable.fsdp import (  # type: ignore[no-redef,unused-ignore]
+            FSDPModule,
+        )
+
+    # ROOT FIRST, towers after -- load-bearing order, see this function's
+    # docstring: unsharding a tower first lets it self-elect as FSDP2's
+    # root (root status is decided by whichever state's lazy-init runs
+    # first), which then makes the TRUE root's own lazy-init raise when
+    # its walk finds that tower already initialized.
+    #
+    # _find_tower_modules resolves towers from the FAMILY REGISTRY, which
+    # is sharding-agnostic -- it finds the SAME vision embedder whether the
+    # model was ever wrapped with fully_shard or not. MEASURED: under
+    # sharding='ddp', that tower is a plain nn.Module (fully_shard was
+    # never called on it), and unconditionally calling .unshard() on it
+    # raised AttributeError. Filtered to isinstance(tower, FSDPModule) so
+    # this function is a correct no-op whenever NEITHER the root NOR any
+    # tower is actually FSDP2-wrapped, not just when no tower is declared.
+    units: list[Any] = []
+    if isinstance(model, FSDPModule):
+        units.append(model)
+    units.extend(tower for tower in _find_tower_modules(model) if isinstance(tower, FSDPModule))
+    for unit in units:
+        unit.unshard()
+
+    def _reshard() -> None:
+        for unit in units:
+            unit.reshard()
+
+    return _reshard
 
 
 def wrap_ddp(model: Any, ctx: DistContext) -> Any:
@@ -492,6 +695,29 @@ def generate_kwargs_for(ctx: DistContext, sharding: str) -> dict[str, Any]:
     if sharding == "fsdp" and ctx.world_size > 1:
         return {"synced_gpus": True}
     return {}
+
+
+def _atomic_peft_save(target: Any, out_dir: str, state_dict: Any | None) -> None:
+    """Adapter-only save, atomic: temp-dir-then-replace on the SAME filesystem.
+
+    Reused, not reimplemented: ``foundationscale.train.fsdp_peft_save``'s
+    SFT plane already built and tested this exact mechanism
+    (``_atomically_overwrite_adapter`` -- write into a fresh ``mkdtemp``
+    inside ``out_dir``, then ``Path.replace`` each file into place, which is
+    an ``os.replace`` and therefore atomic because source and destination
+    share a filesystem) for a DIFFERENT reason (FSDP1's per-layer wrap
+    corrupts ``get_peft_model_state_dict``'s key derivation). That root
+    cause does not apply here -- FSDP2's composable ``fully_shard`` never
+    renames submodules, so ``target.save_pretrained`` derives correct
+    adapter key prefixes directly from the live, wrapped model -- but the
+    atomic-write MECHANISM has nothing FSDP1-specific about it, and a
+    second, subtly different atomic-write routine written here would be
+    exactly the kind of drift between two copies of one idea that this
+    repository's doctrine refuses to let stand unmeasured.
+    """
+    from foundationscale.train.fsdp_peft_save import _atomically_overwrite_adapter
+
+    _atomically_overwrite_adapter(target, out_dir, state_dict)
 
 
 def save_checkpoint(
@@ -523,15 +749,28 @@ def save_checkpoint(
 
     out = Path(out_dir)
     target = model.module if hasattr(model, "module") else model
+    # A peft-wrapped target carries a non-empty peft_config: save_pretrained
+    # on one writes ONLY adapter_model.safetensors + adapter_config.json
+    # (peft's own get_peft_model_state_dict filters the state_dict it is
+    # given down to the adapter tensors), which is the adapter-only
+    # checkpoint contract -- and that write goes through the atomic
+    # temp-dir-then-replace path, never a direct write into out_dir.
+    is_peft = getattr(target, "peft_config", None) is not None
     _save_barrier(ctx)  # entry wait: builds the save group before rank 0 diverges
     if sharding == "fsdp":
         state_dict = _gather_full_state_dict(model, ctx, save_dtype)
         if is_main(ctx):
             out.mkdir(parents=True, exist_ok=True)
-            target.save_pretrained(out, state_dict=state_dict, safe_serialization=True)
+            if is_peft:
+                _atomic_peft_save(target, str(out), state_dict)
+            else:
+                target.save_pretrained(out, state_dict=state_dict, safe_serialization=True)
     elif is_main(ctx):
         out.mkdir(parents=True, exist_ok=True)
-        target.save_pretrained(out, safe_serialization=True)
+        if is_peft:
+            _atomic_peft_save(target, str(out), None)
+        else:
+            target.save_pretrained(out, safe_serialization=True)
     if is_main(ctx):
         out.mkdir(parents=True, exist_ok=True)
         if tokenizer_or_processor is not None and hasattr(

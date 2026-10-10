@@ -225,7 +225,7 @@ FLOORS: dict[str, int] = {
     # tests are written. Delete a line when its module reaches the default; do not
     # add a line by hand, and do not lower one to make a red run green.
     "src/foundationscale/gates/speech_gates.py": 99,  # measured 100.0%; 1 pt CI slack
-    "src/foundationscale/rl/distributed.py": 69,  # measured 70.7%; CI covers 1 line less
+    "src/foundationscale/rl/distributed.py": 73,  # measured 74.5% (LoRA save path); 1 pt CI slack
     "src/foundationscale/rl/megatron/driver.py": 39,  # measured 39.8%; rung-2 loop is GPU-only
     "src/foundationscale/rl/megatron/logprobs.py": 33,  # set by --update; measured 33.3%
     "src/foundationscale/rl/megatron/normalization.py": 77,  # set by --update; measured 77.1%
@@ -316,6 +316,7 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/train/__init__.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/train/audio.py": 96,  # set by --update; measured 97.0%
     "src/foundationscale/train/cli.py": 98,  # set by --update; measured 98.9%
+    "src/foundationscale/train/conversation.py": 96,  # set by --update; measured 96.2%
     "src/foundationscale/train/sdp_backend.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/train/speech_adjudication.py": 97,  # measured 98.1%; 1 pt CI slack
     "src/foundationscale/train/speech_kinds.py": 94,  # measured 95.9%; 1 pt CI slack

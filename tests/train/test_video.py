@@ -516,3 +516,243 @@ def test_ffmpeg_bins_honour_the_override_variables(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("FOUNDATIONSCALE_FFMPEG", "/x/ffmpeg")
     monkeypatch.setenv("FOUNDATIONSCALE_FFPROBE", "/x/ffprobe")
     assert video._ffmpeg_bins() == ("/x/ffmpeg", "/x/ffprobe")
+
+
+# ---------------------------------------------------------------------------
+# video segments: sample_times(start=, end=), video_frame_paths(start=, end=),
+# fold_video_row/frames_for_row reading a row's own "start"/"end"
+#
+# Every assertion below goes through the ``video.`` module attribute (never
+# the bare names imported at the top of this file): test_module_imports_
+# without_decoders, above, reloads the module, minting new class objects for
+# everything it defines -- an exception raised by the (reloaded) module code
+# is NOT an instance of a bare name imported before that reload, so
+# pytest.raises(VideoDecodeError, ...) against the stale top-level import
+# would silently never catch it. Every decoder-backend test below this point
+# in the file already follows this rule for exactly that reason.
+# ---------------------------------------------------------------------------
+
+
+def test_sample_times_segment_is_centred_uniform_inside_the_bounds() -> None:
+    # An 8s clip, segment [2, 6] (4s span): identical shape to a fresh
+    # 4s-duration call, offset by the segment's own start.
+    assert video.sample_times(8.0, 4, start=2.0, end=6.0) == [2.5, 3.5, 4.5, 5.5]
+
+
+def test_sample_times_with_no_bounds_is_unaffected_by_segments_existing() -> None:
+    assert video.sample_times(8.0, 4) == [1.0, 3.0, 5.0, 7.0]
+    assert video.sample_times(8.0, 4, start=None, end=None) == [1.0, 3.0, 5.0, 7.0]
+
+
+def test_sample_times_segment_end_clamped_to_the_decoded_duration() -> None:
+    # The segment says 9s but the clip is only 8s long: clamp, don't refuse --
+    # a common corpus rounding artifact.
+    assert video.sample_times(8.0, 2, start=6.0, end=9.0) == [6.5, 7.5]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"start": 1.0, "end": None}, "both start and end"),
+        ({"start": None, "end": 5.0}, "both start and end"),
+        ({"start": 5.0, "end": 5.0}, "greater than start"),
+        ({"start": 5.0, "end": 3.0}, "greater than start"),
+        ({"start": 8.0, "end": 10.0}, "at or beyond the clip duration"),
+        ({"start": 9.0, "end": 10.0}, "at or beyond the clip duration"),
+    ],
+)
+def test_sample_times_segment_refusals(kwargs: dict[str, Any], message: str) -> None:
+    with pytest.raises(video.VideoDecodeError, match=message):
+        video.sample_times(8.0, 4, **kwargs)
+
+
+def _segment_decoder(calls: list[tuple[str, int, float | None, float | None]]) -> Any:
+    from PIL import Image
+
+    def decode(
+        path: str, frames: int, *, start: float | None = None, end: float | None = None
+    ) -> list[Any]:
+        calls.append((path, frames, start, end))
+        return [Image.new("RGB", (8, 8), (index * 10, 0, 0)) for index in range(frames)]
+
+    return decode
+
+
+def test_video_frame_paths_passes_the_segment_to_the_decoder(
+    clip: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, int, float | None, float | None]] = []
+    monkeypatch.setitem(video._DECODERS, "seg", _segment_decoder(calls))
+    video.video_frame_paths(
+        clip, video.FrameBudget(2), tmp_path, backends=["seg"], start=1.0, end=3.0
+    )
+    assert calls == [(str(clip), 2, 1.0, 3.0)]
+
+
+def test_video_frame_paths_with_no_segment_calls_the_decoder_with_two_positional_args(
+    clip: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Byte-identical call shape for a no-segment caller: exactly 2 positional
+    args, no start/end kwargs -- the existing ``_fake_decoder`` stand-ins used
+    by every OTHER test in this module take no kwargs at all, so this is also
+    what proves those tests keep measuring the right thing."""
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setitem(video._DECODERS, "plain", _fake_decoder(calls))
+    video.video_frame_paths(clip, video.FrameBudget(2), tmp_path, backends=["plain"])
+    assert calls == [(str(clip), 2)]
+
+
+def test_video_frame_paths_two_segments_of_one_clip_decode_separately(
+    clip: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, int, float | None, float | None]] = []
+    monkeypatch.setitem(video._DECODERS, "seg", _segment_decoder(calls))
+    budget = video.FrameBudget(2)
+    first = video.video_frame_paths(clip, budget, tmp_path, backends=["seg"], start=0.0, end=4.0)
+    second = video.video_frame_paths(clip, budget, tmp_path, backends=["seg"], start=4.0, end=8.0)
+    assert first != second
+    assert len(calls) == 2, "each segment must decode its own frames, never share a cache entry"
+    # Re-requesting the FIRST segment is a cache hit: still only 2 decodes total.
+    again = video.video_frame_paths(clip, budget, tmp_path, backends=["seg"], start=0.0, end=4.0)
+    assert again == first
+    assert len(calls) == 2
+
+
+def test_video_frame_paths_a_segment_and_the_whole_clip_do_not_share_a_cache_entry(
+    clip: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, int, float | None, float | None]] = []
+    monkeypatch.setitem(video._DECODERS, "seg", _segment_decoder(calls))
+    budget = video.FrameBudget(2)
+    whole = video.video_frame_paths(clip, budget, tmp_path, backends=["seg"])
+    segment = video.video_frame_paths(clip, budget, tmp_path, backends=["seg"], start=1.0, end=3.0)
+    assert whole != segment
+    assert len(calls) == 2
+
+
+def test_video_frame_paths_segment_record_carries_start_and_end(
+    clip: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(video._DECODERS, "seg", _segment_decoder([]))
+    paths = video.video_frame_paths(
+        clip, video.FrameBudget(2), tmp_path, backends=["seg"], start=1.0, end=3.0
+    )
+    record = json.loads((Path(paths[0]).parent / "frames.json").read_text())
+    assert (record["start"], record["end"]) == (1.0, 3.0)
+
+
+def test_video_frame_paths_segment_only_one_bound_refuses_before_any_backend_is_touched(
+    clip: Path, tmp_path: Path
+) -> None:
+    def never(*_a: Any, **_k: Any) -> list[Any]:
+        raise AssertionError("a backend must not be touched for an invalid segment declaration")
+
+    with pytest.raises(video.VideoDecodeError, match="both start and end"):
+        video.video_frame_paths(
+            clip, video.FrameBudget(2), tmp_path, backends=["never"], start=1.0, end=None
+        )
+
+
+def test_fold_video_row_reads_start_and_end_from_the_row(
+    clip: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, int, float | None, float | None]] = []
+    monkeypatch.setattr(video, "_DECODERS", {"seg": _segment_decoder(calls)})
+    monkeypatch.setattr(video, "available_backends", lambda: ["seg"])
+    row = {"text": "<video> q", "clip": clip.name, "start": 1, "end": "3.5"}
+    out = video.fold_video_row(
+        row,
+        video_column="clip",
+        image_column="img",
+        budget=video.FrameBudget(2),
+        cache_dir=tmp_path / "cache",
+        base_dir=clip.parent,
+    )
+    assert len(out["img"]) == 2
+    assert calls == [(str(clip), 2, 1.0, 3.5)]
+
+
+def test_fold_video_row_without_start_end_leaves_the_segment_unset(
+    clip: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(video, "_DECODERS", {"fake": _fake_decoder(calls)})
+    monkeypatch.setattr(video, "available_backends", lambda: ["fake"])
+    video.fold_video_row(
+        {"text": "<video> q", "clip": clip.name},
+        video_column="clip",
+        image_column="img",
+        budget=video.FrameBudget(2),
+        cache_dir=tmp_path / "cache",
+        base_dir=clip.parent,
+    )
+    assert calls == [(str(clip), 2)]
+
+
+# ---------------------------------------------------------------------------
+# frames_for_row: native video for the conversation path
+# ---------------------------------------------------------------------------
+
+
+def test_frames_for_row_returns_frames_and_segment_metadata(
+    clip: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(video, "_DECODERS", {"seg": _segment_decoder([])})
+    monkeypatch.setattr(video, "available_backends", lambda: ["seg"])
+    row = {"clip": str(clip), "start": 2.0, "end": 6.0}
+    result = video.frames_for_row(
+        row,
+        video_column="clip",
+        budget=video.FrameBudget(4),
+        cache_dir=tmp_path,
+        base_dir=tmp_path,
+    )
+    assert len(result["frames"]) == 4
+    assert result["duration"] == 4.0
+    assert result["fps"] == pytest.approx(1.0)  # 4 frames / 4s
+    assert result["frames_indices"] == [0, 1, 2, 3]
+
+
+def test_frames_for_row_requires_both_start_and_end(tmp_path: Path, clip: Path) -> None:
+    with pytest.raises(video.VideoDecodeError, match="'start'/'end'"):
+        video.frames_for_row(
+            {"clip": str(clip)},
+            video_column="clip",
+            budget=video.FrameBudget(2),
+            cache_dir=tmp_path,
+            base_dir=tmp_path,
+        )
+
+
+def test_frames_for_row_resolves_a_relative_clip_against_base_dir(
+    clip: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, int, float | None, float | None]] = []
+    monkeypatch.setattr(video, "_DECODERS", {"seg": _segment_decoder(calls)})
+    monkeypatch.setattr(video, "available_backends", lambda: ["seg"])
+    row = {"clip": clip.name, "start": 0.0, "end": 2.0}
+    video.frames_for_row(
+        row,
+        video_column="clip",
+        budget=video.FrameBudget(2),
+        cache_dir=tmp_path,
+        base_dir=clip.parent,
+    )
+    assert calls == [(str(clip), 2, 0.0, 2.0)]
+
+
+def test_frames_for_row_propagates_an_undecodable_clip(tmp_path: Path, clip: Path) -> None:
+    def broken(*_a: Any, **_k: Any) -> list[Any]:
+        raise video.VideoDecodeError("no decoder here")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(video, "_DECODERS", {"broken": broken})
+        mp.setattr(video, "available_backends", lambda: ["broken"])
+        with pytest.raises(video.VideoDecodeError, match="no decoder here"):
+            video.frames_for_row(
+                {"clip": str(clip), "start": 0.0, "end": 1.0},
+                video_column="clip",
+                budget=video.FrameBudget(2),
+                cache_dir=tmp_path,
+                base_dir=tmp_path,
+            )
