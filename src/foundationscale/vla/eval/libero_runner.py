@@ -305,13 +305,17 @@ def within_published(
     published_trials: int,
     z: float = 1.96,
 ) -> bool:
-    """``True`` when the published success rate falls inside ``report``'s Wilson interval.
+    """``True`` when ``report``'s rate is within the two-sample binomial margin of the published.
 
-    The published rate is ``published_successes / published_trials`` and the interval is
-    ``report.wilson_ci(z)``; the comparison is inclusive, so a published rate exactly on a bound
-    is within. This is the tolerance rule of plan v2: a run whose interval covers the published
-    rate is consistent with it, one whose interval does not is not, whatever the two point
-    estimates happen to be.
+    The margin is ``z * sqrt(p(1-p)/n_published + p(1-p)/n_measured)`` with ``p`` the published
+    rate -- the same rule the VLA registry fixes its tolerances with
+    (:func:`foundationscale.upstream.vla_models.binomial_tolerance`), so the harness and the
+    registry never disagree on whether a run reproduces. Both runs are samples: a one-sample
+    test that only asks whether the published rate falls inside OUR interval ignores the
+    published run's own noise and rejects honest reproductions (measured on GB200: GR00T 190/200
+    against 195/200 fails that test and passes this one). A degenerate published rate (0 or 1)
+    has no binomial spread, so the pooled rate of both runs is used for ``p`` instead. The
+    comparison is inclusive.
 
     Refuses a ``report`` that is not an :class:`EvalReport`, a ``published_trials`` that is not
     an int >= 1, and a ``published_successes`` that is not an int in ``[0, published_trials]``,
@@ -339,8 +343,17 @@ def within_published(
             f"published_successes is {published_successes}; expected an int in "
             f"[0, {published_trials}] (published_trials), a count cannot exceed its denominator"
         )
-    low, high = report.wilson_ci(z)
-    return low <= published_successes / published_trials <= high
+    if not _is_number(z) or not math.isfinite(z) or z <= 0.0:
+        raise LiberoRunnerError(f"z is {z!r}; expected a finite float > 0")
+    measured_trials = report.trials()
+    if measured_trials < 1:
+        raise LiberoRunnerError("the report holds no episodes; there is no rate to compare")
+    published = published_successes / published_trials
+    p = published
+    if p in (0.0, 1.0):
+        p = (published_successes + report.successes()) / (published_trials + measured_trials)
+    margin = z * math.sqrt(p * (1.0 - p) / published_trials + p * (1.0 - p) / measured_trials)
+    return abs(report.rate() - published) <= margin + 1e-12
 
 
 # -- the rollout, one task and one episode at a time -------------------------------------

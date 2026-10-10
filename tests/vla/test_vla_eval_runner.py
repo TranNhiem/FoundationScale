@@ -6,7 +6,7 @@ the module-level benchmark lookup (a fake benchmark, monkeypatched where the run
 and the policy is a fake :class:`PolicyAdapter`. Covered: plan refusals, episode order, the dummy
 settle steps, the replan cadence and inference count, success and the ``max_steps`` budget, short
 chunks and crashed episodes counted as failures, both init protocols, the Wilson interval against
-a hand-computed value, and ``within_published`` both ways.
+a hand-computed value, and ``within_published`` (two-sample rule) both ways.
 """
 
 from __future__ import annotations
@@ -612,19 +612,37 @@ class TestEvalReport:
 
 
 class TestWithinPublished:
-    def test_true_inside_the_interval_and_false_outside(self) -> None:
-        result = build_report(record(success=True), record(trial=1, success=False))
-        assert within_published(result, 1, 2, z=1.0) is True  # 0.5, the centre
-        assert within_published(result, 1, 4, z=1.0) is True  # 0.25, inside (0.2113, 0.7887)
-        assert within_published(result, 4, 4, z=1.0) is False  # 1.0, above the interval
-        assert within_published(result, 0, 4, z=1.0) is False  # 0.0, below the interval
+    def test_gr00t_calibration_reproduces_under_the_two_sample_rule(self) -> None:
+        """Measured on GB200: GR00T 190/200 through the FS harness vs the published 195/200.
 
-    def test_a_published_rate_exactly_on_a_bound_is_within(self) -> None:
-        # 0 of 1 at z = 2: centre = 2/5, half = 2*sqrt(1)/5, so the interval is exactly (0, 0.8).
-        result = build_report(record(success=False))
-        assert result.wilson_ci(z=2.0) == (0.0, 0.8)
-        assert within_published(result, 0, 1, z=2.0) is True
-        assert within_published(result, 1, 1, z=2.0) is False
+        The one-sample test (is 0.975 inside OUR Wilson interval?) rejects it -- the interval
+        tops out at 0.9726 -- while the two-sample margin the registry uses (3.06 points at
+        n = 200 vs 200) accepts it. The harness must agree with the registry.
+        """
+        result = build_report(
+            *[record(trial=i, success=i >= 10) for i in range(200)]  # 190 successes of 200
+        )
+        assert result.successes() == 190
+        assert result.wilson_ci()[1] < 0.975  # the one-sample rule would refuse
+        assert within_published(result, 195, 200) is True
+
+    def test_a_real_regression_is_outside_the_margin(self) -> None:
+        result = build_report(*[record(trial=i, success=i >= 50) for i in range(200)])  # 75%
+        assert within_published(result, 195, 200) is False
+
+    def test_identical_rates_are_within_and_the_bound_is_inclusive(self) -> None:
+        result = build_report(record(success=True), record(trial=1, success=False))
+        assert within_published(result, 1, 2) is True  # 0.5 vs 0.5
+        # p = 0.5, n = 2 vs 2, z = 1: margin sqrt(0.125 + 0.125) = 0.5
+        assert within_published(result, 0, 2, z=1.0) is False  # p = 0 -> pooled p = 0.25
+        assert within_published(result, 2, 4, z=1.0) is True
+
+    def test_a_degenerate_published_rate_uses_the_pooled_rate(self) -> None:
+        # published 10/10 (p = 1, no binomial spread); ours 9/10 -> pooled p = 0.95
+        result = build_report(*[record(trial=i, success=i != 0) for i in range(10)])
+        assert within_published(result, 10, 10) is True
+        result = build_report(*[record(trial=i, success=i >= 5) for i in range(10)])  # 50%
+        assert within_published(result, 10, 10) is False
 
     @pytest.mark.parametrize(
         ("published_successes", "published_trials"),
