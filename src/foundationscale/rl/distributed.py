@@ -654,39 +654,14 @@ def wrap_fsdp2(
     correctness, not a memory regression: the tower's parameters are
     sharded 1/world_size at rest either way.
 
-    MEASURED REMAINING GAP this also closes (Qwen3.6-27B, preference
-    trainer, mixed image+video+text DPO, 2026-10-11, live ``py-spy
-    --native`` capture on 2x H200 during an actual stall): the paragraph
-    above closes ONLY :func:`_find_tower_modules`'s own separate-unit path.
-    :func:`find_decoder_blocks`'s PRIMARY match walks the WHOLE model for
-    any class named in ``model._no_split_modules`` -- UNCONDITIONALLY,
-    never gated by ``shard_towers`` -- and transformers 5.18's
-    ``Qwen3_5VisionModel``/``Qwen3VLVisionModel`` declare
-    ``_no_split_modules = ["Qwen3_5DecoderLayer", "Qwen3_5VisionBlock"]``:
-    HF names the VISION transformer's OWN block class there too, for its
-    own unrelated ``device_map`` sharding granularity. So even with
-    ``shard_towers=False``, every ``Qwen3_5VisionBlock`` instance inside
-    ``model.visual`` was STILL independently discovered and handed its own
-    ``fully_shard`` unit by the decoder-block loop below -- reproducing the
-    exact asymmetric-all-gather hang this parameter exists to close, via a
-    second code path :func:`_find_tower_modules` was never scoped to touch.
-    gemma4 never hit this because ``Gemma4UnifiedTextDecoderLayer`` is the
-    ONLY entry in its own ``_no_split_modules``; it is a family difference,
-    not a mechanism this function can keep ignoring. Confirmed live on the
-    real cluster run: rank0's row carried an image (so its vision block
-    executed and issued the mismatched all-gather) while rank1's
-    SAME-index row was text-only (its vision block never ran) -- rank0 hung
-    inside the vision block's forward, rank1 hung waiting at the training
-    loop's own cross-rank ``agree_all`` barrier for it, for the full NCCL
-    watchdog timeout. Fixed by resolving towers UNCONDITIONALLY (cheap --
-    the same lookup already happens when ``shard_towers=True``) and, when
-    ``shard_towers=False``, dropping any :func:`find_decoder_blocks` match
-    that is a tower itself or lives inside one, before wrapping the
-    survivors individually: those dropped blocks fall through to the
-    catch-all root ``fully_shard`` below, exactly like the whole-tower fold
-    the paragraph above already documents. ``shard_towers=True`` is
-    untouched byte-for-byte: towers are resolved either way, but the
-    filter only applies when folding is requested.
+    :func:`find_decoder_blocks` also matches every class in
+    ``model._no_split_modules``, and transformers 5.18 Qwen3.5/3.6 lists the
+    vision tower's own ``Qwen3_5VisionBlock`` there. With
+    ``shard_towers=False`` those blocks are dropped from the per-block loop
+    and fold into root with the rest of the tower; otherwise an image row on
+    one rank and a text row on the other issue mismatched all-gathers and
+    hang until the NCCL timeout (measured on Qwen3.6-27B mixed-modality DPO,
+    2026-10-11). ``shard_towers=True`` is unchanged.
     """
     import torch
 
@@ -709,11 +684,7 @@ def wrap_fsdp2(
     tower_modules = _find_tower_modules(model)
     decoder_blocks = find_decoder_blocks(model)
     if not shard_towers and tower_modules:
-        # A block matched ONLY because HF's _no_split_modules also names the
-        # tower's own internal block class (see the docstring's "MEASURED
-        # REMAINING GAP" above) must fold into root exactly like the tower
-        # itself -- never wrapped as its own unit, or its all-gather is the
-        # same asymmetric collective shard_towers=False exists to avoid.
+        # Tower-internal blocks matched via _no_split_modules fold into root.
         tower_descendant_ids = {id(sub) for tower in tower_modules for sub in tower.modules()}
         decoder_blocks = [
             block for block in decoder_blocks if id(block) not in tower_descendant_ids
