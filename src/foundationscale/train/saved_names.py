@@ -25,12 +25,16 @@ def saved_name_map(model: Any) -> dict[str, str] | None:
     Older transformers (no ``core_model_loading``) revert nothing: None.
     """
     try:
+        from transformers import PreTrainedModel
         from transformers.core_model_loading import (
             revert_weight_conversion,
         )
     except ImportError:
         return None
     import torch
+
+    if not isinstance(model, PreTrainedModel):
+        return None  # only save_pretrained renames, and only a PreTrainedModel has it
 
     state = getattr(model, "state_dict", None)
     if not callable(state):
