@@ -392,6 +392,55 @@ def _patch_fsdp2_primitives(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 _WRAP_CTX = DistContext(rank=0, world_size=2, local_rank=0, device="cpu", is_distributed=True)
 
 
+class _FakeQwen35VisionBlock(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.proj = nn.Linear(4, 4)
+
+
+class _FakeQwen35DecoderLayer(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.proj = nn.Linear(4, 4)
+
+
+class _FakeQwen35VisualTower(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.blocks = nn.ModuleList(_FakeQwen35VisionBlock() for _ in range(2))
+
+
+class _FakeQwen35LanguageModel(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.layers = nn.ModuleList(_FakeQwen35DecoderLayer() for _ in range(2))
+
+
+class _FakeQwen35InnerModel(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.language_model = _FakeQwen35LanguageModel()
+        self.visual = _FakeQwen35VisualTower()
+
+
+class _FakeQwen35VLM(nn.Module):
+    """Mirrors Qwen3.6-27B's REAL shape (measured, transformers 5.18):
+    ``_no_split_modules`` names BOTH the text decoder layer class AND the
+    vision block class (``Qwen3_5DecoderLayer``, ``Qwen3_5VisionBlock``),
+    and the real family registry's ``qwen3.5`` entry declares
+    ``("model.visual", "image")`` as its tower. ``model_type="qwen3_5"`` is
+    resolved against the REAL ``foundationscale.families`` registry here,
+    the same way the gemma4 fixtures above do -- not a stand-in.
+    """
+
+    _no_split_modules = ["_FakeQwen35DecoderLayer", "_FakeQwen35VisionBlock"]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = _FakeQwen35InnerModel()
+        self.config = SimpleNamespace(to_dict=lambda: {"model_type": "qwen3_5"})
+
+
 def test_wrap_fsdp2_shards_the_tower_in_its_own_unit_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -454,3 +503,77 @@ def test_wrap_fsdp2_shard_towers_false_is_a_noop_with_zero_declared_towers(
     wrap_fsdp2(model_false, _WRAP_CTX, shard_towers=False)
 
     assert len(calls_true) == len(calls_false)
+
+
+# ---------------------------------------------------------------------------
+# wrap_fsdp2's shard_towers=False, second path: _no_split_modules ALSO
+# naming the tower's OWN internal block class.
+#
+# MEASURED REMAINING HANG (Qwen3.6-27B, preference trainer, mixed
+# image+video+text DPO, 2026-10-11 -- a LIVE py-spy --native capture on 2x
+# H200 during an actual stall): with ``shard_towers=False`` already applied
+# (the fix directly above), the SAME class of deadlock still occurred. Root
+# cause: transformers 5.18's ``Qwen3_5VisionModel._no_split_modules`` (and
+# ``Qwen3VLVisionModel``'s) is ``["Qwen3_5DecoderLayer", "Qwen3_5VisionBlock"]``
+# -- HF names the VISION transformer's own block class there too, for its
+# own unrelated device_map sharding granularity. ``find_decoder_blocks``'s
+# PRIMARY match path walks the WHOLE model matching class names in
+# ``_no_split_modules`` -- UNCONDITIONALLY, never gated by ``shard_towers``
+# -- so it independently discovers every ``Qwen3_5VisionBlock`` instance
+# living inside ``model.visual`` and hands each one its OWN ``fully_shard``
+# unit, exactly reproducing the asymmetric-all-gather hang that
+# ``shard_towers=False`` was built to close, via a second, unrelated code
+# path ``_find_tower_modules`` was never scoped to touch. gemma4 never hit
+# this because ``Gemma4UnifiedTextDecoderLayer`` is the ONLY entry in its
+# ``_no_split_modules`` (see this module's own docstring) -- a family
+# difference, not a mechanism this fix can keep ignoring. Confirmed on the
+# real cluster run: rank0's row carried an image (vision block executed),
+# rank1's SAME-index row was text-only (vision block never executed) --
+# rank0 hung inside the vision block's forward, rank1 hung waiting at the
+# training loop's own cross-rank ``agree_all`` barrier for it.
+def test_wrap_fsdp2_shard_towers_false_also_folds_no_split_modules_vision_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _patch_fsdp2_primitives(monkeypatch)
+    model = _FakeQwen35VLM()
+
+    wrap_fsdp2(model, _WRAP_CTX, shard_towers=False)
+
+    vision_blocks = list(model.model.visual.blocks)
+    decoder_layers = list(model.model.language_model.layers)
+    assert vision_blocks, "fixture must declare vision blocks"
+    assert decoder_layers, "fixture must declare decoder layers"
+    for block in vision_blocks:
+        assert block not in calls, (
+            "a vision block matched ONLY via _no_split_modules (not via "
+            "_find_tower_modules) must still fold into the root unit when "
+            "shard_towers=False -- its own all-gather is exactly the "
+            "asymmetric collective that hangs a heterogeneous-modality "
+            "micro-batch, the same failure shard_towers=False exists to close"
+        )
+    assert model.model.visual not in calls
+    for layer in decoder_layers:
+        assert layer in calls, "decoder layers must still get their own unit"
+    assert calls[-1] is model
+
+
+def test_wrap_fsdp2_shard_towers_true_is_unchanged_for_no_split_modules_vision_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # shard_towers=True is the online RL trainer's path, already safe
+    # because every row in a rollout batch carries the SAME declared
+    # modality (see wrap_fsdp2's own docstring). This fix must not touch
+    # that path: _no_split_modules-matched vision blocks are wrapped
+    # individually exactly as before (a pre-existing, harmless nesting
+    # under the tower's own separate unit), never folded into root.
+    calls = _patch_fsdp2_primitives(monkeypatch)
+    model = _FakeQwen35VLM()
+
+    wrap_fsdp2(model, _WRAP_CTX, shard_towers=True)
+
+    for block in model.model.visual.blocks:
+        assert block in calls
+    assert model.model.visual in calls
+    for layer in model.model.language_model.layers:
+        assert layer in calls
+    assert calls[-1] is model
