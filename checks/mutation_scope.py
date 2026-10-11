@@ -102,6 +102,10 @@ PENDING_ENROLMENT: dict[str, str] = {
         "GR00T LIBERO policy adapter (observation batching, float32 state, normalize-then-invert "
         "gripper): pinned against stand-in upstream modules and run on GB200, no mutation row yet."
     ),
+    "src/foundationscale/vla/adapters/openpi/finetune.py": (
+        "openpi fine-tune declaration (pi05_libero recipe) and the scripts/train.py argv: "
+        "line-covered by tests/vla, no mutation row yet."
+    ),
     "src/foundationscale/vla/adapters/openpi/libero.py": (
         "openpi LIBERO policy adapter (180-degree rotation, resize-with-pad, 8-d state): pinned "
         "against stand-in upstream modules and run on GB200, no mutation row yet."
