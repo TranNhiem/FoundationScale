@@ -78,10 +78,11 @@ on:
 
 # Measured 2026-10-11: a run is 25 jobs / ~635 job-minutes, 20 of them mutation shards, and
 # the account's 20-job concurrency cap left jobs queued up to 290 minutes (runs took 1.5-8.3 h
-# wall clock). A newer push to the same branch supersedes the older run; main keeps every run
-# so each main SHA gets its own verdict.
+# wall clock). A newer push to the same branch supersedes the older run. On main every SHA
+# gets its own group: a group holds one PENDING run, and a newer pending run replaces the
+# older one even without cancel-in-progress (measured: two main runs came back `cancelled`).
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
