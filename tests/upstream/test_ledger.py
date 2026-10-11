@@ -64,7 +64,7 @@ def test_entries_for_and_coverage_of_the_record() -> None:
         "nemo-canary-train-cfg-strip",
         "nemo-canary-text-field",
     }
-    assert len(entries_for("transformers")) == 3
+    assert len(entries_for("transformers")) == 4
     assert entries_for("nonexistent") == ()
     kinds = {e.kind for e in LEDGER}
     assert kinds == {LedgerKind.COPY, LedgerKind.WORKAROUND, LedgerKind.PRIVATE_API}

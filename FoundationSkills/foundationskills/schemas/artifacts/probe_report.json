@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "required": ["plan_draft", "checks", "capabilities", "verdict"],
+  "properties": {
+    "plan_draft": {
+      "type": "string"
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["check", "missing"],
+        "additionalProperties": true
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "required": ["available"],
+      "additionalProperties": true
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "UNMEASURED"]
+    }
+  },
+  "additionalProperties": true
+}

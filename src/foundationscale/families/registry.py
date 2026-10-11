@@ -314,6 +314,28 @@ REGISTRY: tuple[FamilySpec, ...] = (
         expert_count_path=("text_config", "num_experts"),
         adapter_full_train=("audio_tower", "multi_modal_projector"),
     ),
+    # Qwen3-ASR, measured on Qwen3-ASR-1.7B-hf with transformers 5.19. get_audio_features calls
+    # the encoder BY KEYWORD (`self.audio_tower(input_features=..., input_features_mask=...)`),
+    # so it cannot be a peft wrap point; the projector is called positionally
+    # (`self.multi_modal_projector(audio_output.last_hidden_state)`) and is the one root that
+    # trains in full under LoRA.
+    FamilySpec(
+        name="qwen3_asr",
+        model_types=("qwen3_asr",),
+        language_prefixes=("model.language_model",),
+        towers=(("model.audio_tower", "audio"), ("model.multi_modal_projector", "audio")),
+        adapter_leaf_modules=(
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ),
+        expert_count_path=("text_config", "num_experts"),
+        adapter_full_train=("model.multi_modal_projector",),
+    ),
 )
 
 

@@ -1,0 +1,87 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fskills-refusal-surface-oracle-RS-HO-001",
+      "skill": "refusal_surface",
+      "rule_id": "RS-HO-001",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "an incoming finding cites a rule id no registered skill declares (an invented id, e.g. PF-IN-999)",
+      "fixture": {
+        "expected": "RED 5 with RS-HO-001; result.findings contains no PF-IN-999; payload entry cites RS-HO-001 carrying source_rule_id: PF-IN-999",
+        "request": {
+          "findings": [
+            {
+              "message": "invented",
+              "rule_id": "PF-IN-999",
+              "severity": "BLOCK"
+            }
+          ]
+        }
+      },
+      "fixture_sha256": "33c06460f51ed4977c94abbb93e446d70823e518694346992326c2ecb6e67516",
+      "expected_behavior": [
+        "Identifies the problem: an incoming finding cites a rule id no registered skill declares (an invented id, e.g. PF-IN-999)",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule RS-HO-001"
+      ],
+      "ground_truth": "refusal_surface: rule RS-HO-001 (BLOCK, handoff phase) fires: an incoming finding cites a rule id no registered skill declares (an invented id, e.g. PF-IN-999).",
+      "trigger_facts": [],
+      "question": "I've got a payload with a single finding whose message is \"invented\", severity \"BLOCK\", and whose rule_id field holds the literal value PF-IN-999. I know that's the exact string sitting in the finding's id / rule_id field. Can you run this through the skill and tell me what the outcome is?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-refusal-surface-oracle-RS-HO-002",
+      "skill": "refusal_surface",
+      "rule_id": "RS-HO-002",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "an incoming finding is unattributed or malformed (no usable rule id, or an unknown severity)",
+      "fixture": {
+        "expected": "PASS 0 with RS-HO-002; emitted entry rule_id: RS-HO-002",
+        "request": {
+          "findings": [
+            {
+              "message": "no id at all"
+            }
+          ]
+        }
+      },
+      "fixture_sha256": "326e60bdef7be21e1c586daf5c94a9758495189db12fde896e4e3989bc4aef51",
+      "expected_behavior": [
+        "Identifies the problem: an incoming finding is unattributed or malformed (no usable rule id, or an unknown severity)",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule RS-HO-002"
+      ],
+      "ground_truth": "refusal_surface: rule RS-HO-002 (WARN, handoff phase) fires: an incoming finding is unattributed or malformed (no usable rule id, or an unknown severity).",
+      "trigger_facts": [],
+      "question": "I've got one finding in my set whose entire content is the message string \"no id at all\" — there are no other fields on it. Please run the attribution-and-sealing pass over this set and tell me what outcome comes back.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-refusal-surface-oracle-RS-IN-001",
+      "skill": "refusal_surface",
+      "rule_id": "RS-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "findings empty or not a finding set: nothing to surface (refuse rather than emit an empty surface)",
+      "fixture": {
+        "expected": "REFUSED 96 naming RS-IN-001",
+        "request": {
+          "findings": []
+        }
+      },
+      "fixture_sha256": "3ea5b44874d2a892b44d0fbab2131515017dc1ed771a4224c699442d23973e50",
+      "expected_behavior": [
+        "Identifies the problem: findings empty or not a finding set: nothing to surface (refuse rather than emit an empty surface)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule RS-IN-001"
+      ],
+      "ground_truth": "refusal_surface: rule RS-IN-001 (BLOCK, input phase) fires: findings empty or not a finding set: nothing to surface (refuse rather than emit an empty surface).",
+      "trigger_facts": [],
+      "question": "I ran a surface review and came back with an empty findings list — zero RED entries, nothing to attribute to any registered skill's declared checks. I still want the run sealed as a finding_set so I have a closed artifact to archive. What's the outcome for an empty set like this?",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

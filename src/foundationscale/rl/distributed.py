@@ -38,6 +38,8 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from foundationscale.rl.hf_format import save_format_kwargs
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -55,6 +57,7 @@ __all__ = (
     "generate_kwargs_for",
     "init_distributed",
     "is_main",
+    "keep_experts_switchable",
     "save_checkpoint",
     "save_sharded_dcp",
     "shard_indices",
@@ -87,6 +90,59 @@ class DistContext:
     # True only when init_distributed created the group in this process;
     # destroy() then owns the teardown and nobody else may call it.
     owns_process_group: bool = False
+
+
+_COLLECTIVE_TIMEOUT_MINUTES_ENV = "FOUNDATIONSCALE_COLLECTIVE_TIMEOUT_MINUTES"
+_DEFAULT_COLLECTIVE_TIMEOUT_MINUTES = 30
+
+
+def _collective_timeout() -> Any:
+    """The NCCL process-group collective timeout, as a ``datetime.timedelta``.
+
+    MEASURED (Qwen3.6-27B, preference trainer, mixed image+video+text DPO,
+    2026-10-11), revised after a second, fuller measurement the same day: an
+    initial py-spy dump of both ranks at a reported "collective timeout"
+    showed rank 0's Python frame parked inside ``transformers``' own
+    RMSNorm, the SAME frame on samples 90s apart, and was read as a
+    wall-clock IMBALANCE (one rank's micro-batch carrying more/heavier media
+    than its peer's, atop Qwen3.6's hybrid Mamba+attention layers falling
+    back to transformers' own un-optimized ``causal_conv1d`` reference
+    implementation on this estate). That reading was WRONG: py-spy only
+    samples Python frames, and RMSNorm is the hottest Python call site in
+    the whole forward, so it is what any sample lands on whether the rank is
+    computing OR blocked underneath in native code. The NCCL watchdog's OWN
+    flight-recorder dump at the actual timeout -- collected once a longer
+    ceiling let the run run long enough to re-time-out and surface it --
+    showed rank 0's true innermost frame was ``all_gather_single`` inside
+    FSDP2's per-layer ``unshard`` (``last enqueued`` far ahead of ``last
+    completed``, i.e. prefetched all-gathers piling up unanswered) while
+    rank 1 had already left the forward pass entirely and moved on to
+    ``agree_all``'s ``all_reduce``. That IS a deadlock, not a slow step: a
+    rank that calls ``model(...)`` one fewer time than its peer this step
+    leaves that peer's next per-layer all-gather with no partner, forever.
+    The actual bug was preference_trainer.py's ``_one_step`` sizing its
+    logprob micro-batch COUNT (and whether to micro-batch at all) from each
+    rank's OWN row_count with no cross-rank agreement; it is now fixed there
+    with ``agree_max``/``_padding_backwards`` (mirroring the fix
+    ``rl/trainer.py`` already carries for the identical GRPO-side bug), so
+    this timeout is back to being what it says: a generous ceiling for
+    genuine compute-time variance between ranks (real NCCL default on this
+    build resolves to 600s, which measurably was not enough even for
+    ordinary variance), not a substitute for ranks agreeing on how many
+    collectives they will issue. Overridable via
+    :data:`_COLLECTIVE_TIMEOUT_MINUTES_ENV` for a run that needs even more
+    (or wants a SHORTER ceiling to fail fast in CI-shaped smoke tests).
+    """
+    import datetime
+
+    raw = os.environ.get(_COLLECTIVE_TIMEOUT_MINUTES_ENV, "").strip()
+    minutes = _DEFAULT_COLLECTIVE_TIMEOUT_MINUTES
+    if raw:
+        try:
+            minutes = int(raw)
+        except ValueError:
+            minutes = _DEFAULT_COLLECTIVE_TIMEOUT_MINUTES
+    return datetime.timedelta(minutes=minutes)
 
 
 def _default_single_device() -> torch.device:
@@ -149,7 +205,7 @@ def init_distributed(sharding: str) -> DistContext:
             "sharding requires CUDA: the process group backend is 'nccl' and "
             "no CUDA device is visible"
         )
-    dist.init_process_group("nccl")
+    dist.init_process_group("nccl", timeout=_collective_timeout())
     torch.cuda.set_device(local_rank)
     return DistContext(
         rank=rank,
@@ -507,6 +563,35 @@ def _find_tower_modules(model: Any) -> list[Any]:
     return found
 
 
+def _switchable() -> bool:
+    return True
+
+
+def keep_experts_switchable(model: Any, original_cls: type) -> bool:
+    """Let an ``FSDP<Name>`` wrapper class switch MoE expert kernels like its original.
+
+    transformers 5.x ``generate()`` swaps ``grouped_mm`` experts for ``batched_mm``
+    around decoding and back afterwards, after asking the class whether it may:
+    ``_can_set_experts_implementation`` greps the source of the module the class
+    is defined in for ``@use_experts_implementation``. ``fully_shard`` re-types the
+    model to a dynamic ``FSDP<Name>`` subclass defined in torch's FSDP module, so
+    the grep fails and the first rollout dies (measured: Gemma-4 26B-A4B,
+    ``FSDPGemma4ForConditionalGeneration does not support setting experts
+    implementation``). Pinning ``batched_mm`` up front instead avoided the error but
+    ran prefill on the per-token kernel and OOMed (56 GiB for one allocation), so the
+    wrapper inherits the original class's answer and HF's own swap runs unchanged.
+
+    Returns True when the answer was carried over; a model that was not re-typed, or
+    whose original class cannot switch kernels, is left alone (False).
+    """
+    wrapped_cls = type(model)
+    can_set = getattr(original_cls, "_can_set_experts_implementation", None)
+    if wrapped_cls is original_cls or can_set is None or not can_set():
+        return False
+    wrapped_cls._can_set_experts_implementation = staticmethod(_switchable)
+    return True
+
+
 def wrap_fsdp2(
     model: Any,
     ctx: DistContext,
@@ -514,6 +599,7 @@ def wrap_fsdp2(
     reshard_after_forward: bool = True,
     param_dtype: torch.dtype | None = None,
     reduce_dtype: torch.dtype | None = None,
+    shard_towers: bool = True,
 ) -> Any:
     """Shard ``model`` with FSDP2 ``fully_shard`` over a 1-D world mesh.
 
@@ -530,6 +616,43 @@ def wrap_fsdp2(
     final norm) live in the root unit and the tie survives. Cast before
     this call stays the caller's choice; this function performs it because
     every trainer wants exactly this order.
+
+    ``shard_towers=False`` (default ``True``, unchanged for every existing
+    caller) skips :func:`_find_tower_modules`'s separate ``fully_shard``
+    units entirely, leaving a declared tower's parameters inside the ROOT
+    unit instead. MEASURED DEADLOCK this closes (Qwen3.6-27B, preference
+    trainer, mixed image+video+text DPO, 2026-10-10): a separately-sharded
+    tower's all-gather is its OWN collective, issued only when that
+    submodule's ``forward()`` actually runs. The online RL trainer's own
+    rollouts (the ONLY caller that set this True before this parameter
+    existed) are safe because ``_expand_modality_kwargs_for_group``'s own
+    docstring states its precondition -- "ONE image per prompt is this
+    plane's only declared shape" -- so every rank's every micro-batch row
+    carries the SAME modality and the tower's forward fires symmetrically
+    every time, or never. The preference trainer's per-row heterogeneous
+    batches (declared ``image_column``/``video_column``, but each row's OWN
+    media varies -- an image row next to a video row next to a text-only
+    row) break that precondition: at micro-batch index ``i``, one rank's
+    row can carry an image while the peer rank's row at the SAME index
+    carries none, so one rank issues the tower's all-gather and the other
+    never does -- a permanently mismatched collective, confirmed (two
+    separate configurations, 16 and 4 video frames, hung identically at the
+    SAME NCCL work-id gap, ruling out a data-size-dependent compute-time
+    explanation). Folding the tower into the ROOT unit instead is safe
+    because the ROOT's own ``fully_shard`` hook fires on EVERY top-level
+    ``model(...)`` call, by every rank, on every micro-batch, regardless of
+    that row's modality -- the tower's parameters are unsharded as a
+    by-product of a collective that was already symmetric. The preference
+    trainer never calls ``generate()`` (it only scores existing text), so
+    :func:`_find_tower_modules`'s own measured fix (generate()'s
+    out-of-band ``get_image_features()`` call reaching a still-sharded
+    tower) does not apply there either -- there is no out-of-band caller
+    for a folded-in tower to be unready for. The tower is declared frozen
+    by every LoRA target plan observed so far (adapter targets resolve
+    under ``model.language_model`` only), so this trades a small, bounded
+    amount of avoidable all-gather bandwidth on text-only rows for
+    correctness, not a memory regression: the tower's parameters are
+    sharded 1/world_size at rest either way.
     """
     import torch
 
@@ -545,6 +668,7 @@ def wrap_fsdp2(
         )
     from torch.distributed.device_mesh import init_device_mesh
 
+    original_cls = type(model)
     model = model.to(dtype=torch.float32)
     mesh = init_device_mesh("cuda", (ctx.world_size,))
     mp_policy = MixedPrecisionPolicy(param_dtype=param_dtype, reduce_dtype=reduce_dtype)
@@ -555,19 +679,26 @@ def wrap_fsdp2(
             mp_policy=mp_policy,
             reshard_after_forward=reshard_after_forward,
         )
-    for tower in _find_tower_modules(model):
-        fully_shard(
-            tower,
-            mesh=mesh,
-            mp_policy=mp_policy,
-            reshard_after_forward=reshard_after_forward,
-        )
+    if shard_towers:
+        for tower in _find_tower_modules(model):
+            fully_shard(
+                tower,
+                mesh=mesh,
+                mp_policy=mp_policy,
+                reshard_after_forward=reshard_after_forward,
+            )
     fully_shard(
         model,
         mesh=mesh,
         mp_policy=mp_policy,
         reshard_after_forward=reshard_after_forward,
     )
+    if keep_experts_switchable(model, original_cls) and is_main(ctx):
+        print(
+            f"[distributed] wrap_fsdp2: {type(model).__name__} keeps "
+            f"{original_cls.__name__}'s expert-kernel switching for generate()",
+            file=sys.stderr,
+        )
     return model
 
 
@@ -764,13 +895,18 @@ def save_checkpoint(
             if is_peft:
                 _atomic_peft_save(target, str(out), state_dict)
             else:
-                target.save_pretrained(out, state_dict=state_dict, safe_serialization=True)
+                target.save_pretrained(
+                    out,
+                    state_dict=state_dict,
+                    safe_serialization=True,
+                    **save_format_kwargs(target),
+                )
     elif is_main(ctx):
         out.mkdir(parents=True, exist_ok=True)
         if is_peft:
             _atomic_peft_save(target, str(out), None)
         else:
-            target.save_pretrained(out, safe_serialization=True)
+            target.save_pretrained(out, safe_serialization=True, **save_format_kwargs(target))
     if is_main(ctx):
         out.mkdir(parents=True, exist_ok=True)
         if tokenizer_or_processor is not None and hasattr(

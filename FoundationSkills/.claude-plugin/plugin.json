@@ -1,0 +1,12 @@
+{
+  "name": "foundationskills",
+  "version": "0.1.0",
+  "description": "FoundationSkills: probe-first, refusal-honest agent skills for planning, launching, evaluating and researching FoundationScale training runs (statuses PASS/RED/UNMEASURED/REFUSED).",
+  "author": {
+    "name": "TranNhiem"
+  },
+  "homepage": "https://github.com/TranNhiem/FoundationScale",
+  "repository": "https://github.com/TranNhiem/FoundationScale",
+  "license": "MIT",
+  "skills": "./skills"
+}

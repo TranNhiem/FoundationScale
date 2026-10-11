@@ -96,8 +96,11 @@ PROFILES: tuple[UpstreamProfile, ...] = (
         captured="2026-10-10",
     ),
     # Candidate for the HF lane: the hf-26.04 container plus a venv carrying transformers 5.19
-    # (torch unchanged). Decode-only for now: peft and accelerate are not visible in the venv,
-    # so the FS trainer cannot run here. Parakeet-CTC reproduces its card under it (Level 3).
+    # (with its tokenizers and huggingface_hub); every other package is hf-26.04's own, reached
+    # through a .pth to the container's /opt/venv placed after the venv's site-packages.
+    # Parakeet-CTC reproduces its card under it (Level 3), and the FS trainer runs: a seeded
+    # 30-step fine-tune is bit-deterministic within each profile and differs across them by
+    # at most 0.007 loss (transformers forward numerics) -- validation_campaigns/speech_repro.
     UpstreamProfile(
         name="hf-cand-519",
         backend="hf",
@@ -106,8 +109,8 @@ PROFILES: tuple[UpstreamProfile, ...] = (
         packages={
             "torch": "2.11.0a0+eb65b36914.nv26.2",
             "transformers": "5.19.0",
-            "peft": None,
-            "accelerate": None,
+            "peft": "0.18.1",
+            "accelerate": "1.11.0",
             "nemo_toolkit": None,
             "lhotse": None,
             "lightning": None,

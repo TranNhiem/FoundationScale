@@ -514,7 +514,14 @@ def _refusing_loss(**_: Any) -> Any:
 
 
 def _two_rank_world(monkeypatch: pytest.MonkeyPatch, *, peer_ok: bool) -> list[bool]:
-    """Fake agree_all for a 2-rank world; records each local vote."""
+    """Fake agree_all/agree_max for a 2-rank world; records each local vote.
+
+    agree_max is patched to the identity (a peer with exactly as many real
+    slices as this rank, so extra_slices == 0): these fixtures test the
+    refusal-agreement collective, not the slice-count one, and a bare
+    DistContext(is_distributed=True) with no real process group would
+    otherwise send the UNPATCHED agree_max straight into dist.all_reduce.
+    """
     votes: list[bool] = []
 
     def agree_all(flag: bool, ctx: Any) -> bool:
@@ -522,6 +529,7 @@ def _two_rank_world(monkeypatch: pytest.MonkeyPatch, *, peer_ok: bool) -> list[b
         return bool(flag) and peer_ok
 
     monkeypatch.setattr(pt, "agree_all", agree_all)
+    monkeypatch.setattr(pt, "agree_max", lambda value, ctx: value)
     return votes
 
 
@@ -538,7 +546,10 @@ def test_one_step_refusing_rank_skips_collectively(
     kwargs["loss_fn"] = _refusing_loss
     report = trainer._one_step(records=(_record(_line=1),), ctx=_RANK1, **kwargs)
     assert report is None
-    assert votes == [False]
+    # [micro-batch-path agreement vote, refusal-agreement vote]: this rank's
+    # row_count never crosses logprob_micro_batch, so the first vote is
+    # always "I would not slice" (True); the second is the refusal itself.
+    assert votes == [True, False]
     assert trainer.history == []
     assert torch.equal(kwargs["policy_model"].embed.weight, before), "no optimiser step"
     err = capsys.readouterr().err
@@ -553,7 +564,11 @@ def test_one_step_healthy_rank_follows_a_refusing_peer(
     before = kwargs["policy_model"].embed.weight.detach().clone()
     report = trainer._one_step(records=(_record(_line=1),), ctx=_RANK1, **kwargs)
     assert report is None
-    assert votes == [True], "the healthy rank voted, then skipped with its peer"
+    # peer_ok=False makes every agree_all call resolve False, which also
+    # forces this rank onto the micro-batched forward path for the first
+    # (micro-batch-path agreement) vote -- harmless for a single real slice,
+    # and orthogonal to the refusal vote that actually matters here.
+    assert votes == [True, True], "the healthy rank voted, then skipped with its peer"
     assert torch.equal(kwargs["policy_model"].embed.weight, before)
     assert "on a peer rank" in capsys.readouterr().err
 
@@ -563,7 +578,9 @@ def test_one_step_agreed_healthy_step_is_measured(monkeypatch: pytest.MonkeyPatc
     trainer, kwargs = _step_fixture("orpo")
     report = trainer._one_step(records=(_record(_line=1),), ctx=_RANK1, **kwargs)
     assert report is not None and report.rows == 1
-    assert votes == [True]
+    # [micro-batch-path agreement vote, refusal-agreement vote]: both True --
+    # this rank never slices, and the step is healthy.
+    assert votes == [True, True]
 
 
 def test_one_step_without_ctx_still_raises_the_refusal() -> None:
@@ -571,6 +588,131 @@ def test_one_step_without_ctx_still_raises_the_refusal() -> None:
     kwargs["loss_fn"] = _refusing_loss
     with pytest.raises(BatchRefusal, match="ORPO is undefined"):
         trainer._one_step(records=(_record(_line=1),), **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# #561: per-rank micro-batch slice COUNT must agree, or FSDP2 deadlocks
+# ---------------------------------------------------------------------------
+#
+# MEASURED (Qwen3.6-27B, mixed image+video+text DPO, 2x H200, 2026-10-11): an
+# uneven prompt-level shard gave one rank 2 logprob micro-batch slices and its
+# peer 4. The 2-slice rank finished its forwards and moved on to the next
+# collective (agree_all); the 4-slice rank's 3rd and 4th slice each re-enter
+# the model, each re-firing FSDP2's per-layer unshard all-gather, and found
+# no peer to answer. A first py-spy sample read this as a slow rank (the
+# Python frame was parked in a hot RMSPnorm call, the hottest line in any
+# forward, true whether a rank is computing or blocked underneath it in
+# native code); the NCCL flight recorder's dump at the eventual timeout
+# showed the real innermost frame was FSDP2's all_gather_single with "last
+# enqueued" far ahead of "last completed" -- a genuine collective-count
+# deadlock, not a wall-clock imbalance. rl/trainer.py already carries the fix
+# for the identical GRPO-side bug (agree_max + a shared zero-weight pad
+# slice via _padding_backwards); these tests pin preference_trainer.py's
+# mirror of that fix.
+
+
+def test_one_step_pads_to_a_busier_peers_slice_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A rank with fewer real slices than its peer pads with zero-weight
+    dummy forward/backward passes: the forward count matches the agreed
+    total, the measured tensors stay row_count wide, and the optimiser step
+    lands bit-for-bit where a padding-free run would."""
+    forced_peer_slices = 4  # local real_slices == 2 (row_count=2, micro_batch=1)
+    records = (_record(_line=1),)
+
+    control_trainer, control_kwargs = _step_fixture("dpo", logprob_micro_batch=1)
+    initial_state = copy.deepcopy(control_kwargs["policy_model"].state_dict())
+    torch.manual_seed(0)
+    control_report = control_trainer._one_step(records=records, **control_kwargs)
+    assert control_report is not None
+    control_state = copy.deepcopy(control_kwargs["policy_model"].state_dict())
+
+    padded_trainer, padded_kwargs = _step_fixture("dpo", logprob_micro_batch=1)
+    padded_kwargs["policy_model"].load_state_dict(initial_state)
+    padded_kwargs["reference_model"].load_state_dict(initial_state)
+
+    forward_calls = {"n": 0}
+    real_forward = padded_kwargs["policy_model"].forward
+
+    def counting_forward(*args: Any, **kwargs: Any) -> Any:
+        forward_calls["n"] += 1
+        return real_forward(*args, **kwargs)
+
+    padded_kwargs["policy_model"].forward = counting_forward
+
+    def fake_agree_max(value: int, ctx: Any) -> int:
+        return max(int(value), forced_peer_slices)
+
+    monkeypatch.setattr(pt, "agree_max", fake_agree_max)
+    # Identity: this rank already wants to slice, so the real agree_all would
+    # also resolve to "keep slicing" here regardless of the (unmodelled)
+    # peer's vote; the later refusal-agreement call also passes a healthy
+    # True through unopposed.
+    monkeypatch.setattr(pt, "agree_all", lambda flag, ctx: flag)
+
+    torch.manual_seed(0)
+    padded_report = padded_trainer._one_step(records=records, ctx=_RANK1, **padded_kwargs)
+    assert padded_report is not None
+
+    # initial policy forward: len(padded_slices) == 4 calls.
+    # _micro_batched_backward replay: len(row_slices) == 2 calls.
+    # _padding_backwards: extra_slices == 2 calls.
+    # total == 8.
+    assert forward_calls["n"] == 8
+    padded_state = padded_kwargs["policy_model"].state_dict()
+    for name, control_tensor in control_state.items():
+        assert torch.allclose(control_tensor, padded_state[name], atol=1e-6), (
+            f"{name}: the padding slices leaked a non-zero gradient contribution"
+        )
+
+
+def test_one_step_force_agrees_to_micro_batch_when_a_peer_needs_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rank whose OWN row_count would take the single-shot path must still
+    slice (and pad) when the agreement says a peer needs to slice: a rank
+    that forwards its whole batch in one shot while its peer forwards in
+    narrower re-entrant slices issues a different NUMBER of per-layer
+    all-gathers than its peer every bit as much as an uneven slice COUNT
+    does."""
+    agree_all_calls: list[bool] = []
+
+    def fake_agree_all(flag: bool, ctx: Any) -> bool:
+        agree_all_calls.append(flag)
+        if len(agree_all_calls) == 1:
+            return False  # the modelled peer needs to slice
+        return bool(flag)  # the later refusal-agreement call: healthy, pass through
+
+    def fake_agree_max(value: int, ctx: Any) -> int:
+        return max(int(value), 2)
+
+    monkeypatch.setattr(pt, "agree_all", fake_agree_all)
+    monkeypatch.setattr(pt, "agree_max", fake_agree_max)
+
+    # logprob_micro_batch=64 with row_count=2 would normally take the
+    # single-shot (non-micro-batched) path.
+    trainer, kwargs = _step_fixture("dpo", logprob_micro_batch=64)
+    forward_calls = {"n": 0}
+    real_forward = kwargs["policy_model"].forward
+
+    def counting_forward(*args: Any, **kwargs: Any) -> Any:
+        forward_calls["n"] += 1
+        return real_forward(*args, **kwargs)
+
+    kwargs["policy_model"].forward = counting_forward
+
+    report = trainer._one_step(records=(_record(_line=1),), ctx=_RANK1, **kwargs)
+
+    assert report is not None
+    # The call is agree_all(not use_micro_batching, ctx); locally
+    # use_micro_batching is False (row_count <= micro_batch), so the argument
+    # -- "I would not slice" -- is True. The fake overrides the combined
+    # result to False, i.e. "a peer disagrees", forcing use_micro_batching
+    # back on.
+    assert agree_all_calls[0] is True
+    # Forced onto the sliced path: row_slices has 1 real slice (row_count=2 <
+    # micro_batch=64), agreed up to 2 -- 1 padding slice.
+    # initial forward (2) + backward replay (1) + padding backward (1) == 4.
+    assert forward_calls["n"] == 4
 
 
 # ---------------------------------------------------------------------------

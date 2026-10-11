@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 import sys
 from collections.abc import Mapping, Sequence
@@ -52,6 +53,7 @@ from foundationscale.rl.algorithm import StepReport
 from foundationscale.rl.distributed import (
     DistContext,
     agree_all,
+    agree_max,
     all_reduce_mean,
     all_reduce_sum,
     destroy,
@@ -82,18 +84,75 @@ from foundationscale.rl.prompt_surface import resolve_prompt_surface
 from foundationscale.rl.registry import lookup_algorithm
 from foundationscale.rl.trainer import (
     _ADAPTERS,
+    _FLATTENED_PATCH_PAIRS,
     MasterWeightOptimizer,
     TrainerRefusal,
     _AdapterDisabledReference,
     _apply_lora_adapter,
+    _load_causal_lm,
     _loss_components,
     _micro_batched_backward,
+    _narrow_modality_kwargs_by_row,
+    _padding_backwards,
     _reference_plan,
     _refuse_exit_96,
     _refuse_vacuous_run,
     _token_logprobs,
     _trainable_parameters,
 )
+from foundationscale.train.conversation import (
+    TurnMarkers,
+    _conversation_processor_batch_call,
+    _render_conversation_row,
+    assistant_label_mask,
+    derive_turn_markers,
+)
+from foundationscale.video import FrameBudget, frames_for_row
+
+
+def _classify_modality_key(
+    key: str,
+    value: Any,
+    *,
+    row_count: int,
+    total_images: int | None,
+    total_videos: int | None,
+) -> str:
+    """'generic' | 'image' | 'video' for one ``modality_kwargs`` entry.
+
+    MEASURED (gemma-4-12B-it processor, 2026-10-11): a hardcoded key-name
+    list (``pixel_values``/``image_grid_thw``, mirroring
+    ``rl.trainer._FLATTENED_PATCH_PAIRS``) is NOT enough. Gemma's processor
+    also returns ``image_position_ids``/``video_position_ids`` -- ONE ROW
+    PER IMAGE/VIDEO, exactly like ``pixel_values``/``pixel_values_videos``
+    -- under neither of those two hardcoded names, so they fell through to
+    the training-row-range "generic" branch and were narrowed by the WRONG
+    axis the moment a batch mixed modalities (``RuntimeError: start (2) +
+    length (1) exceeds dimension size (2)`` the first time a text-only row
+    shared a step with two image rows). Classifying by SHAPE instead of a
+    name list generalises across families without enumerating every
+    per-family key: a key whose row-0 width equals the batch's training row
+    count is training-row-aligned ("generic", including every PER-TOKEN key
+    this plane has ever measured -- checked FIRST, so a width that
+    coincidentally also equals a media total is still treated as the safe,
+    historical per-row case); otherwise a width matching the total image or
+    video count is that modality's own per-media-item axis. ``"video"`` in
+    the key name is the ONLY disambiguator needed when a batch's image and
+    video totals coincide (both ``_FLATTENED_PATCH_PAIRS`` entries, and
+    gemma's ``*_position_ids``, name their video variant with that
+    substring; MEASURED true of every key observed on gemma and Qwen3.6).
+    """
+    width0 = int(value.shape[0]) if hasattr(value, "shape") and value.dim() >= 1 else None
+    if width0 is None or width0 == row_count:
+        return "generic"
+    if "video" in key and total_videos is not None and width0 == total_videos:
+        return "video"
+    if total_images is not None and width0 == total_images:
+        return "image"
+    if total_videos is not None and width0 == total_videos:
+        return "video"
+    return "generic"
+
 
 __all__ = (
     "PreferenceTrainConfig",
@@ -137,6 +196,35 @@ class _EncodedBatch:
     chosen/rejected rows for a paired objective, or ordinary completion rows
     for KTO. ``desirable`` stays outside the padded matrices because it is a
     per-row label, not a token-level reading.
+
+    ``modality_kwargs`` is ``None`` for every text-only run (the historical
+    shape, unchanged) and a dict of the processor's OWN extra keys (
+    ``pixel_values``/``image_grid_thw``/``pixel_values_videos``/
+    ``video_grid_thw``/``mm_token_type_ids``/... -- whatever the loaded
+    family's processor returned beyond ``input_ids``/``attention_mask``) when
+    the run declares ``image_column``/``video_column``.
+
+    MEASURED (Qwen3.6-27B, a mixed image+video+text pair file): the raw
+    processor output's ``image_grid_thw``/``video_grid_thw`` carry ONE ROW
+    PER IMAGE/VIDEO THE BATCH ACTUALLY CARRIES, never one row per training
+    row -- a batch where row 2 is the only video-bearing row still gets a
+    1-row ``video_grid_thw``, not an 8-row one padded with zeros for the
+    other 7. :func:`foundationscale.rl.trainer._narrow_modality_kwargs_by_row`
+    (built for the online RL trainer, where "ONE image per prompt is this
+    plane's only declared shape" per its own sibling
+    ``_expand_modality_kwargs_for_group``'s docstring) assumes those two
+    row-spaces already coincide, and applying it directly to a HETEROGENEOUS
+    batch narrows the wrong media block or indexes out of range -- MEASURED:
+    ``ValueError: Video features and video tokens do not match, tokens: 0,
+    features: 2400`` the first time a video-row and an image/text-row shared
+    one micro-batch slice. ``image_counts``/``video_counts`` (one int per
+    TRAINING row, 0 when that row carries none) are what
+    :meth:`PreferenceTrainer._forward_logprobs` uses to translate a
+    batch-row range into the matching MEDIA-row range before calling the
+    reused helper -- the helper itself is unchanged; only the row range
+    handed to it is corrected per modality. ``None`` iff the whole batch
+    carries neither image nor video keys (reruns exactly as a no-media call
+    would).
     """
 
     target_ids: torch.Tensor
@@ -144,6 +232,9 @@ class _EncodedBatch:
     attention_mask: torch.Tensor
     input_ids: torch.Tensor
     desirable: torch.Tensor | None
+    modality_kwargs: dict[str, torch.Tensor] | None = None
+    image_counts: tuple[int, ...] | None = None
+    video_counts: tuple[int, ...] | None = None
 
 
 @dataclass
@@ -203,6 +294,24 @@ class PreferenceTrainConfig:
     adapter_alpha: float | None = None
     adapter_targets: tuple[str, ...] | None = None
     adapter_dropout: float | None = None
+    # Media declaration surface, mirroring train/loop.py's SFT plane and
+    # video.py's own env names (FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN /
+    # _VIDEO_COLUMN / _VIDEO_FRAMES / _VIDEO_SAMPLING / _VIDEO_MAX_SIDE /
+    # _VIDEO_CACHE_DIR) as explicit config fields instead of environment
+    # reads: this trainer is constructed directly, not through the SFT CLI's
+    # environment surface. ``image_column``/``video_column`` are None by
+    # default -- EXACTLY today's text-only trainer, byte-identical, with
+    # every _MODALITY_KEYS carrier refused (see ``run``). Declaring one opts
+    # that one modality's named field into the processor-rendered path;
+    # every ``video_*`` knob below is validated as a partial declaration
+    # (refused) when ``video_column`` is None, the same doctrine
+    # ``adapter``/``adapter_*`` already enforces above.
+    image_column: str | None = None
+    video_column: str | None = None
+    video_frames: int = 0
+    video_sampling: str = "uniform"
+    video_max_side: int | None = None
+    video_cache_dir: str | None = None
 
 
 def _record_kind(record: Mapping[str, Any]) -> tuple[bool, bool]:
@@ -506,7 +615,64 @@ class PreferenceTrainer:
                     "least one target, or pass None to use peft's per-model "
                     "defaults"
                 )
+        for column_field in ("image_column", "video_column"):
+            column_value = getattr(config, column_field)
+            if column_value is not None and (
+                not isinstance(column_value, str) or not column_value.strip()
+            ):
+                raise TrainerRefusal(
+                    f"field {column_field}={column_value!r}: None or a "
+                    f"non-empty string is required; an empty column name "
+                    f"names no field"
+                )
+        if config.video_column is None:
+            # Same "partial declaration is refused" doctrine as adapter/
+            # adapter_*: a video_* knob set with no video_column is a
+            # statement about nothing, not a hint to infer one.
+            for video_field, default in (
+                ("video_frames", 0),
+                ("video_sampling", "uniform"),
+                ("video_max_side", None),
+                ("video_cache_dir", None),
+            ):
+                value = getattr(config, video_field)
+                if value != default:
+                    raise TrainerRefusal(
+                        f"field {video_field}={value!r} is set while "
+                        f"video_column is None: a partial video "
+                        f"specification is refused. Declare video_column, "
+                        f"or clear {video_field}"
+                    )
+            video_budget: FrameBudget | None = None
+        else:
+            if isinstance(config.video_frames, bool) or not isinstance(config.video_frames, int):
+                raise TrainerRefusal(
+                    f"field video_frames={config.video_frames!r}: an integer is required"
+                )
+            if config.video_max_side is not None and (
+                isinstance(config.video_max_side, bool)
+                or not isinstance(config.video_max_side, int)
+            ):
+                raise TrainerRefusal(
+                    f"field video_max_side={config.video_max_side!r}: None or "
+                    f"an integer is required"
+                )
+            try:
+                video_budget = FrameBudget(
+                    frames=config.video_frames,
+                    sampling=config.video_sampling,
+                    max_side=config.video_max_side,
+                )
+            except (ValueError, TypeError) as exc:
+                raise TrainerRefusal(
+                    f"field video_column={config.video_column!r} is declared "
+                    f"but its frame budget is invalid: {exc}"
+                ) from exc
         self.config = config
+        self._needs_media = config.image_column is not None or config.video_column is not None
+        self._video_budget = video_budget
+        self._processor: Any | None = None
+        self._turn_markers: TurnMarkers | None = None
         self._objective = self._resolve_objective()
         self._paired = is_paired(self._objective)
         self._reference_required = needs_reference(self._objective)
@@ -761,12 +927,25 @@ class PreferenceTrainer:
         the causally visible tokens cannot be crossed by pads. The invariant
         that justifies left padding in the online trainer is deliberately not
         restated as a requirement here.
+
+        Dispatches to :meth:`_encode_batch_media` when the run declares
+        ``image_column``/``video_column`` -- a distinct method rather than a
+        branch threaded through every line below, because the media path
+        renders through the SFT processor pipeline
+        (``_render_conversation_row``/``_conversation_processor_batch_call``/
+        ``assistant_label_mask``) instead of a bare tokenizer, and the two
+        pipelines share no line of tensor-building code. ``tokenizer`` and
+        ``pad_token_id`` are unused on that path (the processor renders and
+        pads its own batch); they stay required parameters because the sole
+        caller, ``_one_step``, passes them unconditionally for both paths.
         """
         if not records:  # pragma: no cover -- run() always passes a non-empty chunk
             raise TrainerRefusal(
                 "0 records were supplied for a configured step; an empty "
                 "batch has no supervision denominator"
             )
+        if self._needs_media:
+            return self._encode_batch_media(records=records, device=device)
         encoded_rows: list[_EncodedCompletion] = []
         desirable_values: list[bool] = []
         for record in records:
@@ -852,6 +1031,207 @@ class PreferenceTrainer:
             desirable=desirable,
         )
 
+    def _encode_batch_media(
+        self,
+        *,
+        records: Sequence[Mapping[str, Any]],
+        device: str,
+    ) -> _EncodedBatch:
+        """Build one processor-rendered batch for an image/video-declared run.
+
+        Each OUTPUT row (chosen, rejected, or one KTO completion) is rendered
+        INDEPENDENTLY through the exact SFT pipeline
+        (:func:`foundationscale.train.conversation._render_conversation_row`,
+        which itself calls ``normalize_conversation`` for marker validation
+        and image loading / ``frames_for_row`` for video) as a synthetic
+        two-turn conversation ``[user: prompt, assistant: this side's
+        completion]``, then the whole step's rows are encoded in ONE
+        :func:`_conversation_processor_batch_call`, byte-identical to how
+        the SFT collator calls it. A paired record's chosen and rejected
+        rows therefore each reload and re-render the SAME declared image(s)
+        /video segment rather than sharing one upstream processor call: this
+        pays one extra PIL decode (video frames are cache-hit after the
+        first side, see ``video.video_frame_paths``) per pair instead of
+        re-deriving ``rl.trainer._expand_modality_kwargs_for_group``'s
+        GROUP/``kept_indices`` semantics for a shape -- two differently
+        truncated completions sharing one prompt -- that function was never
+        built for (it expands ONE prompt into K ROLLOUT rows, not two
+        independently-worded sides). ``_narrow_modality_kwargs_by_row`` IS
+        reused unchanged below, in ``_forward_logprobs``, for micro-batch
+        row-range slicing -- that helper's block-vs-row distinction is
+        exactly the one this batch still needs.
+
+        Labels are derived with ``assistant_label_mask`` off the SAME
+        ``derive_turn_markers`` boundary the SFT plane uses
+        (``self._turn_markers``, computed once in ``run()``), then shifted
+        into this trainer's ``completion_mask`` convention
+        (``labels[:, 1:] != -100``) rather than re-deriving a prompt/
+        completion token boundary by hand: the processor expands
+        ``<image>``/``<video>`` markers into a family-specific placeholder
+        token COUNT this trainer has no other way to predict, so only the
+        rendered token stream itself can say where the assistant span starts.
+
+        Refuses (never truncates) a row whose rendered length exceeds
+        ``max_length``: unlike the text-only ``_encode_completion`` path
+        (which may truncate a completion's tail), truncating here could cut
+        mid-image placeholder or drop a turn's own end-of-turn marker, so
+        the only safe response to an overlong media row is to refuse and
+        name it.
+        """
+        import torch
+
+        rows: list[dict[str, Any]] = []
+        desirable_values: list[bool] = []
+        for record in records:
+            sides: tuple[tuple[str, str], ...]
+            if self._paired:
+                sides = (
+                    ("chosen", str(record["chosen"])),
+                    ("rejected", str(record["rejected"])),
+                )
+            else:
+                sides = (("completion", str(record["completion"])),)
+            for _side, completion_text in sides:
+                row = dict(record)
+                row["conversations"] = [
+                    {"role": "user", "content": record["prompt"]},
+                    {"role": "assistant", "content": completion_text},
+                ]
+                rows.append(row)
+                if not self._paired:
+                    label = record["label"]
+                    if not isinstance(label, bool):
+                        raise TrainerRefusal(
+                            f"dataset line {record[_LINE_KEY]}: KTO label "
+                            f"{label!r} was not a bool after validation"
+                        )
+                    desirable_values.append(label)
+
+        frames_for: Any = None
+        if self.config.video_column is not None:
+            video_column: str = self.config.video_column
+            if self._video_budget is None:  # pragma: no cover -- __init__ always builds one
+                raise TrainerRefusal(
+                    "video_column is declared but 0 frame budgets were built at construction time"
+                )
+            video_budget: FrameBudget = self._video_budget
+            base_dir = Path(self.config.dataset).resolve().parent
+            cache_dir = self.config.video_cache_dir or str(base_dir / ".fs_video_frames")
+
+            def frames_for(data: Mapping[str, Any]) -> dict[str, Any]:
+                return frames_for_row(
+                    data,
+                    video_column=video_column,
+                    budget=video_budget,
+                    cache_dir=cache_dir,
+                    base_dir=base_dir,
+                )
+
+        texts: list[str] = []
+        images_by_row: list[list[Any]] = []
+        videos_by_row: list[list[Any]] = []
+        video_metadata_by_row: list[list[dict[str, Any]]] = []
+        for row_index, row in enumerate(rows):
+            (
+                text,
+                loaded_images,
+                video_frames,
+                video_metadata,
+                assistant_turn_count,
+            ) = _render_conversation_row(
+                row_index,
+                row,
+                conversations_column="conversations",
+                image_column=self.config.image_column,
+                video_column=self.config.video_column,
+                processor=self._processor,
+                frames_for=frames_for,
+            )
+            if assistant_turn_count != 1:  # pragma: no cover -- this method builds exactly one
+                raise TrainerRefusal(
+                    f"row {row_index}: rendered {assistant_turn_count} "
+                    f"assistant turn(s), expected exactly 1 (the completion "
+                    f"side being priced)"
+                )
+            texts.append(text)
+            images_by_row.append(loaded_images)
+            videos_by_row.append(video_frames)
+            video_metadata_by_row.append(video_metadata)
+
+        batch_feature = _conversation_processor_batch_call(
+            self._processor,
+            texts,
+            images_by_row,
+            videos_by_row,
+            video_metadata_by_row,
+            max_length=self.config.max_length,
+            pad_to_max=False,
+        )
+        input_ids = batch_feature["input_ids"].to(device)
+        attention_mask = batch_feature["attention_mask"].to(device)
+        row_count = int(input_ids.shape[0])
+
+        overlong = tuple(
+            row_index
+            for row_index in range(row_count)
+            if int(attention_mask[row_index].sum()) > self.config.max_length
+        )
+        if overlong:
+            shown = ", ".join(str(index) for index in overlong[:5])
+            more = f" and {len(overlong) - 5} more" if len(overlong) > 5 else ""
+            raise TrainerRefusal(
+                f"{len(overlong)} rendered row(s) exceed max_length="
+                f"{self.config.max_length} after media expansion (row "
+                f"index(es) {shown}{more}); media rows are never truncated "
+                f"-- truncation could cut a media placeholder or drop a "
+                f"turn's end marker -- raise max_length or drop the record"
+            )
+
+        if self._turn_markers is None:  # pragma: no cover -- run() derives it first
+            raise TrainerRefusal(
+                "0 of 1 required turn markers are derived; a media-declared "
+                "run cannot locate the supervised span without them"
+            )
+        labels = assistant_label_mask(
+            input_ids,
+            attention_mask,
+            self._turn_markers,
+            expected_spans=[1] * row_count,
+        )
+        completion_mask = (labels[:, 1:] != -100).to(torch.float32)
+        target_ids = input_ids[:, 1:]
+
+        modality_kwargs: dict[str, torch.Tensor] = {
+            key: (value.to(device) if hasattr(value, "to") else value)
+            for key, value in batch_feature.items()
+            if key not in ("input_ids", "attention_mask")
+        }
+        desirable = (
+            torch.tensor(desirable_values, dtype=torch.bool, device=device)
+            if desirable_values
+            else None
+        )
+        # One entry per TRAINING row (0 for a row with none of that
+        # modality) -- the row-order match to images_by_row/videos_by_row
+        # is exact because both were built in the SAME enumerate(rows) loop
+        # above that fed _conversation_processor_batch_call. See
+        # _EncodedBatch's docstring for why _forward_logprobs needs these:
+        # the processor's own image_grid_thw/video_grid_thw count MEDIA,
+        # not training rows, and the two counts only coincide when every
+        # row carries exactly one of that modality.
+        image_counts = tuple(len(images) for images in images_by_row)
+        video_counts = tuple(len(videos) for videos in videos_by_row)
+        return _EncodedBatch(
+            target_ids=target_ids,
+            completion_mask=completion_mask,
+            attention_mask=attention_mask,
+            input_ids=input_ids,
+            desirable=desirable,
+            modality_kwargs=modality_kwargs or None,
+            image_counts=image_counts if any(image_counts) else None,
+            video_counts=video_counts if any(video_counts) else None,
+        )
+
     def _forward_logprobs(
         self,
         *,
@@ -860,11 +1240,116 @@ class PreferenceTrainer:
         start: int,
         end: int,
     ) -> torch.Tensor:
-        """Return target log-probabilities for one half-open row slice."""
+        """Return target log-probabilities for one half-open row slice.
+
+        Every key in ``batch.modality_kwargs`` is classified by
+        :func:`_classify_modality_key` -- shape against the batch's training
+        row count and total image/video count, not a hardcoded key-name list
+        (see that function's docstring for the measured gemma defect this
+        closes: ``image_position_ids``/``video_position_ids`` are per-media
+        axes under neither of ``rl.trainer``'s two flattened-patch names).
+        ``_narrow_modality_kwargs_by_row`` is reused UNCHANGED once per
+        bucket, with that bucket's OWN row range: the training-row range for
+        'generic' keys, the MEDIA-row range (translated via
+        ``image_counts``/``video_counts``) for 'image'/'video' keys -- never
+        the training-row range directly for the latter, whenever the batch
+        can be heterogeneous (some rows image, some video, some neither; see
+        ``_EncodedBatch``'s docstring for the measured defect this closes).
+
+        A modality absent from this particular row range (``media_start ==
+        media_end``, e.g. ``logprob_micro_batch=1`` landing on a text-only or
+        other-modality row) OMITS that modality's keys entirely rather than
+        passing a 0-row tensor. MEASURED (Qwen3.6-27B): passing an EMPTY
+        ``pixel_values_videos``/``video_grid_thw`` pair (rather than leaving
+        both keys out) still routes into the vision tower's forward, which
+        crashes on the degenerate input (``RuntimeError: repeats must have
+        the same size as input along dim, but got repeats.size(0) = 0 and
+        input.size(0) = 1`` inside transformers' own
+        ``get_vision_interpolation_indices_and_weights``) -- the same
+        "OMIT, never pass an empty collection" rule
+        ``_conversation_processor_batch_call``'s own docstring already
+        states for the whole-batch ``images=``/``videos=`` kwargs, recurring
+        here at the per-micro-batch-slice level.
+        """
         width = end - start
+        extra_kwargs: dict[str, Any] = {}
+        if batch.modality_kwargs:
+            row_count = int(batch.input_ids.shape[0])
+            total_images = sum(batch.image_counts) if batch.image_counts is not None else None
+            total_videos = sum(batch.video_counts) if batch.video_counts is not None else None
+            buckets: dict[str, dict[str, Any]] = {"generic": {}, "image": {}, "video": {}}
+            key_bucket: dict[str, str] = {}
+            for key, value in batch.modality_kwargs.items():
+                bucket = _classify_modality_key(
+                    key,
+                    value,
+                    row_count=row_count,
+                    total_images=total_images,
+                    total_videos=total_videos,
+                )
+                buckets[bucket][key] = value
+                key_bucket[key] = bucket
+            # Reconciliation pass: a FLATTENED-PATCH value (Qwen3.6's
+            # pixel_values/pixel_values_videos) has row-0 width equal to the
+            # TOTAL PATCH COUNT, not total_images/total_videos, so the shape
+            # check above cannot classify it directly -- it is reclassified
+            # into whichever bucket its own paired COUNT key
+            # (image_grid_thw/video_grid_thw, always one row per media item,
+            # so the shape check DOES classify it) landed in. A pair whose
+            # count key is absent (gemma has none) or was not classified as
+            # image/video (an ordinary text-only batch) leaves the value key
+            # exactly where the shape check already put it.
+            for value_key, count_key in _FLATTENED_PATCH_PAIRS:
+                count_bucket = key_bucket.get(count_key)
+                if (
+                    value_key in batch.modality_kwargs
+                    and count_bucket is not None
+                    and count_bucket != "generic"
+                    and key_bucket.get(value_key) != count_bucket
+                ):
+                    buckets[key_bucket[value_key]].pop(value_key, None)
+                    buckets[count_bucket][value_key] = batch.modality_kwargs[value_key]
+                    key_bucket[value_key] = count_bucket
+            if buckets["generic"]:
+                extra_kwargs.update(
+                    _narrow_modality_kwargs_by_row(buckets["generic"], start=start, end=end)
+                )
+            for name, counts in (("image", batch.image_counts), ("video", batch.video_counts)):
+                media_kwargs = buckets[name]
+                if not media_kwargs:
+                    continue
+                # counts is None means "uniform modality" (every row carries
+                # exactly one, the RL trainer's own precondition): the
+                # media-row range IS the training-row range, unchanged.
+                # Heterogeneous batches carry real per-row counts (0 for a
+                # row with none of this modality) and need the translation.
+                if counts is None:
+                    media_start, media_end = start, end
+                else:
+                    media_start = sum(counts[:start])
+                    media_end = sum(counts[:end])
+                if media_end == media_start:
+                    continue
+                extra_kwargs.update(
+                    _narrow_modality_kwargs_by_row(media_kwargs, start=media_start, end=media_end)
+                )
+            # Diagnostic, same shape as rl.trainer's own "forwarding modality
+            # keys to the scorer" line: per-rank (plain print() carries no
+            # rank prefix under torchrun, unlike the NCCL error dumps), so a
+            # hang's last line on each rank's own stream shows exactly which
+            # modality that rank's micro-batch was about to force the model
+            # to touch -- the evidence that confirms or refutes a per-rank
+            # modality mismatch at the point of a collective timeout.
+            print(
+                f"[preference_trainer] rank={os.environ.get('RANK', '0')} "
+                f"micro-batch rows [{start}, {end}) modality keys: "
+                f"{', '.join(sorted(extra_kwargs)) or '(none)'}",
+                file=sys.stderr,
+            )
         logits = model(
             input_ids=batch.input_ids.narrow(0, start, width),
             attention_mask=batch.attention_mask.narrow(0, start, width),
+            **extra_kwargs,
         ).logits
         return _token_logprobs(logits, batch.target_ids.narrow(0, start, width))
 
@@ -956,11 +1441,35 @@ class PreferenceTrainer:
             if use_micro_batching
             else ((0, row_count),)
         )
+        # The micro-slice COUNT, and whether a rank slices AT ALL, must agree
+        # across ranks: every narrowed forward() re-enters the model and so
+        # re-fires one round of FSDP2's per-layer unshard all-gathers. A rank
+        # that issues fewer forward() calls than a peer (either because its
+        # row_count produced fewer ceil-divided slices, or because its
+        # row_count fell at/under logprob_micro_batch while a peer's did not)
+        # leaves that peer's later all-gathers short a participant, which
+        # waits forever rather than erroring. MEASURED on 2x H200: a
+        # rank0/rank1 prompt-level shard of 5/4 preference rows produced a
+        # 3-slice rank beside a 2-slice rank and the run hung past a 90
+        # minute collective timeout with rank0 still issuing all-gathers no
+        # peer would answer; rl/trainer.py hit the identical class of bug for
+        # GRPO and fixed it with agree_max plus a shared zero-weight pad
+        # slice (_padding_backwards) -- this mirrors that fix rather than
+        # re-deriving it.
+        real_slices = len(row_slices)
+        extra_slices = 0
+        if ctx is not None and ctx.is_distributed:
+            extra_slices = max(0, agree_max(real_slices, ctx) - real_slices)
+            use_micro_batching = not agree_all(not use_micro_batching, ctx)
+        pad_slice = (0, min(1, row_count))
+        padded_slices = row_slices + (pad_slice,) * extra_slices
 
         if use_micro_batching:
             # One detached leaf lets the declared scalar see the complete
             # batch. Its backward is then delivered to parameter graphs one
-            # fresh slice at a time by _micro_batched_backward.
+            # fresh slice at a time by _micro_batched_backward. Padding
+            # slices are forwarded too -- so every rank issues the same
+            # number of all-gathers -- then dropped before concatenation.
             with torch.no_grad():
                 policy_logprobs = (
                     torch.cat(
@@ -971,8 +1480,8 @@ class PreferenceTrainer:
                                 start=start,
                                 end=end,
                             )
-                            for start, end in row_slices
-                        ],
+                            for start, end in padded_slices
+                        ][:real_slices],
                         dim=0,
                     )
                     .detach()
@@ -993,13 +1502,6 @@ class PreferenceTrainer:
                     f"objective {type(self._objective).__name__} requires "
                     f"a frozen reference model but 0 were loaded"
                 )
-            reference_slices: tuple[tuple[int, int], ...]
-            if 0 < micro_batch < row_count:
-                reference_slices = row_slices
-            elif micro_batch > 0:
-                reference_slices = ((0, row_count),)
-            else:
-                reference_slices = ((0, row_count),)
             with torch.no_grad():
                 reference_logprobs = torch.cat(
                     [
@@ -1009,8 +1511,8 @@ class PreferenceTrainer:
                             start=start,
                             end=end,
                         )
-                        for start, end in reference_slices
-                    ],
+                        for start, end in padded_slices
+                    ][:real_slices],
                     dim=0,
                 ).detach()
 
@@ -1090,21 +1592,32 @@ class PreferenceTrainer:
                     f"support pair accuracy"
                 )
 
+        policy_forward_slice = lambda start, end: self._forward_logprobs(  # noqa: E731
+            model=policy_model,
+            batch=batch,
+            start=start,
+            end=end,
+        )
         optimizer.zero_grad()
         if use_micro_batching:
             _micro_batched_backward(
                 loss_tensor=loss_tensor,
                 current_logprobs=policy_logprobs,
                 row_slices=row_slices,
-                forward_slice=lambda start, end: self._forward_logprobs(
-                    model=policy_model,
-                    batch=batch,
-                    start=start,
-                    end=end,
-                ),
+                forward_slice=policy_forward_slice,
             )
         else:
             loss_tensor.backward()
+        # Padding passes: one collective-matching forward+backward per extra
+        # slice, gradient exactly zero, so a rank with fewer real slices than
+        # its busiest peer still issues the same number of all-gather /
+        # reduce-scatter rounds. A no-op when extra_slices == 0 (every rank
+        # agreed, including the single-pass path above).
+        _padding_backwards(
+            forward_slice=policy_forward_slice,
+            extra_slices=extra_slices,
+            n_rows=row_count,
+        )
         optimizer.step()
 
         measured_loss = float(loss_tensor.detach())
@@ -1174,23 +1687,32 @@ class PreferenceTrainer:
 
         WHAT IS NOT CLAIMED: that the random or shuffled draw is sampled
         without replacement per epoch beyond the stated cycle, or that a
-        media-carrying record can be downgraded to text.
+        media-carrying record whose column is NOT declared can be
+        downgraded to text.
         """
         records = load_pairs_jsonl(self.config.dataset, paired=self._paired)
+        declared_columns = {
+            column
+            for column in (self.config.image_column, self.config.video_column)
+            if column is not None
+        }
         carriers = tuple(
             (record[_LINE_KEY], key)
             for record in records
             for key in _MODALITY_KEYS
-            if record.get(key) is not None
+            if key not in declared_columns and record.get(key) is not None
         )
         if carriers:
             shown = ", ".join(f"line {line} ({key})" for line, key in carriers[:5])
             more = f" and {len(carriers) - 5} more" if len(carriers) > 5 else ""
             _refuse_exit_96(
                 f"{len(carriers)} preference record field(s) carry image or "
-                f"video data: {shown}{more}. The offline preference "
-                f"trainer is text-only; training on the prompt alone "
-                f"would silently drop the modality"
+                f"video data in an undeclared column: {shown}{more}. "
+                f"The offline preference trainer is text-only for any "
+                f"undeclared field; declare image_column/video_column to "
+                f"train on them, or drop the field(s) -- never guessed, and "
+                f"training on the prompt alone would silently drop the "
+                f"modality"
             )
         try:
             import torch
@@ -1240,7 +1762,7 @@ class PreferenceTrainer:
         torch.manual_seed(self.config.seed)
 
         try:
-            prompt_surface = resolve_prompt_surface(self.config.model, False)
+            prompt_surface = resolve_prompt_surface(self.config.model, self._needs_media)
             tokenizer = (
                 prompt_surface.surface
                 if prompt_surface.kind == "tokenizer"
@@ -1248,6 +1770,13 @@ class PreferenceTrainer:
             )
         except Exception as exc:  # noqa: BLE001 -- load-surface failure is a refusal
             _refuse_exit_96(f"tokenizer load failed for {self.config.model!r}: {exc}")
+        if self._needs_media:
+            # resolve_prompt_surface(..., True) REFUSES (96) rather than
+            # returning kind='tokenizer' (see its own docstring), so this is
+            # a type narrowing, not a runtime branch: self._processor is
+            # always the loaded AutoProcessor here.
+            self._processor = prompt_surface.surface
+            self._turn_markers = derive_turn_markers(self._processor)
         if not getattr(tokenizer, "chat_template", None):
             _refuse_exit_96(
                 f"tokenizer for {self.config.model!r} has no chat "
@@ -1282,14 +1811,25 @@ class PreferenceTrainer:
         if inner_tokenizer is not None:
             inner_tokenizer.padding_side = "right"
 
-        try:
-            # Annotated Any: transformers 5.x wraps ``from_pretrained`` in a
-            # decorator whose type does not survive inference, so an
-            # unannotated binding makes the subsequent ``.to(device)`` read
-            # the device string as the wrapper's self argument.
-            policy_model: Any = AutoModelForCausalLM.from_pretrained(self.config.model)
-        except Exception as exc:  # noqa: BLE001 -- named model-load refusal
-            _refuse_exit_96(f"policy model load failed for {self.config.model!r}: {exc}")
+        policy_model: Any
+        if self._needs_media:
+            # _load_causal_lm picks AutoModelForImageTextToText
+            # deterministically BEFORE from_pretrained and PROVES the loaded
+            # instance can consume pixels (exit 96, naming the model type,
+            # otherwise) -- the same defect-closing helper rl/trainer.py's
+            # RLTrainer uses, reused unchanged rather than re-trying
+            # AutoModelForCausalLM first the way the text-only branch below
+            # still does for byte-identical historical behaviour.
+            policy_model = _load_causal_lm(self.config.model, needs_images=True)
+        else:
+            try:
+                # Annotated Any: transformers 5.x wraps ``from_pretrained``
+                # in a decorator whose type does not survive inference, so
+                # an unannotated binding makes the subsequent ``.to(device)``
+                # read the device string as the wrapper's self argument.
+                policy_model = AutoModelForCausalLM.from_pretrained(self.config.model)
+            except Exception as exc:  # noqa: BLE001 -- named model-load refusal
+                _refuse_exit_96(f"policy model load failed for {self.config.model!r}: {exc}")
         # adapter_notes is a dict a manifest-keeping caller could consume;
         # this trainer has no manifest of its own -- _apply_lora_adapter
         # already PRINTS the same facts to stderr, this module's existing
@@ -1323,7 +1863,13 @@ class PreferenceTrainer:
             # masters; MixedPrecisionPolicy then casts to bf16 for compute.
             # This deliberately replaces MasterWeightOptimizer under fsdp.
             policy_model = policy_model.float()
-            policy_model = wrap_fsdp2(policy_model, ctx)
+            # shard_towers=False for a media-declared run: see wrap_fsdp2's
+            # own docstring for the measured FSDP all-gather deadlock this
+            # avoids when per-row modality is heterogeneous (declared
+            # image_column/video_column rows mixed with text-only ones),
+            # unlike the online RL trainer's uniform-one-image-per-prompt
+            # rollouts, which keep the default.
+            policy_model = wrap_fsdp2(policy_model, ctx, shard_towers=not self._needs_media)
         elif self.config.sharding == "ddp":
             policy_model.to(device)
             policy_model = wrap_ddp(policy_model, ctx)
@@ -1378,26 +1924,39 @@ class PreferenceTrainer:
                     file=sys.stderr,
                 )
             else:
-                try:
-                    # Same Any binding as the policy load, for the same
-                    # wrapped-loader reason; the two-step build keeps the
-                    # Optional plane free of the loader's inferred type.
-                    loaded_reference: Any = AutoModelForCausalLM.from_pretrained(self.config.model)
-                except Exception as exc:  # noqa: BLE001
-                    _refuse_exit_96(
-                        f"reference model load failed for "
-                        f"{self.config.model!r}: {exc}; objective "
-                        f"{type(self._objective).__name__} is "
-                        f"reference-anchored, so substituting the policy "
-                        f"readings would change its margin"
-                    )
+                loaded_reference: Any
+                if self._needs_media:
+                    # Same defect-closing loader as the policy load above:
+                    # a second AutoModelForCausalLM copy of a media-declared
+                    # qwen3_5-family checkpoint would load without error and
+                    # silently absorb pixel_values through **kwargs.
+                    loaded_reference = _load_causal_lm(self.config.model, needs_images=True)
+                else:
+                    try:
+                        # Same Any binding as the policy load, for the same
+                        # wrapped-loader reason; the two-step build keeps the
+                        # Optional plane free of the loader's inferred type.
+                        loaded_reference = AutoModelForCausalLM.from_pretrained(self.config.model)
+                    except Exception as exc:  # noqa: BLE001
+                        _refuse_exit_96(
+                            f"reference model load failed for "
+                            f"{self.config.model!r}: {exc}; objective "
+                            f"{type(self._objective).__name__} is "
+                            f"reference-anchored, so substituting the policy "
+                            f"readings would change its margin"
+                        )
                 loaded_reference.eval()
                 loaded_reference.requires_grad_(False)
                 if self.config.sharding == "fsdp":
                     # The reference is sharded too; its no-grad forwards still
                     # all-gather, so every rank must issue the same calls.
+                    # shard_towers=False for the SAME reason as the policy
+                    # load above -- the reference scores the identical
+                    # heterogeneous rows the policy does.
                     loaded_reference = loaded_reference.float()
-                    loaded_reference = wrap_fsdp2(loaded_reference, ctx)
+                    loaded_reference = wrap_fsdp2(
+                        loaded_reference, ctx, shard_towers=not self._needs_media
+                    )
                 else:
                     # ddp: the reference is a plain replica, never DDP-wrapped.
                     loaded_reference.to(device)

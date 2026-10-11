@@ -882,10 +882,25 @@ def _qwen2_audio_tokens(mask_length: int) -> int:
     return (input_length - 2) // 2 + 1
 
 
+def _qwen3_asr_tokens(mask_length: int) -> int:
+    """Audio tokens Qwen3ASRProcessor inserts for a clip with ``mask_length`` mel frames.
+
+    Copied from transformers 5.19 processing_qwen3_asr.py ``_get_audio_token_length`` at its
+    default ``n_window=50``: the encoder works in 100-frame chunks, each full chunk giving 13
+    tokens, and the final partial chunk goes through three stride-2 convolutions.
+    """
+    chunk = 100
+    remainder = mask_length % chunk
+    after_first = (remainder - 1) // 2 + 1
+    after_second = (after_first - 1) // 2 + 1
+    return (after_second - 1) // 2 + 1 + (mask_length // chunk) * 13
+
+
 # Processors that expose no per-clip count helper but expand placeholders by a fixed
 # formula over the batch's feature attention mask. A DECLARED table, keyed by
 # processor class: a family not listed here keeps the honest UNMEASURED abstention.
 _MASK_LENGTH_TOKEN_FORMULAS: dict[str, Any] = {"Qwen2AudioProcessor": _qwen2_audio_tokens}
+_MASK_LENGTH_TOKEN_FORMULAS["Qwen3ASRProcessor"] = _qwen3_asr_tokens
 
 
 def resolve_audio_surface(model_id: str) -> Any:
@@ -1278,6 +1293,232 @@ def train_audio_collator_or_refuse(
     # satisfies AudioCollator. The `# type: ignore` markers say so to the
     # type-checker without polluting the AudioCollator protocol with callable
     # implementation details.
+    collate.coverage = coverage  # type: ignore[attr-defined]
+    return collate  # type: ignore[return-value]
+
+
+def train_transcription_collator_or_refuse(
+    surface: Any,
+    *,
+    audio_column: str,
+    max_length: int,
+    language: str | None,
+    answer_field: str = "answer",
+) -> AudioCollator:
+    """Build the request-API transcription TRAIN collator (Qwen3-ASR, transformers 5.19).
+
+    The audio_llm arm of ``build_speech_collator`` for a processor that exposes
+    ``apply_transcription_request``: no chat template is involved -- the request
+    wraps its own typed prefix -- so the contract is the REQUEST contract:
+
+      * ONE batched ``processor.apply_transcription_request(audio=[...],
+        language=...)`` call per batch returns ``input_ids`` /
+        ``attention_mask`` / ``input_features [B, T, 128]`` /
+        ``input_features_mask [B, T]`` together. Every prompt ends with the
+        forced assistant prefill, so the training target is
+        ``tokenizer(answer, add_special_tokens=False).input_ids`` +
+        ``eos_token_id`` appended after that prompt (MEASURED loss 0.014 on the
+        model's own transcript with exactly this format).
+      * THE ROW'S PROMPT TEXT COLUMN IS NOT USED -- the user turn is audio only,
+        so only ``answer_field`` names a supervised cell and the chat-template
+        twin's ``text_fields`` pair has no counterpart here.
+      * ``language`` is REQUIRED at construction: ``None`` refuses 96 naming
+        ``FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE`` (never defaulted -- one
+        language trained under another's label is a silent mislabel).
+      * the prompt / target boundary is recovered per row off ``attention_mask``
+        (first attended position and attended count, so a LEFT-padded request
+        and a RIGHT-padded one both behave), and the ragged prompt+target rows
+        are re-padded RIGHT with ``tokenizer.pad_token_id`` (labels -100,
+        attention_mask 0) -- the request's own padding side is not assumed to be
+        the training side once a target has been appended.
+      * labels are -100 on every prompt position and on padding, and hold the
+        target + eos after the prompt; ``audio_token_id`` positions stay -100
+        too (a placeholder is an INPUT slot, never a TARGET) as in the twin.
+      * the PER-ROW placeholder gate reads the family's DECLARED entry in
+        ``_MASK_LENGTH_TOKEN_FORMULAS`` over the row's ``input_features_mask``
+        sum (the request expands placeholders by a formula over the feature
+        mask, not by the twin's per-waveform ``_compute_audio_num_tokens``
+        prediction). A family with no declared formula is UNMEASURED on the
+        coverage record -- not a pass and not a guess; a disagreeing count
+        refuses 96 naming the row and both numbers.
+
+    The twin's other refusals stay exact: strict ``load_audio`` per row (one bad
+    row refuses 96 naming row, reason and column), NO truncation (a final width
+    over ``max_length`` refuses naming both numbers),
+    ``refuse_if_audio_features_dropped`` on the batch the model would receive,
+    and ``SharedAudioCoverage`` accounting read per row. ``input_features`` /
+    ``input_features_mask`` pass through untouched -- the request API is the
+    feature extractor here, and a re-slice would be the silent-drop defect one
+    layer down.
+    """
+    if surface.kind != "processor":
+        _audio_refuse_exit_96(
+            f"a train-time transcription collator was requested for column "
+            f"{audio_column!r} but the resolved surface is {surface.kind!r}: "
+            "transcribing audio through a tokenizer is the silent-drop defect one "
+            "layer up (the waveform would never reach the audio tower and no "
+            "signal would say so), so this refuses rather than collates"
+        )
+    if language is None:
+        _audio_refuse_exit_96(
+            "a train-time transcription collator was requested with language=None: "
+            "the request API must be told the language (declared as "
+            "FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE) and defaulting it would train "
+            "one language under another's label. Refusing rather than guessing"
+        )
+    processor = surface.surface
+    tokenizer = getattr(processor, "tokenizer", processor)
+    pad_id = getattr(tokenizer, "pad_token_id", None)
+    eos_id = getattr(tokenizer, "eos_token_id", None)
+    if pad_id is None or eos_id is None:
+        _audio_refuse_exit_96(
+            f"audio column {audio_column!r}: the transcription target is the "
+            "answer ids + tokenizer.eos_token_id and the batch is re-padded with "
+            "tokenizer.pad_token_id, but pad_token_id="
+            f"{pad_id!r}, eos_token_id={eos_id!r}. Refusing rather than forging a "
+            "boundary the config does not declare"
+        )
+    end_of_turn = int(eos_id)  # type: ignore[arg-type]  # None refused just above
+    audio_token_id = getattr(processor, "audio_token_id", None)
+    if audio_token_id is None:
+        _audio_refuse_exit_96(
+            f"audio column {audio_column!r} put audio in the batch, but the "
+            "processor declares no audio_token_id. Without it the placeholder "
+            "positions cannot be counted (for verification) or masked out of the "
+            "labels (for supervision), and training would optimise the model to "
+            "emit placeholder tokens as text. Refusing rather than training "
+            "against an objective we cannot verify"
+        )
+    mask_formula = _MASK_LENGTH_TOKEN_FORMULAS.get(type(processor).__name__)
+    coverage = SharedAudioCoverage(rows_expected=0)
+
+    def collate(rows: Sequence[Any]) -> dict[str, Any]:
+        waves: list[Any] = []
+        durations: list[float] = []
+        answers: list[str] = []
+        for index, raw_row in enumerate(rows):
+            row = raw_row if isinstance(raw_row, dict) else vars(raw_row)
+            row_id = f"train-row[{index}]"
+            coverage.add_expected()
+            value = row.get(audio_column)
+            try:
+                wave, duration = load_audio(
+                    value,
+                    target_sr=processor.feature_extractor.sampling_rate,
+                    row_id=row_id,
+                    max_seconds=max_audio_seconds(processor),
+                )
+            except AudioLoadError as exc:
+                # Strict mode: one bad row is a REFUSED RUN, never a silently
+                # shorter batch (the defect being fixed).
+                _audio_refuse_exit_96(
+                    f"audio column {audio_column!r} row {row_id!r} refused by the "
+                    f"loader: reason={exc.reason!r}, source={value!r}. Strict mode "
+                    "does not drop rows silently (that is the defect being fixed); "
+                    "fix the corpus or the loader, or narrow the audio column"
+                )
+            waves.append(wave)
+            durations.append(duration)
+            answers.append(str(row.get(answer_field, "")))
+
+        if not waves:
+            return {}
+
+        # ONE batched request for the whole batch: the API renders prompt and
+        # features together, and a second pass risks the silent-drop class of bug
+        # this plane keeps finding. The prompt text column is never read -- the
+        # user turn is audio only.
+        batch = processor.apply_transcription_request(audio=waves, language=language)
+        input_ids = batch["input_ids"]
+        attention_mask = batch.get("attention_mask")
+        if attention_mask is None:
+            _audio_refuse_exit_96(
+                f"audio column {audio_column!r}: apply_transcription_request "
+                "produced no attention_mask, so the prompt length cannot be "
+                "recovered from the padded request and the label mask would mark "
+                "the wrong tokens as supervised. Refusing rather than supervising "
+                "the prompt by accident"
+            )
+        feature_mask = batch.get("input_features_mask")
+
+        prompt_ids_per_row: list[list[int]] = []
+        lines: list[tuple[list[int], list[int]]] = []
+        for index, answer_text in enumerate(answers):
+            # first attended position + attended count recover the UNPADDED
+            # prompt ids for either request padding side (the request pads LEFT
+            # by default; the TRAIN batch is re-padded RIGHT below).
+            row_mask = attention_mask[index]
+            first_attended = int(row_mask.argmax())
+            prompt_len = int(row_mask.sum())
+            prompt_ids = [
+                int(token)
+                for token in input_ids[index, first_attended : first_attended + prompt_len]
+            ]
+            encoded = tokenizer(answer_text, add_special_tokens=False)
+            target_line = [int(token) for token in encoded.input_ids] + [end_of_turn]
+            prompt_ids_per_row.append(prompt_ids)
+            lines.append((prompt_ids, target_line))
+
+        for index, prompt_ids in enumerate(prompt_ids_per_row):
+            row_id = f"train-row[{index}]"
+            actual = sum(1 for token in prompt_ids if token == audio_token_id)
+            if mask_formula is None or feature_mask is None:
+                # UNMEASURED, never a silent skip and never a pass: the family's
+                # expansion over the feature mask is a DECLARED formula, and a
+                # family outside the table cannot be pair-checked.
+                coverage.add_placeholder_unmeasured()
+                continue
+            mask_length = int(feature_mask[index].sum())
+            expected = int(mask_formula(mask_length))
+            if actual != expected:
+                _audio_refuse_exit_96(
+                    f"audio column {audio_column!r} row {row_id!r}: "
+                    f"apply_transcription_request produced {actual} audio "
+                    f"placeholders, but the registered {type(processor).__name__} "
+                    f"expansion over input_features_mask[{index}] (sum={mask_length}) "
+                    f"expects {expected}. The processor and the model pair are out "
+                    "of contract (P0 measured these equal on the measured family); "
+                    "refusing to train against a sequence the family does not "
+                    "recognise"
+                )
+            coverage.add_placeholder_verified()
+
+        width = max(len(prompt) + len(target) for prompt, target in lines)
+        if width > max_length:
+            # NO truncation on the transcription path: truncating the prompt
+            # drops measured sound and truncating the target drops the learned
+            # transcript -- the silent-drop defect one layer down.
+            _audio_refuse_exit_96(
+                f"audio column {audio_column!r}: the batch reached {width} tokens, "
+                f"wider than the declared max_length={max_length}. The transcription "
+                "path does not truncate; reduce the audio length per row, the "
+                f"{answer_field!r} field, or the max_length budget -- this refuses "
+                "rather than corrupts"
+            )
+
+        batch_size = len(lines)
+        padded_ids = input_ids.new_full((batch_size, width), pad_id)
+        padded_attention = attention_mask.new_zeros((batch_size, width))
+        labels = input_ids.new_full((batch_size, width), -100)
+        for index, (prompt_ids, target_line) in enumerate(lines):
+            seq_len = len(prompt_ids) + len(target_line)
+            padded_ids[index, :seq_len] = input_ids.new_tensor(prompt_ids + target_line)
+            padded_attention[index, :seq_len] = 1
+            labels[index, len(prompt_ids) : seq_len] = labels.new_tensor(target_line)
+        # Same discipline as the chat-template collator: a placeholder is a
+        # valid INPUT slot and never a valid TARGET.
+        labels[labels == audio_token_id] = -100
+
+        out = dict(batch)
+        out["input_ids"] = padded_ids
+        out["attention_mask"] = padded_attention
+        out["labels"] = labels
+        refuse_if_audio_features_dropped(out.keys(), audio_column)
+
+        for duration in durations:
+            coverage.record_ok(duration)
+        return out
+
     collate.coverage = coverage  # type: ignore[attr-defined]
     return collate  # type: ignore[return-value]
 

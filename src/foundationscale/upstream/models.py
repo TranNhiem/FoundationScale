@@ -338,9 +338,10 @@ MODELS: tuple[ModelEntry, ...] = (
         kind=ModelKind.AUDIO_LLM,
         license_weights="apache-2.0",
         attribution="Qwen team, Alibaba Cloud, Qwen3-ASR-1.7B",
-        # Decode-only: no FamilySpec, because the class needs transformers >= 5.13 and the HF
-        # training lane (hf-26.04) has 5.5. It runs in the candidate profile with its own
-        # script until the HF lane moves to a transformers that carries it.
+        family="qwen3_asr",
+        # The class needs transformers >= 5.13, so it trains and decodes in the candidate
+        # profile. Its own eval script drives apply_transcription_request (the forced-language
+        # prompt); the generic audio-LLM eval would build a different prompt.
         requires=(("transformers", ">=5.13"),),
         reference=ReferenceResult(
             task="librispeech_test_clean",
@@ -351,7 +352,9 @@ MODELS: tuple[ModelEntry, ...] = (
             measured=1.643,
             measured_note=(
                 "full split, Whisper EnglishTextNormalizer; FS normalizer reads 1.883. "
-                "test_other 3.368 vs README 3.38 -- validation_campaigns/speech_repro, 2026-10-10"
+                "test_other 3.368 vs README 3.38 -- validation_campaigns/speech_repro, 2026-10-10. "
+                "FS fine-tune on Earnings-22: held-out 14.54 -> 9.66 (validation_campaigns/"
+                "speech_q3asr)"
             ),
         ),
         status=SupportStatus.SUPPORTED,
