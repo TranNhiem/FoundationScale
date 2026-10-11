@@ -43,6 +43,8 @@ class Protocol:
     seed: int
     default_port: int
     source: str
+    # env steps per episode for every suite; None takes the suite's cap from LIBERO_MAX_STEPS
+    max_steps: int | None = None
 
 
 PROTOCOLS: dict[str, Protocol] = {
@@ -50,8 +52,11 @@ PROTOCOLS: dict[str, Protocol] = {
     # 50 trials per task, seed 7.
     "openpi": Protocol("suite_init_states", 10, 5, 50, 7, 8000, "openpi examples/libero/main.py"),
     # GR00T examples/LIBERO/README.md + gr00t/eval/rollout_policy.py: seeded resets, no settle
-    # steps, 8 action steps per inference, 20 episodes per task.
-    "gr00t": Protocol("seeded_reset", 0, 8, 20, 0, 5555, "Isaac-GR00T examples/LIBERO/README.md"),
+    # steps, 8 action steps per inference, 20 episodes per task, and --max-episode-steps 720 for
+    # every suite (MultiStepWrapper counts env steps, not inferences).
+    "gr00t": Protocol(
+        "seeded_reset", 0, 8, 20, 0, 5555, "Isaac-GR00T examples/LIBERO/README.md", max_steps=720
+    ),
 }
 
 SUITE_TASKS = {"libero_spatial": 10, "libero_object": 10, "libero_goal": 10, "libero_10": 10}
@@ -109,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=protocol.seed if args.seed is None else args.seed,
             init=protocol.init,  # type: ignore[arg-type]
             num_steps_wait=protocol.num_steps_wait,
+            max_steps=protocol.max_steps,
         )
     except EvalPlanError as exc:
         print(f"REFUSAL (exit 96): {exc}", file=sys.stderr)

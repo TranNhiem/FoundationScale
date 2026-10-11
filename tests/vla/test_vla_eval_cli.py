@@ -287,3 +287,21 @@ def test_a_serve_cmd_that_does_not_render_is_refused_before_launch(
 
     monkeypatch.setattr(cli.subprocess, "Popen", no_launch)
     assert cli.main(_argv(tmp_path, 1, "--serve-cmd", serve)) == cli.EXIT_REFUSE
+
+
+@pytest.mark.parametrize("suite", ["libero_spatial", "libero_10"])
+def test_each_backend_keeps_its_own_step_budget(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, suite: str
+) -> None:
+    budgets = {}
+    for backend in ("openpi", "gr00t"):
+        seen: dict[str, Any] = {}
+        monkeypatch.setattr(cli, "run_libero", _fake_run(seen))
+        server, port = _listening_port()
+        with server:
+            argv = _argv(tmp_path, port)
+            argv[1], argv[5] = backend, suite
+            assert cli.main(argv) == cli.EXIT_OK
+        budgets[backend] = seen["plan"].max_steps
+    # openpi caps each suite at its longest demo plus margin; GR00T runs 720 env steps everywhere
+    assert budgets == {"openpi": {"libero_spatial": 220, "libero_10": 520}[suite], "gr00t": 720}
