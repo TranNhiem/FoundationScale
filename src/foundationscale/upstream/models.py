@@ -74,6 +74,8 @@ class Backend(str, Enum):
 
     HF = "hf"  # Hugging Face transformers (plus its processors / tokenizers)
     NEMO = "nemo"  # NeMo: restore_from on a .nemo checkpoint
+    GR00T = "gr00t"  # Isaac GR00T: its own policy server in its own environment (VLA)
+    OPENPI = "openpi"  # Physical Intelligence openpi: its own policy server (VLA)
 
 
 class ModelKind(str, Enum):
@@ -91,6 +93,7 @@ class ModelKind(str, Enum):
     CTC = "ctc"  # encoder + CTC head: frames to tokens, no decoder
     AED = "aed"  # attention encoder-decoder (Canary)
     SPEECH_LLM = "speech_llm"  # speech language model (SALM: perception + a pretrained LLM)
+    VLA = "vla"  # vision-language-action policy: observations + instruction in, action chunk out
 
 
 class SupportStatus(str, Enum):

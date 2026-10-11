@@ -55,6 +55,35 @@ _HF_SEEN = "transformers 5.5"
 
 LEDGER: tuple[LedgerEntry, ...] = (
     LedgerEntry(
+        id="gr00t-launch-finetune-no-ddp-flag",
+        kind=LedgerKind.WORKAROUND,
+        framework="gr00t",
+        path="src/foundationscale/vla/adapters/gr00t/ddp_hook.py",
+        anchor="config.training.use_ddp = True",
+        why=(
+            "GR00T's training config has use_ddp but launch_finetune.py does not expose it, so "
+            "every num_gpus > 1 run goes to DeepSpeed, which has no aarch64 build and needs nvcc "
+            "(absent on GB200). The hook sets use_ddp before GR00T's own experiment.run and runs "
+            "the launcher unchanged (measured: 3 GPUs 2.6x, 87% efficient)."
+        ),
+        upstream_version="Isaac-GR00T d2b7e75 (n1.7)",
+        expiry_check="python gr00t/experiment/launch_finetune.py --help lists a use_ddp option",
+    ),
+    LedgerEntry(
+        id="gr00t-flash-attn-off-aarch64",
+        kind=LedgerKind.WORKAROUND,
+        framework="gr00t",
+        path="src/foundationscale/vla/adapters/gr00t/finetune.py",
+        anchor='data["use_flash_attention"] = bool(use_flash_attention)',
+        why=(
+            "flash-attn 2.8.3 (GR00T's pin) has no aarch64 wheel; staging sets the checkpoint's "
+            "public use_flash_attention field to False so GR00T runs on PyTorch SDPA. Measured "
+            "with it: GR00T N1.7 LIBERO spatial 588/606 vs the published 195/200."
+        ),
+        upstream_version="Isaac-GR00T d2b7e75 (n1.7); flash-attn 2.8.3",
+        expiry_check="pip install flash-attn==<GR00T's pin> succeeds on linux aarch64",
+    ),
+    LedgerEntry(
         id="nemo-salm-strict-loading",
         kind=LedgerKind.WORKAROUND,
         framework="nemo",
