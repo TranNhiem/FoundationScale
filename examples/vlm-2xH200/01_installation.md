@@ -154,6 +154,14 @@ uv pip install --python venv/bin/python -r examples/vlm-2xH200/install/requireme
 uv pip install --python venv/bin/python -e ".[train]"
 ```
 
+### Step B3 — Activate the venv
+
+```bash
+source venv/bin/activate
+```
+
+**Every later chapter assumes the environment from this chapter is ACTIVE in the shell** (conda: `conda activate fs-vlm`; uv: `source venv/bin/activate`). Otherwise `python`/`torchrun` resolve to the system Python 3.10 and `torchrun` is "not found".
+
 ### Check it worked
 
 Run the same two checks as in Option A, but through the venv:

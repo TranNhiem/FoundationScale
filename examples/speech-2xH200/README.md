@@ -1,12 +1,10 @@
 # Fine-tune ASR models on 2x H200 with FoundationScale
 
-This tutorial takes you end to end through fine-tuning **three different kinds of speech/ASR model** on
-LibriSpeech with FoundationScale — a CTC encoder (full fine-tune), a seq2seq encoder-decoder (full
-fine-tune), and one audio-LLM (LoRA fine-tune) — and then evaluating every one of them honestly,
-base vs. fine-tuned, with paired-bootstrap significance testing on the WER difference. (A fourth model,
-`Qwen/Qwen2-Audio-7B-Instruct`, is documented here as a clean **REFUSE** pending a FoundationScale
-`FamilySpec` update — it is a refusal demo, not a fourth trained model.) The raw validation evidence this
-tutorial draws on already lives in this repository at
+This tutorial takes you end to end through fine-tuning **four speech/ASR models of three different kinds**
+on LibriSpeech with FoundationScale — a CTC encoder (full fine-tune), a seq2seq encoder-decoder (full
+fine-tune), and two audio-LLMs (LoRA fine-tune) — and then evaluating every one of them honestly,
+base vs. fine-tuned, with paired-bootstrap significance testing on the WER difference. The raw validation
+evidence this tutorial draws on already lives in this repository at
 [`validation_campaigns/speech_p0`](../../validation_campaigns/speech_p0),
 [`speech_p1`](../../validation_campaigns/speech_p1),
 [`speech_p2`](../../validation_campaigns/speech_p2),
@@ -23,10 +21,10 @@ tutorial draws on already lives in this repository at
 500-step 2x H200 runs below, plus traps not covered by the campaigns above — was freshly **MEASURED** on
 2026-10-10/11; the raw evidence for this tutorial's own runs is in
 [`validation_campaigns/speech_2xh200/EVIDENCE.md`](../../validation_campaigns/speech_2xh200/EVIDENCE.md),
-which now covers **four measurement rounds**, **three owner-reported fixes applied from origin/main
-`ced0c5c`**, and a resolved Whisper finding: an apparent regression traced to raw-upper-case training
-targets, fixed by sentence-casing them (2.25% -> 1.72%, matching the owner's own 1.69%) — not a
-transformers/torch version issue.
+which now covers **six measurement rounds**, **three owner-reported fixes applied from origin/main
+`ced0c5c`**, a resolved Whisper finding (an apparent regression traced to raw-upper-case training
+targets, fixed by sentence-casing them: 2.25% -> 1.72%, matching the owner's own 1.69% — not a
+transformers/torch version issue), and Qwen2-Audio's restoration after an upstream `FamilySpec` update.
 
 ## What you get
 
@@ -35,10 +33,11 @@ transformers/torch version issue.
 - A LibriSpeech → FLAC + JSONL data pipeline: `scripts/prepare_librispeech.py` turns parquet shards into
   16 kHz mono audio plus manifests (chapter 02).
 - One training launcher, `scripts/train_speech.sh`, that covers three model kinds with the same interface:
-  CTC full fine-tune, seq2seq full fine-tune, and one audio-LLM LoRA fine-tune (chapter 03).
+  CTC full fine-tune, seq2seq full fine-tune, and audio-LLM LoRA fine-tune (chapter 03).
 - An honest base-vs-fine-tuned WER evaluation harness — `eval_wer.py` plus `paired_bootstrap.py` — that
   reports the WER delta with a 95% confidence interval on identical held-out rows (chapter 04).
-- 3 ready-to-run configs (`configs/*.env`), one per trained model, copy-pasteable as-is.
+- 5 ready-to-run configs (`configs/*.env`): one per trained model, plus a second Qwen2-Audio config for its
+  full fine-tune recipe, copy-pasteable as-is.
 
 ## Chapters
 
@@ -46,10 +45,10 @@ transformers/torch version issue.
    dependency (librosa), and the VM quirks you need to know before training.
 2. [02_data_preparation.md](02_data_preparation.md) — LibriSpeech parquet → FLAC + JSONL manifests, and
    why the eval split must be the full dev-clean set.
-3. [03_training.md](03_training.md) — the `train_speech.sh` launcher, per-model knobs, the Qwen2-Audio
-   refusal demo, and the Whisper target-case recipe lesson.
+3. [03_training.md](03_training.md) — the `train_speech.sh` launcher, per-model knobs, Qwen2-Audio's LoRA
+   and full-fine-tune recipes, and the Whisper target-case recipe lesson.
 4. [04_evaluation.md](04_evaluation.md) — `eval_wer.py` and `paired_bootstrap.py`, base vs. tuned across
-   the 3 trained models, and how to read the confidence intervals.
+   the 4 trained models, and how to read the confidence intervals.
 
 ## Quick start (after chapters 1 and 2)
 
@@ -65,9 +64,9 @@ shards, 28,539 rows) takes ~20–25 min (parquet download ~2.5 min **MEASURED** 
 `parakeet-ctc-1.1b` 500-step full fine-tune takes ~245 s wall (220 s pure train time) on 2 GPUs;
 evaluation (base + tuned, full 2,683-row dev-clean, parallel on 2 GPUs) takes a few minutes each.
 
-## Measured results: 3 ASR models, LibriSpeech, 2x H200, 2026-10-10/11
+## Measured results: 4 ASR models, LibriSpeech, 2x H200, 2026-10-10/11
 
-Workload: 500-step runs, global batch 8 (parakeet/whisper) or 16 (gemma-4), trained on the FULL
+Workload: 500-step runs, global batch 8 (parakeet/whisper/qwen2-audio) or 16 (gemma-4), trained on the FULL
 train-clean-100 (28,539 utterances, 100.59 h, 14 parquet shards) and evaluated base-vs-tuned on the FULL
 2,683-row dev-clean split (never a 300-row slice — see chapter 02 §4 / chapter 04 §2 for why).
 Measurement semantics: peak GB/GPU is the single highest 5-second `nvidia-smi` sample during each run;
@@ -78,6 +77,7 @@ WER/CI come from `eval_wer.py` + `paired_bootstrap.py` on identical held-out row
 | parakeet-ctc-1.1b | full FT | 0 | 14.3 | 0.44 | 1.87% -> 1.77% | [-0.14, -0.05] (significantly better) |
 | whisper-large-v3 | full FT, sentence-cased targets | 0 | n/a (1 GPU, see ch.03) | 0.73 | 2.25% -> **1.72%** | [-0.65, -0.41] (significantly better) |
 | gemma-4-E4B-it | LoRA r16/a32 + towers in full, sentence-cased targets | 0 | 86.2 | 0.94 | 4.04% -> **2.99%** | [-1.24, -0.85] (significantly better) |
+| qwen2-audio-7b | LoRA r16 + towers in full, automatic adapter scoping | 0 | see ch.03 | 0.62 | 35.58% -> **3.41%** | [-0.3303, -0.3134] (significantly better) |
 
 - **parakeet-ctc-1.1b**: a clean win — 1.87% -> 1.77% with a CI of [-0.14, -0.05], significantly better,
   and it essentially matches this repo's own longer-campaign ceiling
@@ -102,19 +102,29 @@ WER/CI come from `eval_wer.py` + `paired_bootstrap.py` on identical held-out row
   via `get_base_model()`, landing after this tutorial's first Gemma-4 round) resolved a separate refusal
   that had blocked re-verifying on sentence-cased targets; gates confirmed PASS
   (`speech.audio_row_coverage` 8016/8016, `speech.tower_movement` 271/271 + 1/1).
-- **qwen2-audio-7b-instruct**: **NOT in this table.** It REFUSES (exit 96) before training on this VM —
-  `transformers==5.18.0` nests its audio tower one level deeper than FoundationScale's `qwen2_audio`
-  `FamilySpec` currently declares, and FoundationScale now correctly refuses rather than train against an
-  unresolved tower. Pending a `FamilySpec` update; see chapter 03 §5 for the verified refusal message. An
-  earlier exploratory round that trained it via a workaround is **RETRACTED** (not reproducible through
-  the verified path) — do not cite those numbers.
+- **qwen2-audio-7b**: **35.58% -> 3.41%**, CI [-0.3303, -0.3134], significantly better. The owner updated
+  the `qwen2_audio` `FamilySpec` to the `transformers>=5.18` module layout (`origin/main` `0fa19be`) with
+  **automatic** LoRA adapter-target scoping — no `--adapter-target` flag needed any more, 224 modules
+  resolve on their own. Gates confirmed PASS (`speech.audio_row_coverage` 8016/8016,
+  `speech.tower_movement` 487/487 + 2/2). The base number (35.58%) independently matches the owner's own
+  quoted 35.6%. **The full fine-tune recipe** (lr 1e-5, global batch 8, FSDP across 2 GPUs — the owner's
+  primary recipe) trains correctly (loss 0.32 -> 0.15) but hits a real FSDP checkpoint-saving gap on this
+  VM: see chapter 03 §5 for the full story and why no full-FT WER number is reported yet. Use the LoRA
+  number above for this model.
 - **Qwen3-ASR-1.7B** also trains in FoundationScale (transformers >= 5.13) but is not used with this
   tutorial's LibriSpeech manifests (it needs cased, punctuated targets); see
   [`validation_campaigns/speech_q3asr/EVIDENCE.md`](../../validation_campaigns/speech_q3asr/EVIDENCE.md)
   if you want to try it on different data.
-- Stated once, clearly: **one of three models got measurably worse in this run and two got better; a
-  500-step run on 2 GPUs is a plumbing check and a teaching tool, not a quality claim** — the same spirit
-  as the VLM tutorial's own "a 6-step adapter is a plumbing check, not a quality claim".
+- Stated once, clearly: **every model in the table above improved** — parakeet, whisper and gemma-4 each
+  within ~0.03 points of the speech-plane owner's own reference numbers; qwen2-audio-7b's LoRA path has no
+  owner LoRA reference to compare against (the owner's reference number is for the full fine-tune, not yet
+  reproduced here — see above), but its base-vs-tuned base number independently matches the owner's quoted
+  base within 0.02 points — **but a 500-step run on 2 GPUs is still a plumbing check and a teaching tool,
+  not a quality claim** — the same spirit as the VLM tutorial's own "a 6-step adapter is a plumbing check,
+  not a quality claim". Getting there took real debugging (see chapter 03): the first Whisper attempt
+  trained on the wrong target TEXT FORMAT, the first Gemma-4 rerun hit a FoundationScale bug now fixed
+  upstream, and Qwen2-Audio needed an upstream `FamilySpec` update before it could train at all. All of it
+  is kept in the record, not hidden.
 
 ## Ready-to-run configs for each model
 
@@ -126,11 +136,14 @@ WER/CI come from `eval_wer.py` + `paired_bootstrap.py` on identical held-out row
 | `configs/parakeet-ctc-1.1b.env` | `nvidia/parakeet-ctc-1.1b` | full fine-tune |
 | `configs/whisper-large-v3.env` | `openai/whisper-large-v3` | full fine-tune |
 | `configs/gemma-4-E4B-it.env` | `google/gemma-4-E4B-it` | LoRA r16/alpha32 |
+| `configs/qwen2-audio-7b-lora.env` | `Qwen/Qwen2-Audio-7B-Instruct` | LoRA r16/alpha32, automatic adapter scoping — **the measured result in this tutorial** |
+| `configs/qwen2-audio-7b.env` | `Qwen/Qwen2-Audio-7B-Instruct` | full fine-tune, FSDP — trains correctly; see chapter 03 §5 for a real checkpoint-saving gap on this VM before citing a WER number from it |
 
 ```bash
 bash examples/speech-2xH200/scripts/train_speech.sh examples/speech-2xH200/configs/parakeet-ctc-1.1b.env
 bash examples/speech-2xH200/scripts/train_speech.sh examples/speech-2xH200/configs/whisper-large-v3.env
 bash examples/speech-2xH200/scripts/train_speech.sh examples/speech-2xH200/configs/gemma-4-E4B-it.env
+bash examples/speech-2xH200/scripts/train_speech.sh examples/speech-2xH200/configs/qwen2-audio-7b-lora.env
 ```
 
 You can override any setting from the shell — `STEPS`, `LR`, `BATCH`, `GRAD_ACCUM`, `SAVE_EVERY`, `RANK`,
@@ -143,16 +156,19 @@ it is an optional throughput toggle, not a correctness knob.
 
 All **MEASURED**, 2026-10-10/11.
 
-- `torchrun` hangs forever at rendezvous → localhost is IPv6-only on this VM class → always
-  `--master_addr 127.0.0.1` (this tutorial's launcher already does this; it uses port 29880 vs. the VLM
+- `torchrun` hangs forever at rendezvous → `/etc/hosts` lists `::1` before the IPv4 entry for `localhost`,
+  so the rendezvous picks the IPv6 address and hangs → always pass `--master_addr 127.0.0.1` explicitly
+  (this tutorial's launcher already does this; it uses port 29880 vs. the VLM
   tutorial's 29500, so the two never collide — **TODO(verify)** the port is still free if you run other
   jobs concurrently).
 - `nvidia/parakeet-ctc-1.1b` refuses to load with exit 96 naming
   `ParakeetFeatureExtractor requires the librosa library` → the feature extractor needs `librosa`, not
   just `soundfile` → `pip install librosa` (chapter 01).
-- `Qwen/Qwen2-Audio-7B-Instruct` refuses (exit 96) before training on this VM → its `FamilySpec`'s declared
-  module paths don't resolve under `transformers==5.18.0` → pending a `FamilySpec` update (see chapter 03
-  §5); don't attempt a workaround, the framework is refusing correctly.
+- `Qwen/Qwen2-Audio-7B-Instruct` full fine-tune (`SHARDING=fsdp`) trains cleanly but its checkpoint save has
+  a real gap on this VM → the default `--fsdp-state-dict full` fails `checkpoint.save_complete` (RED, exit
+  5); `--fsdp-state-dict sharded` (the shipped default) passes the save gates but leaves
+  `speech.tower_movement` UNMEASURED and writes raw DCP shards `eval_wer.py` can't load directly → see
+  chapter 03 §5 for the conversion and why the LoRA recipe is this tutorial's measured number instead.
 - `torchrun` reports a bare `exit 1` and you can't tell which FoundationScale verdict fired → read the
   `exitcode : N` line inside torchrun's own per-rank failure report (under "Root Cause (first observed
   failure)") — that is the real 5/95/96 code, not torchrun's own wrapper exit.

@@ -18,7 +18,7 @@ CANONICAL MANIFEST FORMAT (one JSON object per line)::
     {
       "id": "1272-128104-0000",
       "text": "Transcribe this audio exactly.",
-      "answer": "<transcript text, as-is from the dataset>",
+      "answer": "<transcript text, sentence-cased>",
       "audio": "/abs/path/to/the/flac/file.flac",
       "duration": 5.855
     }
@@ -27,9 +27,11 @@ RULES enforced on every manifest row
 ------------------------------------
 1. ``text`` is ALWAYS the literal prompt "Transcribe this audio exactly."; it
    is the training prompt and is never derived from the dataset.
-2. ``answer`` is the raw transcript from the parquet ``text`` column with only
-   leading/trailing whitespace stripped — no case, punctuation or number
-   normalisation of any kind.
+2. ``answer`` is the transcript from the parquet ``text`` column, SENTENCE-CASED (whitespace
+   collapsed, lower-cased, then only the first character upper-cased) — no punctuation or number
+   normalisation of any kind. See ``_answer_text`` for why: raw upper-case targets measurably
+   regressed Whisper-large-v3's WER on this stack (2.25% -> 3.32%) by fragmenting words it already
+   transcribes correctly zero-shot into upper-case BPE pieces.
 3. ``duration`` is recomputed from the decoded samples
    (``len(array) / sampling_rate``) and rounded to 3 decimals.  Any
    ``duration`` / ``num_samples`` column in the parquet row is ignored.

@@ -555,14 +555,14 @@ itself, from the Makefile's own accounting:
 
 ## 23. Project structure
 
-`src/` = 95310 LOC across 151 files. `launchers/` contains 10231 shell LOC plus 1615 Python
+`src/` = 97908 LOC across 164 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 34169 Python LOC and 6706 shell LOC on top of the
-package. `tools/` contains 10192 Python LOC. 423869 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 10192 Python LOC. 429359 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
                        topology.py, models/, train/, integrate.py
-tests/                 the test suite (128051 .py LOC); conftest carries the skip guard
+tests/                 the test suite (130251 .py LOC); conftest carries the skip guard
 tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
                        real_checkpoint_probe, preflight/, mutate, census)
 checks/                standalone repository gates: countables drift, packaging

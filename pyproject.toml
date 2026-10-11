@@ -284,12 +284,15 @@ warn_unreachable = true
 # liger_kernel joins the list for the same reason: optional (train/fused_loss.py's
 # --fused-loss liger path), absent in CI by design, reached only function-locally.
 # pyarrow joins it too: it ships no type stubs, and vla/lerobot.py imports it only
-# inside the parquet reader.
+# inside the parquet reader. The VLA backends (openpi_client, gr00t, libero, robosuite) run in
+# their own environments and are imported only inside foundationscale/vla/adapters and eval.
 # harbor joins it as an optional runtime: only agentic_rl/sandbox/harbor_env.py
 # imports it (Harbor loads that module by import path inside its own venv), and CI
-# exercises the module against stand-ins, never the real package.
+# exercises the module against stand-ins, never the real package. minisweagent likewise:
+# only sandbox/mini_swe_env.py imports it, lazily, inside mini-SWE-agent's own process.
 module = [
     "harbor.*",
+    "minisweagent.*",
     "torch.*",
     "safetensors.*",
     "transformers.*",
@@ -299,6 +302,14 @@ module = [
     "liger_kernel.*",
     "pyarrow",
     "pyarrow.*",
+    "openpi_client",
+    "openpi_client.*",
+    "gr00t",
+    "gr00t.*",
+    "libero",
+    "libero.*",
+    "robosuite",
+    "robosuite.*",
 ]
 ignore_missing_imports = true
 
