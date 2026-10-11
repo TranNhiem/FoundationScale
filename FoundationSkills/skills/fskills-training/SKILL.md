@@ -91,6 +91,11 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | TR-IN-007 | BLOCK | input | explicit `lora_targets` empty, or matching no module in a carried module inventory |
 | TR-IN-008 | BLOCK | input | `tp>1` (FS refuses wherever it cannot also save) or `cp>1` with image/video rows (`--cp` is measured end to end only on text) |
 | TR-PL-008 | BLOCK | input | `max_sequence_length >= 32768` without `fused_loss: liger`: refuses naming `--fused-loss liger` (32K needs it or the fp32 logits tensor OOMs, examples/vlm-2xH200) |
+| TR-IN-010 | BLOCK | input | (agentic) algorithm / engine / env backend / reward kind / parser not measured by the probe run INSIDE the declared runtime (a missing or failed probe field is UNMEASURED) |
+| TR-IN-011 | BLOCK | input | (agentic) more than 1 trainer GPU, or `trainer.sharding != "none"`, while agentic multi-GPU is unmeasured |
+| TR-IN-012 | BLOCK | input | (agentic) a reward handle is missing: music needs an executable `abc2midi_bin`, a readable `rollout.tasks_path`, a named env backend (`allow_unsandboxed` for isolation none); never an invented score |
+| TR-IN-013 | BLOCK | input | (agentic) `max_steps > 1` with neither a weight sync nor a declared `engine.allow_stale_policy` |
+| TR-IN-014 | BLOCK | input | (agentic) a declared `engine.env` cannot start the server: FS hands it as the COMPLETE environment (no PATH: vLLM cannot load CUDA); a dev-RPC reload needs `VLLM_SERVER_DEV_MODE=1` |
 | TR-PL-001 | WARN | handoff | plan has 0 executable stages (still useful as a gap list) |
 | TR-PL-002 | BLOCK | handoff | a stage is infeasible with no executable feasible alternative |
 | TR-PL-003 | INFO | handoff | a stage relies on an unvalidated (literature/community/derived) recipe |
@@ -98,6 +103,7 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | TR-PL-005 | INFO | handoff | an sft stage is present: FS SFT full-sequence loss disclosure |
 | TR-PL-006 | BLOCK | handoff | planned `max_sequence_length >= 131072`, or a goal claim that 128K works: RED (131072 OOMs all five measured models, examples/vlm-2xH200) |
 | TR-PL-007 | BLOCK | handoff | gemma-4-31B-it planned above 32768: RED (its measured 2×H200 maximum is 32K) |
+| TR-PL-009 | WARN | handoff | (agentic) `agentic_grpo_token_mean`, the measured control arm, chosen as the default: note |
 | FS-IN-001 | BLOCK | input | (training.emit) the plan has no stages |
 | FS-IN-002 | BLOCK | input | (training.emit) a stage has no dataset payload |
 | FS-IN-003 | BLOCK | input | (training.emit) FoundationScale is not importable: refusal names it |
@@ -106,6 +112,9 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | FS-HO-003 | INFO | handoff | (training.emit) an RL spec is single-device; runnable as measurement-only (`fskills launch --measurement-only`) |
 | FS-IN-004 | BLOCK | input | (training.emit) a stage declares a modality the dataset's `fs_columns` cannot feed |
 | FS-HO-004 | BLOCK | handoff | (training.emit) the emitted spec lacks `--fused-loss` while the stage declares it: RED |
+| FS-IN-005 | BLOCK | input | (training.emit) an agentic stage whose runtime probe is unmeasured or whose engine is not importable there; the refusal names the container |
+| FS-HO-005 | BLOCK | handoff | (training.emit) FS `--dry-run` of the generated agentic config does not exit 0: RED (FS owns the config schema) |
+| FS-HO-006 | BLOCK | handoff | (training.emit) a claim record maps TIMEOUT/STEP_LIMIT to abstention, or claims PASS over 0 measured steps: REFUSED |
 
 VLM competition LoRA (A4.1): a goal may declare `modalities`, `video_frames`, `max_sequence_length`,
 `lora_targets`, `fused_loss`, `tp`/`cp`; the planner copies them into each stage. Image/video rows at
@@ -113,6 +122,14 @@ VLM competition LoRA (A4.1): a goal may declare `modalities`, `video_frames`, `m
 `examples/vlm-2xH200`. Emit declares the conversation, image, video, frame and overlong columns the
 measured launcher uses, and a `--fused-loss` spec stays non-executable unless the probe measured its
 kernel importable (`fused_loss_kernels`; FS lists `liger` as a choice even without `liger_kernel`).
+
+Agentic RL (A4.2): a goal with an `agentic` block plans an `agentic_rl` stage over FS
+`foundationscale.agentic_rl`. The stage declares a runtime (the agentic stack runs in an enroot
+container, e.g. `vllmsrv3`, with `--rc` overriding a server entrypoint); the capability probe runs
+INSIDE it, or a stored `agentic_probe` with `measured: true` is accepted. Emit writes the FS config
+(engine command and complete engine env from the measured GB200 recipe unless declared) and is
+executable only if FS's own `--dry-run` accepts it. A run whose every step is UNMEASURED is refused
+by FS as vacuous (96).
 
 Statuses: PASS 0 / RED 5 / UNMEASURED 95 / REFUSED 96. A `PlanningRefusal`
 (no stage selected; unknown model with no size; unknown hardware) is REFUSED

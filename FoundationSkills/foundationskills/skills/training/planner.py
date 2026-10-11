@@ -897,7 +897,10 @@ def plan(
     if goal.get("stages") is not None:
         selected = _apply_operator_stages(goal.get("stages"), selected, rules, fired, decide,
                                           stage_order=goal.get("stage_order"))
-    if not selected:
+    # A4.2 (agentic RL): a goal whose only stage is the agentic stage (a goal.agentic
+    # mapping, e.g. the measured music S0 shape) must plan it; the refusal below is
+    # exactly what it was for every goal that names neither a stage nor an agentic block.
+    if not selected and not isinstance(goal.get("agentic"), dict):
         raise PlanningRefusal(
             "no stage selected: "
             f"{len(rules)} stage rules evaluated and none added a stage for "
@@ -1304,6 +1307,17 @@ def plan(
             f"{stage}: {stage_feas['verdict']} ({'executable' if executable else 'missing: ' + str(missing)[:80]})",
             f"memory {estimate['memory_gb_per_gpu']}GB/GPU estimate; {len(stage_feas['alternatives'])} alternative(s) considered",
         )
+
+    # A4.2 (agentic RL): the agentic stage is appended AFTER every training stage (the
+    # training chain keeps its order and the agentic RL stage measures last on it).
+    # plan_agentic is imported here, not at module top: importing planner must not drag
+    # in the agentic stack, plan() is its only caller, and both modules are loaded by
+    # the time it runs. It is the agentic module's own record (goal["agentic"] ->
+    # one agentic_rl stage), never a planner heuristic.
+    if isinstance(goal.get("agentic"), dict):
+        from foundationskills.skills.training.agentic import plan_agentic
+
+        stages_out.append(plan_agentic(goal))
 
     overall = max(feas_verdicts, key=lambda v: _VERDICT_ORDER.get(v, 1)) if feas_verdicts else "warn"
     decide(

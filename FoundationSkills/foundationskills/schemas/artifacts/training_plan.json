@@ -15,7 +15,7 @@
         "additionalProperties": true,
         "properties": {
           "name": {"type": "string", "minLength": 1},
-          "stage": {"enum": ["pretrain", "cpt", "sft", "preference", "rl"]},
+          "stage": {"enum": ["pretrain", "cpt", "sft", "preference", "rl", "agentic_rl"]},
           "algorithm": {"type": ["string", "null"]},
           "method": {"enum": ["full", "lora", "qlora"]},
           "recipe_id": {"type": ["string", "null"]},

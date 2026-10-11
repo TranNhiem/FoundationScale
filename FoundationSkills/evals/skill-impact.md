@@ -26,3 +26,5 @@ Append-only: one row per measured change family (A2.1 baselines first). Rows are
 | 2026-10-11 | a41-vlm-lora | fskills-training | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 892be2ee6071 | b87d01d17d79 | 0.972 | 0.185 | 0.787 | [0.699, 0.875] | 24/0 | uplift | 919e7a56758a |
 | 2026-10-11 | a41-vlm-lora | fskills-evaluation | routing | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 3e2136f6f6ef | ad8bcab0a68d | 0.974 | 0.175 | 0.781 | [0.635, 0.917] | 16/0 | uplift | daacf07e78b4 |
 | 2026-10-11 | a41-vlm-lora | fskills-evaluation | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 3e2136f6f6ef | dfe2c4239f74 | 0.911 | 0.274 | 0.637 | [0.511, 0.763] | 15/0 | uplift | 7ea190ac6c1f |
+| 2026-10-11 | a42-agentic-rl | fskills-training | routing | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 9e4793704694 | b27a8f6b39b5 | 0.919 | 0.431 | 0.490 | [0.327, 0.660] | 17/0 | uplift | 9a01def60d52 |
+| 2026-10-11 | a42-agentic-rl | fskills-training | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 9e4793704694 | dfc84123c864 | 0.848 | 0.182 | 0.667 | [0.559, 0.761] | 33/0 | uplift | 871fbfa0fe90 |

@@ -3,7 +3,16 @@
 from __future__ import annotations
 
 import re
+import sys
+from pathlib import Path
 from typing import Any
+
+from foundationskills.interfaces.fs.agentic_probe import probe_agentic, runtime_from_dict
+from foundationskills.skills.training.agentic import (
+    agentic_gates,
+    blocking_findings,
+    plan_agentic,
+)
 
 from foundationskills.core import (
     Artifact,
@@ -275,9 +284,55 @@ _VLM_RECOVERY: dict[str, str] = {
     "TR-PL-007": "plan max_sequence_length at 32768 or below for gemma-4-31B-it",
     "TR-PL-008": (
         "run with --fused-loss liger at max_sequence_length >= 32768 (the measured 32K loss path), or "
-        "plan below 32768"
+        "plan below 32768",
     ),
 }
+
+# A4.2 (agentic RL): the recovery each agentic gate Finding carries. Rule ids and
+# severities are the agentic module's own (skills/training/agentic.py GATE_SEVERITY):
+# this map never re-decides them, it only says how to recover from each refusal.
+_AGENTIC_RECOVERY: dict[str, str] = {
+    "TR-IN-010": (
+        "run the agentic probe in the declared runtime and name only algorithm/engine/env backend/reward "
+        "kind/parser entries the probe measures (an unprobed entry is UNMEASURED: register it in FS or re-probe)"
+    ),
+    "TR-IN-011": (
+        "plan 1 GPU with trainer.sharding 'none' (the measured agentic run is single-GPU), or measure agentic "
+        "multi-GPU first -- the runtime probe leaves multi_gpu UNMEASURED"
+    ),
+    "TR-IN-012": (
+        "declare and prove every handle the scorer reads in the declared runtime (music: abc2midi_bin present "
+        "and executable; rollout.tasks_path readable; the env backend named, with allow_unsandboxed when it "
+        "runs at isolation none)"
+    ),
+    "TR-IN-013": (
+        "declare a weight-sync mode on the engine, or opt in explicitly with engine.allow_stale_policy "
+        "(max_steps > 1 with neither is REFUSED: staleness is an operator declaration, never a default)"
+    ),
+    "TR-IN-014": (
+        "declare everything the engine server needs in engine.env (FS reads engine.env verbatim and never "
+        "merges os.environ, so the env that starts the server is exactly what the declaration carries)"
+    ),
+    "TR-PL-009": (
+        "agentic_grpo_token_mean is the measured control arm: the handoff names the arm as the control and "
+        "keeps its GB200 measurement as the baseline other arms are compared against"
+    ),
+}
+
+
+def _agentic_fs_src() -> Any:
+    """The FS source dir the agentic probe runs over (``None`` without importable FS).
+
+    A4.2: the probe runs INSIDE the runtime ``goal.agentic.runtime`` declares, over this
+    checkout (the measured launcher mounts ``$HOME:$HOME`` into the enroot container):
+    a host-side probe is not the measurement, and a missing import is UNMEASURED.
+    """
+    try:
+        import foundationscale
+
+        return Path(foundationscale.__file__).resolve().parents[1]  # type: ignore[union-attr]
+    except Exception:  # noqa: BLE001 - the probe reports what is missing; never assumed
+        return None
 
 
 class TrainingPlannerSkill(BaseSkill):
@@ -308,6 +363,9 @@ class TrainingPlannerSkill(BaseSkill):
             "goal": {"type": "object"},
             "readiness": {"type": ["object", "null"]},
             "hardware_id": {"type": ["string", "null"]},
+            # a stored agentic runtime probe (probe_agentic output); used only when it says measured: true,
+            # else the probe runs live in the declared runtime (starting a container only to probe is slow)
+            "agentic_probe": {"type": ["object", "null"]},
         },
     }
     output_schema = {
@@ -373,6 +431,48 @@ class TrainingPlannerSkill(BaseSkill):
             Severity.BLOCK,
             "input",
         ),
+        # A4.2 (agentic RL): the TR-* gates adjudicated by skills/training/agentic.py
+        # (agentic_gates) against the agentic capability probe measured INSIDE the
+        # declared runtime (interfaces.fs.agentic_probe.probe_agentic).
+        RuleSpec(
+            "TR-IN-010",
+            "algorithm/engine/env backend/reward kind/parser not probed: the agentic plan names one the declared "
+            "runtime's probe does not measure (a missing or failed probe field is UNMEASURED, never assumed)",
+            Severity.BLOCK,
+            "input",
+        ),
+        RuleSpec(
+            "TR-IN-011",
+            "multi-GPU claimed while agentic multi-GPU is unmeasured (more than 1 GPU, or trainer.sharding != 'none')",
+            Severity.BLOCK,
+            "input",
+        ),
+        RuleSpec(
+            "TR-IN-012",
+            "reward handle / tasks file / env declaration missing (music: abc2midi_bin present and executable; "
+            "rollout.tasks_path readable; the env backend named, allow_unsandboxed for one at isolation none)",
+            Severity.BLOCK,
+            "input",
+        ),
+        RuleSpec(
+            "TR-IN-013",
+            ">1 step with neither weight sync nor stale-policy opt-in (max_steps > 1 without engine weight sync "
+            "and without declared engine.allow_stale_policy)",
+            Severity.BLOCK,
+            "input",
+        ),
+        RuleSpec(
+            "TR-IN-014",
+            "engine env cannot start the server (engine.env must be an explicit declaration: FS never merges os.environ)",
+            Severity.BLOCK,
+            "input",
+        ),
+        RuleSpec(
+            "TR-PL-009",
+            "the measured control chosen as the default arm (agentic_grpo_token_mean): handoff note",
+            Severity.WARN,
+            "handoff",
+        ),
     )
     fs_interface = FSInterface(
         entries=("foundationscale-train", "fskills-rl"),
@@ -380,6 +480,13 @@ class TrainingPlannerSkill(BaseSkill):
         apis=("foundationscale.train.cli", "foundationscale.rl.trainer.RLTrainer"),
         notes="This skill only plans; training.emit turns the plan into an fs_launch_spec. --dry-run runs the FS validation prologue with 0 GPUs.",
     )
+
+    def __init__(self, agentic_probe: Any = probe_agentic) -> None:
+        # A4.2: the agentic capability probe is injectable -- a MUST_FIRE fixture never
+        # needs a real enroot container (the harness feeds its ``agentic_caps`` through a
+        # fake probe here). Default: the in-runtime probe (agentic_probe).
+        super().__init__()
+        self.agentic_probe = agentic_probe
 
     # -- hooks -------------------------------------------------------------
 
@@ -444,6 +551,37 @@ class TrainingPlannerSkill(BaseSkill):
         for rule_id, message in vlm_gates(vlm_stage_fields(goal), goal, getattr(ctx, "capabilities", None)):
             if rule_id in _VLM_INPUT_RULES:
                 findings.append(self.finding(rule_id, message, dict(evidence), _VLM_RECOVERY[rule_id]))
+        # A4.2 (agentic RL): the TR-IN-010..014 gates over the agentic stage, adjudicated
+        # against the agentic capability probe measured INSIDE the runtime goal.agentic
+        # declares (the agentic stack has no host vLLM: a host probe would truthfully
+        # report every engine absent and every plan would read UNMEASURED). BLOCK findings
+        # surface HERE as input findings (BLOCK input -> REFUSED); TR-PL-009 is a handoff
+        # note and fires from .check_handoff. fs_src is the FS checkout the probe runs
+        # over inside that runtime.
+        if isinstance(goal.get("agentic"), dict):
+            declared = dict(goal["agentic"])
+            stored = request.get("agentic_probe")
+            if isinstance(stored, dict) and stored.get("measured") is True:
+                agentic_caps = stored
+            else:
+                try:
+                    runtime = runtime_from_dict(declared.get("runtime") or {})
+                except ValueError as exc:  # a malformed runtime is an unmeasurable one, refused by name
+                    findings.append(self.finding(
+                        "TR-IN-010", f"goal.agentic.runtime is malformed: {exc}",
+                        {"runtime": declared.get("runtime")},
+                        "declare runtime as {kind, container, mounts: [[src, dst], ...], env: [[k, v], ...], rc}"))
+                    return findings
+                agentic_caps = self.agentic_probe(runtime, fs_src=_agentic_fs_src())
+            for rule_id, message in blocking_findings(agentic_gates(plan_agentic(goal), agentic_caps)):
+                findings.append(
+                    self.finding(
+                        rule_id,
+                        message,
+                        {"agentic": declared, "runtime_probe": agentic_caps},
+                        _AGENTIC_RECOVERY.get(rule_id, "run the agentic probe in the declared runtime"),
+                    )
+                )
         return findings
 
     def run(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
@@ -560,6 +698,25 @@ class TrainingPlannerSkill(BaseSkill):
                             _VLM_RECOVERY[rule_id],
                         )
                     )
+        # A4.2 (handoff WARN): TR-PL-009 over the planned agentic stage -- when the arm is
+        # agentic_grpo_token_mean the handoff must name it as the measured control it is
+        # (the ablation baseline), never as "just the default". A note, not a refusal: the
+        # block verdict stays with the TR-IN-* gates.
+        for stage in stages:
+            if str(stage.get("stage")) != "agentic_rl":
+                continue
+            arm = str(stage.get("algorithm") or (stage.get("hparams") or {}).get("algorithm") or "")
+            if arm == "agentic_grpo_token_mean":
+                findings.append(
+                    self.finding(
+                        "TR-PL-009",
+                        "the agentic stage plans agentic_grpo_token_mean: this is the MEASURED control arm "
+                        "(mean-of-group advantage on the measured GB200 music run), so the handoff carries it "
+                        "as the control other arms are compared against",
+                        {"stage": stage.get("name"), "algorithm": arm},
+                        _AGENTIC_RECOVERY["TR-PL-009"],
+                    )
+                )
         return findings
 
     def diagnose(self, failure: BaseException | SkillResult) -> Diagnosis:
@@ -689,7 +846,63 @@ class TrainingPlannerSkill(BaseSkill):
             base.update(over)
             return base
 
-        return {
+        # A4.2 (agentic RL): the measured music S0 declaration (examples/agentic_rl/
+        # music_s0.json shape: Qwen2.5-1.5B-Instruct, qwen_xml, one vLLM server in the
+        # enroot container), one healthy runtime probe, and one violation per TR-IN gate.
+        # ``agentic_caps`` is what the harness feeds through the injected probe
+        # (TrainingPlannerSkill.__init__): no fixture ever needs a real container.
+        agentic = {
+            "algorithm": "agentic_grpo_token_mean",
+            "policy": {"model_path": "/mnt/models/Qwen2.5-1.5B-Instruct"},
+            "trainer": {"max_steps": 3, "lr": 0.0001, "sharding": "none"},
+            "engine": {
+                "kind": "vllm",
+                "weight_sync_mode": "collective_rpc",
+                "allow_stale_policy": False,
+                "env": {"PATH": "/usr/local/bin:/usr/bin:/bin"},
+            },
+            "env": {"backend": "local", "allow_unsandboxed": True},
+            "harness": {"name": "qwen_xml", "parser": "qwen_xml"},
+            "budget": {"step_limit": 4, "max_response_tokens": 256, "max_observation_chars": 1024},
+            "sampling": {"temperature": 1.0, "max_new_tokens": 256},
+            # handles that exist on any host running the suite (TR-IN-012 checks the real filesystem):
+            # the interpreter stands in for an executable abc2midi, this module for a readable tasks file
+            "rollout": {"tasks_path": __file__, "tasks_per_step": 1, "group_size": 2},
+            "reward": {"kind": "music", "abc2midi_bin": sys.executable},
+            "runtime": {"kind": "enroot", "container": "vllmsrv3", "mounts": [["/mnt/models", "/mnt/models"]]},
+        }
+        agentic_caps = {
+            "measured": True,
+            "fs_version": "fixture",
+            "algorithms": ["agentic_grpo", "agentic_grpo_token_mean"],
+            "engines_importable": {"vllm": True},
+            "env_backends": ["local"],
+            "reward_kinds": ["music"],
+            "parsers": ["qwen_xml"],
+            "reward_handles": {"abc2midi_bin": sys.executable, "tasks_path": __file__},
+            "runtime": {"kind": "enroot", "container": "vllmsrv3"},
+            "multi_gpu": None,
+            "errors": [],
+        }
+
+        def agentic_block(**over: Any) -> dict[str, Any]:
+            built = {**agentic}
+            built.update(over)
+            return built
+
+        def agentic_goal(block: dict[str, Any], **over: Any) -> dict[str, Any]:
+            built = {**goal, "agentic": block, "hardware": {"gpu": "GB200", "gpus_per_node": 1, "nodes": 1}}
+            built.update(over)
+            return built
+
+        agentic_stage = stage(
+            "agentic_rl",
+            name="agentic0",
+            algorithm="agentic_grpo_token_mean",
+            method="full",
+            hparams={"max_steps": 3},
+        )
+        fixtures: dict[str, dict[str, Any]] = {
             "TR-IN-001": {"request": {"goal": {**goal, "base_model": {}}}},
             "TR-IN-002": {"request": {"goal": {**goal, "objective": ""}}},
             "TR-IN-003": {"request": {"goal": {**goal, "hardware": {}}}},
@@ -762,4 +975,55 @@ class TrainingPlannerSkill(BaseSkill):
                 ),
             },
             "TR-PL-008": {"request": {"goal": {**vlm_goal, "max_sequence_length": 32768}}},
+            # A4.2 (agentic): one violation per new rule; ``agentic_caps`` is the runtime
+            # probe the harness feeds through the injected ``agentic_probe``.
+            "TR-IN-010": {
+                "request": {"goal": agentic_goal(agentic_block(harness={"name": "qwen_xml", "parser": "regex_v1"})), "agentic_probe": agentic_caps},
+                "agentic_caps": agentic_caps,
+            },
+            "TR-IN-011": {
+                "request": {
+                    "goal": agentic_goal(agentic_block(trainer={"max_steps": 3, "lr": 1e-6, "sharding": "fsdp"})),
+                },
+                "agentic_caps": agentic_caps,
+            },
+            "TR-IN-012": {
+                "request": {
+                    "goal": agentic_goal(agentic_block(reward={"kind": "music", "abc2midi_bin": "/usr/bin/abc2midi"})),
+                },
+                # the probe measured the handle the music scorer reads and it is NOT executable there
+                "agentic_caps": {**agentic_caps, "reward_handles": {"abc2midi_bin": None}},
+            },
+            "TR-IN-013": {
+                "request": {
+                    "goal": agentic_goal(
+                        agentic_block(
+                            trainer={"max_steps": 3, "lr": 1e-6, "sharding": "none"},
+                            engine={"kind": "vllm", "weight_sync_mode": None, "allow_stale_policy": False,
+                                    "env": {"PATH": "/usr/local/bin:/usr/bin:/bin"}},
+                        )
+                    ),
+                },
+                "agentic_caps": agentic_caps,
+            },
+            "TR-IN-014": {
+                "request": {
+                    "goal": agentic_goal(
+                        agentic_block(engine={"kind": "vllm", "weight_sync_mode": "collective_rpc", "env": {}}),
+                    ),
+                },
+                "agentic_caps": agentic_caps,
+            },
+            "TR-PL-009": {
+                "request": {"goal": agentic_goal(agentic_block()), "agentic_probe": agentic_caps},
+                "fake_plan": fake_plan([agentic_stage], plan_goal=agentic_goal(agentic_block())),
+                "agentic_caps": agentic_caps,
+            },
         }
+        # A4.2: the generic fixture harness calls execute(request) only, so each agentic fixture's runtime
+        # probe travels in the request as a stored, measured probe (no container is started in tests)
+        for fixture in fixtures.values():
+            if "agentic_caps" in fixture:
+                fixture["request"].setdefault("agentic_probe", fixture["agentic_caps"])
+        return fixtures
+

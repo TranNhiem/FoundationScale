@@ -20,6 +20,7 @@ Choices where the spec is silent:
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,8 @@ from foundationskills.core import (
     make_provenance,
     write_artifact,
 )
+from foundationskills.interfaces.fs.agentic_probe import probe_agentic, runtime_from_dict
+from foundationskills.interfaces.fs.emit_agentic import emit_agentic
 from foundationskills.interfaces.fs.emit_rl import emit_rl
 from foundationskills.interfaces.fs.emit_train import emit_train
 from foundationskills.interfaces.fs.sbatch import render_sbatch, write_sbatch
@@ -52,6 +55,63 @@ def _capabilities(ctx: SkillContext) -> Any:
 
         caps = probe()
     return caps
+
+
+def _agentic_fs_src() -> Any:
+    """The FS source dir handed to the agentic probe/emitter (``None`` without FS).
+
+    A4.2: the agentic probe and FS's ``--dry-run`` run INSIDE the container the stage
+    declares, over this checkout (``enroot start --mount $HOME:$HOME``); the same helper
+    lives in the planner skill (``TrainingPlannerSkill._agentic_fs_src``).
+    """
+    try:
+        import foundationscale
+
+        return Path(foundationscale.__file__).resolve().parents[1]  # type: ignore[union-attr]
+    except Exception:  # noqa: BLE001 - the probe reports what is missing; never assumed
+        return None
+
+
+def _stage_runtime(stage: Mapping[str, Any]) -> Any:
+    """The ``Runtime`` an agentic stage declares (empty when the record omits one)."""
+    raw = stage.get("runtime")
+    if raw is None and isinstance(stage.get("agentic"), Mapping):
+        raw = stage["agentic"].get("runtime")
+    return runtime_from_dict(raw or {})
+
+
+def _cap_field(caps: Any, name: str, default: Any = None) -> Any:
+    """Read one probe field from a mapping- or attribute-shaped probe result."""
+    if isinstance(caps, Mapping):
+        return caps.get(name, default)
+    return getattr(caps, name, default)
+
+
+def _is_agentic_spec(spec: Mapping[str, Any]) -> bool:
+    """A spec ``emit_agentic`` produced (FS's ``agentic_rl`` config), by any marker."""
+    if str(spec.get("stage") or spec.get("stage_kind") or "") == "agentic_rl":
+        return True
+    if "agentic" in str(spec.get("entry") or ""):
+        return True
+    return "foundationscale.agentic_rl" in [str(a) for a in spec.get("argv") or ()]
+
+
+def _dry_run_record(spec: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The FS ``--dry-run`` record an agentic spec reports, at every spelling.
+
+    ``emit_agentic`` reports the validation it ran inside the declared runtime
+    (``_DRY_RUN_TIMEOUT_S``-bounded); spellings vary across emitters and an absent
+    record is returned as ``{}`` -- the caller refuses a spec it cannot read, because an
+    unmeasured ``--dry-run`` is never a pass (FS-HO-005: FS owns the schema).
+    """
+    for key in ("fs_dry_run", "dry_run", "fs_validation", "validation"):
+        record = spec.get(key)
+        if isinstance(record, Mapping):
+            return record
+    for key in ("fs_dry_run_rc", "dry_run_rc", "fs_validation_rc", "validation_rc"):
+        if spec.get(key) is not None:
+            return {"rc": spec.get(key)}
+    return {}
 
 
 class TrainingEmitSkill(BaseSkill):
@@ -105,6 +165,28 @@ class TrainingEmitSkill(BaseSkill):
         RuleSpec("FS-HO-002", "all launch specs are non-executable", Severity.BLOCK, "handoff"),
         RuleSpec("FS-HO-003", "an RL spec is single-device (FS RLTrainer runs on one device)", Severity.INFO, "handoff"),
         RuleSpec("FS-HO-004", "the emitted spec lacks --fused-loss while the stage declares it", Severity.BLOCK, "handoff"),
+        # A4.2 (agentic RL): the agentic spec is FS's own AgenticRLConfig, proven by FS's
+        # own --dry-run INSIDE the declared runtime (FS owns the schema end to end).
+        RuleSpec(
+            "FS-IN-005",
+            "an agentic stage whose declared runtime's probe is UNMEASURED or whose engine is not importable "
+            "there (the refusal names the container): the agentic stack has no host vLLM",
+            Severity.BLOCK,
+            "input",
+        ),
+        RuleSpec(
+            "FS-HO-005",
+            "FS --dry-run of the generated agentic config does not exit 0 (or reports no record): RED",
+            Severity.BLOCK,
+            "handoff",
+        ),
+        RuleSpec(
+            "FS-HO-006",
+            "a launch/claim record maps TIMEOUT/STEP_LIMIT to abstention, or claims PASS over 0 measured "
+            "steps: REFUSED (a check over spec['claims'] when present, never fired without one)",
+            Severity.BLOCK,
+            "handoff",
+        ),
     )
     fs_interface = FSInterface(
         entries=("foundationscale-train", "fskills-rl"),
@@ -112,6 +194,13 @@ class TrainingEmitSkill(BaseSkill):
         apis=("emit_train", "emit_rl", "render_sbatch"),
         notes="Emission only; launching is confirmation-gated in interfaces.fs.launch.",
     )
+
+    def __init__(self, agentic_probe: Any = probe_agentic) -> None:
+        # A4.2: the agentic capability probe is injectable exactly as in the planner skill
+        # (TrainingPlannerSkill.__init__): a MUST_FIRE fixture feeds its ``agentic_caps``
+        # through a fake probe and never needs a real container.
+        super().__init__()
+        self.agentic_probe = agentic_probe
 
     def check_inputs(self, request: dict[str, Any], ctx: SkillContext) -> list[Finding]:
         findings: list[Finding] = []
@@ -141,6 +230,11 @@ class TrainingEmitSkill(BaseSkill):
         single = request.get("dataset")
         for stage in stages:
             name = str(stage.get("name") or "<unnamed>")
+            if str(stage.get("stage")) == "agentic_rl":
+                # A4.2: an agentic stage is fed from rollout.tasks_path inside the declared
+                # runtime (emit_agentic takes no dataset payload) -- the "stage that needs
+                # one" is a train/rl/preference stage.
+                continue
             if single is None and name not in datasets_map:
                 findings.append(
                     self.finding(
@@ -153,7 +247,9 @@ class TrainingEmitSkill(BaseSkill):
         for stage in stages:
             name = str(stage.get("name") or "<unnamed>")
             modalities = set(stage.get("modalities") or ())
-            if not modalities:
+            if not modalities or str(stage.get("stage")) == "agentic_rl":
+                # A4.2: an agentic stage is fed by rollout.tasks_path inside the declared
+                # runtime, not by dataset fs_columns (there is no modality column to feed).
                 continue
             stage_dataset = datasets_map.get(name) or single or {}
             fs_cols = dict(stage_dataset.get("fs_columns") or {})
@@ -177,6 +273,35 @@ class TrainingEmitSkill(BaseSkill):
                             f"attach a dataset with {col_key} set, or drop {modality!r} from the stage's modalities",
                         )
                     )
+        # A4.2 (FS-IN-005): an agentic stage is emitted only over a runtime whose probe
+        # measured its engine importable THERE -- the agentic stack runs inside the enroot
+        # container (vllmsrv3: python3 -m foundationscale.agentic_rl) and the host has no
+        # vLLM, so a host probe is not the measurement. The refusal names the container.
+        for stage in stages:
+            if str(stage.get("stage")) != "agentic_rl":
+                continue
+            name = str(stage.get("name") or "<unnamed>")
+            runtime = _stage_runtime(stage)
+            agentic_caps = self.agentic_probe(runtime, fs_src=_agentic_fs_src())
+            engines = _cap_field(agentic_caps, "engines_importable")
+            engines_map = dict(engines) if isinstance(engines, Mapping) else {}
+            engine_decl = stage.get("engine") if isinstance(stage.get("engine"), Mapping) else {}
+            engine_kind = str(engine_decl.get("kind") or "vllm")
+            container = str(getattr(runtime, "container", "") or "")
+            if not isinstance(engines, Mapping) or engines_map.get(engine_kind) is not True:
+                findings.append(
+                    self.finding(
+                        "FS-IN-005",
+                        f"agentic stage {name!r}: engine {engine_kind!r} is not measurable as importable in "
+                        f"runtime {container or '<declared runtime>'!r} "
+                        f"(probe engines_importable={engines_map or 'UNMEASURED'}); the agentic stack has no "
+                        f"host vLLM, and a host probe is not the measurement",
+                        {"stage": name, "engine": engine_kind, "runtime_probe": agentic_caps},
+                        f"fix the declared runtime ({container or 'see stage.runtime'}: the enroot "
+                        f"container/mounts/env) so the in-runtime probe reports {engine_kind!r} importable, "
+                        f"then re-probe before emitting",
+                    )
+                )
         return findings
 
     def run(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
@@ -236,7 +361,21 @@ class TrainingEmitSkill(BaseSkill):
                                      f"(FS writes adapter-only checkpoints; future merging skill)")
                 stage_model = f"{previous['output_dir']}/final"
 
-            if str(stage.get("stage")) in ("rl", "preference"):  # FS RLTrainer / PreferenceTrainer via fskills-rl
+            if str(stage.get("stage")) == "agentic_rl":
+                # A4.2: emit_agentic renders FS's own AgenticRLConfig and proves it with FS's
+                # --dry-run INSIDE the declared runtime (FS-HO-005: FS owns the schema, so a
+                # key this line wrote that foundationscale.agentic_rl.config does not declare
+                # would make the whole spec worthless). No dataset and no sbatch: rollout.
+                # tasks_path feeds the stage, and the enroot envelope in the emitted argv IS
+                # the launch wrap the measured launcher uses (run.sh: enroot start --rw ...).
+                spec = emit_agentic(
+                    stage,
+                    output_dir=output_dir,
+                    run_name=run_name,
+                    fs_src=_agentic_fs_src(),
+                    agentic_caps=self.agentic_probe(_stage_runtime(stage), fs_src=_agentic_fs_src()),
+                )
+            elif str(stage.get("stage")) in ("rl", "preference"):  # FS RLTrainer / PreferenceTrainer via fskills-rl
                 spec = emit_rl(
                     stage, dataset=dataset, model=stage_model, output_dir=output_dir,
                     caps=caps, run_name=run_name,
@@ -294,6 +433,13 @@ class TrainingEmitSkill(BaseSkill):
                 spec = {**spec, "executable": False,
                         "missing": "; ".join(m for m in (spec.get("missing"), reason) if m)}
             spec = {**spec, "stage_fused_loss": str((stage.get("hparams") or {}).get("fused_loss") or "")}
+            # A4.2 (FS-HO-006): a launch/claim record handed in for this stage travels WITH
+            # the spec so .check_handoff can judge the claim. emit_agentic itself writes no
+            # score and no verdict (the claim is made where the launch record is read:
+            # rl_driver/CLI), and a spec without claims is never refused.
+            claims = stage.get("claims") or request.get("claims")
+            if claims:
+                spec = {**spec, "claims": list(claims) if isinstance(claims, (list, tuple)) else [claims]}
             previous = {"name": stage_name, "kind": str(stage.get("stage")),
                         "method": str(stage.get("method") or "full"), "output_dir": output_dir}
             artifact = Artifact(
@@ -357,6 +503,61 @@ class TrainingEmitSkill(BaseSkill):
                         "ensure the installed FS advertises --fused-loss, then re-emit",
                     )
                 )
+        # A4.2 (FS-HO-005): an agentic spec is handed off only over a MEASURED FS --dry-run
+        # exit 0 of the generated config -- FS owns the schema (foundationscale.agentic_rl
+        # .config), so a failed-or-unreported validation is RED, never read as a pass.
+        for spec in specs:
+            if not _is_agentic_spec(spec):
+                continue
+            dry = _dry_run_record(spec)
+            rc = dry.get("rc", dry.get("returncode"))
+            finished_zero = (dry.get("ok") is True) or (rc is not None and str(rc) == "0")
+            if (not dry) or (not finished_zero):
+                dry_text = f"did not exit 0 (record {dict(dry)!r})" if dry else "reported no record (UNMEASURED)"
+                findings.append(
+                    self.finding(
+                        "FS-HO-005",
+                        f"launch spec {spec.get('stage_name')!r}: FS --dry-run of the generated agentic config "
+                        f"{dry_text}, config {spec.get('config_path') or spec.get('config')!r}",
+                        {"stage_name": spec.get("stage_name"), "dry_run": dict(dry) if dry else None},
+                        "fix the key FS's --dry-run names in the record and re-emit inside the declared runtime "
+                        "(FS validates with --dry-run at 0 GPUs before anything launches)",
+                    )
+                )
+        # A4.2 (FS-HO-006): claim-time honesty over whatever launch/claim record rides on a
+        # spec (spec['claims']; normally ABSENT -- emit_agentic writes no score and no
+        # verdict -- and "else not fired"). A terminal TIMEOUT/STEP_LIMIT laundered into
+        # 'abstention', or PASS claimed over zero measured steps, is REFUSED where it is claimed.
+        for spec in specs:
+            raw_claims = spec.get("claims") or ()
+            for claim in (list(raw_claims) if isinstance(raw_claims, (list, tuple)) else [raw_claims]):
+                if not isinstance(claim, Mapping):
+                    continue
+                status = " ".join(str(claim.get(k) or "") for k in ("status", "outcome", "termination")).upper()
+                verdict = " ".join(str(claim.get(k) or "") for k in ("claim", "verdict")).lower()
+                measured = claim.get("measured_steps", claim.get("steps_measured"))
+                laundered = ("TIMEOUT" in status or "STEP_LIMIT" in status) and (
+                    "abstention" in verdict or "abstain" in verdict
+                )
+                vacuous = (not laundered) and ("pass" in verdict) and measured in (0, "0", None, "")
+                if not (laundered or vacuous):
+                    continue
+                findings.append(
+                    self.finding(
+                        "FS-HO-006",
+                        f"launch/claim record on spec {spec.get('stage_name')!r} "
+                        + (
+                            "maps a terminal TIMEOUT/STEP_LIMIT record to abstention (a non-result "
+                            "laundered into an abstention)"
+                            if laundered
+                            else f"claims PASS over 0 measured steps (claim {dict(claim)!r})"
+                        ),
+                        {"stage_name": spec.get("stage_name"), "claim": dict(claim)},
+                        "publish what FS adjudicated: TIMEOUT is UNMEASURED (the forced-infra arm exits 95), "
+                        "a run whose steps produced no measurable update is vacuous (REFUSED, exit 96), and "
+                        "PASS needs >= 1 measured step",
+                    )
+                )
         return findings
 
     def diagnose(self, failure: BaseException | SkillResult) -> Diagnosis:
@@ -397,6 +598,37 @@ class TrainingEmitSkill(BaseSkill):
             "format": "sft",
             "shards": [{"path": "ds/shard-00000.jsonl"}],
             "fs_columns": {"text_column": "text", "image_column": None, "gold_key": "answer"},
+        }
+        # A4.2 (agentic): an agentic_rl stage and the runtime probe the harness feeds
+        # through the injected ``agentic_probe`` (TrainingEmitSkill.__init__) -- fixtures
+        # never need a real container. The model/tasks paths are deliberately unreadable:
+        # FS's own --dry-run of the generated config cannot exit 0 over them.
+        agentic_stage = {
+            "name": "agentic0",
+            "stage": "agentic_rl",
+            "algorithm": "agentic_grpo_token_mean",
+            "method": "full",
+            "hparams": {"max_steps": 3},
+            "runtime": {"kind": "host", "container": None},
+            "policy": {"model_path": "/nonexistent/Qwen2.5-1.5B-Instruct"},
+            "trainer": {"max_steps": 3, "lr": 1e-6, "sharding": "none"},
+            "engine": {"kind": "vllm", "weight_sync_mode": "collective_rpc", "env": {"PATH": "/usr/bin:/bin"}},
+            "env": {"backend": "local", "allow_unsandboxed": True},
+            "harness": {"name": "qwen_xml", "parser": "qwen_xml"},
+            "rollout": {"tasks_path": "/nonexistent/agentic-tasks.jsonl", "tasks_per_step": 1, "group_size": 2},
+            "reward": {"kind": "music", "abc2midi_bin": "/usr/bin/abc2midi"},
+        }
+        agentic_caps = {
+            "fs_version": "fixture",
+            "algorithms": ["agentic_grpo_token_mean"],
+            "engines_importable": {"vllm": True},
+            "env_backends": ["local"],
+            "reward_kinds": ["music"],
+            "parsers": ["qwen_xml"],
+            "reward_handles": {"abc2midi_bin": "/usr/bin/abc2midi"},
+            "runtime": {"kind": "host"},
+            "multi_gpu": None,
+            "errors": [],
         }
         return {
             "FS-IN-001": {
@@ -457,6 +689,43 @@ class TrainingEmitSkill(BaseSkill):
                 },
                 "capabilities": {"train_flag_choices": {"--fused-loss": ["cross_entropy"]}},
                 "expected": "RED via handoff BLOCK FS-HO-004 (fused_loss=liger declared but --fused-loss not in argv)",
+            },
+            "FS-IN-005": {
+                "request": {
+                    "plan": {"stages": [{**agentic_stage, "runtime": {"kind": "enroot", "container": "vllmsrv3"}}]},
+                    "model": "m", "output_root": "out",
+                },
+                "agentic_caps": {**agentic_caps, "engines_importable": {"vllm": False}},
+                "expected": "REFUSED naming FS-IN-005 (vllm not importable in container 'vllmsrv3')",
+            },
+            "FS-HO-005": {
+                # the host runtime runs FS's --dry-run for real (no container involved): the
+                # generated config cannot resolve the /nonexistent model/tasks, so the
+                # command does not exit 0 and the handoff is RED.
+                "request": {"plan": {"stages": [agentic_stage]}, "model": "m", "output_root": "out"},
+                "agentic_caps": agentic_caps,
+                "expected": "RED via handoff BLOCK FS-HO-005 (FS --dry-run rc != 0)",
+            },
+            "FS-HO-006": {
+                "request": {
+                    "plan": {
+                        "stages": [
+                            {
+                                **agentic_stage,
+                                "claims": [
+                                    {"status": "TIMEOUT", "claim": "abstention"},
+                                    {"status": "STEP_LIMIT", "verdict": "PASS", "measured_steps": 0},
+                                ],
+                            }
+                        ]
+                    },
+                    "model": "m", "output_root": "out",
+                },
+                "agentic_caps": agentic_caps,
+                "expected": (
+                    "RED via handoff BLOCK FS-HO-006 (TIMEOUT mapped to abstention; "
+                    "PASS claimed over 0 measured steps)"
+                ),
             },
         }
 
