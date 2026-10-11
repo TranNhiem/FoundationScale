@@ -115,6 +115,12 @@ train = [
     # ogg), so there is no system dependency. Imported function-locally, like
     # PIL above: a text-only run never loads it.
     "soundfile>=0.12",
+    # pyarrow, for the VLA data plane (foundationscale/vla/lerobot.py): LeRobot
+    # stores every episode as a parquet file. `datasets` already pulls it in, so
+    # this installs nothing new -- it is declared because the reader imports it
+    # directly, and an undeclared direct dependency is the class of defect the
+    # notes above record three times. Imported function-locally.
+    "pyarrow>=14",
 ]
 all = [
     # `all` must mean all, or it is a name that lies. CI does NOT install this —
@@ -277,6 +283,8 @@ warn_unreachable = true
 # imported only inside functions in rl/megatron/driver.py and pp_step.py.
 # liger_kernel joins the list for the same reason: optional (train/fused_loss.py's
 # --fused-loss liger path), absent in CI by design, reached only function-locally.
+# pyarrow joins it too: it ships no type stubs, and vla/lerobot.py imports it only
+# inside the parquet reader.
 module = [
     "torch.*",
     "safetensors.*",
@@ -285,6 +293,8 @@ module = [
     "peft.*",
     "megatron.*",
     "liger_kernel.*",
+    "pyarrow",
+    "pyarrow.*",
 ]
 ignore_missing_imports = true
 

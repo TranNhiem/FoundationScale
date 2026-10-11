@@ -186,7 +186,7 @@ def skill_md(index: list[dict]) -> str:
 
 
 def test_load_index_reads_real_packages(index: list[dict]) -> None:
-    assert len(index) == 4  # training, evaluation, data_engine, auto_research
+    assert len(index) == 8  # 4 lane skills + 4 discipline skills (A3.1)
     for entry in index:
         assert entry["package"] and entry["name"]
         assert HEX64.fullmatch(str(entry["skill_md_sha256"])) is not None
@@ -352,7 +352,10 @@ def test_self_grading_is_refused(index: list[dict]) -> None:
 
 
 def test_stale_skill_md_sha_is_refused(index: list[dict]) -> None:
-    entry = dict(make_entry(index, [make_case("be-1", ["writes the artefact"])]), skill_md_sha256="0" * 64)
+    # The binding is the bundle hash (SKILL.md + references/scripts/assets), which equals the SKILL.md sha
+    # while no bundle dirs exist; corrupt it the way a stale index would.
+    entry = dict(make_entry(index, [make_case("be-1", ["writes the artefact"])]),
+                 skill_md_sha256="0" * 64, skill_bundle_sha256="0" * 64)
     with pytest.raises(BehaviourEvalRefused) as excinfo:
         run_behaviour_eval([entry], FakeAgent(), FakeJudge(), reps=1, workers=1, created=CREATED)
     assert "stale" in str(excinfo.value) and str(entry["package"]) in str(excinfo.value)
@@ -650,6 +653,24 @@ def test_resume_reuses_measured_calls_and_reasks_only_the_rest(index: list[dict]
                                 created=CREATED, resume=first)
     assert second["reused_calls"] == 1 and len(agent.calls) == 1 and "be-2" in agent.calls[0]["user"]
     assert all(call["measured"] for call in second["calls"])
+
+
+def test_resume_accepts_a_pre_bundle_report_only_when_skill_md_binds_the_same_bytes(index: list[dict]) -> None:
+    entry = make_entry(index, [make_case("be-1", ["writes the artefact"])])
+    assert entry["skill_bundle_sha256"] == entry["skill_md_sha256"]  # no bundle files
+    first = run_behaviour_eval([entry], FakeAgent(), FakeJudge(), arms=("with_skill",), reps=1, workers=1,
+                               created=CREATED)
+    legacy = json.loads(json.dumps(first))
+    for view in legacy["index"]:
+        del view["skill_bundle_sha256"]
+    second = run_behaviour_eval([entry], FakeAgent(), FakeJudge(), arms=("with_skill",), reps=1, workers=1,
+                                created=CREATED, resume=legacy)
+    assert second["reused_calls"] == 1
+    for view in legacy["index"]:
+        view["skill_md_sha256"] = "0" * 64
+    with pytest.raises(BehaviourEvalRefused, match="skill_bundle_sha256 changed"):
+        run_behaviour_eval([entry], FakeAgent(), FakeJudge(), arms=("with_skill",), reps=1, workers=1,
+                           created=CREATED, resume=legacy)
 
 
 def test_resume_refuses_a_report_from_another_run(index: list[dict]) -> None:

@@ -60,7 +60,7 @@ class _Chunk:
         self.strict: bool | None = None
 
     def sharded_state_dict(self, metadata: dict[str, object]) -> dict[str, object]:
-        assert metadata["distrib_optim_sharding_type"] == "fully_reshardable"
+        assert metadata["distrib_optim_sharding_type"] == "dp_reshardable"
         return {f"{self.prefix}.weight": f"{self.prefix}-shard"}
 
     def load_state_dict(self, state: dict[str, object], strict: bool) -> None:

@@ -1039,3 +1039,56 @@ def test_build_speech_collator_checked_probes_and_resets(monkeypatch) -> None:
             model_config=SimpleNamespace(),
             language=None,
         )
+
+
+def test_an_unresolvable_audio_tower_is_refused_before_training() -> None:
+    from types import SimpleNamespace
+
+    import torch
+
+    from foundationscale.train.speech_kinds import speech_tower_resolution_refusal
+
+    class Nested(torch.nn.Module):  # transformers 5.19's Qwen2-Audio layout
+        def __init__(self) -> None:
+            super().__init__()
+            self.model = torch.nn.Module()
+            self.model.audio_tower = torch.nn.Linear(2, 2)
+            self.lm_head = torch.nn.Linear(2, 2)
+
+    flat = SimpleNamespace(name="qwen2_audio", towers=(("audio_tower", "audio"),))
+    nested = SimpleNamespace(name="qwen2_audio", towers=(("model.audio_tower", "audio"),))
+    message = speech_tower_resolution_refusal(flat, Nested())
+    assert message is not None
+    assert "['audio_tower']" in message and "['lm_head', 'model']" in message
+    assert speech_tower_resolution_refusal(nested, Nested()) is None
+
+
+def test_tower_resolution_sees_through_a_peft_wrapper() -> None:
+    # Measured regression (gemma-4-E4B LoRA, peft 0.21): the check ran on the PeftModel,
+    # where "model.audio_tower" resolves through the wrapper's own .model and misses.
+    from types import SimpleNamespace
+
+    import torch
+
+    from foundationscale.train.speech_kinds import speech_tower_resolution_refusal
+
+    class Checkpoint(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.model = torch.nn.Module()
+            self.model.audio_tower = torch.nn.Linear(2, 2)
+
+    class Wrapper(torch.nn.Module):  # PeftModel's shape: base_model.model is the checkpoint
+        def __init__(self, inner: torch.nn.Module) -> None:
+            super().__init__()
+            self.base_model = torch.nn.Module()
+            self.base_model.model = inner
+            self.model = inner  # what LoraModel's attribute fallback hands back
+
+        def get_base_model(self) -> torch.nn.Module:
+            return self.base_model.model
+
+    family = SimpleNamespace(name="gemma4", towers=(("model.audio_tower", "audio"),))
+    wrapped = Wrapper(Checkpoint())
+    assert speech_tower_resolution_refusal(family, Checkpoint()) is None
+    assert speech_tower_resolution_refusal(family, wrapped) is None

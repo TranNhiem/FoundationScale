@@ -204,10 +204,10 @@ def test_tower_prefixes_may_be_empty_because_some_families_have_no_towers() -> N
 
 
 def test_registry_declares_the_families_measured_on_this_estate() -> None:
-    # Two vision/omni LLM families plus the three speech families of P4, each
-    # registered from a measured checkpoint.
+    # Two vision/omni LLM families, the three speech families of P4, and Qwen3-ASR
+    # (validation_campaigns/speech_q3asr), each registered from a measured checkpoint.
     names = {spec.name for spec in REGISTRY}
-    assert names == {"gemma4", "qwen3.5", "whisper", "parakeet_ctc", "qwen2_audio"}
+    assert names == {"gemma4", "qwen3.5", "whisper", "parakeet_ctc", "qwen2_audio", "qwen3_asr"}
 
 
 def test_gemma4_declares_an_audio_tower_and_qwen_does_not() -> None:

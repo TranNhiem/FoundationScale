@@ -50,6 +50,7 @@ from foundationskills.skills.auto_research.campaign import (
     campaign_hash,
     check_launch,
     check_spec,
+    evidence_required,
     launch_token,
     scan_command_text,
     scan_rendered,
@@ -72,6 +73,7 @@ from .concurrency import concurrency_check, reserve_check
 from .locks import closing_check
 from .claims import ROOT as CLAIM_ROOT
 from .claims import build_claim, champion, claim_entries, derive_chain, reference_rows
+from .evidence import EvidenceError, derive_result, rehash_problems
 from .seeds import phase_of, phase_problems, set_status
 
 _ACTIONS = ("check", "launch", "record", "propose", "close", "envelope", "submit", "cancel", "claim")
@@ -90,6 +92,36 @@ def _claim_reference(entry: dict[str, Any], results: list[dict[str, Any]]) -> li
     if ref == CLAIM_ROOT:
         return [row for row in results if row.get("role") == "baseline"]
     return [row for row in results if row.get("trial") == ref]
+
+
+def _claim_set_evidence_problems(trial: str, rows: list[dict[str, Any]], require_bound: bool = True) -> list[str]:
+    """AR-RS-009 (M6, D1): unmeasured rows never ground a claim; asserted/legacy rows neither when the campaign
+    requires evidence (``campaign.evidence_required``); crashes say nothing."""
+    problems: list[str] = []
+    for row in rows:
+        if row.get("status") == "crash":
+            continue  # a crash is judged by the crash rules, never by its evidence class
+        tag = str(row.get("trial") or trial)
+        if row.get("status") == "unmeasured":
+            problems.append(f"claim_set_unmeasured:{tag}")
+        elif require_bound and row.get("evidence_class") in (None, "asserted"):
+            problems.append(f"claim_set_asserted:{tag}")
+    return list(dict.fromkeys(problems))
+
+
+def _rehash_bound_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """M6 (D3): close re-hashes the named evidence; a missing/changed file degrades its row to unmeasured."""
+    checked: list[dict[str, Any]] = []
+    drops: list[str] = []
+    for row in rows:
+        row = dict(row)
+        if row.get("evidence_class") == "bound":
+            problems = rehash_problems(row)
+            if problems:
+                drops.extend(problems)
+                row["status"] = "unmeasured"
+        checked.append(row)
+    return checked, drops
 
 
 def _claim_well_formed(body: dict[str, Any]) -> bool:
@@ -364,6 +396,105 @@ def _multi_objective_must_fire_fixtures() -> dict[str, dict[str, Any]]:
     }
 
 
+def _evidence_must_fire_fixtures() -> dict[str, dict[str, Any]]:
+    """M6 fixtures (pure data): unreadable evidence files (AR-IN-011), a caller assertion over the eval
+    report (AR-IN-012), an rl campaign without a declared floor (AR-IN-013) and a claim (AR-RS-009) plus
+    close (AR-HO-010) over legacy rows that carry no evidence. One rl spec drives all five."""
+    import json
+
+    fix = "arbiter"
+    bench = "arc_challenge"
+
+    def _rl_spec(with_floor: bool) -> dict[str, Any]:
+        spec = _spec(
+            objective={"metric": f"{bench}_acc", "direction": "max", "benchmarks": [bench]},
+            eval_policy={"fingerprint": FINGERPRINT, "metrics": [f"{bench}_acc", "rl_measured_fraction"]},
+        )
+        spec["stage"] = "rl"
+        if with_floor:
+            spec["rl_min_measured_fraction"] = 0.5
+        spec["confirm"]["guardrails"] = ["rl_measured_fraction"]
+        spec["confirm"]["guardrail_directions"] = {"rl_measured_fraction": "max"}
+        return spec
+
+    def _row(trial: str, role: str, seed: int, score: float) -> dict[str, Any]:
+        return {
+            "trial": trial, "role": role, "seed": seed, "status": "ok", "limited": False,
+            "steps": 200, "eval_policy_fingerprint": FINGERPRINT,
+            "metrics": {f"{bench}_acc": {"value": score, "se": 0.01},
+                        "rl_measured_fraction": {"value": 0.5, "se": 0.0}},
+        }
+
+    rl_spec = _rl_spec(True)
+    open_spec = _rl_spec(False)
+    campaign = _campaign(rl_spec)
+    approval: list[tuple[str, str, str, dict[str, Any]]] = [
+        ("campaign_approved", campaign, "-", {"spec_hash": campaign_hash(rl_spec), "approver": fix}),
+        ("launch_envelope", campaign, "-", _env_payload(rl_spec, {"max_runs": 6, "gpu_hours_total": 24.0})),
+    ]
+    baselines = [_row("baseline", "baseline", seed, 0.5) for seed in (101, 102, 103)]
+    claim_events: list[tuple[str, str, str, dict[str, Any]]] = [*approval]
+    claim_events.extend(("trial_result", campaign, "baseline", dict(row)) for row in baselines)
+    for seed in (101, 102, 103):
+        job = _job_payload(str(800 + seed), "t1", kind="eval_only")
+        job.update({"seed": seed, "phase": "confirm", "gpu_hours_est": 1.0})
+        claim_events.append(("job_submitted", campaign, "t1", job))
+        claim_events.append(("trial_result", campaign, "t1", _row("t1", "confirm", seed, 0.6)))
+    missing = _row("t1", "confirm", 101, 0.6)
+    missing["steps"] = 21
+    missing["evidence"] = {
+        "run_manifests": ["{tmp}/missing/fskills_rl_manifest.json"],
+        "eval_report": "{tmp}/missing/eval.json",
+    }
+    unbound = _row("baseline", "baseline", 101, 0.6)
+    unbound["limited"] = True
+    unbound["steps"] = 0
+    unbound["evidence"] = {"run_manifests": [], "eval_report": "{tmp}/run/eval.json"}
+    base_model = str(rl_spec["base"]["model"])
+    report = {
+        "verdict": "PASS", "limited": False, "base": base_model, "checkpoint": base_model,
+        "policy": {"fingerprint": FINGERPRINT.split(":", 1)[1]},
+        "benchmarks": [{"name": bench, "score": 0.6, "stderr": 0.01}],
+    }
+    close_rows = [*baselines, *[_row("t1", "candidate", seed, 0.9) for seed in (101, 102, 103)]]
+    return {
+        "AR-IN-011": {
+            "files": ledger_files(approval),
+            "request": {
+                "action": "record", "campaign_spec": rl_spec, "campaign_confirm": "{confirm}",
+                "ledger_dir": "{tmp}/ledger", "result": missing,
+            },
+        },
+        "AR-IN-012": {
+            "files": {**ledger_files(approval), "run/eval.json": json.dumps(report)},
+            "request": {
+                "action": "record", "campaign_spec": rl_spec, "campaign_confirm": "{confirm}",
+                "ledger_dir": "{tmp}/ledger", "result": unbound,
+            },
+        },
+        "AR-IN-013": {
+            "request": {
+                "action": "check", "campaign_spec": open_spec, "campaign_confirm": "{confirm}",
+                "ledger_dir": "{tmp}/ledger",
+            },
+        },
+        "AR-RS-009": {
+            "files": ledger_files(claim_events),
+            "request": {
+                "action": "claim", "campaign_spec": rl_spec, "campaign_confirm": "{confirm}",
+                "approver": fix, "ledger_dir": "{tmp}/ledger", "trial": "t1",
+            },
+        },
+        "AR-HO-010": {
+            **_stage(rl_spec, close_rows),
+            "request": {
+                "action": "close", "campaign_spec": rl_spec, "campaign_confirm": "{confirm}", "approver": fix,
+                "ledger_dir": "{tmp}/ledger", "stop_reason": "budget exhausted",
+            },
+        },
+    }
+
+
 FINGERPRINT = "sha256:" + "a1" * 32
 BASE_FINGERPRINT = "sha256:" + "b2" * 32
 
@@ -398,6 +529,11 @@ _RECOVERY = {
     "AR-PR-002": "use proposer optuna (TPE holds categorical axes) or remove the categorical axes",
     "AR-IN-010": "fix the llm proposer block (pool_key and model required and not URL-shaped, max_cards/max_calls >= 1, parse_spec_version >= 1, sampling a dict)",
     "AR-PR-003": "drop the tainted llm response: an llm response carries an unsafe card and a command never survives in a card",
+    "AR-IN-011": "name readable run manifests and an eval report (evidence.run_manifests, evidence.eval_report); a training/eval verdict outside PASS|UNMEASURED is not recordable",
+    "AR-IN-012": "drop the asserted field (derived values win) or re-run the eval on the checkpoint the run manifest saved",
+    "AR-IN-013": "declare rl_min_measured_fraction, add rl_measured_fraction to eval_policy.metrics and confirm.guardrails with guardrail_directions max",
+    "AR-RS-009": "re-record the rows with evidence (run manifest + eval report); unmeasured rows never ground a claim",
+    "AR-HO-010": "treat the named rows as unverified; re-run them with evidence in a new campaign to promote them",
     "AR-PR-004": "record only what was measured: an llm proposal record overstates provenance (byte_identical / generation replay claimed)",
     "AR-PR-005": "pin the endpoint through the config model pool registry and keep credentials out of the ledgered prompt/response",
     "AR-HO-009": "investigate llm parse drift before adopting: an llm proposal's recorded cards do not re-parse from its recorded response",
@@ -510,6 +646,9 @@ class AutoResearchSkill(BaseSkill):
                  "claim on a multi-objective campaign whose decision is not accepted_gain (a trade-off, tie, "
                  "regression or unmeasured objective never dominates the reference)",
                  Severity.BLOCK, "input"),
+        RuleSpec("AR-RS-009",
+                 "a claim's confirm set holds an unmeasured or caller-asserted (unbound) result",
+                 Severity.BLOCK, "input"),
         RuleSpec("AR-IN-009",
                  "spec.objectives invalid (2-4 {metric, direction} entries, objectives[0] = objective, distinct metrics "
                  "inside eval_policy.metrics, none a guardrail)",
@@ -520,6 +659,16 @@ class AutoResearchSkill(BaseSkill):
                  Severity.BLOCK, "input"),
         RuleSpec("AR-PR-002",
                  "the optuna-cma proposer cannot hold a categorical axis (refused, never dropped)",
+                 Severity.BLOCK, "input"),
+        RuleSpec("AR-IN-011", "named trial evidence is missing, unreadable or unrecognised",
+                 Severity.BLOCK, "input"),
+        RuleSpec("AR-IN-012",
+                 "a caller-asserted result field contradicts its bound evidence, or the eval is not bound to the "
+                 "trained checkpoint",
+                 Severity.BLOCK, "input"),
+        RuleSpec("AR-IN-013",
+                 "an rl-stage campaign does not declare rl_min_measured_fraction (0 < f <= 1) and the "
+                 "rl_measured_fraction guardrail",
                  Severity.BLOCK, "input"),
         RuleSpec("AR-IN-010",
                  "llm proposer block malformed (pool_key/model missing, URL-shaped, or caps/sampling invalid)",
@@ -548,6 +697,8 @@ class AutoResearchSkill(BaseSkill):
                  Severity.INFO, "handoff"),
         RuleSpec("AR-HO-009", "an llm proposal's recorded cards do not re-parse from its recorded response (parse provenance drifted)",
                  Severity.BLOCK, "handoff"),
+        RuleSpec("AR-HO-010", "the closed ledger holds caller-asserted (unbound) results; each is named and counted",
+                 Severity.INFO, "handoff"),
     )
     fs_interface = FSInterface(
         entries=(),
@@ -721,6 +872,25 @@ class AutoResearchSkill(BaseSkill):
     def _check_record_request(self, request: dict[str, Any], spec: dict[str, Any], ledger: Ledger) -> list[Finding]:
         findings: list[Finding] = []
         result = dict(request.get("result") or {})
+        self._record_spec = dict(spec)  # _record re-derives from the campaign spec (metric names, rl floor)
+        if "evidence" in result:  # evidence-bound row: derived values win over caller assertions
+            try:
+                result = derive_result(
+                    {k: v for k, v in result.items() if k != "evidence"},
+                    result["evidence"],
+                    metric_names=list((spec.get("eval_policy") or {}).get("metrics") or []),
+                    rl_floor=spec.get("rl_min_measured_fraction"),
+                )
+            except EvidenceError as err:
+                findings.append(
+                    self.finding(
+                        err.rule_id,
+                        err.message,
+                        {"result": result, **(err.detail or {})},
+                        _RECOVERY[err.rule_id],
+                    )
+                )
+                return findings
         for message in result_problems(result):
             findings.append(self.finding("AR-IN-006", message, {"result": result}, _RECOVERY["AR-IN-006"]))
         prior = _safe_list(lambda: ledger.results(_campaign(spec)))
@@ -950,6 +1120,20 @@ class AutoResearchSkill(BaseSkill):
                     {"trial": trial, "claims": [str(entry.get("claim_id") or "") for entry in chain]},
                     _RECOVERY["AR-RS-007"],
                 )
+            ]
+        evidence_problems = _claim_set_evidence_problems(
+            trial, [*list(data["confirm_rows"]), *list(data["ref"])], evidence_required(spec)
+        )
+        if evidence_problems:
+            # AR-RS-009 (M6, D1): asserted/legacy and unmeasured rows can never ground a claim
+            return [
+                self.finding(
+                    "AR-RS-009", problem,
+                    {"trial": trial,
+                     "rows": [f"{row.get('trial')}:{row.get('seed')}" for row in data["confirm_rows"]]},
+                    _RECOVERY["AR-RS-009"],
+                )
+                for problem in evidence_problems
             ]
         status = dict(data["status"])
         if not status.get("complete"):
@@ -1182,12 +1366,37 @@ class AutoResearchSkill(BaseSkill):
             {"launch_token": token, "budget_left": max(0.0, total - used), "trial": str(launch_spec.get("trial") or "-")},
         )
 
-    def _record(self, request: dict[str, Any], ledger: Ledger, campaign: str) -> SkillResult:
+    def _record(
+        self,
+        request: dict[str, Any],
+        ledger: Ledger,
+        campaign: str,
+        spec: dict[str, Any] | None = None,
+    ) -> SkillResult:
         result = dict(request.get("result") or {})
+        if "evidence" in result:
+            source = dict(spec or request.get("spec") or getattr(self, "_record_spec", None) or {})
+            try:
+                result = derive_result(
+                    {k: v for k, v in result.items() if k != "evidence"},
+                    result["evidence"],
+                    metric_names=list((source.get("eval_policy") or {}).get("metrics") or []),
+                    rl_floor=source.get("rl_min_measured_fraction"),
+                )
+            except EvidenceError as exc:  # files changed after the check: refuse, append nothing
+                return self._refused(exc.message, [self.finding(
+                    exc.rule_id, exc.message, {"result": result, **exc.detail}, _RECOVERY[exc.rule_id])])
+        else:
+            result["evidence_class"] = "crash" if result.get("status") == "crash" else "asserted"
         ledger.append("trial_result", campaign, str(result.get("trial") or "-"), result)
         return SkillResult(
             Status.PASS,
-            {"recorded": {"trial": result.get("trial"), "seed": result.get("seed")}, "ledger": ledger.head()},
+            {
+                "recorded": {"trial": result.get("trial"), "seed": result.get("seed")},
+                "status": result.get("status"),
+                "evidence_class": result.get("evidence_class"),
+                "ledger": ledger.head(),
+            },
         )
 
     def _envelope(
@@ -1335,14 +1544,22 @@ class AutoResearchSkill(BaseSkill):
     ) -> SkillResult:
         stop_reason = str(request.get("stop_reason") or "")
         problems = ledger.verify()
-        results = _safe_list(lambda: ledger.results(campaign))
+        results, evidence_drops = _rehash_bound_rows(
+            _safe_list(lambda: ledger.results(campaign))
+        )  # M6 (D3): close re-hashes the named evidence before anything is accepted
+        if evidence_required(spec):  # D1: an asserted row is listed, never evidence, where evidence is required
+            for row in results:
+                if row.get("status") == "ok" and row.get("evidence_class") in (None, "asserted"):
+                    row["status"] = "unmeasured"
+                    evidence_drops.append(f"asserted_unbound:{row.get('trial')}:{row.get('seed')}")
         launches = _safe_list(lambda: ledger.launches(campaign))
         metric = str(dict(spec.get("objective") or {}).get("metric") or "")
         baseline = [row for row in results if row.get("role") == "baseline"]
         claims_state = self._claim_context(spec, ledger)
         chain = list(claims_state["chain"])
         chain_drops = list(claims_state["drops"])
-        reference = list(claims_state["ref"])
+        reference, reference_drops = _rehash_bound_rows(list(claims_state["ref"]))
+        evidence_drops.extend(d for d in reference_drops if d not in evidence_drops)
         grouped: dict[str, list[dict[str, Any]]] = {}
         for row in results:
             if row.get("role") != "baseline":
@@ -1376,7 +1593,7 @@ class AutoResearchSkill(BaseSkill):
             "measured_gpu_hours": measured,
             "declared_gpu_hours": declared,
             "per_job": per_job,
-            "drops": [*list(usage.get("drops") or []), *chain_drops],
+            "drops": [*list(usage.get("drops") or []), *chain_drops, *evidence_drops],
             "runs": len(launches),
         }
         ho006 = _baseline_non_eval_trials(
@@ -1434,6 +1651,20 @@ class AutoResearchSkill(BaseSkill):
         else:
             outcome, status = "improved", Status.PASS
 
+        asserted_rows = [
+            row for row in results if row.get("evidence_class") in (None, "asserted")
+        ]
+        asserted_tags = [f"{row.get('trial')}:{row.get('seed')}" for row in asserted_rows]
+        if asserted_rows:  # AR-HO-010: D1 rows are named at close and change no verdict of their own
+            findings.append(
+                self.finding(
+                    "AR-HO-010",
+                    f"{len(asserted_rows)} result row(s) rest on asserted (or legacy, unrecorded) evidence: "
+                    f"{', '.join(asserted_tags)}",
+                    {"count": len(asserted_rows), "rows": asserted_tags},
+                    _RECOVERY["AR-HO-010"],
+                )
+            )
         if outcome == "improved":
             recommendation = f"adopt {best_trial}: mean_delta {best['mean_delta']} > tau {best['tau']}"
         elif outcome == "flat_simplified":
@@ -2002,7 +2233,7 @@ class AutoResearchSkill(BaseSkill):
                 },
             },
             **_claim_must_fire_fixtures(),
-            **_multi_objective_must_fire_fixtures(), **_llm_must_fire_fixtures(),
+            **_multi_objective_must_fire_fixtures(), **_evidence_must_fire_fixtures(), **_llm_must_fire_fixtures(),
         }
 
 
@@ -2305,8 +2536,8 @@ def result_problems(result: dict[str, Any]) -> list[str]:
         problems.append(f"role must be one of {list(_RESULT_ROLES)}: {role!r}")
     if "seed" in result and (isinstance(result.get("seed"), bool) or not isinstance(result.get("seed"), int)):
         problems.append(f"seed must be an int: {result.get('seed')!r}")
-    if result.get("status") not in {"ok", "crash"}:
-        problems.append(f"status must be 'ok' or 'crash': {result.get('status')!r}")
+    if result.get("status") not in {"ok", "crash", "unmeasured"}:
+        problems.append(f"status must be 'ok', 'crash' or 'unmeasured': {result.get('status')!r}")
     if "limited" in result and not isinstance(result.get("limited"), bool):
         problems.append(f"limited must be a bool: {result.get('limited')!r}")
     steps = result.get("steps")
@@ -2319,6 +2550,7 @@ def result_problems(result: dict[str, Any]) -> list[str]:
     if "metrics" in result and not isinstance(metrics, dict):
         problems.append("metrics must be a mapping name -> {value, se}")
     elif isinstance(metrics, dict):
+        sources = result.get("metric_sources") if isinstance(result.get("metric_sources"), dict) else {}
         for name, point in metrics.items():
             if not isinstance(point, dict) or "value" not in point:
                 problems.append(f"metric {name!r} must carry {{value, se}}")
@@ -2327,6 +2559,8 @@ def result_problems(result: dict[str, Any]) -> list[str]:
                 item = point.get(field)
                 if item is None and field == "se":
                     continue  # an unreported standard error is allowed
+                if item is None and field == "value" and sources.get(name) == "absent":
+                    continue  # an evidence-bound row may name a metric no source scored (value stays None)
                 if not _finite_number(item):
                     problems.append(f"metric {name!r} {field} must be a finite number: {item!r}")
         if result.get("status") == "crash" and any(

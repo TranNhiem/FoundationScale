@@ -1,0 +1,262 @@
+---
+name: fskills-data-engine
+license: MIT
+description: 'Turns raw sources (JSONL/JSON/CSV/parquet, txt/html/pdf doc dirs, HF datasets, image-text
+  folders) into FS-ready datasets via data_pipeline_spec streams (ingest->clean->dedup->quality->[decontam]->[mix]->format->tokenize).
+  Emits data_pipeline_spec, dataset (JSONL shards w/ path+sha256+records, fs_columns), readiness_report
+  (PASS/RED/UNMEASURED), stats.json accounting; REFUSED `phase-2: <op>` / DE-IN, DE-HO, DE-RDY failures.
+  Also embedding semantic dedup, tool-calling trace normalization (OpenAI/ShareGPT/Hermes/Glaive/xLAM/Llama-3/Mistral)
+  and video ingest (frames + Whisper ASR). Do NOT use for training launches (fskills-training) or checkpoint evals
+  (fskills-evaluation), nor for synthesizing new examples from nothing (phase 2; use llm_enhance on existing records).'
+compatibility: "Requires Python>=3.10 and the foundationskills package (fskills CLI); launches additionally need FoundationScale on a Slurm GPU cluster. Without them the skill reports REFUSED or UNMEASURED and gives the install step instead of improvising."
+metadata:
+  version: "0.1.0"
+  invocation: "model"
+  fs_status_doctrine: "PASS/RED/UNMEASURED/REFUSED (exit 0/5/95/96)"
+  when_to_use: '["Turn these raw PDFs, HTML docs and JSONL files into a CPT corpus for gemma4","Build an SFT dataset from my Alpaca-style JSONL with the gemma4 chat template","Convert this HF dataset into RL verifiable prompts with gold answers","Dedup, clean and quality-filter my parquet dumps and show me per-stage drop counts","My training plan handed off to data_engine with a target_format — prepare the dataset","Scan my corpus for benchmark contamination before we spend GPU hours","Make preference pairs (prompt/chosen/rejected rows) from my judged data","Give me a readiness report and stats.json for this dataset — is it PASS, RED or UNMEASURED?","Remove paraphrase-level near-duplicates from my SFT set with embeddings, not just MinHash","Normalize my Hermes/Glaive/xLAM tool-calling traces into one OpenAI tool_calls schema","Turn these lecture videos into frame + transcript records for multimodal SFT"]'
+---
+
+# Data Engine
+
+## Purpose
+Turn raw data sources into a measured, FS-ready dataset. The skill recommends
+(or accepts) a `data_pipeline_spec`, streams it through the registered ops
+(`ingest -> clean -> dedup -> quality -> [decontam] -> [mix] -> format ->
+tokenize`), writes sharded JSONL plus per-op accounting, and emits a readiness
+report whose verdict becomes the skill status. Nothing trains: output rows are
+exactly the record shapes `foundationscale-train` / `fskills-rl` consume.
+
+## When to use
+- You have raw sources (JSONL/JSON/CSV/parquet files, document dirs of
+  txt/html/pdf, HF datasets, image-text folders) and need CPT/pretrain corpus,
+  SFT rows, preference pairs, or an RL verifiable prompt set.
+- A training plan hands you `{"handoff": "data_engine", "target_format": ...}`.
+- You want per-stage drop accounting (`stats.json`) before spending GPU hours.
+
+- You need embedding near-dedup (`semantic_dedup`), tool-calling traces in one
+  schema (`toolcall_format`) or video turned into frame+transcript records
+  (`video_ingest`) — see "Semantic, tool-call and video ops" below.
+- You want RL prompts the base model neither always solves nor always misses
+  (`difficulty_filter`), so GRPO groups have reward variance.
+
+Do NOT use it for: training itself (training.planner / training.emit) or
+synthesizing examples from nothing (`synthesize`, phase 2).
+
+## Inputs
+Request object (validated against the skill input schema):
+- `sources` (required unless `pipeline` is given): `[{uri, kind}]` where kind
+  is one of `local_dir | jsonl | json | parquet | csv | hf_dataset | documents
+  | image_text` (a `raw_data_ref` payload).
+- `target_format` (required): `pretrain | cpt | sft | mm_sft | preference | rl`.
+- Optional: `goal`, `algorithm`, `tokenizer`, `chat_template_family`, `domain`,
+  `benchmarks` (triggers decontam; names follow eval_policy.yaml, e.g. `arc_easy`),
+  `benchmark_sources` (`{name: local file}`) or `allow_benchmark_download: true`
+  (builtin HF registry, served from the HF cache when offline) -- without either,
+  every declared benchmark is UNMEASURED (DE-RDY-005), `pipeline` (explicit spec;
+  overrides the recommendation), `requirements` (readiness overrides), `out_dir`.
+
+## Outputs
+Three artifacts written to `<workdir>/artifacts/`:
+- `data_pipeline_spec` — the executed op sequence with rationale.
+- `dataset` — shards (path+sha256+records), schema columns, `fs_columns`
+  (`text_column` / `image_column` / `gold_key`), `num_tokens` (null when only
+  an approximate count exists; see `num_tokens_approx`).
+- `readiness_report` — verdict PASS/RED/UNMEASURED plus per-check details.
+
+Status mirrors the readiness verdict. REFUSED names the missing input or the
+phase-2 capability (`phase-2: <op>`). Zero records written is RED with
+DE-HO-003 (the dataset artifact is skipped, since an empty shard list is
+schema-invalid).
+
+Payload extras: `stats.json` in `out_dir` with every op's in/out/dropped
+counters and the realized mixture.
+
+## Scope
+- Stages: pretrain, cpt, sft, preference, rl (mm_sft via image_column).
+- Model types: llm and vlm. Families: any. Methods/hardware: not applicable.
+- FS interface: emits artifacts only; consumes nothing from FS directly, but
+  consults `ctx.capabilities` for the preference-family warning (DE-IN-006).
+
+## Validation rules
+
+Outcome semantics (from `core/contract.py`, the same for every skill): an **input**-phase BLOCK refuses before any work - status REFUSED, exit 96, nothing written. A **handoff**-phase BLOCK does not refuse: the work ran, and the result is RED (exit 5), never PASS. WARN and INFO findings never block; they travel with the result (DE-HO-002 makes the readiness verdict UNMEASURED).
+
+| Rule id | Phase | Severity | Fires when |
+|---|---|---|---|
+| DE-IN-001 | input | BLOCK | no sources given (and no explicit pipeline) |
+| DE-IN-002 | input | BLOCK | `target_format` not in the known set |
+| DE-IN-003 | input | BLOCK | a local source uri does not exist |
+| DE-IN-004 | input | BLOCK | a phase-2 op name appears in the spec → REFUSED `phase-2: <op>` |
+| DE-IN-005 | sft/mm_sft | WARN | chat_template_family or tokenizer missing |
+| DE-IN-006 | input | WARN | preference target while the installed FS cannot run the preference family |
+| DE-IN-007 | input | BLOCK | `llm_classify`/`llm_enhance` without a usable `config.backend` (static), or a backend config error at run time → REFUSED |
+| DE-IN-008 | input | BLOCK | `semantic_dedup`/`video_ingest`/`difficulty_filter` runtime dependency unavailable (encoder not cached, ffmpeg/ffprobe missing, ASR model not cached) — checked offline by the op's `preflight`, or raised at run time → REFUSED; nothing is downloaded |
+| DE-HO-001 | handoff | BLOCK | readiness verdict is RED |
+| DE-HO-002 | handoff | WARN | readiness verdict is UNMEASURED (null checks listed) |
+| DE-HO-003 | handoff | BLOCK | zero records written |
+| DE-RDY-001 | readiness | check | dataset format equals `target_format` |
+| DE-RDY-002 | readiness | check | token count >= `min_tokens` (null when tokens are unknown or approximate) |
+| DE-RDY-003 | readiness | check | record count >= `min_records` |
+| DE-RDY-004 | readiness | check | a dedup op ran (failure when `require_dedup` and none ran) |
+| DE-RDY-005 | readiness | check | decontamination ran with no unmeasured benchmarks and no remaining hits |
+| DE-RDY-006 | readiness | check | PII remaining after redaction <= `max_pii_remaining` (measured by the clean op) |
+| DE-RDY-007 | readiness | check | truncation rate <= `max_truncation_rate`; reports the over-length drop rate, since drops are non-random |
+| DE-RDY-008 | readiness | check | the chat template actually applied (measured template source; fallback or family mismatch fails; not applicable to raw text) |
+| DE-RDY-009 | readiness | check | every shard's first record carries the FS columns |
+| DE-RDY-010 | readiness | disclosure | sft/mm_sft: FS trains on the full rendered text (no assistant-only loss masking) |
+| DE-RDY-011 | readiness | check | sft/mm_sft: training targets start exactly as the tokenizer's inference prompt does (Gemma-4 26B/31B empty-thought prefix aligned) |
+
+(Readiness rule ids DE-RDY-001..011 are emitted by
+`foundationskills.skills.data_engine.report.build_readiness`; consult the
+readiness_report artifact `checks` for per-rule details.)
+
+## Failure handling
+- REFUSED: unknown format (DE-IN-002), missing local files (DE-IN-003), no
+  sources (DE-IN-001), phase-2 op (DE-IN-004), LLM op without a backend
+  (DE-IN-007), missing encoder/ffmpeg/ASR model (DE-IN-008) — fix the request
+  or the environment, not the data.
+- RED: readiness failure (DE-HO-001) or empty output (DE-HO-003). Read
+  `out_dir/stats.json`: every op reports `dropped` by reason, so find which
+  stage ate the records (usually strict `clean`/`quality` thresholds).
+- UNMEASURED: some readiness checks never ran (DE-HO-002) — e.g. decontam
+  without benchmark files, or dedup missing from the pipeline while
+  `require_dedup` is true.
+- Ingest backend missing → `pip install foundationskills[data]`; the builtin
+  fallback is an approximation and marks its stats (`extra["approximate"]`),
+  which surfaces as UNMEASURED where it matters. OOM in dedup → lower
+  `num_perm`/`bands` or use the datatrove backend.
+
+## FS interface
+- Emits: `data_pipeline_spec`, `dataset`, `readiness_report` artifacts.
+- Record shapes (exactly what FS consumes): pretrain/cpt `{id, text, meta}`;
+  sft `{id, messages, text, meta}` (text = chat-template-rendered); mm_sft adds
+  `image` (training sets `FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN=image`);
+  preference `{id, prompt, chosen, rejected, meta}`; rl ShareGPT-style
+  `{conversations: [{from, value}...], answer}` with `fs_columns.gold_key`.
+- APIs for callers: `recommend_pipeline`, `run_pipeline`, `build_readiness`,
+  `design_mixture`, `catalog.discover`. No direct processes are launched.
+
+## Worked examples
+1. CPT from internal PDFs + HTML docs:
+   ```
+   request = {
+     "sources": [{"uri": "/data/manuals", "kind": "documents", "domain": "manufacturing"}],
+     "target_format": "cpt", "domain": "manufacturing",
+     "goal": "domain_expert", "tokenizer": "gemma4-4b",
+     "benchmarks": ["gsm8k"]          # triggers decontam
+   }
+   ```
+   Recommended flow: ingest → clean (strict PII, doc cleaning) → dedup
+   (document+near) → quality (gopher_fineweb) → decontam → format(cpt) →
+   tokenize (pack). Design the general-replay share with
+   `design_mixture(stage="cpt", preserve_general=True, ...)`.
+
+2. SFT from Alpaca-style JSONL for gemma4:
+   ```
+   request = {
+     "sources": [{"uri": "/data/alpaca.jsonl", "kind": "jsonl"}],
+     "target_format": "sft", "tokenizer": "gemma4-4b",
+     "chat_template_family": "gemma4",
+     "goal": "general_chat"
+   }
+   ```
+   Rows are rendered with the gemma4 chat template into `text`; note FS trains
+   loss over the full rendered text (no assistant-only masking).
+
+3. RL verifiable math from a HF dataset:
+   ```
+   request = {
+     "sources": [{"uri": "openai/gsm8k", "kind": "hf_dataset",
+                  "options": {"config": "main", "split": "train"}}],
+     "target_format": "rl", "goal": "math", "algorithm": "dr_grpo",
+     "benchmarks": ["gsm8k"]
+   }
+   ```
+   MEASURED 2026-10-07: FS's RL reward verifies a single MCQ letter only, so
+   every free-form gsm8k row is dropped (`rl_answer_not_mcq_letter`, 7,473/7,473)
+   and the run is RED. Use an MCQ source instead -- e.g. `allenai/ai2_arc`
+   with `options: {config: ARC-Challenge, split: train}` gave 1,111 records
+   (7 decontaminated against arc_challenge/arc_easy). Output records carry the
+   gold letter under `fs_columns.gold_key="answer"`; the emit skill turns this
+   into an `fskills-rl` config for the runnable dr_grpo/gspo/dapo family.
+   `options.config` (alias of datasets' `name`) selects a multi-config dataset.
+
+## LLM-based ops
+Model-based processing for what heuristics cannot see (semantics, grounding,
+correctness). Both ops call a pluggable backend (`llm_backend.py`):
+`{kind: openai_compatible, base_url, model, api_key_env?, extra_body?, cache_dir?}`
+serves a local vLLM server on GB200 (the corpus-scale default) or the Kimi-K3
+endpoint (small sets only: it is shared and slow). There is no heuristic
+fallback: no backend refuses (DE-IN-007). Responses are cached by content hash,
+calls run through an order-preserving thread pool, `max_calls` caps the spend,
+and every touched record gets `meta.llm` provenance (model, prompt hash, cache hit).
+- `llm_classify` — rubric axes (categorical `labels` or ordinal `scale`) →
+  `meta.llm_labels`. An invalid or failed label is `None` and counted
+  unmeasured, never guessed; `filters` drop by label, never on `None` unless
+  `drop_unmeasured`. `sample.rate` labels a deterministic subset: the annotate
+  half of annotate-then-distill (FineWeb-Edu) for corpus scale.
+- `llm_enhance` — `mode`:
+  - `rephrase` (WRAP / Nemotron-CC), additive by default;
+  - `qa_synth`, document-grounded Q&A → SFT rows;
+  - `reasoning_trace`, kept only when the final answer matches the gold;
+  - `judge`, pointwise 1–5 for SFT, order-swapped pairwise for preference, with
+    position consistency reported.
+
+  Every synthetic output passes a measured grounding check (content-word overlap
+  with its source ≥ `min_overlap`), or it is dropped as `ungrounded`.
+
+Design record and survey: `artifacts/research/llm_data_engine.md`.
+
+## Semantic, tool-call and video ops
+- `semantic_dedup` — sentence-transformers embeddings (default
+  `all-MiniLM-L6-v2`, `local_files_only`), greedy keep-first: a record is a
+  duplicate iff its cosine similarity to an EARLIER KEPT record is >= `threshold`
+  (default 0.90; no chain collapse). `exact` up to `exact_max` (100k) records,
+  seeded MiniBatchKMeans above (`approximate: true` in stats). Drops count as
+  `semantic_duplicate`; stats carry the model revision, device, a 20-bin
+  similarity histogram, the near-threshold count and example pairs, so the
+  threshold is auditable (cluster-scoped in kmeans mode: `measurement_scope`).
+  Buffers records in memory up to `max_records`.
+- `toolcall_format` — normalizes OpenAI (incl. legacy `function_call` /
+  `role: function`), ShareGPT (`messages` or `conversations`; `function_call`/
+  `observation`), Hermes, Glaive, xLAM, Llama-3 and Mistral traces into OpenAI
+  `tool_calls` messages plus a top-level `tools` list (JSON-schema parameters);
+  canonical argument JSON, deterministic call ids (id-less dialects pair each
+  tool result with the oldest unanswered call, one result per call). Text
+  content-part lists are joined. Arguments are validated
+  against the declared schema; failures drop with a named reason
+  (`bad_arguments_json`, `undeclared_tool_call`, `args_schema_violation`,
+  `result_without_call`, ...), or with `strict: false` are kept and marked.
+  Unparsable or non-object entries (messages, calls, tool definitions, xLAM
+  `answers`, other content types) drop as `malformed_message`; an unparsable
+  call payload after a dialect marker drops as `malformed_tool_marker`.
+  `require_tools` defaults to true: a record without a tools schema drops as
+  `missing_tools_schema`; set `require_tools: false` for plain chat.
+- `video_ingest` — ffprobe/ffmpeg uniform frames (`fps`, `max_frames`) cached
+  under `frames_dir`, Whisper ASR through transformers (`asr: none` for frames
+  only), transcript segments aligned to the nearest frame; emits `images` +
+  timestamped `text` (or a user/assistant `messages` pair), optional
+  `chunk_seconds` windows. Drops: `video_missing`, `probe_failed`, `too_long`,
+  `no_frames`, `audio_extract_failed`, `asr_failed`. ASR segments that zlib-compress more than
+  `max_compression_ratio` (default 2.4, Whisper's own threshold) are
+  repetition-loop hallucinations on non-speech audio and are suppressed
+  (`asr_segments_suppressed`). In chunk mode a window with no sampled frame
+  emits nothing; its segments are counted in `asr_segments_frameless_window`.
+- `difficulty_filter` (rl, after `format`) — `k` (default 8) sampled base-model
+  completions per prompt, built and scored exactly as FS RL does
+  (`rl.corpus._parse_record`, `encode_prompts`, `MCQLetterReward`). It keeps a
+  prompt iff `keep_above < pass_rate < keep_below` (default 0 < p < 1), because an
+  all-correct or all-wrong group has zero advantage and FS marks its step
+  UNMEASURED. Unparseable completions abstain: they leave the denominator and
+  are never counted wrong. Drops: `difficulty_too_easy`, `difficulty_too_hard`,
+  `difficulty_unscorable` (< 2 scored), `difficulty_no_gold`,
+  `difficulty_unparseable_record`. Kept records gain `meta.pass_rate`. The
+  readiness stats carry `rl_pass_rate_hist` and `rl_kept_fraction`. It needs CUDA
+  (`device: cpu` forces CPU) and a locally resolvable `model`.
+Running these on a GPU is a library call, not a launch: no confirm hash; the
+device is recorded in stats.
+
+## Phase 2
+Declared (via `data_engine.phase2.PHASE2`) but NOT implemented; selecting it
+refuses with `phase-2: <name>`:
+- `synthesize` — superseded by `llm_enhance`; kept as a refusing name.

@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "required": ["source_skill", "result_status", "findings"],
+  "properties": {
+    "source_skill": {},
+    "result_status": {},
+    "findings": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["rule_id", "severity", "message"],
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "pattern": "^[A-Z]{2,4}-[A-Z0-9_-]+$"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["BLOCK", "WARN", "INFO"]
+          },
+          "message": {},
+          "evidence": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "recovery": {
+            "type": "string"
+          },
+          "cited_by": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

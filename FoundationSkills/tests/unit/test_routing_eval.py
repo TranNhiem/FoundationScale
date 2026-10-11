@@ -31,7 +31,8 @@ from foundationskills.agent.routing_eval import (
 from foundationskills.skills.data_engine.llm_backend import LLMResponse
 
 CREATED = "2026-10-02T00:00:00Z"
-PACKAGE_NAMES = ("fskills-auto-research", "fskills-data-engine", "fskills-evaluation", "fskills-training")
+PACKAGE_NAMES = ("fskills-auto-research", "fskills-confirm-before-launch", "fskills-data-engine", "fskills-evaluation",
+                 "fskills-measured-or-unmeasured", "fskills-probe-first", "fskills-refusal-surface", "fskills-training")
 HEX64 = re.compile(r"[0-9a-f]{64}")
 
 

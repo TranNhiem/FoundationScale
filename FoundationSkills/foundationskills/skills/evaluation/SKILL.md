@@ -7,15 +7,12 @@ description: 'Scores a trained checkpoint (full HF model dir or PEFT adapter) ag
   with verdict PASS/RED/UNMEASURED and provenance (harness version, task hash, few-shot, seed, baseline
   fingerprint). Do NOT use for building FS-ready datasets (use fskills-data-engine) or Slurm training
   runs (use fskills-training). Not for VLM, LLM-judged or RL/agentic evals.'
-when_to_use:
-- Score this checkpoint against its base on mmlu and gsm8k
-- Give me a PASS/RED verdict before promoting this trained model
-- Evaluate this LoRA adapter offline with lm-eval 0.4.12 and write eval_report.json
-- Smoke-test the eval setup with --limit 8 on arc_easy
-- The run exited 5 RED / 95 UNMEASURED / 96 REFUSED, what does that mean
-- Emit the eval job for GB200 and give me the confirm hash, then launch it
-- Why is my benchmark unmeasured with 'dataset not staged in eval cache'
-- Which rule fired EV-IN-005 / EV-HO-001 in my eval policy
+compatibility: "Requires Python>=3.10 and the foundationskills package (fskills CLI); launches additionally need FoundationScale on a Slurm GPU cluster. Without them the skill reports REFUSED or UNMEASURED and gives the install step instead of improvising."
+metadata:
+  version: "0.1.0"
+  invocation: "model"
+  fs_status_doctrine: "PASS/RED/UNMEASURED/REFUSED (exit 0/5/95/96)"
+  when_to_use: '["Score this checkpoint against its base on mmlu and gsm8k","Give me a PASS/RED verdict before promoting this trained model","Evaluate this LoRA adapter offline with lm-eval 0.4.12 and write eval_report.json","Smoke-test the eval setup with --limit 8 on arc_easy","The run exited 5 RED / 95 UNMEASURED / 96 REFUSED, what does that mean","Emit the eval job for GB200 and give me the confirm hash, then launch it","Why is my benchmark unmeasured with ''dataset not staged in eval cache''","Which rule fired EV-IN-005 / EV-HO-001 in my eval policy"]'
 ---
 
 # evaluation — FoundationSkills checkpoint evaluation
