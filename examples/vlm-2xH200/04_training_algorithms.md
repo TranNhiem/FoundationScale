@@ -2,6 +2,8 @@
 
 FoundationScale registers 18 algorithms behind three front doors. Everything you learned in chapters 02–03 still applies (data loading, LoRA, bf16, acceptance runs); this chapter shows how to run preference training and RL on your 2× H200 node and what the measured numbers look like.
 
+Every command below assumes the environment is active — activate it first in a fresh shell.
+
 | Front door | Trainer / CLI | `algorithm=` values | Modality support |
 |---|---|---|---|
 | SFT | `foundationscale-train` CLI (chapter 03) | `sft` | image + video + text |
@@ -136,7 +138,15 @@ torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 298
   --video-column video --video-frames 16
 ```
 
-3. Mixed image+video+text, `Qwen3.6-27B`, and an ORPO run on the SAME mixed file (algorithm switching, Step 5). Qwen3.6-27B's video path is measurably heavier than gemma-4's (Qwen3VL does not cap per-frame pixels the way gemma-4 does, and this estate has no optimized `causal_conv1d` kernel for Qwen3.6's hybrid layers), so the proof uses a lighter frame/length budget for this model only:
+3. Mixed image+video+text, `Qwen3.6-27B`, and an ORPO run on the SAME mixed file (algorithm switching, Step 5). `prepare_rl_data.py preference_mm` writes ONLY `data/dpo_mm/preference_mm_images.jsonl` and `data/dpo_mm/preference_mm_video.jsonl` — there is no ready-made mixed file, so build it first (deterministic shuffle):
+
+```bash
+cat data/dpo_mm/preference_mm_images.jsonl data/dpo_mm/preference_mm_video.jsonl | shuf --random-source=<(yes) > data/dpo_mm/preference_mm_mixed.jsonl
+```
+
+Add text pairs from `data/pref/dpo_train.jsonl` (Step 1.1) to that file if you want text in the mix.
+
+Qwen3.6-27B's video path is measurably heavier than gemma-4's (Qwen3VL does not cap per-frame pixels the way gemma-4 does, and this estate has no optimized `causal_conv1d` kernel for Qwen3.6's hybrid layers), so the proof uses a lighter frame/length budget for this model only:
 
 ```bash
 torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29890 \
@@ -227,7 +237,7 @@ GRPO with images on `Qwen3.6-27B` and `Qwen3.6-35B-A3B` used to be broken by thr
 2. **prompt-length `mm_token_type_ids`** were forwarded together with the prompt+completion ids;
 3. **Qwen's flattened patch tensor was sliced by row** in group expansion and micro-batching.
 
-After the fixes **both models run GRPO with images 10 steps without error**: peak **60.3 GB/GPU** (`Qwen3.6-27B`) and **82.2 GB/GPU** (`Qwen3.6-35B-A3B`), on the 2× H200 run recipe used throughout this chapter (LoRA r16/α32, FSDP, bf16, activation checkpointing, `--fused-loss liger`). The gemma models never had these problems: `gemma-4-26B-A4B-it` and `gemma-4-31B-it` each run 20 steps of GRPO with images, exit 0. See the algorithm × model matrix in Step 5 and the Troubleshooting entry if a Qwen run fails.
+After the fixes **both models run GRPO with images 10 steps without error**: peak **60.3 GB/GPU** (`Qwen3.6-27B`) and **82.2 GB/GPU** (`Qwen3.6-35B-A3B`), on the 2× H200 run recipe used throughout this chapter (LoRA r16/α32, `sharding="ddp"` — hard-coded in `train_grpo.py` — bf16, activation checkpointing; `train_grpo.py` has no `--fused-loss` option). The gemma models never had these problems: `gemma-4-26B-A4B-it` and `gemma-4-31B-it` each run 20 steps of GRPO with images, exit 0. See the algorithm × model matrix in Step 5 and the Troubleshooting entry if a Qwen run fails.
 
 ---
 
@@ -266,8 +276,9 @@ The 12 RL algorithms share the same `algorithm=` field (CLI: `--algorithm`); per
 
 ### Sharding and LoRA memory (2× H200)
 
-- `sharding="ddp"` is the validated choice for RL and preference training with LoRA — it fits, with the peaks measured above.
-- `sharding="fsdp"` works for RL **training**, but repeated generation under FSDP is not yet reliable. The shipped DPO recipe runs with `sharding="fsdp"` (its measured 72.7 GB/GPU is under that setting); use `ddp` when in doubt.
+- The GRPO/RL recipe is **DDP + LoRA + activation checkpointing, exactly as in `train_grpo.py`**: `sharding="ddp"` is **hard-coded** in that script, because repeated generation under FSDP is not yet reliable. There is no `--fused-loss` option on `train_grpo.py`.
+- The shipped DPO preference recipe runs with `sharding="fsdp"` (its measured 72.7 GB/GPU is under that setting).
+- `sharding="ddp"` is the validated choice for preference training with LoRA as well — it fits, with the peaks measured above. Use `ddp` when in doubt.
 - Keep `logprob_micro_batch=1` for long preference rows: without it the peak was **125 GB** at `max_length 4096` (fp32 vocab logits of a long row); with it, 72.7 GB at 4096 and the same 72.7 GB at 8192.
 
 ### Rollout generation is now safe with gradient checkpointing
@@ -276,7 +287,7 @@ Generation runs in eval mode with the KV cache even when `gradient_checkpointing
 
 ### Algorithm × model results (measured sweep, 2 × H200)
 
-Every cell below is a measured run of the **20-step acceptance sweep**: 2× H200, LoRA `adapter_rank=16` / `adapter_alpha=32`, FSDP, bf16, activation checkpointing, `--fused-loss liger`. Unless a cell says otherwise, each run trained **20 steps and exited 0**. A dash (—) = not part of this sweep.
+Every cell below is a measured run of the **20-step acceptance sweep**: 2× H200, LoRA `adapter_rank=16` / `adapter_alpha=32`, bf16, activation checkpointing. Preference/DPO rows ran under the DPO recipe (`sharding="fsdp"`, `--fused-loss liger` on `train_dpo.py`); the GRPO/RL rows ran under the GRPO recipe (`sharding="ddp"` hard-coded in `train_grpo.py`, DDP + LoRA + activation checkpointing — no `--fused-loss` option there). Unless a cell says otherwise, each run trained **20 steps and exited 0**. A dash (—) = not part of this sweep.
 
 | `algorithm=` | `gemma-4-12B-it` | `gemma-4-26B-A4B-it` | `gemma-4-31B-it` | `Qwen3.6-27B` | `Qwen3.6-35B-A3B` |
 |---|---|---|---|---|---|
@@ -335,6 +346,8 @@ CUDA_VISIBLE_DEVICES=0 VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_USE_DEEP_GEMM=0 \
   --samples 8 --temperature 1.0 --max-tokens 400 --min-rate 0.125 --max-rate 0.875 --tp 1
 ```
 
+`vllm-env` here is the separate venv for vLLM — it is created in [chapter 05 §4a](05_evaluation.md); create it first if you haven't.
+
 Then split `keep.jsonl` into train and held-out files with `prepare_data.py split`, and train GRPO
 on the train part only.
 
@@ -368,7 +381,7 @@ the training reward alone; and sweep the learning rate between these two points 
 
 **Rollouts look corrupted after the first token with gradient checkpointing on.** You are on a build older than the generate-in-eval-mode fix. Update FoundationScale and re-run: greedy 32-token rollouts must be identical with checkpointing on and off.
 
-**Generation hangs or behaves oddly under FSDP on the RL trainer.** Repeated generation under FSDP is not yet reliable; switch to `sharding="ddp"` (validated with LoRA on 2× H200).
+**Generation hangs or behaves oddly under FSDP on the RL trainer.** You are not on the shipped `train_grpo.py` path — it hard-codes `sharding="ddp"` precisely because repeated generation under FSDP is not yet reliable. Run DDP (the validated `train_grpo.py` default) with LoRA on 2× H200.
 
 **Only some steps of 30 produce a reward (11/30 or 13/30 is the measured norm).** Expected on hard ScienceQA questions with `group_size 4`: all 4 samples keep reasoning and hit `max_new_tokens`. This is abstention, not a bug.
 
