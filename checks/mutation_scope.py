@@ -106,6 +106,15 @@ PENDING_ENROLMENT: dict[str, str] = {
         "turns, failure categories): line-covered by tests/agentic_rl/test_evaluation.py, but no "
         "mutation row yet proves a flipped pass threshold would be caught."
     ),
+    "src/foundationscale/agentic_rl/integrity.py": (
+        "reward integrity (fail-closed ingestion, failed-sandbox masking, stage budgets, verifier "
+        "false-positive audit, oracle/empty smoke): line-covered by tests/agentic_rl/"
+        "test_integrity.py, but no mutation row yet proves a dropped pass refusal would be caught."
+    ),
+    "src/foundationscale/agentic_rl/sandbox/hidden.py": (
+        "hidden-artifact vault and egress probe: line-covered by tests/agentic_rl/"
+        "test_sandbox_hidden.py over a fake sandbox, but no mutation row yet."
+    ),
     "src/foundationscale/agentic_rl/stability.py": (
         "rollout-reward collapse guard (EMA, peak, best-k, stop/warn): line-covered by "
         "tests/agentic_rl/test_stability.py incl. the measured 100-step collapse shape, but no "
