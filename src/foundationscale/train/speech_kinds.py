@@ -809,6 +809,11 @@ def speech_tower_resolution_refusal(family: Any, model: Any) -> str | None:
     """
     from foundationscale.families.towers import resolve_module_path  # noqa: PLC0415
 
+    # Under an adapter the run holds a PeftModel, whose own ``.model`` attribute shadows the
+    # checkpoint's: FamilySpec paths are measured on the unwrapped model, so resolve there.
+    get_base = getattr(model, "get_base_model", None)
+    if callable(get_base):
+        model = get_base()
     towers = getattr(family, "towers", None) or ()
     missing = [
         path
