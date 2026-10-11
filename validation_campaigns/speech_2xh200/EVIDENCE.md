@@ -3,7 +3,7 @@
 Verification run for `examples/speech-2xH200/`, the hands-on speech/ASR tutorial (mirrors
 `examples/vlm-2xH200/`). Not a new research campaign: reuses the recipe and traps already measured by
 `speech_p0` through `speech_p8`, `speech_ddp`, `speech_canary`, `speech_repro` and `speech_q3asr`, and
-re-verifies the speech-plane owner's recipe end to end on a fresh 2x H200 VM. Four measurement rounds:
+re-verifies the speech-plane owner's recipe end to end on a fresh 2x H200 VM. Seven measurement rounds:
 
 - **Round 1** (2026-10-10, FoundationScale `9dd37b0`): a 100-step / 4,078-row quick-start slice on all
   four models, before the owner's fixes below landed.
@@ -26,10 +26,19 @@ re-verifies the speech-plane owner's recipe end to end on a fresh 2x H200 VM. Fo
   tower-resolution misfire upstream (`692101b`: resolves FamilySpec paths via `model.get_base_model()`).
   Pulled the fix, re-ran Gemma-4-E4B-it's LoRA + full-towers recipe on the sentence-cased manifest: all
   speech gates PASS, dev-clean WER **4.04% -> 2.99%**, matching the owner's 2.96%.
+- **Round 6** (2026-10-11, FoundationScale `0fa19be`): the owner updated the `qwen2_audio` FamilySpec to the
+  `transformers>=5.18` layout with automatic LoRA adapter-target scoping, restoring Qwen2-Audio-7B-Instruct
+  from a clean REFUSE. LoRA r16 + towers in full: clean PASS, dev-clean WER **35.58% -> 3.41%**. Its full
+  fine-tune trained correctly but hit a separate `checkpoint.save_complete` bug (superseded by Round 7).
+- **Round 7** (2026-10-11, FoundationScale `3cff8f9`): the owner fixed Round 6's full-fine-tune checkpoint
+  bug (`152f43c`/`c904e4c`: FS now asks transformers' `revert_weight_conversion` for on-disk tensor names).
+  Re-ran the identical full-FT recipe: clean PASS, dev-clean WER **35.58% -> 2.57%**, within 0.8 points of
+  the owner's 1-GPU reference (1.79%).
 
-All WER numbers below are Round 2 unless stated otherwise; Round 3/4/5 are labelled explicitly where they
-apply. Round 4 numbers SUPERSEDE Round 1-3's Whisper numbers; Round 5 numbers SUPERSEDE Round 2's Gemma-4
-number.
+All WER numbers below are Round 2 unless stated otherwise; Round 3/4/5/6/7 are labelled explicitly where
+they apply. Round 4 numbers SUPERSEDE Round 1-3's Whisper numbers; Round 5 numbers SUPERSEDE Round 2's
+Gemma-4 number; Round 7's full-fine-tune number SUPERSEDES Round 6's full-fine-tune non-result (Round 6's
+LoRA number stands unchanged).
 
 ## STEP 1 diagnostics (run before any 500-step commitment, as requested)
 
@@ -427,6 +436,73 @@ look at: (a) why `--fsdp-state-dict full` saves a duplicate F32 artifact for thi
 sharded layouts, since full fine-tunes of 7B+ dense audio-LLMs are exactly the case FSDP sharding exists
 for. **Use the LoRA result above as Qwen2-Audio's measured number in this tutorial.**
 
+**SUPERSEDED by Round 7 below.** The owner root-caused and fixed `--fsdp-state-dict full`'s
+`checkpoint.save_complete` failure (it was comparing saved tensor names against the wrong on-disk layout,
+not actually duplicating data) and `--fsdp-state-dict sharded`'s `tower_movement` gap. Round 7 has a real,
+gate-clean, directly-evaluable full fine-tune WER number. The diagnostic trail above (the DCP conversion
+mechanics, the abnormal eval memory/runtime) remains accurate as a record of what was tried and found before
+the fix landed; none of it is needed any more with current `origin/main`.
+
+## Round 7: Qwen2-Audio-7B-Instruct full fine-tune -- checkpoint-save fix verified, clean PASS, real WER number
+
+**The speech-plane owner root-caused and fixed the Round 6 full-fine-tune checkpoint gap on
+`origin/main`.** Cause: `transformers>=5.18` reverts the load-time module-name conversion when saving a
+checkpoint (on-disk tensor names come back as `audio_tower.*`; the live model holds `model.audio_tower.*`),
+so FoundationScale's `checkpoint.save_complete` gate -- comparing declared tensor names against the model's
+live names, not the on-disk names -- found 0/876 matches and the earlier `--fsdp-state-dict full` attempt's
+duplicate-artifact appearance was a side effect of that same name mismatch, not independent data corruption.
+Fix (`origin/main` `152f43c`, hardened against a brief sharded-save regression by `c904e4c`): FoundationScale
+now asks transformers' own `revert_weight_conversion` for the on-disk names, and narrows saved fp32 master
+weights to bf16 before the dtype check. `speech.tower_movement`'s digest comparison was separately extended
+to read sharded (DCP) saves too (current `origin/main`) -- **both `--fsdp-state-dict full` and `sharded` are
+now fully adjudicated**, not just `full`. `full` stays this tutorial's recipe default anyway because
+`sharded` still writes raw DCP shards that need a manual conversion before `eval_wer.py` can load them (the
+Round 6 diagnostic trail above still describes that conversion if you need it for a bigger model).
+
+**Pulled the fix** (VM: `git -C FoundationScale fetch && git -C FoundationScale reset --hard origin/main` ->
+`3cff8f9`; Mac worktree: `git fetch && git merge origin/main`, no conflicts, no amend) and re-ran the
+identical Round 6 full-fine-tune recipe unchanged: lr 1e-5, global batch 8 (per-device 4 x dp 2), 500 steps,
+`SHARDING=fsdp`, `FSDP_STATE_DICT=full` (now `configs/qwen2-audio-7b.env`'s explicit default, replacing
+Round 6's `sharded` workaround).
+
+**Training: exit 0, PASS.** Loss step 10/250/500: 0.3224 / 0.1755 / 0.1392 (same convergence shape as Round
+6's sharded attempt). Peak memory 92.9 GiB/GPU (vs. Round 6's 95.1 GiB sharded -- comparable). Wall 597 s for
+500 steps including the (now full-gather) checkpoint write. Speech gates, all PASS:
+
+```
+[fs:train:adjudicate]  [PASS] speech.audio_row_coverage: 4008/4008 audio rows -- 4008 of 4008 expected
+audio rows loaded (no refusals)
+[fs:train:adjudicate]  [PASS] speech.audio_placeholder_coverage: 4008/4008 audio rows -- 4008 of 4008
+audio row placeholder markers verified (0 unmeasured)
+[fs:train:adjudicate]  [PASS] speech.tower_movement: 487/487 tower parameters -- 474 of 487 tower
+parameters moved from base to saved
+[fs:train:adjudicate]  [PASS] speech.tower_movement: 2/2 tower parameters -- 2 of 2 tower parameters
+moved from base to saved
+[fs:train:done]         PASS
+```
+
+The saved `final/` directory is now a normal HF checkpoint: `config.json` + `generation_config.json` +
+`model.safetensors` (one file, 33.5 GB on disk -- fp32 master weights per the precision gate's own note,
+cast to bf16 at load time by `eval_wer.py`'s `dtype=torch.bfloat16`), directly loadable with no conversion
+step, no `--adapter` flag, just `--processor` pointing at the base model (same shape as parakeet/whisper's
+full-fine-tune eval).
+
+**WER result**, full 2,683-row dev-clean, `eval_wer.py` + `paired_bootstrap.py` vs the unchanged base:
+
+```
+n=2683 fields=(errors,reference_length) base=0.3558 tuned=0.0257 diff=-0.3301 95%CI=[-0.3385,-0.3216] P(diff<0)=1.000
+```
+
+**35.58% -> 2.57%**, significantly better (CI excludes zero, P(diff<0)=1.000), within 0.8 points of the
+owner's own 1-GPU reference (35.6% -> 1.79%). The eval itself behaved normally this time: ~29-35 GiB on one
+GPU, finished in 258 s (vs. Round 6's killed-at-55-min, ~102 GiB anomaly on the hand-converted checkpoint) --
+consistent with the Round 6 hypothesis that the missing `generation_config.json` in that hand-built directory
+(not present in this normal HF save) was the cause of the earlier eval-side slowdown.
+
+**This WER number, plus LoRA's 35.58% -> 3.41% from Round 6, are both Qwen2-Audio-7B-Instruct's measured
+numbers in this tutorial.** Use whichever recipe matches what you're demonstrating (LoRA for the cheap/fast
+path, full fine-tune for the owner's primary recipe).
+
 ## Troubleshooting note added per the owner
 
 When `torchrun` reports a bare `exit 1` (or any wrapper exit code), the real FoundationScale verdict (5
@@ -461,9 +537,9 @@ would. Re-verify timing-sensitive numbers if reproducing this campaign in isolat
 - Qwen2-Audio-7B-Instruct: the Round 1 `--adapter-target` enumeration workaround is retired and should not
   be re-attempted -- the owner's `0fa19be` FamilySpec update resolves LoRA targets automatically (Round 6).
   LoRA r16 + towers in full is Round 6's clean, measured, gate-passing result (35.58% -> 3.41%). The full
-  fine-tune recipe (`SHARDING=fsdp`) trains correctly but has a real, separate FSDP-checkpoint gap on this
-  VM (see Round 6) -- not reproducible to a trustworthy WER number yet; do not cite a full-FT number for
-  this model.
+  fine-tune recipe (`SHARDING=fsdp`, `FSDP_STATE_DICT=full`) hit a separate checkpoint-save bug in Round 6
+  (fixed upstream, `152f43c`); Round 7 re-verified it clean, PASS, 35.58% -> 2.57%. Use both Round 6 (LoRA)
+  and Round 7 (full fine-tune) numbers -- Round 6's full-FT non-result is superseded.
 - Gemma-4-E4B-it's Round 2 number was from BEFORE the sentence-case fix; Round 4 hit a separate
   `speech_tower_resolution_refusal` misfire blocking the rerun; Round 5 re-verified it after the owner
   fixed that misfire upstream (4.04% -> 2.99%, matching the owner's 2.96%). Use the Round 5 number.

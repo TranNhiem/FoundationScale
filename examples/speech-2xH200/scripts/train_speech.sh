@@ -46,18 +46,20 @@ if [ -n "$SHARDING" ]; then
   EXTRA_ARGS+=(--sharding-strategy "$SHARDING")
 fi
 
-# FSDP_STATE_DICT (optional, only meaningful with SHARDING=fsdp): MEASURED on this VM, 2026-10-11 --
-# the default full-gather save (--fsdp-state-dict full) fails FoundationScale's own checkpoint
-# completeness gates for qwen2-audio-7b's architecture (duplicate model.safetensors +
-# pytorch_model_fsdp.bin, tensors reported F32 instead of bf16): RED, exit 5, no usable checkpoint.
-# --fsdp-state-dict sharded avoids that -- the save gates PASS -- but writes raw
-# torch.distributed.checkpoint (DCP) shards instead of an HF-loadable safetensors file, which costs
-# two things: the in-training speech.tower_movement gate can't diff base-vs-saved tensors against a
-# sharded layout (reported UNMEASURED, not failed, not a regression) and this chapter's own
-# eval_wer.py cannot load the result directly -- see 03_training.md section 5 for the one-time
-# torch.distributed.checkpoint.format_utils.dcp_to_torch_save conversion this needs before eval.
-# qwen2-audio-7b.env sets this to sharded so the shipped recipe at least finishes with a complete,
-# gate-passing checkpoint instead of the RED full-state-dict failure.
+# FSDP_STATE_DICT (optional, only meaningful with SHARDING=fsdp): qwen2-audio-7b.env sets this to
+# "full" (also the CLI default -- the config sets it explicitly for documentation). An earlier round
+# measured --fsdp-state-dict full failing checkpoint.save_complete (0/876 tensors matched) on
+# transformers>=5.18: transformers reverts the load-time module layout on save (checkpoint keys come
+# back as audio_tower.*, the live model holds model.audio_tower.*), so FS's save-completeness check
+# was comparing against the wrong names. FIXED upstream (origin/main 152f43c): FS now asks
+# transformers' own revert_weight_conversion for the on-disk names and narrows saved fp32 master
+# weights to bf16 before the dtype check, so --fsdp-state-dict full now saves a normal, directly
+# HF-loadable checkpoint with tower_movement correctly measured -- see 03_training.md section 5.
+# --fsdp-state-dict sharded also PASSES the save-completeness gates and (as of current origin/main)
+# speech.tower_movement reads sharded (DCP) saves too -- both layouts are adjudicated, not just full.
+# full stays the recipe's default anyway: sharded still writes raw torch.distributed.checkpoint (DCP)
+# shards instead of an HF-loadable safetensors file, which eval_wer.py can't load without a manual
+# conversion -- see 03_training.md section 5.
 if [ -n "$FSDP_STATE_DICT" ]; then
   EXTRA_ARGS+=(--fsdp-state-dict "$FSDP_STATE_DICT")
 fi
