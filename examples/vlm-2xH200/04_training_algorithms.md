@@ -5,7 +5,7 @@ FoundationScale registers 18 algorithms behind three front doors. Everything you
 | Front door | Trainer / CLI | `algorithm=` values | Modality support |
 |---|---|---|---|
 | SFT | `foundationscale-train` CLI (chapter 03) | `sft` | image + video + text |
-| Offline preference | `PreferenceTrainer` | `dpo`, `ipo`, `kto`, `orpo`, `simpo`, `cpo` | **TEXT ONLY** — rows containing an image or a video are refused (exit 96) |
+| Offline preference | `PreferenceTrainer` | `dpo`, `ipo`, `kto`, `orpo`, `simpo`, `cpo` | **image + video + text** — declare `image_column`/`video_column` (`--image-column`/`--video-column`) to train on them; a row carrying media in an UNDECLARED column is refused (exit 96) |
 | Online RL | `RLTrainer` | `grpo`, `dr_grpo`, `dapo`, `gspo`, `reinforce_baseline`, `reinforce_pp`, `rloo`, `raft`, `best_of_n`, `online_dpo`, `iterative_dpo`, `ppo` | **images yes, video refused** |
 
 Switching algorithm is a one-line change: the `algorithm` field of `PreferenceTrainConfig` / `RLTrainConfig` (command-line: `--algorithm`; the `objective` name appears in some older configs, but the shipped scripts use `algorithm`). Everything else — data format, sharding, LoRA fields — stays the same.
@@ -34,6 +34,16 @@ python3 examples/vlm-2xH200/scripts/prepare_rl_data.py preference \
 python3 examples/vlm-2xH200/scripts/prepare_rl_data.py scienceqa \
   --out-dir data/rl_scienceqa --rows 300
 ```
+
+3. Generate the **multimodal preference set** for Step 2b below: image pairs from `openbmb/RLAIF-V-Dataset` plus grounding video pairs from the canonical video rows:
+
+```bash
+python3 examples/vlm-2xH200/scripts/prepare_rl_data.py preference_mm \
+  --out-dir data/dpo_mm --n-images 500 \
+  --video-jsonl data/prepared/video.train.jsonl --n-video-pairs 500
+```
+
+This writes `data/dpo_mm/preference_mm_images.jsonl` (`{"prompt","image","chosen","rejected"}`, one PNG per row under `data/dpo_mm/images/`) and `data/dpo_mm/preference_mm_video.jsonl` (`{"prompt","video","start","end","chosen","rejected"}`). The video pairs are a **grounding construction** (rejected = a different segment's real answer), not a human preference judgement — see the script's own docstring.
 
 **Check it worked.** Both files exist and the RL file has one image path and a gold letter per row:
 
@@ -87,6 +97,81 @@ RESULT_JSON {"ok": true, "model": "models/Qwen3.6-27B",
 - exact history key names for preference accuracy / margin: `preference_accuracy` and `margin` (next to `loss`), as printed above
 
 Flags: `--model`, `--data`, `--output-dir`, `--algorithm`, `--max-steps`, `--max-length`, `--learning-rate`, `--lora-rank`, `--lora-alpha`. Measured by a fresh user: a 5-step acceptance run is **92 s**; a full run at 30 steps is under 5 minutes.
+
+---
+
+## Step 2b — Multimodal DPO (image + video, verified; Qwen3.6-27B's full-length mixed-batch proof blocked by a host kernel limitation, see below)
+
+The offline preference trainer now accepts image and/or video rows: declare
+`image_column`/`video_column` (`--image-column`/`--video-column` on the CLI)
+and a record's declared media is rendered through the SAME processor path
+SFT uses (`<image>`/`<video>` markers in `prompt`, media loaded/decoded, the
+two sides' completions scored with the shared media attached). A row with
+neither column declared trains exactly as Step 2 above — byte-identical.
+
+Row shapes (`prepare_rl_data.py preference_mm`'s own output, Step 1.3):
+
+```text
+{"prompt": "<image> ...", "image": "<path>", "chosen": "...", "rejected": "..."}
+{"prompt": "<video> ...", "video": "<clip>", "start": 0.0, "end": 2.0, "chosen": "...", "rejected": "..."}
+```
+
+1. Image pairs, `gemma-4-12B-it`:
+
+```bash
+torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29890 \
+  examples/vlm-2xH200/scripts/train_dpo.py --model models/gemma-4-12B-it \
+  --data data/dpo_mm/preference_mm_images.jsonl --output-dir runs/dpo_mm_image \
+  --algorithm dpo --max-steps 20 --max-length 4096 \
+  --image-column image
+```
+
+2. Video pairs, `gemma-4-12B-it` (16 frames/clip; native video needs more room than a single image, hence `max-length 16384`):
+
+```bash
+torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29890 \
+  examples/vlm-2xH200/scripts/train_dpo.py --model models/gemma-4-12B-it \
+  --data data/dpo_mm/preference_mm_video.jsonl --output-dir runs/dpo_mm_video \
+  --algorithm dpo --max-steps 20 --max-length 16384 \
+  --video-column video --video-frames 16
+```
+
+3. Mixed image+video+text, `Qwen3.6-27B`, and an ORPO run on the SAME mixed file (algorithm switching, Step 5). Qwen3.6-27B's video path is measurably heavier than gemma-4's (Qwen3VL does not cap per-frame pixels the way gemma-4 does, and this estate has no optimized `causal_conv1d` kernel for Qwen3.6's hybrid layers), so the proof uses a lighter frame/length budget for this model only:
+
+```bash
+torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29890 \
+  examples/vlm-2xH200/scripts/train_dpo.py --model models/Qwen3.6-27B \
+  --data data/dpo_mm/preference_mm_mixed.jsonl --output-dir runs/dpo_mm_mixed \
+  --algorithm dpo --max-steps 20 --max-length 8192 \
+  --image-column image --video-column video --video-frames 4
+
+torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29890 \
+  examples/vlm-2xH200/scripts/train_dpo.py --model models/Qwen3.6-27B \
+  --data data/dpo_mm/preference_mm_mixed.jsonl --output-dir runs/orpo_mm_mixed \
+  --algorithm orpo --max-steps 20 --max-length 8192 \
+  --image-column image --video-column video --video-frames 4
+```
+
+**Check it worked** (measured, 2× H200, LoRA r16/α32, FSDP, bf16, gradient checkpointing, `logprob_micro_batch=1`, 20 steps for `gemma-4-12B-it`, 2 steps for `Qwen3.6-27B` DPO -- see below for why):
+
+| Run | exit | peak GB/GPU | s/step | step-0 loss | last loss | last accuracy | last margin | adapter |
+|---|---|---|---|---|---|---|---|---|
+| (1) `gemma-4-12B-it`, image pairs | 0 | 28.6 / 27.4 | 10.4 | `0.693147` (`ln 2`) | 1.1044 | 0.25 | -0.582 | loads |
+| (2) `gemma-4-12B-it`, video pairs (16 frames) | 0 | 51.2 / 51.4 | 18.8 | `0.693147` (`ln 2`) | 0.0054 | 1.00 | 10.25 | loads |
+| (3) `Qwen3.6-27B`, mixed image+video+text, DPO | partial (small-scale) | 74.3 / 81.0 | 90.3 | `0.693147` (`ln 2`) | 0.6662 (step 1) | 0.5 | 0.0573 | loads |
+| (4) `Qwen3.6-27B`, mixed image+video+text, ORPO | blocked, see below | — | — | — | — | — | — | — |
+
+Row (3) is a 2-step run, not 20: `Qwen3.6-27B`'s full 20-step proof is blocked by a measured, genuine per-row compute-time ceiling on this host that two real bugs were hiding behind (both found and fixed below) and that neither bug fix removes.
+
+**Bug A (found and fixed): a heterogeneous-batch modality-narrowing crash.** The first mixed-batch run crashed inside the model's own placeholder-count check (`Video features and video tokens do not match, tokens: 0, features: 2400`). ``image_grid_thw``/``video_grid_thw`` count MEDIA ITEMS, not training rows — a batch where only one row carries a video still gets a 1-row ``video_grid_thw``, never a zero-padded one row per training row — so `rl.trainer._narrow_modality_kwargs_by_row`'s own precondition ("one image per prompt," true for the online RL trainer that built it) does not hold for a HETEROGENEOUS image+video+text batch. Fixed by tracking per-row image/video counts (`_EncodedBatch.image_counts`/`video_counts`) and translating a training-row micro-batch range into the matching MEDIA-row range per modality before calling the reused helper — and by OMITTING a modality's keys entirely (never passing an empty tensor) for a micro-batch slice that carries none of it, which a second measured crash (`repeats must have the same size as input along dim`) showed the vision tower does not tolerate either. A THIRD measured crash (`RuntimeError: start (2) + length (1) exceeds dimension size (2)`) showed gemma's own convention (`image_position_ids`/`video_position_ids`, no `*_grid_thw` pair at all) defeated a name-based key classifier; the fix classifies by TENSOR SHAPE against the batch's measured row/image/video counts instead of a hardcoded name list, with a flattened-patch-pair reconciliation pass for Qwen's convention. All three failure modes are pinned as CPU regression tests in `tests/rl/test_preference_trainer_multimodal.py`.
+
+**Bug B (found and fixed): a genuine collective-count deadlock, not a slow step.** `Qwen3.6-27B` DPO/ORPO runs hung past increasingly generous NCCL collective timeouts (600s default, then 30 min, then 90 min configured via `FOUNDATIONSCALE_COLLECTIVE_TIMEOUT_MINUTES` on `init_process_group`). The first py-spy dump of both ranks was misread as a wall-clock imbalance (one rank's Python frame parked in a hot `transformers` RMSNorm call, the SAME frame on repeated samples) because py-spy only samples Python frames and RMSNorm is the hottest call site in any forward, computing or blocked underneath. The NCCL watchdog's OWN flight-recorder dump at the actual timeout told the true story: one rank's innermost frame was FSDP2's `all_gather_single` inside per-layer `unshard`, with `last enqueued` far ahead of `last completed` (prefetched all-gathers piling up unanswered), while the OTHER rank had already left the forward pass entirely and moved on to the next collective. That is a genuine deadlock: `preference_trainer.py`'s `_one_step` sized its logprob micro-batch COUNT (and whether to micro-batch at all) from each rank's own `row_count` with no cross-rank agreement, so an uneven prompt-level shard could give one rank more (or zero) micro-batch forward() calls than its peer for the same step — each forward() re-fires FSDP2's per-layer all-gathers, so a rank short one call leaves its peer's matching all-gather with no partner, forever. `rl/trainer.py` already carries the fix for the identical GRPO-side bug (`agree_max` plus a shared zero-weight pad slice, `_padding_backwards`); `preference_trainer.py` now mirrors it: every rank agrees on the micro-batch slice COUNT (`agree_max`) and on WHETHER to slice at all (`agree_all`), pads up to the busier peer's count with a cheap 1-row dummy forward/backward whose gradient is exactly zero, and only then narrows to its own real rows before concatenating. Two CPU regression tests in `tests/rl/test_preference_trainer_cov.py` pin this: one proves the padded run's optimizer step is bit-for-bit identical to a padding-free control (the padding leaks no gradient), the other proves a rank whose OWN row count would take the single-shot path still slices (and pads) when a peer needs to.
+
+**The remaining limitation (confirmed, NOT a code bug): some rows cost Qwen3.6-27B far more than 90 minutes per forward pass on this host.** After Bug B's fix, `Qwen3.6-27B` DPO ran clean and fast at small scale (row (3) above: step-0 `ln 2`, 90.3 s/step, 74–81 GB/GPU) but a specific row deep in the 20-step mixed file still drove a single forward pass past a 90-minute collective timeout -- confirmed via sustained 100% CPU/GPU utilization and an advancing/varying py-spy stack the whole time (genuine computation, not a hang). The row was the dataset's single largest image (2844×2126, ~10x the area of any other image in the pool); removing it let the run progress further, but a DIFFERENT row (a video) then hit the identical wall. Reducing `--video-frames` 4→2 and capping `--video-max-side 448` changed nothing, ruling out a simple media-token-count cause. This is consistent with the `transformers`-logged warning on every run (`causal_conv1d_fn` falling back to its reference PyTorch implementation for this model's hybrid Mamba+attention layers) -- an intrinsic, per-row cost of this model's un-optimized fallback kernel on this host that the preference trainer's media-size knobs cannot buy down. `gemma-4-12B-it` (runs (1)/(2) above, same code path, same FSDP micro-batching machinery) never shows this: its 20-step mixed proof completed twice, clean, in under 6 minutes each time. Remedies are operational, not code changes: install the optimized `causal_conv1d`/`mamba-ssm` kernel for this model family on this host, or budget >2 hours of uncontended wall-clock for a from-scratch 20-step `Qwen3.6-27B` mixed run.
+
+**The control that proves pixels matter** (measured, `gemma-4-12B-it`, single GPU, LoRA r16, 2 DPO steps on the SAME 8 image pairs, same seed so LoRA's random init is identical): step-0 loss is `ln 2 = 0.693147...` in BOTH conditions (policy == reference by construction, independent of pixel content — expected, and itself a check that nothing else differs between the two runs). After one gradient step, real images give loss `0.3253`, solid-black images give loss `0.3145` — DIFFERENT. If they had matched, the vision tower's contribution would be zero and the run would be training on the prompt text alone under a multimodal label. Automated as `validation_campaigns/vlm_2xh200/test_preference_trainer_multimodal_dpo.py`.
+
+Flags added to `train_dpo.py` for this step: `--image-column`, `--video-column`, `--video-frames`, `--video-sampling`, `--video-max-side`.
 
 ---
 
@@ -165,8 +250,9 @@ Advice baked into the example command above: **set `max_new_tokens` to 400 or mo
 One field, one dataset format:
 
 ```python
-# offline preference training (PreferenceTrainer) — text-only rows
+# offline preference training (PreferenceTrainer) — text, image and/or video rows
 cfg = PreferenceTrainConfig(..., algorithm="ipo")  # dpo | ipo | kto | orpo | simpo | cpo
+# add image_column="image" / video_column="video" (+ video_frames) to train on declared media
 ```
 
 ```python
@@ -208,7 +294,7 @@ Every cell below is a measured run of the **20-step acceptance sweep**: 2× H200
 
 † GRPO with images on the Qwen models runs only **after** the three vision fixes (see Step 3): text-only class loaded by the RL trainer; prompt-length `mm_token_type_ids` forwarded with prompt+completion ids; Qwen's flattened patch tensor sliced by row in group expansion and micro-batching. Before the fixes the run failed; after them both run 10 steps with images without error.
 
-Not in this sweep: `kto`, `raft`, `best_of_n`, `online_dpo`, `iterative_dpo`, `ppo` (registered, but no measured numbers to report here). Modality rules do not change with the algorithm: preference rows stay text-only and `RLTrainer` still refuses video rows.
+Not in this sweep: `kto`, `raft`, `best_of_n`, `online_dpo`, `iterative_dpo`, `ppo` (registered, but no measured numbers to report here). Modality rules: preference rows take text, image and/or video (declare `image_column`/`video_column`, Step 2b); `RLTrainer` still refuses video rows (images only).
 
 ---
 
@@ -238,7 +324,7 @@ Start with a larger group and more prompts per step (the cheapest change), then 
 
 ## Troubleshooting
 
-**Exit code 96 on the preference trainer.** Your JSONL has a row with an image or a video; `PreferenceTrainer` is text only (`{"prompt","chosen","rejected"}`). Strip multimodal rows or use SFT (chapters 02–03).
+**Exit code 96 on the preference trainer.** Your JSONL has a row carrying an image or a video field that is NOT declared: pass `--image-column`/`--video-column` naming that field (Step 2b), or strip the field if the row really is text-only. The trainer never guesses a media column.
 
 **The RL trainer refuses my video rows.** Online RL supports images but not video. Use SFT for video.
 

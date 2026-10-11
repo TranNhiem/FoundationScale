@@ -28,7 +28,12 @@ from typing import Any
 import pytest
 from torch import nn
 
-from foundationscale.rl.distributed import _find_tower_modules, unshard_for_generation
+from foundationscale.rl.distributed import (
+    DistContext,
+    _find_tower_modules,
+    unshard_for_generation,
+    wrap_fsdp2,
+)
 
 
 class _VisionTower(nn.Module):
@@ -338,3 +343,114 @@ def test_unshard_for_generation_ignores_a_tower_not_actually_fsdp_wrapped(
     model = _Root()
     reshard = unshard_for_generation(model)  # must not raise
     reshard()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# wrap_fsdp2's shard_towers parameter
+# ---------------------------------------------------------------------------
+#
+# MEASURED DEADLOCK (Qwen3.6-27B, preference trainer, mixed image+video+text
+# DPO, 2026-10-10 -- see wrap_fsdp2's own docstring for the full account): a
+# separately-sharded tower's all-gather is its own collective, fired only
+# when that submodule's forward() runs. The online RL trainer's rollouts are
+# safe because every row carries the SAME declared modality; the preference
+# trainer's per-row heterogeneous batches are not -- at a given micro-batch
+# index, one rank's row can carry media while the peer's does not, so one
+# rank issues the tower's all-gather and the other never does. These tests
+# exercise the DECISION LOGIC -- which modules get their own fully_shard
+# unit -- against fakes for fully_shard/MixedPrecisionPolicy/
+# init_device_mesh (each of which needs a real CUDA process group to
+# construct for real), never touching a GPU.
+
+
+def _patch_fsdp2_primitives(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Patch wrap_fsdp2's three FSDP2 primitives with CPU-safe fakes.
+
+    Returns the list ``fully_shard`` was called on, in call order -- the
+    one piece of evidence that distinguishes "towers get their own unit"
+    from "towers fold into the root unit".
+    """
+    import torch.distributed.device_mesh as mesh_mod
+    import torch.distributed.fsdp as fsdp_mod
+
+    calls: list[Any] = []
+
+    def _fake_fully_shard(module: Any, **_kwargs: Any) -> Any:
+        calls.append(module)
+        return module
+
+    monkeypatch.setattr(fsdp_mod, "fully_shard", _fake_fully_shard, raising=False)
+    monkeypatch.setattr(
+        fsdp_mod, "MixedPrecisionPolicy", lambda **_kwargs: SimpleNamespace(), raising=False
+    )
+    monkeypatch.setattr(
+        mesh_mod, "init_device_mesh", lambda *_a, **_kw: SimpleNamespace(), raising=False
+    )
+    return calls
+
+
+_WRAP_CTX = DistContext(rank=0, world_size=2, local_rank=0, device="cpu", is_distributed=True)
+
+
+def test_wrap_fsdp2_shards_the_tower_in_its_own_unit_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _patch_fsdp2_primitives(monkeypatch)
+    model = _FakeVLM("gemma4_unified", alias="embed_vision")
+
+    wrap_fsdp2(model, _WRAP_CTX)
+
+    # One fully_shard call for the decoder-block ModuleList's own child, one
+    # for the tower, one for the root -- the tower gets its OWN unit.
+    assert model.model.embed_vision in calls
+    assert calls[-1] is model  # root is always wrapped last
+    assert calls.index(model.model.embed_vision) < calls.index(model)
+
+
+def test_wrap_fsdp2_shard_towers_false_folds_the_tower_into_the_root_unit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _patch_fsdp2_primitives(monkeypatch)
+    model = _FakeVLM("gemma4_unified", alias="embed_vision")
+
+    wrap_fsdp2(model, _WRAP_CTX, shard_towers=False)
+
+    # The tower is NEVER its own fully_shard unit -- only decoder blocks and
+    # the root are. Its parameters are therefore unsharded as a by-product
+    # of the root's own hook, which fires on every top-level forward
+    # regardless of that row's modality.
+    assert model.model.embed_vision not in calls
+    assert calls[-1] is model
+
+
+def test_wrap_fsdp2_shard_towers_false_still_shards_decoder_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # shard_towers must be scoped to TOWERS only -- decoder blocks (which
+    # every row's forward always touches, media or not, so their collective
+    # is never at risk of the mismatch) must still get their own units.
+    calls = _patch_fsdp2_primitives(monkeypatch)
+    model = _FakeVLM("gemma4_unified", alias="embed_vision")
+
+    wrap_fsdp2(model, _WRAP_CTX, shard_towers=False)
+
+    decoder_layers = list(model.model.language_model.layers)
+    assert decoder_layers, "fixture must declare at least one decoder layer"
+    for layer in decoder_layers:
+        assert layer in calls
+
+
+def test_wrap_fsdp2_shard_towers_false_is_a_noop_with_zero_declared_towers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A text-only checkpoint has nothing _find_tower_modules would have
+    # wrapped anyway -- shard_towers=False changes nothing observable.
+    calls_true = _patch_fsdp2_primitives(monkeypatch)
+    model_true = _FakeVLM("gemma4_unified", with_vision=False)
+    wrap_fsdp2(model_true, _WRAP_CTX, shard_towers=True)
+
+    calls_false = _patch_fsdp2_primitives(monkeypatch)
+    model_false = _FakeVLM("gemma4_unified", with_vision=False)
+    wrap_fsdp2(model_false, _WRAP_CTX, shard_towers=False)
+
+    assert len(calls_true) == len(calls_false)

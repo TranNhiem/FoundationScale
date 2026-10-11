@@ -9,12 +9,15 @@ may skip.
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 import torch
 from torch import nn
 
+from foundationscale.rl import distributed as dist_mod
 from foundationscale.rl.distributed import (
     DistContext,
     agree_all,
@@ -88,6 +91,67 @@ def test_init_distributed_none_refuses_under_torchrun(
 def test_init_distributed_unknown_sharding_refused() -> None:
     with pytest.raises(ValueError, match="bogus"):
         init_distributed("bogus")
+
+
+# ---------------------------------------------------------------------------
+# _collective_timeout / init_distributed's explicit NCCL timeout
+# ---------------------------------------------------------------------------
+#
+# MEASURED (Qwen3.6-27B, preference trainer mixed image+video+text DPO,
+# 2026-10-11): py-spy dumps of both ranks at a reported "collective timeout"
+# showed one rank still genuinely COMPUTING (a live transformers forward
+# frame, the SAME frame on two samples 90s apart) while its peer waited at
+# agree_all's all_reduce -- a per-rank wall-clock IMBALANCE (heavier media on
+# one rank's chunk, plus Qwen3.6's un-optimized causal_conv1d fallback on
+# this estate), not a deadlock. This estate's default NCCL timeout resolved
+# to 600s, too short to tolerate it. These tests pin the decision logic that
+# replaces it with an explicit, generous, overridable timeout.
+
+
+def test_collective_timeout_default_is_30_minutes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(dist_mod._COLLECTIVE_TIMEOUT_MINUTES_ENV, raising=False)
+    assert dist_mod._collective_timeout() == timedelta(minutes=30)
+
+
+def test_collective_timeout_honours_the_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(dist_mod._COLLECTIVE_TIMEOUT_MINUTES_ENV, "45")
+    assert dist_mod._collective_timeout() == timedelta(minutes=45)
+
+
+def test_collective_timeout_falls_back_to_default_on_a_non_integer_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(dist_mod._COLLECTIVE_TIMEOUT_MINUTES_ENV, "not-a-number")
+    assert dist_mod._collective_timeout() == timedelta(minutes=30)
+
+
+def test_init_distributed_nccl_path_passes_the_collective_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``init_distributed``'s real (world_size > 1, CUDA) branch must pass
+    ``timeout=_collective_timeout()`` to ``dist.init_process_group`` rather
+    than inheriting whatever ambient default this build/estate resolves to
+    -- the fix for the measured imbalance above. CUDA/NCCL are mocked;
+    ``torch.cuda.is_available``/``set_device`` and
+    ``dist.init_process_group`` itself are the only calls this function
+    makes on the branch under test."""
+    import torch.distributed as dist
+
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "set_device", lambda _device: None)
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        dist, "init_process_group", lambda backend, **kw: calls.append({"backend": backend, **kw})
+    )
+
+    ctx = init_distributed("fsdp")
+
+    assert ctx.is_distributed is True
+    assert len(calls) == 1
+    assert calls[0] == {"backend": "nccl", "timeout": dist_mod._collective_timeout()}
 
 
 def test_generate_kwargs_for() -> None:
