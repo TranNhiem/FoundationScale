@@ -107,3 +107,47 @@ def test_fp32_master_weights_are_compared_at_the_base_precision(tmp_path: Path) 
     # without the base precision nothing is narrowed: a dtype change, not a comparison
     plain = digests_from_safetensors_dir(tmp_path, ["t"])
     assert plain["t.still"].startswith("float32:")
+
+
+def test_sharded_dcp_save_is_read_under_its_container_prefix(tmp_path: Path) -> None:
+    import torch
+    import torch.distributed.checkpoint as dcp
+
+    from foundationscale.train.speech_adjudication import (
+        digests_from_dcp_dir,
+        digests_from_named_tensors,
+    )
+
+    still = torch.randn(4, 4).to(torch.bfloat16)
+    moved = torch.randn(4, 4).to(torch.bfloat16)
+    base = digests_from_named_tensors(
+        [("model.audio_tower.still", still), ("model.audio_tower.moved", moved)],
+        ["model.audio_tower"],
+    )
+    # accelerate's FSDP sharded save: {"model": state_dict}, fp32 master weights
+    state = {
+        "model": {
+            "model.audio_tower.still": still.float(),
+            "model.audio_tower.moved": moved.float() + 0.5,
+        }
+    }
+    dcp.save(state, checkpoint_id=str(tmp_path / "pytorch_model_fsdp_0"), no_dist=True)
+    narrowed: list[str] = []
+    saved = digests_from_dcp_dir(
+        tmp_path / "pytorch_model_fsdp_0",
+        ["model.audio_tower"],
+        expected=list(base),
+        narrow_to=dict.fromkeys(base, "bfloat16"),
+        narrowed=narrowed,
+    )
+    assert saved is not None and saved.keys() == base.keys()
+    assert saved["model.audio_tower.still"] == base["model.audio_tower.still"]
+    assert saved["model.audio_tower.moved"] != base["model.audio_tower.moved"]
+    assert len(narrowed) == 2
+    # a base name the save does not carry under any container: unread, not guessed
+    assert (
+        digests_from_dcp_dir(
+            tmp_path / "pytorch_model_fsdp_0", ["model.audio_tower"], expected=["absent.weight"]
+        )
+        is None
+    )

@@ -3573,7 +3573,9 @@ def _tied_aliases(model: Any, names: set[str]) -> set[str]:
     return candidates & names
 
 
-def _declare_checkpoint(model: Any) -> tuple[Any, dict[str, str]]:
+def _declare_checkpoint(
+    model: Any, *, save_pretrained_names: bool = True
+) -> tuple[Any, dict[str, str]]:
     """Build the gates' denominator from the model IN MEMORY, before any save.
 
     The checkpoint gates cannot say "64 tensors were declared and 61 arrived"
@@ -3738,7 +3740,8 @@ def _declare_checkpoint(model: Any) -> tuple[Any, dict[str, str]]:
         # every one of 876 declared tensors "missing" before this). Ask the saver.
         from foundationscale.train.saved_names import saved_name_map  # noqa: PLC0415
 
-        renamed = saved_name_map(model) or {}
+        # A sharded (DCP) save writes the in-memory state dict, not save_pretrained's names.
+        renamed = (saved_name_map(model) if save_pretrained_names else None) or {}
         declared = {renamed.get(n, n) for n in names - tied}
         source += f"; {len(renamed)} name(s) mapped to their on-disk spelling"
         adapter_scope = "full model (no peft wrapper detected on model.peft_config)"
@@ -5823,7 +5826,9 @@ def _train(cfg: TrainConfig) -> int:
     # #222's shape, caught here by the typechecker rather than by a wrong number
     # in a report.
     try:
-        declared_ckpt, decl_notes = _declare_checkpoint(model)
+        declared_ckpt, decl_notes = _declare_checkpoint(
+            model, save_pretrained_names=cfg.fsdp_state_dict != "sharded"
+        )
     except Exception as exc:  # noqa: BLE001 -- undeclarable is a STATE, not a crash
         declared_ckpt, decl_notes = None, {"declaration.error": repr(exc)}
         _mark(

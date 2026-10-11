@@ -109,4 +109,12 @@ Qwen2-Audio-7B full fine-tune, 10 steps:
 |---|---|---|
 | 1 GPU | (save_complete RED, by the same naming) | PASS: tower movement 466/487, 2/2 |
 | FSDP 2 GPUs, `--fsdp-state-dict full` | RED (save_complete, first_save) | PASS: 469/487, 2/2; 489 tensors narrowed |
-| FSDP 2 GPUs, `--fsdp-state-dict sharded` | tower movement UNMEASURED | unchanged: a DCP save is not read by the speech gates |
+| FSDP 2 GPUs, `--fsdp-state-dict sharded` | tower movement UNMEASURED | PASS: 471/487, 2/2; read from the DCP shards |
+
+Sharded saves keep the in-memory names (no `save_pretrained` renaming), so the declaration
+translates names only for `--fsdp-state-dict full`. The speech gates now read the DCP save through
+`checkpoint/dcp.py`, which does a verified full read per tensor. The container prefix is chosen by
+checking which one makes every base name present (accelerate writes `model.<name>`), never assumed.
+In a same-seed rerun, full and sharded agree exactly (471/487 moved each). A first version
+translated names for every full save, which turned the sharded save_complete RED on main 152f43c
+for one push; fixed in the next.

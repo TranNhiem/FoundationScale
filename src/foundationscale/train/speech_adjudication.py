@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -217,6 +217,63 @@ def digests_from_safetensors_dir(
 
 # Base precisions a saved fp32 master weight may be narrowed back to (see narrow_to above).
 _NARROWABLE = frozenset({"bfloat16", "float16"})
+
+# Container prefixes a sharded (DCP) save may wrap the model state in; accelerate's FSDP save
+# writes ``{"model": state_dict}``, so keys read ``model.<name>`` (measured, Qwen2-Audio 5.19).
+_DCP_CONTAINERS = ("", "model.")
+
+
+def digests_from_dcp_dir(
+    directory: Path,
+    prefixes: Sequence[str],
+    expected: Collection[str],
+    narrow_to: Mapping[str, str] | None = None,
+    narrowed: list[str] | None = None,
+) -> dict[str, str] | None:
+    """Tower digests from a sharded (DCP) save, keyed like the base; None if it cannot be paired.
+
+    The container prefix is not assumed: the one under which every ``expected`` base name is
+    present is used, and if none fits (or two do) the save is unread -- None -- which the
+    adjudication reports as UNMEASURED. Tensors are assembled with the verified full read of
+    :mod:`foundationscale.checkpoint.dcp`, and fp32 master weights narrow as in
+    :func:`digests_from_safetensors_dir`.
+    """
+    from foundationscale.checkpoint.dcp import open_weights  # noqa: PLC0415
+
+    source = open_weights(directory)
+    try:
+        keys = set(source.tensor_keys())
+        fits = [c for c in _DCP_CONTAINERS if all(f"{c}{name}" in keys for name in expected)]
+        if len(fits) != 1 or not expected:
+            return None
+        container = fits[0]
+        out: dict[str, str] = {}
+        for key in sorted(keys):
+            if not key.startswith(container):
+                continue
+            name = canonical_param_name(key[len(container) :])
+            if name is None or not _under_prefixes(name, prefixes):
+                continue
+            tensor = source.read_full(key).tensor
+            base_dtype = (narrow_to or {}).get(name)
+            if base_dtype in _NARROWABLE and _dtype_name(tensor) == "float32":
+                import torch  # noqa: PLC0415
+
+                tensor = tensor.to(getattr(torch, base_dtype))
+                if narrowed is not None:
+                    narrowed.append(name)
+            out[name] = tensor_digest(tensor)
+        return out
+    finally:
+        source.close()
+
+
+def _dcp_dir(final_dir: Path) -> Path | None:
+    """The DCP directory of a sharded final save (``pytorch_model_fsdp_0`` or the dir itself)."""
+    for candidate in (final_dir / "pytorch_model_fsdp_0", final_dir):
+        if (candidate / ".metadata").is_file():
+            return candidate
+    return None
 
 
 def dtype_mismatches(base: Mapping[str, str], saved: Mapping[str, str]) -> list[str]:
@@ -766,6 +823,15 @@ def run_final_speech_adjudication(
         if has_safetensors and towers
         else None
     )
+    dcp = None if has_safetensors or not towers or not base_digests else _dcp_dir(final_dir)
+    if dcp is not None:
+        saved = digests_from_dcp_dir(
+            dcp,
+            [prefix for prefix, _ in towers],
+            expected=list(base_digests or {}),
+            narrow_to={name: _digest_dtype(d) for name, d in (base_digests or {}).items()},
+            narrowed=narrowed,
+        )
     return adjudicate_speech(
         coverage_manifest=coverage_manifest,
         base_digests=base_digests,
