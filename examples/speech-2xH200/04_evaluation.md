@@ -4,9 +4,11 @@ Always compare the base model and the fine-tuned checkpoint **on the same held-o
 training loss, not on a handful of cherry-picked utterances, and not on two different eval sets — on the
 identical manifest, scored the same way, then compared utterance by utterance. Everything below was measured
 on a 2x H200 VM on 2026-10-10/11: two `eval_wer.py` calls per model (base and tuned) over the full 2,683-row
-dev-clean set, then one `paired_bootstrap.py` call per pair. The headline result of this chapter is
-unflattering and important: **one of the three models got measurably WORSE after fine-tuning**, and the
-paired bootstrap says so with high confidence.
+dev-clean set, then one `paired_bootstrap.py` call per pair. The headline result of this chapter: **all four
+models improved after fine-tuning**, each confirmed by the paired bootstrap with high confidence (every CI
+below excludes zero) — but getting there took two real debugging rounds (a Whisper target-text-format bug
+and a FoundationScale tower-resolution bug, both kept in the record in chapter 03, not hidden) plus an
+upstream `FamilySpec` fix before Qwen2-Audio could train at all.
 
 ## 1. Confirm your held-out split is clean
 
@@ -56,6 +58,25 @@ Note the `--processor` on the second call. A full-fine-tune `final/` checkpoint 
 original base model directory. Omitting it fails trying to load a processor from a directory that doesn't
 have one.
 
+**Run base and tuned in parallel, one per GPU.** `eval_wer.py` only ever uses `cuda:0` inside its own
+process — it has no multi-GPU awareness — so on a 2-GPU box the way to use both GPUs for one model's
+base-vs-tuned pair is to launch two separate processes, each pinned to a different physical GPU with
+`CUDA_VISIBLE_DEVICES`:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python validation_campaigns/speech_p4/eval_wer.py \
+    --model models/parakeet-ctc-1.1b --manifest data/librispeech/manifests/eval.jsonl \
+    --out eval_logs/parakeet_base.json &
+CUDA_VISIBLE_DEVICES=1 python validation_campaigns/speech_p4/eval_wer.py \
+    --model runs/parakeet-ctc-1.1b/final --processor models/parakeet-ctc-1.1b \
+    --manifest data/librispeech/manifests/eval.jsonl --out eval_logs/parakeet_tuned.json &
+wait
+```
+
+This is how every measured result in this tutorial was produced (roughly halves wall-clock time for a
+base/tuned pair). `--adapter`/`--processor` flags carry over unchanged per call; just vary
+`CUDA_VISIBLE_DEVICES` and the output path.
+
 For a LoRA run, point `--model` at the **original base model** and `--adapter` at the `final/` adapter
 directory instead:
 
@@ -63,6 +84,24 @@ directory instead:
 python validation_campaigns/speech_p4/eval_wer.py \
     --model models/gemma-4-E4B-it --adapter runs/gemma-4-E4B-it/final \
     --manifest data/librispeech/manifests/eval.jsonl --out eval_logs/gemma4_tuned.json
+```
+
+`qwen2-audio-7b-lora` (chapter 03 §5) evaluates the same way:
+
+```bash
+python validation_campaigns/speech_p4/eval_wer.py \
+    --model models/Qwen2-Audio-7B-Instruct --adapter runs/qwen2-audio-7b-lora/final \
+    --manifest data/librispeech/manifests/eval.jsonl --out eval_logs/qwen2audio_lora_tuned.json
+```
+
+`qwen2-audio-7b`'s full fine-tune (chapter 03 §5) saves a normal full-fine-tune checkpoint with its own
+`generation_config.json`, so it evaluates exactly like parakeet/whisper above — no `--adapter`, just
+`--processor` pointing at the original base model:
+
+```bash
+python validation_campaigns/speech_p4/eval_wer.py \
+    --model runs/qwen2-audio-7b/final --processor models/Qwen2-Audio-7B-Instruct \
+    --manifest data/librispeech/manifests/eval.jsonl --out eval_logs/qwen2audio_fullft_tuned.json
 ```
 
 For Whisper (seq2seq), `--language en` is required on **both** the base and the tuned eval call — same reason
@@ -90,6 +129,8 @@ jq '.all | length' eval_logs/parakeet_base.json
 | parakeet-ctc-1.1b | full FT | 1.87% | 1.77% | -0.09 | [-0.14, -0.05] | **significantly BETTER**; P(diff<0)=1.000 |
 | whisper-large-v3 | full FT, sentence-cased targets | 2.25% | **1.72%** | **-0.53** | [-0.65, -0.41] | **significantly BETTER**; P(diff<0)=1.000 |
 | gemma-4-E4B-it | LoRA r16/a32 + towers in full, sentence-cased targets | 4.04% | **2.99%** | **-1.05** | [-1.24, -0.85] | **significantly BETTER**; P(diff<0)=1.000 |
+| qwen2-audio-7b | LoRA r16/a32 + towers in full, automatic adapter scoping | 35.58% | **3.41%** | **-32.17** | [-33.03, -31.34] | **significantly BETTER**; P(diff<0)=1.000 |
+| qwen2-audio-7b | full FT, FSDP (`full` state dict) | 35.58% | **2.57%** | **-33.01** | [-33.85, -32.16] | **significantly BETTER**; P(diff<0)=1.000 |
 
 Read that table honestly. **parakeet-ctc-1.1b improves and essentially matches this repo's own longer-campaign
 ceiling** (`speech_p7`: 1.86% -> 1.80%). **whisper-large-v3 improves from 2.25% to 1.72%** — within 0.03
@@ -100,6 +141,18 @@ number (`speech_p7`: 4.07% -> 2.96% LoRA). This result needed a FoundationScale 
 `base_model`) instead of the unwrapped one, misfiring on this otherwise-working LoRA family; the fix
 resolves via `model.get_base_model()` — see chapter 03 for the full story. Speech gates confirmed PASS:
 `speech.audio_row_coverage` 8016/8016, `speech.tower_movement` 271/271 (220 moved) + 1/1 (1 moved).
+**qwen2-audio-7b improves from 35.58% to 3.41% (LoRA) and to 2.57% (full fine-tune)** — the largest deltas
+in this tutorial, and the base number (35.58%) independently matches the speech-plane owner's own quoted
+base (35.6%) in both recipes. LoRA needed the owner's `0fa19be` FamilySpec update first (automatic LoRA
+adapter-target scoping, 224 modules) — see chapter 03 §5. The owner's primary recipe for this model is the
+**full** fine-tune (reference, 1 GPU: 35.6% -> 1.79%); this tutorial's 2-GPU FSDP run lands at 2.57%, within
+0.8 points of that reference. The full-FT recipe hit its own separate bug in an earlier round
+(`checkpoint.save_complete` found 0/876 tensors — transformers reverts on-disk tensor names on save under
+`transformers>=5.18`, and the old save-completeness check compared against the wrong names), **fixed
+upstream** (`origin/main` `152f43c`) — see chapter 03 §5 for the full diagnostic trail. Speech gates
+confirmed PASS for both: LoRA `speech.audio_row_coverage` 8016/8016, `speech.tower_movement` 487/487 (473
+moved) + 2/2 (2 moved); full FT `speech.audio_row_coverage` 4008/4008, `speech.tower_movement` 487/487 (474
+moved) + 2/2 (2 moved).
 
 **The Whisper story, in full: this was never a software-stack bug.** Earlier rounds measured
 whisper-large-v3 REGRESSING (2.25% -> 3.32-3.58% depending on configuration) and ran diagnostics that ruled
@@ -117,10 +170,12 @@ target-case hypothesis, not a stack difference. **Never describe this as "a know
 always check the exact training-target TEXT FORMAT a reference recipe uses before assuming a stack or
 version difference when a fine-tune underperforms.
 
-> [!WARNING]
-> An earlier revision of this chapter listed a fourth model, qwen2-audio-7b. Those results are **RETRACTED**:
-> they were obtained by bypassing a gap that FoundationScale now formally refuses before training. See
-> chapter 03 §5. Do not quote them.
+> [!NOTE]
+> An earlier revision of this chapter listed qwen2-audio-7b as a clean REFUSE with no trained result, then
+> later as trainable by LoRA only (its full fine-tune hit a separate checkpoint-save bug). Both gaps are
+> fixed upstream now (`0fa19be` for the refusal, `152f43c` for the checkpoint save) and this chapter's table
+> above reports both of qwen2-audio-7b's measured recipes. Those refusal-era and gap-era non-numbers never
+> existed and are not relevant any more.
 
 **A 500-step run on 2 GPUs is still a short campaign (~0.14 epoch) — a plumbing check and a teaching tool,
 not a quality claim.**
@@ -150,8 +205,9 @@ comparing across different manifests or `--limit` values fails loudly rather tha
 
 > [!WARNING]
 > `P(diff<0)` is the fraction of bootstrap resamples where the tuned model wins. Read the CI first: if it
-> straddles 0 (as gemma-4-E4B-it's nearly does), a favourable `P(diff<0)` like 0.966 is a lean, **not** a win.
-> Do not report "fine-tuning improved WER" off a CI that includes zero.
+> straddles 0, a favourable `P(diff<0)` like 0.966 is a lean, **not** a win (none of this tutorial's four
+> models land there — all four CIs above exclude zero cleanly — but a short run or a small eval set
+> elsewhere easily could). Do not report "fine-tuning improved WER" off a CI that includes zero.
 
 ## 6. Model-card comparison (optional, not run in this tutorial)
 

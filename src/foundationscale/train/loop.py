@@ -3573,7 +3573,9 @@ def _tied_aliases(model: Any, names: set[str]) -> set[str]:
     return candidates & names
 
 
-def _declare_checkpoint(model: Any) -> tuple[Any, dict[str, str]]:
+def _declare_checkpoint(
+    model: Any, *, save_pretrained_names: bool = True
+) -> tuple[Any, dict[str, str]]:
     """Build the gates' denominator from the model IN MEMORY, before any save.
 
     The checkpoint gates cannot say "64 tensors were declared and 61 arrived"
@@ -3733,7 +3735,15 @@ def _declare_checkpoint(model: Any) -> tuple[Any, dict[str, str]]:
             "only; the saved artifact carries adapter weights, not base weights"
         )
     else:
-        declared = names - tied
+        # A full save writes transformers' ON-DISK names, which can differ from the
+        # in-memory ones (Qwen2-Audio under 5.19: model.audio_tower.* -> audio_tower.*,
+        # every one of 876 declared tensors "missing" before this). Ask the saver.
+        from foundationscale.train.saved_names import saved_name_map  # noqa: PLC0415
+
+        # A sharded (DCP) save writes the in-memory state dict, not save_pretrained's names.
+        renamed = (saved_name_map(model) if save_pretrained_names else None) or {}
+        declared = {renamed.get(n, n) for n in names - tied}
+        source += f"; {len(renamed)} name(s) mapped to their on-disk spelling"
         adapter_scope = "full model (no peft wrapper detected on model.peft_config)"
     notes = {
         "declaration.source": source,
@@ -5816,7 +5826,9 @@ def _train(cfg: TrainConfig) -> int:
     # #222's shape, caught here by the typechecker rather than by a wrong number
     # in a report.
     try:
-        declared_ckpt, decl_notes = _declare_checkpoint(model)
+        declared_ckpt, decl_notes = _declare_checkpoint(
+            model, save_pretrained_names=cfg.fsdp_state_dict != "sharded"
+        )
     except Exception as exc:  # noqa: BLE001 -- undeclarable is a STATE, not a crash
         declared_ckpt, decl_notes = None, {"declaration.error": repr(exc)}
         _mark(
@@ -5919,6 +5931,7 @@ def _train(cfg: TrainConfig) -> int:
     # save is compared against these after training (speech_adjudication).
     _speech_towers: list[tuple[str, bool]] = []
     _speech_base_digests: dict[str, str] | None = None
+    _speech_saved_to_memory: dict[str, str] | None = None
     if AUDIO_COLUMN is not None:
         # Before a step: freeze BatchNorm statistics, and digest the towers (or, under an
         # adapter, the declared full-train modules) for the post-save movement gate.
@@ -5930,6 +5943,13 @@ def _train(cfg: TrainConfig) -> int:
         )
         if _bn_line is not None:
             _mark(Step.VALIDATED, _bn_line)
+        if cfg.adapter is None:
+            # The final save is read under transformers' on-disk names; map them back.
+            from foundationscale.train.saved_names import saved_name_map  # noqa: PLC0415
+
+            _renamed = saved_name_map(model)
+            if _renamed:
+                _speech_saved_to_memory = {disk: mem for mem, disk in _renamed.items()}
     _dormant_towers = _dormant_modality_towers(
         model,
         family=_family,
@@ -7136,6 +7156,7 @@ def _train(cfg: TrainConfig) -> int:
             towers=_speech_towers,
             adapter=cfg.adapter,
             placeholder_applicable=_speech_kind == "audio_llm",
+            saved_to_memory=_speech_saved_to_memory,
         )
         for line in _speech_lines:
             _mark(Step.ADJUDICATE, line)

@@ -439,6 +439,10 @@ PENDING_ENROLMENT: dict[str, str] = {
         "dtype-tagged tensor digests, safetensors digest reading, and the fold of speech "
         "gate verdicts into the run exit code (RED outranks PASS, abstention moves PASS)"
     ),
+    "src/foundationscale/train/saved_names.py": (
+        "on-disk tensor names asked of transformers' revert_weight_conversion, which the save "
+        "completeness declaration and the speech tower digests both join on"
+    ),
     "src/foundationscale/train/speech_kinds.py": (
         "speech model-kind dispatch (audio_llm / seq2seq / ctc): the loader class per kind, "
         "per-kind processor refusals, Whisper prompt-prefix verification and CTC blank padding"
