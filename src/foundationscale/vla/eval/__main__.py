@@ -103,7 +103,9 @@ def main(argv: list[str] | None = None) -> int:
         plan = EpisodePlan(
             suite=args.suite,
             task_ids=tuple(range(SUITE_TASKS[args.suite])),
-            trials_per_task=args.trials_per_task or protocol.trials_per_task,
+            trials_per_task=(
+                protocol.trials_per_task if args.trials_per_task is None else args.trials_per_task
+            ),
             seed=protocol.seed if args.seed is None else args.seed,
             init=protocol.init,  # type: ignore[arg-type]
             num_steps_wait=protocol.num_steps_wait,
@@ -118,9 +120,19 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return EXIT_REFUSE
-    proc = None
+    command = None
     if args.serve_cmd:
-        command = args.serve_cmd.format(model=args.model, port=port)
+        try:
+            command = args.serve_cmd.format(model=args.model, port=port)
+        except (KeyError, IndexError, ValueError) as exc:
+            print(
+                f"REFUSAL (exit 96): --serve-cmd {args.serve_cmd!r} does not render with only "
+                f"{{model}} and {{port}}: {exc!r}",
+                file=sys.stderr,
+            )
+            return EXIT_REFUSE
+    proc = None
+    if command is not None:
         proc = subprocess.Popen(shlex.split(command), start_new_session=True)  # noqa: S603
     try:
         if not _wait_for_port(args.host, port, args.serve_timeout_s, proc):
@@ -136,7 +148,12 @@ def main(argv: list[str] | None = None) -> int:
             proc.terminate()
             proc.wait(timeout=60)
     low, high = report.wilson_ci()
+    # an episode that raised (a server that died, a chunk outside the adapter's contract) stays
+    # in the denominator as a failure, so its rate is a lower bound, not a measurement
+    errors = sum(1 for episode in report.episodes if episode.error is not None)
     payload = report.to_json() | {
+        "episode_errors": errors,
+        "measured": errors == 0,
         "backend": args.backend,
         "model": args.model,
         "protocol_source": protocol.source,
@@ -150,6 +167,14 @@ def main(argv: list[str] | None = None) -> int:
         f"{100.0 * report.rate():.2f}% (Wilson 95% {100.0 * low:.1f}-{100.0 * high:.1f}) "
         f"-> {args.out}"
     )
+    if errors:
+        first = next(e.error for e in report.episodes if e.error is not None)
+        print(
+            f"UNMEASURED (exit 95): {errors} of {report.trials()} episode(s) raised instead of "
+            f"reaching a verdict (first: {first}); the rate above is not a measurement",
+            file=sys.stderr,
+        )
+        return EXIT_UNMEASURED
     return EXIT_OK
 
 

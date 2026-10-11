@@ -216,3 +216,74 @@ def test_a_directory_out_is_refused_before_any_episode(
         ]
     )
     assert rc == cli.EXIT_REFUSE
+
+
+def _argv(tmp_path: Path, port: int, *extra: str) -> list[str]:
+    return [
+        "--backend",
+        "gr00t",
+        "--model",
+        "m",
+        "--suite",
+        "libero_spatial",
+        "--out",
+        str(tmp_path / "r.json"),
+        "--port",
+        str(port),
+        *extra,
+    ]
+
+
+def test_an_episode_that_raised_makes_the_run_unmeasured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def run(plan: Any, policy: Any) -> EvalReport:
+        episodes = tuple(
+            EpisodeRecord(
+                task_id=t,
+                trial=i,
+                success=t < 5,
+                steps=10,
+                inferences=2,
+                wall_s=0.1,
+                error=None if t < 5 else "ConnectionRefusedError: server gone",
+            )
+            for t, i in plan.episodes()
+        )
+        return EvalReport(plan=plan, policy=policy.name, episodes=episodes)
+
+    monkeypatch.setattr(cli, "run_libero", run)
+    server, port = _listening_port()
+    with server:
+        rc = cli.main(_argv(tmp_path, port))
+    report = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
+    assert rc == cli.EXIT_UNMEASURED
+    assert report["episode_errors"] == 100 and report["measured"] is False
+    assert report["trials"] == 200  # the denominator still holds every episode
+
+
+def test_a_clean_run_is_marked_measured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli, "run_libero", _fake_run({}))
+    server, port = _listening_port()
+    with server:
+        rc = cli.main(_argv(tmp_path, port))
+    report = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
+    assert rc == cli.EXIT_OK and report["episode_errors"] == 0 and report["measured"] is True
+
+
+def test_zero_trials_is_refused_not_replaced_by_the_protocol_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli, "run_libero", _fake_run({}))
+    assert cli.main(_argv(tmp_path, 1, "--trials-per-task", "0")) == cli.EXIT_REFUSE
+
+
+@pytest.mark.parametrize("serve", ["serve --ckpt {checkpoint}", "serve {0}", "serve {port"])
+def test_a_serve_cmd_that_does_not_render_is_refused_before_launch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, serve: str
+) -> None:
+    def no_launch(*_a: object, **_k: object) -> None:
+        raise AssertionError("a server was launched from an unrenderable --serve-cmd")
+
+    monkeypatch.setattr(cli.subprocess, "Popen", no_launch)
+    assert cli.main(_argv(tmp_path, 1, "--serve-cmd", serve)) == cli.EXIT_REFUSE
