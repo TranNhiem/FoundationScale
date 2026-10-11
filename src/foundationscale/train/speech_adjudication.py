@@ -146,8 +146,18 @@ def digests_from_named_tensors(
 def digests_from_safetensors_dir(
     directory: Path,
     prefixes: Sequence[str],
+    saved_to_memory: Mapping[str, str] | None = None,
+    narrow_to: Mapping[str, str] | None = None,
+    narrowed: list[str] | None = None,
 ) -> dict[str, str]:
     """Digest every matching tensor in a flat directory of ``*.safetensors`` shards.
+
+    ``narrow_to`` (name -> base dtype tag) lets a saved float32 tensor be digested at its
+    base's bfloat16/float16: FSDP mixed precision keeps and saves fp32 master weights of a
+    bf16 model, and an untouched bf16 weight survives the fp32 round trip exactly, so the
+    narrowed digest equals the base one iff the weight did not move by at least one step of
+    the base precision. Narrowing can only under-report movement, never invent it. Each name
+    narrowed is appended to ``narrowed`` so the verdict can say so.
 
     Only the shards sitting directly in ``directory`` are read (not recursive: a
     run's checkpoint is one flat layout, and descending into nested dirs would
@@ -179,7 +189,9 @@ def digests_from_safetensors_dir(
                 # Keyed on the CANONICAL name, so a full save and an adapter save
                 # both carrying one parameter (under two spellings) is caught as
                 # the ambiguity it is, not silently resolved by file order.
-                name = canonical_param_name(key)
+                # ``saved_to_memory`` undoes transformers' save-time renaming
+                # (saved_names.saved_name_map), so the saved side is keyed like the base.
+                name = canonical_param_name((saved_to_memory or {}).get(key, key))
                 if name is None:
                     continue
                 previous = first_seen.get(name)
@@ -191,8 +203,20 @@ def digests_from_safetensors_dir(
                     )
                 first_seen[name] = path.name
                 if _under_prefixes(name, prefixes):
-                    out[name] = tensor_digest(shard.get_tensor(key))
+                    tensor = shard.get_tensor(key)
+                    base_dtype = (narrow_to or {}).get(name)
+                    if base_dtype in _NARROWABLE and _dtype_name(tensor) == "float32":
+                        import torch  # noqa: PLC0415
+
+                        tensor = tensor.to(getattr(torch, base_dtype))
+                        if narrowed is not None:
+                            narrowed.append(name)
+                    out[name] = tensor_digest(tensor)
     return out
+
+
+# Base precisions a saved fp32 master weight may be narrowed back to (see narrow_to above).
+_NARROWABLE = frozenset({"bfloat16", "float16"})
 
 
 def dtype_mismatches(base: Mapping[str, str], saved: Mapping[str, str]) -> list[str]:
@@ -723,6 +747,8 @@ def run_final_speech_adjudication(
     towers: Sequence[tuple[str, bool]],
     adapter: str | None,
     placeholder_applicable: bool = True,
+    saved_to_memory: Mapping[str, str] | None = None,
+    narrowed: list[str] | None = None,
 ) -> SpeechAdjudication:
     """Read the final save's tower digests (safetensors layout only) and adjudicate.
 
@@ -730,7 +756,13 @@ def run_final_speech_adjudication(
     :func:`adjudicate_speech` reports as UNMEASURED rather than guessing.
     """
     saved = (
-        digests_from_safetensors_dir(final_dir, [prefix for prefix, _ in towers])
+        digests_from_safetensors_dir(
+            final_dir,
+            [prefix for prefix, _ in towers],
+            saved_to_memory,
+            narrow_to={name: _digest_dtype(d) for name, d in (base_digests or {}).items()},
+            narrowed=narrowed,
+        )
         if has_safetensors and towers
         else None
     )
@@ -808,6 +840,7 @@ def finish_speech_run(
     towers: Sequence[tuple[str, bool]],
     adapter: str | None,
     placeholder_applicable: bool,
+    saved_to_memory: Mapping[str, str] | None = None,
 ) -> tuple[int, str, list[str], str]:
     """After the final save: adjudicate, fold into the run verdict, and render.
 
@@ -826,6 +859,7 @@ def finish_speech_run(
     # measured on GB200, rank 0 spinning at 100% while rank 1 had exited. The census
     # arrives already summed by coverage_after_train, which train() calls right after
     # Trainer.train() returns, while every rank is still present.
+    narrowed: list[str] = []
     if coverage_manifest is None:
         raise ValueError(
             "no run-wide audio coverage census: train() must sum it over the ranks "
@@ -839,7 +873,15 @@ def finish_speech_run(
         towers=towers,
         adapter=adapter,
         placeholder_applicable=placeholder_applicable,
+        saved_to_memory=saved_to_memory,
+        narrowed=narrowed,
     )
     rc, done = fold_speech_verdict(rc, done, speech.exit_code)
     lines = [SUPERSEDE_NOTE, *speech.render_lines()]
+    if narrowed:
+        lines.append(
+            f"[   ok] speech: {len(narrowed)} saved float32 tower tensor(s) compared at their "
+            "base precision (fp32 master weights, e.g. FSDP mixed precision); narrowing can "
+            "only under-report movement"
+        )
     return rc, done, lines, json.dumps(speech.as_manifest(), sort_keys=True)

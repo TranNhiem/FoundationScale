@@ -86,3 +86,27 @@ runner exit 0; HF steps in hf-26.10, NeMo steps in nemo-26.08):
 | Canary-1B-flash | 2.874 | 2.87 | +0.004 |
 | Canary-Qwen-2.5B | 1.624 | 1.61 | +0.014 |
 | Qwen3-ASR-1.7B | 1.643 | 1.63 | +0.013 |
+
+## Follow-up: full saves under transformers 5.19 (2026-10-11)
+
+Found from a 2x H200 report and reproduced on GB200 (`artifacts/speech/q2_fsdp`). transformers 5.19
+reverts its load-time layout conversion on save, so a full Qwen2-Audio checkpoint carries
+`audio_tower.*` while the model in memory holds `model.audio_tower.*`. FS declared the in-memory
+names, so `checkpoint.save_complete` found 0 of 876 and went RED; this hit every full fine-tune of
+Qwen2-Audio on 5.19, on any GPU count. `train/saved_names.py` now asks transformers'
+`revert_weight_conversion` (the function `save_pretrained` calls) for the on-disk names. The
+declaration and the speech tower digests use them; FS copies no mapping table (ledger
+`hf-revert-weight-conversion`).
+
+FSDP mixed precision then saves fp32 master weights of the bf16 model, and the dtype-qualified
+digests refused the cross-dtype pairs (UNMEASURED). Saved fp32 tower tensors are now narrowed to
+their base precision before hashing, and the log line says so. An untouched weight round-trips
+exactly, so narrowing can only under-report movement.
+
+Qwen2-Audio-7B full fine-tune, 10 steps:
+
+| run | before | after |
+|---|---|---|
+| 1 GPU | (save_complete RED, by the same naming) | PASS: tower movement 466/487, 2/2 |
+| FSDP 2 GPUs, `--fsdp-state-dict full` | RED (save_complete, first_save) | PASS: 469/487, 2/2; 489 tensors narrowed |
+| FSDP 2 GPUs, `--fsdp-state-dict sharded` | tower movement UNMEASURED | unchanged: a DCP save is not read by the speech gates |

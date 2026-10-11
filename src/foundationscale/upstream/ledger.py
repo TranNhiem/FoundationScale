@@ -164,6 +164,20 @@ LEDGER: tuple[LedgerEntry, ...] = (
         expiry_check="Qwen3ASRProcessor exposes a public per-row audio token count",
     ),
     LedgerEntry(
+        id="hf-revert-weight-conversion",
+        kind=LedgerKind.PRIVATE_API,
+        framework="transformers",
+        path="src/foundationscale/train/saved_names.py",
+        anchor="from transformers.core_model_loading import (",
+        why=(
+            "A full save writes transformers' on-disk tensor names (reverted from the in-memory "
+            "layout, e.g. Qwen2-Audio's model.audio_tower.* -> audio_tower.* in 5.19); the save "
+            "gates ask the function save_pretrained itself calls rather than copying its tables."
+        ),
+        upstream_version="transformers 5.19.0",
+        expiry_check="transformers exports a public API for a model's save-time tensor names",
+    ),
+    LedgerEntry(
         id="hf-gemma-private-audio-token-count",
         kind=LedgerKind.PRIVATE_API,
         framework="transformers",
