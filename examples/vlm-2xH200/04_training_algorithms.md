@@ -322,6 +322,38 @@ Start with a larger group and more prompts per step (the cheapest change), then 
 
 ---
 
+## Difficulty filtering for GRPO, and what it did (measured)
+
+GRPO learns only from groups whose rewards differ. Before training, measure each question's
+pass rate with the base model and keep the ones it gets right *sometimes*:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_USE_DEEP_GEMM=0 \
+  vllm-env/bin/python examples/vlm-2xH200/scripts/filter_by_pass_rate.py \
+  --model models/gemma-4-12B-it --data data/rl_scienceqa/scienceqa_train.jsonl \
+  --out-keep data/rl_scienceqa/keep.jsonl --out-stats data/rl_scienceqa/filter_stats.json \
+  --samples 8 --temperature 1.0 --max-tokens 400 --min-rate 0.125 --max-rate 0.875 --tp 1
+```
+
+Then split `keep.jsonl` into train and held-out files with `prepare_data.py split`, and train GRPO
+on the train part only.
+
+Measured on gemma-4-12B-it with 3,000 ScienceQA train questions: 72.8% were answered correctly
+in all 8 samples, 4.4% never, so 686 were kept (480 train / 206 held out). With the filtered set,
+every GRPO step produced an update (50 of 50, versus 12 of 30 unfiltered). But neither recipe
+improved held-out accuracy:
+
+| GRPO recipe (group 8, 8 prompts/step, LoRA r16) | KL at end | held-out greedy accuracy | unparsable |
+|---|---|---|---|
+| base model | - | 119 / 206 (57.8%) | 9.7% |
+| lr 1e-4, 50 steps | ~0.0003 | 117 / 206 (56.8%) | 17.0% |
+| lr 5e-4, 150 steps | ~0.02 | 44 / 206 (21.4%) | 41.7% |
+
+At 1e-4 the policy barely moved. At 5e-4 it drifted away from ending with "Answer: X" inside the
+token budget (format collapse), while the training reward stayed flat and looked fine. Lessons:
+filter for difficulty first; always track held-out accuracy, the unparsable rate and KL, never
+the training reward alone; and sweep the learning rate between these two points before a long run.
+
 ## Troubleshooting
 
 **Exit code 96 on the preference trainer.** Your JSONL has a row carrying an image or a video field that is NOT declared: pass `--image-column`/`--video-column` naming that field (Step 2b), or strip the field if the row really is text-only. The trainer never guesses a media column.
