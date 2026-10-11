@@ -37,6 +37,12 @@ from foundationscale.agentic_rl.harness.base import (
     to_trajectory,
 )
 from foundationscale.agentic_rl.rewards.base import RewardFn
+from foundationscale.agentic_rl.stability import (
+    CollapseDetected,
+    StabilityGuard,
+    rollout_stats,
+    verdict_line,
+)
 from foundationscale.agentic_rl.tasks import TaskSource
 from foundationscale.agentic_rl.weight_sync import DiskWeightSync
 from foundationscale.gates.agentic_gates import RolloutGateContext, WeightSyncGateContext
@@ -151,6 +157,10 @@ class RolloutHost:
     # `servable.complete_for_serving` on rank 0 between the collective save
     # and the push -- see `publish`'s own docstring.
     servable_base_model_dir: str | None = None
+    # Optional collapse guard (foundationscale.agentic_rl.stability). Fed once per rollout
+    # step; after each publish it protects the checkpoint that produced a best-k reward and
+    # can stop the run on a collapse.
+    guard: StabilityGuard | None = None
 
     def __post_init__(self) -> None:
         where = "RolloutHost"
@@ -315,6 +325,9 @@ class RolloutHost:
         trajectories = await asyncio.gather(*episodes)
         batch = flatten(trajectories, group_by_harness=self.group_by_harness)
         print(rollout_summary(step, trajectories), file=sys.stderr, flush=True)
+        if self.guard is not None:
+            verdict = self.guard.update(rollout_stats(step, trajectories))
+            print(verdict_line(verdict), file=sys.stderr, flush=True)
         if self.gates:
             gate_ctx = RolloutGateContext(
                 batch_columns=batch.columns,
@@ -438,6 +451,34 @@ class RolloutHost:
                         f"RolloutHost.publish: step {step}: WEIGHT_SYNC gates blocked:\n"
                         f"{gate_report.render()}"
                     )
+            if self.guard is not None:
+                self._apply_guard(step)
+
+    def _apply_guard(self, step: int) -> None:
+        """Retention and stop decisions for the checkpoint just published at ``step``.
+
+        The rollout of step r is sampled with the weights published at step r - 1 (the
+        trainer calls ``rollout(r)``, trains, then ``publish(r)``). So a best-k reward at
+        rollout r is the work of checkpoint r - 1, and that is the one protected.
+        """
+        guard = self.guard
+        assert guard is not None
+        verdict = guard.last_verdict
+        if verdict is None or self.weight_sync is None:
+            return
+        for rollout_step in verdict.best_steps:
+            if 1 <= rollout_step <= step + 1:
+                self.weight_sync.protect(rollout_step - 1)
+        for rollout_step in verdict.evicted:
+            if rollout_step >= 1:
+                self.weight_sync.unprotect(rollout_step - 1)
+        if verdict.alarm and guard.config.action == "stop":
+            raise CollapseDetected(
+                f"RolloutHost.publish: step {step}: rollout reward EMA {verdict.ema} fell to "
+                f"<= {1 - guard.config.drop_from_peak:.2f} of its peak {verdict.peak} "
+                f"(rollout step {verdict.peak_step}); the run stops here with checkpoint "
+                f"{step} published and the best-k checkpoints kept"
+            )
 
 
 def rollout_summary(step: int, trajectories: tuple[Trajectory, ...] | list[Trajectory]) -> str:

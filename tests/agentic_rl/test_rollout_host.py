@@ -996,3 +996,70 @@ def test_rollout_summary_counts_abstentions_and_never_averages_none() -> None:
     assert payload["trajectories"] == 0
     assert payload["reward_mean"] is None
     assert payload["abstained"] == 0
+
+
+def test_rollout_feeds_the_stability_guard_once_per_step(tmp_path: Path) -> None:
+    """With a guard configured, each rollout updates it and leaves a verdict for publish."""
+    from foundationscale.agentic_rl.stability import GuardConfig, StabilityGuard
+
+    guard = StabilityGuard(GuardConfig())
+    host = _host(
+        tmp_path,
+        uids=["taskA"],
+        group_size=2,
+        client_factory=lambda index: SubmitClient("hello world"),
+        guard=guard,
+    )
+    host.rollout(0)
+    assert guard.last_verdict is not None
+    assert guard.last_verdict.step == 0
+
+
+def test_publish_applies_the_stability_guard_after_a_complete_push(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a complete push, a stop-action alarm raises with the checkpoint published."""
+    from foundationscale.agentic_rl.stability import (
+        CollapseDetected,
+        GuardConfig,
+        RolloutStats,
+        StabilityGuard,
+    )
+    from foundationscale.rl.weightsync import SyncReport
+
+    monkeypatch.setattr(
+        "foundationscale.rl.distributed.save_checkpoint",
+        lambda *a, **k: Path(a[2]).mkdir(parents=True, exist_ok=True) or True,
+    )
+
+    def fake_push(self: DiskWeightSync, path: str) -> SyncReport:
+        return SyncReport(
+            transport="disk",
+            offered=("server_0",),
+            transferred=("server_0",),
+            skipped=(),
+            failed_ranks=(),
+            bytes_moved=None,
+            seconds=0.01,
+            is_stale=False,
+        )
+
+    monkeypatch.setattr(DiskWeightSync, "push", fake_push)
+    fake_module = write_fake_server(tmp_path)
+    spec = make_server_spec(tmp_path, fake_module, port=free_port())
+    fleet = EngineFleet(servers=(SGLangServer(spec),))
+    publish_root = tmp_path / "publish"
+    publish_root.mkdir()
+    guard = StabilityGuard(GuardConfig(ema_alpha=1.0, min_steps=2, action="stop"))
+    for step, mean in ((0, 0.6), (1, 0.6), (2, 0.05)):
+        guard.update(RolloutStats(step, 4, 0, mean, 0.0))
+    host = _host(
+        tmp_path,
+        uids=["taskA"],
+        client_factory=lambda index: SubmitClient(),
+        weight_sync=DiskWeightSync(publish_root=str(publish_root), fleet=fleet),
+        servable_base_model_dir=None,
+        guard=guard,
+    )
+    with pytest.raises(CollapseDetected):
+        host.publish(object(), object(), SimpleNamespace(rank=0), step=2)
