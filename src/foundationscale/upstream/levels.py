@@ -28,6 +28,9 @@ _TASK_MANIFESTS = {
     "librispeech_test_other": "librispeech_test_other.jsonl",
     # VLA: the "manifest" is the LIBERO suite the FS harness (foundationscale.vla.eval) rolls out.
     "libero_spatial": "libero_spatial",
+    "libero_object": "libero_object",
+    "libero_goal": "libero_goal",
+    "libero_10": "libero_10",
 }
 
 

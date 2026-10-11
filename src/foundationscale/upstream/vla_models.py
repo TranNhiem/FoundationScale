@@ -87,4 +87,151 @@ VLA_MODELS: tuple[ModelEntry, ...] = (
         ),
         status=SupportStatus.SUPPORTED,
     ),
+    ModelEntry(
+        id="gr00t-n1.7-libero-goal",
+        backend=Backend.GR00T,
+        upstream_ref="nvidia/GR00T-N1.7-LIBERO",
+        kind=ModelKind.VLA,
+        license_weights="nvidia-open-model-license",
+        attribution="NVIDIA Isaac GR00T N1.7 (libero_goal subfolder); backbone "
+        "nvidia/Cosmos-Reason2-2B (gated)",
+        requires=(("torch", "==2.9.0"), ("transformers", "==4.57.3")),
+        reference=ReferenceResult(
+            task="libero_goal",
+            metric="success_rate_pct",
+            # Isaac-GR00T examples/LIBERO/README.md: 195/200 (README label 97.5%);
+            # the counts are what is transcribed.
+            upstream_value=97.5,
+            source="Isaac-GR00T examples/LIBERO/README.md (goal 195/200)",
+            # binomial_tolerance(0.975, 200, 200) = 3.06 -> 3.1
+            tolerance=3.1,
+            measured=97.5,
+            measured_note="195/200 on GB200 aarch64 through the FS harness "
+            "(python -m foundationscale.vla.eval --backend gr00t: seeded resets, 720 env steps), "
+            "0 episode errors, 2026-10-12",
+        ),
+        status=SupportStatus.SUPPORTED,
+        notes="flash-attn has no aarch64 build: use_flash_attention=False (SDPA) is the only "
+        "runtime change",
+    ),
+    ModelEntry(
+        id="gr00t-n1.7-libero-object",
+        backend=Backend.GR00T,
+        upstream_ref="nvidia/GR00T-N1.7-LIBERO",
+        kind=ModelKind.VLA,
+        license_weights="nvidia-open-model-license",
+        attribution="NVIDIA Isaac GR00T N1.7 (libero_object subfolder); backbone "
+        "nvidia/Cosmos-Reason2-2B (gated)",
+        requires=(("torch", "==2.9.0"), ("transformers", "==4.57.3")),
+        reference=ReferenceResult(
+            task="libero_object",
+            metric="success_rate_pct",
+            # Isaac-GR00T examples/LIBERO/README.md: 197/200 (README label 98.45%);
+            # the counts are what is transcribed.
+            upstream_value=98.5,
+            source="Isaac-GR00T examples/LIBERO/README.md (object 197/200)",
+            # binomial_tolerance(0.985, 200, 200) = 2.38 -> 2.4
+            tolerance=2.4,
+            measured=99.5,
+            measured_note="199/200 on GB200 aarch64 through the FS harness "
+            "(python -m foundationscale.vla.eval --backend gr00t: seeded resets, 720 env steps), "
+            "0 episode errors, 2026-10-12",
+        ),
+        status=SupportStatus.SUPPORTED,
+        notes="flash-attn has no aarch64 build: use_flash_attention=False (SDPA) is the only "
+        "runtime change",
+    ),
+    ModelEntry(
+        id="gr00t-n1.7-libero-10",
+        backend=Backend.GR00T,
+        upstream_ref="nvidia/GR00T-N1.7-LIBERO",
+        kind=ModelKind.VLA,
+        license_weights="nvidia-open-model-license",
+        attribution="NVIDIA Isaac GR00T N1.7 (libero_10 subfolder); backbone "
+        "nvidia/Cosmos-Reason2-2B (gated)",
+        requires=(("torch", "==2.9.0"), ("transformers", "==4.57.3")),
+        reference=ReferenceResult(
+            task="libero_10",
+            metric="success_rate_pct",
+            # Isaac-GR00T examples/LIBERO/README.md: 189/200 (README label 94.35%);
+            # the counts are what is transcribed.
+            upstream_value=94.5,
+            source="Isaac-GR00T examples/LIBERO/README.md (10 189/200)",
+            # binomial_tolerance(0.945, 200, 200) = 4.47 -> 4.5
+            tolerance=4.5,
+            measured=90.5,
+            measured_note="181/200 on GB200 aarch64 through the FS harness "
+            "(python -m foundationscale.vla.eval --backend gr00t: seeded resets, 720 env steps), "
+            "0 episode errors, 2026-10-12",
+        ),
+        status=SupportStatus.SUPPORTED,
+        notes="flash-attn has no aarch64 build: use_flash_attention=False (SDPA) is the only "
+        "runtime change",
+    ),
+    ModelEntry(
+        id="openpi-pi05-libero-goal",
+        backend=Backend.OPENPI,
+        upstream_ref="gs://openpi-assets/checkpoints/pi05_libero",
+        kind=ModelKind.VLA,
+        license_weights="gemma",
+        attribution="Physical Intelligence openpi pi0.5 (PaliGemma-derived; Gemma terms)",
+        requires=(("jax", "==0.5.3"), ("transformers", "==4.53.2")),
+        reference=ReferenceResult(
+            task="libero_goal",
+            metric="success_rate_pct",
+            upstream_value=98.0,
+            source="openpi examples/libero/README.md (pi0.5 @ 30k, 50 trials x 10 tasks)",
+            # binomial_tolerance(0.98, 500, 500) = 1.74 -> 1.8
+            tolerance=1.8,
+            measured=97.2,
+            measured_note="486/500 on GB200 aarch64 through the FS harness "
+            "(python -m foundationscale.vla.eval --backend openpi: suite init states, seed 7), "
+            "0 episode errors, 2026-10-12",
+        ),
+        status=SupportStatus.SUPPORTED,
+    ),
+    ModelEntry(
+        id="openpi-pi05-libero-object",
+        backend=Backend.OPENPI,
+        upstream_ref="gs://openpi-assets/checkpoints/pi05_libero",
+        kind=ModelKind.VLA,
+        license_weights="gemma",
+        attribution="Physical Intelligence openpi pi0.5 (PaliGemma-derived; Gemma terms)",
+        requires=(("jax", "==0.5.3"), ("transformers", "==4.53.2")),
+        reference=ReferenceResult(
+            task="libero_object",
+            metric="success_rate_pct",
+            upstream_value=98.2,
+            source="openpi examples/libero/README.md (pi0.5 @ 30k, 50 trials x 10 tasks)",
+            # binomial_tolerance(0.982, 500, 500) = 1.65 -> 1.7
+            tolerance=1.7,
+            measured=99.2,
+            measured_note="496/500 on GB200 aarch64 through the FS harness "
+            "(python -m foundationscale.vla.eval --backend openpi: suite init states, seed 7), "
+            "0 episode errors, 2026-10-12",
+        ),
+        status=SupportStatus.SUPPORTED,
+    ),
+    ModelEntry(
+        id="openpi-pi05-libero-10",
+        backend=Backend.OPENPI,
+        upstream_ref="gs://openpi-assets/checkpoints/pi05_libero",
+        kind=ModelKind.VLA,
+        license_weights="gemma",
+        attribution="Physical Intelligence openpi pi0.5 (PaliGemma-derived; Gemma terms)",
+        requires=(("jax", "==0.5.3"), ("transformers", "==4.53.2")),
+        reference=ReferenceResult(
+            task="libero_10",
+            metric="success_rate_pct",
+            upstream_value=92.4,
+            source="openpi examples/libero/README.md (pi0.5 @ 30k, 50 trials x 10 tasks)",
+            # binomial_tolerance(0.924, 500, 500) = 3.28 -> 3.3
+            tolerance=3.3,
+            measured=92.4,
+            measured_note="462/500 on GB200 aarch64 through the FS harness "
+            "(python -m foundationscale.vla.eval --backend openpi: suite init states, seed 7), "
+            "0 episode errors, 2026-10-12",
+        ),
+        status=SupportStatus.SUPPORTED,
+    ),
 )

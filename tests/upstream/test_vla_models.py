@@ -30,7 +30,16 @@ def test_vla_entries_are_kept_out_of_the_speech_table() -> None:
 
 @pytest.mark.parametrize(
     ("model_id", "n_published", "n_measured"),
-    [("gr00t-n1.7-libero-spatial", 200, 606), ("openpi-pi05-libero", 500, 500)],
+    [
+        ("gr00t-n1.7-libero-spatial", 200, 606),
+        ("gr00t-n1.7-libero-goal", 200, 200),
+        ("gr00t-n1.7-libero-object", 200, 200),
+        ("gr00t-n1.7-libero-10", 200, 200),
+        ("openpi-pi05-libero", 500, 500),
+        ("openpi-pi05-libero-goal", 500, 500),
+        ("openpi-pi05-libero-object", 500, 500),
+        ("openpi-pi05-libero-10", 500, 500),
+    ],
 )
 def test_tolerance_comes_from_the_published_rate_and_trial_counts(
     model_id: str, n_published: int, n_measured: int
@@ -59,7 +68,8 @@ def test_level3_plan_schedules_each_vla_model_through_the_fs_harness() -> None:
     assert [s.model_id for s in steps] == [e.id for e in VLA_MODELS]
     for step in steps:
         assert step.entry_point == "foundationscale.vla.eval"
-        assert step.manifest == "libero_spatial"
+        entry = next(e for e in VLA_MODELS if e.id == step.model_id)
+        assert entry.reference is not None and step.manifest == entry.reference.task
         assert step.args[:2] == ("--backend", step.backend)
         assert {"{model}", "{manifest}", "{out}"} <= set(step.args)
         # each VLA step runs in its own backend's recorded environment (rule 3)
@@ -88,3 +98,10 @@ def test_a_vla_entry_without_a_reproduction_cannot_claim_support() -> None:
 def test_binomial_tolerance_refuses_degenerate_inputs(rate: float, n1: int, n2: int) -> None:
     with pytest.raises(ValueError):
         binomial_tolerance(rate, n1, n2)
+
+
+def test_every_libero_suite_is_registered_for_both_backends() -> None:
+    suites = {"libero_spatial", "libero_object", "libero_goal", "libero_10"}
+    for backend in (Backend.GR00T, Backend.OPENPI):
+        entries = [e for e in VLA_MODELS if e.backend is backend]
+        assert {e.reference.task for e in entries if e.reference} == suites, backend

@@ -11,6 +11,12 @@ number under a tolerance fixed before the run, from the published rate and the t
 |---|---|---|---|---|---|
 | GR00T N1.7 `libero_spatial` (`nvidia/GR00T-N1.7-LIBERO`) | 195/200 = 97.5% (Isaac-GR00T `examples/LIBERO/README.md`; the README labels it "97.65%", which is 97.5%) | 588/606 = 97.0% (95% CI ~95.7–98.4); passes 192/201, 198/202, 198/203 | 200 / 606 | 2.5 pt = `binomial_tolerance(0.975, 200, 606)` | REPRODUCED within tolerance — published rate inside our CI; the first pass's 2.1-point gap was sampling noise |
 | openpi pi0.5 `pi05_libero` @30k | 494/500 = 98.8% (`examples/libero/README.md`) | 492/500 = 98.4% (per task 100/98/100/98/98/92/100/100/100/98) | 500 / 500 | 1.4 pt = `binomial_tolerance(0.988, 500, 500)` | REPRODUCED within tolerance (seed 7, 50 trials × 10 tasks) |
+| GR00T N1.7 `libero_goal` | 195/200 = 97.5% | 195/200 = 97.5% (FS harness) | 200 / 200 | 3.1 pt | REPRODUCED within tolerance |
+| GR00T N1.7 `libero_object` | 197/200 = 98.5% (README "98.45%") | 199/200 = 99.5% (FS harness) | 200 / 200 | 2.4 pt | REPRODUCED within tolerance |
+| GR00T N1.7 `libero_10` | 189/200 = 94.5% (README "94.35%") | 181/200 = 90.5% (FS harness) | 200 / 200 | 4.5 pt | REPRODUCED within tolerance (gap 4.0 pt; closest to its margin) |
+| openpi pi0.5 `libero_object` | 98.2% | 496/500 = 99.2% (FS harness) | 500 / 500 | 1.7 pt | REPRODUCED within tolerance |
+| openpi pi0.5 `libero_goal` | 98.0% | 486/500 = 97.2% (FS harness) | 500 / 500 | 1.8 pt | REPRODUCED within tolerance |
+| openpi pi0.5 `libero_10` | 92.4% | 462/500 = 92.4% (FS harness) | 500 / 500 | 3.3 pt | REPRODUCED (exact) |
 | verl-vla FPO on pi0.5, `libero_spatial` task 2 (from SFT step-100) | 29/50 = 58% at start → ~98% by update 25 | endpoint 47/50 = 94% (Wilson 83.8–97.9); val trace 0.70, 0.70, 0.90, 0.92, 0.94, 0.94 at updates 0…25 | 50 / 50 | two-sample binomial margin 5.5 pt at n=50 vs 50 | within tolerance on ONE SEED — gap 4 pt ≤ 5.5 pt (margin computed with the same rule after the run; no registry row yet); start 70 vs 58 is n=50 noise (±13 pt) |
 
 Tolerance rule (binding): `foundationscale.upstream.vla_models.binomial_tolerance(rate, n_published, n_measured)` = `1.96 * sqrt(p(1-p)/n_pub + p(1-p)/n_meas)` percentage points, fixed from the published rate and both denominators — never from our measured gap. A row passes when the measured rate sits inside that margin of the published rate. This is the registry's two-sample rule; the harness's earlier one-sample `within_published` check disagreed with it on the GR00T row and was replaced.
@@ -78,6 +84,9 @@ Published evaluation protocol rows (what a Level 3 rerun rolls out exactly):
 |---|---|---|---|---|---|
 | openpi | suite init states | 10 | 5 | 50 | 7 |
 | gr00t | seeded reset | 0 | 8 | 20 | 0 |
+
+Step budget per episode: openpi caps each suite at its longest demo plus margin (220 / 280 / 300 / 520 for
+spatial / object / goal / 10); GR00T runs `--max-episode-steps 720` env steps on every suite.
 
 Rung (b) through the FS harness — the policy server is the upstream's own; `--serve-cmd` is a
 deployment-specific command line with `{model}` and `{port}` placeholders and is kept out of the repo
