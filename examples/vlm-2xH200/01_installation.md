@@ -5,9 +5,9 @@ In this chapter you'll clone the repo, pick **one** environment (conda, uv/venv,
 
 **Time needed:** **~7 min** for the environment + install (MEASURED on a fresh account: Miniforge 15 s, `conda env create` 3.3 min, `pip install -e` 1 min, `flash-linear-attention` 1.5 min). On top of that, the model downloads depend on network speed; the full model set is ~266 GB.
 
-**The VM you're on (same for every team):** Ubuntu 22.04, 2x NVIDIA H200 (141 GB each), driver 580 / CUDA 13.0, 44 CPU cores, 472 GB RAM. No Docker is preinstalled and there is no system CUDA toolkit (no `nvcc`) — this matters later.
+**The VM you're on (same for every team):** Ubuntu 22.04, 2x NVIDIA H200 (141 GB each), driver 580 / CUDA 13.0, 44 CPU cores, 472 GB RAM. No Docker is preinstalled (Option C shows the install) and there is no system CUDA toolkit (no `nvcc`) — this matters later.
 
-All commands below were run on the 2x H200 competition VM. The Docker path (Option C) has not been built yet and is marked as such.
+All commands below were run on the 2x H200 competition VM, including the Docker path (Option C).
 ...
 
 ---
@@ -177,20 +177,37 @@ Expected output: `2.13.0+cu132 True 5.18.0 0.21.2` on the first line (measured o
 
 ---
 
-## Option C — Docker image (build NOT yet tested)
+## Option C — Docker image
 
-**This VM has no Docker preinstalled.** Installing Docker Engine + the NVIDIA Container Toolkit needs **root**:
+**This VM has no Docker preinstalled.** Installing Docker Engine + the NVIDIA Container Toolkit needs **root** (MEASURED on the VM: ~2 min, Docker 29.9):
 
-- https://docs.docker.com/engine/install/ubuntu/
-- https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+```bash
+apt-get update && apt-get install -y ca-certificates curl gnupg
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable" \
+  > /etc/apt/sources.list.d/docker.list
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+  | sed "s#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g" \
+  > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin nvidia-container-toolkit
+nvidia-ctk runtime configure --runtime=docker && systemctl restart docker
+docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi -L   # lists both H200s
+```
 
-The image build itself is `TODO(verify)` — the Dockerfile below exists and is expected to work, but nobody has built it on this VM yet. Do not make it your primary path on competition day unless you have time to verify it first.
+Upstream guides: https://docs.docker.com/engine/install/ubuntu/ and
+https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
 
 ### Step C1 — Build (from the repository root)
 
 ```bash
 docker build -f examples/vlm-2xH200/install/Dockerfile -t foundationscale-vlm .
 ```
+
+MEASURED: ~6 min from a fresh clone; the image is 14.5 GB.
 
 ### Step C2 — Run (models and data mounted from the host)
 
@@ -200,13 +217,18 @@ docker run --gpus all --ipc=host --shm-size 64g -v /workspace:/workspace -it fou
 
 ### Check it worked
 
-The last line of `Dockerfile` runs an import check and prints:
+The last build step runs an import check and prints:
 
 ```
-ok TODO(verify) TODO(verify)
+ok 2.13.0+cu132 5.18.0
 ```
 
-i.e. the literal string `ok` followed by the torch and transformers versions (exact strings `TODO(verify)`, since the build is untested).
+Inside the container, `python -c "import torch;print(torch.cuda.device_count())"` prints `2`.
+
+VERIFIED 2026-10-11: from a fresh clone, `scripts/train_sft.sh` run inside the container (`-w /workspace/fs-vlm`,
+`STEPS=10`) trained gemma-4-12B-it and Qwen3.6-35B-A3B at 16384 on the image + video + text mix, exit 0,
+adapters saved, save gates PASS. The run manifest reports `code.status=not_a_repository` because the
+working directory is the workspace, not the repository; that is a warning, not a failure.
 
 ### The Dockerfile
 
@@ -224,16 +246,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     || (apt-get install -y software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa \
         && apt-get update && apt-get install -y --no-install-recommends python3.12 python3.12-venv python3.12-dev git ffmpeg curl) \
     && rm -rf /var/lib/apt/lists/*
+# Triton (liger fused loss, flash-linear-attention) compiles a C launcher at first use.
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 RUN python3.12 -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 WORKDIR /opt/FoundationScale
 COPY examples/vlm-2xH200/install/requirements-vlm.txt /tmp/requirements-vlm.txt
 RUN pip install --upgrade pip && pip install -r /tmp/requirements-vlm.txt
+# Qwen3.6 gated-delta layers: 502 -> 1461-3156 tokens/s at 32K (01_installation.md).
+RUN pip install flash-linear-attention==0.5.2
 COPY . /opt/FoundationScale
-RUN pip install -e ".[train]" && python -c "import foundationscale, torch, transformers, peft, liger_kernel; print('ok', torch.__version__, transformers.__version__)"
+RUN pip install -e ".[train]" && python -c "import foundationscale, torch, transformers, peft, liger_kernel, fla; print('ok', torch.__version__, transformers.__version__)"
 ```
 
-Repeat the `python -c "import torch;print(torch.cuda.device_count())"` check inside the container — expected `2`.
+The `gcc` line is required: Triton (used by the fused loss and flash-linear-attention) compiles a small C launcher the first time a kernel runs, and the CUDA runtime image ships no compiler. Without it training fails at step 1 with `Failed to find C compiler`.
 
 ---
 
@@ -245,7 +271,7 @@ The Qwen3.6 models (`Qwen/Qwen3.6-35B-A3B`, `Qwen/Qwen3.6-27B`) need **flash-lin
 pip install flash-linear-attention==0.5.2
 ```
 
-(Use `uv pip install --python venv/bin/python flash-linear-attention==0.5.2` on the uv path, or run it inside your Docker container.) Exact version pin (MEASURED): `0.5.2`.
+(Use `uv pip install --python venv/bin/python flash-linear-attention==0.5.2` on the uv path. The Docker image already includes it.) Exact version pin (MEASURED): `0.5.2`.
 
 Measured on this setup (Qwen3.6-27B LoRA at 32K):
 

@@ -9,10 +9,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     || (apt-get install -y software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa \
         && apt-get update && apt-get install -y --no-install-recommends python3.12 python3.12-venv python3.12-dev git ffmpeg curl) \
     && rm -rf /var/lib/apt/lists/*
+# Triton (liger fused loss, flash-linear-attention) compiles a C launcher at first use.
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 RUN python3.12 -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 WORKDIR /opt/FoundationScale
 COPY examples/vlm-2xH200/install/requirements-vlm.txt /tmp/requirements-vlm.txt
 RUN pip install --upgrade pip && pip install -r /tmp/requirements-vlm.txt
+# Qwen3.6 gated-delta layers: 502 -> 1461-3156 tokens/s at 32K (01_installation.md).
+RUN pip install flash-linear-attention==0.5.2
 COPY . /opt/FoundationScale
-RUN pip install -e ".[train]" && python -c "import foundationscale, torch, transformers, peft, liger_kernel; print('ok', torch.__version__, transformers.__version__)"
+RUN pip install -e ".[train]" && python -c "import foundationscale, torch, transformers, peft, liger_kernel, fla; print('ok', torch.__version__, transformers.__version__)"
