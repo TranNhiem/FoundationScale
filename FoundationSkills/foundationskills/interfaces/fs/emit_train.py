@@ -68,6 +68,7 @@ _HPARAM_ALIASES: dict[str, tuple[str, ...]] = {
     "gradient-checkpointing": ("gradient_checkpointing", "grad_ckpt"),
     "attn-implementation": ("attn_implementation",),
     "sdp-backend": ("sdp_backend",),
+    "fused-loss": ("fused_loss",),
 }
 # Keys consumed elsewhere (never flags) -- listed so an unmapped key is a note,
 # not a silent drop: epochs/tokens -> max_steps, lora_* -> adapter flags,
@@ -393,6 +394,15 @@ def emit_train(
     for flag in _LOAD_BEARING:
         if _hp(hparams, flag) is not None and flag not in emitted:
             missing.append(f"load-bearing hparam for --{flag} could not be passed to FS")
+    fused = hparams.get("fused_loss")
+    if fused:
+        kernel = (getattr(caps, "fused_loss_kernels", None) or {}).get(str(fused))
+        if kernel is False:
+            missing.append(f"--fused-loss {fused}: its kernel module is not importable in the FS environment "
+                           "(install with pip install 'foundationscale[train]'); FS would refuse at start (exit 96)")
+        elif kernel is None:
+            missing.append(f"--fused-loss {fused}: kernel availability is unmeasured; re-run `fskills probe` "
+                           "(absence of evidence is not an installed kernel)")
     if "max-sequence-length" not in emitted:
         # FS's own default is 128 tokens: an unplanned sequence length is not a default, it is a defect
         missing.append("max_sequence_length not planned (FS default is 128 tokens)")
@@ -411,7 +421,30 @@ def emit_train(
         image_column = (dataset.get("fs_columns") or {}).get("image_column") or "image"
         env["FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN"] = str(image_column)
         notes.append(f"mm_sft: FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN={image_column}")
-
+    modalities = set(stage.get("modalities") or ())
+    fs_cols = dict((stage.get("data") or {}).get("fs_columns") or {})
+    ds_cols = dict(dataset.get("fs_columns") or {})
+    if "video" in modalities:
+        video_column = fs_cols.get("video_column") or ds_cols.get("video_column") or "video"
+        env["FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN"] = str(video_column)
+        notes.append(f"video modality: FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN={video_column}")
+        video_frames = fs_cols.get("video_frames") or ds_cols.get("video_frames")
+        if video_frames is not None:
+            env["FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES"] = str(video_frames)
+            notes.append(f"video modality: FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES={video_frames}")
+    if modalities & {"image", "video"}:
+        # multimodal rows are conversations: the measured launcher declares the column
+        # (examples/vlm-2xH200/scripts/train_sft.sh:13-14) instead of relying on FS's text column
+        conv = fs_cols.get("conversations_column") or ds_cols.get("conversations_column") or "conversations"
+        env["FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN"] = str(conv)
+        notes.append(f"multimodal: FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN={conv}")
+        if "image" in modalities and "FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN" not in env:
+            image_column = fs_cols.get("image_column") or ds_cols.get("image_column") or "image"
+            env["FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN"] = str(image_column)
+            notes.append(f"image modality: FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN={image_column}")
+        overlong = fs_cols.get("overlong") or ds_cols.get("overlong") or "drop"
+        env["FOUNDATIONSCALE_TRAIN_OVERLONG"] = str(overlong)
+        notes.append(f"multimodal: FOUNDATIONSCALE_TRAIN_OVERLONG={overlong}")
     check_reason = caps.check(
         stage_kind,
         algorithm=stage.get("algorithm"),

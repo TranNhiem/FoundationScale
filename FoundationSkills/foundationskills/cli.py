@@ -180,6 +180,8 @@ def _eval_request(args: argparse.Namespace) -> dict[str, Any]:
             request[key] = getattr(args, key)
     if args.parallelize:
         request["parallelize"] = True
+    if getattr(args, "heldout", None):
+        request["heldout"] = json.loads(Path(args.heldout).read_text(encoding="utf-8"))
     return request
 
 
@@ -522,7 +524,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--checkpoint", default=None)
     p_run.add_argument("--base", default=None)
     p_run.add_argument("--run-manifest", dest="run_manifest", default=None)
-    p_run.add_argument("--benchmarks", required=True, help="comma-separated policy task names")
+    p_run.add_argument("--benchmarks", default="", help="comma-separated policy task names (may be empty with --heldout)")
+    p_run.add_argument("--heldout", default=None,
+                       help="JSON file with the held-out VLM loss block (data, max_length, video_frames, abs_epsilon, ...)")
     p_run.add_argument("--policy", required=True)
     p_run.add_argument("--eval-cache", dest="eval_cache", required=True,
                        help="pre-staged offline HF_HOME; nothing is downloaded")

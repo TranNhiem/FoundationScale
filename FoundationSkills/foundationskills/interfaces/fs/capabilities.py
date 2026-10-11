@@ -36,6 +36,9 @@ class FSCapabilities:
     backends: tuple[str, ...] = ()
     # flag -> allowed values (argparse `choices`); a value outside them is refused by FS
     train_flag_choices: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # --fused-loss choice -> its kernel module is importable here (measured by find_spec, never assumed):
+    # FS advertises 'liger' as a flag choice even when liger_kernel is absent and then refuses (exit 96)
+    fused_loss_kernels: dict[str, bool] = field(default_factory=dict)
     # Reward kinds FS RL can verify, measured behaviourally (77bfa65: mcq_letter only)
     rl_reward_kinds: tuple[str, ...] = ()
     # Whether RLTrainer persists the trained policy (77bfa65: False); None = unmeasured
@@ -435,6 +438,19 @@ def _probe_rl_runnable(names: tuple[str, ...], errors: list[str]) -> dict[str, s
     return out
 
 
+FUSED_LOSS_MODULES = {"liger": "liger_kernel"}
+
+
+def _probe_fused_loss_kernels(flag_choices: dict[str, tuple[str, ...]]) -> dict[str, bool]:
+    """Each advertised --fused-loss kernel -> whether its module imports in this interpreter."""
+    kernels: dict[str, bool] = {}
+    for choice in flag_choices.get("--fused-loss", ()):
+        module = FUSED_LOSS_MODULES.get(str(choice))
+        if module is not None:
+            kernels[str(choice)] = importlib.util.find_spec(module) is not None
+    return kernels
+
+
 def probe(deep: bool = False, python: str | None = None) -> FSCapabilities:
     """Probe installed FoundationScale. Failures are recorded, never fatal."""
     notes: list[str] = []
@@ -494,7 +510,8 @@ def probe(deep: bool = False, python: str | None = None) -> FSCapabilities:
         rl_runnable=rl_runnable,
         families=families,
         backends=tuple(backends),
-        train_flag_choices=_probe_flag_choices(errors),
+        train_flag_choices=(flag_choices := _probe_flag_choices(errors)),
+        fused_loss_kernels=_probe_fused_loss_kernels(flag_choices),
         rl_reward_kinds=rl_reward_kinds,
         rl_saves_checkpoint=rl_saves_checkpoint,
         pref_runnable=pref_runnable,

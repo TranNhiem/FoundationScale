@@ -29,7 +29,13 @@ except Exception:  # pragma: no cover - defensive
         pass
 
 from foundationskills.interfaces.fs.capabilities import FSCapabilities, probe
-from foundationskills.skills.training.planner import PlanningRefusal, plan
+from foundationskills.skills.training.planner import (
+    PlanningRefusal,
+    plan,
+    vlm_gates,
+    vlm_goal_fields,
+    vlm_stage_fields,
+)
 
 TRAINING_PLAYBOOK: dict[str, Diagnosis] = {
     "loss_spike": Diagnosis(
@@ -240,6 +246,39 @@ def diagnose_symptom(name: Any) -> Diagnosis:
         recovery=("escalate with the run logs and the fs_launch_spec",),
     )
 
+# A4.1 (VLM competition LoRA): the gate rules vlm_gates() (skills/training/planner.py)
+# returns, and the recovery each Finding carries. Phase mapping (shared contract):
+# TR-IN-005..008 surface from .check_inputs as input findings (BLOCK -> REFUSED);
+# TR-PL-008 surfaces there too (see its rule description: the handoff template can
+# only emit findings, never a REFUSED result); TR-PL-006/007 surface from
+# .check_handoff (BLOCK handoff -> RED).
+_VLM_INPUT_RULES: tuple[str, ...] = ("TR-IN-005", "TR-IN-006", "TR-IN-007", "TR-IN-008", "TR-PL-008")
+_VLM_HANDOFF_RULES: tuple[str, ...] = ("TR-PL-006", "TR-PL-007")
+_VLM_RECOVERY: dict[str, str] = {
+    "TR-IN-005": "register the family in FS, or pass explicit lora_targets / --adapter-target",
+    "TR-IN-006": (
+        "declare goal.data.fs_columns.video_column and goal.video_frames "
+        "(FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN / FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES)"
+    ),
+    "TR-IN-007": (
+        "pass explicit lora_targets / --adapter-target whose names match the model's modules "
+        "(a blank-only list is not a declaration; drop the key and register the family for FS auto)"
+    ),
+    "TR-IN-008": (
+        "plan tp=1 (FS refuses --tp wherever it cannot also save) and run cp>1 on text rows only "
+        "(--cp is measured end to end only on text)"
+    ),
+    "TR-PL-006": (
+        "plan max_sequence_length at 32768 or below (the measured VLM ceiling), or measure 128K before "
+        "the plan claims it"
+    ),
+    "TR-PL-007": "plan max_sequence_length at 32768 or below for gemma-4-31B-it",
+    "TR-PL-008": (
+        "run with --fused-loss liger at max_sequence_length >= 32768 (the measured 32K loss path), or "
+        "plan below 32768"
+    ),
+}
+
 
 class TrainingPlannerSkill(BaseSkill):
     """Plan an executable-or-explicitly-refused multi-stage training run."""
@@ -282,11 +321,58 @@ class TrainingPlannerSkill(BaseSkill):
         RuleSpec("TR-IN-002", "goal.objective missing or empty", Severity.BLOCK, "input"),
         RuleSpec("TR-IN-003", "goal.hardware missing (gpu/gpus_per_node/nodes)", Severity.BLOCK, "input"),
         RuleSpec("TR-IN-004", "a RED readiness_report was supplied; fix the data first", Severity.BLOCK, "input"),
+        RuleSpec(
+            "TR-IN-005",
+            "the VLM family is not FS-registered and no explicit lora_targets are declared (the refusal names "
+            "both fixes: register the family in FS, pass explicit lora_targets / --adapter-target)",
+            Severity.BLOCK,
+            "input",
+        ),
+        RuleSpec(
+            "TR-IN-006",
+            "rows carry video but the feed lacks video_column or video_frames (FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN "
+            "/ FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES)",
+            Severity.BLOCK,
+            "input",
+        ),
+        RuleSpec(
+            "TR-IN-007",
+            "explicit lora_targets empty after normalisation, or one that matches no module in the module inventory",
+            Severity.BLOCK,
+            "input",
+        ),
+        RuleSpec(
+            "TR-IN-008",
+            "tp>1 is refused by FS (exit 96), or cp>1 is planned with image/video rows (--cp is measured end to "
+            "end only on text)",
+            Severity.BLOCK,
+            "input",
+        ),
         RuleSpec("TR-PL-001", "plan has 0 executable stages on the installed FS", Severity.WARN, "handoff"),
         RuleSpec("TR-PL-002", "a stage is feasibility-infeasible with no executable feasible alternative", Severity.BLOCK, "handoff"),
         RuleSpec("TR-PL-003", "a stage relies on an unvalidated (literature/community/derived) recipe", Severity.INFO, "handoff"),
         RuleSpec("TR-PL-004", "a stage needs data not yet prepared (handoff to data_engine)", Severity.WARN, "handoff"),
         RuleSpec("TR-PL-005", "disclosure: FS SFT trains on the full rendered text (no assistant-only loss masking)", Severity.INFO, "handoff"),
+        RuleSpec(
+            "TR-PL-006",
+            "planned max_sequence_length >= 131072, or a goal claim that it works (a 128K claim is a planning fact, "
+            "not a measurement): marks the handoff RED",
+            Severity.BLOCK,
+            "handoff",
+        ),
+        RuleSpec(
+            "TR-PL-007",
+            "gemma-4-31B-it planned above max_sequence_length 32768: marks the handoff RED",
+            Severity.BLOCK,
+            "handoff",
+        ),
+        RuleSpec(
+            "TR-PL-008",
+            "max_sequence_length >= 32768 without fused_loss 'liger' (REFUSED, naming --fused-loss liger): an input "
+            "rule by necessity, because the handoff template can only emit findings and never a REFUSED result",
+            Severity.BLOCK,
+            "input",
+        ),
     )
     fs_interface = FSInterface(
         entries=("foundationscale-train", "fskills-rl"),
@@ -340,6 +426,24 @@ class TrainingPlannerSkill(BaseSkill):
                     "rerun the data_engine skill until the readiness verdict is PASS (or address every failed check)",
                 )
             )
+        # A4.1 (VLM competition LoRA): the gate rules. TR-IN-005..008 surface as
+        # input findings (BLOCK input -> REFUSED); TR-PL-008 does too — its subject
+        # is the plan handoff (see its rule description), but the input phase is the
+        # only one that can REFUSE.
+        vlm_facts = vlm_goal_fields(goal)
+        evidence = {
+            "modalities": vlm_facts["modalities"],
+            "row_modalities": vlm_facts["row_modalities"],
+            "fs_columns": vlm_facts["fs_columns"],
+            "fused_loss": vlm_facts["fused_loss"],
+            "lora_targets": vlm_facts["lora_targets"],
+            "max_sequence_length": vlm_facts["max_sequence_length"],
+            "tp": vlm_facts["tp"],
+            "cp": vlm_facts["cp"],
+        }
+        for rule_id, message in vlm_gates(vlm_stage_fields(goal), goal, getattr(ctx, "capabilities", None)):
+            if rule_id in _VLM_INPUT_RULES:
+                findings.append(self.finding(rule_id, message, dict(evidence), _VLM_RECOVERY[rule_id]))
         return findings
 
     def run(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
@@ -434,6 +538,28 @@ class TrainingPlannerSkill(BaseSkill):
                     "if assistant-only loss is required, the installed FS cannot do it; state this to the user",
                 )
             )
+        # A4.1 (BLOCK handoff -> RED): TR-PL-006 (a >= 128K planning claim) and
+        # TR-PL-007 (gemma-4-31B-it above 32768) over the planned stages; a stage's
+        # hparams carry the planned max_sequence_length the estimate priced, and the
+        # plan's goal is the claim channel.
+        plan_goal = plan_payload.get("goal") or {}
+        for stage in stages:
+            for rule_id, message in vlm_gates(stage, plan_goal, getattr(ctx, "capabilities", None)):
+                if rule_id in _VLM_HANDOFF_RULES:
+                    hparams = stage.get("hparams") or {}
+                    findings.append(
+                        self.finding(
+                            rule_id,
+                            message,
+                            {
+                                "stage": stage.get("name"),
+                                "modalities": stage.get("modalities"),
+                                "max_sequence_length": hparams.get("max_sequence_length"),
+                                "fused_loss": hparams.get("fused_loss"),
+                            },
+                            _VLM_RECOVERY[rule_id],
+                        )
+                    )
         return findings
 
     def diagnose(self, failure: BaseException | SkillResult) -> Diagnosis:
@@ -520,9 +646,9 @@ class TrainingPlannerSkill(BaseSkill):
             base.update(over)
             return base
 
-        def fake_plan(stages: list[dict]) -> dict:
+        def fake_plan(stages: list[dict], plan_goal: dict | None = None) -> dict:
             return {
-                "goal": goal,
+                "goal": plan_goal if plan_goal is not None else goal,
                 "stages": stages,
                 "decisions": [],
                 "feasibility": {"verdict": "ok", "findings": [], "alternatives": []},
@@ -530,6 +656,39 @@ class TrainingPlannerSkill(BaseSkill):
             }
 
         read = {"verdict": "RED", "dataset_id": "ds-red", "stats": {}, "checks": []}
+
+        # A4.1 (VLM competition LoRA): a VLM goal and a planned VLM stage that
+        # satisfy every gate rule except the one a fixture breaks on purpose
+        # (vlm_gates in skills/training/planner.py).
+        vlm_goal = {
+            **goal,
+            "modalities": ["image", "text", "video"],
+            "video_frames": 8,
+            "method": "lora",
+            "lora_targets": ["q_proj", "v_proj"],
+            "data_facts": {**goal["data_facts"], "modalities": ["image", "text", "video"]},
+        }
+        vlm_31b_goal = {
+            **vlm_goal,
+            "base_model": {"name_or_path": "gemma-4-31B-it", "size_b": 31.0, "arch": "dense"},
+            "max_sequence_length": 16384,
+        }
+
+        def vlm_stage(**over: Any) -> dict[str, Any]:
+            base = stage(
+                "sft",
+                modalities=["image", "text", "video"],
+                hparams={"fused_loss": "liger", "lora_targets": ["q_proj", "v_proj"], "max_sequence_length": 16384},
+                data={
+                    "format": "sft",
+                    "ready": True,
+                    "tokens": 1000,
+                    "fs_columns": {"video_column": "video", "video_frames": 8, "overlong": "drop"},
+                },
+            )
+            base.update(over)
+            return base
+
         return {
             "TR-IN-001": {"request": {"goal": {**goal, "base_model": {}}}},
             "TR-IN-002": {"request": {"goal": {**goal, "objective": ""}}},
@@ -565,4 +724,42 @@ class TrainingPlannerSkill(BaseSkill):
                 ),
             },
             "TR-PL-005": {"request": {"goal": goal}, "fake_plan": fake_plan([stage("sft")])},
+            # A4.1: input rules fire from check_inputs; TR-PL-006/007 (RED) fire from
+            # check_handoff over the planned stages. TR-PL-008 is a request fixture:
+            # it is an input-phase rule (see its RuleSpec description).
+            "TR-IN-005": {"request": {"goal": {**vlm_goal, "lora_targets": None}}},
+            "TR-IN-006": {"request": {"goal": {**vlm_goal, "video_frames": None}}},
+            "TR-IN-007": {"request": {"goal": {**vlm_goal, "lora_targets": ["  ", ""]}}},
+            "TR-IN-008": {"request": {"goal": {**vlm_goal, "tp": 2, "cp": 2}}},
+            "TR-PL-006": {
+                "request": {"goal": {**vlm_goal, "max_sequence_length": 16384}},
+                "fake_plan": fake_plan(
+                    [
+                        vlm_stage(
+                            hparams={
+                                "fused_loss": "liger",
+                                "lora_targets": ["q_proj", "v_proj"],
+                                "max_sequence_length": 131072,
+                            }
+                        )
+                    ],
+                    plan_goal={**vlm_goal, "max_sequence_length": 16384},
+                ),
+            },
+            "TR-PL-007": {
+                "request": {"goal": vlm_31b_goal},
+                "fake_plan": fake_plan(
+                    [
+                        vlm_stage(
+                            hparams={
+                                "fused_loss": "liger",
+                                "lora_targets": ["q_proj", "v_proj"],
+                                "max_sequence_length": 65536,
+                            }
+                        )
+                    ],
+                    plan_goal=vlm_31b_goal,
+                ),
+            },
+            "TR-PL-008": {"request": {"goal": {**vlm_goal, "max_sequence_length": 32768}}},
         }

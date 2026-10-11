@@ -86,17 +86,33 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | TR-IN-002 | BLOCK | input | `goal.objective` missing/empty |
 | TR-IN-003 | BLOCK | input | `goal.hardware` missing gpu/gpus_per_node/nodes |
 | TR-IN-004 | BLOCK | input | a RED readiness_report supplied — fix the data first; hand off to data_engine |
+| TR-IN-005 | BLOCK | input | VLM family not FS-registered and no explicit `lora_targets`: the refusal names both fixes (register the family in FS, or pass explicit `lora_targets` / `--adapter-target`) |
+| TR-IN-006 | BLOCK | input | video rows without `video_frames` (or column): names `FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN` / `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES`; `video_column` defaults to `video` |
+| TR-IN-007 | BLOCK | input | explicit `lora_targets` empty, or matching no module in a carried module inventory |
+| TR-IN-008 | BLOCK | input | `tp>1` (FS refuses wherever it cannot also save) or `cp>1` with image/video rows (`--cp` is measured end to end only on text) |
+| TR-PL-008 | BLOCK | input | `max_sequence_length >= 32768` without `fused_loss: liger`: refuses naming `--fused-loss liger` (32K needs it or the fp32 logits tensor OOMs, examples/vlm-2xH200) |
 | TR-PL-001 | WARN | handoff | plan has 0 executable stages (still useful as a gap list) |
 | TR-PL-002 | BLOCK | handoff | a stage is infeasible with no executable feasible alternative |
 | TR-PL-003 | INFO | handoff | a stage relies on an unvalidated (literature/community/derived) recipe |
 | TR-PL-004 | WARN | handoff | a stage needs data not yet prepared (handoff data_engine) |
 | TR-PL-005 | INFO | handoff | an sft stage is present: FS SFT full-sequence loss disclosure |
+| TR-PL-006 | BLOCK | handoff | planned `max_sequence_length >= 131072`, or a goal claim that 128K works: RED (131072 OOMs all five measured models, examples/vlm-2xH200) |
+| TR-PL-007 | BLOCK | handoff | gemma-4-31B-it planned above 32768: RED (its measured 2×H200 maximum is 32K) |
 | FS-IN-001 | BLOCK | input | (training.emit) the plan has no stages |
 | FS-IN-002 | BLOCK | input | (training.emit) a stage has no dataset payload |
 | FS-IN-003 | BLOCK | input | (training.emit) FoundationScale is not importable: refusal names it |
 | FS-HO-001 | WARN | handoff | (training.emit) a launch spec is non-executable; `missing` names the gap (e.g. LoRA adapter needs a merge before the next stage; FS RL saves no checkpoint) |
 | FS-HO-002 | BLOCK | handoff | (training.emit) every launch spec is non-executable |
 | FS-HO-003 | INFO | handoff | (training.emit) an RL spec is single-device; runnable as measurement-only (`fskills launch --measurement-only`) |
+| FS-IN-004 | BLOCK | input | (training.emit) a stage declares a modality the dataset's `fs_columns` cannot feed |
+| FS-HO-004 | BLOCK | handoff | (training.emit) the emitted spec lacks `--fused-loss` while the stage declares it: RED |
+
+VLM competition LoRA (A4.1): a goal may declare `modalities`, `video_frames`, `max_sequence_length`,
+`lora_targets`, `fused_loss`, `tp`/`cp`; the planner copies them into each stage. Image/video rows at
+>= 8K context are planned at per-device batch 1 (grad-accum 8), the measured recipe of
+`examples/vlm-2xH200`. Emit declares the conversation, image, video, frame and overlong columns the
+measured launcher uses, and a `--fused-loss` spec stays non-executable unless the probe measured its
+kernel importable (`fused_loss_kernels`; FS lists `liger` as a choice even without `liger_kernel`).
 
 Statuses: PASS 0 / RED 5 / UNMEASURED 95 / REFUSED 96. A `PlanningRefusal`
 (no stage selected; unknown model with no size; unknown hardware) is REFUSED

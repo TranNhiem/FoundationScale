@@ -3,8 +3,12 @@
 ``SubprocessLmEvalRunner`` runs ``lm-eval run`` as a subprocess with an argv
 list (never a shell string), one task per invocation so that one missing
 dataset costs one benchmark rather than the whole suite. The environment is
-forced offline and pointed at the eval cache. Unit tests inject any object with
-the same ``run(request) -> HarnessOutcome`` shape instead.
+forced offline and pointed at the eval cache. ``VlmHeldoutRunner`` scores VLM
+held-out rows (image/video/text, video rows included) with FoundationScale's own
+``examples/vlm-2xH200/scripts/eval_heldout_loss.py``, again as an argv list with
+the inherited environment; exit 96 (the script refusing) is a REFUSED. Unit tests
+inject any object with the same ``run(request) -> HarnessOutcome`` /
+``-> HeldoutOutcome`` shape instead.
 """
 from __future__ import annotations
 
@@ -177,3 +181,138 @@ class SubprocessLmEvalRunner:
                                   {"log": str(log)})
         return HarnessOutcome(code, json.loads(path.read_text(encoding="utf-8")), tuple(argv), None,
                               {"log": str(log), "results_path": str(path)})
+
+
+# -- VLM held-out loss: FoundationScale's examples/vlm-2xH200/scripts/eval_heldout_loss.py --------
+
+HELDOUT_DEFAULT_VIDEO_COLUMN = "video"
+
+
+@dataclass(frozen=True)
+class HeldoutRequest:
+    """One held-out loss scoring run; every field mirrors an eval_heldout_loss.py flag.
+
+    ``adapter`` marks a PEFT checkpoint (its base is the ``model``), ``video_frames`` is
+    required as soon as the rows carry video, and an unset field means "not declared" --
+    :func:`build_heldout_argv` refuses those instead of guessing.
+    """
+    model: str
+    adapter: str | None = None
+    data: str = ""
+    max_length: int = 0
+    video_frames: int | None = None
+    image_column: str = "image"
+    video_column: str = "video"
+    limit: int | None = None
+    out: str = ""
+    script: str | None = None
+    python: str | None = None
+
+
+@dataclass(frozen=True)
+class HeldoutOutcome:
+    rc: int
+    result: dict[str, Any] | None
+    stderr_tail: str
+    argv: tuple[str, ...] = ()
+
+
+def default_heldout_script() -> Path | None:
+    """Shipped eval_heldout_loss.py (two packages up from FoundationScale), or None without FoundationScale."""
+    try:
+        from importlib import import_module
+        package = import_module("foundationscale")
+    except Exception:  # FoundationScale is only needed on the held-out path
+        return None
+    module = getattr(package, "__file__", None)
+    if not module:
+        return None
+    return Path(module).resolve().parents[2] / "examples" / "vlm-2xH200" / "scripts" / "eval_heldout_loss.py"
+
+
+def build_heldout_argv(req: HeldoutRequest) -> list[str]:
+    """eval_heldout_loss.py argv as a list -- never a shell string; flag order mirrors the script."""
+    for label, value in (("model", req.model), ("data", req.data), ("out", req.out)):
+        if not value:
+            raise ValueError(f"missing input: held-out {label}")
+    for label, value in (("model", req.model), ("adapter", req.adapter), ("data", req.data),
+                         ("out", req.out), ("script", req.script)):
+        if value and ("," in value or "=" in value):
+            raise ValueError(f"precondition failed: {label} path {value!r} contains ',' or '=' (breaks the flag list)")
+    if req.max_length < 1:
+        raise ValueError(f"missing input: held-out max_length (got {req.max_length!r})")
+    script = req.script or default_heldout_script()
+    if script is None:
+        raise ValueError("missing input: held-out script (pass heldout_script)")
+    argv = [req.python or sys.executable, str(script), "--model", req.model]
+    if req.adapter:
+        argv += ["--adapter", req.adapter]
+    argv += ["--data", req.data, "--max-length", str(req.max_length), "--image-column", req.image_column]
+    if req.video_frames is not None:
+        argv += ["--video-frames", str(req.video_frames)]
+    argv += ["--video-column", req.video_column or HELDOUT_DEFAULT_VIDEO_COLUMN]
+    if req.limit is not None:
+        argv += ["--limit", str(req.limit)]
+    argv += ["--out", req.out]
+    return argv
+
+
+def extract_heldout(result: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """rows_used/rows_dropped/nll/perplexity/tokens_scored of one role, or None when the result lacks the block."""
+    doc = result or {}
+    rows_used, rows_dropped, nll = doc.get("rows_used"), doc.get("rows_dropped"), doc.get("mean_nll_nats")
+    if isinstance(rows_used, bool) or not isinstance(rows_used, int):
+        return None
+    if isinstance(rows_dropped, bool) or not isinstance(rows_dropped, int):
+        return None
+    if isinstance(nll, bool) or not isinstance(nll, (int, float)):
+        return None
+
+    def _opt(key: str) -> float | None:
+        value = doc.get(key)
+        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    return {
+        "rows_used": rows_used,
+        "rows_dropped": rows_dropped,
+        "nll": float(nll),
+        "perplexity": _opt("perplexity"),
+        "tokens_scored": _opt("tokens_scored"),
+    }
+
+
+class VlmHeldoutRunner:
+    """Score one role (base model, or base + PEFT adapter) on the canonical held-out rows.
+
+    The script inherits the environment and runs with ``cwd`` at the output
+    directory; its result JSON at ``--out`` is the measurement. Exit 96 is the
+    script refusing (video rows without ``--video-frames``, ...), which the skill
+    maps to REFUSED. Tests inject any ``run(request) -> HeldoutOutcome`` object.
+    """
+    name = "fs-heldout"
+
+    def __init__(self, timeout_s: float | None = None) -> None:
+        self.timeout_s = timeout_s
+
+    def run(self, request: HeldoutRequest) -> HeldoutOutcome:
+        try:
+            argv = build_heldout_argv(request)
+        except ValueError as exc:
+            return HeldoutOutcome(96, None, str(exc))
+        out = Path(request.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            proc = subprocess.run(argv, cwd=str(out.parent), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, timeout=self.timeout_s, check=False)
+        except FileNotFoundError as exc:
+            return HeldoutOutcome(127, None, f"held-out script or interpreter not found: {exc}", tuple(argv))
+        except subprocess.TimeoutExpired:
+            return HeldoutOutcome(124, None, f"held-out run timed out after {self.timeout_s}s", tuple(argv))
+        tail = "\n".join((proc.stderr or "").splitlines()[-20:])
+        if proc.returncode != 0:
+            return HeldoutOutcome(proc.returncode, None, tail or f"exit {proc.returncode}", tuple(argv))
+        try:
+            doc = json.loads(out.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return HeldoutOutcome(3, None, f"held-out result {out} is not readable JSON ({exc})", tuple(argv))
+        return HeldoutOutcome(0, doc if isinstance(doc, dict) else None, tail, tuple(argv))

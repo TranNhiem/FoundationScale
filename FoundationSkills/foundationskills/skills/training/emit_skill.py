@@ -100,9 +100,11 @@ class TrainingEmitSkill(BaseSkill):
         RuleSpec("FS-IN-001", "plan has no stages", Severity.BLOCK, "input"),
         RuleSpec("FS-IN-002", "no dataset for a stage that needs one", Severity.BLOCK, "input"),
         RuleSpec("FS-IN-003", "FS not importable (capabilities.available is false)", Severity.BLOCK, "input"),
+        RuleSpec("FS-IN-004", "a stage declares a modality the dataset's fs_columns cannot feed", Severity.BLOCK, "input"),
         RuleSpec("FS-HO-001", "a launch spec is non-executable", Severity.WARN, "handoff"),
         RuleSpec("FS-HO-002", "all launch specs are non-executable", Severity.BLOCK, "handoff"),
         RuleSpec("FS-HO-003", "an RL spec is single-device (FS RLTrainer runs on one device)", Severity.INFO, "handoff"),
+        RuleSpec("FS-HO-004", "the emitted spec lacks --fused-loss while the stage declares it", Severity.BLOCK, "handoff"),
     )
     fs_interface = FSInterface(
         entries=("foundationscale-train", "fskills-rl"),
@@ -148,6 +150,33 @@ class TrainingEmitSkill(BaseSkill):
                         "attach the dataset artifact produced by the data_engine skill",
                     )
                 )
+        for stage in stages:
+            name = str(stage.get("name") or "<unnamed>")
+            modalities = set(stage.get("modalities") or ())
+            if not modalities:
+                continue
+            stage_dataset = datasets_map.get(name) or single or {}
+            fs_cols = dict(stage_dataset.get("fs_columns") or {})
+            _modality_columns = {"text": "text_column", "image": "image_column", "video": "video_column"}
+            for modality in sorted(modalities):
+                col_key = _modality_columns.get(modality)
+                if col_key is None:
+                    continue
+                col_val = fs_cols.get(col_key) or fs_cols.get(col_key.replace("_column", "_columns"))
+                if modality == "text" and not col_val:
+                    # conversation rows feed text through the conversations column
+                    # (examples/vlm-2xH200/scripts/train_sft.sh:13), not a flat text column
+                    col_val = fs_cols.get("conversations_column")
+                if not col_val:
+                    findings.append(
+                        self.finding(
+                            "FS-IN-004",
+                            f"stage {name!r} declares modality {modality!r} but the dataset's "
+                            f"fs_columns {col_key} is missing or empty",
+                            {"stage": name, "modality": modality, "fs_columns": dict(fs_cols)},
+                            f"attach a dataset with {col_key} set, or drop {modality!r} from the stage's modalities",
+                        )
+                    )
         return findings
 
     def run(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
@@ -264,6 +293,7 @@ class TrainingEmitSkill(BaseSkill):
                 reason = "plan infeasible: " + ("; ".join(blocked) or "stage feasibility verdict is infeasible")
                 spec = {**spec, "executable": False,
                         "missing": "; ".join(m for m in (spec.get("missing"), reason) if m)}
+            spec = {**spec, "stage_fused_loss": str((stage.get("hparams") or {}).get("fused_loss") or "")}
             previous = {"name": stage_name, "kind": str(stage.get("stage")),
                         "method": str(stage.get("method") or "full"), "output_dir": output_dir}
             artifact = Artifact(
@@ -313,6 +343,18 @@ class TrainingEmitSkill(BaseSkill):
                         f"RL spec {spec.get('stage_name')!r} is single-device: FS RLTrainer runs on one GPU",
                         {"stage_name": spec.get("stage_name")},
                         "size the RL stage for a single device (see method selection)",
+                    )
+                )
+        for spec in specs:
+            declared_fused = str(spec.get("stage_fused_loss") or "")
+            if declared_fused and "--fused-loss" not in (spec.get("argv") or []):
+                findings.append(
+                    self.finding(
+                        "FS-HO-004",
+                        f"launch spec {spec.get('stage_name')!r} declares fused_loss={declared_fused!r} "
+                        f"but --fused-loss is not in the emitted argv",
+                        {"stage_name": spec.get("stage_name"), "declared_fused_loss": declared_fused},
+                        "ensure the installed FS advertises --fused-loss, then re-emit",
                     )
                 )
         return findings
@@ -370,6 +412,18 @@ class TrainingEmitSkill(BaseSkill):
                 "capabilities": {"available": False},
                 "expected": "REFUSED with 'missing: importable foundationscale'",
             },
+            "FS-IN-004": {
+                "request": {
+                    "plan": {"stages": [{"name": "vlm1", "stage": "sft", "algorithm": None,
+                                         "method": "lora", "modalities": ["image", "text"],
+                                         "hparams": {"max_sequence_length": 16384}}]},
+                    "dataset": {**dataset, "format": "mm_sft",
+                                "fs_columns": {"text_column": "text", "image_column": None,
+                                               "gold_key": "answer"}},
+                    "model": "m", "output_root": "out",
+                },
+                "expected": "REFUSED naming FS-IN-004 (stage declares 'image' but dataset fs_columns cannot feed it)",
+            },
             "FS-HO-001": {
                 "request": {
                     "plan": {"stages": [good_stage, pp_stage]},
@@ -394,6 +448,15 @@ class TrainingEmitSkill(BaseSkill):
                 },
                 "capabilities": {"rl_runnable": {"dr_grpo": None}},
                 "expected": "PASS carrying an INFO FS-HO-003 (single-device RL)",
+            },
+            "FS-HO-004": {
+                "request": {
+                    "plan": {"stages": [{"name": "sft1", "stage": "sft", "algorithm": None, "method": "full",
+                                         "hparams": {"fused_loss": "liger", "max_sequence_length": 16384}}]},
+                    "dataset": dataset, "model": "m", "output_root": "out",
+                },
+                "capabilities": {"train_flag_choices": {"--fused-loss": ["cross_entropy"]}},
+                "expected": "RED via handoff BLOCK FS-HO-004 (fused_loss=liger declared but --fused-loss not in argv)",
             },
         }
 

@@ -20,3 +20,9 @@ Append-only: one row per measured change family (A2.1 baselines first). Rows are
 | 2026-10-10 | baseline | fskills-probe-first | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 5a15bfaca65a | 182a21afbc04 | 0.844 | 0.333 | 0.511 | [0.356, 0.644] | 5/0 | uplift | 7dfebfdccb90 |
 | 2026-10-10 | baseline | fskills-refusal-surface | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 6f15e568f487 | 24f72b0f1ec1 | 1.000 | 0.222 | 0.778 | [0.667, 1.000] | 3/0 | uplift | 7dfebfdccb90 |
 | 2026-10-10 | baseline | fskills-training | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 12a4006652d9 | 38cbf83076ae | 0.985 | 0.207 | 0.778 | [0.681, 0.867] | 15/0 | uplift | 7dfebfdccb90 |
+| 2026-10-11 | a41-vlm-lora | fskills-probe-first | routing | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 5a15bfaca65a | 4250963b2bba | 0.863 | 0.137 | 0.685 | [0.389, 0.907] | 6/0 | uplift | b2fc3cad2640 |
+| 2026-10-11 | a41-vlm-lora | fskills-training | routing | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 892be2ee6071 | b27a8f6b39b5 | 0.992 | 0.431 | 0.552 | [0.386, 0.709] | 17/0 | uplift | b2fc3cad2640 |
+| 2026-10-11 | a41-vlm-lora | fskills-probe-first | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 5a15bfaca65a | 2ab79adda3f2 | 0.867 | 0.244 | 0.622 | [0.467, 0.778] | 5/0 | uplift | 919e7a56758a |
+| 2026-10-11 | a41-vlm-lora | fskills-training | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 892be2ee6071 | b87d01d17d79 | 0.972 | 0.185 | 0.787 | [0.699, 0.875] | 24/0 | uplift | 919e7a56758a |
+| 2026-10-11 | a41-vlm-lora | fskills-evaluation | routing | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 3e2136f6f6ef | ad8bcab0a68d | 0.974 | 0.175 | 0.781 | [0.635, 0.917] | 16/0 | uplift | daacf07e78b4 |
+| 2026-10-11 | a41-vlm-lora | fskills-evaluation | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 3e2136f6f6ef | dfe2c4239f74 | 0.911 | 0.274 | 0.637 | [0.511, 0.763] | 15/0 | uplift | 7ea190ac6c1f |
