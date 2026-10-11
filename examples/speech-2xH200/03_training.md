@@ -3,12 +3,13 @@
 This chapter is the whole training interface for the speech/ASR tutorial: one launch script
 (`scripts/train_speech.sh`) and one dotenv file per model (`configs/*.env`). Everything below is
 **MEASURED** on a real 2x H200 VM verification run on **2026-10-10/11** (this VM's `transformers` is
-**5.18.0**, FoundationScale is origin/main **`ced0c5c`**), with the exact numbers from that run — no
-rounding, no extrapolation. Anything unproven is marked TODO(verify).
+**5.18.0**; FoundationScale is origin/main **`ced0c5c`** for the first three models, **`0fa19be`** for
+Qwen2-Audio-7B-Instruct's restoration below), with the exact numbers from that run — no rounding, no
+extrapolation. Anything unproven is marked TODO(verify).
 
 The measured stack is: 2x NVIDIA H200 (140 GiB per GPU), `torchrun --nnodes 1 --nproc_per_node 2`,
-`foundationscale.train`, three models (`nvidia/parakeet-ctc-1.1b`, `openai/whisper-large-v3`,
-`google/gemma-4-E4B-it`), 500 steps, full train-clean-100 (28,539 rows,
+`foundationscale.train`, four models (`nvidia/parakeet-ctc-1.1b`, `openai/whisper-large-v3`,
+`google/gemma-4-E4B-it`, `Qwen/Qwen2-Audio-7B-Instruct`), 500 steps, full train-clean-100 (28,539 rows,
 `data/librispeech/manifests/train_full.jsonl`), dp=2.
 
 ## 1. The launch command
@@ -56,9 +57,11 @@ measured per-model tunables, exactly:
 | `nvidia/parakeet-ctc-1.1b` | 500 | 5e-5 | 4 | 50 | 2 |
 | `openai/whisper-large-v3` | 500 | 1e-5 | 4 | 0 | 2 |
 | `google/gemma-4-E4B-it` | 500 | 1e-4 | 8 | 0 | 2 |
+| `Qwen/Qwen2-Audio-7B-Instruct` (LoRA, measured) | 500 | 1e-4 | 8 | 0 | 2 |
+| `Qwen/Qwen2-Audio-7B-Instruct` (full FT, trains but see §5) | 500 | 1e-5 | 4 | 0 | 2 |
 
-(global batch 8, 8 and 16 respectively). The LR scheduler is FoundationScale's default (linear) — this
-tutorial passes **no** `--lr-scheduler-type` override.
+(global batch 8, 8, 16, 16 and 8 respectively). The LR scheduler is FoundationScale's default (linear) —
+this tutorial passes **no** `--lr-scheduler-type` override.
 
 Override on the command line, before the script:
 
@@ -75,8 +78,9 @@ torchrun --nnodes 1 --nproc_per_node "$GPUS" --master_addr 127.0.0.1 --master_po
 
 Two details there are load-bearing:
 
-- `--master_addr 127.0.0.1`, **never `localhost`**. This VM class resolves `localhost` to IPv6 only (see
-  chapter 01), and the rendezvous then hangs forever instead of failing loudly.
+- `--master_addr 127.0.0.1`, **never `localhost`**. `/etc/hosts` on this VM class lists `::1` before the
+  IPv4 entry for `localhost` (see chapter 01), so `torchrun`'s rendezvous picks the IPv6 address and hangs
+  forever instead of failing loudly.
 - `--master_port 29880` is reserved for this tutorial so it never collides with the vlm tutorial's own
   launcher (port `29500`) when both run on the same box.
 
@@ -105,17 +109,19 @@ family registry resolves the model's kind and adapter scope. A malformed manifes
 column fails there (a REFUSAL, exit 96), before any GPU memory is touched — see the `[fs:train:validated]`
 and `[fs:train:refuse]` lines in every log below for what that looks like in practice.
 
-## 3. The three models and what each needs
+## 3. The four models and what each needs
 
 | model | kind | fine-tune method | special env/flags |
 |---|---|---|---|
 | `nvidia/parakeet-ctc-1.1b` | `ctc` | full fine-tune | none beyond the table above |
 | `openai/whisper-large-v3` | `seq2seq` | full fine-tune | `FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE=en` (required) |
 | `google/gemma-4-E4B-it` | `audio_llm` | LoRA r16/alpha32 on the language model | see "why no gradient checkpointing" below |
+| `Qwen/Qwen2-Audio-7B-Instruct` | `audio_llm` | LoRA r16/alpha32, automatic adapter scoping (measured) — or full fine-tune, FSDP (trains, see §5) | none beyond `SHARDING=fsdp`/`FSDP_STATE_DICT=sharded` for the full-FT config |
 
-For `google/gemma-4-E4B-it`, the LoRA adapter covers the language model only — but the `gemma4`
-FamilySpec trains the audio tower and the `embed_audio` projector in **full** automatically alongside it.
-That is not an extra flag and not an extra config knob; it happens by family declaration.
+For `google/gemma-4-E4B-it` and `Qwen/Qwen2-Audio-7B-Instruct`, the LoRA adapter covers the language model
+only — but their FamilySpecs (`gemma4`, `qwen2_audio`) train the audio tower and projector in **full**
+automatically alongside it, with **automatic** adapter-target scoping (no `--adapter-target` flag for
+either model). That is not an extra flag and not an extra config knob; it happens by family declaration.
 
 For `nvidia/parakeet-ctc-1.1b`, FoundationScale **freezes the model's BatchNorm running statistics**
 during speech training automatically (affine weights still train) — small, zero-padded audio batches
@@ -130,46 +136,100 @@ model itself.
 
 ## 4. LoRA settings and why no `--gradient-checkpointing`, ever
 
-`--gradient-checkpointing` is **deliberately never passed**, for any of the 3 models, by design (one uniform
+`--gradient-checkpointing` is **deliberately never passed**, for any of the 4 models, by design (one uniform
 code path): `google/gemma-4-E4B-it` has 18 KV-shared decoder layers whose forward is only correct with the
 KV cache ON; `transformers.Trainer` sets `use_cache=False` by default, and FoundationScale pins it back to
 `True` for this family — but gradient checkpointing would re-break that invariant, so it is refused rather
-than silently miscomputed. None of the 3 models in this tutorial need checkpointing at these step
-counts/batch sizes (peak memory stayed under 90 GiB of 140 GiB per GPU in every run below), so leaving it
-off uniformly costs nothing and removes a whole class of model-specific exceptions from the script.
+than silently miscomputed. None of the 4 models in this tutorial need checkpointing at these step
+counts/batch sizes to train (Qwen2-Audio-7B-Instruct's full fine-tune needs FSDP *sharding* to fit, a
+different lever — see §5 — not gradient checkpointing), so leaving it off uniformly costs nothing and
+removes a whole class of model-specific exceptions from the script.
 
 LoRA itself is `RANK`/`ALPHA` (16/32 in every measured run) with `ADAPTER=lora`; an empty `ADAPTER` is a
-full fine-tune. The defaults just work for all three models — there is no per-model adapter plumbing left
-in `scripts/train_speech.sh`.
+full fine-tune. The defaults just work for all four models — there is no per-model adapter plumbing left
+in `scripts/train_speech.sh` (Qwen2-Audio-7B-Instruct's 224 LoRA target modules resolve automatically, same
+as gemma-4-E4B-it's).
 
-## 5. Qwen2-Audio-7B-Instruct: a clean REFUSE, not a result
+## 5. Qwen2-Audio-7B-Instruct: LoRA is the measured recipe; full fine-tune trains but hits a checkpoint gap
 
-**MEASURED, 2026-10-11, this VM's transformers 5.18.0, FoundationScale origin/main `ced0c5c`.**
-`Qwen/Qwen2-Audio-7B-Instruct` is **not** part of this tutorial's measured or recommended path. On this VM
-it refuses before training, verbatim:
+**MEASURED, 2026-10-11, this VM's transformers 5.18.0, FoundationScale origin/main `0fa19be`.** An earlier
+round of this tutorial documented this model as a clean REFUSE: its `qwen2_audio` FamilySpec declared tower
+paths (`audio_tower`, `multi_modal_projector`) that did not resolve against this VM's `transformers==5.18.0`
+module nesting (`model.audio_tower`, one level deeper than declared), and FoundationScale correctly refused
+(exit 96) rather than train against an unresolved tower. **The speech-plane owner has since fixed this**:
+`origin/main` `0fa19be` updates the `qwen2_audio` FamilySpec to the `transformers>=5.18` layout, with
+**automatic** LoRA adapter-target scoping (224 modules resolve with no `--adapter-target` flag). Their own
+lane moved to `transformers==5.19` and retired `5.5` for this model (on `5.5`, `qwen2_audio` now refuses at
+load — not relevant to this VM, which stays on `5.18.0`). The old `--adapter-target` enumeration workaround
+from the retracted earlier round is obsolete and must not be re-attempted; it is no longer needed.
 
+### LoRA r16/alpha32 + towers in full — the measured recipe, clean PASS
+
+```bash
+bash examples/speech-2xH200/scripts/train_speech.sh examples/speech-2xH200/configs/qwen2-audio-7b-lora.env
 ```
-[fs:train:refuse]  family 'qwen2_audio' declares audio tower(s) ['audio_tower', 'multi_modal_projector']
-that do not resolve on the loaded model (its top-level modules: ['lm_head', 'model']). The module layout
-differs from the one the FamilySpec was measured on -- usually a transformers version that nests the
-model differently. Re-measure the module paths for this transformers version and update
-FamilySpec.towers. Refusing (96) before training
+
+lr 1e-4, global batch 16 (per-device 8 x dp 2), 500 steps — same shape as `gemma-4-E4B-it`'s recipe.
+`ADAPTER=lora` is the only adapter-related setting in the config; FoundationScale resolves the 224 LoRA
+target modules and the audio-tower/projector full-train set automatically, exactly like `gemma4`. Training:
+exit 0, PASS. Speech gates: `speech.audio_row_coverage` 8016/8016, `speech.audio_placeholder_coverage`
+8016/8016, `speech.tower_movement` 487/487 + 2/2 (moved). WER: **35.58% -> 3.41%**, CI
+[-0.3303, -0.3134], significantly better — see the README's results table and
+`validation_campaigns/speech_2xh200/EVIDENCE.md` Round 6 for the full numbers. **This is the measured
+result for Qwen2-Audio in this tutorial.**
+
+### Full fine-tune — the owner's primary recipe, trains correctly, but a real FSDP checkpoint gap on this VM
+
+```bash
+bash examples/speech-2xH200/scripts/train_speech.sh examples/speech-2xH200/configs/qwen2-audio-7b.env
 ```
 
-Root cause in plain terms: `Qwen2AudioForConditionalGeneration` nests its towers one level deeper
-(`model.audio_tower`, `model.multi_modal_projector`, `model.language_model`) on this VM's
-`transformers==5.18.0`, while the `qwen2_audio` FamilySpec declares the bare names `audio_tower` /
-`multi_modal_projector` / `language_model`. FoundationScale (as of origin/main `ced0c5c`) resolves the
-declared tower names against the loaded model's top-level modules and, when they do not resolve, **refuses
-rather than training against an unresolved tower**. This replaces an earlier, now-retracted workaround that
-bypassed this exact gap via `--adapter-target`; that workaround and everything it produced are retracted
-and must not be re-attempted.
+lr 1e-5, global batch 8 (per-device 4 x dp 2), `SHARDING=fsdp` (9.08B params does not fit under plain DDP
+replication on 2x H200 — same OOM-at-~140 GiB/GPU as every other full-FT-of-a-large-model lever in this
+repo). Training itself is clean: loss went 0.32 (step 10) -> 0.15 (step 500), the expected shape for "stop
+answering the prompt in English prose, start transcribing".
 
-Cost of the refusal: it fires in **~20 seconds**, before any GPU training time is spent, and it produces
-**NO checkpoint**.
+The checkpoint save is where it gets real:
 
-This is pending a FamilySpec re-measurement for `transformers >= 5.18` — the speech-plane owner's call,
-out of scope for an `examples/`-only tutorial. Do not attempt the old workaround.
+- **`--fsdp-state-dict full` (the FSDP default): RED, exit 5.** `checkpoint.save_complete` and
+  `checkpoint.first_save` both fail — the save writes a duplicate `model.safetensors` AND
+  `pytorch_model_fsdp.bin` of near-identical size, with every tensor reported F32 instead of the declared
+  bf16. No usable checkpoint comes out of this path for this model's architecture, on this stack.
+- **`--fsdp-state-dict sharded` (what `configs/qwen2-audio-7b.env` now sets via `FSDP_STATE_DICT=sharded`):
+  the save gates PASS** (`checkpoint.save_complete` 876/876 tensors, `speech.audio_row_coverage` 4008/4008,
+  `speech.audio_placeholder_coverage` 4008/4008) — **but `speech.tower_movement` comes back `UNMEASURED`**:
+  "saved_digests unavailable (e.g. sharded save layout) — base-vs-saved tower digests cannot be compared".
+  The run's own final verdict is therefore `UNMEASURED` (exit 95), not `PASS` — nothing regressed, the gate
+  simply has no code path for a sharded save layout yet.
+
+Two more gaps surface if you try to actually evaluate that `sharded` checkpoint:
+
+1. It's raw `torch.distributed.checkpoint` (DCP) shards (`final/pytorch_model_fsdp_0/*.distcp` +
+   `.metadata`), not HF-loadable safetensors — `eval_wer.py`'s `AutoModel.from_pretrained` can't read it.
+   A manual, one-time conversion works and is mechanical (the converted state dict's 876 keys matched
+   `Qwen2AudioForConditionalGeneration`'s native naming exactly — `model.audio_tower.*`,
+   `model.language_model.*`, `lm_head.weight`):
+   ```python
+   from torch.distributed.checkpoint.format_utils import dcp_to_torch_save
+
+   dcp_to_torch_save("runs/qwen2-audio-7b/final/pytorch_model_fsdp_0", "consolidated.pth")
+   # then: load, cast the inner state dict to bf16, safetensors.torch.save_file() it next to a
+   # copy of final/config.json
+   ```
+   This script is **not** part of this tutorial — it is a diagnostic step, not a shipped recipe.
+2. Evaluating the converted checkpoint behaved abnormally: ~102 GiB on a single GPU (vs. ~35 GiB for the
+   same base model + a LoRA adapter) and still running past 55 minutes wall clock when it was killed (base
+   and LoRA both finish the same 2,683-row eval in 5-10 minutes). The likely cause: the hand-built
+   checkpoint directory has no `generation_config.json` (only `config.json` was recovered), so batched
+   generation may never hit an early EOS stop and always runs the full `max_new_tokens=128` for every row —
+   plausible, not confirmed, and not worth blocking two other testers' GPU time to confirm.
+
+**No full fine-tune WER number is reported for Qwen2-Audio-7B-Instruct.** The recipe trains correctly and
+the `sharded` workaround produces a checkpoint FoundationScale's own gates call complete, but getting a
+trustworthy, directly-measured WER out of it needs tooling this tutorial does not ship. Use the LoRA number
+above. See `validation_campaigns/speech_2xh200/EVIDENCE.md` Round 6 for the full diagnostic trail, including
+what's worth fixing upstream (why `--fsdp-state-dict full` double-writes this architecture, and wiring
+`speech.tower_movement` / a DCP-to-HF path for sharded saves).
 
 One alternative worth knowing about: `Qwen3-ASR-1.7B` is an audio-LLM that **does** train on this stack
 (`transformers >= 5.13`), verified in `validation_campaigns/speech_q3asr/EVIDENCE.md`. It is not used with
@@ -185,12 +245,15 @@ rather than demonstrate ASR fine-tuning.
 | whisper-large-v3 | full FT, 2 GPUs (batch 4/GPU) | 0 | 27.6 | 0.41 | 230 s |
 | whisper-large-v3 | full FT, 1 GPU (batch 8, owner's recipe, sentence-cased targets) | 0 | not cleanly isolated (shared-VM contention) | 0.73 | 364 s |
 | gemma-4-E4B-it | LoRA r16/a32 + towers in full, sentence-cased targets, 2 GPUs | 0 | 86.2 | 0.94 | 470 s |
+| qwen2-audio-7b | LoRA r16/a32 + towers in full, automatic adapter scoping, 2 GPUs | 0 | 82.0 | 1.07 | 541 s |
+| qwen2-audio-7b | full FT, FSDP (`sharded` state dict), 2 GPUs | 95 (see §5) | 93.3 | 0.85 | 586 s |
 
 **MEASURED, 2026-10-10/11, 2x H200.** `peak GB/GPU` is the single highest sample from a 3–5 second
 `nvidia-smi` poll during each run; `s/step` is `transformers.Trainer`'s own reported
-`train_runtime / max_steps`. All three runs stayed comfortably under 140 GiB per H200, so none of the
-memory levers `../vlm-2xH200` documents (fused-loss, FSDP sharding) were needed at this scale — a longer
-run or a bigger model would need to revisit that chapter.
+`train_runtime / max_steps`. The qwen2-audio-7b full-FT row's `wall` includes its (slower) sharded-DCP
+checkpoint write; its `exit` is 95 (UNMEASURED), not 0 — see §5 for why. Every other run here stayed
+comfortably under 140 GiB per H200 and exited 0, so none of the memory levers `../vlm-2xH200` documents
+beyond FSDP (fused-loss) were needed at this scale.
 
 **Shared-VM caveat:** this VM runs other, unrelated jobs outside this campaign's GPU-lock protocol, so
 timing numbers can vary run to run under contention. The peak-memory numbers above were filtered to this
@@ -249,10 +312,16 @@ Artifacts land in two places per run:
 - `$OUTPUT_DIR/checkpoint-<N>/` — intermediate checkpoints, every `SAVE_EVERY` steps.
 - `$OUTPUT_DIR/final/` — the end-of-run artifact.
 
-Contents depend on `ADAPTER`:
+Contents depend on `ADAPTER` and `SHARDING`:
 
-- full fine-tune (`ADAPTER` empty): `config.json` + `model.safetensors`.
-- LoRA (`ADAPTER=lora`): `adapter_config.json` + `adapter_model.safetensors`, **no base weights**.
+- full fine-tune, no FSDP (`ADAPTER` empty, `SHARDING` unset — parakeet, whisper): `config.json` +
+  `model.safetensors`, directly HF-loadable.
+- LoRA (`ADAPTER=lora` — gemma-4-E4B-it, qwen2-audio-7b-lora): `adapter_config.json` +
+  `adapter_model.safetensors`, **no base weights**.
+- full fine-tune, FSDP sharded (`ADAPTER` empty, `SHARDING=fsdp`, `FSDP_STATE_DICT=sharded` —
+  qwen2-audio-7b): `config.json` + raw `torch.distributed.checkpoint` shards
+  (`pytorch_model_fsdp_0/*.distcp` + `.metadata`), **not** directly HF-loadable — see §5 for the manual
+  conversion this needs before `eval_wer.py` can read it.
 
 Exit-code semantics: `0` means every gate passed; `1` from torchrun wrapping FoundationScale's own exit `5`
 means **some gate failed** — RED is not automatically "harmless", and it is not automatically "the
@@ -276,9 +345,11 @@ tokenizer/processor files, pass `--processor` pointing at the original base mode
   "Root Cause (first observed failure)") — that N is the real 5/95/96 FoundationScale code.
 - **librosa / layerdrop traps** — already covered in chapter 01; see that chapter rather than repeating them
   here.
-- **Qwen2-Audio-7B-Instruct refuses with exit 96 naming unresolved audio towers** — that is by design on
-  this VM's `transformers==5.18.0`; see §5. Do not attempt the old `--adapter-target` workaround (it has
-  been removed from `train_speech.sh` along with all Qwen2-Audio-specific plumbing).
+- **Qwen2-Audio-7B-Instruct full fine-tune reports RED, `checkpoint.save_complete`/`checkpoint.first_save`
+  failing** — that's the `--fsdp-state-dict full` default; see §5. Use `FSDP_STATE_DICT=sharded`
+  (already the config default) to get a gate-passing checkpoint; be aware of what that trades away.
+- Do not attempt the old `--adapter-target` enumeration workaround — it predates the owner's `0fa19be`
+  FamilySpec fix and is obsolete; LoRA's 224 target modules now resolve automatically.
 - **Whisper refuses with exit 96 naming `AUDIO_LANGUAGE`** — set `FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE=en`
   (and make sure it is unset for the other kinds).
 - **Whisper fine-tunes but WER gets worse** — check your manifest's `answer` field is SENTENCE-CASED
