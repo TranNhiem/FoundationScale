@@ -45,7 +45,7 @@ reproduction evidence; the reproduced GR00T row used the real `nvidia/Cosmos-Rea
   speech transcription is pinned exactly as its owners wrote it.
 - **Integrated == reproduced.** Rungs: (a) bit-exact input parity + seeded-action parity — done for GR00T; (b) the
   published checkpoint evaluated through a harness — done for both (table §1); (c) an FS-run fine-tune or RL run that
-  reproduces the published number — in progress (§7). The passing run becomes the upgrade regression.
+  reproduces the published number — done for GR00T fine-tuning (§4), openpi next (§7). The passing run becomes the upgrade regression.
 
 ## 3. Modules
 
@@ -105,7 +105,7 @@ compares each report's `success_rate_pct` against `ReferenceResult.upstream_valu
 the GR00T 606-trial run are the current baselines (baseline pins: openpi `215abfb` + `pi05_libero`;
 GR00T `d2b7e75` + `GR00T-N1.7-LIBERO/libero_spatial` + `Cosmos-Reason2-2B` snapshot `9ce19a19`, SDPA).
 
-Rung (c), GR00T fine-tune through the FS run spec (in progress):
+Rung (c), GR00T fine-tune through the FS run spec — REPRODUCED 2026-10-11:
 
 ```python
 from foundationscale.vla.adapters.gr00t.finetune import (
@@ -113,6 +113,11 @@ from foundationscale.vla.adapters.gr00t.finetune import (
 spec = on_gpus(PUBLISHED_LIBERO_RECIPE, 4)   # same global batch 640 -> 160/GPU, 20K steps
 argv  = render_command(spec, torchrun="torchrun", master_port=29500)  # DDP hook for num_gpus>1
 ```
+
+Measured: 20,000 steps × global batch 640 from the N1.7 base on one 4-GPU GB200 tray in 8 h 58 min (1.61 s/step,
+SDPA, real Cosmos backbone), then `python -m foundationscale.vla.eval --backend gr00t --suite libero_spatial` with the
+GR00T protocol: step 12,000 191/200 = 95.5%; final step 20,000 **481/500 = 96.2%** (Wilson 94.1–97.6) vs published
+195/200 = 97.5% — gap 1.3 ≤ two-sample margin 2.6 pt. Same harness on NVIDIA's released checkpoint: 190/200.
 
 ## 5. Environment notes (aarch64 / Blackwell data-centre)
 
@@ -144,10 +149,9 @@ argv  = render_command(spec, torchrun="torchrun", master_port=29500)  # DDP hook
 
 ## 7. Known gaps / next
 
-- **GR00T rung (c) in progress**: the FS-spec fine-tune on the real Cosmos backbone — 1 GPU 1.36 it/s = 109 samples/s,
-  3 GPUs DDP 1.18 it/s × 240 = 283 samples/s (2.6×, 87% efficiency), loss 1.222/1.217; budget ~9.4 h for the published
-  20K × 640 = 12.8M samples on one 4-GPU tray; the 4-GPU run in progress steps at ~1.5 s per 640-sample step
-  (~430 samples/s). Published success not yet re-attained, so the registry row stays at rung (b).
+- **GR00T rung (c) done, one seed**: the training run is not yet a registry row (its checkpoint is ours, not an upstream
+  artifact), so the Level 3 regression still replays the published checkpoint. Scaling measured on the way: 1 GPU
+  109 samples/s; 3 GPUs DDP 283 samples/s (87% efficiency); 4 GPUs ~400 samples/s (1.61 s per 640-sample step).
 - **openpi fine-tune** (Phase-1 T3, rung c) not started; the JAX → PyTorch conversion path is the prerequisite.
 - **More suites**: only `libero_spatial` is reproduced; `libero_goal` (97.5), `libero_object` (98.45), `libero_long`
   (94.35), and openpi's goal/object/long (98.2/98.0/92.4) are the remaining published targets at the same row rules.
