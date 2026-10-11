@@ -59,7 +59,7 @@ import re
 import shutil
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -102,6 +102,15 @@ class DiskWeightSync:
     reads this field; see the module docstring. ``keep_last`` published step
     directories are kept under ``publish_root``; older ones are deleted --
     never anything outside ``publish_root``.
+
+    Retention (``_prune``): the ``keep_last`` highest-numbered step directories
+    are kept, UNION every step directory whose step satisfies
+    ``step % archive_every == 0`` when ``archive_every`` is set, UNION every
+    step explicitly marked via ``protect(step)``. Everything else matching the
+    ``step_<N>`` pattern is deleted -- never anything outside ``publish_root``.
+    With the defaults (``archive_every=None``, nothing protected) this keeps
+    exactly the ``keep_last`` highest-numbered step directories, byte-for-byte
+    the behaviour before this retention rule existed.
     """
 
     publish_root: str
@@ -109,6 +118,10 @@ class DiskWeightSync:
     save_fn: Callable[[str], None] | None = None
     keep_last: int = 2
     mode: Literal["reload_endpoint", "restart"] = "reload_endpoint"
+    archive_every: int | None = None
+    # Steps the stability guard protects (best-k); mutable state on a frozen dataclass is
+    # fine for a set's contents. Not an init argument and not part of equality.
+    _protected_steps: set[int] = field(default_factory=set, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         where = "DiskWeightSync"
@@ -139,6 +152,14 @@ class DiskWeightSync:
             raise DiskWeightSyncRefusal(
                 f"{where}: field 'mode' is {_described(self.mode)}: it must be one of {_MODES}"
             )
+        if self.archive_every is not None and (
+            type(self.archive_every) is not int or self.archive_every < 1
+        ):
+            raise DiskWeightSyncRefusal(
+                f"{where}: field 'archive_every' is {_described(self.archive_every)}: it "
+                f"must be None or a real int >= 1 -- an archive interval of zero or less "
+                f"would match no step (or every step) by 'step % archive_every == 0'"
+            )
 
     def capabilities(self) -> SyncCapabilities:
         """This realisation's claim: one transport ("disk"), and it populates both
@@ -156,6 +177,35 @@ class DiskWeightSync:
                 f"be a real int >= 0"
             )
         return f"{self.publish_root}/step_{step:06d}"
+
+    def protect(self, step: int) -> None:
+        """Mark ``step`` as protected from pruning: its published directory survives
+        ``_prune`` regardless of ``keep_last`` and ``archive_every``.
+
+        ``step`` must be a real ``int >= 0``. Idempotent: protecting an
+        already-protected step is a no-op.
+        """
+        if type(step) is not int or step < 0:
+            raise DiskWeightSyncRefusal(
+                f"DiskWeightSync.protect: parameter 'step' is {_described(step)}: it must "
+                f"be a real int >= 0"
+            )
+        self._protected_steps.add(step)
+
+    def unprotect(self, step: int) -> None:
+        """Remove ``step`` from the protected set (a no-op if it was not protected),
+        so its published directory is again subject to the ordinary retention
+        rule in ``_prune``.
+
+        ``step`` must be a real ``int >= 0``. Idempotent: unprotecting a step
+        that is not protected is a no-op.
+        """
+        if type(step) is not int or step < 0:
+            raise DiskWeightSyncRefusal(
+                f"DiskWeightSync.unprotect: parameter 'step' is {_described(step)}: it must "
+                f"be a real int >= 0"
+            )
+        self._protected_steps.discard(step)
 
     def push(self, path: str) -> SyncReport:
         """Push the ALREADY-SAVED checkpoint at ``path`` to every fleet server, prune
@@ -276,12 +326,15 @@ class DiskWeightSync:
 
     def _prune(self) -> None:
         """Delete every ``step_<N>`` directory directly under ``publish_root`` except
-        the ``keep_last`` highest-numbered ones. CONFINED to ``publish_root``:
-        ``publish_root`` is resolved to its canonical real path first, and a
-        candidate is only deleted when it is a real (non-symlink) directory whose
-        OWN resolved path is a direct child of that canonical root -- so a symlink
-        planted under ``publish_root``, or any other escape, can never point this
-        deletion anywhere else. Never touches a non-matching entry.
+        those kept by the retention rule: the ``keep_last`` highest-numbered ones,
+        UNION every step with ``step % archive_every == 0`` when ``archive_every``
+        is set, UNION every step marked via ``protect(step)``. CONFINED to
+        ``publish_root``: ``publish_root`` is resolved to its canonical real path
+        first, and a candidate is only deleted when it is a real (non-symlink)
+        directory whose OWN resolved path is a direct child of that canonical
+        root -- so a symlink planted under ``publish_root``, or any other escape,
+        can never point this deletion anywhere else. Never touches a non-matching
+        entry.
 
         This also means ``{publish_root}/.serving_cache`` (``servable.
         complete_for_serving``'s extras-file cache, when ``RolloutHost.
@@ -311,6 +364,13 @@ class DiskWeightSync:
                 continue
             numbered.append((int(match.group(1)), resolved_child))
         numbered.sort(key=lambda pair: pair[0])
-        stale = numbered[: max(0, len(numbered) - self.keep_last)]
+        keep_last_steps = {step for step, _ in numbered[-self.keep_last :]} if numbered else set()
+        archive_steps = (
+            {step for step, _ in numbered if step % self.archive_every == 0}
+            if self.archive_every is not None
+            else set()
+        )
+        kept = keep_last_steps | archive_steps | self._protected_steps
+        stale = [(step, directory) for step, directory in numbered if step not in kept]
         for _, directory in stale:
             shutil.rmtree(directory)

@@ -82,6 +82,45 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/agentic_rl/sandbox/enroot.py": (
+        "enroot sandbox (per-trial containers, no-network via unshare, private /tmp, contained "
+        "file transfer): line-covered by tests/agentic_rl/test_sandbox_enroot.py and run on a "
+        "GB200 tray, but no mutation row yet proves a dropped containment check is caught."
+    ),
+    "src/foundationscale/agentic_rl/sandbox/harbor_env.py": (
+        "Harbor environment backend over enroot sandboxes: line-covered by "
+        "tests/agentic_rl/test_sandbox_harbor_env.py against Harbor stand-ins and run in a real "
+        "Harbor trial on a GB200 tray, but no mutation row yet."
+    ),
+    "src/foundationscale/agentic_rl/sandbox/build.py": (
+        "arm64 sandbox image builder from a Dockerfile subset: line-covered by "
+        "tests/agentic_rl/test_sandbox_build.py and run on a GB200 tray, but no mutation row yet."
+    ),
+    "src/foundationscale/agentic_rl/stability.py": (
+        "rollout-reward collapse guard (EMA, peak, best-k, stop/warn): line-covered by "
+        "tests/agentic_rl/test_stability.py incl. the measured 100-step collapse shape, but no "
+        "mutation row yet proves a flipped alarm comparison would be caught."
+    ),
+    "src/foundationscale/agentic_rl/gateway/server.py": (
+        "gateway request routing, control plane and HTTP front end: line-covered by "
+        "tests/agentic_rl/test_gateway_server.py (fakes + one real-socket smoke), but no mutation "
+        "row yet proves a dropped logprob refusal or an unguarded weight commit would be caught."
+    ),
+    "src/foundationscale/agentic_rl/gateway/session.py": (
+        "gateway sampling contract, session store and episode assembly: line-covered by "
+        "tests/agentic_rl/test_gateway_session.py, but no mutation row yet proves a dropped "
+        "override record or a silent capacity drop would be caught."
+    ),
+    "src/foundationscale/agentic_rl/gateway/wire.py": (
+        "gateway wire-format translation (OpenAI Chat/Responses, Anthropic Messages, Gemini <-> "
+        "canonical; responses and SSE): line-covered by tests/agentic_rl/test_gateway_wire.py, "
+        "but no mutation row yet proves a dropped refusal or a mis-ordered message is caught."
+    ),
+    "src/foundationscale/agentic_rl/trajectory_v2.py": (
+        "fs.trajectory/v2 contract (segments, per-token planes, reward events, v1 adapters, "
+        "flatten_v2): line-covered by tests/agentic_rl/test_trajectory_v2.py, but no mutation "
+        "row yet proves a flipped mask/NaN rule or a dropped refusal would be caught."
+    ),
     "src/foundationscale/vla/adapters/gr00t/contract.py": (
         "GR00T checkpoint contract reader (processor_config.json -> embodiment contract, "
         "ChunkSpec, observation dict): line-covered by tests/vla and bit-exact against GR00T's "
