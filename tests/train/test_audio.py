@@ -649,8 +649,8 @@ def test_full_train_modules_for_the_measured_speech_families() -> None:
     by_name = {spec.name: spec for spec in REGISTRY}
     assert audio_full_train_modules(by_name["whisper"]) == ["model.encoder"]
     assert audio_full_train_modules(by_name["qwen2_audio"]) == [
-        "audio_tower",
-        "multi_modal_projector",
+        "model.audio_tower",
+        "model.multi_modal_projector",
     ]
     # Parakeet trains its subsampling front end in full and adapts its conformer layers.
     assert audio_full_train_modules(by_name["parakeet_ctc"]) == ["encoder.subsampling"]

@@ -13,7 +13,7 @@ NEMO_PY="fs-nemo-26-08 /home/hhri-ai/hh28144/envs/nemo-speech-asr/bin/python"
 # HF steps run in the python of their upstream profile (levels.DecodeStep.profile).
 declare -A HF_PY=(
   [hf-26.04]="fs-g4e4b-nemo-automodel-26-04_compute python3"
-  [hf-cand-519]="fs-g4e4b-nemo-automodel-26-04_compute /home/hhri-ai/hh28144/envs/hf-cand-519/bin/python"
+  [hf-26.10]="fs-g4e4b-nemo-automodel-26-04_compute /home/hhri-ai/hh28144/envs/hf-cand-519/bin/python"
 )
 free_gpu() { nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits | awk -F', ' '$2<1000{print $1; exit}'; }
 

@@ -299,9 +299,13 @@ REGISTRY: tuple[FamilySpec, ...] = (
     FamilySpec(
         name="qwen2_audio",
         model_types=("qwen2_audio",),
-        # No "model." prefix on this checkpoint: the three roots are top-level.
-        language_prefixes=("language_model",),
-        towers=(("audio_tower", "audio"), ("multi_modal_projector", "audio")),
+        # Re-measured with transformers 5.19 (hf-26.10, the HF lane): the three roots now sit
+        # under "model." (5.5 had them top-level, plus a tied lm_head now at the top). Both
+        # calls stay positional in 5.19 (`self.audio_tower(input_features, attention_mask=...)`,
+        # `self.multi_modal_projector(selected_audio_feature)`), so the wrap points carry over.
+        # On transformers 5.5 these paths do not resolve and the run refuses (96) at load.
+        language_prefixes=("model.language_model",),
+        towers=(("model.audio_tower", "audio"), ("model.multi_modal_projector", "audio")),
         adapter_leaf_modules=(
             "q_proj",
             "k_proj",
@@ -312,7 +316,7 @@ REGISTRY: tuple[FamilySpec, ...] = (
             "down_proj",
         ),
         expert_count_path=("text_config", "num_experts"),
-        adapter_full_train=("audio_tower", "multi_modal_projector"),
+        adapter_full_train=("model.audio_tower", "model.multi_modal_projector"),
     ),
     # Qwen3-ASR, measured on Qwen3-ASR-1.7B-hf with transformers 5.19. get_audio_features calls
     # the encoder BY KEYWORD (`self.audio_tower(input_features=..., input_features_mask=...)`),

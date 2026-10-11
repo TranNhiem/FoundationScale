@@ -358,7 +358,6 @@ MODELS: tuple[ModelEntry, ...] = (
             ),
         ),
         status=SupportStatus.SUPPORTED,
-        profile="hf-cand-519",
         eval_script="validation_campaigns/speech_repro/eval_qwen3_asr.py",
     ),
 )

@@ -158,8 +158,19 @@ two profiles differ by at most 0.007 loss. Qwen3-ASR gained a FamilySpec and a c
 `apply_transcription_request`. Fine-tuned in FS on Earnings-22, it goes 14.54 -> 9.66 on the
 held-out calls (validation_campaigns/speech_q3asr).
 
-**Blockers before `hf-cand-519` replaces hf-26.04 as the HF lane:**
-1. Re-measure the qwen2_audio FamilySpec. Transformers 5.18+ nests the model under `model.`, and
-   FS now refuses (96) on an unresolvable tower instead of training into a VACUOUS gate.
-2. Re-run the training-lane regression for Gemma-4. Whisper is done: 1.69 under both profiles
-   (validation_campaigns/speech_repro).
+## Promotion: `hf-26.10` is the HF lane (2026-10-11)
+
+The candidate was promoted and renamed `hf-26.10` (the venv keeps its path, `~/envs/hf-cand-519`).
+`hf-26.04` is retired but stays in `PROFILES`, so results it produced still name their stack.
+Both blockers were cleared on GB200:
+1. **qwen2_audio FamilySpec** re-measured for the 5.19 layout (`model.audio_tower`,
+   `model.multi_modal_projector`, `model.language_model`; both calls still positional). A 10-step
+   LoRA run with the towers in full PASSes with automatic adapter scoping (224 modules; audio rows
+   and placeholders 88/88; tower movement 473/487 and 2/2). On transformers 5.5 it now refuses at load.
+2. **Gemma-4-E4B training regression**: 30 seeded steps with two runs per profile. Step 1 is
+   identical (0.3488). The largest cross-profile difference (0.022) equals the within-profile
+   run-to-run difference (0.021), and tower movement is 187 vs 186 of 271. Whisper reads 1.69
+   under both profiles; Parakeet differs by at most 0.007.
+
+Level 3 under the promoted default passes 4/4 (gaps +0.004 to +0.014; runner exit 0;
+validation_campaigns/speech_repro/EVIDENCE.md).

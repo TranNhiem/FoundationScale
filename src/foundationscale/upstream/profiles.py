@@ -76,6 +76,8 @@ PROFILES: tuple[UpstreamProfile, ...] = (
         },
         captured="2026-10-10",
     ),
+    # RETIRED as the HF lane 2026-10-11 (kept so results it produced still name their stack).
+    # Qwen2-Audio refuses here: its FamilySpec is measured on the 5.19 module layout.
     UpstreamProfile(
         name="hf-26.04",
         backend="hf",
@@ -95,16 +97,21 @@ PROFILES: tuple[UpstreamProfile, ...] = (
         },
         captured="2026-10-10",
     ),
-    # Candidate for the HF lane: the hf-26.04 container plus a venv carrying transformers 5.19
+    # THE HF LANE since 2026-10-11 (promoted from candidate "hf-cand-519"): the hf-26.04
+    # container plus a venv carrying transformers 5.19
     # (with its tokenizers and huggingface_hub); every other package is hf-26.04's own, reached
     # through a .pth to the container's /opt/venv placed after the venv's site-packages.
     # Parakeet-CTC reproduces its card under it (Level 3), and the FS trainer runs: a seeded
     # 30-step fine-tune is bit-deterministic within each profile and differs across them by
-    # at most 0.007 loss (transformers forward numerics) -- validation_campaigns/speech_repro.
+    # at most 0.007 loss (transformers forward numerics). Whisper reads 1.69 under both, Gemma-4
+    # differs by no more than its own run-to-run noise, and Qwen2-Audio was re-measured for the
+    # 5.19 module layout -- validation_campaigns/speech_repro.
     UpstreamProfile(
-        name="hf-cand-519",
+        name="hf-26.10",
         backend="hf",
-        container="fs-g4e4b-nemo-automodel-26-04_compute + venv hf-cand-519",
+        container=(
+            "fs-g4e4b-nemo-automodel-26-04_compute + venv ~/envs/hf-cand-519 (python in the venv)"
+        ),
         python="3.12.3",
         packages={
             "torch": "2.11.0a0+eb65b36914.nv26.2",
