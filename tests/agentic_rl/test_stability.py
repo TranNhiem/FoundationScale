@@ -711,13 +711,13 @@ def _apply(guard: StabilityGuard, step: int) -> _RecordingSync:
 
 
 def test_host_protects_the_checkpoint_that_produced_a_best_rollout() -> None:
-    """A best rollout at step r was sampled with checkpoint r-1, so r-1 is protected."""
+    """A best rollout at step r sampled step_r (written by publish(r-1)), so r is protected."""
     guard = StabilityGuard(GuardConfig(ema_alpha=1.0, best_k=1, min_steps=1))
     guard.update(_stats(0, 0.1))
     guard.update(_stats(1, 0.2))
     guard.update(_stats(2, 0.9))
     sync = _apply(guard, 2)
-    assert sync.protected == [1]
+    assert sync.protected == [2]
 
 
 def test_host_stops_on_a_collapse_when_action_is_stop() -> None:
@@ -754,9 +754,9 @@ def test_host_guard_is_a_no_op_before_any_verdict_or_without_a_sync() -> None:
 
 
 def test_host_unprotects_a_checkpoint_when_its_rollout_leaves_the_best_k() -> None:
-    """An evicted best rollout r releases checkpoint r-1 back to normal pruning."""
+    """An evicted best rollout r releases checkpoint step_r back to normal pruning."""
     guard = StabilityGuard(GuardConfig(ema_alpha=1.0, best_k=1, min_steps=1))
     guard.update(_stats(1, 0.2))
     guard.update(_stats(2, 0.9))
     sync = _apply(guard, 2)
-    assert sync.unprotected == [0]
+    assert sync.unprotected == [1]

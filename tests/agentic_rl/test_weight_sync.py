@@ -422,3 +422,33 @@ def test_protect_refuses_non_step_values(
     sync = DiskWeightSync(save_fn=_save_fn([]), publish_root=publish_root, fleet=fleet)
     with pytest.raises(DiskWeightSyncRefusal):
         sync.protect(bad)  # type: ignore[arg-type]
+
+
+def test_guard_keeps_the_checkpoint_each_best_rollout_sampled(
+    publish_root: str, fleet: EngineFleet
+) -> None:
+    """Replays the trainer order (rollout r, publish(r) -> step_{r+1}, prune, guard) and
+    checks every best-k rollout's checkpoint survives. Rollout r samples the weights in
+    step_r; protecting step_{r-1} instead lost all of them on a GB200 run (keep_last=2
+    had already pruned step_{r-1} when the guard ran)."""
+    from types import SimpleNamespace
+
+    from foundationscale.agentic_rl.rollout_host import RolloutHost
+    from foundationscale.agentic_rl.stability import GuardConfig, RolloutStats, StabilityGuard
+
+    sync = DiskWeightSync(save_fn=_save_fn([]), publish_root=publish_root, fleet=fleet, keep_last=2)
+    guard = StabilityGuard(GuardConfig(best_k=3, min_steps=2))
+    host = SimpleNamespace(guard=guard, weight_sync=sync)
+    rewards = [0.1, 0.2, 0.5, 0.9, 0.95, 0.6, 0.1, 0.05, 0.02, 0.01, 0.01, 0.0]
+    for r, mean in enumerate(rewards):
+        guard.update(
+            RolloutStats(step=r, scored=4, abstained=0, reward_mean=mean, zero_reward_fraction=0.0)
+        )
+        _steps(publish_root, r + 1)  # publish(r) writes step_{r+1}
+        sync._prune()
+        RolloutHost._apply_guard(host, r)  # type: ignore[arg-type]
+    best = guard.last_verdict.best_steps if guard.last_verdict else ()
+    assert best and all(r >= 1 for r in best)
+    left = _left(publish_root)
+    assert [f"step_{r:06d}" for r in best if f"step_{r:06d}" not in left] == []
+    assert len(left) == len(set(best)) + 2  # nothing else retained

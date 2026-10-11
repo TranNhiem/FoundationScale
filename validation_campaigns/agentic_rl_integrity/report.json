@@ -1,0 +1,34 @@
+{
+ "sealed": [
+  "/tests",
+  "/testbed/.git"
+ ],
+ "agent_view": [
+  "ls: cannot access '/testbed/.git': No such file or directory",
+  "cat: /tests/t.py: No such file or directory",
+  "rc=1"
+ ],
+ "unsealed": [
+  "/tests",
+  "/testbed/.git"
+ ],
+ "verifier_view": [
+  "gold",
+  "ref"
+ ],
+ "attack_dangling_symlink": {
+  "assert_sealed": "FIRED: hidden paths present in sandbox: 1 of 3 hidden paths exist: ['/tests']",
+  "unseal": "FIRED: agent wrote to hidden path: '/tests' exists in the sandbox (0 of 2 vaulted paths restored)"
+ },
+ "attack_planted_file": {
+  "assert_sealed": "FIRED: hidden paths present in sandbox: 1 of 3 hidden paths exist: ['/tests']",
+  "unseal": "FIRED: agent wrote to hidden path: '/tests' exists in the sandbox (0 of 2 vaulted paths restored)"
+ },
+ "attack_symlinked_parent": {
+  "assert_sealed": "FIRED: hidden path ancestor is a symlink: $HOME/.enroot-sbx/integ-symlinked-parent/testbed (for $HOME/...",
+  "unseal": "FIRED: hidden path ancestor is a symlink: $HOME/.enroot-sbx/integ-symlinked-parent/testbed (for $HOME/..."
+ },
+ "egress_no-network": false,
+ "egress_public": true,
+ "arch": "aarch64"
+}
