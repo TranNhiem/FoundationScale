@@ -3,29 +3,67 @@
 The function's whole contract lives in four asymmetries that a passing build must keep
 apart: one interface name feeding two consumers (NCCL and gloo agree, or they silently
 disagree at runtime); an operator export that always wins, including the empty string;
-``mnnvl_available`` that only ever writes when it is False; and ``ib_hca_pattern`` that is
-deliberately never written because its glob would be a measured regression if exported
-verbatim. Every test here calls the real function with a real registered profile fetched
-through ``profile_by_name`` and reshaped with ``dataclasses.replace`` -- ClusterProfile's
-constructor is not part of the surface under test, so this module never guesses at it.
+``mnnvl_available`` that writes 0 when it is False, or when it is True but no nvidia-imex
+daemon runs on the node; and ``ib_hca_pattern`` that reaches NCCL_IB_HCA only through sysfs
+discovery of InfiniBand ports, never as the raw glob. Every test here calls the real
+function with a real registered profile fetched through ``profile_by_name`` and reshaped
+with ``dataclasses.replace`` -- ClusterProfile's constructor is not part of the surface
+under test, so this module never guesses at it.
 
 No monkeypatch, no GPU: ``environ`` is a parameter precisely so a plain ``dict`` stands in
-for ``os.environ``, and no arm of this function touches hardware.
+for ``os.environ``, and the two host probes (the InfiniBand sysfs root and the IMEX daemon
+check) are parameters too. The module-level wrapper below pins both to "absent" and
+"unmeasured" so no test reads the host it happens to run on.
 """
 
 from __future__ import annotations
 
 import dataclasses
 from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from foundationscale.topology import (
     PROFILES,
     ClusterProfile,
-    apply_fabric_declaration,
+    _imex_daemon_running,
     profile_by_name,
 )
+from foundationscale.topology import apply_fabric_declaration as _apply_fabric_declaration
+
+# A sysfs root that cannot exist, so discovery reads UNMEASURED unless a test builds a tree.
+_ABSENT_SYSFS = Path("/nonexistent/fs-test/infiniband")
+_IB_HCAS = ("mlx5_0", "mlx5_1", "mlx5_4", "mlx5_5")
+_ETHERNET_DEVICES = ("mlx5_2", "mlx5_3", "mlx5_6", "mlx5_7")
+
+
+def apply_fabric_declaration(
+    profile: ClusterProfile, environ: dict[str, str], **probes: Any
+) -> tuple[str, ...]:
+    """The real function with both host probes pinned unless a test passes its own."""
+    probes.setdefault("ib_sysfs_root", _ABSENT_SYSFS)
+    probes.setdefault("imex_running", lambda: None)
+    return _apply_fabric_declaration(profile, environ, **probes)
+
+
+def _make_device(sysfs_root: Path, name: str, link_layer: str, state: str = "4: ACTIVE") -> None:
+    """One fake sysfs HCA with a port-1 link_layer and state (the shape discovery reads)."""
+    port1 = sysfs_root / name / "ports" / "1"
+    port1.mkdir(parents=True)
+    (port1 / "link_layer").write_text(f"{link_layer}\n", encoding="utf-8")
+    (port1 / "state").write_text(f"{state}\n", encoding="utf-8")
+
+
+def _two_tray_node(root: Path) -> Path:
+    """A GB200 tray's eight HCAs: four InfiniBand compute ports, four Ethernet bond members."""
+    for name in _IB_HCAS:
+        _make_device(root, name, "InfiniBand")
+    for name in _ETHERNET_DEVICES:
+        _make_device(root, name, "Ethernet")
+    return root
+
 
 # The variables the function considers, in the order it considers them: two socket
 # consumers, the MNNVL switch, and the field it declines. The shape test below pins
@@ -179,20 +217,37 @@ def test_mnnvl_unavailable_disables_mnnvl() -> None:
     assert "NCCL_MNNVL_ENABLE=0" in _line_for(announcements, "NCCL_MNNVL_ENABLE")
 
 
-def test_mnnvl_available_sets_nothing_and_says_why() -> None:
-    """MNNVL available is not MNNVL required: the True branch exports nothing --
-    the key is ABSENT from the mapping, not set to "1" -- and the announcement
-    states that NCCL keeps the decision.
+@pytest.mark.parametrize(("imex", "state"), [(True, "running"), (None, "UNMEASURED")])
+def test_mnnvl_available_sets_nothing_and_says_why(imex: bool | None, state: str) -> None:
+    """MNNVL available is not MNNVL required: with the IMEX daemon running, or with
+    its state unmeasurable, the True branch exports nothing -- the key is ABSENT
+    from the mapping, not set to "1" -- and the line says which of the two it was.
     """
     profile = _profile_with(nccl_socket_ifname="eth0", mnnvl_available=True)
     environ: dict[str, str] = {}
 
-    announcements = apply_fabric_declaration(profile, environ)
+    announcements = apply_fabric_declaration(profile, environ, imex_running=lambda: imex)
 
     assert "NCCL_MNNVL_ENABLE" not in environ
     line = _line_for(announcements, "NCCL_MNNVL_ENABLE")
     assert "nothing set" in line
     assert "AVAILABLE" in line
+    assert state in line
+
+
+def test_mnnvl_available_without_an_imex_daemon_is_disabled() -> None:
+    """An NVLink Switch in the rack does not make multi-node NVLink usable: with no
+    nvidia-imex daemon on the node NCCL would still select MNNVL and spin in its
+    first collective, so the profile's "available" is overridden to 0 and the
+    line names the missing daemon.
+    """
+    profile = _profile_with(nccl_socket_ifname="eth0", mnnvl_available=True)
+    environ: dict[str, str] = {}
+
+    announcements = apply_fabric_declaration(profile, environ, imex_running=lambda: False)
+
+    assert environ["NCCL_MNNVL_ENABLE"] == "0"
+    assert "nvidia-imex" in _line_for(announcements, "NCCL_MNNVL_ENABLE")
 
 
 def test_an_operator_mnnvl_export_wins_over_an_unavailable_profile() -> None:
@@ -214,11 +269,10 @@ def test_an_operator_mnnvl_export_wins_over_an_unavailable_profile() -> None:
 
 @pytest.mark.parametrize("mnnvl_available", [False, True])
 @pytest.mark.parametrize("ifname", ["eth0", ""])
-def test_ib_hca_is_never_set_under_any_declaration(ifname: str, mnnvl_available: bool) -> None:
-    """NCCL_IB_HCA is never written, whatever the profile declares: the field's
-    glob does not fit NCCL's prefix-list syntax, and exporting a value known to
-    mis-match is worse than exporting none -- on every combination of the other
-    two inputs, not just the happy one.
+def test_ib_hca_is_not_set_without_a_discovery_surface(ifname: str, mnnvl_available: bool) -> None:
+    """With no readable InfiniBand sysfs root NCCL_IB_HCA is not written, whatever
+    else the profile declares: the glob itself is never exported, and an
+    unmeasured fabric gets no pin -- on every combination of the other two inputs.
     """
     profile = _profile_with(nccl_socket_ifname=ifname, mnnvl_available=mnnvl_available)
     environ: dict[str, str] = {}
@@ -240,9 +294,98 @@ def test_the_ib_hca_decline_names_the_declined_field_and_its_value() -> None:
     announcements = apply_fabric_declaration(profile, environ)
 
     line = _line_for(announcements, "NCCL_IB_HCA")
-    assert "ib_hca_pattern" in line
-    assert f"ib_hca_pattern={profile.ib_hca_pattern!r}" in line
+    assert repr(profile.ib_hca_pattern) in line
     assert "NOT set" in line
+    assert "unmeasured" in line
+
+
+def test_ib_hca_pins_exactly_the_infiniband_ports_of_a_gb200_tray(tmp_path: Path) -> None:
+    """REGRESSION for the two-tray run: unpinned, NCCL paired a local InfiniBand HCA
+    with a remote RoCE one and died in its first large collective. Discovery must
+    export the four InfiniBand ports, port 1 each, and none of the Ethernet four.
+    """
+    profile = _profile_with(nccl_socket_ifname="eth0", mnnvl_available=False)
+    environ: dict[str, str] = {}
+
+    announcements = apply_fabric_declaration(
+        profile, environ, ib_sysfs_root=_two_tray_node(tmp_path)
+    )
+
+    assert environ["NCCL_IB_HCA"] == "mlx5_0:1,mlx5_1:1,mlx5_4:1,mlx5_5:1"
+    for name in _ETHERNET_DEVICES:
+        assert name not in environ["NCCL_IB_HCA"]
+    assert "applied" in _line_for(announcements, "NCCL_IB_HCA")
+
+
+def test_ib_hca_is_not_set_when_only_ethernet_ports_match(tmp_path: Path) -> None:
+    """The glob matched, the fabric did not: no InfiniBand port survives, so nothing
+    is exported and the line names the discovery verdict.
+    """
+    for name in _ETHERNET_DEVICES:
+        _make_device(tmp_path, name, "Ethernet")
+    profile = _profile_with(nccl_socket_ifname="eth0", mnnvl_available=False)
+    environ: dict[str, str] = {}
+
+    announcements = apply_fabric_declaration(profile, environ, ib_sysfs_root=tmp_path)
+
+    assert "NCCL_IB_HCA" not in environ
+    assert "none_survived" in _line_for(announcements, "NCCL_IB_HCA")
+
+
+@pytest.mark.parametrize("operator_value", ["mlx5_0", ""])
+def test_an_operator_ib_hca_export_wins_over_discovery(tmp_path: Path, operator_value: str) -> None:
+    """An operator's NCCL_IB_HCA, including the empty string, is never replaced by
+    the discovered list -- even when discovery would have succeeded.
+    """
+    profile = _profile_with(nccl_socket_ifname="eth0", mnnvl_available=False)
+    environ = {"NCCL_IB_HCA": operator_value}
+
+    announcements = apply_fabric_declaration(
+        profile, environ, ib_sysfs_root=_two_tray_node(tmp_path)
+    )
+
+    assert environ["NCCL_IB_HCA"] == operator_value
+    assert "left alone" in _line_for(announcements, "NCCL_IB_HCA")
+
+
+def test_a_blank_ib_hca_pattern_sets_nothing(tmp_path: Path) -> None:
+    """A profile with no ib_hca_pattern has no opinion: nothing is discovered or set."""
+    profile = _profile_with(nccl_socket_ifname="eth0", mnnvl_available=False, ib_hca_pattern="")
+    environ: dict[str, str] = {}
+
+    announcements = apply_fabric_declaration(
+        profile, environ, ib_sysfs_root=_two_tray_node(tmp_path)
+    )
+
+    assert "NCCL_IB_HCA" not in environ
+    assert "declares no ib_hca_pattern" in _line_for(announcements, "NCCL_IB_HCA")
+
+
+def test_imex_probe_reads_process_names_and_abstains_without_proc(tmp_path: Path) -> None:
+    """The IMEX probe answers True/False from ``<proc>/*/comm`` and None when there
+    is no proc tree to read -- an absent surface is not evidence of an absent daemon.
+    """
+    proc = tmp_path / "proc"
+    (proc / "1").mkdir(parents=True)
+    (proc / "1" / "comm").write_text("systemd\n", encoding="utf-8")
+    assert _imex_daemon_running(proc) is False
+    (proc / "42").mkdir()
+    (proc / "42" / "comm").write_text("nvidia-imex\n", encoding="utf-8")
+    assert _imex_daemon_running(proc) is True
+    assert _imex_daemon_running(tmp_path / "absent") is None
+
+
+def test_imex_probe_skips_an_entry_that_vanished_mid_scan(tmp_path: Path) -> None:
+    """A process that exits while /proc is being walked leaves a comm that cannot be
+    read; that entry is skipped, not taken as evidence either way.
+    """
+    proc = tmp_path / "proc"
+    (proc / "7" / "comm").mkdir(parents=True)  # read_text raises IsADirectoryError
+    (proc / "9").mkdir()
+    (proc / "9" / "comm").write_text("bash\n", encoding="utf-8")
+    # No readable entry is the daemon, so the walk must visit the unreadable one
+    # whatever order the filesystem lists them in -- and still answer False.
+    assert _imex_daemon_running(proc) is False
 
 
 @pytest.mark.parametrize("blank", ["", "   ", "\t"])
@@ -332,8 +475,7 @@ def test_every_registered_profile_applies_without_exception_and_reports() -> Non
         announcements = apply_fabric_declaration(profile, environ)
         assert announcements, f"profile {profile.name!r} produced no announcements"
         assert all(isinstance(line, str) and line for line in announcements)
-        # Declined-and-announced holds for the whole registry, not one fixture:
-        # whatever a profile declares, the glob never becomes an export.
+        # With no discovery surface, no profile's glob becomes an export.
         assert "NCCL_IB_HCA" not in environ, (
             f"profile {profile.name!r} caused NCCL_IB_HCA to be exported"
         )
