@@ -87,6 +87,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "file transfer): line-covered by tests/agentic_rl/test_sandbox_enroot.py and run on a "
         "GB200 tray, but no mutation row yet proves a dropped containment check is caught."
     ),
+    "src/foundationscale/agentic_rl/sandbox/mini_swe_env.py": (
+        "mini-SWE-agent execution environment over enroot sandboxes: line-covered by "
+        "tests/agentic_rl/test_sandbox_mini_swe_env.py and run end to end on a GB200 tray, but no "
+        "mutation row yet."
+    ),
     "src/foundationscale/agentic_rl/sandbox/harbor_env.py": (
         "Harbor environment backend over enroot sandboxes: line-covered by "
         "tests/agentic_rl/test_sandbox_harbor_env.py against Harbor stand-ins and run in a real "
@@ -95,6 +100,11 @@ PENDING_ENROLMENT: dict[str, str] = {
     "src/foundationscale/agentic_rl/sandbox/build.py": (
         "arm64 sandbox image builder from a Dockerfile subset: line-covered by "
         "tests/agentic_rl/test_sandbox_build.py and run on a GB200 tray, but no mutation row yet."
+    ),
+    "src/foundationscale/agentic_rl/evaluation.py": (
+        "per model-harness evaluation report (pass rate + Wilson CI, tokens, turns, no-action "
+        "turns, failure categories): line-covered by tests/agentic_rl/test_evaluation.py, but no "
+        "mutation row yet proves a flipped pass threshold would be caught."
     ),
     "src/foundationscale/agentic_rl/stability.py": (
         "rollout-reward collapse guard (EMA, peak, best-k, stop/warn): line-covered by "
