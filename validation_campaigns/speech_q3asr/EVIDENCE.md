@@ -1,7 +1,7 @@
 # Qwen3-ASR-1.7B: fine-tuned in FoundationScale on Earnings-22 (2026-10-10/11)
 
 The first model adopted through the upstream process (validation_campaigns/speech_repro) that FS
-also trains. Profile `hf-cand-519` (transformers 5.19.0); GB200, r04dgx03 GPUs 2-3.
+also trains. Profile `hf-cand-519` (transformers 5.19.0); one GB200 tray, 2 GPUs.
 
 ## 1. The training format, measured before any code
 

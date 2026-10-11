@@ -2,23 +2,24 @@
 # Level 3 of the upstream upgrade process: reproduce every `supported` registry model against its
 # model-card reference, each in its own backend container. Exit 0 all PASS, 5 any REGRESSION.
 # Usage: run_levels.sh SRC_DIR OUT_DIR   (SRC_DIR: the FoundationScale src/ to test; one free GPU per step)
+CLUSTER_HOME="${CLUSTER_HOME:-$HOME}"  # holds datasets/, pretraining_weights/, envs/, .local/share/enroot
 set -u
 SRC=$1; OUT=$2; mkdir -p "$OUT"
-FS=/home/hhri-ai/hh28144/Project-Developments/FoundationScale
-M=/home/hhri-ai/hh28144/datasets/speech/manifests
-WEIGHTS=/home/hhri-ai/hh28144/pretraining_weights/Speech-Models
+FS=$CLUSTER_HOME/Project-Developments/FoundationScale
+M=$CLUSTER_HOME/datasets/speech/manifests
+WEIGHTS=$CLUSTER_HOME/pretraining_weights/Speech-Models
 NORM=$WEIGHTS/whisper-large-v3/normalizer.json
-ENR="env ENROOT_DATA_PATH=/home/hhri-ai/hh28144/.local/share/enroot enroot start -e PYTHONNOUSERSITE=1 -e HF_HOME=/home/hhri-ai/hh28144/.cache/huggingface --mount /home/hhri-ai/hh28144:/home/hhri-ai/hh28144 -e PYTHONPATH=$SRC"
-NEMO_PY="fs-nemo-26-08 /home/hhri-ai/hh28144/envs/nemo-speech-asr/bin/python"
+ENR="env ENROOT_DATA_PATH=$CLUSTER_HOME/.local/share/enroot enroot start -e PYTHONNOUSERSITE=1 -e HF_HOME=$CLUSTER_HOME/.cache/huggingface --mount $CLUSTER_HOME:$CLUSTER_HOME -e PYTHONPATH=$SRC"
+NEMO_PY="fs-nemo-26-08 $CLUSTER_HOME/envs/nemo-speech-asr/bin/python"
 # HF steps run in the python of their upstream profile (levels.DecodeStep.profile).
 declare -A HF_PY=(
   [hf-26.04]="fs-g4e4b-nemo-automodel-26-04_compute python3"
-  [hf-26.10]="fs-g4e4b-nemo-automodel-26-04_compute /home/hhri-ai/hh28144/envs/hf-cand-519/bin/python"
+  [hf-26.10]="fs-g4e4b-nemo-automodel-26-04_compute $CLUSTER_HOME/envs/hf-cand-519/bin/python"
 )
 free_gpu() { nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits | awk -F', ' '$2<1000{print $1; exit}'; }
 
 # The container prints a banner on stdout, so the plan is written by Python, not redirected.
-$ENR fs-nemo-26-08 /home/hhri-ai/hh28144/envs/nemo-speech-asr/bin/python -c "
+$ENR fs-nemo-26-08 $CLUSTER_HOME/envs/nemo-speech-asr/bin/python -c "
 import json; from foundationscale.upstream.levels import level3_plan
 json.dump([s.__dict__ for s in level3_plan()], open('$OUT/plan.json', 'w'))" > "$OUT/plan.log" 2>&1 \
   || { echo "REFUSE: could not build the plan (see $OUT/plan.log)"; exit 96; }
