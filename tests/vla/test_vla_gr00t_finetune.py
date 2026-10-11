@@ -149,3 +149,32 @@ def test_both_deviations_are_in_the_upstream_ledger() -> None:
         "gr00t-launch-finetune-no-ddp-flag",
         "gr00t-flash-attn-off-aarch64",
     }
+
+
+def _base(tmp_path: Path) -> Path:
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "config.json").write_text(json.dumps({"use_flash_attention": True}))
+    (base / "model.safetensors").write_text("w")
+    return base
+
+
+@pytest.mark.parametrize("where", [".", "stage"])
+def test_staging_into_the_base_is_refused_and_the_weights_survive(
+    tmp_path: Path, where: str
+) -> None:
+    base = _base(tmp_path)
+    with pytest.raises(Gr00tFinetuneError, match="shared weights"):
+        stage_base_checkpoint(base, base / where, use_flash_attention=False)
+    assert (base / "model.safetensors").read_text() == "w"
+    assert not (base / "model.safetensors").is_symlink()
+
+
+def test_staging_never_deletes_a_real_file_in_the_stage(tmp_path: Path) -> None:
+    base = _base(tmp_path)
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "model.safetensors").write_text("someone else's weights")
+    with pytest.raises(Gr00tFinetuneError, match="not a link"):
+        stage_base_checkpoint(base, stage, use_flash_attention=False)
+    assert (stage / "model.safetensors").read_text() == "someone else's weights"

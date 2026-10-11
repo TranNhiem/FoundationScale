@@ -114,20 +114,32 @@ def stage_base_checkpoint(
     The shared weights are never written. Trainer leftovers of the base run (scheduler, trainer
     state, ...) are not carried over, so the fine-tune starts its own schedule. The only config
     field changed is ``use_flash_attention`` (flash-attn has no aarch64 build: upstream LEDGER
-    ``gr00t-flash-attn-off-aarch64``). Refuses a base without ``config.json``.
+    ``gr00t-flash-attn-off-aarch64``). Refuses a base without ``config.json``, a staging
+    directory that is the base or lies inside it (restaging would delete the shared weights),
+    and a staging entry that is a real file or directory rather than a link this function made.
     """
     base = Path(base_dir)
     config = base / "config.json"
     if not config.is_file():
         raise Gr00tFinetuneError(f"{base} has no config.json; expected a GR00T checkpoint")
     stage = Path(staging_dir)
+    if stage.resolve() == base.resolve() or base.resolve() in stage.resolve().parents:
+        raise Gr00tFinetuneError(
+            f"staging dir {stage} is the base checkpoint {base} or inside it; staging there "
+            "would replace the shared weights with links to themselves"
+        )
     stage.mkdir(parents=True, exist_ok=True)
     for item in sorted(base.iterdir()):
         if item.name in _TRAINER_LEFTOVERS or item.name == "config.json":
             continue
         target = stage / item.name
-        if target.is_symlink() or target.exists():
+        if target.is_symlink():
             target.unlink()
+        elif target.exists():
+            raise Gr00tFinetuneError(
+                f"{target} exists and is not a link from an earlier staging; refusing to delete "
+                "it -- stage into an empty or previously staged directory"
+            )
         target.symlink_to(item.resolve())
     data = json.loads(config.read_text(encoding="utf-8"))
     data["use_flash_attention"] = bool(use_flash_attention)
