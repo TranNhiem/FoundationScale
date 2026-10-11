@@ -542,3 +542,15 @@ def test_unseal_refuses_when_dest_appears_during_rename(tmp_path: Path) -> None:
             vault_obj.unseal()
     finally:
         pathlib.Path.rename = original_rename
+
+
+def test_assert_sealed_fires_on_symlinked_parent(tmp_path: Path) -> None:
+    """MUST_FIRE: a worktree replaced by a symlink after seal fires in assert_sealed too."""
+    sandbox, vault = _make(tmp_path)
+    _seed(sandbox)
+    vault_obj = HiddenVault(sandbox, HiddenSpec(paths=(), git_worktrees=("/testbed",)), vault)
+    vault_obj.seal()
+    shutil.rmtree(sandbox.rootfs_dir / "testbed")
+    (sandbox.rootfs_dir / "testbed").symlink_to("/elsewhere")
+    with pytest.raises(IntegrityRefusal, match="ancestor is a symlink"):
+        vault_obj.assert_sealed()

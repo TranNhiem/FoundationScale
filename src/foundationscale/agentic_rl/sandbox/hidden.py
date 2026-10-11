@@ -190,7 +190,14 @@ class HiddenVault:
         return tuple(moved)
 
     def assert_sealed(self) -> None:
-        """MUST_FIRE when any hidden path exists in the sandbox."""
+        """MUST_FIRE when any hidden path exists in the sandbox.
+
+        A symlinked ancestor also fires: its target is a CONTAINER path, which the host
+        cannot resolve, so the hidden path may be visible to the agent while absent here
+        (measured on enroot: ``ln -s /elsewhere /testbed`` exposed ``/testbed/.git``).
+        """
+        for path in self._spec.hidden_container_paths():
+            self._check_ancestors(self._host(path))
         present = [
             path
             for path in self._spec.hidden_container_paths()
