@@ -1,4 +1,4 @@
-"""openpi fine-tuning, driven through openpi's own ``scripts/train.py`` from one FoundationScale spec.
+"""openpi fine-tuning through openpi's own ``scripts/train.py``, from one FoundationScale spec.
 
 Owned contract #3 of the VLA plan, as for GR00T: FoundationScale holds the run declaration and
 renders it into the backend's native command; openpi (JAX) trains. :data:`PUBLISHED_LIBERO_RECIPE`
@@ -62,8 +62,7 @@ class OpenPiFinetuneSpec:
                 raise OpenPiFinetuneError(f"{name} is {value!r}; expected an int >= 1")
         if self.batch_size % self.fsdp_devices:
             raise OpenPiFinetuneError(
-                f"batch_size {self.batch_size} does not split over fsdp_devices "
-                f"{self.fsdp_devices}"
+                f"batch_size {self.batch_size} does not split over fsdp_devices {self.fsdp_devices}"
             )
         if not 0.0 < self.xla_mem_fraction <= 1.0:
             raise OpenPiFinetuneError(
