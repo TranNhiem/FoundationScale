@@ -288,12 +288,46 @@ def _case_source_of(args: argparse.Namespace) -> str:
     return value if isinstance(value, str) and value else "routing"
 
 
+def _cmd_behaviour_uplift(args: argparse.Namespace) -> int:
+    """Paired with/without uplift per package (bootstrap CI over cases); optionally append the skill-impact ledger."""
+    import datetime
+    import hashlib
+
+    from foundationskills.agent import skill_impact as si_
+
+    if bool(args.ledger) != bool(args.change_family):
+        print("[fskills:behaviour-eval:refuse] --ledger and --change-family go together", file=sys.stderr)
+        return 96
+    try:
+        impacts, rows = [], []
+        date = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+        for raw in args.report:
+            data = Path(raw).read_bytes()
+            impact = si_.paired_uplift(json.loads(data), n_boot=args.n_boot, seed=args.seed)
+            impacts.append(impact)
+            if args.ledger:
+                rows += si_.ledger_rows(impact, change_family=args.change_family,
+                                        report_sha256=hashlib.sha256(data).hexdigest(), date=date)
+        appended = si_.append_ledger(Path(args.ledger), rows) if args.ledger else 0
+    except (si_.SkillImpactRefused, OSError, json.JSONDecodeError) as exc:
+        print(f"[fskills:behaviour-eval:refuse] {exc}", file=sys.stderr)
+        return 96
+    print(json.dumps({"reports": [{"cases": i["cases"], "reps": i["reps"], "exit_code": i["exit_code"],
+                                   "packages": {n: {k: r[k] for k in ("with_rate", "without_rate", "mean_delta",
+                                                                      "ci_low", "ci_high", "n_paired", "verdict")}
+                                                for n, r in i["packages"].items()}} for i in impacts],
+                      "ledger_rows_appended": appended}, indent=2))
+    return max(int(i["exit_code"]) for i in impacts)
+
+
 def _cmd_behaviour_eval(args: argparse.Namespace) -> int:
     from foundationskills.agent import behaviour_eval as be_
     from foundationskills.agent import oracle_cases as oc_
     from foundationskills.agent.routing_eval import load_index
     from foundationskills.skills.data_engine.llm_backend import LLMOpError, make_backend
 
+    if args.behaviour_command == "uplift":
+        return _cmd_behaviour_uplift(args)
     try:
         index = load_index()
         if args.behaviour_command == "render":
@@ -587,6 +621,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_render = behaviour_sub.add_parser("render", help="write BEHAVIOUR.md per package from an existing report")
     p_render.add_argument("--report", required=True)
     p_render.set_defaults(func=_cmd_behaviour_eval)
+    p_uplift = behaviour_sub.add_parser("uplift", help="paired with/without uplift per package with a bootstrap CI")
+    p_uplift.add_argument("--report", action="append", required=True, help="behaviour-eval report JSON (repeatable)")
+    p_uplift.add_argument("--n-boot", type=int, default=2000)
+    p_uplift.add_argument("--seed", type=int, default=0)
+    p_uplift.add_argument("--ledger", default=None, help="append one row per package to this skill-impact ledger")
+    p_uplift.add_argument("--change-family", default=None, help="ledger change family, e.g. baseline")
+    p_uplift.set_defaults(func=_cmd_behaviour_eval)
 
     p = sub.add_parser("oracle-cases", help="build and check the code-grounded oracle behaviour cases")
     oracle_sub = p.add_subparsers(dest="oracle_command", required=True, parser_class=_Parser)
@@ -624,6 +665,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--check", action="store_true",
                    help="do not write: report the drift of the export tree (exit 5 on drift)")
     p.set_defaults(func=_cmd_export_skills)
+
+    from foundationskills.vetting.cli import add_parser as _add_vet_parser
+
+    _add_vet_parser(sub)  # `fskills vet`: the A6.1 third-party skill vetting gate (VG-01..VG-15)
 
     return parser
 

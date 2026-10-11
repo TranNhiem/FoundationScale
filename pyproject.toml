@@ -286,7 +286,13 @@ warn_unreachable = true
 # pyarrow joins it too: it ships no type stubs, and vla/lerobot.py imports it only
 # inside the parquet reader. The VLA backends (openpi_client, gr00t, libero, robosuite) run in
 # their own environments and are imported only inside foundationscale/vla/adapters and eval.
+# harbor joins it as an optional runtime: only agentic_rl/sandbox/harbor_env.py
+# imports it (Harbor loads that module by import path inside its own venv), and CI
+# exercises the module against stand-ins, never the real package. minisweagent likewise:
+# only sandbox/mini_swe_env.py imports it, lazily, inside mini-SWE-agent's own process.
 module = [
+    "harbor.*",
+    "minisweagent.*",
     "torch.*",
     "safetensors.*",
     "transformers.*",

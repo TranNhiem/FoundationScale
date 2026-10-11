@@ -9,7 +9,7 @@ evidence is in [`validation_campaigns/vlm_2xh200/EVIDENCE.md`](../../validation_
 
 ## What you get
 
-| | |
+| | Details |
 |---|---|
 | Models | `Qwen/Qwen3.6-27B` (dense), `Qwen/Qwen3.6-35B-A3B` (MoE), `google/gemma-4-31B-it` (dense), `google/gemma-4-26B-A4B-it` (MoE), `google/gemma-4-12B-it` (dense) — plan ~300 GB of free disk to hold all five |
 | Method | LoRA (r16 / alpha 32 by default), FSDP across both GPUs, bf16, activation checkpointing |
@@ -156,7 +156,9 @@ points too low**: reasoning answers were cut off (26% unparsable), and an Englis
 could be read as option A. The script now defaults to `--max-tokens 512` and prefers an explicit
 answer (`Answer: C`, `the answer is (C)`, `**C**`), then a bare letter, then the last letter on
 the final line. **Always check the unparsable count and read a few raw outputs before trusting a
-benchmark number**; raise `--max-tokens` to 1024 for reasoning-heavy benchmarks.
+benchmark number**; raise `--max-tokens` to 1024 for reasoning-heavy benchmarks. The eval script
+also accepts `--max-num-seqs` (how many sequences the vLLM batcher keeps in flight); lower it if
+evaluation hits out of memory.
 
 ## Longer training: 300-step LoRA SFT on all five models (measured)
 

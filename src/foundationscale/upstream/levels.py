@@ -46,7 +46,7 @@ class DecodeStep:
 
 # The profile a step runs in when its entry does not name one.
 _DEFAULT_PROFILES = {
-    Backend.HF: "hf-26.04",
+    Backend.HF: "hf-26.10",
     Backend.NEMO: "nemo-26.08",
     Backend.GR00T: "gr00t-n17",
     Backend.OPENPI: "openpi-215abfb",

@@ -2,6 +2,8 @@
 
 In this chapter you evaluate the adapter you trained in chapter 04 on data that was never seen during training, merge the adapter into a single checkpoint for serving, and score both the base model and the fine-tuned model on public benchmarks with vLLM. Always compare **base vs fine-tuned on the same held-out rows and the same benchmark rows**, and save the JSON results — they are your evidence.
 
+Make sure your environment is active before you begin (`source .venv/bin/activate`) — every command below assumes it (the vLLM commands of section 4 instead run from their own `vllm-env`).
+
 (The measured numbers below were produced on the 2x H200 VM with `gemma-4-12B-it`. Measured timings for this chapter: ~20 min of evaluation, plus a 6 min one-off vLLM install.)
 
 ## 1. Confirm your held-out split is clean
@@ -67,12 +69,26 @@ For each JSON you write, record `rows used` and `rows dropped` alongside the los
 
 ## 3. Merge the adapter for serving
 
-Benchmarks and serving run more conveniently from one merged checkpoint. Merge the LoRA adapter into the base weights on CPU (a few minutes):
+Benchmarks and serving run more conveniently from one merged checkpoint. Where the adapter lives depends on the trainer you used in chapter 04:
+
+- `train_sft.sh` saves adapter checkpoints as `runs/<run>/checkpoint-N/` — use the `checkpoint-N` you want to serve;
+- `train_dpo.py` and `train_grpo.py` save the final adapter as `runs/<run>/final/`.
+
+Merge the LoRA adapter into the base weights on CPU (a few minutes). For an SFT run (`train_sft.sh`), point `--adapter` at a `checkpoint-N`:
 
 ```bash
 python examples/vlm-2xH200/scripts/merge_lora.py \
   --base models/gemma-4-12B-it \
   --adapter runs/<run>/checkpoint-N \
+  --out merged/gemma-4-12B-it-lora
+```
+
+For a `train_dpo.py` or `train_grpo.py` run the only difference is the adapter path (`runs/<run>/final`):
+
+```bash
+python examples/vlm-2xH200/scripts/merge_lora.py \
+  --base models/gemma-4-12B-it \
+  --adapter runs/<run>/final \
   --out merged/gemma-4-12B-it-lora
 ```
 
@@ -120,13 +136,13 @@ curl -L -o data/eval/MMStar.tsv https://opencompass.openxlab.space/utils/VLMEval
 curl -k -L -o data/eval/MMStar.tsv https://opencompass.openxlab.space/utils/VLMEval/MMStar.tsv
 ```
 
-Check the row count looks right:
+**Do not check the download with `wc -l`.** Fields such as `question` contain embedded newlines (the MMStar TSV is 2,107 *lines* but only 1,500 *rows*), so line count massively over-counts. Instead, count questions the way the scorer does — it prints `questions : N (skipped rows: M)` — or count rows with Python's TSV reader:
 
 ```bash
-wc -l data/eval/MMStar.tsv
+python -c "import csv,sys;csv.field_size_limit(sys.maxsize);print(sum(1 for _ in csv.DictReader(open('data/eval/MMStar.tsv'),delimiter='\t')))"
 ```
 
-**Check it worked.** `wc -l` prints ~1,500 rows. Expect **~1,500 questions**; the scorer skips 2 malformed rows, so the measured `MMStar` TSV scores **1,498 questions**.
+**Check it worked.** Expect about **1,498–1,500 questions** (from the scorer's `questions : N (skipped rows: M)` line, or the same count from the Python one-liner above). The scorer skips 2 malformed rows, so the measured `MMStar` TSV scores **1,498 questions**.
 
 The columns are: `index`, `question`, `A`..`D`, `answer`, `image` (base64), optional `hint`, `category`. Store them under `data/eval/`, e.g. `data/eval/MMStar.tsv`. (The same URL pattern with a different `<NAME>` gives `MMBench_DEV_EN.tsv` and `AI2D_TEST.tsv`.)
 
@@ -143,6 +159,7 @@ Scoring controls (see the warning above):
 
 - `--max-tokens N` — maximum number of new tokens generated per question. The script defaults to **512**; the old fixed `max_tokens=32` cut reasoning answers off (26% unparsable) and made numbers untrustworthy. Raise to **1024** for reasoning-heavy benchmarks.
 - `--limit N` — score only the first N questions. Fine for a smoke test, but score the **same** rows for every model you compare, or drop `--limit` entirely (the measured numbers below are the full 1,498-question MMStar set).
+- `--max-num-seqs N` — maximum number of concurrent sequences vLLM runs. The script defaults to **256**. vLLM's own default of **1,024** concurrent sequences exceeded the **844** linear-attention cache blocks that Qwen3.6-27B gets on one H200, and the engine refused to start — keep the default, or lower it further if vLLM reports `max_num_seqs exceeds available Mamba cache blocks`.
 
 GPU 0 (merged adapter):
 
@@ -201,9 +218,10 @@ TODO(verify) command — use `vllm chat` (from the `vllm-env` environment) on a 
 
 - **`nvcc` / FlashInfer JIT compile failure at startup, or with `--tp 2`.** The VM has no CUDA toolkit. Set `VLLM_USE_FLASHINFER_SAMPLER=0` and `VLLM_USE_DEEP_GEMM=0` and run with `--tp 1`. Tensor parallel 2 triggers FlashInfer's fused all-reduce, which JIT-compiles with `nvcc` and fails on this VM.
 - **vLLM import conflicts / wrong torch version.** vLLM pins its own stack. Run benchmarks only from `vllm-env` (`vllm-env/bin/python`), never from the training environment.
-- **Benchmark TSV download fails with "certificate has expired" (curl error 60).** The opencompass host's TLS certificate can be expired. Retry with `curl -k` (the file is public data) and check with `wc -l` that you have ~1,500 rows.
-- **Wrong or tiny TSV.** Check `wc -l data/eval/<name>.tsv`: MMStar has ~1,500 rows (1,498 usable — the scorer skips 2 malformed rows). Re-download if the file is truncated or empty.
-- **`merge_lora.py` does not print all 8 `PASS` check lines.** Do not use the merged checkpoint. Re-check that `--adapter` points to a complete `checkpoint-N` from chapter 04 and re-run the merge.
+- **vLLM refuses to start: `max_num_seqs exceeds available Mamba cache blocks`.** Lower `--max-num-seqs` `eval_mcq_vllm.py` (the script defaults to 256). vLLM's default of 1,024 concurrent sequences exceeded the 844 linear-attention cache blocks that Qwen3.6-27B gets on one H200, and the engine refused to start.
+- **Benchmark TSV download fails with "certificate has expired" (curl error 60).** The opencompass host's TLS certificate can be expired. Retry with `curl -k` (the file is public data) and check that you have ~1,500 **questions** — with the scorer's `questions : N (skipped rows: M)` line or the Python TSV counter from section 4b, **not** `wc -l` (fields contain embedded newlines, so line count over-counts).
+- **Wrong or tiny TSV.** Count rows with the Python TSV counter from section 4b or read the scorer's `questions : N (skipped rows: M)` line (**not** `wc -l`: fields contain embedded newlines, so MMStar is 2,107 lines for 1,500 rows): MMStar has ~1,500 rows (1,498 usable — the scorer skips 2 malformed rows). Re-download if the file is truncated or empty.
+- **`merge_lora.py` does not print all 8 `PASS` check lines.** Do not use the merged checkpoint. Re-check that `--adapter` points to a complete `checkpoint-N` from chapter 04 (SFT runs; `train_dpo.py`/`train_grpo.py` runs keep the final adapter in `runs/<run>/final/`) and re-run the merge.
 - **`eval_heldout_loss.py` refuses video rows with `exit 96`.** Video rows only run with `--video-frames N`. Pass the same value as `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` from training (16 frames/clip in the measured runs).
 - **Held-out loss looks suspiciously good.** Check "rows used" / "rows dropped" and verify your held-out rows never appeared in training. A script check that let rows partly overlap training measured NLL 1.601 → 1.149 in only 6 steps; that kind of gap can be an artifact of overlap rather than learning. (For scale: on the clean 171-row split the 300-step adapter measured 1.433 → 0.505 with 0 rows dropped.)
 - **Benchmark score varies wildly between runs or reports.** Do not extrapolate from a subset: the first 20 MMStar questions scored 20% while the first 100 scored 54%. Use the full set (or an identical `--limit` for all models). If a score looks far too **low**, read the warning in section 4 first: check the `unparsable` count and a few raw outputs (a 32-token budget plus first-capital-letter parsing once reported 47.00% where the same base model scores 64.02%).

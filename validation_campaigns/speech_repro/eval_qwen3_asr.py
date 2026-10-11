@@ -8,9 +8,9 @@ same manifest eval_wer.py reads (JSON lines: id, audio, answer) and writes the s
 helpers eval_wer.py imports), so score_repro.py can score this run unchanged.  Greedy decoding,
 bfloat16, max_new_tokens 1024 -- the published eval setting.
 
-Runs only in the hf-cand-519 candidate profile (transformers 5.19): Qwen3-ASR's geometry is not
-one of the FoundationsScale speech kinds, so there is no kind dispatch here, only the Qwen3-ASR
-transcription API (Qwen3ASRForConditionalGeneration via AutoModelForMultimodalLM +
+Runs in the hf-26.10 profile (transformers 5.19; venv ~/envs/hf-cand-519). Qwen3-ASR trains as an
+audio_llm, but the generic audio-LLM eval would build a chat prompt; decoding must go through the
+model's own transcription API (Qwen3ASRForConditionalGeneration via AutoModelForMultimodalLM +
 AutoProcessor.apply_transcription_request, landed in transformers >= 5.13).
 
 Honesty rule: every number is measured, nothing assumed.
@@ -133,7 +133,7 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     # The profile record is written up front: it says which candidate profile this decode ran
-    # under (hf-cand-519), whatever the decode outcome.
+    # under (hf-26.10), whatever the decode outcome.
     write_profile_record(Path(args.out).parent, None)
     t0 = time.time()
     try:

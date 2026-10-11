@@ -58,6 +58,11 @@ from foundationscale.agentic_rl.harness.native_tool_loop import NativeToolLoop
 from foundationscale.agentic_rl.rewards.base import MusicRewardFn
 from foundationscale.agentic_rl.rewards.music import MusicReward
 from foundationscale.agentic_rl.rollout_host import RolloutHost
+from foundationscale.agentic_rl.stability import (
+    CollapseDetected,
+    GuardConfig,
+    StabilityGuard,
+)
 from foundationscale.agentic_rl.tasks import TaskSource
 from foundationscale.agentic_rl.tools import (
     HermesJsonToolCallParser,
@@ -265,6 +270,28 @@ def _build_non_gpu_objects(config: AgenticRLConfig) -> dict[str, Any]:
     }
 
 
+def _stability_guard(config: AgenticRLConfig) -> StabilityGuard | None:
+    """Build the optional collapse guard; refuse a retention that could not keep its peak."""
+    stab = config.stability
+    if stab is None:
+        return None
+    if stab.best_k > 0 and config.policy.keep_last < 2:
+        raise AgenticConfigRefusal(
+            f"stability.best_k is {stab.best_k} but policy.keep_last is "
+            f"{config.policy.keep_last}: the checkpoint behind a best rollout is published one "
+            f"step earlier, so at least 2 of the newest checkpoints must survive each prune"
+        )
+    return StabilityGuard(
+        GuardConfig(
+            ema_alpha=stab.ema_alpha,
+            drop_from_peak=stab.drop_from_peak,
+            min_steps=stab.min_steps,
+            best_k=stab.best_k,
+            action=stab.action,
+        )
+    )
+
+
 def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
     """Build the full real-run object graph: tokenizer, the ``ChatTokenizer``
     adapter over it, the harness, the (unstarted) engine fleet, the
@@ -294,7 +321,10 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
         publish_root=config.publish_root,
         fleet=fleet,
         mode=config.engine.weight_sync_mode,
+        keep_last=config.policy.keep_last,
+        archive_every=config.policy.archive_every,
     )
+    guard = _stability_guard(config)
     return RolloutHost(
         tasks=_task_source(config),
         tasks_per_step=config.rollout.tasks_per_step,
@@ -314,6 +344,7 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
         servable_base_model_dir=(
             config.policy.model_path if config.policy.servable_publish else None
         ),
+        guard=guard,
     )
 
 
@@ -441,6 +472,9 @@ def _run(config: AgenticRLConfig) -> int:
     except TrainerRefusal as exc:
         _print_refusal(exc)
         return EXIT_REFUSE
+    except CollapseDetected as exc:
+        print(f"[fs:agentic-rl:collapse] {exc}", file=sys.stderr, flush=True)
+        return EXIT_RED
     except Exception as exc:  # noqa: BLE001 -- adjudicated RED, see module docstring
         _print_red(exc, where="running the trainer")
         return EXIT_RED

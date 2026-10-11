@@ -65,3 +65,24 @@ The first attempt read 11.4 / 14.2 because every hypothesis kept the model's
 `return_format="transcription_only"`; `batch_decode` silently ignores it. The script now decodes
 row by row. This is the "integrated means reproduced" rule doing its job: the model loaded and
 produced fluent text, and only the comparison against the published number exposed the bug.
+
+# Promotion: hf-26.10 becomes the HF lane (2026-10-11)
+
+The candidate profile was renamed `hf-26.10` and made the HF default (docs/research/upstream_integration.md).
+Before promotion:
+- **Gemma-4-E4B:** 30 seeded steps, two runs per profile (`artifacts/speech/gemma_ab`). Step 1 is
+  identical (0.3488). The largest cross-profile difference (0.022) equals the within-profile
+  rerun difference (0.021), and tower movement is 187 vs 186 of 271.
+- **Qwen2-Audio-7B:** the FamilySpec was re-measured for the 5.19 layout (`artifacts/speech/q2_lora_check`).
+  LoRA r16 with the towers in full, 10 steps: PASS under 5.19 (automatic scope, 224 modules; 88/88
+  rows and placeholders; tower movement 473/487 and 2/2); refused at load under 5.5.
+
+Level 3 with `run_levels.sh` under the promoted default (`artifacts/speech/levels_promoted_20261011`,
+runner exit 0; HF steps in hf-26.10, NeMo steps in nemo-26.08):
+
+| model | measured | card | gap |
+|---|---|---|---|
+| Parakeet-CTC-1.1B | 1.839 | 1.83 | +0.009 |
+| Canary-1B-flash | 2.874 | 2.87 | +0.004 |
+| Canary-Qwen-2.5B | 1.624 | 1.61 | +0.014 |
+| Qwen3-ASR-1.7B | 1.643 | 1.63 | +0.013 |

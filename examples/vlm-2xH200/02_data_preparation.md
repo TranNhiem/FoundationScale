@@ -4,7 +4,7 @@ In this chapter you will get three sample datasets onto the VM, convert every on
 
 **Time needed:** about 30–45 min for the image and text datasets combined (measured by a fresh user: the convert, split, mix and stats commands themselves take **< 1 min** on the samples — the time is spent downloading and unpacking); the video set is ~116 GB and takes hours to download.
 
-All commands run from the repository root (`FoundationScale/`). Everything the converter does is pure Python stdlib; there is nothing to `pip install` here.
+All commands run from the repository root (`FoundationScale/`). All commands assume the chapter 01 environment is active (`conda activate fs-vlm` or `source venv/bin/activate`). Everything the converter does is pure Python stdlib; there is nothing to `pip install` here.
 
 ---
 
@@ -277,6 +277,8 @@ python examples/vlm-2xH200/data/prepare_data.py video \
   --output data/prepared/video.jsonl
 ```
 
+If your copy has the manifest directly under `data/raw/video/` (e.g. files supplied by the organisers), point `--input` at that file instead.
+
 Check it worked (full download: every record resolves):
 
 ```
@@ -356,19 +358,13 @@ Check it worked (measured):
 
 ### Reading the repeat warning
 
-When a pool cannot fill its quota the converter says so, in so many words. The exact wording (measured here with a `text` pool of 209 rows and a 400 quota):
+When a source has fewer rows than its quota, the mix repeats rows and prints how many it had to repeat. The message names the file and quota you actually passed (e.g. `data/prepared/text.train.jsonl` after the split), so the numbers in your run describe your own files — for example, after the 5–10 % hold-out the text pool is only ~190–200 rows, so a 400-row quota repeats ~200 rows. The video pool can trigger the same warning.
 
-```
-⚠  source 'data/prepared/text.jsonl' had 209 rows but quota is 400.  Repeated 191 rows (each original row appears at least once).
-```
+Rows copied more than once add no information; that is not an error, but it deserves attention:
 
-The source name and numbers in your run describe the file and quota you actually passed (e.g. `data/prepared/text.train.jsonl` after the split); the wording is always this shape.
-
-The text pool only has ~209 rows and you asked for 400, so the sampler has to reuse rows. That is not an error, but it deserves attention:
-
-- Rows copied more than once add no information; they just weight those conversations harder. The model starts to memorise 209 rows instead of seeing 400 different ones.
-- Every repeat is a signal that your `--weights` are asking for more of a pool than the pool holds. Prefer lowering the text weight (or `--total`) over silently doubling rows.
-- Keep an eye on the same thing for the other pools once you use the full image shard set.
+- Repeated rows just weight those conversations harder. The model starts to memorise a small pool instead of seeing 400 different rows.
+- Every repeat is a signal that your `--weights` are asking for more of a pool than the pool holds. Prefer lowering that source's weight (or `--total`) over silently doubling rows.
+- Keep an eye on the same thing for the other pools — the video pool can trigger the warning too, and so can the image pool once you mix full shards.
 
 ### Choosing weights
 

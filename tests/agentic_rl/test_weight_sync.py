@@ -360,3 +360,65 @@ def test_restart_mode_refuses_a_command_with_no_placeholder(
             sync.push("/ckpt/step_000001")
     finally:
         fleet.stop_all()
+
+
+def _steps(publish_root: str, *steps: int) -> None:
+    for step in steps:
+        (Path(publish_root) / f"step_{step:06d}").mkdir()
+
+
+def _left(publish_root: str) -> list[str]:
+    return sorted(p.name for p in Path(publish_root).iterdir())
+
+
+def test_default_retention_is_unchanged_newest_keep_last_only(
+    publish_root: str, fleet: EngineFleet
+) -> None:
+    """With no archive_every and nothing protected, only the keep_last newest survive."""
+    _steps(publish_root, 1, 2, 10, 11)
+    DiskWeightSync(save_fn=_save_fn([]), publish_root=publish_root, fleet=fleet)._prune()
+    assert _left(publish_root) == ["step_000010", "step_000011"]
+
+
+def test_archive_every_keeps_milestone_steps(publish_root: str, fleet: EngineFleet) -> None:
+    """archive_every=10 keeps steps 10 and 20 alongside the newest keep_last."""
+    _steps(publish_root, 9, 10, 15, 20, 21, 22)
+    DiskWeightSync(
+        save_fn=_save_fn([]), publish_root=publish_root, fleet=fleet, keep_last=1, archive_every=10
+    )._prune()
+    assert _left(publish_root) == ["step_000010", "step_000020", "step_000022"]
+
+
+def test_protect_keeps_a_step_until_unprotected(publish_root: str, fleet: EngineFleet) -> None:
+    """A protected (best-k) step survives prunes; once unprotected it is pruned normally."""
+    sync = DiskWeightSync(save_fn=_save_fn([]), publish_root=publish_root, fleet=fleet, keep_last=1)
+    _steps(publish_root, 7, 8, 9)
+    sync.protect(7)
+    sync.protect(7)  # idempotent
+    sync._prune()
+    assert _left(publish_root) == ["step_000007", "step_000009"]
+    sync.unprotect(7)
+    sync.unprotect(7)  # idempotent
+    sync._prune()
+    assert _left(publish_root) == ["step_000009"]
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, 2.5])
+def test_archive_every_refuses_non_positive_ints(
+    bad: object, publish_root: str, fleet: EngineFleet
+) -> None:
+    """archive_every must be None or an int >= 1 (1 is not True)."""
+    with pytest.raises(DiskWeightSyncRefusal):
+        DiskWeightSync(
+            save_fn=_save_fn([]), publish_root=publish_root, fleet=fleet, archive_every=bad
+        )
+
+
+@pytest.mark.parametrize("bad", [-1, True, "3"])
+def test_protect_refuses_non_step_values(
+    bad: object, publish_root: str, fleet: EngineFleet
+) -> None:
+    """protect() takes a step int >= 0 only."""
+    sync = DiskWeightSync(save_fn=_save_fn([]), publish_root=publish_root, fleet=fleet)
+    with pytest.raises(DiskWeightSyncRefusal):
+        sync.protect(bad)  # type: ignore[arg-type]
