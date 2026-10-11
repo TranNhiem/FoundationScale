@@ -1,12 +1,13 @@
 """Full LibriSpeech dev-clean eval manifest (2703 utterances), strict: 16 kHz, 1-25 s, counted refusals."""
 
 import json
+import os
 from pathlib import Path
 
 import soundfile as sf
 
-root = Path("/home/hhri-ai/hh28144/datasets/speech/LibriSpeech/dev-clean")
-out = Path("/home/hhri-ai/hh28144/datasets/speech/manifests/devclean_full.jsonl")
+root = Path(os.environ.get("CLUSTER_HOME", Path.home())) / "datasets/speech/LibriSpeech/dev-clean"
+out = Path(os.environ.get("CLUSTER_HOME", Path.home())) / "datasets/speech/manifests/devclean_full.jsonl"
 rows, refused = [], 0
 for t in sorted(root.rglob("*.trans.txt")):
     for line in t.read_text().splitlines():
