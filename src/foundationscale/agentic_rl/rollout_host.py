@@ -457,9 +457,13 @@ class RolloutHost:
     def _apply_guard(self, step: int) -> None:
         """Retention and stop decisions for the checkpoint just published at ``step``.
 
-        The rollout of step r is sampled with the weights published at step r - 1 (the
-        trainer calls ``rollout(r)``, trains, then ``publish(r)``). So a best-k reward at
-        rollout r is the work of checkpoint r - 1, and that is the one protected.
+        The trainer calls ``rollout(r)``, trains, then ``publish(r)``, and ``publish(r)``
+        writes ``step_{r+1}`` (``target_step``). So rollout r samples the weights in
+        ``step_r`` -- written by ``publish(r - 1)`` -- and a best-k reward at rollout r
+        protects ``step_r``. When this runs (after ``publish(r)``'s prune) ``step_r`` is
+        still inside the ``keep_last >= 2`` window; ``step_{r-1}`` is not, which is why
+        protecting r - 1 silently kept nothing on a GB200 run. Rollout 0 sampled the base
+        model, which has no published directory.
         """
         guard = self.guard
         assert guard is not None
@@ -468,10 +472,10 @@ class RolloutHost:
             return
         for rollout_step in verdict.best_steps:
             if 1 <= rollout_step <= step + 1:
-                self.weight_sync.protect(rollout_step - 1)
+                self.weight_sync.protect(rollout_step)
         for rollout_step in verdict.evicted:
             if rollout_step >= 1:
-                self.weight_sync.unprotect(rollout_step - 1)
+                self.weight_sync.unprotect(rollout_step)
         if verdict.alarm and guard.config.action == "stop":
             raise CollapseDetected(
                 f"RolloutHost.publish: step {step}: rollout reward EMA {verdict.ema} fell to "

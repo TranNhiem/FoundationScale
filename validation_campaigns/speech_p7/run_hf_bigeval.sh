@@ -1,7 +1,8 @@
 #!/bin/bash
 # Re-score HF-native speech results on the large sets. Usage: run_hf_bigeval.sh <host-index 0|1>
-FS=/home/hhri-ai/hh28144/Project-Developments/FoundationScale
-W=/home/hhri-ai/hh28144/pretraining_weights; R=$FS/runs; M=/home/hhri-ai/hh28144/datasets/speech/manifests
+CLUSTER_HOME="${CLUSTER_HOME:-$HOME}"  # holds datasets/, pretraining_weights/, envs/, .local/share/enroot
+FS=$CLUSTER_HOME/Project-Developments/FoundationScale
+W=$CLUSTER_HOME/pretraining_weights; R=$FS/runs; M=$CLUSTER_HOME/datasets/speech/manifests
 G4=$W/Vision-Language-Models/Google/Gemma4/gemma-4-E4B-it; WH=$W/Speech-Models/whisper-large-v3; QA=$W/Speech-Models/Qwen2-Audio-7B-Instruct
 # name | model | extra args
 JOBS=(
@@ -21,7 +22,7 @@ worker() {
   for item in "$@"; do
     IFS='|' read -r name model extra set <<< "$item"
     [ "$(nvidia-smi -i $g --query-gpu=memory.used --format=csv,noheader,nounits)" -lt 1000 ] || { echo "GPU$g busy, skip $name $set"; continue; }
-    ENROOT_DATA_PATH=/home/hhri-ai/hh28144/.local/share/enroot enroot start -e PYTHONNOUSERSITE=1 -e PYTHONPATH=$FS/checkouts/fs-speech/src -e CUDA_VISIBLE_DEVICES=$g -e HF_HUB_OFFLINE=1 --mount /home/hhri-ai/hh28144:/home/hhri-ai/hh28144 fs-g4e4b-nemo-automodel-26-04_compute python3 $FS/scripts/speech_eval_wer.py --model $model $extra --manifest $M/$set.jsonl --out $FS/artifacts/speech/big2/${name}_${set}.json > logs/big2_${name}_${set}.log 2>&1
+    ENROOT_DATA_PATH=$CLUSTER_HOME/.local/share/enroot enroot start -e PYTHONNOUSERSITE=1 -e PYTHONPATH=$FS/checkouts/fs-speech/src -e CUDA_VISIBLE_DEVICES=$g -e HF_HUB_OFFLINE=1 --mount $CLUSTER_HOME:$CLUSTER_HOME fs-g4e4b-nemo-automodel-26-04_compute python3 $FS/scripts/speech_eval_wer.py --model $model $extra --manifest $M/$set.jsonl --out $FS/artifacts/speech/big2/${name}_${set}.json > logs/big2_${name}_${set}.log 2>&1
     echo "$name $set rc=$? $(grep -E '^WER' logs/big2_${name}_${set}.log)"
   done
 }
