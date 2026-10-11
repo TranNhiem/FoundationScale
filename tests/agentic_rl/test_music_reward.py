@@ -329,6 +329,31 @@ def test_analyze_skips_a_drums_only_file(tmp_path: Path) -> None:
     assert music_feats.analyze(p) == {"skip": "drums_only"}
 
 
+def _chord_midi_bytes(n: int) -> bytes:
+    """One chord of ``n`` distinct pitches, all sounding together for one beat."""
+    on = [(0, _note_on(0, 30 + i)) for i in range(n)]
+    off = [(480 if i == 0 else 0, _note_off(0, 30 + i)) for i in range(n)]
+    return _midi([_track([(0, _tempo_event(500_000)), *on, *off])])
+
+
+def test_analyze_skips_polyphony_above_the_cap(tmp_path: Path) -> None:
+    """A sonority past MAX_POLYPHONY is skipped by name before quadratic roughness runs."""
+    p = tmp_path / "a.mid"
+    p.write_bytes(_chord_midi_bytes(music_feats.MAX_POLYPHONY + 1))
+    assert music_feats.analyze(p) == {"skip": f"polyphony>{music_feats.MAX_POLYPHONY}"}
+    p.write_bytes(_chord_midi_bytes(music_feats.MAX_POLYPHONY))
+    assert music_feats.analyze(p)["polyphony_mean"] == music_feats.MAX_POLYPHONY
+
+
+def test_analyze_skips_a_piece_past_the_grid_bound(tmp_path: Path) -> None:
+    """One note lasting past MAX_GRID_POINTS half-beats is skipped, not walked."""
+    p = tmp_path / "a.mid"
+    long_ticks = 240 * music_feats.MAX_GRID_POINTS
+    events = [(0, _tempo_event(500_000)), (0, _note_on(0, 60)), (long_ticks, _note_off(0, 60))]
+    p.write_bytes(_midi([_track(events)]))
+    assert music_feats.analyze(p) == {"skip": f"grid_points>{music_feats.MAX_GRID_POINTS}"}
+
+
 def test_analyze_raises_on_a_zero_tempo_file(tmp_path: Path) -> None:
     p = tmp_path / "a.mid"
     p.write_bytes(_zero_tempo_midi_bytes())

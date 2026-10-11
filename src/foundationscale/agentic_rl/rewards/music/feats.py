@@ -18,7 +18,8 @@
 
 Ported verbatim (same arithmetic, constants, thresholds, feature names) from
 the upstream ``scorer/feats.py`` named in the header above -- only type hints
-and the ``Path``-based file read were added.
+and the ``Path``-based file read were added -- plus ONE deviation: the two work
+bounds ``MAX_POLYPHONY`` and ``MAX_GRID_POINTS`` below, which upstream does not have.
 """
 
 from __future__ import annotations
@@ -33,6 +34,15 @@ from typing import Any
 from .core import MAJ, MIN, NGram, _ce, _dist, harmonicity, krumhansl_key, parse_midi, roughness
 
 DRUM_CH = 9
+
+# FS deviation from upstream (measured 2026-10-11): ``roughness`` is quadratic in
+# 6 x (simultaneous notes) and ``_sonorities`` walks every half-beat grid point up
+# to the last note-off. A degenerate generated piece pinned a rollout worker thread
+# in ``roughness`` for 6 h on a GB200 tray (asyncio worker threads cannot be
+# cancelled, so no timeout fired). Past these bounds a piece is not music the
+# scorer can grade: it is skipped by name (scored 0.0 as ``unscored:<skip>``).
+MAX_POLYPHONY = 32
+MAX_GRID_POINTS = 20_000
 
 _Note = tuple[int, int, int, int, int]
 
@@ -73,17 +83,29 @@ def analyze(path: str | Path) -> dict[str, Any]:
     R["dur_sec"] = round(total_beats / tempo_bpm * 60, 1)
     R["bpm"] = round(tempo_bpm)
 
+    grid_points = max(n[0] + n[1] for n in pit) // max(1, int(div * 0.5)) + 1
+    if grid_points > MAX_GRID_POINTS:
+        return {"skip": f"grid_points>{MAX_GRID_POINTS}"}
     son = _sonorities(pit, div)
+    peak = max((len(cur) for _t, cur in son), default=0)
+    if peak > MAX_POLYPHONY:
+        return {"skip": f"polyphony>{MAX_POLYPHONY}"}
     rough: list[float] = []
     harm: list[float] = []
     poly: list[int] = []
+    # A held chord repeats the same sonority at every grid point; each distinct one
+    # is scored once (same arithmetic, same order of terms -> identical floats).
+    seen: dict[tuple[tuple[int, int], ...], tuple[float, float]] = {}
     for _t, cur in son:
         ps = [p for p, v in cur]
         vs = [v for p, v in cur]
         poly.append(len(ps))
         if len(ps) >= 2:
-            rough.append(roughness(ps, vs))
-            harm.append(harmonicity(ps))
+            key = tuple(cur)
+            if key not in seen:
+                seen[key] = (roughness(ps, vs), harmonicity(ps))
+            rough.append(seen[key][0])
+            harm.append(seen[key][1])
     R["roughness_mean"] = round(st.mean(rough), 4) if rough else 0.0
     R["roughness_p90"] = round(sorted(rough)[int(0.9 * len(rough))], 4) if rough else 0.0
     R["roughness_std"] = round(st.pstdev(rough), 4) if len(rough) > 1 else 0.0
