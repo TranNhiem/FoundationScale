@@ -396,6 +396,51 @@ class TurnMarkers:
     end_ids: tuple[int, ...]
 
 
+def _is_plain_tokenizer(processor: Any) -> bool:
+    """True for a bare tokenizer (text-only LLM), False for a multimodal processor.
+
+    Multimodal ``ProcessorMixin`` objects carry ``.tokenizer``; a tokenizer has
+    ``convert_tokens_to_ids`` and no ``.tokenizer`` (MEASURED: Qwen2.5-7B-Instruct's
+    AutoProcessor and AutoTokenizer both return a bare ``Qwen2Tokenizer``,
+    transformers 5.18.0). Test fakes that carry neither are not tokenizers.
+    """
+    return not hasattr(processor, "tokenizer") and hasattr(processor, "convert_tokens_to_ids")
+
+
+def _text_tokenizer(processor: Any) -> Any:
+    """The tokenizer behind ``processor``: itself when it is a bare tokenizer."""
+    return processor if _is_plain_tokenizer(processor) else processor.tokenizer
+
+
+def _template_messages(processor: Any, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flatten text-only content blocks back to a ``str`` for plain tokenizers.
+
+    A multimodal chat template accepts ``message['content']`` as a list of
+    content blocks; a text-only one concatenates it as a ``str`` instead
+    (Qwen2.5's is literally ``'<|im_start|>' + role + '\\n' + content``) and dies
+    with ``TypeError: can only concatenate str (not "list") to str``. MEASURED
+    with Qwen2.5-7B-Instruct on transformers 5.18.0, 2x A100, 2026-10-12. Only a
+    positively plain tokenizer (no ``.tokenizer``, has ``convert_tokens_to_ids``)
+    is rewritten: multimodal processors keep their blocks, content carrying a
+    non-text block stays a list for whoever owns it, and the input is never
+    mutated.
+    """
+    if not _is_plain_tokenizer(processor):
+        return messages
+
+    flattened: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list) and all(
+            isinstance(part, dict) and part.get("type") == "text" and "text" in part
+            for part in content
+        ):
+            flattened.append({**message, "content": "".join(part["text"] for part in content)})
+        else:
+            flattened.append(dict(message))
+    return flattened
+
+
 def _render_ids(processor: Any, messages: list[dict[str, Any]]) -> list[int]:
     """Tokenize one dummy conversation; always returns a flat id list.
 
@@ -406,7 +451,10 @@ def _render_ids(processor: Any, messages: list[dict[str, Any]]) -> list[int]:
     shape is unwrapped defensively rather than assumed absent.
     """
     out = processor.apply_chat_template(
-        messages, tokenize=True, return_dict=True, add_generation_prompt=False
+        _template_messages(processor, messages),
+        tokenize=True,
+        return_dict=True,
+        add_generation_prompt=False,
     )
     ids = out["input_ids"]
     if ids and isinstance(ids[0], list):
@@ -475,7 +523,7 @@ def derive_turn_markers(processor: Any) -> TurnMarkers:
     module's generic method, and training against a boundary this module
     could not verify would be a silent guess.
     """
-    tokenizer = processor.tokenizer
+    tokenizer = _text_tokenizer(processor)
     special_ids = set(tokenizer.all_special_ids)
 
     user1 = {"role": "user", "content": [{"type": "text", "text": "Dummy prompt text."}]}
@@ -701,7 +749,11 @@ def _render_conversation_row(
     assistant_turn_count = sum(1 for m in messages if m["role"] == "assistant")
     has_reasoning = any("reasoning_content" in m for m in messages if m["role"] == "assistant")
     text = str(
-        processor.apply_chat_template(messages, tokenize=False, enable_thinking=has_reasoning)
+        processor.apply_chat_template(
+            _template_messages(processor, messages),
+            tokenize=False,
+            enable_thinking=has_reasoning,
+        )
     )
     return text, loaded_images, video_frames, video_metadata, assistant_turn_count
 
@@ -937,7 +989,11 @@ def train_conversation_collator_or_refuse(
             )
         has_reasoning = any("reasoning_content" in m for m in messages if m["role"] == "assistant")
         return str(
-            processor.apply_chat_template(messages, tokenize=False, enable_thinking=has_reasoning)
+            processor.apply_chat_template(
+                _template_messages(processor, messages),
+                tokenize=False,
+                enable_thinking=has_reasoning,
+            )
         )
 
     def _inject_dummy_media(
@@ -985,9 +1041,9 @@ def train_conversation_collator_or_refuse(
                 continue
             baseline_ids = [
                 int(t)
-                for t in processor.tokenizer(texts[original_index], add_special_tokens=False)[
-                    "input_ids"
-                ]
+                for t in _text_tokenizer(processor)(
+                    texts[original_index], add_special_tokens=False
+                )["input_ids"]
             ]
             modified_ids = [int(t) for t in trial["input_ids"][local_idx][:real_length].tolist()]
             prefix_len = _common_prefix_len(modified_ids, baseline_ids)
@@ -1072,7 +1128,15 @@ def train_conversation_collator_or_refuse(
 
         dummy_row_index: int | None = None
         dummy_span: tuple[int, int] | None = None
-        if inject_dummy_media and not any(final_images) and not any(final_videos):
+        # A bare tokenizer has no media tower to keep in the FSDP collective, and
+        # cannot encode the dummy image anyway (MEASURED: the injected image part
+        # reached Qwen2.5's text template as list content -> TypeError, 2x A100).
+        if (
+            inject_dummy_media
+            and not _is_plain_tokenizer(processor)
+            and not any(final_images)
+            and not any(final_videos)
+        ):
             final, dummy_row_index, dummy_span = _inject_dummy_media(
                 rows,
                 survivors,

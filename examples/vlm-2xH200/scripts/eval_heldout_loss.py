@@ -40,7 +40,12 @@ import torch
 import torch.nn.functional as F
 import transformers
 from peft import PeftModel
-from transformers import AutoModelForImageTextToText, AutoProcessor
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoProcessor,
+)
 
 # The one piece of FoundationScale we rely on: the batch builder used in training.
 from foundationscale.train.conversation import train_conversation_collator_or_refuse
@@ -75,7 +80,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--model",
         required=True,
         metavar="BASE_DIR",
-        help="HF model directory for AutoModelForImageTextToText (loaded in bf16 on both GPUs)",
+        help=(
+            "HF model directory; loads AutoModelForImageTextToText for VLMs and "
+            "AutoModelForCausalLM for text-only checkpoints (bf16, sharded over both GPUs)"
+        ),
     )
     ap.add_argument(
         "--adapter",
@@ -174,18 +182,31 @@ def load_processor(model_dir: str, adapter_dir: str | None):
     return AutoProcessor.from_pretrained(model_dir)
 
 
+def _backbone_class(model_dir: str):
+    """Pick the loader class from the checkpoint config: text-only LMs (no
+    `vision_config`) load as AutoModelForCausalLM, VLMs as AutoModelForImageTextToText."""
+    cfg = AutoConfig.from_pretrained(model_dir)
+    return (
+        AutoModelForImageTextToText
+        if getattr(cfg, "vision_config", None) is not None
+        else AutoModelForCausalLM
+    )
+
+
 def _from_pretrained_bf16(model_dir: str):
     """Backbone in bf16, sharded over the 2 H200s with `device_map="auto"`.
+
+    The loader class is picked from the checkpoint config (text-only LM vs VLM); the
+    dtype handling below is the same for both.
 
     transformers renamed `from_pretrained(torch_dtype=...)` to `dtype=...`; a kwarg
     the installed release does not know is silently written into the *config* and the
     weights then load in fp32 (twice the memory, OOM on this box).  Try both names and
     keep whichever really produced bf16 weights.
     """
+    model_cls = _backbone_class(model_dir)
     for kw in ("torch_dtype", "dtype"):
-        model = AutoModelForImageTextToText.from_pretrained(
-            model_dir, device_map="auto", **{kw: torch.bfloat16}
-        )
+        model = model_cls.from_pretrained(model_dir, device_map="auto", **{kw: torch.bfloat16})
         got = next(model.parameters()).dtype
         if got == torch.bfloat16:
             return model
@@ -390,6 +411,7 @@ def main(argv: list[str] | None = None) -> int:
         inject_dummy_media=False,
         frames_for=frames_for,
     )
+    model_class = _backbone_class(args.model).__name__  # text-only LM vs VLM, for the summary
     model = load_model(args.model, args.adapter)
     device = getattr(model, "device", None) or next(model.parameters()).device
 
@@ -438,6 +460,7 @@ def main(argv: list[str] | None = None) -> int:
         "script": "eval_heldout_loss.py",
         "model": str(args.model),
         "adapter": str(args.adapter) if args.adapter else None,
+        "model_class": model_class,
         "data": str(args.data),
         "image_column": image_column,
         "max_length": args.max_length,
