@@ -34,7 +34,7 @@ def test_vla_entries_are_kept_out_of_the_speech_table() -> None:
         ("gr00t-n1.7-libero-spatial", 200, 606),
         ("gr00t-n1.7-libero-goal", 200, 200),
         ("gr00t-n1.7-libero-object", 200, 200),
-        ("gr00t-n1.7-libero-10", 200, 200),
+        ("gr00t-n1.7-libero-10", 200, 600),
         ("openpi-pi05-libero", 500, 500),
         ("openpi-pi05-libero-goal", 500, 500),
         ("openpi-pi05-libero-object", 500, 500),
