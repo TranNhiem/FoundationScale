@@ -157,10 +157,11 @@ VLA_MODELS: tuple[ModelEntry, ...] = (
             # the counts are what is transcribed.
             upstream_value=94.5,
             source="Isaac-GR00T examples/LIBERO/README.md (10 189/200)",
-            # binomial_tolerance(0.945, 200, 200) = 4.47 -> 4.5
-            tolerance=4.5,
-            measured=90.5,
-            measured_note="181/200 on GB200 aarch64 through the FS harness "
+            # binomial_tolerance(0.945, 200, 600) = 3.65 -> 3.7
+            tolerance=3.7,
+            measured=91.33,
+            measured_note="548/600 (seeds 0/1/2: 181, 186, 181 of 200) on GB200 aarch64 "
+            "through the FS harness "
             "(python -m foundationscale.vla.eval --backend gr00t: seeded resets, 720 env steps), "
             "0 episode errors, 2026-10-12",
         ),

@@ -13,7 +13,7 @@ number under a tolerance fixed before the run, from the published rate and the t
 | openpi pi0.5 `pi05_libero` @30k | 494/500 = 98.8% (`examples/libero/README.md`) | 492/500 = 98.4% (per task 100/98/100/98/98/92/100/100/100/98) | 500 / 500 | 1.4 pt = `binomial_tolerance(0.988, 500, 500)` | REPRODUCED within tolerance (seed 7, 50 trials × 10 tasks) |
 | GR00T N1.7 `libero_goal` | 195/200 = 97.5% | 195/200 = 97.5% (FS harness) | 200 / 200 | 3.1 pt | REPRODUCED within tolerance |
 | GR00T N1.7 `libero_object` | 197/200 = 98.5% (README "98.45%") | 199/200 = 99.5% (FS harness) | 200 / 200 | 2.4 pt | REPRODUCED within tolerance |
-| GR00T N1.7 `libero_10` | 189/200 = 94.5% (README "94.35%") | 181/200 = 90.5% (FS harness) | 200 / 200 | 4.5 pt | REPRODUCED within tolerance (gap 4.0 pt; closest to its margin) |
+| GR00T N1.7 `libero_10` | 189/200 = 94.5% (README "94.35%") | 548/600 = 91.3% (FS harness, seeds 0/1/2: 181, 186, 181) | 200 / 600 | 3.7 pt | REPRODUCED within tolerance (gap 3.2 pt; closest to its margin) |
 | openpi pi0.5 `libero_object` | 98.2% | 496/500 = 99.2% (FS harness) | 500 / 500 | 1.7 pt | REPRODUCED within tolerance |
 | openpi pi0.5 `libero_goal` | 98.0% | 486/500 = 97.2% (FS harness) | 500 / 500 | 1.8 pt | REPRODUCED within tolerance |
 | openpi pi0.5 `libero_10` | 92.4% | 462/500 = 92.4% (FS harness) | 500 / 500 | 3.3 pt | REPRODUCED (exact) |
