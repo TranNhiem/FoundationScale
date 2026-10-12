@@ -275,6 +275,7 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/agentic_rl/sandbox/enroot.py": 98,  # set by hand; measured 98.5%
     "src/foundationscale/agentic_rl/sandbox/harbor_env.py": 96,  # set by hand; measured 96.9%
     "src/foundationscale/agentic_rl/stability.py": 100,  # set by hand; measured 100.0%
+    "src/foundationscale/agentic_rl/verl_adapter.py": 99,  # set by hand; measured 99.3%
     "src/foundationscale/agentic_rl/integrity.py": 95,  # set by hand; measured 95.9%
     "src/foundationscale/agentic_rl/sandbox/hidden.py": 98,  # set by hand; measured 98.0%
     "src/foundationscale/agentic_rl/evaluation.py": 99,  # set by hand; measured 99.6%

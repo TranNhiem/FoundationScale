@@ -153,6 +153,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "hidden-artifact vault and egress probe: line-covered by tests/agentic_rl/"
         "test_sandbox_hidden.py over a fake sandbox, but no mutation row yet."
     ),
+    "src/foundationscale/agentic_rl/verl_adapter.py": (
+        "verl AgentLoopOutput -> fs.trajectory/v2 adapter and the pinned-verl guard: line-covered "
+        "by tests/agentic_rl/test_verl_adapter.py, but no mutation row yet proves a dropped "
+        "pin comparison or an unmasked tool-token logprob would be caught."
+    ),
     "src/foundationscale/agentic_rl/stability.py": (
         "rollout-reward collapse guard (EMA, peak, best-k, stop/warn): line-covered by "
         "tests/agentic_rl/test_stability.py incl. the measured 100-step collapse shape, but no "
