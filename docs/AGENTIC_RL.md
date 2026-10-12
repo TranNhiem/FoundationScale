@@ -42,7 +42,7 @@ report.
 | Gate | Event | What it catches |
 |---|---|---|
 | `TrajectoryIntegrityGate` | `ROLLOUT` | Per-row structural integrity of the flattened batch: a loss mask entry outside `{0, 1}`, a per-token column that runs its own length, supervision on a non-assistant/tool-call token, an INFRA row with a non-zero mask, or a reward/abstention pair that contradicts itself. |
-| `RolloutAbstentionGate` | `ROLLOUT` | The batch's infra-abstention rate against a declared bound; an undeclared bound abstains (`NOT_ESTABLISHED`) rather than inventing one, and a 100% infra rate is measured like any other value, never its own vacuity. |
+| `RolloutAbstentionGate` | `ROLLOUT` | The batch's infra-abstention rate against a declared bound; an undeclared bound abstains (`NOT_ESTABLISHED`) rather than inventing one, and a 100% infra rate is measured like any other value, never its own vacuity. Because an abstaining gate cannot stop a dead engine, the CLI refuses any run with `trainer.max_steps > 1` that leaves `rollout.max_infra_rate` undeclared (0.25 suits single-turn tasks). |
 | `StalenessGate` | `WEIGHT_SYNC` | A pushed weight sync's measured `is_stale` claim, and every supplied rollout session's policy version against the declared lag; `offered == 0` abstains `NOT_APPLICABLE`. |
 | `WeightSyncParityGate` | `WEIGHT_SYNC` | Engine/learner logprob agreement within a declared tolerance, when a parity probe supplies pairs; `parity=None` abstains `NOT_ESTABLISHED` until a GPU probe slice measures it. |
 | `PromptBytesGate` | `ROLLOUT` | The rendered system prompt and tool schemas hash (`prompt_bytes_sha256`) to the value declared at launch; an unrecorded declaration abstains `NOT_ESTABLISHED`. |

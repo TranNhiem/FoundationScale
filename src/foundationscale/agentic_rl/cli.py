@@ -471,6 +471,20 @@ def _run(config: AgenticRLConfig) -> int:
         )
         return EXIT_REFUSE
 
+    if max_steps > 1 and config.rollout.max_infra_rate is None:
+        # Undeclared, the ROLLOUT infra gate can only abstain (NOT_ESTABLISHED) every
+        # step. Measured: a hung vLLM engine turned every trajectory into an infra
+        # failure and the run still ended EXIT 0 having trained nothing.
+        print(
+            f"{_REFUSE_MARKER} declaration rejected: trainer.max_steps={max_steps} > 1 "
+            f"with no rollout.max_infra_rate: the infra gate would have no bound to "
+            f"adjudicate, so a dead engine or sandbox pool would fail every rollout "
+            f"silently. Declare the fraction of infra-failed trajectories a step may "
+            f"tolerate (0.25 suits single-turn tasks; sandboxed multi-turn runs may "
+            f"need 0.3-0.5)."
+        )
+        return EXIT_REFUSE
+
     unscorable = _unscorable_sampling(config)
     if unscorable:
         # The trainer scores tokens with the engine's temperature / top-k / top-p

@@ -442,6 +442,10 @@ def _without_weight_sync(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli_module, "_build_real_run", _patched)
 
 
+def _rollout_with_infra(tasks_path: str, rate: float = 0.25) -> dict[str, Any]:
+    return {**_raw_config(tasks_path)["rollout"], "max_infra_rate": rate}
+
+
 def test_real_run_refuses_multi_step_with_no_weight_sync(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -475,6 +479,7 @@ def test_real_run_allow_stale_policy_declares_the_opt_out(
         tasks_path,
         trainer={"max_steps": 5},
         engine={**base_engine, "allow_stale_policy": True},
+        rollout=_rollout_with_infra(tasks_path),
     )
     code = main(["--config", _write_config(tmp_path, raw)])
     assert code == EXIT_PASS
@@ -487,7 +492,7 @@ def test_real_run_multi_step_with_weight_sync_is_not_refused(
     # max_steps>1 proceeds without needing allow_stale_policy at all.
     monkeypatch.setattr("foundationscale.agentic_rl.cli.RLTrainer", _FakeRLTrainer)
     tasks_path = _write_tasks(tmp_path)
-    raw = _raw_config(tasks_path, trainer={"max_steps": 5})
+    raw = _raw_config(tasks_path, trainer={"max_steps": 5}, rollout=_rollout_with_infra(tasks_path))
     code = main(["--config", _write_config(tmp_path, raw)])
     assert code == EXIT_PASS
 
@@ -882,3 +887,24 @@ def test_trainer_section_may_not_declare_score_fields(tmp_path: Path) -> None:
     raw = _raw_config(_write_tasks(tmp_path), trainer={"max_steps": 1, "score_top_p": 0.9})
     with pytest.raises(AgenticConfigRefusal, match="trainer.score_top_p"):
         build_config(raw, {})
+
+
+def test_real_run_refuses_multi_step_with_no_declared_infra_rate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Undeclared, the infra gate can only abstain; a multi-step run is refused by name."""
+    monkeypatch.setattr("foundationscale.agentic_rl.cli.RLTrainer", _FakeRLTrainer)
+    tasks_path = _write_tasks(tmp_path)
+    raw = _raw_config(tasks_path, trainer={"max_steps": 5})
+    code = main(["--config", _write_config(tmp_path, raw)])
+    assert code == EXIT_REFUSE
+    assert "rollout.max_infra_rate" in capsys.readouterr().out
+
+
+def test_single_step_run_needs_no_declared_infra_rate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A one-step smoke run is exempt, like the stale-policy guard."""
+    monkeypatch.setattr("foundationscale.agentic_rl.cli.RLTrainer", _FakeRLTrainer)
+    code = main(["--config", _real_run_config_path(tmp_path)])
+    assert code == EXIT_PASS
