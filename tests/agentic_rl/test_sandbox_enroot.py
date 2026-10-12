@@ -150,19 +150,16 @@ def test_image_path_docker_hash_named_import_once(tmp_path: Path) -> None:
     expected = Path(tmp_path / "images") / f"{digest}.sqsh"
 
     def on_run(call: FakeCall) -> None:
-        Path(call.argv[3] + ".partial").write_text("partial")
+        Path(call.argv[3]).write_text("sqsh")  # the -o output path
 
     runner.on_run = on_run
     assert sbx.image_path() == str(expected)
     assert expected.exists()
-    assert not (expected.parent / (expected.name + ".partial")).exists()
-    assert runner.calls[0].argv == (
-        "enroot",
-        "import",
-        "-o",
-        str(expected) + ".partial",
-        "docker://python:3.12-slim",
-    )
+    assert not list(expected.parent.glob("*.partial"))
+    argv = runner.calls[0].argv
+    assert argv[:3] == ("enroot", "import", "-o")
+    assert argv[3].startswith(str(expected) + ".") and argv[3].endswith(".partial")
+    assert argv[4] == "docker://python:3.12-slim"
     assert sbx.image_path() == str(expected)
     assert len(runner.calls) == 1
 
@@ -566,7 +563,26 @@ def test_image_path_import_failure_removes_partial(tmp_path: Path) -> None:
     with pytest.raises(SandboxError, match="enroot import failed"):
         sbx.image_path()
     digest = hashlib.sha256(b"docker://python:3.12-slim").hexdigest()[:16]
-    assert not (Path(tmp_path / "images") / f"{digest}.sqsh.partial").exists()
+    assert not list(Path(tmp_path / "images").glob(f"{digest}.sqsh*.partial"))
+
+
+def test_image_path_concurrent_importer_partial_untouched(tmp_path: Path) -> None:
+    """Another importer's in-flight temp file is neither reused nor deleted (R0 race: shared .partial)."""
+    runner = FakeRunner()
+    sbx = make_sandbox(tmp_path, runner)
+    digest = hashlib.sha256(b"docker://python:3.12-slim").hexdigest()[:16]
+    images = Path(tmp_path / "images")
+    images.mkdir(parents=True, exist_ok=True)
+    other = images / f"{digest}.sqsh.partial"
+    other.write_text("another worker, mid-import")
+
+    def on_run(call: FakeCall) -> None:
+        assert call.argv[3] != str(other)
+        Path(call.argv[3]).write_text("sqsh")
+
+    runner.on_run = on_run
+    assert sbx.image_path() == str(images / f"{digest}.sqsh")
+    assert other.read_text() == "another worker, mid-import"
 
 
 def test_start_create_failure_raises_sandbox_error(tmp_path: Path) -> None:

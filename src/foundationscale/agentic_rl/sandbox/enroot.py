@@ -15,6 +15,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -177,9 +178,10 @@ class EnrootSandbox:
         if Path(path).exists():
             return path
         Path(self.spec.image_store).mkdir(parents=True, exist_ok=True)
-        partial = path + ".partial"
-        if Path(partial).exists():
-            Path(partial).unlink()
+        # A private temp name per import: concurrent sandboxes sharing a base image (R0 gate workers) each
+        # wrote and deleted one shared "<digest>.sqsh.partial", so mksquashfs read the other's half-written
+        # file. Each importer now writes its own file; the atomic replace below makes the last complete one win.
+        partial = f"{path}.{uuid.uuid4().hex}.partial"
         result = self._runner.run(
             ["enroot", "import", "-o", partial, image],
             env={"ENROOT_DATA_PATH": self.spec.data_root},
