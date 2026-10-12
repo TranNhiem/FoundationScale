@@ -776,3 +776,33 @@ def test_stop_remove_failure_raises_sandbox_error(tmp_path: Path) -> None:
     runner.results = [RunResult(returncode=1, stdout="", stderr="remove failed")]
     with pytest.raises(SandboxError, match="enroot remove failed"):
         sbx.stop()
+
+
+def test_subprocess_runner_kill_all_ends_an_inflight_run() -> None:
+    """kill_all reaches a run blocked on a process that never exits, child processes included."""
+    import threading
+    import time
+
+    runner = SubprocessRunner()
+    out: list[RunResult] = []
+    worker = threading.Thread(target=lambda: out.append(runner.run(["sh", "-c", "sleep 60 & sleep 60"])))
+    worker.start()
+    deadline = time.monotonic() + 10
+    while not runner._live and time.monotonic() < deadline:
+        time.sleep(0.05)
+    runner.kill_all()
+    worker.join(10)
+    assert not worker.is_alive()
+    assert out[0].returncode == -9
+    assert not runner._live
+
+
+def test_stop_kills_running_execs_first(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    killed: list[int] = []
+    runner.kill_all = lambda: killed.append(len(runner.calls))  # type: ignore[attr-defined]
+    sbx = import_image(tmp_path, runner)
+    sbx.start()
+    sbx.stop(delete=True)
+    assert killed, "stop() must kill in-flight execs before removing the container"
+    assert runner.calls[killed[0]].argv[:3] == ("enroot", "remove", "-f")

@@ -397,3 +397,32 @@ def test_start_creates_harbors_log_layout(harbor_env_module: Any, tmp_path: Path
     rootfs = Path(tmp_path / "data")
     for sub in ("agent", "user-agent", "verifier", "artifacts"):
         assert any(p.is_dir() for p in rootfs.glob(f"*/logs/{sub}"))
+
+
+def test_cancelled_exec_kills_the_process_and_frees_the_thread(
+    harbor_env_module: Any, tmp_path: Path
+) -> None:
+    """Harbor times verifiers out with asyncio.wait_for (no timeout_sec). Cancelling must kill the exec;
+    otherwise the to_thread worker blocks forever and asyncio.run hangs at shutdown (B2.1 R0 run r3)."""
+    import threading
+
+    env = _make_env(harbor_env_module, tmp_path, runner=FakeRunner())
+    asyncio.run(env.start(force_build=False))
+    released = threading.Event()
+
+    class BlockingRunner:
+        def run(self, argv: Sequence[str], **_: Any) -> Any:
+            assert released.wait(10), "exec was never killed"
+            return RunResult(returncode=-9, stdout="", stderr="")
+
+        def kill_all(self) -> None:
+            released.set()
+
+    env._sandbox._runner = BlockingRunner()
+
+    async def verifier() -> None:
+        await asyncio.wait_for(env.exec("node server.js"), timeout=0.2)
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(verifier())
+    assert released.is_set()

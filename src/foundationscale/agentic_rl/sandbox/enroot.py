@@ -15,6 +15,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import threading
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -60,6 +61,18 @@ class Runner(Protocol):
 class SubprocessRunner:
     """``subprocess.run`` based runner; timeouts kill the process group."""
 
+    def __init__(self) -> None:
+        self._live: set[int] = set()
+        self._lock = threading.Lock()
+
+    def kill_all(self) -> None:
+        """SIGKILL the process group of every in-flight run (each run is its own session)."""
+        with self._lock:
+            groups = list(self._live)
+        for pgid in groups:
+            with contextlib.suppress(OSError):
+                os.killpg(pgid, signal.SIGKILL)
+
     def run(
         self,
         argv: Sequence[str],
@@ -83,13 +96,19 @@ class SubprocessRunner:
             )
         except OSError as exc:
             raise SandboxError(f"failed to spawn {list(argv)!r}: {exc}") from exc
+        with self._lock:
+            self._live.add(proc.pid)  # start_new_session: pgid == pid
         try:
-            stdout, stderr = proc.communicate(timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            with contextlib.suppress(OSError):
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            stdout, stderr = proc.communicate()
-            return RunResult(returncode=124, stdout=stdout, stderr=stderr, timed_out=True)
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(OSError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+                stdout, stderr = proc.communicate()
+                return RunResult(returncode=124, stdout=stdout, stderr=stderr, timed_out=True)
+        finally:
+            with self._lock:
+                self._live.discard(proc.pid)
         return RunResult(returncode=proc.returncode, stdout=stdout, stderr=stderr)
 
 
@@ -306,7 +325,18 @@ class EnrootSandbox:
             timed_out=result.timed_out,
         )
 
+    def kill_running(self) -> None:
+        """Kill every in-flight exec of this sandbox, as stopping a Docker container kills its processes.
+
+        Callers that enforce their own deadline (Harbor's ``asyncio.wait_for`` around a verifier) cancel the
+        coroutine but cannot stop the worker thread blocked in the exec; a verifier whose server never exits
+        then held the thread, and the whole Harbor process, forever (B2.1 R0 run r3)."""
+        kill_all = getattr(self._runner, "kill_all", None)
+        if callable(kill_all):
+            kill_all()
+
     def stop(self, *, delete: bool = True) -> None:
+        self.kill_running()
         if delete and self._started:
             result = self._runner.run(
                 ["enroot", "remove", "-f", self.spec.name],

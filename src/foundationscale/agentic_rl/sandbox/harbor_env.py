@@ -170,13 +170,20 @@ class EnrootEnvironment(BaseEnvironment):
         user: str | int | None = None,
     ) -> ExecResult:
         self._validate_user(user)
-        result = await asyncio.to_thread(
-            self._require_sandbox().exec,
-            command,
-            cwd=cwd,
-            env=env,
-            timeout_s=float(timeout_sec) if timeout_sec is not None else None,
-        )
+        sandbox = self._require_sandbox()
+        try:
+            result = await asyncio.to_thread(
+                sandbox.exec,
+                command,
+                cwd=cwd,
+                env=env,
+                timeout_s=float(timeout_sec) if timeout_sec is not None else None,
+            )
+        except asyncio.CancelledError:
+            # Harbor times verifiers out by cancelling this coroutine; the thread keeps blocking on the
+            # process unless it is killed, and Harbor then hangs at shutdown waiting for that thread.
+            sandbox.kill_running()
+            raise
         return ExecResult(
             stdout=result.stdout,
             stderr=result.stderr,
