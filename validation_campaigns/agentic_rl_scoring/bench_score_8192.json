@@ -1,0 +1,26 @@
+{
+ "L": 8192,
+ "after_forward_GB": 22.8,
+ "logits_dtype": "torch.bfloat16",
+ "raw": {
+  "score_s": 0.032,
+  "score+backward_s": 11.07,
+  "peak_GB": 53.1,
+  "mean_logprob": -13.3723,
+  "finite": true
+ },
+ "top_p0.95": {
+  "score_s": 0.292,
+  "score+backward_s": 11.67,
+  "peak_GB": 47.0,
+  "mean_logprob": -13.321,
+  "finite": true
+ },
+ "T0.8_top_p0.95_top_k20": {
+  "score_s": 0.286,
+  "score+backward_s": 11.5,
+  "peak_GB": 47.0,
+  "mean_logprob": -12.2739,
+  "finite": true
+ }
+}
