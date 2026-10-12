@@ -806,3 +806,15 @@ def test_stop_kills_running_execs_first(tmp_path: Path) -> None:
     sbx.stop(delete=True)
     assert killed, "stop() must kill in-flight execs before removing the container"
     assert runner.calls[killed[0]].argv[:3] == ("enroot", "remove", "-f")
+
+
+def test_exec_disables_enroot_login_shell(tmp_path: Path) -> None:
+    """A login shell sources the image's /etc/profile, which resets PATH and drops the image ENV PATH
+    (golang: "go: not found"). Docker never uses one; enroot defaults to yes and reads "" as default."""
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner)
+    sbx.start()
+    runner.calls.clear()
+    sbx.exec("go version")
+    assert runner.calls[0].env is not None
+    assert runner.calls[0].env.get("ENROOT_LOGIN_SHELL") == "no"

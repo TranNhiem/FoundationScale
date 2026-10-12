@@ -314,7 +314,10 @@ class EnrootSandbox:
         ]
         result = self._runner.run(
             argv,
-            env={"ENROOT_DATA_PATH": self.spec.data_root},
+            # No login shell (enroot defaults to one): the image's /etc/profile then reset PATH, dropping the
+            # image ENV PATH (e.g. golang's /usr/local/go/bin -> "go: not found"). Docker never runs a login shell.
+            # An empty value means "default" to enroot, so it must be "no".
+            env={"ENROOT_DATA_PATH": self.spec.data_root, "ENROOT_LOGIN_SHELL": "no"},
             timeout_s=timeout_s,
         )
         return_code = 124 if result.timed_out else result.returncode
