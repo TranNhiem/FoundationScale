@@ -275,6 +275,10 @@ class EnrootSandbox:
         argv += [
             "enroot",
             "start",
+            # Root inside the container, as Docker runs (the builder only accepts USER root). Without it a
+            # public-network exec kept the caller's uid and every apt/dpkg RUN failed "requires superuser
+            # privilege"; no-network execs were root only by accident of the outer `unshare -r`.
+            "--root",
             "--rw",
             "--mount",
             f"{self._scratch_tmp()}:/tmp",

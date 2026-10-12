@@ -352,7 +352,8 @@ def _run_step(
     command = _run_command(step, argument)
     result = sandbox.exec(command, cwd=workdir, env=env, timeout_s=timeout_s)
     if result.return_code != 0:
-        tail = result.stderr[-_STDERR_TAIL:]
+        # Include stdout: apt relays dpkg's actual error there, leaving stderr with only its summary line
+        tail = (result.stdout[-_STDERR_TAIL:] + "\n" + result.stderr[-_STDERR_TAIL:]).strip()
         raise SandboxBuildFailed(
             f"line {step.lineno}: RUN {argument!r} failed (exit {result.return_code}): {tail}"
         )

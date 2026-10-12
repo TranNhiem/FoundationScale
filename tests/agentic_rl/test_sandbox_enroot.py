@@ -208,6 +208,21 @@ def test_exec_no_network_prefix(tmp_path: Path) -> None:
     assert "enroot" in argv
 
 
+@pytest.mark.parametrize("network", ["no-network", "public"])
+def test_exec_runs_as_container_root(tmp_path: Path, network: str) -> None:
+    # Docker semantics: RUN and task commands are root. Without --root a public-network exec (every build
+    # step) kept the caller's uid and dpkg refused "requires superuser privilege".
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner, network=network)
+    sbx.start()
+    runner.calls.clear()
+    sbx.exec("echo hi")
+    argv = runner.calls[0].argv
+    i = argv.index("start")
+    assert argv[i - 1] == "enroot"
+    assert "--root" in argv[i + 1 : argv.index(sbx.spec.name)]
+
+
 def test_exec_public_no_prefix(tmp_path: Path) -> None:
     runner = FakeRunner()
     sbx = import_image(tmp_path, runner, network="public")
