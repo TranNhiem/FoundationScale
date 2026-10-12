@@ -15,7 +15,7 @@ evidence is in [`validation_campaigns/vlm_2xh200/EVIDENCE.md`](../../validation_
 | Method | LoRA (r16 / alpha 32 by default), FSDP across both GPUs, bf16, activation checkpointing |
 | Context | 16K and 32K tokens |
 | Data | image + text, video + text and text-only, mixed in one run |
-| Algorithms | SFT (image + video + text), DPO / IPO / ORPO / SimPO / CPO (text), GRPO / Dr-GRPO / DAPO / GSPO / REINFORCE++ / RLOO (images) |
+| Algorithms | SFT (image + video + text), DPO / IPO / ORPO / SimPO / CPO (text; DPO and ORPO also image + video + text), GRPO / Dr-GRPO / DAPO / GSPO / REINFORCE++ / RLOO (images) |
 
 ## Chapters
 
@@ -85,6 +85,7 @@ both GPUs.
 |---|---|---|
 | DPO (LoRA) | all five models | text |
 | IPO, SimPO, CPO, ORPO | Qwen3.6-27B | text |
+| DPO, ORPO (multimodal) | gemma-4-12B-it, Qwen3.6-27B | images, video, mixed image+video+text |
 | GRPO, Dr-GRPO, DAPO, GSPO, REINFORCE++, RLOO | gemma-4-12B-it | images |
 | GRPO | gemma-4-26B-A4B-it, gemma-4-31B-it | images |
 
