@@ -7,6 +7,7 @@ provided by :mod:`foundationscale.agentic_rl.sandbox.enroot`.
 from __future__ import annotations
 
 import hashlib
+import posixpath
 import json
 import shlex
 import time
@@ -207,7 +208,7 @@ def build_image(
                     )
                 _run_step(sandbox, step, argument, env, workdir, remaining)
             elif instruction in ("COPY", "ADD"):
-                _copy_step(sandbox, step, instruction, argument, context)
+                _copy_step(sandbox, step, instruction, argument, context, workdir)
             elif instruction == "USER":
                 _check_user(step, argument)
             applied += 1
@@ -247,6 +248,7 @@ def _validate_steps(
     context: Path,
 ) -> None:
     """Refuse every unsupported or unsafe line BEFORE a container exists (cheap and leak-free)."""
+    workdir = "/"
     for step in steps:
         instruction = step.instruction
         if instruction == "FROM":
@@ -261,9 +263,9 @@ def _validate_steps(
         elif instruction == "ENV":
             _parse_env(step, argument)
         elif instruction == "WORKDIR":
-            _parse_workdir(step, argument)
+            workdir = _parse_workdir(step, argument)
         elif instruction in ("COPY", "ADD"):
-            _copy_plan(step, instruction, argument, context)
+            _copy_plan(step, instruction, argument, context, workdir)
         elif instruction == "USER":
             _check_user(step, argument)
 
@@ -384,7 +386,7 @@ _ARCHIVE_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", 
 
 
 def _copy_plan(
-    step: DockerfileStep, instruction: str, argument: str, context: Path
+    step: DockerfileStep, instruction: str, argument: str, context: Path, workdir: str = "/"
 ) -> tuple[list[Path], list[str], str]:
     """Validate a COPY/ADD line without touching any container: (sources, raw sources, target)."""
     if not argument:
@@ -422,9 +424,10 @@ def _copy_plan(
             f"line {step.lineno}: {instruction}: expected at least one source, got {argument!r}"
         )
     if not target.startswith("/"):
-        raise SandboxRefusal(
-            f"line {step.lineno}: {instruction}: expected an absolute target, got {target!r}"
-        )
+        # Docker resolves a relative target against the current WORKDIR; a trailing slash
+        # (e.g. "./") still means "into this directory".
+        joined = posixpath.normpath(posixpath.join(workdir or "/", target))
+        target = joined.rstrip("/") + "/" if target.endswith("/") or target in (".", "./") else joined
     return resolved, sources, target
 
 
@@ -434,18 +437,19 @@ def _copy_step(
     instruction: str,
     argument: str,
     context: Path,
+    workdir: str = "/",
 ) -> None:
-    resolved, sources, target = _copy_plan(step, instruction, argument, context)
-    if len(resolved) == 1 and not _is_glob(sources[0]) and not target.endswith("/"):
-        source = resolved[0]
-        if source.is_dir():
-            sandbox.upload_dir(source, target)
-        else:
-            sandbox.upload_file(source, target)
-        return
+    """Docker COPY/ADD semantics: a directory source contributes its CONTENTS to the target (the
+    directory itself is never copied); a file goes to the target path, or to ``target/<name>`` when
+    the target is a directory (trailing slash, several sources, or a glob)."""
+    resolved, sources, target = _copy_plan(step, instruction, argument, context, workdir)
+    into_dir = target.endswith("/") or len(resolved) > 1 or any(_is_glob(s) for s in sources)
+    base = target.rstrip("/") or "/"
     for source in resolved:
         if source.is_dir():
-            sandbox.upload_dir(source, target.rstrip("/") + "/" + source.name)
+            sandbox.upload_dir(source, base)
+        elif into_dir:
+            sandbox.upload_file(source, base.rstrip("/") + "/" + source.name)
         else:
             sandbox.upload_file(source, target)
 

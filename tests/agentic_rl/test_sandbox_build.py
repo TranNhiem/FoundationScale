@@ -920,23 +920,26 @@ def test_build_copy_glob_with_no_matches_refused(tmp_path: Path) -> None:
         )
 
 
-def test_build_copy_relative_target_refused(tmp_path: Path) -> None:
-    """A COPY target that is not absolute is refused."""
+def test_build_copy_relative_target_resolves_against_workdir(tmp_path: Path) -> None:
+    """Docker semantics: a relative COPY target resolves against the current WORKDIR (Skill2Env
+    Dockerfiles write `COPY x ./`; 697 of 7,496 tasks were refused before this)."""
     runner = FakeRunner()
-    df = _write(tmp_path, "Dockerfile", "FROM alpine\nCOPY a.txt dest/a.txt\n")
+    df = _write(tmp_path, "Dockerfile", "FROM alpine\nWORKDIR /w\nCOPY a.txt dest/a.txt\n")
     context = tmp_path / "ctx"
     context.mkdir()
     (context / "a.txt").write_text("a", encoding="utf-8")
-    with pytest.raises(SandboxRefusal, match="COPY: expected an absolute target"):
-        build_image(
-            df,
-            context,
-            tmp_path / "out.sqsh",
-            data_root=str(tmp_path / "data"),
-            image_store=str(tmp_path / "store"),
-            scratch_root=str(tmp_path / "scratch"),
-            runner=runner,
-        )
+    build_image(
+        df,
+        context,
+        tmp_path / "out.sqsh",
+        data_root=str(tmp_path / "data"),
+        image_store=str(tmp_path / "store"),
+        scratch_root=str(tmp_path / "scratch"),
+        runner=runner,
+    )
+    rootfs = runner.exported_root
+    assert rootfs is not None
+    assert (rootfs / "w" / "dest" / "a.txt").read_text(encoding="utf-8") == "a"
 
 
 def test_build_copy_absolute_source_refused(tmp_path: Path) -> None:
@@ -995,7 +998,8 @@ def test_build_copy_glob_escaping_context_refused(tmp_path: Path) -> None:
 
 
 def test_build_copy_dir_to_trailing_slash_target(tmp_path: Path) -> None:
-    """COPY of a directory into a trailing-slash target nests it under the target."""
+    """Docker semantics: COPY of a directory copies its CONTENTS into the target, never the directory
+    itself (the old nesting mis-built 98.8% of builder-accepted Skill2Env tasks)."""
     runner = FakeRunner()
     context = tmp_path / "ctx"
     context.mkdir()
@@ -1013,7 +1017,8 @@ def test_build_copy_dir_to_trailing_slash_target(tmp_path: Path) -> None:
     )
     rootfs = runner.exported_root
     assert rootfs is not None
-    assert (rootfs / "dest" / "d" / "inner.txt").read_text(encoding="utf-8") == "i"
+    assert (rootfs / "dest" / "inner.txt").read_text(encoding="utf-8") == "i"
+    assert not (rootfs / "dest" / "d").exists()
 
 
 def test_build_unsupported_instruction_refused(tmp_path: Path) -> None:
@@ -1196,23 +1201,25 @@ def test_build_add_missing_target_refused(tmp_path: Path) -> None:
         )
 
 
-def test_build_add_relative_target_refused(tmp_path: Path) -> None:
-    """An ADD target that is not absolute is refused."""
+def test_build_add_relative_target_resolves_against_workdir(tmp_path: Path) -> None:
+    """Docker semantics: a relative ADD target resolves against the current WORKDIR."""
     runner = FakeRunner()
-    df = _write(tmp_path, "Dockerfile", "FROM alpine\nADD a.txt dest/a.txt\n")
+    df = _write(tmp_path, "Dockerfile", "FROM alpine\nWORKDIR /w\nADD a.txt dest/a.txt\n")
     context = tmp_path / "ctx"
     context.mkdir()
     (context / "a.txt").write_text("a", encoding="utf-8")
-    with pytest.raises(SandboxRefusal, match="ADD: expected an absolute target"):
-        build_image(
-            df,
-            context,
-            tmp_path / "out.sqsh",
-            data_root=str(tmp_path / "data"),
-            image_store=str(tmp_path / "store"),
-            scratch_root=str(tmp_path / "scratch"),
-            runner=runner,
-        )
+    build_image(
+        df,
+        context,
+        tmp_path / "out.sqsh",
+        data_root=str(tmp_path / "data"),
+        image_store=str(tmp_path / "store"),
+        scratch_root=str(tmp_path / "scratch"),
+        runner=runner,
+    )
+    rootfs = runner.exported_root
+    assert rootfs is not None
+    assert (rootfs / "w" / "dest" / "a.txt").read_text(encoding="utf-8") == "a"
 
 
 def test_build_add_absolute_source_refused(tmp_path: Path) -> None:
@@ -1271,7 +1278,7 @@ def test_build_add_glob_escaping_context_refused(tmp_path: Path) -> None:
 
 
 def test_build_add_dir_to_trailing_slash_target(tmp_path: Path) -> None:
-    """ADD of a directory into a trailing-slash target nests it under the target."""
+    """Docker semantics: ADD of a directory copies its CONTENTS into the target, never the directory itself."""
     runner = FakeRunner()
     context = tmp_path / "ctx"
     context.mkdir()
@@ -1289,7 +1296,8 @@ def test_build_add_dir_to_trailing_slash_target(tmp_path: Path) -> None:
     )
     rootfs = runner.exported_root
     assert rootfs is not None
-    assert (rootfs / "dest" / "d" / "inner.txt").read_text(encoding="utf-8") == "i"
+    assert (rootfs / "dest" / "inner.txt").read_text(encoding="utf-8") == "i"
+    assert not (rootfs / "dest" / "d").exists()
 
 
 def test_build_add_symlink_source_escaping_context_refused(tmp_path: Path) -> None:
