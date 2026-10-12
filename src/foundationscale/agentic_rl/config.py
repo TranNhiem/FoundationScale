@@ -83,7 +83,6 @@ _MODEL_PATH_PLACEHOLDER = "{model_path}"
 # a config file could state; dataset is refused by name -- the rollout
 # source replaces the corpus draw entirely, so a declared dataset would
 # never be read (see RLTrainConfig.dataset / RLTrainer.run()'s own refusal).
-_TRAINER_FORBIDDEN_KEYS = frozenset({"model", "algorithm", "rollout_source", "dataset"})
 _TRAINER_FORBIDDEN_REASONS: dict[str, str] = {
     "model": "model is declared under 'policy' instead",
     "algorithm": "algorithm is declared under 'policy' instead",
@@ -91,7 +90,11 @@ _TRAINER_FORBIDDEN_REASONS: dict[str, str] = {
     "dataset": (
         "the rollout source replaces the corpus, so a dataset here would be declared and never read"
     ),
+    "score_temperature": "the trainer scores with sampling.temperature, the engine's own value",
+    "score_top_p": "the trainer scores with sampling.top_p, the engine's own value",
+    "score_top_k": "the trainer scores with sampling.top_k, the engine's own value",
 }
+_TRAINER_FORBIDDEN_KEYS = frozenset(_TRAINER_FORBIDDEN_REASONS)
 
 
 class AgenticConfigRefusal(ValueError):

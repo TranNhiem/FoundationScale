@@ -58,6 +58,7 @@ correctly tuned; or that any row survives scoring on any given step.
 
 from __future__ import annotations
 
+import math
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -124,7 +125,14 @@ def _refuse_exit_96(message: str) -> NoReturn:
 _MAX_GROUPS_REPORTED: int = 8
 
 
-def _token_logprobs(logits: torch.Tensor, target_ids: torch.Tensor) -> torch.Tensor:
+def _token_logprobs(
+    logits: torch.Tensor,
+    target_ids: torch.Tensor,
+    *,
+    temperature: float = 1.0,
+    top_p: float = 1.0,
+    top_k: int = 0,
+) -> torch.Tensor:
     """Return per-token target log-probabilities without a dense log-softmax.
 
     ``log_softmax(logits).gather(...)`` first materialises a B x T x V
@@ -144,7 +152,65 @@ def _token_logprobs(logits: torch.Tensor, target_ids: torch.Tensor) -> torch.Ten
     # over all T positions, so the logits are narrowed to the targets first.
     logits = logits[:, : target_ids.shape[1]]
     target = target_ids.unsqueeze(-1)
-    return logits.gather(-1, target).squeeze(-1).float() - torch.logsumexp(logits.float(), dim=-1)
+    if temperature == 1.0 and top_p >= 1.0 and top_k <= 0:
+        return logits.gather(-1, target).squeeze(-1).float() - torch.logsumexp(
+            logits.float(), dim=-1
+        )
+    return _sampled_token_logprobs(
+        logits, target, temperature=temperature, top_p=top_p, top_k=top_k
+    )
+
+
+# Vocabulary entries one scoring chunk may sort at once (~32M -> ~128 MB of fp32 logits
+# plus their int64 sort order); positions are batched to stay under it.
+_SCORE_CHUNK_ENTRIES = 1 << 25
+
+
+def _sampling_support(z: torch.Tensor, top_p: float, top_k: int) -> torch.Tensor:
+    """Boolean mask of the tokens a vLLM-style sampler can draw from ``z`` (already
+    temperature-scaled): top-k first, then top-p over what is left, at least one
+    token kept -- the order and tie rule of vLLM's ``apply_top_k_top_p``."""
+    import torch  # function-local: see module docstring
+
+    sorted_z, order = z.sort(dim=-1, descending=False)
+    if top_k > 0 and top_k < sorted_z.shape[-1]:
+        kth = sorted_z[..., -top_k].unsqueeze(-1)
+        sorted_z = sorted_z.masked_fill(sorted_z < kth, float("-inf"))
+    if top_p < 1.0:
+        cumulative = sorted_z.softmax(dim=-1).cumsum(dim=-1)
+        outside = cumulative <= 1.0 - top_p
+        outside[..., -1] = False
+        sorted_z = sorted_z.masked_fill(outside, float("-inf"))
+    keep_sorted = sorted_z > float("-inf")
+    return torch.zeros_like(keep_sorted).scatter(-1, order, keep_sorted)
+
+
+def _sampled_token_logprobs(
+    logits: torch.Tensor, target: torch.Tensor, *, temperature: float, top_p: float, top_k: int
+) -> torch.Tensor:
+    """Log-probability of each target under the distribution the engine SAMPLED from:
+    logits / temperature, renormalised over the top-k / top-p support. Scoring raw
+    logits instead makes every update off-policy whenever top_p < 1 or temperature
+    != 1 (the agentic music runs sampled at top_p 0.95 and collapsed). The target is
+    always counted inside the support, so a bf16 disagreement with the engine about
+    the nucleus edge yields a finite score rather than -inf. Positions are processed
+    in chunks so the sort never holds more than ~32M vocabulary entries at once."""
+    import torch  # function-local: see module docstring
+
+    batch, positions, vocab = logits.shape
+    chunk = max(1, _SCORE_CHUNK_ENTRIES // max(1, batch * vocab))
+    pieces = []
+    for start in range(0, positions, chunk):
+        z = logits[:, start : start + chunk].float() / temperature
+        tgt = target[:, start : start + chunk]
+        score = z.gather(-1, tgt).squeeze(-1)
+        if top_p < 1.0 or top_k > 0:
+            with torch.no_grad():
+                keep = _sampling_support(z.detach(), top_p, top_k)
+                keep.scatter_(-1, tgt, True)
+            z = z.masked_fill(~keep, float("-inf"))
+        pieces.append(score - torch.logsumexp(z, dim=-1))
+    return torch.cat(pieces, dim=1)
 
 
 def _micro_batched_backward(
@@ -1100,6 +1166,13 @@ class RLTrainConfig:
     # The loss, kept-row selection and metrics still describe one logical
     # batch, while full-vocabulary scorer activations are bounded per slice.
     logprob_micro_batch: int = 0
+    # The distribution the SCORED tokens were sampled from. When an external rollout
+    # source (the agentic engine fleet) samples with temperature / top-p / top-k,
+    # scoring raw logits trains on a different policy than the one that acted. The
+    # defaults score raw logits, byte-for-byte the historical behaviour.
+    score_temperature: float = 1.0
+    score_top_p: float = 1.0
+    score_top_k: int = 0
     seed: int = 0
     device: str | None = None
     # Data-parallel sharding: "none" (default, single process) / "ddp" /
@@ -1198,6 +1271,25 @@ class RLTrainer:
                 f"prompts_per_step={config.prompts_per_step}: 0 prompts of at least 1 "
                 f"required per step"
             )
+        if (
+            isinstance(config.score_temperature, bool)
+            or not isinstance(config.score_temperature, (int, float))
+            or not math.isfinite(config.score_temperature)
+            or config.score_temperature <= 0
+        ):
+            raise TrainerRefusal(
+                f"score_temperature={config.score_temperature!r}: a finite number > 0 is required"
+            )
+        if (
+            isinstance(config.score_top_p, bool)
+            or not isinstance(config.score_top_p, (int, float))
+            or not 0.0 < config.score_top_p <= 1.0
+        ):
+            raise TrainerRefusal(
+                f"score_top_p={config.score_top_p!r}: a number in (0, 1] is required"
+            )
+        if type(config.score_top_k) is not int or config.score_top_k < 0:
+            raise TrainerRefusal(f"score_top_k={config.score_top_k!r}: an int >= 0 is required")
         if config.logprob_micro_batch < 0:
             raise ValueError(
                 f"logprob_micro_batch={config.logprob_micro_batch}: a negative row "
@@ -2172,7 +2264,13 @@ class RLTrainer:
                 attention_mask=attention.narrow(0, start, width),
                 **sliced_modalities,
             ).logits
-            return _token_logprobs(logits, target_ids.narrow(0, start, width))
+            return _token_logprobs(
+                logits,
+                target_ids.narrow(0, start, width),
+                temperature=self.config.score_temperature,
+                top_p=self.config.score_top_p,
+                top_k=self.config.score_top_k,
+            )
 
         if isinstance(objective, (RAFTLoss, BestOfNLoss)):
             # The SFT pair has no advantage estimator, no old plane and no

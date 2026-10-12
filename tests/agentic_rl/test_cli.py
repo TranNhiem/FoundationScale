@@ -821,7 +821,7 @@ def test_stability_guard_is_built_from_the_declared_section(tmp_path: Path) -> N
 
 
 def test_stability_best_k_with_keep_last_one_is_refused(tmp_path: Path) -> None:
-    """best_k needs keep_last >= 2: the checkpoint behind a best rollout is one step older."""
+    """best_k needs keep_last >= 2: step_r must survive publish(r) writing step_{r+1}."""
     from foundationscale.agentic_rl.cli import _stability_guard
     from foundationscale.agentic_rl.config import AgenticConfigRefusal, build_config
 
@@ -830,3 +830,55 @@ def test_stability_best_k_with_keep_last_one_is_refused(tmp_path: Path) -> None:
     raw["stability"] = {"best_k": 2}
     with pytest.raises(AgenticConfigRefusal, match="keep_last"):
         _stability_guard(build_config(raw, {}))
+
+
+def test_real_run_scores_with_the_engine_sampling_distribution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The trainer receives the engine's temperature / top_p / top_k as its score_* fields."""
+    seen: list[Any] = []
+
+    class _Capturing(_FakeRLTrainer):
+        def __init__(self, config: Any) -> None:
+            super().__init__(config)
+            seen.append(config)
+
+    monkeypatch.setattr("foundationscale.agentic_rl.cli.RLTrainer", _Capturing)
+    tasks_path = _write_tasks(tmp_path)
+    sampling = {
+        **_raw_config(tasks_path)["sampling"],
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "top_k": 20,
+    }
+    code = main(["--config", _write_config(tmp_path, _raw_config(tasks_path, sampling=sampling))])
+    assert code == EXIT_PASS
+    assert (seen[0].score_temperature, seen[0].score_top_p, seen[0].score_top_k) == (0.8, 0.95, 20)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"), [("min_p", 0.05), ("presence_penalty", 0.5), ("repetition_penalty", 1.1)]
+)
+def test_real_run_refuses_sampling_the_trainer_cannot_score(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    key: str,
+    value: float,
+) -> None:
+    """min_p and penalties reshape the sampled distribution beyond what scoring reproduces."""
+    monkeypatch.setattr("foundationscale.agentic_rl.cli.RLTrainer", _FakeRLTrainer)
+    tasks_path = _write_tasks(tmp_path)
+    sampling = {**_raw_config(tasks_path)["sampling"], key: value}
+    code = main(["--config", _write_config(tmp_path, _raw_config(tasks_path, sampling=sampling))])
+    assert code == EXIT_REFUSE
+    assert f"sampling.{key}" in capsys.readouterr().out
+
+
+def test_trainer_section_may_not_declare_score_fields(tmp_path: Path) -> None:
+    """score_* always come from sampling.*; declaring them under trainer is refused."""
+    from foundationscale.agentic_rl.config import AgenticConfigRefusal, build_config
+
+    raw = _raw_config(_write_tasks(tmp_path), trainer={"max_steps": 1, "score_top_p": 0.9})
+    with pytest.raises(AgenticConfigRefusal, match="trainer.score_top_p"):
+        build_config(raw, {})
