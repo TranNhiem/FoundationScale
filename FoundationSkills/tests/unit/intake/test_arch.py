@@ -1035,3 +1035,50 @@ class StageTaskTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_repair_git_repos_restores_what_the_corpus_lost(tmp_path):
+    """The published corpus dropped empty dirs (.git/refs) and exec bits; both come back from the repo itself."""
+    import os
+    import shutil
+    import subprocess
+
+    from foundationskills.intake.arch import _repair_git_repos
+
+    repo = tmp_path / "environment" / "repo"
+    repo.mkdir(parents=True)
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "safe.directory=*", "-C", str(repo)]
+    subprocess.run(git + ["init", "-q", "-b", "main"], check=True)
+    script = repo / "verify.sh"
+    script.write_text("#!/bin/sh\nexit 0\n")
+    script.chmod(0o755)
+    subprocess.run(git + ["add", "verify.sh"], check=True)
+    subprocess.run(git + ["commit", "-q", "-m", "seed"], check=True)
+    subprocess.run(git + ["pack-refs", "--all"], check=True)
+    head = subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    # what the distribution did: empty dirs gone, exec bit gone
+    shutil.rmtree(repo / ".git" / "refs")
+    script.chmod(0o644)
+    assert subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True).returncode != 0
+
+    repairs = _repair_git_repos(tmp_path / "environment")
+
+    assert subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() == head
+    assert os.access(script, os.X_OK)
+    assert subprocess.run(git + ["status", "--porcelain"], capture_output=True, text=True).stdout == ""
+    kinds = {r["repair"] for r in repairs}
+    assert kinds == {"git_required_dirs", "exec_bits"}
+    assert any("verify.sh" in r.get("restored", []) for r in repairs)
+
+
+def test_repair_git_repos_leaves_intact_repos_alone(tmp_path):
+    import subprocess
+
+    from foundationskills.intake.arch import _repair_git_repos
+
+    repo = tmp_path / "environment" / "repo"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    for d in ("refs/heads", "refs/tags", "objects/info", "objects/pack"):
+        (repo / ".git" / d).mkdir(parents=True, exist_ok=True)
+    assert _repair_git_repos(tmp_path / "environment") == []

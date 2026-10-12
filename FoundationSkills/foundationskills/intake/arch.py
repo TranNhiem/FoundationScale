@@ -34,6 +34,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import urllib.request
 from dataclasses import dataclass
@@ -613,6 +614,46 @@ def _clean_dest(dest: Path) -> None:
         shutil.rmtree(dest)
 
 
+# Directories git requires even when empty. The published Skill2Env corpus dropped empty directories
+# (45 of 196 task repos lack refs/ or objects/, so `git rev-parse HEAD` fails "not a git repository").
+_GIT_REQUIRED_DIRS = ("refs/heads", "refs/tags", "objects/info", "objects/pack")
+
+
+def _repair_git_repos(env_dir: Path) -> List[Dict[str, Any]]:
+    """Restore what the corpus distribution lost from each git repo in a STAGED environment: git's
+    required empty directories, then executable bits recorded in the repo's own index (100755).
+    Both are recoverable from the repo itself; nothing else is changed.  Returns one record per repair."""
+    repairs: List[Dict[str, Any]] = []
+    for git_dir in sorted(env_dir.rglob(".git")):
+        if not git_dir.is_dir() or git_dir.is_symlink():
+            continue
+        repo = git_dir.parent
+        rel = repo.relative_to(env_dir).as_posix()
+        created = [d for d in _GIT_REQUIRED_DIRS if not (git_dir / d).is_dir()]
+        for d in created:
+            (git_dir / d).mkdir(parents=True, exist_ok=True)
+        if created:
+            repairs.append({"repo": rel, "repair": "git_required_dirs", "created": created})
+        listing = subprocess.run(
+            ["git", "-c", "safe.directory=*", "-C", str(repo), "ls-files", "-s", "-z"],
+            capture_output=True, check=False,
+        )
+        if listing.returncode != 0:
+            repairs.append({"repo": rel, "repair": "exec_bits", "error": listing.stderr.decode(errors="replace")[-300:]})
+            continue
+        restored = []
+        for entry in listing.stdout.split(b"\0"):
+            if not entry.startswith(b"100755 "):
+                continue
+            path = repo / entry.split(b"\t", 1)[1].decode()
+            if path.is_file() and not path.is_symlink() and not os.access(path, os.X_OK):
+                path.chmod(path.stat().st_mode | 0o111)
+                restored.append(path.relative_to(repo).as_posix())
+        if restored:
+            repairs.append({"repo": rel, "repair": "exec_bits", "restored": restored})
+    return repairs
+
+
 def stage_task(
     task_dir: Path,
     stage_root: Path,
@@ -636,6 +677,9 @@ def stage_task(
     dest = stage_root / task_dir.name
     _clean_dest(dest)
     shutil.copytree(task_dir, dest, symlinks=True)
+    repairs = _repair_git_repos(dest / "environment") if (dest / "environment").is_dir() else []
+    if repairs:
+        (dest / "environment" / "STAGING_REPAIRS.json").write_text(json.dumps(repairs, indent=2) + "\n")
 
     dockerfile = dest / "environment" / "Dockerfile"
     if not dockerfile.is_file():
