@@ -261,11 +261,17 @@ class EnrootSandbox:
         workdir = cwd if cwd is not None else (self._build_workdir or self.spec.workdir)
         argv: list[str] = []
         if self.spec.network == "no-network":
-            argv += ["unshare", "-rn"]
+            # A fresh network namespace has loopback DOWN: 127.0.0.1 was unreachable even within one exec
+            # (measured ENETUNREACH), so every task that serves and probes on localhost failed. Bring lo up
+            # inside the namespace; there is still no route off the box.
+            argv += ["unshare", "-rn", "sh", "-c", 'ip link set lo up 2>/dev/null; exec "$@"', "sh"]
         if self.spec.cpu_set:
             argv += ["taskset", "-c", ",".join(str(cpu) for cpu in self.spec.cpu_set)]
         if self.spec.memory_mb:
-            argv += ["prlimit", f"--as={self.spec.memory_mb * 1048576}"]
+            # RLIMIT_DATA bounds memory actually written; RLIMIT_AS (the old --as) also counted the large
+            # PROT_NONE reservations V8/WebAssembly/Chromium make and never touch, so Node and browsers could
+            # not start under a 4 GiB task limit (measured: WebAssembly.Memory fails under --as, ok under --data)
+            argv += ["prlimit", f"--data={self.spec.memory_mb * 1048576}"]
         argv += [
             "enroot",
             "start",

@@ -150,8 +150,10 @@ def write_license_csv(path, rows) -> Path:
 
 
 def write_result_json(path, doc) -> Path:
+    """A trial result laid out as Harbor writes it: result.json beside the trial's agent/ dir."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    (path.parent / "agent").mkdir(exist_ok=True)
     path.write_text(json.dumps(doc), encoding="utf-8")
     return path
 
@@ -1037,3 +1039,22 @@ def test_from_pin_accepts_inline_digest_matching_task_toml_and_skips_platform_fl
     assert status == "RED" and "disagrees" in reason
     df.write_text("FROM python:3.12-slim\n")
     assert skill2env.dockerfile_preflight(df, {}, validator=ok)[0] == "RED"
+
+
+def test_run_gate_reads_the_trial_result_not_the_job_summary(tmp_path):
+    """Real-run finding (B2.1 R0): Harbor writes <jobs>/<timestamp>/<task>__<id>/result.json, and the timestamp
+    dir also contains "__"; the job-level summary (no verifier_result) was read and every task looked UNMEASURED."""
+    jobs = Path(tmp_path) / "jobs"
+
+    def fake_run(argv, **kwargs):
+        job = jobs / "2026-10-12__13-00-11"
+        trial = job / "task_x__abc123"
+        (trial / "agent").mkdir(parents=True)
+        (job / "result.json").write_text(json.dumps({"stats": {}}))  # job summary: no verifier_result
+        (trial / "result.json").write_text(json.dumps({"verifier_result": {"rewards": {"a": 1.0, "b": 1.0}},
+                                                       "exception_info": None}))
+        return None
+
+    g = skill2env.run_gate(Path(tmp_path) / "task", harbor_bin="harbor", env_import_path="m:E", env_kwargs={},
+                           jobs_dir=jobs, agent="oracle", run=fake_run)
+    assert g.status == "PASS" and g.rewards == {"a": 1.0, "b": 1.0}

@@ -522,7 +522,11 @@ def run_gate(
         return GateResult(agent, None, "TimeoutExpired", UNMEASURED)
     except OSError as exc:
         return GateResult(agent, None, type(exc).__name__, UNMEASURED)
-    results = sorted(set(jobs_dir.glob("*__*/result.json")))
+    # Harbor nests a trial as <jobs_dir>/<timestamp>/<task>__<id>/result.json, and the timestamp dir
+    # ("2026-10-12__13-00-11") also contains "__": identify the TRIAL result by structure (it sits beside the
+    # trial's agent/ or verifier/ dir), never by name -- the job-level result.json carries no verifier_result
+    results = sorted(p for p in jobs_dir.rglob("result.json")
+                     if (p.parent / "agent").is_dir() or (p.parent / "verifier").is_dir())
     if len(results) > 1:
         return GateResult(
             agent,

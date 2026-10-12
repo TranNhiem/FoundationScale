@@ -202,7 +202,9 @@ def test_exec_no_network_prefix(tmp_path: Path) -> None:
     runner.calls.clear()
     sbx.exec("echo hi")
     argv = runner.calls[0].argv
-    assert argv[:2] == ("unshare", "-rn")
+    # no-network keeps the fresh namespace (no route off the box) but brings loopback up inside it:
+    # a fresh netns has lo DOWN, so 127.0.0.1 was unreachable even within one exec (measured ENETUNREACH)
+    assert argv[:6] == ("unshare", "-rn", "sh", "-c", 'ip link set lo up 2>/dev/null; exec "$@"', "sh")
     assert "enroot" in argv
 
 
@@ -222,9 +224,10 @@ def test_exec_cpu_set_taskset(tmp_path: Path) -> None:
     runner.calls.clear()
     sbx.exec("true")
     argv = runner.calls[0].argv
-    assert argv[:3] == ("unshare", "-rn", "taskset")
-    assert argv[3] == "-c"
-    assert argv[4] == "0,2"
+    assert argv[:2] == ("unshare", "-rn")
+    i = argv.index("taskset")
+    assert argv[i + 1] == "-c"
+    assert argv[i + 2] == "0,2"
 
 
 def test_exec_memory_mb_prlimit_bytes(tmp_path: Path) -> None:
@@ -234,8 +237,12 @@ def test_exec_memory_mb_prlimit_bytes(tmp_path: Path) -> None:
     runner.calls.clear()
     sbx.exec("true")
     argv = runner.calls[0].argv
-    assert argv[:3] == ("unshare", "-rn", "prlimit")
-    assert argv[3] == f"--as={256 * 1048576}"
+    assert argv[:2] == ("unshare", "-rn")
+    i = argv.index("prlimit")
+    # RLIMIT_DATA, not RLIMIT_AS: --as also counted V8/WebAssembly/Chromium PROT_NONE reservations, so Node
+    # and browsers could not start under a task's memory limit (measured: WebAssembly.Memory fails under --as)
+    assert argv[i + 1] == f"--data={256 * 1048576}"
+    assert not any(a.startswith("--as=") for a in argv)
 
 
 def test_exec_mounts_scratch_over_tmp(tmp_path: Path) -> None:
