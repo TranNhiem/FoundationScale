@@ -22,6 +22,7 @@ from foundationscale.agentic_rl.verl_adapter import (
     VerlAdapterRefusal,
     episode_from_agent_loop_output,
     require_pinned_verl,
+    samples_from_rollout_batch,
 )
 
 MODEL = ModelMeta(name="m", version=0, checkpoint_sha="sha")
@@ -274,3 +275,282 @@ def test_non_sequence_ids_refused():
     """prompt_ids given as a string is refused, not split into characters."""
     with pytest.raises(VerlAdapterRefusal, match="prompt_ids"):
         _ep(_out(prompt_ids="12"))
+
+
+def _padded_batch():
+    """Build a B=2, P=4, R=5 padded rollout batch as plain nested lists."""
+    return {
+        "prompts": [
+            [0, 0, 11, 12],
+            [0, 21, 22, 23],
+        ],
+        "responses": [
+            [31, 32, 33, 34, 35],
+            [41, 42, 43, 44, 45],
+        ],
+        "response_mask": [
+            [1, 1, 0, 1, 0],
+            [1, 0, 0, 0, 0],
+        ],
+        "attention_mask": [
+            [0, 0, 1, 1, 1, 1, 1, 1, 0],  # 4 real response tokens (one is a tool token), 1 pad
+            [0, 1, 1, 1, 1, 0, 0, 0, 0],
+        ],
+        "rollout_log_probs": [
+            [-0.5, -0.25, -0.125, -0.0625, -0.03],
+            [-0.7, -0.35, -0.17, -0.08, -0.04],
+        ],
+        "rm_scores": [
+            [0.0, 0.0, 0.0, 1.5, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 0.0],
+        ],
+    }
+
+
+def test_samples_exact_unpadding_of_prompts_and_responses():
+    """Left-padded prompts and right-padded responses are stripped exactly."""
+    samples = samples_from_rollout_batch(_padded_batch(), {"__num_turns__": [2, 1]})
+    assert samples[0]["prompt_ids"] == [11, 12]
+    assert samples[0]["response_ids"] == [31, 32, 33, 34]
+    assert samples[0]["response_mask"] == [1, 1, 0, 1]
+    assert samples[1]["prompt_ids"] == [21, 22, 23]
+    assert samples[1]["response_ids"] == [41]
+
+
+def test_samples_logprobs_follow_response_mask_selection():
+    """rollout_log_probs is sliced at the same valid response indices as the ids."""
+    samples = samples_from_rollout_batch(_padded_batch(), {"__num_turns__": [2, 1]})
+    assert samples[0]["response_logprobs"] == [-0.5, -0.25, -0.125, -0.0625]
+    assert samples[1]["response_logprobs"] == [-0.7]
+
+
+def test_samples_reward_score_at_last_valid_response_index():
+    """rm_scores is read at the last valid response index, not at the padded tail."""
+    samples = samples_from_rollout_batch(_padded_batch(), {"__num_turns__": [2, 1]})
+    assert samples[0]["reward_score"] == 1.5
+    assert samples[1]["reward_score"] == 0.0
+
+
+def test_samples_rm_scores_absent_gives_none_reward():
+    """Without rm_scores every row reports reward_score None (abstention)."""
+    batch = _padded_batch()
+    del batch["rm_scores"]
+    samples = samples_from_rollout_batch(batch, {"__num_turns__": [2, 1]})
+    assert samples[0]["reward_score"] is None
+    assert samples[1]["reward_score"] is None
+
+
+def test_samples_num_turns_read_from_non_tensor_batch():
+    """num_turns comes from non_tensor['__num_turns__'] per row."""
+    samples = samples_from_rollout_batch(_padded_batch(), {"__num_turns__": [3, 1]})
+    assert samples[0]["num_turns"] == 3
+    assert samples[1]["num_turns"] == 1
+
+
+def test_samples_num_turns_defaults_to_zero_when_absent():
+    """num_turns is 0 when the non_tensor batch is missing or lacks the key."""
+    batch = _padded_batch()
+    assert samples_from_rollout_batch(batch)[0]["num_turns"] == 0
+    assert samples_from_rollout_batch(batch, {})[0]["num_turns"] == 0
+
+
+def test_samples_row_with_no_valid_response_tokens():
+    """A row whose response mask is all padding yields empty response fields and None reward."""
+    batch = _padded_batch()
+    batch["attention_mask"][1] = [0, 1, 1, 1, 0, 0, 0, 0, 0]
+    samples = samples_from_rollout_batch(batch, {"__num_turns__": [2, 1]})
+    assert samples[1]["response_ids"] == []
+    assert samples[1]["response_mask"] == []
+    assert samples[1]["response_logprobs"] == []
+    assert samples[1]["reward_score"] is None
+    assert samples[1]["prompt_ids"] == [21, 22, 23]
+
+
+def test_samples_every_refusal():
+    """Each documented refusal is raised by name with both counts where applicable."""
+    with pytest.raises(VerlAdapterRefusal, match="prompts"):
+        samples_from_rollout_batch({k: v for k, v in _padded_batch().items() if k != "prompts"})
+    with pytest.raises(VerlAdapterRefusal, match="responses"):
+        samples_from_rollout_batch({k: v for k, v in _padded_batch().items() if k != "responses"})
+    with pytest.raises(VerlAdapterRefusal, match="response_mask"):
+        samples_from_rollout_batch(
+            {k: v for k, v in _padded_batch().items() if k != "response_mask"}
+        )
+    with pytest.raises(VerlAdapterRefusal, match="attention_mask"):
+        samples_from_rollout_batch(
+            {k: v for k, v in _padded_batch().items() if k != "attention_mask"}
+        )
+    batch = _padded_batch()
+    batch["responses"] = batch["responses"][:1]
+    with pytest.raises(VerlAdapterRefusal, match="responses"):
+        samples_from_rollout_batch(batch)
+    batch = _padded_batch()
+    batch["attention_mask"] = [[0, 0, 1, 1, 1, 1, 0, 1, 0], [0, 1, 1, 1, 1, 0, 0, 0]]
+    with pytest.raises(VerlAdapterRefusal, match="attention_mask"):
+        samples_from_rollout_batch(batch)
+    batch = _padded_batch()
+    batch["attention_mask"][0] = [0, 1, 0, 1, 1, 1, 0, 1, 0]
+    with pytest.raises(VerlAdapterRefusal, match="prompt"):
+        samples_from_rollout_batch(batch)
+    batch = _padded_batch()
+    batch["attention_mask"][0] = [
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+        0,
+        1,
+        0,
+    ][:9]
+    batch["attention_mask"][0][4:9] = [1, 0, 1, 0, 0]
+    with pytest.raises(VerlAdapterRefusal, match="response"):
+        samples_from_rollout_batch(batch)
+
+
+def test_samples_accepts_tolist_wrapping_object():
+    """Arrays exposing .tolist() are converted before slicing."""
+    batch = _padded_batch()
+    batch["prompts"] = _ListWrapper(batch["prompts"])
+    batch["responses"] = _ListWrapper(batch["responses"])
+    batch["response_mask"] = _ListWrapper(batch["response_mask"])
+    batch["attention_mask"] = _ListWrapper(batch["attention_mask"])
+    batch["rollout_log_probs"] = _ListWrapper(batch["rollout_log_probs"])
+    batch["rm_scores"] = _ListWrapper(batch["rm_scores"])
+    samples = samples_from_rollout_batch(batch, {"__num_turns__": _ListWrapper([2, 1])})
+    assert samples[0]["prompt_ids"] == [11, 12]
+    assert samples[0]["response_ids"] == [31, 32, 33, 34]
+    assert samples[0]["response_logprobs"] == [-0.5, -0.25, -0.125, -0.0625]
+    assert samples[0]["reward_score"] == 1.5
+    assert samples[0]["num_turns"] == 2
+
+
+def test_samples_end_to_end_through_episode_adapter():
+    """Every unpacked sample adapts into a validated Episode via _ep."""
+    samples = samples_from_rollout_batch(_padded_batch(), {"__num_turns__": [2, 1]})
+    for i, sample in enumerate(samples):
+        ep = _ep(sample, episode_id=f"e{i}", group_id="g0")
+        assert ep.segments[0].prompt_ids == tuple(sample["prompt_ids"])
+        assert ep.segments[0].response_ids == tuple(sample["response_ids"])
+        assert ep.segments[0].loss_mask == tuple(sample["response_mask"])
+        if sample["reward_score"] is None:
+            assert ep.reward_events == ()
+        else:
+            assert len(ep.reward_events) == 1
+            assert ep.reward_events[0].value == sample["reward_score"]
+
+
+def test_samples_end_to_end_row_without_response_tokens_is_refused_by_adapter():
+    """An all-padding response row unpacks fine but the adapter refuses the empty response."""
+    batch = _padded_batch()
+    batch["attention_mask"][1] = [0, 1, 1, 1, 0, 0, 0, 0, 0]
+    samples = samples_from_rollout_batch(batch, {"__num_turns__": [2, 1]})
+    with pytest.raises(VerlAdapterRefusal, match="response_ids"):
+        _ep(samples[1], episode_id="e1", group_id="g0")
+
+
+class _ListWrapper:
+    """Tiny stand-in for a tensor-like object exposing .tolist()."""
+
+    def __init__(self, data):
+        self._data = data
+
+    def tolist(self):
+        return self._data
+
+
+def test_samples_missing_required_keys_refused():
+    """Each required key's absence is refused by name."""
+    for key in ("prompts", "responses", "response_mask", "attention_mask"):
+        batch = _padded_batch()
+        del batch[key]
+        with pytest.raises(VerlAdapterRefusal):
+            samples_from_rollout_batch(batch)
+
+
+def test_samples_empty_prompts_refused():
+    """An empty prompts batch is refused."""
+    batch = _padded_batch()
+    batch["prompts"] = []
+    batch["responses"] = []
+    batch["response_mask"] = []
+    batch["attention_mask"] = []
+    with pytest.raises(VerlAdapterRefusal):
+        samples_from_rollout_batch(batch)
+
+
+@pytest.mark.parametrize("key", ["prompts", "responses", "response_mask", "attention_mask"])
+def test_samples_batch_size_mismatch_refused(key):
+    """Every key must carry exactly B rows."""
+    batch = _padded_batch()
+    batch[key] = batch[key][:1]
+    with pytest.raises(VerlAdapterRefusal):
+        samples_from_rollout_batch(batch)
+
+
+@pytest.mark.parametrize("key", ["prompts", "responses", "response_mask", "attention_mask"])
+def test_samples_ragged_rows_refused(key):
+    """Every key must have constant width across rows."""
+    batch = _padded_batch()
+    batch[key][1] = batch[key][1][:-1]
+    with pytest.raises(VerlAdapterRefusal):
+        samples_from_rollout_batch(batch)
+
+
+def test_samples_rollout_log_probs_refusals():
+    """rollout_log_probs row and column counts must agree with the batch."""
+    batch = _padded_batch()
+    batch["rollout_log_probs"] = batch["rollout_log_probs"][:1]
+    with pytest.raises(VerlAdapterRefusal):
+        samples_from_rollout_batch(batch)
+    batch = _padded_batch()
+    batch["rollout_log_probs"][0] = batch["rollout_log_probs"][0][:-1]
+    with pytest.raises(VerlAdapterRefusal):
+        samples_from_rollout_batch(batch)
+
+
+def test_samples_rm_scores_refusals():
+    """rm_scores row and column counts must agree with the batch."""
+    batch = _padded_batch()
+    batch["rm_scores"] = batch["rm_scores"][:1]
+    with pytest.raises(VerlAdapterRefusal):
+        samples_from_rollout_batch(batch)
+    batch = _padded_batch()
+    batch["rm_scores"][0] = batch["rm_scores"][0][:-1]
+    with pytest.raises(VerlAdapterRefusal):
+        samples_from_rollout_batch(batch)
+
+
+def test_samples_num_turns_length_mismatch_refused():
+    """non_tensor.__num_turns__ must carry exactly B entries."""
+    with pytest.raises(VerlAdapterRefusal):
+        samples_from_rollout_batch(_padded_batch(), {"__num_turns__": [2]})
+
+
+def test_samples_non_numeric_attention_mask_refused():
+    """Non-numeric attention_mask entries are refused in both prompt and response halves."""
+    batch = _padded_batch()
+    batch["attention_mask"][0][2] = "1"
+    with pytest.raises(VerlAdapterRefusal):
+        samples_from_rollout_batch(batch)
+    batch = _padded_batch()
+    batch["attention_mask"][0][4] = "1"
+    with pytest.raises(VerlAdapterRefusal):
+        samples_from_rollout_batch(batch)
+
+
+def test_samples_prompt_mask_not_left_padded_refused():
+    """A 1 followed by a 0 in the prompt half is refused."""
+    batch = _padded_batch()
+    batch["attention_mask"][0] = [0, 1, 0, 1, 1, 1, 1, 1, 0]
+    with pytest.raises(VerlAdapterRefusal):
+        samples_from_rollout_batch(batch)
+
+
+def test_samples_response_mask_not_right_padded_refused():
+    """A 0 followed by a 1 in the response half is refused."""
+    batch = _padded_batch()
+    batch["attention_mask"][0] = [0, 0, 1, 1, 1, 0, 1, 1, 0]
+    with pytest.raises(VerlAdapterRefusal):
+        samples_from_rollout_batch(batch)
