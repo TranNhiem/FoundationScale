@@ -424,30 +424,59 @@ def _rewrap(original: type) -> type:
     )
 
 
+class _Tree:
+    """A module tree double: ``modules()`` yields the root and its wrapped children."""
+
+    def __init__(self, *children: object) -> None:
+        self._children = children
+
+    def modules(self) -> list[object]:
+        return [self, *self._children]
+
+
+class _Tower(_Switchable):
+    """A second model class in the tree (e.g. a vision tower) under its own unit."""
+
+
 def test_fsdp_wrapper_inherits_the_original_kernel_switching() -> None:
     from foundationscale.rl.distributed import keep_experts_switchable
 
     wrapped = _rewrap(_Switchable)()
     assert not type(wrapped)._can_set_experts_implementation()  # the failure mode
-    assert keep_experts_switchable(wrapped, _Switchable) is True
+    assert keep_experts_switchable(wrapped) == ["FSDP_Switchable"]
     assert type(wrapped)._can_set_experts_implementation()
     assert _Switchable._can_set_experts_implementation()  # original untouched
+
+
+def test_every_wrapped_unit_in_the_tree_is_carried_over() -> None:
+    # Measured: the root carried over, but a tower wrapped as its own unit
+    # (FSDPGemma4VisionModel) still refused, and generate() died on it.
+    from foundationscale.rl.distributed import keep_experts_switchable
+
+    tower = _rewrap(_Tower)()
+    root_cls = _rewrap(_Switchable)
+    root = type("FSDP_Switchable", (root_cls, _Tree), {})
+    tree = root.__new__(root)
+    _Tree.__init__(tree, tower, tower)
+    carried = keep_experts_switchable(tree)
+    assert sorted(carried) == ["FSDP_Switchable", "FSDP_Tower"]
+    assert type(tower)._can_set_experts_implementation()
 
 
 def test_unwrapped_or_non_switchable_models_are_left_alone() -> None:
     from foundationscale.rl.distributed import keep_experts_switchable
 
-    assert keep_experts_switchable(_Switchable(), _Switchable) is False
+    assert keep_experts_switchable(_Switchable()) == []
 
     class _Fixed(_Switchable):
         can = False
 
     wrapped = _rewrap(_Fixed)()
-    assert keep_experts_switchable(wrapped, _Fixed) is False
+    assert keep_experts_switchable(wrapped) == []
     assert not type(wrapped)._can_set_experts_implementation()
 
     class _Dense:
         pass
 
     dense_wrapped = type("FSDP_Dense", (_Dense,), {})()
-    assert keep_experts_switchable(dense_wrapped, _Dense) is False
+    assert keep_experts_switchable(dense_wrapped) == []

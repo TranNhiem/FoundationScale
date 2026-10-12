@@ -60,7 +60,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from enum import Enum
 from pathlib import Path
@@ -347,6 +347,32 @@ def profile_by_name(name: str) -> ClusterProfile:
         ) from None
 
 
+# Where discover_ib_devices reads each HCA's port state. A parameter of
+# apply_fabric_declaration, not a constant inside it, so tests hand it a fixture tree.
+_IB_SYSFS_ROOT = Path("/sys/class/infiniband")
+
+
+def _imex_daemon_running(proc_root: Path = Path("/proc")) -> bool | None:
+    """Whether an ``nvidia-imex`` daemon is alive on this node; ``None`` = unmeasurable.
+
+    WHY ``None`` is not folded into ``False``: "no daemon" is a fact that earns
+    ``NCCL_MNNVL_ENABLE=0``, while "cannot be measured" (no readable ``/proc``,
+    e.g. a container with a hidden procfs) proves nothing at all and must leave
+    NCCL free to decide -- an operator who really does have MNNVL would
+    otherwise have it silently disabled by monitoring hygiene.
+    """
+    if not proc_root.is_dir():
+        return None
+    for comm_file in proc_root.glob("*/comm"):
+        try:
+            comm = comm_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:  # the process exited or hid itself mid-scan: not evidence
+            continue
+        if comm.strip() == "nvidia-imex":
+            return True
+    return False
+
+
 # The environment variables a fabric declaration can reach, and the profile field
 # each one is derived from. Kept as data beside the function that applies them so
 # that "which fields are applied" is one readable list rather than a sequence of
@@ -363,7 +389,11 @@ _FABRIC_VARS: tuple[tuple[str, str], ...] = (
 
 
 def apply_fabric_declaration(
-    profile: ClusterProfile, environ: MutableMapping[str, str]
+    profile: ClusterProfile,
+    environ: MutableMapping[str, str],
+    *,
+    ib_sysfs_root: Path = _IB_SYSFS_ROOT,
+    imex_running: Callable[[], bool | None] = _imex_daemon_running,
 ) -> tuple[str, ...]:
     """Apply the profile's fabric declaration to ``environ``; report what happened.
 
@@ -381,17 +411,25 @@ def apply_fabric_declaration(
     WHAT IS APPLIED, AND WHAT IS NOT:
 
     * ``nccl_socket_ifname`` -> ``NCCL_SOCKET_IFNAME`` and ``GLOO_SOCKET_IFNAME``.
-    * ``mnnvl_available=False`` -> ``NCCL_MNNVL_ENABLE=0``. The True case sets
-      NOTHING: "MNNVL is available" is not the same claim as "MNNVL must be
-      used", and forcing it on is a decision the profile never made.
-    * ``ib_hca_pattern`` is deliberately NOT applied, and this is the honest part.
-      Its shipped value is a shell glob (``mlx5_*``); ``NCCL_IB_HCA`` takes a
-      comma-separated prefix list with an optional ``^`` for exclusion and does
-      no globbing, so exporting the field verbatim would match no device, and
-      stripping it to the bare prefix ``mlx5`` is a MEASURED regression -- it
-      over-matches devices that are not on the job's fabric. The field is
-      inventory, not configuration. Saying so in the return value is better than
-      either silently ignoring it or applying a value known to be wrong.
+    * ``mnnvl_available=False`` -> ``NCCL_MNNVL_ENABLE=0``.
+    * ``mnnvl_available=True`` asks ``imex_running()`` first. Multi-node NVLink needs
+      the ``nvidia-imex`` daemon on every node; it is normally started per job by a
+      site prolog, so "the rack has an NVLink Switch" and "this job can use it" are
+      different facts. Measured on a GB200 NVL72: two trays in the SAME NVLink
+      clique (fabric state Completed, one ClusterUUID) with IMEX inactive on both.
+      No daemon -> ``NCCL_MNNVL_ENABLE=0``, because NCCL would otherwise select
+      MNNVL and spin in its first collective. Daemon running -> nothing set, NCCL
+      decides ("available" is still not "required"). Not measurable (no ``/proc``)
+      -> nothing set, and the line says UNMEASURED.
+    * ``ib_hca_pattern`` -> ``NCCL_IB_HCA`` THROUGH ``discover_ib_devices`` (#130).
+      The glob is never exported verbatim (NCCL_IB_HCA does not glob) and never cut
+      to the bare prefix ``mlx5`` (it over-matches Ethernet ports). Discovery keeps
+      only ports whose sysfs ``link_layer`` is InfiniBand and ``state`` ACTIVE, and
+      pins port 1 of each. Measured need: an unpinned two-tray GB200 run paired a
+      local InfiniBand HCA with a remote RoCE one ("Remote RoCE device is
+      incompatible") and died with ncclInternalError in its first large
+      collective; the four discovered InfiniBand ports ran clean. Any verdict
+      other than OK sets nothing and says which verdict it was.
 
     NEVER OVERRIDES THE OPERATOR. A variable already present in ``environ`` is
     left exactly as it is, including when it is the empty string, and the return
@@ -455,10 +493,22 @@ def apply_fabric_declaration(
             f"left alone (profile declares mnnvl_available={profile.mnnvl_available})"
         )
     elif profile.mnnvl_available:
-        announcements.append(
-            f"NCCL_MNNVL_ENABLE: profile {profile.name!r} declares MNNVL AVAILABLE, "
-            f"which is not the same as required -- nothing set, NCCL decides"
-        )
+        imex = imex_running()
+        if imex is False:
+            environ["NCCL_MNNVL_ENABLE"] = "0"
+            announcements.append(
+                f"NCCL_MNNVL_ENABLE=0 applied: profile {profile.name!r} declares MNNVL "
+                f"available, but no nvidia-imex daemon runs on this node, so cross-node "
+                f"NVLink cannot be set up and NCCL would select it and spin in its "
+                f"first collective. InfiniBand/socket transport is used instead"
+            )
+        else:
+            state = "running on this node" if imex else "UNMEASURED (no readable /proc)"
+            announcements.append(
+                f"NCCL_MNNVL_ENABLE: profile {profile.name!r} declares MNNVL AVAILABLE "
+                f"and the nvidia-imex daemon is {state}; available is not required "
+                f"-- nothing set, NCCL decides"
+            )
     else:
         environ["NCCL_MNNVL_ENABLE"] = "0"
         announcements.append(
@@ -468,13 +518,32 @@ def apply_fabric_declaration(
             f"collective rather than fail"
         )
 
-    announcements.append(
-        f"NCCL_IB_HCA: NOT set. Profile {profile.name!r} declares "
-        f"ib_hca_pattern={profile.ib_hca_pattern!r}, which is a glob; NCCL_IB_HCA "
-        f"is a prefix list and does not glob, and the bare prefix over-matches. "
-        f"The field is inventory, not configuration -- export NCCL_IB_HCA by hand "
-        f"if this fabric needs it"
-    )
+    existing_hca = environ.get("NCCL_IB_HCA")
+    pattern = (profile.ib_hca_pattern or "").strip()
+    if existing_hca is not None:
+        announcements.append(
+            f"NCCL_IB_HCA: already set to {existing_hca!r} by the operator, left alone "
+            f"(profile declares ib_hca_pattern={pattern!r})"
+        )
+    elif not pattern:
+        announcements.append(
+            f"NCCL_IB_HCA: profile {profile.name!r} declares no ib_hca_pattern, "
+            f"so NCCL's own HCA selection stands"
+        )
+    else:
+        selected, verdict, _ = discover_ib_devices(pattern, ib_sysfs_root)
+        if verdict is DiscoveryVerdict.OK:
+            value = _ib_hca_value(selected)
+            environ["NCCL_IB_HCA"] = value
+            announcements.append(
+                f"NCCL_IB_HCA={value} applied: {len(selected)} InfiniBand port(s) "
+                f"discovered under {ib_sysfs_root} from profile glob {pattern!r}"
+            )
+        else:
+            announcements.append(
+                f"NCCL_IB_HCA: NOT set -- discovery verdict {verdict.value} for glob "
+                f"{pattern!r} under {ib_sysfs_root}; NCCL's own HCA selection stands"
+            )
     return tuple(announcements)
 
 
