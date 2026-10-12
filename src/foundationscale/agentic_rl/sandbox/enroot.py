@@ -58,6 +58,14 @@ class Runner(Protocol):
     ) -> RunResult: ...
 
 
+def _memory_scope(memory_mb: int) -> list[str]:
+    """argv prefix running a command in its own cgroup v2 scope capped at ``memory_mb`` (no swap)."""
+    return ["systemd-run", "--user", "--scope", "--quiet", "-p", f"MemoryMax={memory_mb}M",
+            "-p", "MemorySwapMax=0",
+            # Docker kills only the offending process on OOM; systemd's default stops the whole scope
+            "-p", "OOMPolicy=continue", "--"]
+
+
 class SubprocessRunner:
     """``subprocess.run`` based runner; timeouts kill the process group."""
 
@@ -226,6 +234,14 @@ class EnrootSandbox:
                 f"start: expected not-started sandbox, got already-started {self.spec.name!r}"
             )
         image_path = self.image_path()
+        if self.spec.memory_mb:
+            # Fail closed: a requested memory limit that cannot be enforced must not run unbounded.
+            probe = self._runner.run([*_memory_scope(self.spec.memory_mb), "true"])
+            if probe.returncode != 0:
+                raise SandboxError(
+                    f"memory_mb={self.spec.memory_mb}: expected a cgroup v2 memory scope via systemd --user, "
+                    f"got exit {probe.returncode}: {probe.stderr[-_STDERR_TAIL:]}"
+                )
         result = self._runner.run(
             ["enroot", "create", "-n", self.spec.name, image_path],
             env={"ENROOT_DATA_PATH": self.spec.data_root},
@@ -285,6 +301,12 @@ class EnrootSandbox:
             merged.update(env)
         workdir = cwd if cwd is not None else (self._build_workdir or self.spec.workdir)
         argv: list[str] = []
+        if self.spec.memory_mb:
+            # A cgroup v2 memory limit, as Docker's --memory: it counts memory actually resident. rlimits cannot
+            # do this: RLIMIT_AS counted V8/WebAssembly/Chromium PROT_NONE reservations and RLIMIT_DATA counts
+            # ASan's 8 GiB MAP_NORESERVE shadow, so Node and sanitizer builds could not start under a 4 GiB
+            # task limit. Measured: an 8 GiB untouched reservation runs, touching 512 MiB under 256 MiB is killed.
+            argv += _memory_scope(self.spec.memory_mb)
         if self.spec.network == "no-network":
             # A fresh network namespace has loopback DOWN: 127.0.0.1 was unreachable even within one exec
             # (measured ENETUNREACH), so every task that serves and probes on localhost failed. Bring lo up
@@ -292,11 +314,6 @@ class EnrootSandbox:
             argv += ["unshare", "-rn", "sh", "-c", 'ip link set lo up 2>/dev/null; exec "$@"', "sh"]
         if self.spec.cpu_set:
             argv += ["taskset", "-c", ",".join(str(cpu) for cpu in self.spec.cpu_set)]
-        if self.spec.memory_mb:
-            # RLIMIT_DATA bounds memory actually written; RLIMIT_AS (the old --as) also counted the large
-            # PROT_NONE reservations V8/WebAssembly/Chromium make and never touch, so Node and browsers could
-            # not start under a 4 GiB task limit (measured: WebAssembly.Memory fails under --as, ok under --data)
-            argv += ["prlimit", f"--data={self.spec.memory_mb * 1048576}"]
         argv += [
             "enroot",
             "start",

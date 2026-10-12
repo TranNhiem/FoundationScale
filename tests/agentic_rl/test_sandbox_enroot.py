@@ -242,19 +242,29 @@ def test_exec_cpu_set_taskset(tmp_path: Path) -> None:
     assert argv[i + 2] == "0,2"
 
 
-def test_exec_memory_mb_prlimit_bytes(tmp_path: Path) -> None:
+def test_exec_memory_mb_cgroup_scope(tmp_path: Path) -> None:
+    # A cgroup v2 limit (Docker --memory semantics), not an rlimit: RLIMIT_AS broke V8/Chromium and
+    # RLIMIT_DATA broke ASan's MAP_NORESERVE shadow (both measured on real Skill2Env tasks).
     runner = FakeRunner()
     sbx = import_image(tmp_path, runner, memory_mb=256)
     sbx.start()
     runner.calls.clear()
     sbx.exec("true")
     argv = runner.calls[0].argv
-    assert argv[:2] == ("unshare", "-rn")
-    i = argv.index("prlimit")
-    # RLIMIT_DATA, not RLIMIT_AS: --as also counted V8/WebAssembly/Chromium PROT_NONE reservations, so Node
-    # and browsers could not start under a task's memory limit (measured: WebAssembly.Memory fails under --as)
-    assert argv[i + 1] == f"--data={256 * 1048576}"
-    assert not any(a.startswith("--as=") for a in argv)
+    assert argv[:4] == ("systemd-run", "--user", "--scope", "--quiet")
+    assert "MemoryMax=256M" in argv and "MemorySwapMax=0" in argv and "OOMPolicy=continue" in argv
+    rest = argv[argv.index("--") + 1 :]
+    assert rest[:2] == ("unshare", "-rn")
+    assert "prlimit" not in argv
+
+
+def test_start_refuses_when_memory_scope_unavailable(tmp_path: Path) -> None:
+    """Fail closed: a memory limit that cannot be enforced must not run unbounded."""
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner, memory_mb=256)
+    runner.results = [RunResult(returncode=1, stdout="", stderr="Failed to connect to bus")]
+    with pytest.raises(SandboxError, match="cgroup v2 memory scope"):
+        sbx.start()
 
 
 def test_exec_mounts_scratch_over_tmp(tmp_path: Path) -> None:
