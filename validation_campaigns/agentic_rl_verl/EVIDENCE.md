@@ -39,3 +39,11 @@ Things the real runs exposed, and the fixes:
   correctness belongs to the parity step, not to this format check.
 
 Not yet measured: parity against FS GRPO on the music task (MUST_PASS b).
+
+## FS music reward through verl's reward hook (2026-10-12)
+
+`verl_reward_check.py` builds the hook with verl's own `get_custom_reward_fn` pointed at
+`foundationscale.agentic_rl.verl_rewards.music_compute_score` and scores a valid 18-bar ABC tune with
+the real `abc2midi` in the verl container. The direct call, the hook called by position and the hook
+called by keyword all return 0.468. A malformed tune (duplicated `X:` header) scores 0.0 as rejected,
+and text with no ABC scores 0.0 (`no_abc`).
