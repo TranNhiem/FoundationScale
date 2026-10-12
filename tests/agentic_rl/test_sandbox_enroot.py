@@ -280,7 +280,7 @@ def test_exec_env_precedence(tmp_path: Path) -> None:
     sbx.exec("true", env={"C": "call"})
     argv = runner.calls[0].argv
     env_pairs = [argv[i + 1] for i, x in enumerate(argv) if x == "--env"]
-    assert env_pairs == ["A=build", "B=spec", "C=call"]
+    assert env_pairs == ["HOME=/root", "A=build", "B=spec", "C=call"]  # HOME: Docker default, lowest precedence
 
 
 def test_exec_cwd_quoting(tmp_path: Path) -> None:
@@ -818,3 +818,22 @@ def test_exec_disables_enroot_login_shell(tmp_path: Path) -> None:
     sbx.exec("go version")
     assert runner.calls[0].env is not None
     assert runner.calls[0].env.get("ENROOT_LOGIN_SHELL") == "no"
+
+
+def test_exec_defaults_home_like_docker(tmp_path: Path) -> None:
+    """HOME=/root unless the image's environment sets it (Docker semantics); caller env still wins."""
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner)
+    sbx.start()
+    runner.calls.clear()
+    sbx.exec("go env GOCACHE")
+    assert "HOME=/root" in runner.calls[0].argv
+    environment = Path(sbx.rootfs()) / "etc" / "environment"
+    environment.parent.mkdir(parents=True, exist_ok=True)
+    environment.write_text("PATH=/usr/bin\nHOME=/home/app\n")
+    runner.calls.clear()
+    sbx.exec("true")
+    assert not any(a.startswith("HOME=") for a in runner.calls[0].argv)
+    runner.calls.clear()
+    sbx.exec("true", env={"HOME": "/work"})
+    assert "HOME=/work" in runner.calls[0].argv

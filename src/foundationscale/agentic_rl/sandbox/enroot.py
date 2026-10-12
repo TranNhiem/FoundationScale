@@ -275,6 +275,10 @@ class EnrootSandbox:
                 if not isinstance(key, str) or not isinstance(value, str):
                     raise SandboxRefusal(f"env: expected Mapping[str, str], got {key!r}: {value!r}")
         merged: dict[str, str] = {}
+        if not self._image_env_defines("HOME"):
+            # Docker sets HOME from /etc/passwd (/root: execs run as root); without a login shell nothing
+            # else does, and Go/pip/npm/git failed ("neither $XDG_CACHE_HOME nor $HOME are defined").
+            merged["HOME"] = "/root"
         merged.update(self._build_env)
         merged.update(self.spec.env)
         if env:
@@ -356,6 +360,14 @@ class EnrootSandbox:
         self._started = False
 
     # -- paths -------------------------------------------------------------
+
+    def _image_env_defines(self, name: str) -> bool:
+        """True if the image's own environment (enroot writes it to the rootfs /etc/environment) sets ``name``."""
+        try:
+            lines = (Path(self.rootfs()) / "etc" / "environment").read_text(errors="replace").splitlines()
+        except OSError:
+            return False
+        return any(line.split("=", 1)[0].strip() == name for line in lines if "=" in line)
 
     def rootfs(self) -> Path:
         return Path(self.spec.data_root) / self.spec.name

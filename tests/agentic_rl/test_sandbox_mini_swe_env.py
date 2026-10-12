@@ -153,7 +153,8 @@ def test_cwd_and_env_in_exec_argv(paths: dict[str, str]) -> None:
     env.execute({"command": "ls"}, cwd="/elsewhere")
     start = _start_calls(runner)[-1]  # the uname probe at start-up runs first
     assert "cd /elsewhere && ls" in start[-1]
-    assert "--env" in start and "A=1" in start[start.index("--env") + 1]
+    env_pairs = [start[i + 1] for i, x in enumerate(start) if x == "--env"]
+    assert "A=1" in env_pairs
 
 
 def test_timeout_returns_minus_one(paths: dict[str, str]) -> None:
