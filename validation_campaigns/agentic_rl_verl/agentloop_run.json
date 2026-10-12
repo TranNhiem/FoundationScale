@@ -1,0 +1,46 @@
+{
+  "pinned_commit": "9058412fb308e9f2e31a794ad1d18d97d4286485",
+  "samples": 8,
+  "valid_episodes": 8,
+  "refusals": [],
+  "turns": [
+    2,
+    2,
+    4,
+    4,
+    2,
+    4,
+    4,
+    4
+  ],
+  "tool_tokens_per_sample": [
+    0,
+    0,
+    10,
+    10,
+    0,
+    10,
+    10,
+    10
+  ],
+  "model_tokens_per_sample": [
+    5,
+    8,
+    40,
+    35,
+    29,
+    29,
+    49,
+    55
+  ],
+  "reward_scores": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ]
+}
