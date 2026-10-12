@@ -409,7 +409,7 @@ def samples_from_rollout_batch(
                     f"(a 0 followed by a 1 at column {p + j}; {r} response columns checked)"
                 )
 
-        prompt_ids = [tok for tok, m in zip(prompts[i], prompt_row) if float(m) > 0]
+        prompt_ids = [tok for tok, m in zip(prompts[i], prompt_row, strict=True) if float(m) > 0]
         valid = [j for j, m in enumerate(resp_row) if float(m) > 0]
         response_ids = [responses[i][j] for j in valid]
         mask_values = [response_mask[i][j] for j in valid]
@@ -423,10 +423,7 @@ def samples_from_rollout_batch(
         if rm_rows is not None and valid:
             reward_score = rm_rows[i][valid[-1]]
 
-        if num_turns is not None:
-            turns = int(num_turns[i])
-        else:
-            turns = 0
+        turns = int(num_turns[i]) if num_turns is not None else 0
 
         samples.append(
             {
