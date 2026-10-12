@@ -177,6 +177,154 @@
       "question_model": "mimo-v2.6-pro"
     },
     {
+      "id": "fskills-evaluation-oracle-EV-HO-005",
+      "skill": "evaluation",
+      "rule_id": "EV-HO-005",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "base and checkpoint held-out rows_used/rows_dropped disagree: the delta is unmeasured. BLOCK, but deliberately mapped to UNMEASURED 95 (never RED): an incomparable delta is no failure",
+      "fixture": {
+        "expected": "UNMEASURED 95 with EV-HO-005 (row counts differ: never PASS)",
+        "harness": {
+          "heldout": {
+            "baseline": {
+              "mean_nll_nats": 1.4,
+              "perplexity": 4.19,
+              "rows_dropped": 1,
+              "rows_used": 170
+            },
+            "checkpoint": {
+              "mean_nll_nats": 0.5,
+              "perplexity": 1.66,
+              "rows_dropped": 0,
+              "rows_used": 171
+            }
+          }
+        },
+        "request": {
+          "base": "base",
+          "benchmarks": [],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "heldout": {
+            "abs_epsilon": 0.05,
+            "data": "heldout.jsonl",
+            "max_length": 16384,
+            "video_frames": 16
+          },
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        }
+      },
+      "fixture_sha256": "ca474036e7fb5d87f9f626f9a8dcdedd5df69b48c5a92f4e5517822ec58b0dad",
+      "expected_behavior": [
+        "Identifies the problem: base and checkpoint held-out rows_used/rows_dropped disagree: the delta is unmeasured. BLOCK, but deliberately mapped to UNMEASURED 95 (never RED): an incomparable delta is no failure",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule EV-HO-005"
+      ],
+      "ground_truth": "evaluation: rule EV-HO-005 (BLOCK, handoff phase) fires: base and checkpoint held-out rows_used/rows_dropped disagree: the delta is unmeasured. BLOCK, but deliberately mapped to UNMEASURED 95 (never RED): an incomparable delta is no failure.",
+      "trigger_facts": [
+        {
+          "path": "harness.heldout.baseline.mean_nll_nats",
+          "value": 1.4
+        },
+        {
+          "path": "harness.heldout.baseline.perplexity",
+          "value": 4.19
+        },
+        {
+          "path": "harness.heldout.baseline.rows_dropped",
+          "value": 1
+        },
+        {
+          "path": "harness.heldout.baseline.rows_used",
+          "value": 170
+        },
+        {
+          "path": "harness.heldout.checkpoint.mean_nll_nats",
+          "value": 0.5
+        },
+        {
+          "path": "harness.heldout.checkpoint.perplexity",
+          "value": 1.66
+        },
+        {
+          "path": "harness.heldout.checkpoint.rows_dropped",
+          "value": 0
+        },
+        {
+          "path": "harness.heldout.checkpoint.rows_used",
+          "value": 171
+        }
+      ],
+      "question": "I want to run the offline evaluation with checkpoint \"ck\" against base model \"base\", using eval_policy.yaml, eval cache dir \"cache\", benchmarks list [], heldout data \"heldout.jsonl\" with abs_epsilon 0.05, max_length 16384, and video_frames 16, writing to eval/eval_report.json. The heldout run I observed gave baseline mean_nll_nats = 1.4 and perplexity = 4.19 with rows_used = 170 and rows_dropped = 1, while the checkpoint gave mean_nll_nats = 0.5 and perplexity = 1.66 with rows_used = 171 and rows_dropped = 0. What is the resulting verdict in eval_report.json?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-HO-006",
+      "skill": "evaluation",
+      "rule_id": "EV-HO-006",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "a held-out row lacks rows_used/rows_dropped/score/baseline",
+      "fixture": {
+        "expected": "RED 5 with EV-HO-006 (row lacks the measurement block)",
+        "harness": {
+          "heldout": {
+            "baseline": {
+              "rows_used": 171
+            },
+            "checkpoint": {
+              "mean_nll_nats": 0.5,
+              "rows_dropped": 0,
+              "rows_used": 171
+            }
+          }
+        },
+        "request": {
+          "base": "base",
+          "benchmarks": [],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "heldout": {
+            "abs_epsilon": 0.05,
+            "data": "heldout.jsonl",
+            "max_length": 16384,
+            "video_frames": 16
+          },
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        }
+      },
+      "fixture_sha256": "d135f666bd8cdd7a7fceae1ce568c413f1e516fe8d0ba3199f12802758f8318d",
+      "expected_behavior": [
+        "Identifies the problem: a held-out row lacks rows_used/rows_dropped/score/baseline",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule EV-HO-006"
+      ],
+      "ground_truth": "evaluation: rule EV-HO-006 (BLOCK, handoff phase) fires: a held-out row lacks rows_used/rows_dropped/score/baseline.",
+      "trigger_facts": [
+        {
+          "path": "harness.heldout.baseline.rows_used",
+          "value": 171
+        },
+        {
+          "path": "harness.heldout.checkpoint.mean_nll_nats",
+          "value": 0.5
+        },
+        {
+          "path": "harness.heldout.checkpoint.rows_dropped",
+          "value": 0
+        },
+        {
+          "path": "harness.heldout.checkpoint.rows_used",
+          "value": 171
+        }
+      ],
+      "question": "I ran the eval with base \"base\", checkpoint \"ck\", policy \"eval_policy.yaml\", cache \"cache\", and heldout data \"heldout.jsonl\" (max_length 16384, video_frames 16, abs_epsilon 0.05), writing to eval/eval_report.json. From the harness I observed heldout.baseline.rows_used = 171, heldout.checkpoint.mean_nll_nats = 0.5, heldout.checkpoint.rows_dropped = 0, and heldout.checkpoint.rows_used = 171. I passed benchmarks as an empty list. What's the verdict and the full eval_report.json outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
       "id": "fskills-evaluation-oracle-EV-IN-001",
       "skill": "evaluation",
       "rule_id": "EV-IN-001",
@@ -274,7 +422,7 @@
       "rule_id": "EV-IN-004",
       "severity": "BLOCK",
       "phase": "input",
-      "description": "installed lm_eval is absent or not the pinned version",
+      "description": "installed lm_eval is absent or not the pinned version (lm-eval mode)",
       "fixture": {
         "expected": "REFUSED naming EV-IN-004",
         "request": {
@@ -291,18 +439,18 @@
       },
       "fixture_sha256": "37262bf238d4dbfa494db313d8667c519a0ac49d97754f8474c784ed472e8db7",
       "expected_behavior": [
-        "Identifies the problem: installed lm_eval is absent or not the pinned version",
+        "Identifies the problem: installed lm_eval is absent or not the pinned version (lm-eval mode)",
         "Refuses before doing any work (status REFUSED, nothing written) instead of running",
         "Cites rule EV-IN-004"
       ],
-      "ground_truth": "evaluation: rule EV-IN-004 (BLOCK, input phase) fires: installed lm_eval is absent or not the pinned version.",
+      "ground_truth": "evaluation: rule EV-IN-004 (BLOCK, input phase) fires: installed lm_eval is absent or not the pinned version (lm-eval mode).",
       "trigger_facts": [
         {
           "path": "version",
           "value": "0.4.11"
         }
       ],
-      "question": "I want to evaluate my checkpoint `ck` against its base model `base` on `mmlu` using the pinned lm-evaluation-harness, fully offline, with `cache` as the eval cache and the one-sided stderr-band verdict written to `eval/eval_report.json` under the policy in `eval_policy.yaml`. I've confirmed the installed lm_eval version is `0.4.11`, matching the pinned version. Can you run this and tell me what the outcome is?",
+      "question": "I want to evaluate my checkpoint `ck` offline against the base model `base`, using the pinned benchmark `mmlu`, the eval cache at `cache`, the policy in `eval_policy.yaml`, and I want the single verdict written to `eval/eval_report.json`. I've already confirmed the installed lm_eval version is `0.4.11`, matching the pinned version `0.4.11`. The run should also cover the VLM held-out loss over image, video, and text rows, with video included, through FoundationScale's `eval_heldout_loss.py`. What's the outcome?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -311,7 +459,7 @@
       "rule_id": "EV-IN-005",
       "severity": "BLOCK",
       "phase": "input",
-      "description": "eval policy invalid, a benchmark has no policy entry, or needs an LLM judge",
+      "description": "eval policy invalid, a benchmark has no policy entry, needs an LLM judge, or the request holds neither a benchmark nor a held-out hit",
       "fixture": {
         "expected": "REFUSED naming EV-IN-005",
         "request": {
@@ -327,13 +475,191 @@
       },
       "fixture_sha256": "79c59223f55422371bec9280e9a8d1a75f28f1cc5cd94a78c5aff3a8cd510fc6",
       "expected_behavior": [
-        "Identifies the problem: eval policy invalid, a benchmark has no policy entry, or needs an LLM judge",
+        "Identifies the problem: eval policy invalid, a benchmark has no policy entry, needs an LLM judge, or the request holds neither a benchmark nor a held-out hit",
         "Refuses before doing any work (status REFUSED, nothing written) instead of running",
         "Cites rule EV-IN-005"
       ],
-      "ground_truth": "evaluation: rule EV-IN-005 (BLOCK, input phase) fires: eval policy invalid, a benchmark has no policy entry, or needs an LLM judge.",
+      "ground_truth": "evaluation: rule EV-IN-005 (BLOCK, input phase) fires: eval policy invalid, a benchmark has no policy entry, needs an LLM judge, or the request holds neither a benchmark nor a held-out hit.",
       "trigger_facts": [],
-      "question": "Please evaluate the checkpoint at `ck` (PEFT adapter or full, whichever it is) against its base model `base`, running offline with the pinned lm-evaluation-harness and using `cache` as the eval cache. Run the benchmark `not_in_policy`, with the allowed set defined in `eval_policy.yaml`, and apply the one-sided stderr-band verdict against the base model's scores. Write the results to `eval/eval_report.json`.",
+      "question": "I want to run an offline evaluation of checkpoint \"ck\" (full or PEFT adapter) against base model \"base\", using the pinned lm-evaluation-harness benchmarks from eval_policy.yaml plus the VLM held-out loss across image, video, and text rows (video included) via FoundationScale's eval_heldout_loss.py. The benchmarks I'm passing are [\"not_in_policy\"], with eval cache directory \"cache\" and the policy file eval_policy.yaml. Please write the single combined verdict to eval/eval_report.json. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-IN-006",
+      "skill": "evaluation",
+      "rule_id": "EV-IN-006",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "held-out data missing/unreadable, or the eval_heldout_loss.py script is missing (never a silent fallback)",
+      "fixture": {
+        "expected": "REFUSED naming EV-IN-006 (held-out data missing; a missing script too)",
+        "request": {
+          "base": "base",
+          "benchmarks": [],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "heldout": {
+            "abs_epsilon": 0.05,
+            "data": "missing.jsonl",
+            "max_length": 16384
+          },
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        }
+      },
+      "fixture_sha256": "45e03e687cb1dbe393d731214aa18ff1e1b01a43d1cddc1976054524132d28cc",
+      "expected_behavior": [
+        "Identifies the problem: held-out data missing/unreadable, or the eval_heldout_loss.py script is missing (never a silent fallback)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule EV-IN-006"
+      ],
+      "ground_truth": "evaluation: rule EV-IN-006 (BLOCK, input phase) fires: held-out data missing/unreadable, or the eval_heldout_loss.py script is missing (never a silent fallback).",
+      "trigger_facts": [],
+      "question": "Please evaluate checkpoint `ck` offline against its base model `base`, using `eval_policy.yaml` for the one-sided regression band and writing the single verdict to `eval/eval_report.json`, with `cache` as the eval cache. For the VLM held-out loss, use `missing.jsonl` as the held-out data with `abs_epsilon` 0.05 and `max_length` 16384, and make sure image, video, and text rows are all covered with video included. The `benchmarks` list is empty, so nothing beyond the held-out loss is being pulled in from lm-evaluation-harness. Let me know what the outcome is.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-IN-007",
+      "skill": "evaluation",
+      "rule_id": "EV-IN-007",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "held-out rows carry video but video_frames is unset",
+      "fixture": {
+        "expected": "REFUSED naming EV-IN-007 (video rows and no video_frames)",
+        "request": {
+          "base": "base",
+          "benchmarks": [],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "heldout": {
+            "abs_epsilon": 0.05,
+            "data": "video_rows.jsonl",
+            "max_length": 16384
+          },
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        }
+      },
+      "fixture_sha256": "0bd7ca06082e3a70e6640683925a8f915a2bd657033abf3d61a1ca1dda1b28dc",
+      "expected_behavior": [
+        "Identifies the problem: held-out rows carry video but video_frames is unset",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule EV-IN-007"
+      ],
+      "ground_truth": "evaluation: rule EV-IN-007 (BLOCK, input phase) fires: held-out rows carry video but video_frames is unset.",
+      "trigger_facts": [],
+      "question": "I want to run an offline evaluation of checkpoint `ck` (against base model `base`) using the policy in `eval_policy.yaml`, with the benchmark list in my request currently empty, and write the single verdict to `eval/eval_report.json`. Please use `cache` as the eval cache, and include the VLM held-out loss via FoundationScale's `eval_heldout_loss.py` on `video_rows.jsonl` with `max_length` 16384 and `abs_epsilon` 0.05, covering image, video, and text rows with video included. Let me know what the resulting verdict is.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-IN-008",
+      "skill": "evaluation",
+      "rule_id": "EV-IN-008",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "video_frames disagrees with the run manifest's FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES",
+      "fixture": {
+        "expected": "REFUSED naming EV-IN-008 (24 != FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES 16)",
+        "request": {
+          "base": "base",
+          "benchmarks": [],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "heldout": {
+            "abs_epsilon": 0.05,
+            "data": "heldout.jsonl",
+            "max_length": 16384,
+            "video_frames": 24
+          },
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml",
+          "run_manifest": "run_manifest.json"
+        }
+      },
+      "fixture_sha256": "45c0c659c3c8874029a73fb7b1d02e8b4cd69f81a9151c097b4df39568de3a01",
+      "expected_behavior": [
+        "Identifies the problem: video_frames disagrees with the run manifest's FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule EV-IN-008"
+      ],
+      "ground_truth": "evaluation: rule EV-IN-008 (BLOCK, input phase) fires: video_frames disagrees with the run manifest's FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES.",
+      "trigger_facts": [],
+      "question": "I want to evaluate my checkpoint \"ck\" against base \"base\", writing one verdict to eval/eval_report.json using policy \"eval_policy.yaml\", the run manifest run_manifest.json, and eval cache \"cache\". The held-out VLM pass should use heldout.jsonl with abs_epsilon 0.05, max_length 16384, and video_frames 24, covering image, video, and text rows with video included. The benchmarks list I supplied is empty, and my policy file is eval_policy.yaml. What is the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-RU-001",
+      "skill": "evaluation",
+      "rule_id": "EV-RU-001",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "vacuous run (held-out rows_used == 0 for either role): the rule template has no run phase, so it is declared a handoff BLOCK and yielded as REFUSED (no report) through the existing refusal path",
+      "fixture": {
+        "expected": "REFUSED naming EV-RU-001 (vacuous run writes no report)",
+        "harness": {
+          "heldout": {
+            "baseline": {
+              "mean_nll_nats": 1.4,
+              "rows_dropped": 0,
+              "rows_used": 5
+            },
+            "checkpoint": {
+              "mean_nll_nats": 1.2,
+              "rows_dropped": 5,
+              "rows_used": 0
+            }
+          }
+        },
+        "request": {
+          "base": "base",
+          "benchmarks": [],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "heldout": {
+            "abs_epsilon": 0.05,
+            "data": "heldout.jsonl",
+            "max_length": 16384,
+            "video_frames": 16
+          },
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        }
+      },
+      "fixture_sha256": "73c1a1a3300a8d7771e91b843806ff7b2e54c42a10082df27cd3487482ec29ed",
+      "expected_behavior": [
+        "Identifies the problem: vacuous run (held-out rows_used == 0 for either role): the rule template has no run phase, so it is declared a handoff BLOCK and yielded as REFUSED (no report) through the existing refusal path",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule EV-RU-001"
+      ],
+      "ground_truth": "evaluation: rule EV-RU-001 (BLOCK, handoff phase) fires: vacuous run (held-out rows_used == 0 for either role): the rule template has no run phase, so it is declared a handoff BLOCK and yielded as REFUSED (no report) through the existing refusal path.",
+      "trigger_facts": [
+        {
+          "path": "harness.heldout.baseline.mean_nll_nats",
+          "value": 1.4
+        },
+        {
+          "path": "harness.heldout.baseline.rows_dropped",
+          "value": 0
+        },
+        {
+          "path": "harness.heldout.baseline.rows_used",
+          "value": 5
+        },
+        {
+          "path": "harness.heldout.checkpoint.mean_nll_nats",
+          "value": 1.2
+        },
+        {
+          "path": "harness.heldout.checkpoint.rows_dropped",
+          "value": 5
+        },
+        {
+          "path": "harness.heldout.checkpoint.rows_used",
+          "value": 0
+        }
+      ],
+      "question": "I'm running an offline eval of checkpoint `ck` against base `base`, with the pinned benchmarks list empty for now, policy in `eval_policy.yaml`, cache at `cache`, and the report going to `eval/eval_report.json`; the held-out pass used `heldout.jsonl` with abs_epsilon 0.05, max_length 16384, and video_frames 16. From the harness run I observed: heldout.baseline.mean_nll_nats = 1.4, heldout.baseline.rows_dropped = 0, heldout.baseline.rows_used = 5, and heldout.checkpoint.mean_nll_nats = 1.2, heldout.checkpoint.rows_dropped = 5, heldout.checkpoint.rows_used = 0. What's the outcome and what verdict lands in eval_report.json?",
       "question_model": "mimo-v2.6-pro"
     }
   ]

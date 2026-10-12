@@ -6,7 +6,8 @@ description: 'Scores a trained checkpoint (full HF model dir or PEFT adapter) ag
   a confirm-hashed fs_launch_spec (entry fskills-eval) for GB200. Output: eval_report.json written atomically
   with verdict PASS/RED/UNMEASURED and provenance (harness version, task hash, few-shot, seed, baseline
   fingerprint). Do NOT use for building FS-ready datasets (use fskills-data-engine) or Slurm training
-  runs (use fskills-training). Not for VLM, LLM-judged or RL/agentic evals.'
+  runs (use fskills-training). For a VLM LoRA checkpoint it also measures held-out loss (NLL, image/video/text
+  rows) against the base on the same rows. Not for VLM benchmarks, LLM-judged or RL/agentic evals.'
 compatibility: "Requires Python>=3.10 and the foundationskills package (fskills CLI); launches additionally need FoundationScale on a Slurm GPU cluster. Without them the skill reports REFUSED or UNMEASURED and gives the install step instead of improvising."
 metadata:
   version: "0.1.0"
@@ -30,6 +31,10 @@ The skill never implements a scorer and never downloads data or models.
 
 - After a CPT/SFT/LoRA run, to get PASS/RED against the base before promoting a checkpoint.
 - To smoke-test an eval setup (`--limit N`): the verdict is at best UNMEASURED.
+- For a VLM LoRA checkpoint: `heldout` (or `fskills eval run --heldout BLOCK.json`) scores held-out mean NLL for
+  base and checkpoint on the same rows with FoundationScale's `examples/vlm-2xH200/scripts/eval_heldout_loss.py`.
+  Video rows need `video_frames` equal to training's `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES`; NLL has no stderr, so
+  `abs_epsilon` is required. Like benchmark mode it is a non-regression gate: PASS = not worse than base beyond the band.
 - Not for VLM benchmarks (lmms-eval is a deferred follow-up), LLM-judged tasks, or RL/agentic evals.
 
 ## Inputs
@@ -87,6 +92,12 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | EV-HO-002 | BLOCK | the harness completed but reported no metric for a configured benchmark (a skip) |
 | EV-HO-003 | WARN | a benchmark is unmeasured (dataset not staged, harness error) or the run was limited |
 | EV-HO-004 | BLOCK | a PASS report is missing/altered on disk, limited, or has a null score |
+| EV-IN-006 | BLOCK | held-out `data` missing/unreadable, or `eval_heldout_loss.py` missing (never a silent fallback) |
+| EV-IN-007 | BLOCK | held-out rows carry video but `video_frames` is unset |
+| EV-IN-008 | BLOCK | `video_frames` disagrees with the run manifest's `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` |
+| EV-RU-001 | BLOCK | vacuous held-out run (`rows_used == 0` for either role): REFUSED, no report |
+| EV-HO-005 | BLOCK | base and checkpoint `rows_used`/`rows_dropped` disagree: the delta is UNMEASURED (95), never RED |
+| EV-HO-006 | BLOCK | a held-out row lacks `rows_used`/`rows_dropped`/`score`/`baseline`: RED |
 
 ## Failure handling
 

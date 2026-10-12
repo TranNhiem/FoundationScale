@@ -50,6 +50,28 @@ def _load_manifest(path: Path) -> dict[str, Any]:
     return data
 
 
+def manifest_video_frames(run_manifest: str | Path | None) -> int | None:
+    """The training frame budget an FS run manifest records (``environment.values``), or None when it records none."""
+    if not run_manifest:
+        return None
+    path = Path(run_manifest)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    environment = data.get("environment")
+    values = environment.get("values") if isinstance(environment, dict) else None
+    raw = (values or {}).get("FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES") if isinstance(values, dict) else None
+    if raw in (None, "", "None"):
+        return None
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def _adapter_base(checkpoint: Path) -> str | None:
     try:
         cfg = json.loads((checkpoint / "adapter_config.json").read_text(encoding="utf-8"))
@@ -57,7 +79,6 @@ def _adapter_base(checkpoint: Path) -> str | None:
         return None
     value = cfg.get("base_model_name_or_path") if isinstance(cfg, dict) else None
     return str(value) if value else None
-
 
 def resolve(checkpoint: str | None = None, base: str | None = None, run_manifest: str | None = None) -> Resolved:
     manifest_base = None

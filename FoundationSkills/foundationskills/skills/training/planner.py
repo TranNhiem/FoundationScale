@@ -419,6 +419,323 @@ def _card_default_hparams(algorithm: str | None) -> dict:
             out[key] = spec["default"]
     return out
 
+# ---------------------------------------------------------------------------
+# VLM (A4.1): goal_spec declarations -> stage fields, and the gate rules
+#
+# Evidence base: examples/vlm-2xH200/ (main 270efd5; five VLMs, LoRA r16/a32,
+# 16K/32K, image+video+text on 2xH200). Facts the gates defend:
+#   - FS auto-targets LoRA only for FS-registered families; every other family
+#     needs explicit lora_targets / --adapter-target (emit_train.py:331-348
+#     records "family not FS-registered and no lora_targets" as a missing item).
+#   - video rows need a video column and a frame count
+#     (FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN / FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES).
+#   - FS refuses --tp (exit 96) wherever it cannot also save (docs/STATUS.md
+#     --tp row); --cp is measured end to end only on text (Qwen2.5-7B, #542).
+#   - 32K training is measured with --fused-loss liger (FS's fused Liger loss);
+#     128K context is a planning claim, not a measurement.
+
+_FUSED_LOSS_LIGER = "liger"
+_VIDEO_COLUMN_DEFAULT = "video"  # data.fs_columns.video_column default when video is declared
+_OVERLONG_DEFAULT = "drop"  # data.fs_columns.overlong default
+_SEQ_LEN_LIGER_FLOOR = 32768  # >= 32K needs --fused-loss liger (TR-PL-008)
+_SEQ_LEN_GEMMA4_31B_CEILING = 32768  # gemma-4-31B-it planned above 32K is RED (TR-PL-007)
+_SEQ_LEN_CLAIM_CEILING = 131072  # >= 128K is an unmeasured planning claim (TR-PL-006)
+_GEMMA4_31B_ID_TOKENS = ("gemma431b",)  # normalised id fragments ("gemma-4-31B-it" -> "gemma431bit")
+
+
+def _norm_declaration(raw: Any) -> list[str]:
+    """Lower-cased, de-duplicated declaration tokens (order-preserving)."""
+    out: list[str] = []
+    for item in raw or ():
+        tok = str(item).strip().lower()
+        if tok and tok not in out:
+            out.append(tok)
+    return out
+
+
+def _norm_targets(raw: Any) -> list[str] | None:
+    """Declared lora_targets: ``None`` when nothing is declared (FS auto), else the
+    normalised list. A declaration of only blank entries normalises to the empty
+    list — a vacuous declaration, refused by TR-IN-007."""
+    if raw is None:
+        return None
+    items = raw if isinstance(raw, (list, tuple)) else [raw]
+    return [str(t).strip() for t in items if str(t).strip()]
+
+
+def _int_or_none(value: Any) -> int | None:
+    """A declared integer fact; a bool or an unparseable value is not a fact."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def vlm_goal_fields(goal: dict) -> dict[str, Any]:
+    """The A4.1 goal_spec declarations (shared contract), normalised.
+
+    Goal keys (all optional): ``modalities`` (list of 'image'|'video'|'text', else
+    ``data_facts.modalities``), ``video_frames`` (int, else
+    ``data.fs_columns.video_frames``), ``max_sequence_length`` (int), ``lora_targets``
+    (list[str]), ``fused_loss`` ('liger'), ``tp``/``cp`` (int).
+    ``goal.data.fs_columns`` is the dataset's field -> column mapping and may name
+    ``video_column``, ``video_frames`` and ``overlong``. ``goal.module_inventory`` (or
+    ``goal.base_model.module_inventory``) is optional: without one TR-IN-007's
+    "a target matches no module" check cannot run and the FS post-wrap refusal stands.
+
+    Returns the normalised facts: ``modalities`` (sorted run modalities — empty when
+    nothing declares one, never inferred), ``row_modalities`` (sorted modalities the
+    rows carry: ``data_facts.modalities``, else the run's), ``fs_columns`` (the
+    declared mapping passed through plus the normalised ``video_column`` /
+    ``video_frames`` / ``overlong`` keys), ``fused_loss``, ``lora_targets``
+    (``None`` = not declared, else normalised), ``max_sequence_length``, ``tp``,
+    ``cp``, ``module_inventory``. Unknown modality tokens are carried through to the
+    stage and refused by the emit gate FS-IN-004 (no fs_columns feed them).
+    """
+    goal = goal if isinstance(goal, dict) else {}
+    data = goal.get("data") or {}
+    facts = goal.get("data_facts") or {}
+    cols: dict[str, Any] = {}
+    for src in (data, facts):
+        declared_cols = src.get("fs_columns") if isinstance(src, dict) else None
+        if isinstance(declared_cols, dict):
+            cols.update({str(k): v for k, v in declared_cols.items()})
+    modalities = sorted(_norm_declaration(goal.get("modalities")) or _norm_declaration(facts.get("modalities")))
+    row_modalities = sorted(_norm_declaration(facts.get("modalities")) or list(modalities))
+    frames = goal.get("video_frames")
+    if frames is None:
+        frames = cols.get("video_frames")
+    named_column = cols.get("video_column")
+    if not isinstance(named_column, str) or not named_column.strip():
+        named_column = cols.get("video")
+    video_column = str(named_column).strip() if isinstance(named_column, str) and named_column.strip() else None
+    overlong = cols.get("overlong")
+    fs_columns = dict(cols)
+    fs_columns["video_column"] = video_column or (_VIDEO_COLUMN_DEFAULT if "video" in modalities else None)
+    fs_columns["video_frames"] = _int_or_none(frames)
+    fs_columns["overlong"] = str(overlong).strip() if isinstance(overlong, str) and overlong.strip() else _OVERLONG_DEFAULT
+    inventory_raw = goal.get("module_inventory") or (goal.get("base_model") or {}).get("module_inventory")
+    module_inventory = [str(m) for m in inventory_raw] if isinstance(inventory_raw, (list, tuple)) and inventory_raw else None
+    fused = goal.get("fused_loss")
+    return {
+        "modalities": modalities,
+        "row_modalities": row_modalities,
+        "fs_columns": fs_columns,
+        "fused_loss": str(fused).strip().lower() if isinstance(fused, str) and fused.strip() else None,
+        "lora_targets": _norm_targets(goal.get("lora_targets")),
+        "max_sequence_length": _int_or_none(goal.get("max_sequence_length")),
+        "tp": _int_or_none(goal.get("tp")),
+        "cp": _int_or_none(goal.get("cp")),
+        "module_inventory": module_inventory,
+    }
+
+
+def vlm_stage_fields(goal: dict) -> dict[str, Any]:
+    """The A4.1 fields the planner copies into every training stage (shared contract).
+
+    Returns a stage-shaped fragment: ``modalities`` (sorted list), ``hparams`` with
+    ``fused_loss`` ('liger' | None), ``lora_targets`` (explicit list | None for FS
+    auto) and ``max_sequence_length`` (the declared value), and ``data.fs_columns``
+    with ``video_column`` ('video' by default when video is in modalities),
+    ``video_frames`` and ``overlong`` ('drop' by default). ``plan()`` merges this into
+    each stage: an operator declaration wins over recipe/card hparams and lands in
+    hparams before the estimate resolves max_sequence_length, so
+    estimate == command.
+    """
+    fields = vlm_goal_fields(goal)
+    return {
+        "modalities": list(fields["modalities"]),
+        "hparams": {
+            "fused_loss": fields["fused_loss"],
+            "lora_targets": list(fields["lora_targets"]) if fields["lora_targets"] is not None else None,
+            "max_sequence_length": fields["max_sequence_length"],
+        },
+        "data": {"fs_columns": dict(fields["fs_columns"])},
+    }
+
+
+def vlm_gates(stage: dict, goal: dict, caps: FSCapabilities | None) -> list[tuple[str, str]]:
+    """The A4.1 gate rules (TR-IN-005..008, TR-PL-006..008) over one training stage.
+
+    Returns ``(rule_id, message)`` pairs; the training skill turns each into a
+    Finding (``self.finding(rule_id, message, evidence, recovery)``). Phase (shared
+    contract): ``check_inputs`` surfaces TR-IN-005..008 and TR-PL-008 (BLOCK input ->
+    REFUSED), ``check_handoff`` surfaces TR-PL-006/007 (BLOCK handoff -> RED).
+    TR-PL-008 is a handoff subject that must fire at input: the handoff template can
+    only emit findings, never a REFUSED result.
+
+    Conditions (the spec's, and no others):
+
+    - TR-IN-005: a VLM run (image/video rows, a "vlm" model_type, or a vlm family)
+      whose family is not FS-registered, training anything but full fine-tuning, with
+      no explicit lora_targets -> names "register the family in FS" and "pass explicit
+      lora_targets / --adapter-target" (FS auto-targets LoRA only for FS-registered
+      families).
+    - TR-IN-006: rows carry video but the feed has no video_column or video_frames ->
+      names FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN / FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES.
+    - TR-IN-007: a declared lora_targets list empty after normalisation, or a target
+      matching no module in the plan's module inventory (only checkable when an
+      inventory is carried; otherwise the FS post-wrap refusal stands).
+    - TR-IN-008: tp > 1 (FS refuses --tp, exit 96, wherever it cannot also save) or
+      cp > 1 with image/video rows (--cp is measured end to end only on text).
+    - TR-PL-006: planned max_sequence_length >= 131072, or a goal claim that it works.
+    - TR-PL-007: gemma-4-31B-it planned above 32768.
+    - TR-PL-008: max_sequence_length >= 32768 without fused_loss 'liger'.
+
+    ``stage`` is the planned stage (its hparams carry the facts the estimate priced);
+    ``goal`` is the goal_spec payload (the declaration/claim channel). ``caps``
+    (FSCapabilities) is the shared contract's capability object: the gate facts are
+    knowledge-loop facts (FS-registered families, measured sequence floors) and the
+    installed FS's own refusals stand behind them — the --tp refusal is taken from
+    ``caps.check`` when the capability object answers.
+    """
+    stage = stage if isinstance(stage, dict) else {}
+    goal = goal if isinstance(goal, dict) else {}
+    declared = vlm_goal_fields(goal)
+    hparams = stage.get("hparams") if isinstance(stage.get("hparams"), dict) else {}
+    data = stage.get("data") if isinstance(stage.get("data"), dict) else {}
+    fs_columns = data.get("fs_columns") if isinstance(data.get("fs_columns"), dict) else declared["fs_columns"]
+
+    modalities = set(_norm_declaration(stage.get("modalities")) or declared["modalities"]) | set(declared["row_modalities"])
+    multimodal_rows = bool({"image", "video"} & modalities)
+
+    # model identity: the goal's ref first, the knowledge base's ids/name as backup
+    model_ref = str((goal.get("base_model") or {}).get("name_or_path") or "")
+    family = variant = None
+    if model_ref:
+        try:
+            found = find_variant(model_ref)
+        except Exception:  # noqa: BLE001 - a broken knowledge base must not crash a gate
+            found = None
+        if found is not None:
+            family, variant = found
+    identity = " ".join(
+        "".join(ch for ch in str(token).lower() if ch.isalnum())
+        for token in (model_ref, str(_get(variant, "id", "") or ""), str(_get(family, "name", "") or ""))
+    )
+    is_vlm_family = (
+        multimodal_rows
+        or "vlm" in {str(t).lower() for t in (_get(family, "model_types", ()) or ())}
+        or str(goal.get("model_type") or "").lower() == "vlm"
+    )
+    method = str(stage.get("method") or goal.get("method") or "").lower()
+    named = stage.get("name") or stage.get("stage")
+    where = f"stage {str(named)!r} " if named else "the run "
+
+    # the facts the gates read: the planned stage wins where it carries a value
+    # (that is what the estimate priced), the goal is the declaration/claim channel.
+    raw_targets = hparams.get("lora_targets")
+    if raw_targets is None:
+        raw_targets = declared["lora_targets"]
+    targets = _norm_targets(raw_targets)
+    video_column = fs_columns.get("video_column") or declared["fs_columns"].get("video_column")
+    frames = fs_columns.get("video_frames")
+    frames = frames if frames is not None else declared["fs_columns"].get("video_frames")
+    frames = _int_or_none(frames)
+    lengths = [
+        n
+        for n in (_int_or_none(hparams.get("max_sequence_length")), declared["max_sequence_length"])
+        if n is not None
+    ]
+    longest = max(lengths) if lengths else None
+    fused_loss = hparams.get("fused_loss") or declared["fused_loss"]
+    tp, cp = declared["tp"], declared["cp"]
+
+    out: list[tuple[str, str]] = []
+
+    # TR-IN-005: FS auto-targets LoRA only for FS-registered families
+    if is_vlm_family and method != "full" and not targets and _get(family, "fs_family") is None:
+        out.append((
+            "TR-IN-005",
+            f"the VLM family behind {(model_ref or 'unknown')!r} is not FS-registered and no explicit lora_targets "
+            "are declared: register the family in FS, or pass explicit lora_targets / --adapter-target "
+            "(FS auto-targets LoRA only for FS-registered families)",
+        ))
+
+    # TR-IN-006: rows carry video only when a video column and a frame count feed them
+    if "video" in modalities:
+        missing = [name for name, value in (("video_column", video_column), ("video_frames", frames)) if not value]
+        if missing:
+            out.append((
+                "TR-IN-006",
+                "rows carry video but the feed has no "
+                + " and ".join(missing)
+                + ": declare goal.data.fs_columns.video_column and goal.video_frames "
+                "(FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN / FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES)",
+            ))
+
+    # TR-IN-007: an explicit lora_targets declaration must give usable names
+    if targets is not None:
+        if not targets:
+            out.append((
+                "TR-IN-007",
+                "explicit lora_targets is empty after normalisation: pass a non-empty --adapter-target list "
+                "(or drop the goal's lora_targets key to let FS auto-target an FS-registered family)",
+            ))
+        else:
+            inventory = stage.get("module_inventory") or declared["module_inventory"]
+            unmatched = [t for t in targets if inventory and not any(t == m or t in m for m in inventory)]
+            if unmatched:
+                out.append((
+                    "TR-IN-007",
+                    f"explicit lora_targets {unmatched!r} match no module in the module inventory "
+                    f"({len(inventory or [])} module(s)): pass --adapter-target names the wrapped model has "
+                    "(without an inventory the FS post-wrap refusal stands)",
+                ))
+
+    # TR-IN-008: transport axes the measured FS products do not run or have not measured
+    if tp is not None and tp > 1:
+        message = (
+            f"tp={tp} is REFUSED: FS refuses --tp (exit 96) wherever it cannot also save "
+            "(docs/STATUS.md --tp row); plan tp=1 and shard with ddp/fsdp"
+        )
+        if caps is not None and callable(getattr(caps, "check", None)):
+            try:
+                reported = caps.check(str(stage.get("stage") or "sft"), tp=tp)
+            except Exception:  # noqa: BLE001 - probing never decides a gate
+                reported = None
+            if reported:
+                message = f"{message} (the installed FS reports: {reported})"
+        out.append(("TR-IN-008", message))
+    if cp is not None and cp > 1 and multimodal_rows:
+        out.append((
+            "TR-IN-008",
+            f"cp={cp} is planned with image/video rows: --cp is measured end to end only on text "
+            "(Qwen2.5-7B, #542), so image/video rows with cp>1 are unmeasured; plan cp=1 for image/video "
+            "rows or keep the rows to text",
+        ))
+
+    # TR-PL-006/007/008: the sequence-length claims (planned value and goal claim)
+    if longest is not None and longest >= _SEQ_LEN_CLAIM_CEILING:
+        out.append((
+            "TR-PL-006",
+            f"{where}plans max_sequence_length {longest} >= 131072: a 128K claim is a planning fact, not a "
+            "measurement (the VLM evidence base measures 16K/32K); the claim marks the handoff RED",
+        ))
+    if (
+        longest is not None
+        and longest > _SEQ_LEN_GEMMA4_31B_CEILING
+        and any(tok in identity for tok in _GEMMA4_31B_ID_TOKENS)
+    ):
+        out.append((
+            "TR-PL-007",
+            f"{where}plans max_sequence_length {longest} > 32768 for gemma-4-31B-it (the measured evidence "
+            "covers 32K at most); the stage marks the handoff RED",
+        ))
+    if (
+        longest is not None
+        and longest >= _SEQ_LEN_LIGER_FLOOR
+        and str(fused_loss or "").lower() != _FUSED_LOSS_LIGER
+    ):
+        out.append((
+            "TR-PL-008",
+            f"{where}plans max_sequence_length {longest} >= 32768 without fused_loss 'liger': run with "
+            "--fused-loss liger (FS's fused Liger loss is the measured 32K loss path) or plan below 32768",
+        ))
+    return out
+
 
 def _open_questions(goal: dict) -> list[str]:
     """Missing load-bearing facts; prefers the intake module, else a builtin check."""
@@ -580,7 +897,10 @@ def plan(
     if goal.get("stages") is not None:
         selected = _apply_operator_stages(goal.get("stages"), selected, rules, fired, decide,
                                           stage_order=goal.get("stage_order"))
-    if not selected:
+    # A4.2 (agentic RL): a goal whose only stage is the agentic stage (a goal.agentic
+    # mapping, e.g. the measured music S0 shape) must plan it; the refusal below is
+    # exactly what it was for every goal that names neither a stage nor an agentic block.
+    if not selected and not isinstance(goal.get("agentic"), dict):
         raise PlanningRefusal(
             "no stage selected: "
             f"{len(rules)} stage rules evaluated and none added a stage for "
@@ -600,6 +920,23 @@ def plan(
         )
 
     # 6-10. per-stage: algorithm -> recipe -> method -> estimate -> feasibility
+    # A4.1 (shared contract): the goal_spec's VLM declarations are copied into every
+    # stage below (vh fields land in hparams.data/modalities).
+    vlm_fields = vlm_stage_fields(goal)
+    if (
+        vlm_fields["hparams"]["fused_loss"] is not None
+        or vlm_fields["hparams"]["lora_targets"] is not None
+        or vlm_fields["hparams"]["max_sequence_length"] is not None
+        or set(vlm_fields["modalities"]) - {"text"}
+    ):
+        decide(
+            "hparams",
+            "vlm fields: " + ", ".join(vlm_fields["modalities"]) or "none declared",
+            "copied from the goal_spec (operator declaration): fused_loss="
+            f"{vlm_fields['hparams']['fused_loss']!r}, lora_targets={vlm_fields['hparams']['lora_targets']!r}, "
+            f"max_sequence_length={vlm_fields['hparams']['max_sequence_length']!r}, "
+            f"fs_columns={vlm_fields['data']['fs_columns']!r}",
+        )
     budget = goal.get("budget") or {}
     budget_gpu_hours = budget.get("gpu_hours")
     stages_out: list[dict] = []
@@ -750,8 +1087,39 @@ def plan(
             )
             # the CPT token budget IS the total; a recipe "epochs" alongside it would contradict it
             hparams.pop("epochs", None)
+        # A4.1 (shared contract): the goal_spec's VLM declarations are copied into
+        # every stage, and an operator declaration wins over recipe/card hparams. It
+        # must land in hparams before max_sequence_length resolves below: the
+        # estimate has to price exactly what is emitted (estimate == command).
+        if vlm_fields["hparams"]["fused_loss"] is not None:
+            hparams["fused_loss"] = vlm_fields["hparams"]["fused_loss"]
+        else:
+            hparams.setdefault("fused_loss", None)
+        if vlm_fields["hparams"]["lora_targets"] is not None:
+            hparams["lora_targets"] = list(vlm_fields["hparams"]["lora_targets"])
+        else:
+            hparams.setdefault("lora_targets", None)
+        if vlm_fields["hparams"]["max_sequence_length"] is not None:
+            hparams["max_sequence_length"] = int(vlm_fields["hparams"]["max_sequence_length"])
+            for alias in _HP_ALIASES.get("max_sequence_length", ()):  # drop the recipe's spelling: one value
+                hparams.pop(alias, None)
+        else:
+            hparams.setdefault("max_sequence_length", None)
         def _first(*keys: str, default: Any = None) -> Any:
             return next((hparams[k] for k in keys if hparams.get(k) is not None), default)
+
+        # Multimodal rows at long context train at one row per device: that is the measured
+        # VLM LoRA recipe (examples/vlm-2xH200/scripts/train_sft.sh:9,24 -- batch 1, grad-accum 8).
+        # A text recipe's micro-batch would price (and OOM) several 16K image/video rows at once.
+        if {"image", "video"} & set(vlm_fields["modalities"]) and int(_first(
+                "max_sequence_length", "seq_len", "max_seq_len", default=0) or 0) >= 8192:
+            for alias in ("micro_batch", "micro_batch_size"):
+                hparams.pop(alias, None)
+            hparams["per_device_batch_size"] = 1
+            hparams.setdefault("gradient_accumulation_steps", 8)
+            assumptions.append("vlm: per-device batch 1 (grad-accum "
+                               f"{hparams['gradient_accumulation_steps']}) for image/video rows at long "
+                               "context, as measured in examples/vlm-2xH200")
 
         seq_len = int(_first("max_sequence_length", "seq_len", "max_seq_len", default=4096))
         micro_batch = int(_first("per_device_batch_size", "micro_batch", "micro_batch_size", default=2))
@@ -891,7 +1259,15 @@ def plan(
             and readiness.get("verdict") == "PASS"
             and (readiness.get("format") in (None, data_format))
         )
-        data_entry: dict[str, Any] = {"format": data_format, "ready": ready, "tokens": tokens}
+        data_entry: dict[str, Any] = {
+            "format": data_format,
+            "ready": ready,
+            "tokens": tokens,
+            # A4.1 (shared contract): video_column / video_frames / overlong travel
+            # with the dataset's declared fs_columns so training.emit can set the
+            # FOUNDATIONSCALE_TRAIN_* environment from one place.
+            "fs_columns": dict(vlm_fields["data"]["fs_columns"]),
+        }
         if not ready:
             data_entry["handoff"] = "data_engine"
             data_entry["target_format"] = data_format
@@ -911,6 +1287,7 @@ def plan(
                 "stage": stage,
                 "algorithm": algorithm,
                 "method": method,
+                "modalities": list(vlm_fields["modalities"]),
                 "recipe_id": recipe_id,
                 "because": " | ".join(p for p in because_parts if p),
                 "hparams": hparams,
@@ -930,6 +1307,17 @@ def plan(
             f"{stage}: {stage_feas['verdict']} ({'executable' if executable else 'missing: ' + str(missing)[:80]})",
             f"memory {estimate['memory_gb_per_gpu']}GB/GPU estimate; {len(stage_feas['alternatives'])} alternative(s) considered",
         )
+
+    # A4.2 (agentic RL): the agentic stage is appended AFTER every training stage (the
+    # training chain keeps its order and the agentic RL stage measures last on it).
+    # plan_agentic is imported here, not at module top: importing planner must not drag
+    # in the agentic stack, plan() is its only caller, and both modules are loaded by
+    # the time it runs. It is the agentic module's own record (goal["agentic"] ->
+    # one agentic_rl stage), never a planner heuristic.
+    if isinstance(goal.get("agentic"), dict):
+        from foundationskills.skills.training.agentic import plan_agentic
+
+        stages_out.append(plan_agentic(goal))
 
     overall = max(feas_verdicts, key=lambda v: _VERDICT_ORDER.get(v, 1)) if feas_verdicts else "warn"
     decide(
@@ -961,4 +1349,11 @@ def plan(
     }
 
 
-__all__ = ["plan", "PlanningRefusal", "PLANNING_STEPS"]
+__all__ = [
+    "plan",
+    "PlanningRefusal",
+    "PLANNING_STEPS",
+    "vlm_gates",
+    "vlm_goal_fields",
+    "vlm_stage_fields",
+]

@@ -42,7 +42,7 @@ _TUPLE_FIELDS = frozenset(
      "rl_algorithms", "rl_reward_kinds", "backends", "notes", "errors"}
 )
 _MAP_TUPLE_FIELDS = frozenset({"families", "train_flag_choices"})
-_MAP_FIELDS = frozenset({"rl_runnable", "pref_runnable"})
+_MAP_FIELDS = frozenset({"rl_runnable", "pref_runnable", "fused_loss_kernels"})
 _UNSAFE_ID = re.compile(r"[^A-Za-z0-9._-]+")
 _CHECK_ITEM: dict[str, Any] = {
     "type": "object",
