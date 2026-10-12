@@ -32,6 +32,14 @@ class FakeCall:
 @dataclass
 class FakeRunner:
     """Records every run and returns scripted RunResults in order."""
+    # spawn()/terminate(): the no-network holder (recorded lazily in self.spawned / self.terminated)
+    def spawn(self, argv) -> int:
+        self.__dict__.setdefault("spawned", []).append(list(argv))
+        return 4242
+
+    def terminate(self, pid: int) -> None:
+        self.__dict__.setdefault("terminated", []).append(pid)
+
 
     results: list[RunResult] = field(default_factory=list)
     calls: list[FakeCall] = field(default_factory=list)
@@ -199,9 +207,11 @@ def test_exec_no_network_prefix(tmp_path: Path) -> None:
     runner.calls.clear()
     sbx.exec("echo hi")
     argv = runner.calls[0].argv
-    # no-network keeps the fresh namespace (no route off the box) but brings loopback up inside it:
-    # a fresh netns has lo DOWN, so 127.0.0.1 was unreachable even within one exec (measured ENETUNREACH)
-    assert argv[:6] == ("unshare", "-rn", "sh", "-c", 'ip link set lo up 2>/dev/null; exec "$@"', "sh")
+    # every exec joins ONE namespace held for the sandbox's lifetime (as a Docker container's), so a service
+    # started by one exec is reachable from the next; the holder brings loopback up, with no route off the box
+    assert argv[:6] == ("nsenter", "--target=4242", "--user", "--net", "--preserve-credentials", "--")
+    (holder,) = runner.spawned
+    assert holder[:2] == ["unshare", "-rn"] and "ip link set lo up" in holder[-1]
     assert "enroot" in argv
 
 
@@ -236,7 +246,7 @@ def test_exec_cpu_set_taskset(tmp_path: Path) -> None:
     runner.calls.clear()
     sbx.exec("true")
     argv = runner.calls[0].argv
-    assert argv[:2] == ("unshare", "-rn")
+    assert argv[0] == "nsenter"
     i = argv.index("taskset")
     assert argv[i + 1] == "-c"
     assert argv[i + 2] == "0,2"
@@ -254,7 +264,7 @@ def test_exec_memory_mb_cgroup_scope(tmp_path: Path) -> None:
     assert argv[:4] == ("systemd-run", "--user", "--scope", "--quiet")
     assert "MemoryMax=256M" in argv and "MemorySwapMax=0" in argv and "OOMPolicy=continue" in argv
     rest = argv[argv.index("--") + 1 :]
-    assert rest[:2] == ("unshare", "-rn")
+    assert rest[0] == "nsenter"
     assert "prlimit" not in argv
 
 
@@ -847,3 +857,42 @@ def test_exec_defaults_home_like_docker(tmp_path: Path) -> None:
     runner.calls.clear()
     sbx.exec("true", env={"HOME": "/work"})
     assert "HOME=/work" in runner.calls[0].argv
+
+
+def test_stop_kills_container_processes_and_the_netns_holder(tmp_path: Path, monkeypatch) -> None:
+    """Docker's stop kills every container process; daemons used to outlive their sandbox (73 leaked)."""
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner)
+    sbx.start()
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(sbx, "_container_pids", lambda: [111, 222])
+    monkeypatch.setattr(os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    sbx.stop(delete=True)
+    assert sorted(p for p, _ in killed) == [111, 222]
+    assert runner.terminated == [4242]
+
+
+def test_container_pids_ignores_host_processes(tmp_path: Path) -> None:
+    """Host processes (this one, a plain child) have no root mount at the sandbox rootfs, so they never match."""
+    import subprocess
+
+    sbx = make_sandbox(tmp_path, FakeRunner())
+    child = subprocess.Popen(["sleep", "30"])
+    try:
+        pids = sbx._container_pids()
+        assert os.getpid() not in pids and child.pid not in pids
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_subprocess_runner_spawn_waits_for_ready_and_refuses_silence() -> None:
+    """spawn() returns only after the helper says ready (its namespaces exist); a silent helper is refused."""
+    runner = SubprocessRunner()
+    pid = runner.spawn(["sh", "-c", "sleep 0.3; echo ready; exec sleep 30"])
+    try:
+        assert os.path.exists(f"/proc/{pid}")
+    finally:
+        runner.terminate(pid)
+    with pytest.raises(SandboxError, match="expected 'ready'"):
+        runner.spawn(["sleep", "30"], ready_timeout_s=0.5)

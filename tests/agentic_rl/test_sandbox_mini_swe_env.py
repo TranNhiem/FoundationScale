@@ -17,6 +17,14 @@ _SENTINEL = "FS_HOST_ENV_SENTINEL_9f3a"
 
 class FakeRunner:
     """Records argv and emulates enroot import/create/remove side effects in temp dirs."""
+    # spawn()/terminate(): the no-network holder (recorded lazily in self.spawned / self.terminated)
+    def spawn(self, argv) -> int:
+        self.__dict__.setdefault("spawned", []).append(list(argv))
+        return 4242
+
+    def terminate(self, pid: int) -> None:
+        self.__dict__.setdefault("terminated", []).append(pid)
+
 
     def __init__(self) -> None:
         self.calls: list[list[str]] = []

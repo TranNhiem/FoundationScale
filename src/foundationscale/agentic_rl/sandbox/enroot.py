@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import select
 import shlex
 import shutil
 import signal
@@ -23,6 +24,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol
 
+_NETNS_HOLDER_MAX_S = 172800  # 2 days: far beyond any trial; bounds a holder leaked by an external kill
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,63}$")
 _NETWORKS = ("no-network", "public")
 _STDERR_TAIL = 2000
@@ -71,6 +73,7 @@ class SubprocessRunner:
 
     def __init__(self) -> None:
         self._live: set[int] = set()
+        self._spawned: dict[int, subprocess.Popen[bytes]] = {}
         self._lock = threading.Lock()
 
     def kill_all(self) -> None:
@@ -80,6 +83,43 @@ class SubprocessRunner:
         for pgid in groups:
             with contextlib.suppress(OSError):
                 os.killpg(pgid, signal.SIGKILL)
+
+    def spawn(self, argv: Sequence[str], *, ready_timeout_s: float = 30.0) -> int:
+        """Start a long-lived helper (its own session) and return its pid once it prints "ready".
+
+        Waiting matters: a pid exists before the helper's own setup (e.g. ``unshare``) has run, and a caller
+        that acts on it at once raced it (nsenter: "reassociate to namespace 'ns/user' failed")."""
+        try:
+            proc = subprocess.Popen(  # noqa: S603
+                list(argv), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, start_new_session=True,
+            )
+        except OSError as exc:
+            raise SandboxError(f"failed to spawn {list(argv)!r}: {exc}") from exc
+        assert proc.stdout is not None
+        ready, _, _ = select.select([proc.stdout], [], [], ready_timeout_s)
+        line = proc.stdout.readline() if ready else b""
+        proc.stdout.close()
+        if line.strip() != b"ready":
+            with contextlib.suppress(OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+            raise SandboxError(
+                f"helper {list(argv)!r}: expected 'ready' within {ready_timeout_s}s, got {line!r}"
+            )
+        with self._lock:
+            self._spawned[proc.pid] = proc
+        return proc.pid
+
+    def terminate(self, pid: int) -> None:
+        """SIGKILL a helper started by spawn() and reap it."""
+        with self._lock:
+            proc = self._spawned.pop(pid, None)
+        with contextlib.suppress(OSError):
+            os.killpg(pid, signal.SIGKILL)
+        if proc is not None:
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=10)
 
     def run(
         self,
@@ -178,6 +218,7 @@ class EnrootSandbox:
         self.spec = spec
         self._runner: Runner = runner if runner is not None else SubprocessRunner()
         self._started = False
+        self._netns_pid: int | None = None
         self._image_path: str | None = None
         self._build_env: Mapping[str, str] = MappingProxyType({})
         self._build_workdir: str | None = None
@@ -270,6 +311,16 @@ class EnrootSandbox:
                 raise SandboxError(f"invalid build metadata {metadata}: bad 'workdir'")
             self._build_env = MappingProxyType(dict(env))
             self._build_workdir = workdir
+        if self.spec.network == "no-network":
+            # One network namespace for the sandbox's lifetime, as a Docker container has: every exec joins it.
+            # A namespace per exec meant a service started by one exec (the oracle's mongod) was unreachable
+            # from the next (the verifier: "Connection refused"). Loopback up, no route off the box; the
+            # holder's finite sleep bounds a leak if this process is killed before stop().
+            spawn = getattr(self._runner, "spawn", None)
+            if not callable(spawn):
+                raise SandboxRefusal("network='no-network': expected a runner with spawn(), got none")
+            self._netns_pid = spawn(["unshare", "-rn", "sh", "-c",
+                                     f"ip link set lo up 2>/dev/null; echo ready; exec sleep {_NETNS_HOLDER_MAX_S}"])
         self._started = True
 
     def exec(
@@ -308,10 +359,8 @@ class EnrootSandbox:
             # task limit. Measured: an 8 GiB untouched reservation runs, touching 512 MiB under 256 MiB is killed.
             argv += _memory_scope(self.spec.memory_mb)
         if self.spec.network == "no-network":
-            # A fresh network namespace has loopback DOWN: 127.0.0.1 was unreachable even within one exec
-            # (measured ENETUNREACH), so every task that serves and probes on localhost failed. Bring lo up
-            # inside the namespace; there is still no route off the box.
-            argv += ["unshare", "-rn", "sh", "-c", 'ip link set lo up 2>/dev/null; exec "$@"', "sh"]
+            # join the sandbox's network namespace (and its user namespace, which owns it)
+            argv += ["nsenter", f"--target={self._netns_pid}", "--user", "--net", "--preserve-credentials", "--"]
         if self.spec.cpu_set:
             argv += ["taskset", "-c", ",".join(str(cpu) for cpu in self.spec.cpu_set)]
         argv += [
@@ -359,8 +408,41 @@ class EnrootSandbox:
         if callable(kill_all):
             kill_all()
 
+    def _container_pids(self) -> list[int]:
+        """Host pids of this user's processes running inside this sandbox (daemons included).
+
+        enroot pivots the root inside a private mount namespace, so /proc/<pid>/root reads "/" from the host;
+        the reliable identity is that namespace's root mount: mount point "/" whose filesystem-relative root
+        is a suffix of the rootfs host path (e.g. "/hhri-ai/hh28144/.enroot-sbx/<name>" on a /home export)."""
+        rootfs = str(self.rootfs())
+        uid = os.getuid()
+        pids = []
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit() or int(entry) == os.getpid():
+                continue
+            with contextlib.suppress(OSError):
+                if os.stat(f"/proc/{entry}").st_uid != uid:
+                    continue
+                with open(f"/proc/{entry}/mountinfo") as mountinfo:
+                    for line in mountinfo:
+                        fields = line.split()
+                        if len(fields) > 4 and fields[4] == "/" and fields[3] != "/" and rootfs.endswith(fields[3]):
+                            pids.append(int(entry))
+                            break
+        return pids
+
     def stop(self, *, delete: bool = True) -> None:
         self.kill_running()
+        if self._started:
+            # Docker's stop kills every container process; background daemons (servers, mongod, browsers)
+            # otherwise outlived their sandbox: 73 such processes had leaked on one node across R0 runs.
+            for pid in self._container_pids():
+                with contextlib.suppress(OSError):
+                    os.kill(pid, signal.SIGKILL)
+            terminate = getattr(self._runner, "terminate", None)
+            if self._netns_pid is not None and callable(terminate):
+                terminate(self._netns_pid)
+            self._netns_pid = None
         if delete and self._started:
             result = self._runner.run(
                 ["enroot", "remove", "-f", self.spec.name],

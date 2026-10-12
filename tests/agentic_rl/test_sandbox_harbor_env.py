@@ -107,6 +107,14 @@ class RunResult:
 
 class FakeRunner:
     """Runner that emulates enroot import/create/export/remove side effects."""
+    # spawn()/terminate(): the no-network holder (recorded lazily in self.spawned / self.terminated)
+    def spawn(self, argv) -> int:
+        self.__dict__.setdefault("spawned", []).append(list(argv))
+        return 4242
+
+    def terminate(self, pid: int) -> None:
+        self.__dict__.setdefault("terminated", []).append(pid)
+
 
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
@@ -284,7 +292,7 @@ def test_start_with_docker_image_imports_and_uses_no_network(
     asyncio.run(env.exec("echo hi"))
     exec_calls = [call for call in runner.calls if _is_enroot_start(call)]
     assert exec_calls
-    assert "unshare" in exec_calls[0] and "-rn" in exec_calls[0]
+    assert exec_calls[0][0] == "nsenter" and "--net" in exec_calls[0]
 
 
 def test_start_with_docker_image_public_network_skips_unshare(
