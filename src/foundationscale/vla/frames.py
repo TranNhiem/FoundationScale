@@ -148,7 +148,7 @@ def _decode_all_pyav(path: Path) -> list[np.ndarray]:
     stream, and a stream it cannot decode to the end are all :class:`FrameDecodeError`
     naming the file -- a half-decoded episode must never reach a sample.
     """
-    import av  # type: ignore[import-not-found]  # noqa: PLC0415
+    import av  # noqa: PLC0415
     import numpy as np  # noqa: PLC0415
 
     errors = _decode_error_types(av)

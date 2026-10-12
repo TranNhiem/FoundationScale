@@ -660,10 +660,15 @@ def test_fused_loss_unsupported_model_type_refuses(monkeypatch: pytest.MonkeyPat
 def test_fused_loss_import_error_refuses_naming_the_missing_dependency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # liger_kernel is genuinely NOT installed in this environment (see
-    # train/fused_loss.py's module docstring) -- no stub at all here, so
-    # apply_fused_loss's own real ImportError is what loop.py must catch.
-    assert "liger_kernel" not in sys.modules
+    # liger_kernel is in the [train] extra on Linux, so absence is simulated: a
+    # None entry in sys.modules makes the real import statement in
+    # apply_fused_loss raise ModuleNotFoundError, which loop.py must catch.
+    for name in (
+        "liger_kernel",
+        "liger_kernel.transformers",
+        "liger_kernel.transformers.functional",
+    ):
+        monkeypatch.setitem(sys.modules, name, None)
     stack = _install_fake_runtime(monkeypatch, model_type="gemma4_unified")
     cfg = _config(fused_loss="liger")
 

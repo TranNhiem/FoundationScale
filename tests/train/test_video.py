@@ -399,6 +399,29 @@ def test_av_backend_refuses_a_clip_with_no_frame_at_an_instant(
         video._decode_av("c.mp4", 2)
 
 
+def test_av_backend_refuses_a_stream_with_no_time_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    import types
+
+    class _NoTimeBase:
+        duration = 2_000_000
+        streams = types.SimpleNamespace(
+            video=[types.SimpleNamespace(duration=None, time_base=None)]
+        )
+
+        def __enter__(self) -> _NoTimeBase:
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+    fake = types.ModuleType("av")
+    fake.open = lambda _path: _NoTimeBase()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "av", fake)
+    with pytest.raises(video.VideoDecodeError, match="no time_base"):
+        video._decode_av("c.mp4", 2)
+
+
 def _fake_cv2(opened: bool = True, readable: bool = True) -> tuple[Any, list[float]]:
     import types
 
