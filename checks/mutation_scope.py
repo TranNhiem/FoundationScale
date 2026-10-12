@@ -159,8 +159,8 @@ PENDING_ENROLMENT: dict[str, str] = {
         "pin comparison or an unmasked tool-token logprob would be caught."
     ),
     "src/foundationscale/agentic_rl/verl_rewards.py": (
-        "FS music reward and tasks in verl's shapes (fail-closed on FS abstention): line-covered by "
-        "tests/agentic_rl/test_verl_rewards.py, but no mutation row yet."
+        "FS music reward and tasks in verl's shapes (fail-closed on FS abstention): "
+        "line-covered by tests/agentic_rl/test_verl_rewards.py, but no mutation row yet."
     ),
     "src/foundationscale/agentic_rl/stability.py": (
         "rollout-reward collapse guard (EMA, peak, best-k, stop/warn): line-covered by "
