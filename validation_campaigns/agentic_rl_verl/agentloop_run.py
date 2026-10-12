@@ -1,4 +1,5 @@
-# ruff: noqa: E501, ARG002, PTH  -- harness ported from verl tests/experimental/agent_loop (verl style kept)
+# Harness ported from verl tests/experimental/agent_loop; verl's style is kept as-is.
+# ruff: noqa: E501, ARG002, PTH100, PTH118, PTH120, PTH122, PTH123
 # Copyright 2024 Bytedance Ltd. and/or its affiliates
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
