@@ -15,7 +15,7 @@ from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 
 from foundationscale.agentic_rl.sandbox.build import build_image
-from foundationscale.agentic_rl.sandbox.enroot import EnrootSandbox, Runner, SandboxSpec
+from foundationscale.agentic_rl.sandbox.enroot import EnrootSandbox, Runner, SandboxSpec, SubprocessRunner
 
 _NAME_ALLOWED_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _MAX_NAME_LEN = 63
@@ -53,7 +53,8 @@ class EnrootEnvironment(BaseEnvironment):
         self._scratch_root = self._require_absolute_dir(scratch_root, "scratch_root")
         self._cpu_set = cpu_set
         self._build_timeout_s = build_timeout_s
-        self._runner = runner
+        # One runner for this environment's build and sandbox, so a cancelled start() can kill the build too
+        self._runner: Runner = runner if runner is not None else SubprocessRunner()
         self._sandbox: EnrootSandbox | None = None
 
     @staticmethod
@@ -92,7 +93,16 @@ class EnrootEnvironment(BaseEnvironment):
     # -- lifecycle ---------------------------------------------------------
 
     async def start(self, force_build: bool) -> None:
-        await asyncio.to_thread(self._start_sync, force_build)
+        try:
+            await asyncio.to_thread(self._start_sync, force_build)
+        except asyncio.CancelledError:
+            # Harbor times environment start out by cancelling (EnvironmentStartTimeoutError); an image build
+            # kept running in the thread, Harbor hung until the gate's own timeout killed it, and the killed
+            # build left its container behind (B2.1 R0 run r7). Kill it so the build's cleanup runs.
+            kill_all = getattr(self._runner, "kill_all", None)
+            if callable(kill_all):
+                kill_all()
+            raise
 
     def _start_sync(self, force_build: bool) -> None:
         self._validate_definition()

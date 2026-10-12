@@ -2128,3 +2128,18 @@ def test_workdir_creates_its_directory_like_docker(tmp_path: Path) -> None:
     _build(tmp_path, "FROM alpine\nWORKDIR /app\nRUN true\n", runner)
     assert runner.exported_root is not None
     assert (runner.exported_root / "app").is_dir()
+
+
+def test_build_container_names_are_unique_per_build(tmp_path: Path) -> None:
+    """A killed build left "build-<digest>" behind and the next build of the same Dockerfile failed
+    "File already exists" (B2.1 R0 run r7); each build now gets its own container name."""
+    names = []
+    for i in range(2):
+        runner = FakeRunner()
+        root = tmp_path / str(i)
+        root.mkdir()
+        _build(root, "FROM alpine\nRUN true\n", runner)
+        create = [a for a in runner.argvs() if a[:2] == ("enroot", "create")][0]
+        names.append(create[create.index("-n") + 1])
+    assert names[0] != names[1]
+    assert all(n.startswith("build-") for n in names)

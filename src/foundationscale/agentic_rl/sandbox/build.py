@@ -11,6 +11,7 @@ import posixpath
 import json
 import shlex
 import time
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -170,7 +171,9 @@ def build_image(
         f"{df_path.resolve()}|{context.resolve()}|{sorted((build_args or {}).items())}".encode()
     ).hexdigest()[:16]
     spec = SandboxSpec(
-        name=f"build-{digest}",
+        # unique per build: a killed build left "build-<digest>" behind and every later build of the same
+        # Dockerfile then failed "File already exists"; concurrent builds of one Dockerfile collided the same way
+        name=f"build-{digest}-{uuid.uuid4().hex[:8]}",
         image=base_image,
         data_root=data_root,
         image_store=image_store,

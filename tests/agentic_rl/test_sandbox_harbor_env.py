@@ -426,3 +426,30 @@ def test_cancelled_exec_kills_the_process_and_frees_the_thread(
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(verifier())
     assert released.is_set()
+
+
+def test_cancelled_start_kills_the_build_and_frees_the_thread(
+    harbor_env_module: Any, tmp_path: Path
+) -> None:
+    """Harbor's EnvironmentStartTimeoutError cancels start(); the in-flight build must be killed, not left
+    running in the thread until an outer timeout (B2.1 R0 run r7)."""
+    import threading
+
+    released = threading.Event()
+
+    class BlockingRunner:
+        def run(self, argv: Sequence[str], **_: Any) -> Any:
+            assert released.wait(10), "start was never killed"
+            return RunResult(returncode=-9, stdout="", stderr="killed")
+
+        def kill_all(self) -> None:
+            released.set()
+
+    env = _make_env(harbor_env_module, tmp_path, runner=BlockingRunner())
+
+    async def harbor() -> None:
+        await asyncio.wait_for(env.start(force_build=False), timeout=0.2)
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(harbor())
+    assert released.is_set()
