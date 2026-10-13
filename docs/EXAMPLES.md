@@ -17,6 +17,10 @@ What this documentation can state, because the source material names it, is:
 |---|---|
 | `examples/train_tiny.py` | the thinnest real FoundationScale training path, one screen |
 | `examples/data/toy_text.jsonl` | a 16-row toy corpus exposing a `text` column, so training needs no dataset download |
+| `examples/vlm-2xH200/`, `examples/speech-2xH200/` | end-to-end VLM and speech fine-tuning tutorials measured on two H200s |
+| `examples/A100_2GPU.md` | entry page for two GPUs of an A100-80GB node: environment, GPU hygiene, measured results |
+| `examples/llm-2xA100/` | text-only LLM LoRA SFT tutorial (Qwen2.5-7B-Instruct), measured on two A100s |
+| `examples/speech-2xA100/`, `examples/vlm-2xA100/` | the H200 speech and VLM tutorials re-measured on two A100s |
 
 The runnable gate example from README §10 is not a file under `examples/`; it lives in
 the README itself and in `foundationscale.gates.example`. The launchers and the harness
