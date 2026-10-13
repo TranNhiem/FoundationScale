@@ -53,6 +53,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -269,6 +270,23 @@ def _link_or_copy(src: Path, dst: Path) -> tuple[Literal["hardlink", "copy"], st
     return "hardlink", None
 
 
+# A shared /home (NFS) can report an existing directory as absent for a moment: on GB200 one such
+# blip at publish time refused a 25 h run at step 11 while the base model directory was intact.
+# A directory check is therefore retried briefly before it refuses; a genuinely missing directory
+# still refuses, after _FS_RETRY_ATTEMPTS checks.
+_FS_RETRY_ATTEMPTS = 5
+_FS_RETRY_SLEEP_S = 2.0
+
+
+def _is_dir_settled(path: Path) -> bool:
+    for attempt in range(_FS_RETRY_ATTEMPTS):
+        if path.is_dir():
+            return True
+        if attempt + 1 < _FS_RETRY_ATTEMPTS:
+            time.sleep(_FS_RETRY_SLEEP_S)
+    return False
+
+
 def complete_for_serving(
     publish_dir: str, base_model_dir: str, *, cache_dir: str
 ) -> ServableReport:
@@ -283,9 +301,9 @@ def complete_for_serving(
     where = "complete_for_serving"
     publish = Path(publish_dir)
     base = Path(base_model_dir)
-    if not publish.is_dir():
+    if not _is_dir_settled(publish):
         raise ServableRefusal(f"{where}: publish_dir {publish_dir!r} is not a directory")
-    if not base.is_dir():
+    if not _is_dir_settled(base):
         raise ServableRefusal(f"{where}: base_model_dir {base_model_dir!r} is not a directory")
 
     published_config = _read_json_object(publish / "config.json", where=f"{where}: publish_dir")
