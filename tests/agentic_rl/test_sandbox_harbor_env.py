@@ -36,6 +36,9 @@ class EnvironmentCapabilities:
 
     disable_internet: bool = False
     network_allowlist: bool = False
+    network_allowlist_hostnames: bool = False
+    network_allowlist_wildcard_hostnames: bool = False
+    dynamic_network_policy: bool = False
 
 
 class BaseEnvironment:
@@ -247,14 +250,13 @@ def test_type(harbor_env_module: Any) -> None:
     assert harbor_env_module.EnrootEnvironment.type() == "fs-enroot"
 
 
-def test_capabilities_disable_internet_without_allowlist(
-    harbor_env_module: Any, tmp_path: Path
-) -> None:
-    """capabilities disables internet and declares no allowlist support."""
-    env = _make_env(harbor_env_module, tmp_path)
-    capabilities = env.capabilities
-    assert capabilities.disable_internet is True
-    assert capabilities.network_allowlist is False
+def test_capabilities_declare_only_what_is_enforced(harbor_env_module: Any, tmp_path: Path) -> None:
+    """no-network, hostname and *.wildcard allowlists (egress proxy) and phase switches are enforced; IP/CIDR
+    entries are not declared, so Harbor rejects them rather than leaking access."""
+    caps = _make_env(harbor_env_module, tmp_path).capabilities
+    assert caps.disable_internet and caps.network_allowlist and caps.dynamic_network_policy
+    assert caps.network_allowlist_hostnames and caps.network_allowlist_wildcard_hostnames
+    assert not getattr(caps, "network_allowlist_ipv4_addresses", False)
 
 
 def test_validate_definition_with_docker_image(harbor_env_module: Any, tmp_path: Path) -> None:
@@ -508,3 +510,45 @@ def test_build_from_dockerfile_overrides_prebuilt_image(
     imported_prebuilt = any("docker://alexgshaw/task:20251031" in " ".join(map(str, c)) for c in runner.calls)
     assert bool(built) is expect_build
     assert imported_prebuilt is (not expect_build)
+
+
+
+@dataclass
+class _Policy:
+    network_mode: str
+    allowed_hosts: tuple[str, ...] = ()
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected"),
+    [
+        (None, ("public", ())),
+        (_Policy("no-network"), ("no-network", ())),
+        (_Policy("public", ("ignored.org",)), ("public", ())),
+        (_Policy("allowlist", ("registry.npmjs.org", "*.debian.org")), ("allowlist", ("registry.npmjs.org", "*.debian.org"))),
+    ],
+)
+def test_sandbox_policy_mapping(harbor_env_module: Any, policy, expected) -> None:
+    assert harbor_env_module._sandbox_policy(policy) == expected
+
+
+def test_start_isolates_the_network_and_bridges_endpoints(harbor_env_module: Any, tmp_path: Path) -> None:
+    """Task sandboxes always get their own netns (public included) plus the configured endpoint bridges."""
+    runner = FakeRunner()
+    env = _make_env(harbor_env_module, tmp_path, runner=runner, network_mode="public",
+                    endpoints="18811=127.0.0.1:18811")
+    asyncio.run(env.start(force_build=False))
+    spec = env._sandbox.spec
+    assert spec.isolate_network is True and spec.network == "public"
+    assert spec.endpoints == ("18811=127.0.0.1:18811",)
+
+
+def test_phase_switch_replaces_the_egress_policy(harbor_env_module: Any, tmp_path: Path) -> None:
+    import json as _json
+
+    runner = FakeRunner()
+    env = _make_env(harbor_env_module, tmp_path, runner=runner, network_mode="public")
+    asyncio.run(env.start(force_build=False))
+    asyncio.run(env._apply_network_policy(_Policy("allowlist", ("api.example.com",))))
+    policy = _json.loads(env._sandbox._policy_path().read_text())
+    assert policy == {"mode": "allowlist", "hosts": ["api.example.com"]}

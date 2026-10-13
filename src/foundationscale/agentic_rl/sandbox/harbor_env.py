@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import re
 import shlex
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,7 @@ class EnrootEnvironment(BaseEnvironment):
         build_timeout_s: float = 3600.0,
         build_from_dockerfile: bool | str = False,
         enroot_sysconf: str | None = None,
+        endpoints: str | Sequence[str] | None = None,
         runner: Runner | None = None,
         **kwargs: Any,
     ) -> None:
@@ -57,6 +59,11 @@ class EnrootEnvironment(BaseEnvironment):
         self._cpu_set = cpu_set
         self._build_timeout_s = build_timeout_s
         self._enroot_sysconf = enroot_sysconf or None
+        # "PORT=HOST:HOSTPORT[,...]": host services bridged into every task sandbox (e.g. the agent's local model
+        # endpoint at 127.0.0.1:18811); --ek passes one comma-separated string
+        if isinstance(endpoints, str):
+            endpoints = [e.strip() for e in endpoints.split(",") if e.strip()]
+        self._endpoints = tuple(endpoints or ())
         # Build from environment/Dockerfile even when the task names a prebuilt docker_image: Terminal-Bench 2.1's
         # prebuilt images are single-arch amd64, so GB200 (arm64) must rebuild them. --ek passes strings.
         self._build_from_dockerfile = (
@@ -82,7 +89,17 @@ class EnrootEnvironment(BaseEnvironment):
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
-        return EnvironmentCapabilities(disable_internet=True)
+        # Truthful flags only: no-network (no route out of the sandbox netns), allowlists of hostnames and
+        # *.wildcards (enforced by the per-sandbox egress proxy; proxy-unaware clients get no egress, never more),
+        # and runtime phase switches (atomic policy-file replace). IP/CIDR entries are not enforced, so Harbor
+        # rejects such tasks instead of leaking access.
+        return EnvironmentCapabilities(
+            disable_internet=True,
+            network_allowlist=True,
+            network_allowlist_hostnames=True,
+            network_allowlist_wildcard_hostnames=True,
+            dynamic_network_policy=True,
+        )
 
     # -- definition validation --------------------------------------------
 
@@ -121,7 +138,7 @@ class EnrootEnvironment(BaseEnvironment):
             docker_image = None
         image = "docker://" + docker_image if docker_image else self._build_image_sync(force_build)
         name = _sanitize_name(self.session_id)
-        network = "no-network" if self._network_disabled else "public"
+        network, hosts = _sandbox_policy(self.network_policy)
         memory_mb = getattr(self.task_env_config, "memory_mb", None)
         spec = SandboxSpec(
             name=name,
@@ -133,6 +150,9 @@ class EnrootEnvironment(BaseEnvironment):
             cpu_set=self._cpu_set,
             memory_mb=memory_mb,
             enroot_sysconf=self._enroot_sysconf,
+            isolate_network=True,
+            allowed_hosts=hosts,
+            endpoints=self._endpoints,
         )
         sandbox = EnrootSandbox(spec, runner=self._runner)
         sandbox.start()
@@ -164,6 +184,11 @@ class EnrootEnvironment(BaseEnvironment):
             enroot_sysconf=self._enroot_sysconf,
         )
         return str(out_sqsh)
+
+    async def _apply_network_policy(self, network_policy: Any) -> None:
+        """Harbor phase switch (agent / verifier policies): replace the running sandbox's egress policy."""
+        mode, hosts = _sandbox_policy(network_policy)
+        self._require_sandbox().set_policy(mode, hosts)
 
     async def stop(self, delete: bool) -> None:
         await asyncio.to_thread(self._stop_sync, delete)
@@ -233,3 +258,15 @@ class EnrootEnvironment(BaseEnvironment):
         if self._sandbox is None:
             raise RuntimeError("sandbox: expected started environment, got not-started")
         return self._sandbox
+
+
+def _sandbox_policy(policy: Any) -> tuple[str, tuple[str, ...]]:
+    """Harbor NetworkPolicy -> (sandbox network mode, allowed hosts)."""
+    if policy is None:
+        return "public", ()
+    mode = getattr(policy, "network_mode", "public")
+    mode = getattr(mode, "value", mode)
+    hosts = tuple(getattr(policy, "allowed_hosts", ()) or ())
+    if mode not in ("no-network", "public", "allowlist"):
+        raise ValueError(f"network_mode: expected no-network, public or allowlist, got {mode!r}")
+    return mode, hosts if mode == "allowlist" else ()
