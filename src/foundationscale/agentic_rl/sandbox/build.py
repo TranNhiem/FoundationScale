@@ -185,6 +185,11 @@ def build_image(
     _validate_steps(steps, dict(build_args or {}), build_args, context)
     sandbox = EnrootSandbox(spec, runner=runner if runner is not None else SubprocessRunner())
     sandbox.start()
+    # Docker resolves $VAR in ENV/WORKDIR/COPY/... against ARGs and the environment, including the base
+    # image's config env (enroot writes it to the rootfs /etc/environment). Without it,
+    # `ENV PATH=/x/bin:$PATH` kept a literal "$PATH", dropping /usr/local/bin (senior-fullstack: the node
+    # base image's `exec docker-entrypoint.sh` in /etc/rc was then "not found" and every RUN failed).
+    image_env = _read_image_env(sandbox.rootfs() / "etc" / "environment")
     try:
         for step in steps:
             instruction = step.instruction
@@ -195,7 +200,9 @@ def build_image(
                 raise SandboxRefusal(
                     f"line {step.lineno}: expected a supported instruction, got {instruction!r}"
                 )
-            argument = _substitute(step.argument, args)
+            # RUN text is expanded by the shell at run time (it receives the env), as in Docker
+            scope = args if instruction == "RUN" else {**args, **image_env, **env}
+            argument = _substitute(step.argument, scope)
             if instruction == "ARG":
                 _apply_arg(step, argument, args, build_args)
             elif instruction == "ENV":
@@ -277,9 +284,24 @@ def _validate_steps(
             _check_user(step, argument)
 
 
+def _read_image_env(path: Path) -> dict[str, str]:
+    """KEY=VALUE lines of an image's /etc/environment (as enroot writes the image config env)."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    for line in lines:
+        key, sep, value = line.strip().partition("=")
+        if sep and key and not key.startswith("#") and not any(c.isspace() for c in key):
+            out[key] = value.strip().strip('"')
+    return out
+
+
 def _substitute(text: str, args: Mapping[str, str]) -> str:
     out = text
-    for key, value in args.items():
+    # longest names first, so "$P" can never clobber "$PATH"
+    for key, value in sorted(args.items(), key=lambda kv: -len(kv[0])):
         out = out.replace("${" + key + "}", value)
         out = out.replace("$" + key, value)
     return out

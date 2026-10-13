@@ -32,6 +32,7 @@ class FakeRunner:
         self.exec_results: dict[str, tuple[int, str, str]] = {}
         self.data_root: str | None = None
         self.exported_root: Path | None = None
+        self.image_environment: str | None = None
 
     def run(
         self,
@@ -59,6 +60,8 @@ class FakeRunner:
             name = args[args.index("-n") + 1]
             root = Path(self.data_root or ".") / name
             (root / "etc").mkdir(parents=True, exist_ok=True)
+            if self.image_environment is not None:  # enroot writes the image config env here
+                (root / "etc" / "environment").write_text(self.image_environment)
             return RunResult(returncode=0, stdout="", stderr="")
         if sub == "start":
             name = args[-4]
@@ -2160,3 +2163,16 @@ def test_build_records_entrypoint(tmp_path: Path, line: str, expected) -> None:
     _build(tmp_path, f"FROM alpine\n{line}\nCMD [\"node\", \"server.js\"]\n", runner)
     meta = json.loads(next(tmp_path.rglob("fs-sandbox.json")).read_text())
     assert meta["entrypoint"] == expected
+
+
+def test_env_references_resolve_against_the_base_image_env(tmp_path: Path) -> None:
+    """`ENV PATH=/x/bin:$PATH` must extend the base image's PATH (Docker semantics), not keep a literal "$PATH"."""
+    runner = FakeRunner()
+    runner.image_environment = "PATH=/usr/local/bin:/usr/bin:/bin\nNODE_VERSION=22\n"
+    _build(tmp_path, "FROM node\nENV PATH=/opt/deps/.bin:$PATH \\\n    P=x\nRUN echo $P\n", runner)
+    meta = json.loads(next(tmp_path.rglob("fs-sandbox.json")).read_text())
+    assert meta["env"]["PATH"] == "/opt/deps/.bin:/usr/local/bin:/usr/bin:/bin"
+    assert meta["env"]["P"] == "x"
+    # RUN text is left to the shell (it receives the env), as in Docker
+    run = [a for a in runner.argvs() if a[:2] == ("enroot", "start")][-1]
+    assert run[-1].endswith("echo $P")
