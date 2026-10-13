@@ -51,7 +51,7 @@ reproduction evidence; the reproduced GR00T row used the real `nvidia/Cosmos-Rea
   speech transcription is pinned exactly as its owners wrote it.
 - **Integrated == reproduced.** Rungs: (a) bit-exact input parity + seeded-action parity — done for GR00T; (b) the
   published checkpoint evaluated through a harness — done for both (table §1); (c) an FS-run fine-tune or RL run that
-  reproduces the published number — done for GR00T fine-tuning (§4), openpi next (§7). The passing run becomes the upgrade regression.
+  reproduces the published number — done for GR00T (spatial) and openpi (all four suites) fine-tuning (§4). The passing run becomes the upgrade regression.
 
 ## 3. Modules
 
@@ -127,6 +127,22 @@ Measured: 20,000 steps × global batch 640 from the N1.7 base on one 4-GPU GB200
 SDPA, real Cosmos backbone), then `python -m foundationscale.vla.eval --backend gr00t --suite libero_spatial` with the
 GR00T protocol: step 12,000 191/200 = 95.5%; final step 20,000 **481/500 = 96.2%** (Wilson 94.1–97.6) vs published
 195/200 = 97.5% — gap 1.3 ≤ two-sample margin 2.6 pt. Same harness on NVIDIA's released checkpoint: 190/200.
+A second evaluation of the final checkpoint under the corrected GR00T protocol (720 env steps, seed 1): 197/200 = 98.5%.
+
+Rung (c), openpi fine-tune through the FS run spec — REPRODUCED 2026-10-13: `OpenPiFinetuneSpec(PUBLISHED_LIBERO_RECIPE)`
+(`pi05_libero`: batch 256, 30,000 steps from `pi05_base`) rendered into openpi's own `scripts/train.py` and run on one
+4-GPU GB200 tray (~2.0-2.7 s/step, ~19 h; norm stats from openpi's `compute_norm_stats.py`). The final checkpoint,
+evaluated with the FS harness under the openpi protocol (several runs per suite; openpi's fixed init states make
+seeds less than independent, so the pooled count is the evidence, not a CI over seeds):
+
+| suite | FS-trained checkpoint | published | tolerance (pooled n) | verdict |
+|---|---|---|---|---|
+| spatial | 495 + 491 = 986/1000 = 98.6% | 98.8% | 1.2 pt | REPRODUCED |
+| object | 489 + 488 + 494 = 1471/1500 = 98.1% | 98.2% | 1.4 pt | REPRODUCED |
+| goal | 481 + 486 + 488 = 1455/1500 = 97.0% | 98.0% | 1.5 pt | REPRODUCED (gap 1.0) |
+| libero_10 | 463 + 476 + 473 = 1412/1500 = 94.1% | 92.4% | 2.7 pt | REPRODUCED (above the card) |
+
+At 60% of the schedule (step 18,000) the same run already scored 494/500 = 98.8% on spatial.
 
 ## 5. Environment notes (aarch64 / Blackwell data-centre)
 
@@ -161,7 +177,7 @@ GR00T protocol: step 12,000 191/200 = 95.5%; final step 20,000 **481/500 = 96.2%
 - **GR00T rung (c) done, one seed**: the training run is not yet a registry row (its checkpoint is ours, not an upstream
   artifact), so the Level 3 regression still replays the published checkpoint. Scaling measured on the way: 1 GPU
   109 samples/s; 3 GPUs DDP 283 samples/s (87% efficiency); 4 GPUs ~400 samples/s (1.61 s per 640-sample step).
-- **openpi fine-tune** (Phase-1 T3, rung c) not started; the JAX → PyTorch conversion path is the prerequisite.
+- **GR00T rung (c) on the other suites**: libero_10 fine-tune running (2026-10-13); goal / object next.
 - **More suites**: only `libero_spatial` is reproduced; `libero_goal` (97.5), `libero_object` (98.45), `libero_long`
   (94.35), and openpi's goal/object/long (98.2/98.0/92.4) are the remaining published targets at the same row rules.
 - **RL entry in the registry**: verl-vla FPO evidence is reproduced within tolerance on one seed (2 GPU policy workers
