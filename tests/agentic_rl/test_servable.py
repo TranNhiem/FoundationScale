@@ -474,3 +474,50 @@ def test_link_or_copy_replaces_an_existing_destination(tmp_path: Path) -> None:
     assert reason is None
     assert dst.read_bytes() == b"new"
     assert dst.stat().st_ino == src.stat().st_ino
+
+
+@pytest.fixture
+def _no_fs_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    import foundationscale.agentic_rl.servable as servable_mod
+
+    monkeypatch.setattr(servable_mod, "_FS_RETRY_SLEEP_S", 0.0)
+
+
+def test_directory_check_rides_out_a_transient_nfs_blip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _no_fs_retry_sleep: None
+) -> None:
+    """An existing directory reported absent twice (an NFS blip) is still accepted."""
+    import foundationscale.agentic_rl.servable as servable_mod
+
+    real_is_dir = Path.is_dir
+    misses = {"left": 2}
+
+    def flaky_is_dir(self: Path) -> bool:
+        if self == tmp_path and misses["left"] > 0:
+            misses["left"] -= 1
+            return False
+        return real_is_dir(self)
+
+    monkeypatch.setattr(Path, "is_dir", flaky_is_dir)
+    assert servable_mod._is_dir_settled(tmp_path) is True
+    assert misses["left"] == 0
+
+
+def test_directory_check_still_refuses_a_missing_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _no_fs_retry_sleep: None
+) -> None:
+    """A genuinely missing directory is refused after every retry, with the path named."""
+    import foundationscale.agentic_rl.servable as servable_mod
+
+    calls = {"n": 0}
+    real_is_dir = Path.is_dir
+
+    def counting_is_dir(self: Path) -> bool:
+        calls["n"] += 1
+        return real_is_dir(self)
+
+    monkeypatch.setattr(Path, "is_dir", counting_is_dir)
+    missing = tmp_path / "gone"
+    with pytest.raises(servable_mod.ServableRefusal, match="gone"):
+        servable_mod.complete_for_serving(str(missing), str(tmp_path), cache_dir=str(tmp_path))
+    assert calls["n"] == servable_mod._FS_RETRY_ATTEMPTS
