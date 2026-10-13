@@ -459,6 +459,8 @@ class MegatronRLTrainer:
         from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
         from megatron.core.process_groups_config import ProcessGroupCollection
 
+        from foundationscale.rl.distributed import apply_fabric_from_environment
+
         if not dist.is_initialized():
             # Bind before the first collective: unbound ranks all share cuda:0, which NCCL
             # rejects as "invalid usage" at the optimizer's all_gather_object.
@@ -467,6 +469,7 @@ class MegatronRLTrainer:
             # waits in broadcast_rows; the 10-minute NCCL default killed a 2-GPU run
             # whose 800-prompt PRE eval outlasted it, so the wait must be bounded by
             # work, not by the watchdog.
+            apply_fabric_from_environment()
             dist.init_process_group(backend="nccl", timeout=datetime.timedelta(hours=2))
         world = dist.get_world_size()
         self.cfg.validate(world)

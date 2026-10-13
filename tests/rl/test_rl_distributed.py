@@ -24,6 +24,7 @@ from foundationscale.rl.distributed import (
     agree_max,
     all_reduce_mean,
     all_reduce_sum,
+    apply_fabric_from_environment,
     find_decoder_blocks,
     generate_kwargs_for,
     init_distributed,
@@ -480,3 +481,50 @@ def test_unwrapped_or_non_switchable_models_are_left_alone() -> None:
 
     dense_wrapped = type("FSDP_Dense", (_Dense,), {})()
     assert keep_experts_switchable(dense_wrapped) == []
+
+
+def test_fabric_from_environment_is_a_no_op_without_a_named_profile() -> None:
+    """No profile named: the launcher owns the fabric, nothing is written."""
+    env = {"LOCAL_RANK": "1", "NCCL_SOCKET_IFNAME": "ib0"}
+    assert apply_fabric_from_environment(env) == ()
+    assert env == {"LOCAL_RANK": "1", "NCCL_SOCKET_IFNAME": "ib0"}
+
+
+def test_fabric_from_environment_applies_the_named_profile() -> None:
+    """A named built-in profile reaches NCCL through apply_fabric_declaration."""
+    env = {"FS_CLUSTER_PROFILE": "local-single-node", "LOCAL_RANK": "1"}
+    lines = apply_fabric_from_environment(env)
+    assert env["NCCL_SOCKET_IFNAME"] == "lo"
+    assert env["NCCL_MNNVL_ENABLE"] == "0"
+    assert any(line.startswith("NCCL_IB_HCA") for line in lines)
+
+
+def test_fabric_from_environment_reads_a_profile_json(tmp_path: Path) -> None:
+    """FS_CLUSTER_PROFILE_PATH loads the JSON profile, and the operator's export still wins."""
+    from foundationscale.topology import profile_by_name
+
+    data = profile_by_name("local-single-node").to_dict()
+    data.update(name="site-json", nccl_socket_ifname="bond0")
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    env = {"FS_CLUSTER_PROFILE_PATH": str(path), "NCCL_MNNVL_ENABLE": "1", "LOCAL_RANK": "1"}
+    apply_fabric_from_environment(env)
+    assert env["NCCL_SOCKET_IFNAME"] == "bond0"
+    assert env["NCCL_MNNVL_ENABLE"] == "1"
+
+
+def test_fabric_from_environment_refuses_two_profile_sources(tmp_path: Path) -> None:
+    """Name and path together would leave the applied profile to undeclared precedence."""
+    env = {"FS_CLUSTER_PROFILE": "local-single-node", "FS_CLUSTER_PROFILE_PATH": "x.json"}
+    with pytest.raises(ValueError, match="name exactly one"):
+        apply_fabric_from_environment(env)
+
+
+def test_fabric_from_environment_announces_on_local_rank_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Each node's local rank 0 prints the decisions; other ranks stay quiet."""
+    apply_fabric_from_environment({"FS_CLUSTER_PROFILE": "local-single-node", "LOCAL_RANK": "0"})
+    assert "[distributed] fabric: NCCL_SOCKET_IFNAME=lo" in capsys.readouterr().err
+    apply_fabric_from_environment({"FS_CLUSTER_PROFILE": "local-single-node", "LOCAL_RANK": "3"})
+    assert capsys.readouterr().err == ""
