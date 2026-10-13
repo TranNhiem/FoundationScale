@@ -1233,6 +1233,7 @@ def build_config(raw_config: Mapping[str, Any], overrides: Mapping[str, str]) ->
         else None
     )
     _refuse_unconsumed_overrides(overrides, provenance)
+    _refuse_engine_policy_mismatch(sections["engine"], sections["policy"])
     return AgenticRLConfig(
         policy=sections["policy"],
         trainer=sections["trainer"],
@@ -1247,6 +1248,37 @@ def build_config(raw_config: Mapping[str, Any], overrides: Mapping[str, str]) ->
         provenance=provenance,
         stability=stability,
     )
+
+
+def _served_model(command: Sequence[str]) -> str | None:
+    """The model a vLLM (``serve <model>``) or SGLang (``--model[-path] <m>``) command
+    serves, or ``None`` when the command does not name one."""
+    toks = list(command)
+    for i, tok in enumerate(toks[:-1]):
+        if tok == "serve" and not toks[i + 1].startswith("-"):
+            return toks[i + 1]
+        if tok in ("--model", "--model-path"):
+            return toks[i + 1]
+    return None
+
+
+def _refuse_engine_policy_mismatch(engine: EngineConfig, policy: PolicyConfig) -> None:
+    """Refuse an engine command that serves a different model than the one trained.
+
+    Measured on GB200 (2026-10-13): a run template kept ``vllm serve <MiMo-9B>`` while
+    policy.model_path pointed at Gemma-4-E4B / Qwen3.5-4B. The trainer loaded one model,
+    the fleet sampled from another (Gemma-tokenized prompt ids decoded by MiMo's vocabulary
+    -> no parsable output), and the first weight push failed. Nothing refused it.
+    """
+    served = _served_model(engine.command)
+    if served is None or served == _MODEL_PATH_PLACEHOLDER:
+        return
+    if Path(served).expanduser() != Path(policy.model_path).expanduser():
+        raise AgenticConfigRefusal(
+            f"engine.command serves {served!r} but policy.model_path is "
+            f"{policy.model_path!r}: the fleet would sample from a different model than the one "
+            f"being trained. Name the same path, or use {_MODEL_PATH_PLACEHOLDER!r}."
+        )
 
 
 def load_config(path: str, raw_overrides: Sequence[str]) -> AgenticRLConfig:
