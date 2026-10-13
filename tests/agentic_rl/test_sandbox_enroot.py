@@ -964,3 +964,16 @@ def test_enroot_sysconf_reaches_every_enroot_call(tmp_path: Path) -> None:
 def test_enroot_sysconf_must_be_a_config_dir(tmp_path: Path) -> None:
     with pytest.raises(SandboxRefusal, match="enroot_sysconf"):
         make_spec(tmp_path, enroot_sysconf=str(tmp_path / "missing"))
+
+
+def test_isolated_sandbox_writes_proxy_config_for_sudo_and_apt(tmp_path: Path) -> None:
+    """sudo resets the env (TB 2.1 rstan-to-pystan's `sudo apt-get update` lost the proxy); apt reads its own config."""
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner, isolate_network=True)
+    (Path(sbx.rootfs()) / "etc" / "apt").mkdir(parents=True, exist_ok=True)
+    sbx.start()
+    keep = Path(sbx.rootfs()) / "etc" / "sudoers.d" / "fs-egress-proxy"
+    assert "env_keep" in keep.read_text() and "https_proxy" in keep.read_text()
+    assert (keep.stat().st_mode & 0o777) == 0o440
+    apt = (Path(sbx.rootfs()) / "etc" / "apt" / "apt.conf.d" / "95fs-egress-proxy").read_text()
+    assert 'Acquire::http::Proxy "http://127.0.0.1:3128";' in apt

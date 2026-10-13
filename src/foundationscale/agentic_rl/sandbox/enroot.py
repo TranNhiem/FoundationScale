@@ -380,6 +380,7 @@ class EnrootSandbox:
                                      "ip link set lo up 2>/dev/null; echo 0 > /proc/sys/net/ipv4/"
                                      f"ip_unprivileged_port_start 2>/dev/null; echo ready; exec sleep {_NETNS_HOLDER_MAX_S}"])
             if self.spec.isolate_network:
+                self._write_proxy_config()
                 self.set_policy(self.spec.network, self.spec.allowed_hosts)
                 sock = self._socket_path("egress")
                 self._helpers.append(spawn([sys.executable, str(Path(__file__).with_name("egress_proxy.py")),
@@ -394,6 +395,24 @@ class EnrootSandbox:
         self._started = True
 
     # -- network helpers ---------------------------------------------------
+
+    def _write_proxy_config(self) -> None:
+        """System-level proxy settings for clients that drop the env: sudo resets the environment (TB 2.1
+        rstan-to-pystan: `sudo apt-get update` -> "Temporary failure resolving ports.ubuntu.com"), and apt reads
+        its own config. Docker containers need neither because their egress is not proxied."""
+        root = Path(self.rootfs())
+        proxy = f"http://127.0.0.1:{_PROXY_PORT}"
+        sudoers = root / "etc" / "sudoers.d"
+        sudoers.mkdir(parents=True, exist_ok=True)
+        keep = root / "etc" / "sudoers.d" / "fs-egress-proxy"
+        keep.write_text('Defaults env_keep += "http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY"\n')
+        keep.chmod(0o440)
+        if (root / "etc" / "apt").is_dir():
+            conf = root / "etc" / "apt" / "apt.conf.d"
+            conf.mkdir(parents=True, exist_ok=True)
+            (conf / "95fs-egress-proxy").write_text(
+                f'Acquire::http::Proxy "{proxy}";\nAcquire::https::Proxy "{proxy}";\n'
+            )
 
     def _socket_path(self, role: str) -> Path:
         # AF_UNIX paths are limited to ~108 bytes and sandbox names are long, so sockets live in a short dir
