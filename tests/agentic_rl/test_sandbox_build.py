@@ -299,7 +299,7 @@ def test_success_writes_metadata_and_exports(tmp_path: Path) -> None:
         runner=runner,
     )
     metadata = json.loads((runner.exported_root / "etc" / "fs-sandbox.json").read_text())
-    assert metadata == {"env": {"A": "1"}, "workdir": "/w"}
+    assert metadata == {"env": {"A": "1"}, "workdir": "/w", "entrypoint": None}
     exports = [a for a in runner.argvs() if a[:2] == ("enroot", "export")]
     assert exports and exports[0][exports[0].index("-o") + 1] == str(out)
     assert out.exists()
@@ -2143,3 +2143,20 @@ def test_build_container_names_are_unique_per_build(tmp_path: Path) -> None:
         names.append(create[create.index("-n") + 1])
     assert names[0] != names[1]
     assert all(n.startswith("build-") for n in names)
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ('ENTRYPOINT ["/workspace/tools/bootstrap.sh"]', ["/workspace/tools/bootstrap.sh"]),
+        ("ENTRYPOINT /start.sh --serve", ["/bin/sh", "-c", "/start.sh --serve"]),
+        ('ENTRYPOINT ["/a"]\nENTRYPOINT ["/b", "x"]', ["/b", "x"]),
+        ("ENTRYPOINT []", None),
+    ],
+)
+def test_build_records_entrypoint(tmp_path: Path, line: str, expected) -> None:
+    """Harbor's Docker backend keeps ENTRYPOINT (only CMD is overridden); the builder records the effective one."""
+    runner = FakeRunner()
+    _build(tmp_path, f"FROM alpine\n{line}\nCMD [\"node\", \"server.js\"]\n", runner)
+    meta = json.loads(next(tmp_path.rglob("fs-sandbox.json")).read_text())
+    assert meta["entrypoint"] == expected

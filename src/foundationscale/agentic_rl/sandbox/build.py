@@ -27,11 +27,12 @@ from foundationscale.agentic_rl.sandbox.enroot import (
 )
 
 _STDERR_TAIL = 2000
+# CMD stays ignored: Harbor's Docker backend overrides it (`sh -c "sleep infinity"`) but keeps ENTRYPOINT.
 _IGNORED_INSTRUCTIONS = frozenset(
-    {"EXPOSE", "CMD", "ENTRYPOINT", "LABEL", "HEALTHCHECK", "VOLUME", "STOPSIGNAL"}
+    {"EXPOSE", "CMD", "LABEL", "HEALTHCHECK", "VOLUME", "STOPSIGNAL"}
 )
 _SUPPORTED_INSTRUCTIONS = (
-    frozenset({"FROM", "ARG", "ENV", "WORKDIR", "RUN", "COPY", "ADD", "USER"})
+    frozenset({"FROM", "ARG", "ENV", "WORKDIR", "RUN", "COPY", "ADD", "USER", "ENTRYPOINT"})
     | _IGNORED_INSTRUCTIONS
 )
 
@@ -164,6 +165,7 @@ def build_image(
         args.update(build_args)
     env: dict[str, str] = {}
     workdir = "/"
+    entrypoint: list[str] | None = None
     applied = 0
     started = time.monotonic()
 
@@ -214,9 +216,11 @@ def build_image(
                 _copy_step(sandbox, step, instruction, argument, context, workdir)
             elif instruction == "USER":
                 _check_user(step, argument)
+            elif instruction == "ENTRYPOINT":
+                entrypoint = _parse_entrypoint(step, argument)
             applied += 1
 
-        metadata = {"env": dict(env), "workdir": workdir}
+        metadata = {"env": dict(env), "workdir": workdir, "entrypoint": entrypoint}
         meta_path = sandbox.rootfs() / "etc" / "fs-sandbox.json"
         meta_path.parent.mkdir(parents=True, exist_ok=True)
         meta_path.write_text(json.dumps(metadata, sort_keys=True), encoding="utf-8")
@@ -337,6 +341,20 @@ def _parse_workdir(step: DockerfileStep, argument: str) -> str:
             f"line {step.lineno}: WORKDIR: expected a single path, got {argument!r}"
         )
     return argument
+
+
+def _parse_entrypoint(step: DockerfileStep, argument: str) -> list[str] | None:
+    """Docker ENTRYPOINT: exec form (JSON array) as-is, shell form via /bin/sh -c; empty clears it."""
+    stripped = argument.strip()
+    if stripped.startswith("["):
+        try:
+            parsed = json.loads(stripped)
+        except ValueError:
+            parsed = None
+        if not isinstance(parsed, list) or not all(isinstance(a, str) for a in parsed):
+            raise SandboxRefusal(f"line {step.lineno}: ENTRYPOINT: expected a JSON string array, got {argument!r}")
+        return parsed or None
+    return ["/bin/sh", "-c", stripped] if stripped else None
 
 
 def _check_user(step: DockerfileStep, argument: str) -> None:

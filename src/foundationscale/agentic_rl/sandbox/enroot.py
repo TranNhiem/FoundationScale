@@ -219,6 +219,7 @@ class EnrootSandbox:
         self._runner: Runner = runner if runner is not None else SubprocessRunner()
         self._started = False
         self._netns_pid: int | None = None
+        self.entrypoint: tuple[str, ...] | None = None  # the image's ENTRYPOINT, from build metadata
         self._image_path: str | None = None
         self._build_env: Mapping[str, str] = MappingProxyType({})
         self._build_workdir: str | None = None
@@ -309,8 +310,14 @@ class EnrootSandbox:
                 raise SandboxError(f"invalid build metadata {metadata}: bad 'env'")
             if workdir is not None and not isinstance(workdir, str):
                 raise SandboxError(f"invalid build metadata {metadata}: bad 'workdir'")
+            entrypoint = raw.get("entrypoint")
+            if entrypoint is not None and not (
+                isinstance(entrypoint, list) and all(isinstance(a, str) for a in entrypoint)
+            ):
+                raise SandboxError(f"invalid build metadata {metadata}: bad 'entrypoint'")
             self._build_env = MappingProxyType(dict(env))
             self._build_workdir = workdir
+            self.entrypoint = tuple(entrypoint) if entrypoint else None
         if self.spec.network == "no-network":
             # One network namespace for the sandbox's lifetime, as a Docker container has: every exec joins it.
             # A namespace per exec meant a service started by one exec (the oracle's mongod) was unreachable

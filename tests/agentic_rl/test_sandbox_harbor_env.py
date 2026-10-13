@@ -461,3 +461,30 @@ def test_cancelled_start_kills_the_build_and_frees_the_thread(
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(harbor())
     assert released.is_set()
+
+
+def test_start_launches_image_entrypoint_detached(harbor_env_module: Any, tmp_path: Path) -> None:
+    """Images whose ENTRYPOINT starts services (mongodb bootstrap.sh) get it run at start, detached, with
+    Harbor's `sh -c "sleep infinity"` arguments; images without one get no extra exec."""
+    runner = FakeRunner()
+    env = _make_env(harbor_env_module, tmp_path, runner=runner)
+
+    original_start = harbor_env_module.EnrootSandbox.start
+
+    def start_with_entrypoint(self):
+        original_start(self)
+        self.entrypoint = ("/workspace/tools/bootstrap.sh",)
+
+    harbor_env_module.EnrootSandbox.start = start_with_entrypoint
+    try:
+        asyncio.run(env.start(force_build=False))
+    finally:
+        harbor_env_module.EnrootSandbox.start = original_start
+    launches = [c for c in runner.calls if any("fs-entrypoint.log" in a for a in c)]
+    assert len(launches) == 1
+    assert "setsid nohup /workspace/tools/bootstrap.sh sh -c 'sleep infinity'" in launches[0][-1]
+
+    runner2 = FakeRunner()
+    env2 = _make_env(harbor_env_module, tmp_path / "b", runner=runner2)
+    asyncio.run(env2.start(force_build=False))
+    assert not [c for c in runner2.calls if any("fs-entrypoint.log" in a for a in c)]

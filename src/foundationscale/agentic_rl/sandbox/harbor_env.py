@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -127,6 +128,12 @@ class EnrootEnvironment(BaseEnvironment):
         # there; an enroot rootfs has to create Harbor's convention layout itself.
         for container_dir in _HARBOR_LOG_DIRS:
             sandbox.host_path(container_dir).mkdir(parents=True, exist_ok=True)
+        if sandbox.entrypoint:
+            # Harbor's Docker backend starts the container as ENTRYPOINT + `sh -c "sleep infinity"`; images
+            # whose entrypoint starts services (mongodb-schema-design's bootstrap.sh starts mongod) need it.
+            # Detached in the sandbox's shared network namespace, so later execs reach its services.
+            argv = shlex.join([*sandbox.entrypoint, "sh", "-c", "sleep infinity"])
+            sandbox.exec(f"setsid nohup {argv} > /tmp/fs-entrypoint.log 2>&1 < /dev/null &")
         self._sandbox = sandbox
 
     def _build_image_sync(self, force_build: bool) -> str:
