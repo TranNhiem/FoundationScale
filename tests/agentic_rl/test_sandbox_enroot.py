@@ -927,3 +927,19 @@ def test_image_import_is_serialized_and_reuses_a_concurrent_result(tmp_path: Pat
         t.join(10)
     assert peak == 1, "imports overlapped"
     assert sum(1 for c in runner.calls if c.argv[:2] == ("enroot", "import")) == 1, "waiters must reuse the image"
+
+
+def test_exec_uses_bash_when_the_image_has_it(tmp_path: Path) -> None:
+    """Harbor's Docker backend runs `bash -c`; pi's installer uses `set -o pipefail`, which dash rejects."""
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner)
+    sbx.start()
+    runner.calls.clear()
+    sbx.exec("true")
+    assert runner.calls[0].argv[-3] == "sh"  # no bash in the image
+    bash = Path(sbx.rootfs()) / "bin" / "bash"
+    bash.parent.mkdir(parents=True, exist_ok=True)
+    bash.write_text("")
+    runner.calls.clear()
+    sbx.exec("set -o pipefail; true")
+    assert runner.calls[0].argv[-3] == "bash"

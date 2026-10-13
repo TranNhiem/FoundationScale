@@ -398,7 +398,7 @@ class EnrootSandbox:
             argv += ["--env", f"{key}={value}"]
         argv += [
             self.spec.name,
-            "sh",
+            self._shell(),
             "-c",
             f"cd {shlex.quote(workdir)} && {command}",
         ]
@@ -479,6 +479,12 @@ class EnrootSandbox:
         self._started = False
 
     # -- paths -------------------------------------------------------------
+
+    def _shell(self) -> str:
+        """bash when the image has it (Harbor's Docker backend runs every exec as `bash -c`; agent installers use
+        `set -o pipefail`, which dash rejects), else sh for bash-less images such as Alpine."""
+        root = Path(self.rootfs())
+        return "bash" if (root / "bin" / "bash").exists() or (root / "usr" / "bin" / "bash").exists() else "sh"
 
     def _image_env_defines(self, name: str) -> bool:
         """True if the image's own environment (enroot writes it to the rootfs /etc/environment) sets ``name``."""
