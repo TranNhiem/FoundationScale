@@ -51,6 +51,7 @@ __all__ = (
     "agree_max",
     "all_reduce_mean",
     "all_reduce_sum",
+    "apply_fabric_from_environment",
     "barrier",
     "destroy",
     "find_decoder_blocks",
@@ -155,6 +156,47 @@ def _default_single_device() -> torch.device:
     return torch.device("cpu")
 
 
+def apply_fabric_from_environment(environ: Any = None) -> tuple[str, ...]:
+    """Apply a cluster profile's fabric declaration before NCCL starts, if one is named.
+
+    The training plane takes its ClusterProfile from the CLI; the RL entry points have no
+    such flag, so multi-node RL launchers exported NCCL_SOCKET_IFNAME, NCCL_IB_HCA and
+    NCCL_MNNVL_ENABLE by hand -- and an unpinned NCCL_IB_HCA across two GB200 trays paired
+    an InfiniBand HCA with a RoCE one and died in the first large collective. Naming a
+    profile here hands those three decisions to ``topology.apply_fabric_declaration``,
+    which discovers the InfiniBand ports and checks for the IMEX daemon on THIS node.
+
+    ``FS_CLUSTER_PROFILE`` names a built-in profile; ``FS_CLUSTER_PROFILE_PATH`` points at a
+    profile JSON. Neither set -> nothing is applied and ``()`` is returned (the launcher
+    owns the fabric, as before). Both set -> refused: two sources would make the applied
+    profile depend on precedence nobody declared. Operator exports always win inside
+    ``apply_fabric_declaration``. Must run before ``init_process_group``: NCCL reads its
+    environment when the communicator is built.
+    """
+    from foundationscale.topology import (
+        ClusterProfile,
+        apply_fabric_declaration,
+        profile_by_name,
+    )
+
+    env = os.environ if environ is None else environ
+    name = (env.get("FS_CLUSTER_PROFILE") or "").strip()
+    path = (env.get("FS_CLUSTER_PROFILE_PATH") or "").strip()
+    if name and path:
+        raise ValueError(
+            f"FS_CLUSTER_PROFILE={name!r} and FS_CLUSTER_PROFILE_PATH={path!r} are both set; "
+            "name exactly one cluster profile"
+        )
+    if not name and not path:
+        return ()
+    profile = ClusterProfile.from_json(path) if path else profile_by_name(name)
+    lines = apply_fabric_declaration(profile, env)
+    if str(env.get("LOCAL_RANK", "0")) == "0":
+        for line in lines:
+            print(f"[distributed] fabric: {line}", file=sys.stderr)
+    return lines
+
+
 def init_distributed(sharding: str) -> DistContext:
     """Bring up the process group declared by ``sharding``, or refuse.
 
@@ -205,6 +247,7 @@ def init_distributed(sharding: str) -> DistContext:
             "sharding requires CUDA: the process group backend is 'nccl' and "
             "no CUDA device is visible"
         )
+    apply_fabric_from_environment()
     dist.init_process_group("nccl", timeout=_collective_timeout())
     torch.cuda.set_device(local_rank)
     return DistContext(
