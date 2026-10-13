@@ -598,3 +598,9 @@ def test_stability_section_refuses_unknown_keys() -> None:
     raw["stability"] = {"best_kk": 2}
     with pytest.raises(AgenticConfigRefusal):
         build_config(raw, {})
+
+
+def test_harness_accepts_tools_none() -> None:
+    """harness.tools 'none' is declared and recorded (prompts render without the schema)."""
+    raw = _raw_config(harness={"parser": "qwen_xml", "tools": "none"})
+    assert build_config(raw, {}).harness.tools == "none"

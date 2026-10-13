@@ -309,6 +309,7 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
         parser=_make_parser(config.harness.parser),
         tokenizer=chat_tokenizer,
         sampling=_sampling_params(config),
+        advertise_tools=config.harness.tools == "default",
     )
     fleet = EngineFleet(servers=(EngineServer(_engine_server_spec(config)),))
     reward = MusicRewardFn(scorer=_music_reward(config), decode=chat_tokenizer.decode)

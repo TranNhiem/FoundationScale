@@ -333,7 +333,7 @@ class EnvConfig:
 class HarnessConfig:
     parser: Literal["qwen_xml", "hermes_json"]
     name: str = "native_tool_loop"
-    tools: Literal["default"] = "default"
+    tools: Literal["default", "none"] = "default"
 
 
 @dataclass(frozen=True)
@@ -950,12 +950,13 @@ def _build_harness(
         required=False,
         provenance=provenance,
     )
-    if tools != "default":
+    if tools not in ("default", "none"):
         raise AgenticConfigRefusal(
-            f"harness.tools: is {_described(tools)}, but 'default' is the only tool "
-            f"registry this plane builds"
+            f"harness.tools: is {_described(tools)}, expected 'default' (advertise the tool "
+            f"registry in the prompt) or 'none' (render prompts without the tool schema)"
         )
-    return HarnessConfig(name=name, parser=parser, tools="default")
+    tools_mode: Literal["default", "none"] = tools
+    return HarnessConfig(name=name, parser=parser, tools=tools_mode)
 
 
 def _build_budget(
