@@ -552,3 +552,15 @@ def test_phase_switch_replaces_the_egress_policy(harbor_env_module: Any, tmp_pat
     asyncio.run(env._apply_network_policy(_Policy("allowlist", ("api.example.com",))))
     policy = _json.loads(env._sandbox._policy_path().read_text())
     assert policy == {"mode": "allowlist", "hosts": ["api.example.com"]}
+
+
+def test_restart_of_same_session_gets_a_fresh_container_name(harbor_env_module: Any, tmp_path: Path) -> None:
+    """Harbor retries reuse the session id; the retry's container must not collide with the earlier attempt's."""
+    names = []
+    for i in range(2):
+        runner = FakeRunner()
+        env = _make_env(harbor_env_module, tmp_path / str(i), runner=runner, session_id="task__abc")
+        asyncio.run(env.start(force_build=False))
+        names.append(env._sandbox.spec.name)
+    assert names[0] != names[1]
+    assert all(n.startswith("task__abc-") and len(n) <= 63 for n in names)

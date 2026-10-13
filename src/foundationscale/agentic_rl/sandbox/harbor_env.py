@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import re
 import shlex
+import uuid
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -137,7 +138,9 @@ class EnrootEnvironment(BaseEnvironment):
         if self._build_from_dockerfile and (self.environment_dir / "Dockerfile").is_file():
             docker_image = None
         image = "docker://" + docker_image if docker_image else self._build_image_sync(force_build)
-        name = _sanitize_name(self.session_id)
+        # unique per start: Harbor retries a failed trial (-r) with the same session id, and the earlier attempt's
+        # container made enroot create fail "File already exists" (TB 2.1 winning-avg-corewars)
+        name = f"{_sanitize_name(self.session_id)[:_MAX_NAME_LEN - 9]}-{uuid.uuid4().hex[:8]}"
         network, hosts = _sandbox_policy(self.network_policy)
         memory_mb = getattr(self.task_env_config, "memory_mb", None)
         spec = SandboxSpec(
