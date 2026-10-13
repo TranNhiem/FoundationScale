@@ -45,6 +45,7 @@ class EnrootEnvironment(BaseEnvironment):
         scratch_root: str | Path,
         cpu_set: tuple[int, ...] | None = None,
         build_timeout_s: float = 3600.0,
+        build_from_dockerfile: bool | str = False,
         runner: Runner | None = None,
         **kwargs: Any,
     ) -> None:
@@ -54,6 +55,12 @@ class EnrootEnvironment(BaseEnvironment):
         self._scratch_root = self._require_absolute_dir(scratch_root, "scratch_root")
         self._cpu_set = cpu_set
         self._build_timeout_s = build_timeout_s
+        # Build from environment/Dockerfile even when the task names a prebuilt docker_image: Terminal-Bench 2.1's
+        # prebuilt images are single-arch amd64, so GB200 (arm64) must rebuild them. --ek passes strings.
+        self._build_from_dockerfile = (
+            build_from_dockerfile if isinstance(build_from_dockerfile, bool)
+            else str(build_from_dockerfile).strip().lower() in ("1", "true", "yes")
+        )
         # One runner for this environment's build and sandbox, so a cancelled start() can kill the build too
         self._runner: Runner = runner if runner is not None else SubprocessRunner()
         self._sandbox: EnrootSandbox | None = None
@@ -108,6 +115,8 @@ class EnrootEnvironment(BaseEnvironment):
     def _start_sync(self, force_build: bool) -> None:
         self._validate_definition()
         docker_image = self._docker_image()
+        if self._build_from_dockerfile and (self.environment_dir / "Dockerfile").is_file():
+            docker_image = None
         image = "docker://" + docker_image if docker_image else self._build_image_sync(force_build)
         name = _sanitize_name(self.session_id)
         network = "no-network" if self._network_disabled else "public"

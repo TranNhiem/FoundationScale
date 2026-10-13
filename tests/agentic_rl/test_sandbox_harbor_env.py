@@ -211,6 +211,7 @@ def _make_env(
     docker_image: str | None = "python:3.12",
     memory_mb: int | None = None,
     runner: FakeRunner | None = None,
+    **extra: Any,
 ) -> Any:
     """Build an EnrootEnvironment with FS directories rooted under tmp_path."""
     environment_dir = tmp_path / "environment"
@@ -231,6 +232,7 @@ def _make_env(
         image_store=str(image_store),
         scratch_root=str(scratch_root),
         runner=runner,
+        **extra,
     )
 
 
@@ -488,3 +490,21 @@ def test_start_launches_image_entrypoint_detached(harbor_env_module: Any, tmp_pa
     env2 = _make_env(harbor_env_module, tmp_path / "b", runner=runner2)
     asyncio.run(env2.start(force_build=False))
     assert not [c for c in runner2.calls if any("fs-entrypoint.log" in a for a in c)]
+
+
+@pytest.mark.parametrize(("flag", "expect_build"), [(True, True), ("true", True), ("1", True), ("false", False)])
+def test_build_from_dockerfile_overrides_prebuilt_image(
+    harbor_env_module: Any, tmp_path: Path, flag, expect_build: bool
+) -> None:
+    """Terminal-Bench 2.1 names amd64-only prebuilt images; on arm64 the Dockerfile must be built instead."""
+    runner = FakeRunner()
+    env = _make_env(harbor_env_module, tmp_path, runner=runner, docker_image="alexgshaw/task:20251031",
+                    build_from_dockerfile=flag)
+    (tmp_path / "environment" / "Dockerfile").write_text("FROM alpine\n")
+    built: list[bool] = []
+    (tmp_path / "built.sqsh").write_bytes(b"sqsh")
+    env._build_image_sync = lambda force_build: built.append(force_build) or str(tmp_path / "built.sqsh")
+    asyncio.run(env.start(force_build=False))
+    imported_prebuilt = any("docker://alexgshaw/task:20251031" in " ".join(map(str, c)) for c in runner.calls)
+    assert bool(built) is expect_build
+    assert imported_prebuilt is (not expect_build)

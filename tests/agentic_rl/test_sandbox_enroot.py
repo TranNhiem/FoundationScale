@@ -896,3 +896,34 @@ def test_subprocess_runner_spawn_waits_for_ready_and_refuses_silence() -> None:
         runner.terminate(pid)
     with pytest.raises(SandboxError, match="expected 'ready'"):
         runner.spawn(["sleep", "30"], ready_timeout_s=0.5)
+
+
+def test_image_import_is_serialized_and_reuses_a_concurrent_result(tmp_path: Path) -> None:
+    """enroot's layer cache races on concurrent imports; imports take one file lock, and a waiter reuses the image."""
+    import threading
+    import time
+
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def on_run(call: FakeCall) -> None:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.2)
+        Path(call.argv[3]).write_text("sqsh")
+        with lock:
+            active -= 1
+
+    runner = FakeRunner()
+    runner.on_run = on_run
+    boxes = [make_sandbox(tmp_path, runner, name=f"box{i}") for i in range(3)]
+    threads = [threading.Thread(target=b.image_path) for b in boxes]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert peak == 1, "imports overlapped"
+    assert sum(1 for c in runner.calls if c.argv[:2] == ("enroot", "import")) == 1, "waiters must reuse the image"

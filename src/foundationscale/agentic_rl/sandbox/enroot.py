@@ -7,6 +7,7 @@ tests can substitute a fake.
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -247,6 +248,18 @@ class EnrootSandbox:
         if Path(path).exists():
             return path
         Path(self.spec.image_store).mkdir(parents=True, exist_ok=True)
+        # enroot's per-user layer cache is not safe for concurrent imports that share layers (two trials pulling
+        # ubuntu:24.04 at once: "mv: not replacing .../enroot-cache/<layer>"), so imports are serialized with a
+        # file lock that covers threads and separate Harbor processes alike; an importer that waited reuses the
+        # image a concurrent one already produced.
+        Path(self.spec.data_root).mkdir(parents=True, exist_ok=True)
+        with open(Path(self.spec.data_root) / ".enroot-import.lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if Path(path).exists():
+                return path
+            return self._import_locked(image, path)
+
+    def _import_locked(self, image: str, path: str) -> str:
         # A private temp name per import: concurrent sandboxes sharing a base image (R0 gate workers) each
         # wrote and deleted one shared "<digest>.sqsh.partial", so mksquashfs read the other's half-written
         # file. Each importer now writes its own file; the atomic replace below makes the last complete one win.
