@@ -188,8 +188,8 @@ def test_start_creates_scratch_and_calls_enroot_create(tmp_path: Path) -> None:
     call = runner.calls[0]
     assert call.argv == ("enroot", "create", "-n", "sbx1", sbx.image_path())
     assert call.env == {"ENROOT_DATA_PATH": str(tmp_path / "data")}
-    scratch = tmp_path / "scratch" / "sbx1" / "tmp"
-    assert scratch.is_dir()
+    assert (tmp_path / "scratch" / "sbx1").is_dir()
+    assert (tmp_path / "data" / "sbx1" / "tmp").is_dir()
 
 
 def test_start_twice_refused(tmp_path: Path) -> None:
@@ -277,16 +277,19 @@ def test_start_refuses_when_memory_scope_unavailable(tmp_path: Path) -> None:
         sbx.start()
 
 
-def test_exec_mounts_scratch_over_tmp(tmp_path: Path) -> None:
+def test_tmp_is_in_the_rootfs_not_a_separate_mount(tmp_path: Path) -> None:
+    """Docker's /tmp is on the container filesystem; a bind-mount made rename() into /tmp fail with EXDEV
+    (TB 2.1 path-tracing-reverse: "Invalid cross-device link")."""
     runner = FakeRunner()
     sbx = import_image(tmp_path, runner)
     sbx.start()
     runner.calls.clear()
     sbx.exec("true")
     argv = runner.calls[0].argv
-    scratch = tmp_path / "scratch" / "sbx1" / "tmp"
-    assert "--mount" in argv
-    assert f"{scratch}:/tmp" in argv
+    assert not any(a.endswith(":/tmp") for a in argv)
+    tmp = Path(sbx.rootfs()) / "tmp"
+    assert tmp.is_dir() and (tmp.stat().st_mode & 0o7777) == 0o1777
+    assert sbx.host_path("/tmp/x") == (tmp / "x").resolve()
 
 
 def test_exec_env_precedence(tmp_path: Path) -> None:
@@ -331,11 +334,10 @@ def test_exec_timeout_returns_124(tmp_path: Path) -> None:
     assert runner.calls[-1].timeout_s == 1.0
 
 
-def test_host_path_maps_tmp_into_scratch(tmp_path: Path) -> None:
+def test_host_path_maps_tmp_into_the_rootfs(tmp_path: Path) -> None:
     sbx = import_image(tmp_path, FakeRunner())
     sbx.start()
-    scratch = tmp_path / "scratch" / "sbx1" / "tmp"
-    assert sbx.host_path("/tmp/x") == scratch / "x"
+    assert sbx.host_path("/tmp/x") == tmp_path / "data" / "sbx1" / "tmp" / "x"
     assert sbx.host_path("/etc/hosts") == tmp_path / "data" / "sbx1" / "etc" / "hosts"
 
 
@@ -943,3 +945,22 @@ def test_exec_uses_bash_when_the_image_has_it(tmp_path: Path) -> None:
     runner.calls.clear()
     sbx.exec("set -o pipefail; true")
     assert runner.calls[0].argv[-3] == "bash"
+
+
+def test_enroot_sysconf_reaches_every_enroot_call(tmp_path: Path) -> None:
+    """A site tmpfs over /tmp (separate fs, mode 755) broke rename into /tmp; a sysconf copy without it is opt-in."""
+    conf = tmp_path / "sysconf"
+    conf.mkdir()
+    (conf / "enroot.conf").write_text("")
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner, enroot_sysconf=str(conf))
+    sbx.start()
+    sbx.exec("true")
+    sbx.stop(delete=True)
+    enroot_calls = [c for c in runner.calls if "enroot" in c.argv and c.env is not None]
+    assert enroot_calls and all(c.env.get("ENROOT_SYSCONF_PATH") == str(conf) for c in enroot_calls)
+
+
+def test_enroot_sysconf_must_be_a_config_dir(tmp_path: Path) -> None:
+    with pytest.raises(SandboxRefusal, match="enroot_sysconf"):
+        make_spec(tmp_path, enroot_sysconf=str(tmp_path / "missing"))

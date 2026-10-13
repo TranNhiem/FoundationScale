@@ -46,6 +46,7 @@ class EnrootEnvironment(BaseEnvironment):
         cpu_set: tuple[int, ...] | None = None,
         build_timeout_s: float = 3600.0,
         build_from_dockerfile: bool | str = False,
+        enroot_sysconf: str | None = None,
         runner: Runner | None = None,
         **kwargs: Any,
     ) -> None:
@@ -55,6 +56,7 @@ class EnrootEnvironment(BaseEnvironment):
         self._scratch_root = self._require_absolute_dir(scratch_root, "scratch_root")
         self._cpu_set = cpu_set
         self._build_timeout_s = build_timeout_s
+        self._enroot_sysconf = enroot_sysconf or None
         # Build from environment/Dockerfile even when the task names a prebuilt docker_image: Terminal-Bench 2.1's
         # prebuilt images are single-arch amd64, so GB200 (arm64) must rebuild them. --ek passes strings.
         self._build_from_dockerfile = (
@@ -130,6 +132,7 @@ class EnrootEnvironment(BaseEnvironment):
             network=network,
             cpu_set=self._cpu_set,
             memory_mb=memory_mb,
+            enroot_sysconf=self._enroot_sysconf,
         )
         sandbox = EnrootSandbox(spec, runner=self._runner)
         sandbox.start()
@@ -158,6 +161,7 @@ class EnrootEnvironment(BaseEnvironment):
             scratch_root=str(self._scratch_root),
             runner=self._runner,
             timeout_s=self._build_timeout_s,
+            enroot_sysconf=self._enroot_sysconf,
         )
         return str(out_sqsh)
 

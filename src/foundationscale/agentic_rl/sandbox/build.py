@@ -108,6 +108,7 @@ def build_image(
     runner: Runner | None = None,
     build_args: Mapping[str, str] | None = None,
     timeout_s: float = 3600.0,
+    enroot_sysconf: str | None = None,
 ) -> BuildReport:
     """Build a ``.sqsh`` image from a Dockerfile subset inside ``context_dir``."""
     df_path = Path(dockerfile)
@@ -181,6 +182,7 @@ def build_image(
         image_store=image_store,
         scratch_root=scratch_root,
         network="public",
+        enroot_sysconf=enroot_sysconf,
     )
     _validate_steps(steps, dict(build_args or {}), build_args, context)
     sandbox = EnrootSandbox(spec, runner=runner if runner is not None else SubprocessRunner())
@@ -236,7 +238,7 @@ def build_image(
         export_runner: Runner = runner if runner is not None else SubprocessRunner()
         result = export_runner.run(
             ["enroot", "export", "-o", str(out_path), spec.name],
-            env={"ENROOT_DATA_PATH": data_root},
+            env={"ENROOT_DATA_PATH": data_root, **({"ENROOT_SYSCONF_PATH": enroot_sysconf} if enroot_sysconf else {})},
             timeout_s=timeout_s,
         )
         if result.returncode != 0:

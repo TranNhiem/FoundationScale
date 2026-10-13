@@ -173,10 +173,19 @@ class SandboxSpec:
     memory_mb: int | None = None
     env: Mapping[str, str] = field(default_factory=dict)
     workdir: str = "/"
+    # Optional enroot config dir (ENROOT_SYSCONF_PATH) for all enroot calls: a copy of /etc/enroot that drops the
+    # site's tmpfs over /tmp (mode 755, a separate fs: rename into /tmp failed EXDEV; Docker's /tmp is the container fs)
+    enroot_sysconf: str | None = None
 
     def __post_init__(self) -> None:
         if not _NAME_RE.match(self.name):
             raise SandboxRefusal(f"name: expected [A-Za-z0-9_.-]{{1,63}}, got {self.name!r}")
+        if self.enroot_sysconf is not None and not (
+            self.enroot_sysconf.startswith("/") and Path(self.enroot_sysconf, "enroot.conf").is_file()
+        ):
+            raise SandboxRefusal(
+                f"enroot_sysconf: expected an absolute enroot config dir with enroot.conf, got {self.enroot_sysconf!r}"
+            )
         for field_name in ("data_root", "image_store", "scratch_root"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not Path(value).is_absolute():
@@ -266,7 +275,7 @@ class EnrootSandbox:
         partial = f"{path}.{uuid.uuid4().hex}.partial"
         result = self._runner.run(
             ["enroot", "import", "-o", partial, image],
-            env={"ENROOT_DATA_PATH": self.spec.data_root},
+            env=self._enroot_env(),
         )
         if result.returncode != 0:
             if Path(partial).exists():
@@ -299,14 +308,19 @@ class EnrootSandbox:
                 )
         result = self._runner.run(
             ["enroot", "create", "-n", self.spec.name, image_path],
-            env={"ENROOT_DATA_PATH": self.spec.data_root},
+            env=self._enroot_env(),
         )
         if result.returncode != 0:
             raise SandboxError(
                 f"enroot create failed for {self.spec.name!r} (exit {result.returncode}): "
                 f"{result.stderr[-_STDERR_TAIL:]}"
             )
-        Path(self._scratch_tmp()).mkdir(parents=True, exist_ok=True)
+        # /tmp lives in the container's own (writable) rootfs, as in Docker. A scratch bind-mount over /tmp made
+        # rename(2) into /tmp cross filesystems (TB 2.1 path-tracing-reverse: "Invalid cross-device link").
+        tmp = Path(self.rootfs()) / "tmp"
+        tmp.mkdir(parents=True, exist_ok=True)
+        tmp.chmod(0o1777)
+        (Path(self.spec.scratch_root) / self.spec.name).mkdir(parents=True, exist_ok=True)  # per-sandbox host scratch
         metadata = Path(self.rootfs()) / "etc" / "fs-sandbox.json"
         if metadata.is_file():
             try:
@@ -391,8 +405,6 @@ class EnrootSandbox:
             # privilege"; no-network execs were root only by accident of the outer `unshare -r`.
             "--root",
             "--rw",
-            "--mount",
-            f"{self._scratch_tmp()}:/tmp",
         ]
         for key, value in merged.items():
             argv += ["--env", f"{key}={value}"]
@@ -407,7 +419,7 @@ class EnrootSandbox:
             # No login shell (enroot defaults to one): the image's /etc/profile then reset PATH, dropping the
             # image ENV PATH (e.g. golang's /usr/local/go/bin -> "go: not found"). Docker never runs a login shell.
             # An empty value means "default" to enroot, so it must be "no".
-            env={"ENROOT_DATA_PATH": self.spec.data_root, "ENROOT_LOGIN_SHELL": "no"},
+            env={**self._enroot_env(), "ENROOT_LOGIN_SHELL": "no"},
             timeout_s=timeout_s,
         )
         return_code = 124 if result.timed_out else result.returncode
@@ -466,7 +478,7 @@ class EnrootSandbox:
         if delete and self._started:
             result = self._runner.run(
                 ["enroot", "remove", "-f", self.spec.name],
-                env={"ENROOT_DATA_PATH": self.spec.data_root},
+                env=self._enroot_env(),
             )
             if result.returncode != 0:
                 raise SandboxError(
@@ -479,6 +491,12 @@ class EnrootSandbox:
         self._started = False
 
     # -- paths -------------------------------------------------------------
+
+    def _enroot_env(self) -> dict[str, str]:
+        env = {"ENROOT_DATA_PATH": self.spec.data_root}
+        if self.spec.enroot_sysconf:
+            env["ENROOT_SYSCONF_PATH"] = self.spec.enroot_sysconf
+        return env
 
     def _shell(self) -> str:
         """bash when the image has it (Harbor's Docker backend runs every exec as `bash -c`; agent installers use
@@ -504,12 +522,8 @@ class EnrootSandbox:
             )
         if not container_path.startswith("/"):
             raise SandboxRefusal(f"container_path: expected absolute path, got {container_path!r}")
-        if container_path == "/tmp" or container_path.startswith("/tmp/"):
-            root = Path(self._scratch_tmp())
-            rel = container_path[len("/tmp") :].lstrip("/")
-        else:
-            root = self.rootfs()
-            rel = container_path.lstrip("/")
+        root = self.rootfs()
+        rel = container_path.lstrip("/")
         resolved_root = root.resolve()
         resolved = (resolved_root / rel).resolve() if rel else resolved_root
         if resolved != resolved_root and resolved_root not in resolved.parents:
@@ -518,9 +532,6 @@ class EnrootSandbox:
                 f"{container_path!r} resolving to {resolved}"
             )
         return resolved
-
-    def _scratch_tmp(self) -> str:
-        return str(Path(self.spec.scratch_root) / self.spec.name / "tmp")
 
     # -- transfer ----------------------------------------------------------
 
