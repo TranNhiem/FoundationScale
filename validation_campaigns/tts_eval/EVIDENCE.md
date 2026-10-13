@@ -33,6 +33,35 @@ Ground truth of each split scored with `--gt` (reference: CosyVoice README, Seed
 Every row scored, none missing; all four numbers match the published values to rounding. The harness
 is accepted for T1 (Qwen3-TTS and VoxCPM2 reproductions).
 
+## T1: reproducing the published Seed-TTS numbers (2026-10-12)
+
+Decode-only, each model in its own worker venv (`cluster/build_tts_qwen.sh`, `build_tts_voxcpm.sh`),
+scored by the T0 harness. Tolerance fixed in advance: +-0.3 WER/CER, +-1.0 SIM.
+
+| model | split | ours WER/CER | published | SIM (ours / published) | verdict |
+|---|---|---|---|---|---|
+| VoxCPM2 | test-en | 1.706 | 1.84 | 75.0 / 75.3 | reproduced |
+| VoxCPM2 | test-zh | 0.946 | 0.97 | 79.22 / 79.5 | reproduced |
+| Qwen3-TTS-12Hz-1.7B-Base | test-zh | 0.959 | 0.77 | 76.91 / - | reproduced |
+| Qwen3-TTS-12Hz-0.6B-Base | test-zh | 1.132 | 0.92 | 76.33 / - | reproduced |
+| Qwen3-TTS-12Hz-1.7B-Base | test-en | 1.561 | 1.24 | 71.65 / - | **not reproduced (+0.32)** |
+| Qwen3-TTS-12Hz-0.6B-Base | test-en | 4.224 | 1.32 | 70.3 / - | **not reproduced** |
+
+Qwen3-TTS uses its README protocol (bf16, max_new_tokens 2048, checkpoint sampling defaults,
+language auto); VoxCPM2's README states no evaluation settings, so its documented cloning call and
+defaults were used (recorded in each run's `synth_record.json`).
+
+The two English misses, examined:
+- **Apostrophe style.** Upstream `run_wer.py` strips curly quotes (zhon's punctuation set) but
+  keeps the ASCII apostrophe, so a reference "aren’t" against a transcript "aren't" is an error.
+  Folding both to the ASCII form moves Qwen 1.7B en from 1.561 to 1.441 (and the ground truth from
+  2.143 to 2.069); the official comparison keeps the unmodified scorer.
+- **One runaway utterance.** Qwen 0.6B en has a single row in a repetition loop ("a pile of p- a
+  pile of p- ..." for a sentence about epilepsy, row WER 27.18); because Seed-TTS averages
+  per-utterance WER, that one row adds ~2.5 points (without it: ~1.7). Generation is sampled, so
+  seed and batching variance runs are the next measurement; the loop is exactly what FS's
+  runaway / repetition-loop gates detect on the ASR side.
+
 ## Not covered yet
 
 - Vietnamese: `run_wer.py` supports en and zh only. The MiniMax multilingual set (CC BY-SA 4.0) has
