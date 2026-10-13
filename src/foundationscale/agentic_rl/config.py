@@ -1265,9 +1265,9 @@ def _served_model(command: Sequence[str]) -> str | None:
 def _refuse_engine_policy_mismatch(engine: EngineConfig, policy: PolicyConfig) -> None:
     """Refuse an engine command that serves a different model than the one trained.
 
-    Measured on GB200 (2026-10-13): a run template kept ``vllm serve <MiMo-9B>`` while
+    Measured on GB200 (2026-10-13): a run template kept ``vllm serve <9B qwen3_5 checkpoint>`` while
     policy.model_path pointed at Gemma-4-E4B / Qwen3.5-4B. The trainer loaded one model,
-    the fleet sampled from another (Gemma-tokenized prompt ids decoded by MiMo's vocabulary
+    the fleet sampled from another (Gemma-tokenized prompt ids decoded by a Qwen vocabulary
     -> no parsable output), and the first weight push failed. Nothing refused it.
     """
     served = _served_model(engine.command)
