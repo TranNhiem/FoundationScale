@@ -20,8 +20,8 @@ import asyncio
 import json
 import sys
 from collections import Counter
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from foundationscale.agentic_rl.contracts import Termination, Trajectory, flatten
@@ -105,6 +105,33 @@ def _zero_turn_infra_trajectory(
     )
 
 
+def _all_engine_infra(trajectories: Sequence[Trajectory]) -> bool:
+    """True iff ``trajectories`` is non-empty and EVERY row in it is an ENGINE infra
+    failure -- the one signature of a hung (or dead) generation engine that
+    ``engine_recovery_retries`` is allowed to act on.
+
+    "Engine" here is read off the row's own ``abstention_reason``: the harness's
+    catch of a mid-episode engine fault names the kind
+    (``"infra:engine_<kind>"``, e.g. ``"infra:engine_timeout"``), and this
+    module's own outer catch of a fault that reached it before any outcome names
+    the exception type (``"infra:EngineInfraError"``). Both are engine faults;
+    anything else -- an empty sequence, an env failure
+    (``"infra:EnvInfraError"``), a reward abstention, a measured row -- is NOT
+    this shape and must not trigger a fleet restart.
+    """
+    if not trajectories:
+        return False
+    for trajectory in trajectories:
+        if trajectory.termination is not Termination.INFRA:
+            return False
+        reason = trajectory.abstention_reason
+        if not isinstance(reason, str):
+            return False
+        if not (reason.startswith("infra:engine_") or reason == "infra:EngineInfraError"):
+            return False
+    return True
+
+
 @dataclass(frozen=True)
 class RolloutHost:
     """Generates and scores one step's experience batch for the agentic RL trainer.
@@ -129,6 +156,22 @@ class RolloutHost:
     abstains rather than inventing one) and ``declared_max_lag`` (``1`` for S0)
     are the two declared thresholds those gates read; see
     ``config.py``'s ``rollout.max_infra_rate`` / ``engine.max_policy_lag``.
+
+    ``engine_recovery_retries`` (default ``0`` -- recovery OFF) enables ENGINE
+    hang recovery in ``rollout_async``. Why it exists: a vLLM engine can hang
+    after an in-place weight reload -- every request times out -- and a 100-step
+    run would then die at the infra gate through no fault of the policy.
+    Recovery fires only when EVERY trajectory in a step is an engine infra
+    failure (see ``_all_engine_infra``): it stops and restarts the fleet,
+    re-pushes the last published checkpoint (``_state["last_pushed_path"]``,
+    recorded by ``publish``) so the restarted engine serves the CURRENT policy
+    rather than the base model, and retries the SAME step with the SAME tasks. A
+    failed attempt's summary is replaced by one
+    ``[agentic-rl:engine-recovery]`` JSON line to stderr. It never fires on a
+    PARTIAL failure (some attempts ran) or on env failures, and if the retries
+    are exhausted the step's infra rows still reach the infra gate, which
+    refuses as it always did. A positive count needs a ``fleet`` (there must be
+    an engine to stop and start back up).
     """
 
     tasks: TaskSource
@@ -161,6 +204,16 @@ class RolloutHost:
     # step; after each publish it protects the checkpoint that produced a best-k reward and
     # can stop the run on a collapse.
     guard: StabilityGuard | None = None
+    # How many times rollout_async may restart the fleet and re-run a step whose
+    # every attempt was an ENGINE infra failure (0 = recovery OFF; see the class
+    # docstring). Needs `fleet`.
+    engine_recovery_retries: int = 0
+    # Private mutable state on this frozen dataclass (the dict's CONTENTS are
+    # mutable, never the field binding): "last_pushed_path" is the path of the
+    # last checkpoint `publish` fully pushed, so `_recover_engines` can re-push
+    # it after restarting the fleet -- a restarted engine must serve the CURRENT
+    # policy, never the base model.
+    _state: dict[str, Any] = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         where = "RolloutHost"
@@ -215,6 +268,16 @@ class RolloutHost:
                 f"{where}: field 'servable_base_model_dir' is "
                 f"{_described(self.servable_base_model_dir)}: it must be None or a "
                 f"non-empty str"
+            )
+        _real_int_at_least(
+            self.engine_recovery_retries, 0, where=where, name="engine_recovery_retries"
+        )
+        if self.engine_recovery_retries > 0 and self.fleet is None:
+            raise RolloutHostRefusal(
+                f"{where}: field 'engine_recovery_retries' is {self.engine_recovery_retries} "
+                f"but field 'fleet' is None: engine recovery needs a fleet to restart -- a "
+                f"caller injecting only 'client_factory' declares no engine to stop and start "
+                f"back up"
             )
 
     def _client_for(self, session_index: int) -> GenerationClient:
@@ -302,18 +365,18 @@ class RolloutHost:
             finally:
                 await instance.close()
 
-    async def rollout_async(self, step: int) -> ExperienceBatch:
-        """The async core of ``rollout``: draw this step's tasks, run every attempt
-        concurrently under ``max_concurrency``, flatten the results, and -- unless
-        ``gates=False`` -- run the ``Lifecycle.ROLLOUT`` gates over the flattened
-        batch before returning it.
+    async def _gather_step(self, step: int, tasks: Sequence[EpisodeTask]) -> list[Trajectory]:
+        """Build and run EVERY attempt of ``tasks`` for ``step``, returning one
+        ``Trajectory`` per ``tasks_per_step * group_size`` attempt.
+
+        Called once per attempt at the step (once, or once more per engine
+        recovery retry) with the SAME task list: session ids (``f"{uid}#{k}"``)
+        and session indices are derived purely from ``tasks``/``group_size``, so
+        a retried gather produces exactly the rows the first one would have.
+        Each call builds a FRESH semaphore -- the counting state of a previous
+        call's semaphore is spent on episodes that have since finished/failed,
+        and a recovery retry must not inherit it.
         """
-        if type(step) is not int or step < 0:
-            raise RolloutHostRefusal(
-                f"RolloutHost.rollout: parameter 'step' is {_described(step)}: it must be "
-                f"a real int >= 0"
-            )
-        tasks = self.tasks.batch(step, self.tasks_per_step)
         semaphore = asyncio.Semaphore(self.max_concurrency)
         episodes = []
         session_index = 0
@@ -322,7 +385,113 @@ class RolloutHost:
                 session_id = f"{task.uid}#{replica}"
                 episodes.append(self._run_episode(task, session_id, session_index, step, semaphore))
                 session_index += 1
-        trajectories = await asyncio.gather(*episodes)
+        return list(await asyncio.gather(*episodes))
+
+    def _recover_engines(self, step: int) -> None:
+        """Restart the generation fleet and make it serve the CURRENT policy again.
+
+        A hung engine is not repaired by another request: stop and start it. The
+        last checkpoint ``publish`` fully pushed (``_state["last_pushed_path"]``)
+        is then re-pushed so the restarted engine serves the current policy
+        rather than whatever the base command loads -- a restart with no re-push
+        would serve the BASE model and silently put the training step off-policy
+        on the next gather. ``weight_sync.mode == "restart"`` pushes by
+        stop/starting each server itself around the checkpoint, so it is called
+        directly (there is no separate fleet restart to do here); otherwise the
+        fleet is restarted through ``self.fleet`` and the checkpoint is
+        re-pushed whenever one is both recorded and wanted.
+
+        These are SYNCHRONOUS calls made from inside ``rollout_async``'s running
+        event loop and they BLOCK it: a restart launches real subprocesses and a
+        push waits on real HTTP control calls. That is deliberate -- the step is
+        already stuck and nothing else can proceed until the engines are back --
+        and is acceptable here (no executor wrapper).
+
+        Raises ``RolloutHostRefusal`` rather than returning a report: a recovery
+        that cannot restart the fleet, or that re-pushed only PART of it, leaves
+        the run generating on a stale/partial fleet -- the same dishonesty
+        ``publish`` itself refuses -- so it must not be retried past.
+        """
+        path = self._state.get("last_pushed_path")
+        restart_mode = self.weight_sync is not None and self.weight_sync.mode == "restart"
+        if restart_mode and path is None:
+            # The fleet's declared command carries the "{model_path}" placeholder, which
+            # only cli.py's first launch substitutes; start_all would pass it verbatim.
+            raise RolloutHostRefusal(
+                f"RolloutHost.rollout: step {step}: engine recovery cannot restart a "
+                f"weight_sync mode='restart' fleet before any checkpoint was published -- "
+                f"there is no path to substitute into the command's model placeholder"
+            )
+        if restart_mode:
+            # restart mode stops/starts each server itself, with the checkpoint.
+            assert self.weight_sync is not None and path is not None
+            report = self.weight_sync.push(path)
+        else:
+            fleet = self.fleet
+            assert fleet is not None  # __post_init__: engine_recovery_retries > 0 needs one
+            fleet.stop_all()
+            try:
+                fleet.start_all()
+            except EngineInfraError as exc:
+                raise RolloutHostRefusal(
+                    f"RolloutHost.rollout: step {step}: engine recovery failed to restart the "
+                    f"fleet: {exc}"
+                ) from exc
+            report = (
+                self.weight_sync.push(path)
+                if (self.weight_sync is not None and path is not None)
+                else None
+            )
+        if report is not None and not report.complete:
+            raise RolloutHostRefusal(
+                f"RolloutHost.rollout: step {step}: engine recovery's re-push of {path} was NOT "
+                f"complete ({len(report.transferred)} of {len(report.offered)} server(s) "
+                f"transferred, failed_ranks={report.failed_ranks}): the restarted fleet would "
+                f"keep serving a stale checkpoint on every subsequent rollout without saying so"
+            )
+
+    async def rollout_async(self, step: int) -> ExperienceBatch:
+        """The async core of ``rollout``: draw this step's tasks, run every attempt
+        concurrently under ``max_concurrency``, flatten the results, and -- unless
+        ``gates=False`` -- run the ``Lifecycle.ROLLOUT`` gates over the flattened
+        batch before returning it.
+
+        With ``engine_recovery_retries > 0``, a step whose EVERY attempt is an
+        ENGINE infra failure is recovered and re-gathered in place (see the class
+        docstring and ``_recover_engines``): the failed attempt's summary is
+        replaced by one ``[agentic-rl:engine-recovery]`` line per attempt, and the
+        summary/guard/gates below run ONCE, on the FINAL trajectories only. The
+        tasks are drawn once per call -- a retry re-runs the same step's tasks,
+        never a fresh draw.
+        """
+        if type(step) is not int or step < 0:
+            raise RolloutHostRefusal(
+                f"RolloutHost.rollout: parameter 'step' is {_described(step)}: it must be "
+                f"a real int >= 0"
+            )
+        tasks = self.tasks.batch(step, self.tasks_per_step)
+        trajectories = await self._gather_step(step, tasks)
+        attempt = 0
+        while attempt < self.engine_recovery_retries and _all_engine_infra(trajectories):
+            attempt += 1
+            print(
+                "[agentic-rl:engine-recovery] "
+                + json.dumps(
+                    {
+                        "rollout_step": step,
+                        "attempt": attempt,
+                        "of": self.engine_recovery_retries,
+                        "abstention_reasons": dict(
+                            Counter(t.abstention_reason for t in trajectories)
+                        ),
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+            self._recover_engines(step)
+            trajectories = await self._gather_step(step, tasks)
         batch = flatten(trajectories, group_by_harness=self.group_by_harness)
         print(rollout_summary(step, trajectories), file=sys.stderr, flush=True)
         if self.guard is not None:
@@ -389,7 +558,10 @@ class RolloutHost:
         would serve the OLD policy's rollouts as if they were on-policy,
         silently, for every step after this one; the trainer's own total
         exit-code boundary (``agentic_rl.cli._run``) adjudicates this RED, the
-        correct verdict for an infra fault discovered mid-run.
+        correct verdict for an infra fault discovered mid-run. A COMPLETE push
+        records its path in ``_state["last_pushed_path"]`` -- the checkpoint
+        ``_recover_engines`` re-pushes after a fleet restart, so a recovered
+        engine serves the current policy (see the class docstring).
         """
         if type(step) is not int or step < 0:
             raise RolloutHostRefusal(
@@ -421,6 +593,7 @@ class RolloutHost:
                     f"continuing would serve the stale, pre-step-{target_step} policy on "
                     f"every subsequent rollout without saying so"
                 )
+            self._state["last_pushed_path"] = path
             if self.gates:
                 # rollout_policy_versions=(): RolloutHost does not yet track which
                 # policy version each in-flight rollout session is running (that

@@ -632,3 +632,12 @@ def test_engine_command_with_placeholder_or_no_model_is_accepted(command: list[s
     if "sglang" in command[2]:
         raw["engine"]["kind"] = "sglang"
     build_config(raw, {})
+
+
+def test_rollout_engine_recovery_retries_defaults_off_and_parses_an_override() -> None:
+    assert build_config(_raw_config(), {}).rollout.engine_recovery_retries == 0
+    raw = _raw_config()
+    raw["rollout"] = {**raw["rollout"], "engine_recovery_retries": 1}
+    assert build_config(raw, {}).rollout.engine_recovery_retries == 1
+    config = build_config(_raw_config(), {"rollout.engine_recovery_retries": "3"})
+    assert config.rollout.engine_recovery_retries == 3

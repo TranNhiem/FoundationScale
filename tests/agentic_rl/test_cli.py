@@ -908,3 +908,17 @@ def test_single_step_run_needs_no_declared_infra_rate(
     monkeypatch.setattr("foundationscale.agentic_rl.cli.RLTrainer", _FakeRLTrainer)
     code = main(["--config", _real_run_config_path(tmp_path)])
     assert code == EXIT_PASS
+
+
+def test_build_real_run_wires_engine_recovery_retries_from_rollout(tmp_path: Path) -> None:
+    # rollout.engine_recovery_retries reaches RolloutHost verbatim; absent, it is 0 (off).
+    import foundationscale.agentic_rl.cli as cli_module
+
+    tasks_path = _write_tasks(tmp_path)
+    host_default = cli_module._build_real_run(build_config(_raw_config(tasks_path), {}))
+    assert host_default.engine_recovery_retries == 0
+
+    raw = _raw_config(tasks_path)
+    raw["rollout"] = {**raw["rollout"], "engine_recovery_retries": 2}
+    host = cli_module._build_real_run(build_config(raw, {}))
+    assert host.engine_recovery_retries == 2
