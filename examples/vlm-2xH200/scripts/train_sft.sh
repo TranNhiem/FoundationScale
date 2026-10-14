@@ -7,6 +7,8 @@ source "$1"
 : "${MODEL:?}" "${CONTEXT:?}" "${DATASET:?}" "${OUTPUT_DIR:?}"
 STEPS=${STEPS:-1000}; LR=${LR:-1e-4}; RANK=${RANK:-16}; ALPHA=${ALPHA:-32}
 SAVE_EVERY=${SAVE_EVERY:-200}; GRAD_ACCUM=${GRAD_ACCUM:-8}; VIDEO_FRAMES=${VIDEO_FRAMES:-16}
+# BATCH: per-device micro-batch (2 helps Qwen3.6 on GB200, chapter 06). MASTER_PORT: pick a free one on shared machines.
+BATCH=${BATCH:-1}; MASTER_PORT=${MASTER_PORT:-29500}
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # Declare what the data contains: FoundationScale never guesses a column.
@@ -20,11 +22,11 @@ fi
 export FOUNDATIONSCALE_TRAIN_OVERLONG=drop                # rows longer than CONTEXT are dropped, never truncated
 
 # localhost is IPv6-only on the competition VM image: always pass 127.0.0.1.
-torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29500 \
+torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port "$MASTER_PORT" \
   -m foundationscale.train \
   --model "$MODEL" --dataset "$DATASET" --output-dir "$OUTPUT_DIR" \
   --nodes 1 --gpus-per-node 2 --dp 2 --profile-name local-single-node \
-  --max-steps "$STEPS" --per-device-batch-size 1 --gradient-accumulation-steps "$GRAD_ACCUM" \
+  --max-steps "$STEPS" --per-device-batch-size "$BATCH" --gradient-accumulation-steps "$GRAD_ACCUM" \
   --learning-rate "$LR" --warmup-steps 20 --lr-scheduler-type cosine \
   --max-sequence-length "$CONTEXT" --precision bf16 \
   --adapter lora --adapter-rank "$RANK" --adapter-alpha "$ALPHA" \
