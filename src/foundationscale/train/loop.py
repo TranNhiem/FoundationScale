@@ -243,6 +243,15 @@ def _fsdp_wrap_classes(model: Any) -> list[str]:
             break
     keep = [name for name in declared if name in present]
     if keep:
+        # A class whose every instance sits inside a declared tower (Qwen3.6 lists
+        # Qwen3_5VisionBlock) stays in the root unit with the rest of the tower.
+        # Wrapped per block, a rank whose micro-batch runs the tower twice (image
+        # and video rows) issues more all-gathers than its peer and the run hangs
+        # until the NCCL timeout (measured: 2x GB200, per-device batch 2).
+        in_tower = _tower_module_ids(model)
+        if in_tower:
+            outside = {type(m).__name__ for m in model.modules() if id(m) not in in_tower}
+            keep = [name for name in keep if name in outside] or keep
         return keep
     # Imported only on the fallback path: the intersection above answers for
     # every model that declares its blocks honestly, and a torch.nn import is
@@ -258,6 +267,21 @@ def _fsdp_wrap_classes(model: Any) -> list[str]:
                     structural.append(child_name)
                 break
     return structural
+
+
+def _tower_module_ids(model: Any) -> set[int]:
+    """ids of every module inside the model's declared towers ({} if the family is unknown)."""
+    family = resolve_family(_family_config_mapping(model))
+    if family is None:
+        return set()
+    get_base_model = getattr(model, "get_base_model", None)
+    root = get_base_model() if callable(get_base_model) else model
+    ids: set[int] = set()
+    for dotted_path, _modality in family.towers:
+        tower = resolve_module_path(root, dotted_path)
+        if tower is not None:
+            ids.update(id(sub) for sub in tower.modules())
+    return ids
 
 
 def _model_ties_word_embeddings(model: Any) -> bool:
