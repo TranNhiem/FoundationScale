@@ -24,6 +24,7 @@ from foundationscale.rl.distributed import (
     agree_max,
     all_reduce_mean,
     all_reduce_sum,
+    apply_fabric_from_environment,
     find_decoder_blocks,
     generate_kwargs_for,
     init_distributed,
@@ -424,30 +425,106 @@ def _rewrap(original: type) -> type:
     )
 
 
+class _Tree:
+    """A module tree double: ``modules()`` yields the root and its wrapped children."""
+
+    def __init__(self, *children: object) -> None:
+        self._children = children
+
+    def modules(self) -> list[object]:
+        return [self, *self._children]
+
+
+class _Tower(_Switchable):
+    """A second model class in the tree (e.g. a vision tower) under its own unit."""
+
+
 def test_fsdp_wrapper_inherits_the_original_kernel_switching() -> None:
     from foundationscale.rl.distributed import keep_experts_switchable
 
     wrapped = _rewrap(_Switchable)()
     assert not type(wrapped)._can_set_experts_implementation()  # the failure mode
-    assert keep_experts_switchable(wrapped, _Switchable) is True
+    assert keep_experts_switchable(wrapped) == ["FSDP_Switchable"]
     assert type(wrapped)._can_set_experts_implementation()
     assert _Switchable._can_set_experts_implementation()  # original untouched
+
+
+def test_every_wrapped_unit_in_the_tree_is_carried_over() -> None:
+    # Measured: the root carried over, but a tower wrapped as its own unit
+    # (FSDPGemma4VisionModel) still refused, and generate() died on it.
+    from foundationscale.rl.distributed import keep_experts_switchable
+
+    tower = _rewrap(_Tower)()
+    root_cls = _rewrap(_Switchable)
+    root = type("FSDP_Switchable", (root_cls, _Tree), {})
+    tree = root.__new__(root)
+    _Tree.__init__(tree, tower, tower)
+    carried = keep_experts_switchable(tree)
+    assert sorted(carried) == ["FSDP_Switchable", "FSDP_Tower"]
+    assert type(tower)._can_set_experts_implementation()
 
 
 def test_unwrapped_or_non_switchable_models_are_left_alone() -> None:
     from foundationscale.rl.distributed import keep_experts_switchable
 
-    assert keep_experts_switchable(_Switchable(), _Switchable) is False
+    assert keep_experts_switchable(_Switchable()) == []
 
     class _Fixed(_Switchable):
         can = False
 
     wrapped = _rewrap(_Fixed)()
-    assert keep_experts_switchable(wrapped, _Fixed) is False
+    assert keep_experts_switchable(wrapped) == []
     assert not type(wrapped)._can_set_experts_implementation()
 
     class _Dense:
         pass
 
     dense_wrapped = type("FSDP_Dense", (_Dense,), {})()
-    assert keep_experts_switchable(dense_wrapped, _Dense) is False
+    assert keep_experts_switchable(dense_wrapped) == []
+
+
+def test_fabric_from_environment_is_a_no_op_without_a_named_profile() -> None:
+    """No profile named: the launcher owns the fabric, nothing is written."""
+    env = {"LOCAL_RANK": "1", "NCCL_SOCKET_IFNAME": "ib0"}
+    assert apply_fabric_from_environment(env) == ()
+    assert env == {"LOCAL_RANK": "1", "NCCL_SOCKET_IFNAME": "ib0"}
+
+
+def test_fabric_from_environment_applies_the_named_profile() -> None:
+    """A named built-in profile reaches NCCL through apply_fabric_declaration."""
+    env = {"FS_CLUSTER_PROFILE": "local-single-node", "LOCAL_RANK": "1"}
+    lines = apply_fabric_from_environment(env)
+    assert env["NCCL_SOCKET_IFNAME"] == "lo"
+    assert env["NCCL_MNNVL_ENABLE"] == "0"
+    assert any(line.startswith("NCCL_IB_HCA") for line in lines)
+
+
+def test_fabric_from_environment_reads_a_profile_json(tmp_path: Path) -> None:
+    """FS_CLUSTER_PROFILE_PATH loads the JSON profile, and the operator's export still wins."""
+    from foundationscale.topology import profile_by_name
+
+    data = profile_by_name("local-single-node").to_dict()
+    data.update(name="site-json", nccl_socket_ifname="bond0")
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    env = {"FS_CLUSTER_PROFILE_PATH": str(path), "NCCL_MNNVL_ENABLE": "1", "LOCAL_RANK": "1"}
+    apply_fabric_from_environment(env)
+    assert env["NCCL_SOCKET_IFNAME"] == "bond0"
+    assert env["NCCL_MNNVL_ENABLE"] == "1"
+
+
+def test_fabric_from_environment_refuses_two_profile_sources(tmp_path: Path) -> None:
+    """Name and path together would leave the applied profile to undeclared precedence."""
+    env = {"FS_CLUSTER_PROFILE": "local-single-node", "FS_CLUSTER_PROFILE_PATH": "x.json"}
+    with pytest.raises(ValueError, match="name exactly one"):
+        apply_fabric_from_environment(env)
+
+
+def test_fabric_from_environment_announces_on_local_rank_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Each node's local rank 0 prints the decisions; other ranks stay quiet."""
+    apply_fabric_from_environment({"FS_CLUSTER_PROFILE": "local-single-node", "LOCAL_RANK": "0"})
+    assert "[distributed] fabric: NCCL_SOCKET_IFNAME=lo" in capsys.readouterr().err
+    apply_fabric_from_environment({"FS_CLUSTER_PROFILE": "local-single-node", "LOCAL_RANK": "3"})
+    assert capsys.readouterr().err == ""

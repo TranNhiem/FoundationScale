@@ -77,7 +77,8 @@
     "group_size": 4,
     "max_concurrency": 4,
     "group_by_harness": false,
-    "seed": 0
+    "seed": 0,
+    "max_infra_rate": 0.25
   },
   "reward": {
     "_doc": "kind='music' is the only reward this plane builds today (rewards/music/: rule-scored MIDI human-likeness over the submitted ABC notation). abc2midi_bin is never read from the environment -- name the binary explicitly, 'abc2midi' if it is on PATH.",

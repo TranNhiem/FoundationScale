@@ -1271,3 +1271,34 @@ def test_nameless_call_markup_is_recorded_not_a_crash() -> None:
     assert first.tool_calls[0].parse_error
     assert env.commands == []
     assert outcome.termination is Termination.STOP
+
+
+class _SchemaRecordingTokenizer(ToyTokenizer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_tools: list[Any] = []
+
+    def render(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        tools: Sequence[Mapping[str, Any]] | None,
+        add_generation_prompt: bool,
+    ) -> list[int]:
+        self.seen_tools.append(tools)
+        return super().render(messages, tools=tools, add_generation_prompt=add_generation_prompt)
+
+
+@pytest.mark.parametrize("advertise", [True, False])
+def test_advertise_tools_controls_the_rendered_tool_schema(advertise: bool) -> None:
+    """advertise_tools=False renders every prompt without the schema; the registry is kept."""
+    tokenizer = _SchemaRecordingTokenizer()
+    loop = _loop(tokenizer=tokenizer, advertise_tools=advertise)
+    client = ScriptedClient([_generation("X:1 K:C C D E F")])
+    _run(loop, _task(), client, FakeEnvironment(execute_fn=lambda cmd: _exec_result("")), _budget())
+    assert tokenizer.seen_tools, "the harness rendered no prompt"
+    if advertise:
+        assert all(t for t in tokenizer.seen_tools)
+    else:
+        assert all(t is None for t in tokenizer.seen_tools)
+    assert loop.tools  # the registry itself is never emptied

@@ -598,3 +598,37 @@ def test_stability_section_refuses_unknown_keys() -> None:
     raw["stability"] = {"best_kk": 2}
     with pytest.raises(AgenticConfigRefusal):
         build_config(raw, {})
+
+
+def test_harness_accepts_tools_none() -> None:
+    """harness.tools 'none' is declared and recorded (prompts render without the schema)."""
+    raw = _raw_config(harness={"parser": "qwen_xml", "tools": "none"})
+    assert build_config(raw, {}).harness.tools == "none"
+
+
+def test_engine_serving_a_different_model_than_the_policy_is_refused() -> None:
+    """The fleet must sample from the model being trained (a measured silent mismatch)."""
+    raw = _raw_config()
+    raw["engine"] = {
+        **raw["engine"],
+        "command": ["vllm", "serve", "/models/other", "--port", "8000"],
+    }
+    with pytest.raises(AgenticConfigRefusal, match="engine.command serves"):
+        build_config(raw, {})
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["vllm", "serve", "{model_path}", "--port", "8000"],
+        ["python3", "-m", "sglang.launch_server", "--model-path", "{model_path}"],
+        ["python3", "-m", "vllm.entrypoints.openai.api_server", "--port", "8000"],
+    ],
+)
+def test_engine_command_with_placeholder_or_no_model_is_accepted(command: list[str]) -> None:
+    """The {model_path} placeholder, or a command that names no model, is not a mismatch."""
+    raw = _raw_config()
+    raw["engine"] = {**raw["engine"], "command": command}
+    if "sglang" in command[2]:
+        raw["engine"]["kind"] = "sglang"
+    build_config(raw, {})

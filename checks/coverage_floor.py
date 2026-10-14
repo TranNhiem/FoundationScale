@@ -225,7 +225,7 @@ FLOORS: dict[str, int] = {
     # tests are written. Delete a line when its module reaches the default; do not
     # add a line by hand, and do not lower one to make a red run green.
     "src/foundationscale/gates/speech_gates.py": 99,  # measured 100.0%; 1 pt CI slack
-    "src/foundationscale/rl/distributed.py": 79,  # measured 80.1%; 1 pt CI slack
+    "src/foundationscale/rl/distributed.py": 83,  # measured 84.7%; 1 pt CI slack
     "src/foundationscale/rl/megatron/driver.py": 39,  # measured 39.8%; rung-2 loop is GPU-only
     "src/foundationscale/rl/megatron/logprobs.py": 33,  # set by --update; measured 33.3%
     "src/foundationscale/rl/megatron/normalization.py": 77,  # set by --update; measured 77.1%
@@ -275,6 +275,8 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/agentic_rl/sandbox/enroot.py": 98,  # set by hand; measured 98.5%
     "src/foundationscale/agentic_rl/sandbox/harbor_env.py": 96,  # set by hand; measured 96.9%
     "src/foundationscale/agentic_rl/stability.py": 100,  # set by hand; measured 100.0%
+    "src/foundationscale/agentic_rl/verl_rewards.py": 100,  # set by hand; measured 100.0%
+    "src/foundationscale/agentic_rl/verl_adapter.py": 99,  # set by hand; measured 99.3%
     "src/foundationscale/agentic_rl/integrity.py": 95,  # set by hand; measured 95.9%
     "src/foundationscale/agentic_rl/sandbox/hidden.py": 98,  # set by hand; measured 98.0%
     "src/foundationscale/agentic_rl/evaluation.py": 99,  # set by hand; measured 99.6%

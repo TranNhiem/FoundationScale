@@ -309,6 +309,7 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
         parser=_make_parser(config.harness.parser),
         tokenizer=chat_tokenizer,
         sampling=_sampling_params(config),
+        advertise_tools=config.harness.tools == "default",
     )
     fleet = EngineFleet(servers=(EngineServer(_engine_server_spec(config)),))
     reward = MusicRewardFn(scorer=_music_reward(config), decode=chat_tokenizer.decode)
@@ -430,6 +431,19 @@ def _dry_run(config: AgenticRLConfig) -> int:
     return EXIT_PASS
 
 
+def _unscorable_sampling(config: AgenticRLConfig) -> list[str]:
+    """Sampling settings the trainer cannot reproduce when scoring (named, in order)."""
+    sampling = config.sampling
+    bad = []
+    if sampling.min_p != 0.0:
+        bad.append(f"sampling.min_p={sampling.min_p!r} (neutral 0.0)")
+    if sampling.presence_penalty != 0.0:
+        bad.append(f"sampling.presence_penalty={sampling.presence_penalty!r} (neutral 0.0)")
+    if sampling.repetition_penalty != 1.0:
+        bad.append(f"sampling.repetition_penalty={sampling.repetition_penalty!r} (neutral 1.0)")
+    return bad
+
+
 def _run(config: AgenticRLConfig) -> int:
     try:
         host = _build_real_run(config)
@@ -458,6 +472,33 @@ def _run(config: AgenticRLConfig) -> int:
         )
         return EXIT_REFUSE
 
+    if max_steps > 1 and config.rollout.max_infra_rate is None:
+        # Undeclared, the ROLLOUT infra gate can only abstain (NOT_ESTABLISHED) every
+        # step. Measured: a hung vLLM engine turned every trajectory into an infra
+        # failure and the run still ended EXIT 0 having trained nothing.
+        print(
+            f"{_REFUSE_MARKER} declaration rejected: trainer.max_steps={max_steps} > 1 "
+            f"with no rollout.max_infra_rate: the infra gate would have no bound to "
+            f"adjudicate, so a dead engine or sandbox pool would fail every rollout "
+            f"silently. Declare the fraction of infra-failed trajectories a step may "
+            f"tolerate (0.25 suits single-turn tasks; sandboxed multi-turn runs may "
+            f"need 0.3-0.5)."
+        )
+        return EXIT_REFUSE
+
+    unscorable = _unscorable_sampling(config)
+    if unscorable:
+        # The trainer scores tokens with the engine's temperature / top-k / top-p
+        # (RLTrainConfig.score_*); anything else reshaping the sampled distribution
+        # would leave every update off-policy with no way to correct it.
+        print(
+            f"{_REFUSE_MARKER} declaration rejected: {', '.join(unscorable)}: the "
+            f"trainer can score tokens only under temperature, top_k and top_p, so "
+            f"training on rollouts sampled this way would be silently off-policy. "
+            f"Set them to their neutral values for training."
+        )
+        return EXIT_REFUSE
+
     assert host.fleet is not None  # _build_real_run always supplies one
     fleet = host.fleet
     try:
@@ -466,6 +507,9 @@ def _run(config: AgenticRLConfig) -> int:
             model=config.policy.model_path,
             algorithm=config.policy.algorithm,
             rollout_source=host,
+            score_temperature=config.sampling.temperature,
+            score_top_p=config.sampling.top_p,
+            score_top_k=config.sampling.top_k,
             **config.trainer,
         )
         reports = RLTrainer(trainer_config).run()

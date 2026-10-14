@@ -12,8 +12,11 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # Declare what the data contains: FoundationScale never guesses a column.
 export FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN=conversations
 export FOUNDATIONSCALE_TRAIN_IMAGE_COLUMN=image
-export FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN=video
-export FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES=$VIDEO_FRAMES   # frames per clip, sampled inside [start, end]
+# VIDEO_COLUMN=none for image/text-only data: a declared column the data lacks is refused.
+if [ "${VIDEO_COLUMN:-video}" != none ]; then
+  export FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN=${VIDEO_COLUMN:-video}
+  export FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES=$VIDEO_FRAMES   # frames per clip, sampled inside [start, end]
+fi
 export FOUNDATIONSCALE_TRAIN_OVERLONG=drop                # rows longer than CONTEXT are dropped, never truncated
 
 # localhost is IPv6-only on the competition VM image: always pass 127.0.0.1.

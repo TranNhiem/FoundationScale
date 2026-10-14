@@ -51,6 +51,7 @@ __all__ = (
     "agree_max",
     "all_reduce_mean",
     "all_reduce_sum",
+    "apply_fabric_from_environment",
     "barrier",
     "destroy",
     "find_decoder_blocks",
@@ -155,6 +156,47 @@ def _default_single_device() -> torch.device:
     return torch.device("cpu")
 
 
+def apply_fabric_from_environment(environ: Any = None) -> tuple[str, ...]:
+    """Apply a cluster profile's fabric declaration before NCCL starts, if one is named.
+
+    The training plane takes its ClusterProfile from the CLI; the RL entry points have no
+    such flag, so multi-node RL launchers exported NCCL_SOCKET_IFNAME, NCCL_IB_HCA and
+    NCCL_MNNVL_ENABLE by hand -- and an unpinned NCCL_IB_HCA across two GB200 trays paired
+    an InfiniBand HCA with a RoCE one and died in the first large collective. Naming a
+    profile here hands those three decisions to ``topology.apply_fabric_declaration``,
+    which discovers the InfiniBand ports and checks for the IMEX daemon on THIS node.
+
+    ``FS_CLUSTER_PROFILE`` names a built-in profile; ``FS_CLUSTER_PROFILE_PATH`` points at a
+    profile JSON. Neither set -> nothing is applied and ``()`` is returned (the launcher
+    owns the fabric, as before). Both set -> refused: two sources would make the applied
+    profile depend on precedence nobody declared. Operator exports always win inside
+    ``apply_fabric_declaration``. Must run before ``init_process_group``: NCCL reads its
+    environment when the communicator is built.
+    """
+    from foundationscale.topology import (
+        ClusterProfile,
+        apply_fabric_declaration,
+        profile_by_name,
+    )
+
+    env = os.environ if environ is None else environ
+    name = (env.get("FS_CLUSTER_PROFILE") or "").strip()
+    path = (env.get("FS_CLUSTER_PROFILE_PATH") or "").strip()
+    if name and path:
+        raise ValueError(
+            f"FS_CLUSTER_PROFILE={name!r} and FS_CLUSTER_PROFILE_PATH={path!r} are both set; "
+            "name exactly one cluster profile"
+        )
+    if not name and not path:
+        return ()
+    profile = ClusterProfile.from_json(path) if path else profile_by_name(name)
+    lines = apply_fabric_declaration(profile, env)
+    if str(env.get("LOCAL_RANK", "0")) == "0":
+        for line in lines:
+            print(f"[distributed] fabric: {line}", file=sys.stderr)
+    return lines
+
+
 def init_distributed(sharding: str) -> DistContext:
     """Bring up the process group declared by ``sharding``, or refuse.
 
@@ -205,6 +247,7 @@ def init_distributed(sharding: str) -> DistContext:
             "sharding requires CUDA: the process group backend is 'nccl' and "
             "no CUDA device is visible"
         )
+    apply_fabric_from_environment()
     dist.init_process_group("nccl", timeout=_collective_timeout())
     torch.cuda.set_device(local_rank)
     return DistContext(
@@ -567,29 +610,40 @@ def _switchable() -> bool:
     return True
 
 
-def keep_experts_switchable(model: Any, original_cls: type) -> bool:
-    """Let an ``FSDP<Name>`` wrapper class switch MoE expert kernels like its original.
+def keep_experts_switchable(model: Any) -> list[str]:
+    """Let every ``FSDP<Name>`` wrapper class switch MoE expert kernels like its original.
 
     transformers 5.x ``generate()`` swaps ``grouped_mm`` experts for ``batched_mm``
-    around decoding and back afterwards, after asking the class whether it may:
-    ``_can_set_experts_implementation`` greps the source of the module the class
-    is defined in for ``@use_experts_implementation``. ``fully_shard`` re-types the
-    model to a dynamic ``FSDP<Name>`` subclass defined in torch's FSDP module, so
-    the grep fails and the first rollout dies (measured: Gemma-4 26B-A4B,
-    ``FSDPGemma4ForConditionalGeneration does not support setting experts
-    implementation``). Pinning ``batched_mm`` up front instead avoided the error but
-    ran prefill on the per-token kernel and OOMed (56 GiB for one allocation), so the
-    wrapper inherits the original class's answer and HF's own swap runs unchanged.
+    around decoding and back afterwards, after asking each model class in the tree
+    whether it may: ``_can_set_experts_implementation`` greps the source of the module
+    the class is defined in for ``@use_experts_implementation``. ``fully_shard``
+    re-types every module it wraps to a dynamic ``FSDP<Name>(FSDPModule, <Name>)``
+    subclass defined in torch's FSDP module, so the grep fails and the first rollout
+    dies (measured: Gemma-4 26B-A4B, ``FSDPGemma4ForConditionalGeneration does not
+    support setting experts implementation``, and once the vision tower became its own
+    unit, ``FSDPGemma4VisionModel``). Pinning ``batched_mm`` up front instead avoided
+    the error but ran prefill on the per-token kernel and OOMed (56 GiB for one
+    allocation), so each wrapper inherits its original class's answer and HF's own swap
+    runs unchanged.
 
-    Returns True when the answer was carried over; a model that was not re-typed, or
-    whose original class cannot switch kernels, is left alone (False).
+    Walks the whole module tree (root, decoder blocks, towers) and returns the names of
+    the wrapper classes the answer was carried over to; a module that was not re-typed,
+    or whose original class cannot switch kernels, is left alone.
     """
-    wrapped_cls = type(model)
-    can_set = getattr(original_cls, "_can_set_experts_implementation", None)
-    if wrapped_cls is original_cls or can_set is None or not can_set():
-        return False
-    wrapped_cls._can_set_experts_implementation = staticmethod(_switchable)
-    return True
+    modules = model.modules() if callable(getattr(model, "modules", None)) else [model]
+    carried: list[str] = []
+    for module in modules:
+        wrapped_cls = type(module)
+        name = wrapped_cls.__name__
+        if not name.startswith("FSDP") or name in carried:
+            continue
+        original = next((b for b in wrapped_cls.__mro__[1:] if b.__name__ == name[4:]), None)
+        can_set = getattr(original, "_can_set_experts_implementation", None)
+        if can_set is None or not can_set():
+            continue
+        wrapped_cls._can_set_experts_implementation = staticmethod(_switchable)
+        carried.append(name)
+    return carried
 
 
 def wrap_fsdp2(
@@ -677,7 +731,6 @@ def wrap_fsdp2(
         )
     from torch.distributed.device_mesh import init_device_mesh
 
-    original_cls = type(model)
     model = model.to(dtype=torch.float32)
     mesh = init_device_mesh("cuda", (ctx.world_size,))
     mp_policy = MixedPrecisionPolicy(param_dtype=param_dtype, reduce_dtype=reduce_dtype)
@@ -710,10 +763,11 @@ def wrap_fsdp2(
         mp_policy=mp_policy,
         reshard_after_forward=reshard_after_forward,
     )
-    if keep_experts_switchable(model, original_cls) and is_main(ctx):
+    carried = keep_experts_switchable(model)
+    if carried and is_main(ctx):
         print(
-            f"[distributed] wrap_fsdp2: {type(model).__name__} keeps "
-            f"{original_cls.__name__}'s expert-kernel switching for generate()",
+            f"[distributed] wrap_fsdp2: {', '.join(carried)} keep their originals' "
+            "expert-kernel switching for generate()",
             file=sys.stderr,
         )
     return model

@@ -166,6 +166,11 @@ class NativeToolLoop(HarnessAdapter):
     sampling: SamplingParams
     name: str = "native_tool_loop"
     observation_role: str = "tool"
+    # False renders prompts WITHOUT the tool schema (single-turn tasks such as music): the
+    # registry still routes any call the model emits, but the model is not told tools exist.
+    # Measured: Gemma-4-E4B-it shown the schema wrote its music via bash `echo ... > f.abc`
+    # tool calls, which the reward (plain-text ABC) cannot score.
+    advertise_tools: bool = True
 
     def __post_init__(self) -> None:
         """Refuse an empty tool registry or empty identity/role strings.
@@ -210,8 +215,8 @@ class NativeToolLoop(HarnessAdapter):
         raising for model-attributable outcomes.
         """
         episode_start = time.monotonic()
-        tools_schema: tuple[Mapping[str, Any], ...] = tuple(
-            t.to_openai() for t in self.tools.values()
+        tools_schema: tuple[Mapping[str, Any], ...] = (
+            tuple(t.to_openai() for t in self.tools.values()) if self.advertise_tools else ()
         )
         messages: list[dict[str, Any]] = [dict(m) for m in task.messages]
         trace = TokenTrace(response_length=budget.max_response_tokens)

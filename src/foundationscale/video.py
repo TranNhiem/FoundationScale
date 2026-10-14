@@ -175,11 +175,13 @@ def _decode_torchcodec(
 def _decode_av(
     path: str, frames: int, *, start: float | None = None, end: float | None = None
 ) -> list[Any]:
-    import av  # type: ignore[import-not-found]
+    import av
 
     with av.open(path) as container:
         stream = container.streams.video[0]
-        if stream.duration is not None and stream.time_base is not None:
+        if stream.time_base is None:
+            raise VideoDecodeError(f"{path}: video stream declares no time_base; cannot seek")
+        if stream.duration is not None:
             duration = float(stream.duration * stream.time_base)
         else:
             duration = float(container.duration or 0) / 1_000_000
