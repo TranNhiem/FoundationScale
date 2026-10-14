@@ -498,3 +498,116 @@ def test_restart_mode_recovery_refuses_before_any_checkpoint_was_published(tmp_p
         host.rollout(0)
     assert fleet.stop_calls == 0
     assert fleet.start_calls == 0
+
+
+def _row(termination: Termination, reason: object) -> Any:
+    # _all_engine_infra reads only these two attributes.
+    from types import SimpleNamespace
+
+    return SimpleNamespace(termination=termination, abstention_reason=reason)
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [
+        ([], False),
+        ([_row(Termination.INFRA, "infra:engine_timeout"), _row(Termination.STOP, None)], False),
+        ([_row(Termination.INFRA, None)], False),
+        ([_row(Termination.INFRA, "infra:EnvInfraError")], False),
+        (
+            [
+                _row(Termination.INFRA, "infra:engine_timeout"),
+                _row(Termination.INFRA, "infra:EngineInfraError"),
+            ],
+            True,
+        ),
+    ],
+)
+def test_all_engine_infra_accepts_only_an_all_engine_failure(
+    rows: list[Any], expected: bool
+) -> None:
+    from foundationscale.agentic_rl.rollout_host import _all_engine_infra
+
+    assert _all_engine_infra(rows) is expected
+
+
+def _report(*, complete: bool) -> SyncReport:
+    return SyncReport(
+        transport="disk",
+        offered=("server_0", "server_1"),
+        transferred=("server_0", "server_1") if complete else ("server_0",),
+        skipped=() if complete else ("server_1",),
+        failed_ranks=() if complete else (1,),
+        bytes_moved=None,
+        seconds=0.0,
+        is_stale=False,
+    )
+
+
+def _recovering_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fleet: FakeFleet, *, mode: str, complete: bool
+) -> tuple[RolloutHost, list[str]]:
+    fixtures = pytest.importorskip("_fake_sglang_fixtures")
+    fake_module = fixtures.write_fake_server(tmp_path)
+    spec = fixtures.make_server_spec(tmp_path, fake_module, port=fixtures.free_port())
+    weight_sync = DiskWeightSync(
+        publish_root=str(tmp_path / "pub"),
+        fleet=EngineFleet(servers=(SGLangServer(spec),)),
+        mode=mode,
+    )
+    pushed: list[str] = []
+
+    def fake_push(self: DiskWeightSync, path: str) -> SyncReport:
+        pushed.append(path)
+        fleet.mode.hung = False  # a restart-mode push relaunches the servers itself
+        return _report(complete=complete)
+
+    monkeypatch.setattr(DiskWeightSync, "push", fake_push)
+    host = _host(
+        tmp_path,
+        uids=["taskA"],
+        client_factory=None,
+        fleet=fleet,
+        weight_sync=weight_sync,
+        engine_recovery_retries=1,
+    )
+    host._state["last_pushed_path"] = str(tmp_path / "pub" / "step_000003")
+    return host, pushed
+
+
+def test_restart_mode_recovery_relaunches_through_the_push_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fleet = FakeFleet(FleetMode(cured_by_restart=False))
+    host, pushed = _recovering_host(tmp_path, monkeypatch, fleet, mode="restart", complete=True)
+    batch = host.rollout(0)
+    assert pushed == [str(tmp_path / "pub" / "step_000003")]
+    assert (fleet.stop_calls, fleet.start_calls) == (0, 0)
+    assert all(reward is not None for reward in batch.columns["reward"])
+
+
+def test_recovery_refuses_when_the_fleet_cannot_restart(tmp_path: Path) -> None:
+    class UnstartableFleet(FakeFleet):
+        def start_all(self) -> None:
+            self.start_calls += 1
+            raise EngineInfraError("startup_crashed", "server exited before becoming healthy")
+
+    fleet = UnstartableFleet(FleetMode(cured_by_restart=False))
+    host = _host(
+        tmp_path, uids=["taskA"], client_factory=None, fleet=fleet, engine_recovery_retries=1
+    )
+    with pytest.raises(RolloutHostRefusal, match="failed to restart the fleet"):
+        host.rollout(0)
+    assert fleet.start_calls == 1
+
+
+def test_recovery_refuses_an_incomplete_re_push(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fleet = FakeFleet(FleetMode(cured_by_restart=True))
+    host, pushed = _recovering_host(
+        tmp_path, monkeypatch, fleet, mode="reload_endpoint", complete=False
+    )
+    with pytest.raises(RolloutHostRefusal, match="was NOT complete"):
+        host.rollout(0)
+    assert len(pushed) == 1

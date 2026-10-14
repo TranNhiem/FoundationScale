@@ -48,6 +48,7 @@ from foundationscale.agentic_rl.weight_sync import DiskWeightSync
 from foundationscale.gates.agentic_gates import RolloutGateContext, WeightSyncGateContext
 from foundationscale.gates.core import REGISTRY, Lifecycle, run_event
 from foundationscale.rl.interfaces import ExperienceBatch
+from foundationscale.rl.weightsync import SyncReport
 
 __all__ = (
     "RolloutHost",
@@ -422,6 +423,7 @@ class RolloutHost:
                 f"weight_sync mode='restart' fleet before any checkpoint was published -- "
                 f"there is no path to substitute into the command's model placeholder"
             )
+        report: SyncReport | None
         if restart_mode:
             # restart mode stops/starts each server itself, with the checkpoint.
             assert self.weight_sync is not None and path is not None
