@@ -220,17 +220,30 @@ def _build_qwen3_omni(
     llm: str,
     device: str,
 ) -> Any:
-    """Registry-time stub for the O1 arm; O1 replaces this body without touching the runner."""
+    """O1: Qwen3-Omni-30B-A3B-Instruct answering from audio, text out (talker disabled).
+
+    Mirrors upstream VoiceBench's Qwen2.5-Omni assistant (src/models/qwen_omni.py): the same
+    system prompt, an audio-only user turn, ``disable_talker()`` and ``return_audio=False``. The
+    16 kHz array goes to the processor directly instead of a temp file through
+    ``qwen_omni_utils.process_mm_info`` (which only loads that file at 16 kHz). For this arm
+    ``--llm`` is the Qwen3-Omni checkpoint; ``--asr-model`` is unused.
+    """
+    del asr_model
 
     class Qwen3OmniAssistant(base):
-        def __init__(
-            self,
-            asr_model: str,
-            llm: str,
-            device: str,
-        ) -> None:
-            del asr_model, llm, device
-            raise NotImplementedError("O1 (Qwen3-Omni) is not yet enabled; O0 is the cascade arm.")
+        def __init__(self, model_path: str, device: str) -> None:
+            from transformers import (
+                Qwen3OmniMoeForConditionalGeneration,
+                Qwen3OmniMoeProcessor,
+            )
+
+            self.model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
+                model_path, dtype=torch.bfloat16
+            ).to(device)
+            self.model.disable_talker()
+            self.model.eval()
+            self.processor = Qwen3OmniMoeProcessor.from_pretrained(model_path)
+            self.last_metrics: dict[str, Any] = {}
 
         @torch.no_grad()
         def generate_audio(
@@ -238,10 +251,42 @@ def _build_qwen3_omni(
             audio: dict[str, Any],
             max_new_tokens: int = MAX_RESPONSE_TOKENS,
         ) -> str:
-            del audio, max_new_tokens
-            raise NotImplementedError("O1")
+            messages = [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "You are a helpful assistant."}],
+                },
+                {"role": "user", "content": [{"type": "audio", "audio": "<array>"}]},
+            ]
+            text = self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            inputs = self.processor(
+                text=text,
+                audio=[audio["array"]],
+                return_tensors="pt",
+                padding=True,
+                use_audio_in_video=False,
+            ).to(self.model.device, self.model.dtype)
+            started = time.perf_counter()
+            out = self.model.generate(
+                **inputs, return_audio=False, max_new_tokens=max_new_tokens, do_sample=False
+            )
+            # documented forms: a tensor, or (text_ids, audio) where text_ids may carry .sequences
+            ids = out[0] if isinstance(out, tuple) else out
+            ids = getattr(ids, "sequences", ids)
+            prompt_len = int(inputs["input_ids"].shape[1])
+            response = self.processor.batch_decode(
+                ids[:, prompt_len:], skip_special_tokens=True, clean_up_tokenization_spaces=False
+            )[0]
+            self.last_metrics = {
+                "fs_transcript": "",
+                "fs_asr_seconds": 0.0,
+                "fs_llm_seconds": time.perf_counter() - started,
+            }
+            return response.strip()
 
-    return Qwen3OmniAssistant(asr_model=asr_model, llm=llm, device=device)
+    return Qwen3OmniAssistant(llm, device)
 
 
 def build_registry(

@@ -62,8 +62,19 @@ The two English misses, examined:
   seed and batching variance runs are the next measurement; the loop is exactly what FS's
   runaway / repetition-loop gates detect on the ASR side.
 
-## Not covered yet
+## T0b: the Vietnamese judge (2026-10-13)
 
-- Vietnamese: `run_wer.py` supports en and zh only. The MiniMax multilingual set (CC BY-SA 4.0) has
-  99 Vietnamese sentences and two reference voices but no ground-truth target audio, so the
-  Vietnamese judge is validated separately on FLEURS-vi test recordings (CC BY 4.0) - plan T0b.
+`run_wer.py` covers en and zh only, and the MiniMax multilingual set (CC BY-SA 4.0; 99 Vietnamese
+sentences, two reference voices) has no ground-truth target audio. So the Vietnamese judge is chosen
+on FLEURS-vi test recordings (CC BY 4.0, 857 utterances) with `judge_multilingual.py`: audio decoded
+to float32 at 16 kHz, Whisper's multilingual BasicTextNormalizer on both sides, pooled WER.
+
+| judge | rows scored | WER on ground truth |
+|---|---|---|
+| **Qwen3-ASR-1.7B** (language forced to vi) | 857 / 857 | **7.49** |
+| Whisper-large-v3 (vi, long-form timestamps) | 857 / 857 | 10.25 |
+
+Qwen3-ASR is pinned as the Vietnamese judge; 7.49 is the floor synthesized Vietnamese is measured
+against. The first version of this scorer had three silent audio bugs (it passed the sample rate in
+place of the waveform, left int16 samples unscaled when no resampling was needed, and gave Whisper
+no language or long-form setting); all were fixed before this run.

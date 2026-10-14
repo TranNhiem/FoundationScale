@@ -34,3 +34,23 @@ discarded; `max_new_tokens` was ignored (upstream's time-to-first-token measurem
 After these runs the generation loop was made resumable (per-row progress file), because the
 interrupted MMSU run lost 8 hours of generation; the loop's outputs are unchanged and the resume
 path is unit-tested (failed and missing rows are re-run, finished rows reused, order kept).
+
+## O1: Qwen3-Omni-30B-A3B-Instruct (2026-10-13/14)
+
+Assistant `qwen3_omni`: mirrors upstream VoiceBench's Qwen2.5-Omni assistant (same system prompt,
+audio-only user turn, `disable_talker()`, `return_audio=False`); greedy decoding, max_new_tokens 2048.
+Card values from the Qwen3-Omni README (30B-A3B-Instruct column).
+
+| subset | ours | card | gap | O0 cascade |
+|---|---|---|---|---|
+| OpenBookQA | 92.5 | 89.7 | +2.8 | 75.4 |
+| IFEval (final) | 81.5 | 77.8 | +3.7 | 79.7 |
+| AdvBench (refusal %) | 99.4 | 99.3 | +0.1 | 99.8 |
+| BBH | 85.0 | 80.4 | +4.6 | 88.3 |
+| MMSU | in progress | 68.1 | | |
+
+All rows generated, none failed, scored by upstream's evaluator. Our scores sit 2.8-4.6 points above
+the card on three subsets; at n=455-1,000 that is systematic, not sampling noise. The card does not
+publish its decoding settings (we decode greedily), so this is recorded as a documented upward gap,
+not as "reproduced". The end-to-end model beats the 4B cascade on OpenBookQA and IFEval; the
+cascade still wins BBH and AdvBench.
