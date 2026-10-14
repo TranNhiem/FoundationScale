@@ -103,10 +103,11 @@ VLA_MODELS: tuple[ModelEntry, ...] = (
             # the counts are what is transcribed.
             upstream_value=97.5,
             source="Isaac-GR00T examples/LIBERO/README.md (goal 195/200)",
-            # binomial_tolerance(0.975, 200, 200) = 3.06 -> 3.1
-            tolerance=3.1,
-            measured=97.5,
-            measured_note="195/200 on GB200 aarch64 through the FS harness "
+            # binomial_tolerance(0.975, 200, 600) = 2.50 -> 2.5
+            tolerance=2.5,
+            measured=97.0,
+            measured_note="582/600 (seeds 0/1/2: 195, 195, 192 of 200) on GB200 aarch64 "
+            "through the FS harness "
             "(python -m foundationscale.vla.eval --backend gr00t: seeded resets, 720 env steps), "
             "0 episode errors, 2026-10-12",
         ),
@@ -130,10 +131,11 @@ VLA_MODELS: tuple[ModelEntry, ...] = (
             # the counts are what is transcribed.
             upstream_value=98.5,
             source="Isaac-GR00T examples/LIBERO/README.md (object 197/200)",
-            # binomial_tolerance(0.985, 200, 200) = 2.38 -> 2.4
-            tolerance=2.4,
-            measured=99.5,
-            measured_note="199/200 on GB200 aarch64 through the FS harness "
+            # binomial_tolerance(0.985, 200, 600) = 1.95 -> 2.0
+            tolerance=2.0,
+            measured=99.33,
+            measured_note="596/600 (seeds 0/1/2: 199, 199, 198 of 200) on GB200 aarch64 "
+            "through the FS harness "
             "(python -m foundationscale.vla.eval --backend gr00t: seeded resets, 720 env steps), "
             "0 episode errors, 2026-10-12",
         ),
