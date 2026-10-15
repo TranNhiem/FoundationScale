@@ -93,3 +93,18 @@ def test_connect_tunnel_relays_bytes(tmp_path: Path) -> None:
                                  b"CONNECT 127.0.0.1:PORT HTTP/1.1\r\n\r\nGET /tunnelled HTTP/1.1\r\n\r\n"))
     assert out.startswith(b"HTTP/1.1 200 Connection Established")
     assert b"upstream saw: GET /tunnelled HTTP/1.1" in out
+
+
+def test_failed_upstream_connect_is_retried_and_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import socket
+
+    log = tmp_path / "egress.log"
+    monkeypatch.setattr(ep, "_log_file", log.open("a", encoding="utf-8"))
+    with socket.socket() as s:  # a port nothing listens on: every attempt is refused
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with pytest.raises(OSError):
+        asyncio.run(ep._connect_upstream("127.0.0.1", port, "CONNECT"))
+    lines = log.read_text().splitlines()
+    assert [line.split()[1] for line in lines] == ["RETRY"] * (ep._CONNECT_ATTEMPTS - 1) + ["FAIL"]
+    assert "ConnectionRefusedError" in lines[-1]

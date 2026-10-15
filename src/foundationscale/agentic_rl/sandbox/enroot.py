@@ -384,7 +384,8 @@ class EnrootSandbox:
                 self.set_policy(self.spec.network, self.spec.allowed_hosts)
                 sock = self._socket_path("egress")
                 self._helpers.append(spawn([sys.executable, str(Path(__file__).with_name("egress_proxy.py")),
-                                            "--socket", str(sock), "--policy", str(self._policy_path())]))
+                                            "--socket", str(sock), "--policy", str(self._policy_path()),
+                                            "--log", str(self._egress_log_path())]))
                 self._bridge_into_netns(_PROXY_PORT, sock)
             for i, endpoint in enumerate(self.spec.endpoints):
                 port, host, host_port = _ENDPOINT_RE.match(endpoint).groups()
@@ -420,6 +421,10 @@ class EnrootSandbox:
         base = Path.home() / ".fs-sock"
         base.mkdir(mode=0o700, exist_ok=True)
         return base / f"{tag}-{role}.sock"
+
+    def _egress_log_path(self) -> Path:
+        # outside the per-sandbox scratch dir, which stop() removes: the record must outlive the sandbox
+        return Path(self.spec.scratch_root) / "egress-logs" / f"{self.spec.name}.log"
 
     def _policy_path(self) -> Path:
         return Path(self.spec.scratch_root) / self.spec.name / "egress-policy.json"
