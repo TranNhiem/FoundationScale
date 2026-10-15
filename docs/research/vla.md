@@ -136,6 +136,24 @@ Against NVIDIA's released libero_10 checkpoint in the same FS harness (548/600 =
 matches NVIDIA's model and both sit below the card on long-horizon tasks under this harness. Open check: GR00T's own rollout
 client on libero_10, to separate a harness effect from a protocol one.
 
+GR00T fine-tunes on `libero_goal` and `libero_object` through the same spec (2026-10-14, 20,000 steps each; goal trained on
+427 of 428 episodes because episode 82's wrist video is corrupt in the upstream dataset, a fresh download is byte-identical):
+
+| suite | FS-trained checkpoint (FS harness, seeds 0/1/2) | card | margin (200/600) | verdict |
+|---|---|---|---|---|
+| goal | 197 + 192 + 193 = 582/600 = 97.0% | 195/200 = 97.5% | 2.5 pt | REPRODUCED |
+| object | 197 + 199 + 199 = 595/600 = 99.2% | 197/200 = 98.5% | 2.0 pt | REPRODUCED |
+
+GR00T rung (c) therefore holds on spatial, goal and object; libero_10 matches NVIDIA's released checkpoint but not the card.
+
+Why the cards can sit above a strict harness: GR00T's own client (`gr00t/eval/rollout_policy.py`, README command with
+`--n-envs 5`) counts episodes as they finish across the vectorised envs and stops at `n_episodes`, dropping the episodes
+still running. Failures here are 720-step timeouts and successes take ~150 steps, so the dropped episodes are mostly
+failures. On NVIDIA's released `libero_goal` checkpoint the same client gives 201/202 = 99.5% with 5 envs (one task
+reports 22/20) and 187/200 = 93.5% with `--n-envs 1`, where nothing is dropped. On `libero_10` (n = 200 per run, ±4.5 pt)
+the two settings give 178/200 and 186/200 for the released checkpoint and 186/200 and 180/200 for the FS-trained one:
+the effect is inside the noise there. The FS harness keeps every planned episode in the denominator by construction.
+
 Rung (c), openpi fine-tune through the FS run spec — REPRODUCED 2026-10-13: `OpenPiFinetuneSpec(PUBLISHED_LIBERO_RECIPE)`
 (`pi05_libero`: batch 256, 30,000 steps from `pi05_base`) rendered into openpi's own `scripts/train.py` and run on one
 4-GPU GB200 tray (~2.0-2.7 s/step, ~19 h; norm stats from openpi's `compute_norm_stats.py`). The final checkpoint,
@@ -184,8 +202,8 @@ At 60% of the schedule (step 18,000) the same run already scored 494/500 = 98.8%
 - **GR00T rung (c) done, one seed**: the training run is not yet a registry row (its checkpoint is ours, not an upstream
   artifact), so the Level 3 regression still replays the published checkpoint. Scaling measured on the way: 1 GPU
   109 samples/s; 3 GPUs DDP 283 samples/s (87% efficiency); 4 GPUs ~400 samples/s (1.61 s per 640-sample step).
-- **GR00T rung (c) on the other suites**: libero_10 done (matches the released checkpoint, 3.8 pt under the card); goal
-  (training data: episode 82 wrist video is corrupt upstream, trained without it) and object fine-tunes running (2026-10-14).
+- **GR00T rung (c)**: spatial, goal, object reproduced; libero_10 equals the released checkpoint, 3.8 pt under the card.
+  A second libero_10 training run would separate training variance from the card gap.
 - **More suites**: only `libero_spatial` is reproduced; `libero_goal` (97.5), `libero_object` (98.45), `libero_long`
   (94.35), and openpi's goal/object/long (98.2/98.0/92.4) are the remaining published targets at the same row rules.
 - **RL entry in the registry**: verl-vla FPO evidence is reproduced within tolerance on one seed (2 GPU policy workers
