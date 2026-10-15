@@ -375,6 +375,7 @@ def run_generation(
     rows: list[dict[str, Any]],
     jsonl_path: Path,
     sidecar_path: Path,
+    row_range: tuple[int, int] | None = None,
 ) -> tuple[int, int]:
     """Run the upstream-shaped generation loop; return (rows_generated, failed).
 
@@ -382,18 +383,29 @@ def run_generation(
     completes, so an interrupted run (a released GPU, a killed job) restarts where it stopped.
     Rows that succeeded are reused; rows that failed are retried. The final JSONL is written in
     row order, the shape upstream evaluate.py reads, and the progress file is then removed.
+
+    ``row_range`` (start, end) lets a second GPU take a contiguous slice: it writes its own
+    progress file ``<jsonl>.partial.rows<start>-<end>`` and returns without writing the final
+    JSONL. A later full run reads every progress file, generates only what is still missing,
+    and writes the final output.
     """
     partial = jsonl_path.with_name(jsonl_path.name + ".partial")
+    progress_files = sorted(jsonl_path.parent.glob(jsonl_path.name + ".partial*"))
     done: dict[int, dict[str, Any]] = {}
-    if partial.exists():
-        for line in partial.read_text(encoding="utf-8").splitlines():
+    for path in progress_files:
+        for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 entry = json.loads(line)
                 if "fs_error" not in entry["metrics"]:
                     done[int(entry["row"])] = entry
-    with partial.open("a", encoding="utf-8") as progress:
+    own = partial
+    if row_range is not None:
+        own = partial.with_name(f"{partial.name}.rows{row_range[0]}-{row_range[1]}")
+    with own.open("a", encoding="utf-8") as progress:
         for index, item in enumerate(rows):
             if index in done:
+                continue
+            if row_range is not None and not row_range[0] <= index < row_range[1]:
                 continue
             audio_field = item.get("audio") or {}
             tmp = {k: v for k, v in item.items() if k != "audio"}  # upstream main.py record shape
@@ -412,6 +424,10 @@ def run_generation(
             progress.write(json.dumps(entry, default=_json_default) + "\n")
             progress.flush()
             done[index] = entry
+    if row_range is not None:
+        mine = [e for i, e in done.items() if row_range[0] <= i < row_range[1]]
+        failed = sum(1 for e in mine if "fs_error" in e["metrics"])
+        return len(mine) - failed, failed
     ordered = [done[i] for i in sorted(done)]
     failed = sum(1 for e in ordered if "fs_error" in e["metrics"])
     with jsonl_path.open("w", encoding="utf-8") as handle:
@@ -421,7 +437,8 @@ def run_generation(
         for entry in ordered:
             row = {"row": entry["row"], **entry["metrics"]}
             handle.write(json.dumps(row, default=_json_default) + "\n")
-    partial.unlink()
+    for path in progress_files + [partial]:
+        path.unlink(missing_ok=True)
     return len(ordered) - failed, failed
 
 
@@ -469,6 +486,12 @@ def main() -> None:
     parser.add_argument("--out-dir", dest="out_dir", required=True, type=Path)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--rows",
+        default=None,
+        help="START:END - generate only this row slice on an extra GPU, then exit; "
+        "a later full run merges every slice and scores",
+    )
     args = parser.parse_args()
 
     evaluator = EVALUATOR_BY_SUBSET[args.subset]
@@ -488,6 +511,11 @@ def main() -> None:
     registry = build_registry(args.vb_code, args.asr_model, args.llm, args.device)
     assistant = registry[args.assistant]()
     started = time.perf_counter()
+    if args.rows:
+        start, end = (int(x) for x in args.rows.split(":"))
+        made, failed = run_generation(assistant, rows, jsonl_path, sidecar_path, (start, end))
+        print(json.dumps({"rows": [start, end], "generated": made, "failed": failed}))
+        raise SystemExit(0)
     rows_generated, failed = run_generation(assistant, rows, jsonl_path, sidecar_path)
     elapsed_s = time.perf_counter() - started
 
