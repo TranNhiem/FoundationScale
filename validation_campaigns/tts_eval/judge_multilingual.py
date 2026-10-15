@@ -121,6 +121,57 @@ def _whisper_hypotheses(rows: list[dict[str, Any]], path: Path, language: str) -
     return out
 
 
+_LANGUAGE_NAMES = {"vi": "Vietnamese", "en": "English", "zh": "Chinese"}
+
+
+def _qwen3omni_hypotheses(rows: list[dict[str, Any]], path: Path, language: str) -> dict[str, str]:
+    """Transcribe with Qwen3-Omni's thinker (talker disabled, text out), greedy.
+
+    Measures how well the omni model hears a language (plan phase O2's starting point), with the
+    same normalisation and scoring as the ASR judges. The instruction names the language.
+    """
+    import torch
+    from transformers import Qwen3OmniMoeForConditionalGeneration, Qwen3OmniMoeProcessor
+
+    model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(str(path), dtype=torch.bfloat16)
+    model.to("cuda" if _has_cuda() else "cpu")
+    model.disable_talker()
+    model.eval()
+    processor = Qwen3OmniMoeProcessor.from_pretrained(str(path))
+    sample_rate = int(processor.feature_extractor.sampling_rate)
+    name = _LANGUAGE_NAMES.get(language, language)
+    out: dict[str, str] = {}
+    for r in rows:
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "audio", "audio": "<array>"},
+                    {"type": "text", "text": f"Transcribe the {name} audio into text."},
+                ],
+            },
+        ]
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(
+            text=text,
+            audio=[_load_audio(r["audio"], sample_rate)],
+            return_tensors="pt",
+            padding=True,
+            use_audio_in_video=False,
+        ).to(model.device, model.dtype)
+        with torch.inference_mode():
+            generated = model.generate(
+                **inputs, return_audio=False, max_new_tokens=512, do_sample=False
+            )
+        ids = generated[0] if isinstance(generated, tuple) else generated
+        ids = getattr(ids, "sequences", ids)
+        prompt_len = int(inputs["input_ids"].shape[1])
+        out[r["id"]] = processor.batch_decode(ids[:, prompt_len:], skip_special_tokens=True)[
+            0
+        ].strip()
+    return out
+
+
 def _qwen3asr_hypotheses(rows: list[dict[str, Any]], path: Path, language: str) -> dict[str, str]:
     """Transcribe with Qwen3-ASR (local ``path``) using the eval_qwen3_asr.py API.
 
@@ -235,10 +286,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--manifest", required=True)
-    ap.add_argument("--asr", choices=["whisper", "qwen3asr"], required=True)
+    ap.add_argument("--asr", choices=["whisper", "qwen3asr", "qwen3omni"], required=True)
     ap.add_argument("--language", required=True, help='e.g. "vi" for Whisper/Qwen3-ASR')
     ap.add_argument("--whisper", help="local path to Whisper-large-v3")
-    ap.add_argument("--qwen3asr", help="local path to Qwen3-ASR")
+    ap.add_argument(
+        "--qwen3asr", help="local path to Qwen3-ASR (or Qwen3-Omni for --asr qwen3omni)"
+    )
     ap.add_argument("--wavlm-ckpt", help="WavLM speaker-verification checkpoint")
     ap.add_argument("--seed-code", help="root of a seed-tts-eval checkout")
     ap.add_argument("--python", default=sys.executable)
@@ -278,10 +331,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         hypotheses = _whisper_hypotheses(present, Path(judge_path), args.language)
     else:
         if not args.qwen3asr:
-            sys.stderr.write("judge_multilingual: --qwen3asr is required for --asr qwen3asr\n")
+            sys.stderr.write(f"judge_multilingual: --qwen3asr is required for --asr {args.asr}\n")
             return 96
         judge_path = str(Path(args.qwen3asr).resolve())
-        hypotheses = _qwen3asr_hypotheses(present, Path(judge_path), args.language)
+        if args.asr == "qwen3omni":
+            hypotheses = _qwen3omni_hypotheses(present, Path(judge_path), args.language)
+        else:
+            hypotheses = _qwen3asr_hypotheses(present, Path(judge_path), args.language)
 
     sims: dict[str, float] = {}
     want_sim = not args.no_sim and any(r["prompt_audio"] for r in present)

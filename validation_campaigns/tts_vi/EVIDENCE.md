@@ -49,4 +49,22 @@ So LoRA on 65 h of commercial-safe Vietnamese makes VoxCPM2 significantly more i
 small but significant cost in speaker similarity - consistent with the training mix (one dominant
 reader, unpunctuated text). For reference, the same judge reads real FLEURS-vi recordings at 7.49
 WER: the fine-tuned output is at the judge's floor on read speech. Not measured yet: naturalness
-(UTMOS licence unrecorded) and full fine-tuning (running).
+(UTMOS licence unrecorded).
+
+## Full fine-tuning vs LoRA (2026-10-15)
+
+Same data, steps and effective batch, from upstream `voxcpm_finetune_all.yaml` (all weights except
+the frozen AudioVAE, lr 1e-5; `MODE=full cluster/make_t2b_config.sh`). Final step 2000, fixed in
+advance, judged exactly like the LoRA run.
+
+| run | FLEURS-vi WER / SIM | MiniMax-vi WER / SIM |
+|---|---|---|
+| base | 8.59 / 82.56 | 5.75 / 79.50 |
+| LoRA step 2000 | 6.79 / 81.49 | 1.44 / 77.01 |
+| full FT step 2000 | 6.895 / 81.79 | 1.303 / 73.93 |
+
+Paired bootstrap on FLEURS-vi (n=857): base vs full WER -1.69 points [-3.26, -0.53], SIM -0.77
+[-1.13, -0.40]; LoRA vs full WER +0.10 [-0.32, +0.53], SIM +0.30 [-0.07, +0.70]. Full fine-tuning
+buys nothing measurable over LoRA on intelligibility and loses more similarity on the
+two-voice MiniMax set (73.93 vs 77.01). **LoRA stays the T2b recipe**: equal quality, a small adapter instead of
+a full checkpoint to ship, and it keeps cloning similarity closer to the base model.

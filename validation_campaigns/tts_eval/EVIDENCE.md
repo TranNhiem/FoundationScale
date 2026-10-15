@@ -46,6 +46,8 @@ scored by the T0 harness. Tolerance fixed in advance: +-0.3 WER/CER, +-1.0 SIM.
 | Qwen3-TTS-12Hz-0.6B-Base | test-zh | 1.132 | 0.92 | 76.33 / - | reproduced |
 | Qwen3-TTS-12Hz-1.7B-Base | test-en | 1.561 | 1.24 | 71.65 / - | **not reproduced (+0.32)** |
 | Qwen3-TTS-12Hz-0.6B-Base | test-en | 4.224 | 1.32 | 70.3 / - | **not reproduced** |
+| VoxCPM2 | test-zh-hard | 7.826 | 8.13 | 75.11 / 75.3 | reproduced |
+| Qwen3-TTS-12Hz-1.7B-Base | test-zh-hard | 5.914 | - | 74.65 / - | measured (no published value) |
 
 Qwen3-TTS uses its README protocol (bf16, max_new_tokens 2048, checkpoint sampling defaults,
 language auto); VoxCPM2's README states no evaluation settings, so its documented cloning call and

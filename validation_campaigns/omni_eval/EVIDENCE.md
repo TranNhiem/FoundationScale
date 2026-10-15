@@ -54,3 +54,11 @@ the card on four of five subsets; at n=455-1,000 that is systematic, not samplin
 publish its decoding settings (we decode greedily), so this is recorded as a documented upward gap,
 not as "reproduced". The end-to-end model beats the 4B cascade on OpenBookQA and IFEval; the
 cascade still wins BBH and AdvBench.
+
+## O2 starting point: Qwen3-Omni already hears Vietnamese (2026-10-15)
+
+Qwen3-Omni as an ASR judge on FLEURS-vi test (`judge_multilingual.py --asr qwen3omni`: prompt
+"Transcribe the Vietnamese audio into text.", talker disabled, greedy): **5.44 WER** on 857/857
+rows, better than the pinned Vietnamese judge Qwen3-ASR-1.7B (7.49). So O2's planned target -
+teaching the omni model Vietnamese speech input - has little headroom on read speech; the O2 target
+is being re-scoped before any training is spent on it.
