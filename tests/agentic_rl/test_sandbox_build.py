@@ -1001,8 +1001,8 @@ def test_build_copy_glob_escaping_context_refused(tmp_path: Path) -> None:
 
 
 def test_build_copy_dir_to_trailing_slash_target(tmp_path: Path) -> None:
-    """Docker semantics: COPY of a directory copies its CONTENTS into the target, never the directory
-    itself (the old nesting mis-built 98.8% of builder-accepted Skill2Env tasks)."""
+    """Docker semantics: COPY of a directory copies its CONTENTS into the target, never
+    the directory itself (the old nesting mis-built 98.8% of builder-accepted Skill2Env tasks)."""
     runner = FakeRunner()
     context = tmp_path / "ctx"
     context.mkdir()
@@ -1281,7 +1281,8 @@ def test_build_add_glob_escaping_context_refused(tmp_path: Path) -> None:
 
 
 def test_build_add_dir_to_trailing_slash_target(tmp_path: Path) -> None:
-    """Docker semantics: ADD of a directory copies its CONTENTS into the target, never the directory itself."""
+    """Docker semantics: ADD of a directory copies its CONTENTS into the target,
+    never the directory itself."""
     runner = FakeRunner()
     context = tmp_path / "ctx"
     context.mkdir()
@@ -2158,15 +2159,17 @@ def test_build_container_names_are_unique_per_build(tmp_path: Path) -> None:
     ],
 )
 def test_build_records_entrypoint(tmp_path: Path, line: str, expected) -> None:
-    """Harbor's Docker backend keeps ENTRYPOINT (only CMD is overridden); the builder records the effective one."""
+    """Harbor's Docker backend keeps ENTRYPOINT (only CMD is overridden); the builder records
+    the effective one."""
     runner = FakeRunner()
-    _build(tmp_path, f"FROM alpine\n{line}\nCMD [\"node\", \"server.js\"]\n", runner)
+    _build(tmp_path, f'FROM alpine\n{line}\nCMD ["node", "server.js"]\n', runner)
     meta = json.loads(next(tmp_path.rglob("fs-sandbox.json")).read_text())
     assert meta["entrypoint"] == expected
 
 
 def test_env_references_resolve_against_the_base_image_env(tmp_path: Path) -> None:
-    """`ENV PATH=/x/bin:$PATH` must extend the base image's PATH (Docker semantics), not keep a literal "$PATH"."""
+    """`ENV PATH=/x/bin:$PATH` must extend the base image's PATH (Docker semantics), not keep
+    a literal "$PATH"."""
     runner = FakeRunner()
     runner.image_environment = "PATH=/usr/local/bin:/usr/bin:/bin\nNODE_VERSION=22\n"
     _build(tmp_path, "FROM node\nENV PATH=/opt/deps/.bin:$PATH \\\n    P=x\nRUN echo $P\n", runner)

@@ -1,4 +1,7 @@
-"""Tests for foundationscale.agentic_rl.sandbox.egress_proxy (policy matching and a live CONNECT/HTTP round trip)."""
+"""Tests for foundationscale.agentic_rl.sandbox.egress_proxy.
+
+Policy matching and a live CONNECT/HTTP round trip.
+"""
 
 from __future__ import annotations
 
@@ -37,6 +40,7 @@ def test_unreadable_policy_denies(tmp_path: Path) -> None:
 
 async def _roundtrip(tmp_path: Path, policy: dict, request: bytes) -> bytes:
     """Start an upstream HTTP server and the proxy; send `request` through the proxy socket."""
+
     async def upstream(reader, writer):
         head = await reader.readuntil(b"\r\n\r\n")
         body = b"upstream saw: " + head.split(b"\r\n")[0]
@@ -50,7 +54,9 @@ async def _roundtrip(tmp_path: Path, policy: dict, request: bytes) -> bytes:
     policy_path.write_text(json.dumps(policy))
     import uuid
 
-    short = Path.home() / ".fs-sock"  # AF_UNIX paths are limited to ~108 bytes; pytest tmp paths are longer
+    short = (
+        Path.home() / ".fs-sock"
+    )  # AF_UNIX paths are limited to ~108 bytes; pytest tmp paths are longer
     short.mkdir(exist_ok=True)
     sock = short / f"test-{uuid.uuid4().hex[:8]}.sock"
     proxy = asyncio.create_task(ep.serve(sock, policy_path))
@@ -77,19 +83,34 @@ async def _roundtrip(tmp_path: Path, policy: dict, request: bytes) -> bytes:
 
 
 def test_plain_http_forwarded_in_origin_form(tmp_path: Path) -> None:
-    out = asyncio.run(_roundtrip(tmp_path, {"mode": "allowlist", "hosts": ["127.0.0.1"]},
-                                 b"GET http://127.0.0.1:PORT/pool/x.deb HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"))
+    out = asyncio.run(
+        _roundtrip(
+            tmp_path,
+            {"mode": "allowlist", "hosts": ["127.0.0.1"]},
+            b"GET http://127.0.0.1:PORT/pool/x.deb HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+        )
+    )
     assert b"upstream saw: GET /pool/x.deb HTTP/1.1" in out
 
 
 def test_denied_host_gets_403(tmp_path: Path) -> None:
-    out = asyncio.run(_roundtrip(tmp_path, {"mode": "allowlist", "hosts": ["example.com"]},
-                                 b"GET http://127.0.0.1:PORT/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"))
+    out = asyncio.run(
+        _roundtrip(
+            tmp_path,
+            {"mode": "allowlist", "hosts": ["example.com"]},
+            b"GET http://127.0.0.1:PORT/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+        )
+    )
     assert out.startswith(b"HTTP/1.1 403")
 
 
 def test_connect_tunnel_relays_bytes(tmp_path: Path) -> None:
-    out = asyncio.run(_roundtrip(tmp_path, {"mode": "public"},
-                                 b"CONNECT 127.0.0.1:PORT HTTP/1.1\r\n\r\nGET /tunnelled HTTP/1.1\r\n\r\n"))
+    out = asyncio.run(
+        _roundtrip(
+            tmp_path,
+            {"mode": "public"},
+            b"CONNECT 127.0.0.1:PORT HTTP/1.1\r\n\r\nGET /tunnelled HTTP/1.1\r\n\r\n",
+        )
+    )
     assert out.startswith(b"HTTP/1.1 200 Connection Established")
     assert b"upstream saw: GET /tunnelled HTTP/1.1" in out

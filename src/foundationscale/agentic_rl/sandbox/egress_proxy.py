@@ -1,12 +1,14 @@
 """Per-sandbox egress proxy: the only route out of a sandbox's network namespace.
 
-Listens on a host Unix socket (bridged into the sandbox netns as 127.0.0.1:<port> by socat) and forwards
-HTTPS (CONNECT) and plain HTTP (absolute-URI requests, as apt sends) only to hosts the current policy allows.
+Listens on a host Unix socket (bridged into the sandbox netns as 127.0.0.1:<port> by socat) and
+forwards HTTPS (CONNECT) and plain HTTP (absolute-URI requests, as apt sends) only to hosts the
+current policy allows.
 The policy file is re-read on every connection, so a Harbor phase switch is one atomic file replace:
 
     {"mode": "public" | "allowlist" | "no-network", "hosts": ["example.com", "*.example.org", ...]}
 
-Fails closed: an unreadable or unknown policy denies; IP literals are allowed only when listed exactly;
+Fails closed: an unreadable or unknown policy denies; IP literals are allowed only
+when listed exactly;
 ``*.example.org`` matches subdomains, not the apex. Every decision is logged as one line on stderr.
 
 Run: python -m foundationscale.agentic_rl.sandbox.egress_proxy --socket PATH --policy FILE
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import ipaddress
 import json
 import sys
@@ -63,7 +66,9 @@ def _split_hostport(authority: str, default_port: int) -> tuple[str, int]:
         host, _, rest = authority[1:].partition("]")
         port = rest.lstrip(":")
     else:
-        host, _, port = authority.rpartition(":") if authority.count(":") == 1 else (authority, "", "")
+        host, _, port = (
+            authority.rpartition(":") if authority.count(":") == 1 else (authority, "", "")
+        )
     return host, int(port) if port.isdigit() else default_port
 
 
@@ -75,17 +80,17 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
     except (ConnectionError, asyncio.IncompleteReadError):
         pass
     finally:
-        try:
+        with contextlib.suppress(Exception):  # noqa: BLE001 - closing a broken transport
             writer.close()
-        except Exception:  # noqa: BLE001 - closing a broken transport
-            pass
 
 
 def _log(verdict: str, method: str, host: str, port: int) -> None:
     print(f"egress {verdict} {method} {host}:{port}", file=sys.stderr, flush=True)
 
 
-async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, policy_path: Path) -> None:
+async def _handle(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, policy_path: Path
+) -> None:
     try:
         head = await reader.readuntil(b"\r\n\r\n")
     except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError):
@@ -113,13 +118,17 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, po
     )
     if not allowed:
         _log("DENY", method, host, port)
-        writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n"
-                     b"egress denied by sandbox network policy\n")
+        writer.write(
+            b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n"
+            b"egress denied by sandbox network policy\n"
+        )
         await writer.drain()
         writer.close()
         return
     try:
-        up_reader, up_writer = await asyncio.wait_for(asyncio.open_connection(host.strip("[]"), port), 30)
+        up_reader, up_writer = await asyncio.wait_for(
+            asyncio.open_connection(host.strip("[]"), port), 30
+        )
     except (OSError, asyncio.TimeoutError):
         _log("FAIL", method, host, port)
         writer.write(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
@@ -130,8 +139,12 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, po
         writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await writer.drain()
     else:
-        headers = [h for h in lines[1:] if h and not h.lower().startswith(("proxy-", "connection:"))]
-        request = "\r\n".join([f"{method} /{path} {version}", *headers, "Connection: close", "", ""])
+        headers = [
+            h for h in lines[1:] if h and not h.lower().startswith(("proxy-", "connection:"))
+        ]
+        request = "\r\n".join(
+            [f"{method} /{path} {version}", *headers, "Connection: close", "", ""]
+        )
         up_writer.write(request.encode("latin-1"))
         await up_writer.drain()
     await asyncio.gather(_pipe(reader, up_writer), _pipe(up_reader, writer))

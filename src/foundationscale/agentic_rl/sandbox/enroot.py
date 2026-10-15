@@ -26,7 +26,9 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol
 
-_NETNS_HOLDER_MAX_S = 172800  # 2 days: far beyond any trial; bounds a holder leaked by an external kill
+_NETNS_HOLDER_MAX_S = (
+    172800  # 2 days: far beyond any trial; bounds a holder leaked by an external kill
+)
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,63}$")
 _NETWORKS = ("no-network", "public", "allowlist")
 _PROXY_PORT = 3128  # the egress proxy, as seen from inside an isolated sandbox (127.0.0.1)
@@ -65,11 +67,22 @@ class Runner(Protocol):
 
 
 def _memory_scope(memory_mb: int) -> list[str]:
-    """argv prefix running a command in its own cgroup v2 scope capped at ``memory_mb`` (no swap)."""
-    return ["systemd-run", "--user", "--scope", "--quiet", "-p", f"MemoryMax={memory_mb}M",
-            "-p", "MemorySwapMax=0",
-            # Docker kills only the offending process on OOM; systemd's default stops the whole scope
-            "-p", "OOMPolicy=continue", "--"]
+    """argv prefix running a command in its own cgroup v2 scope capped at ``memory_mb`` (no
+    swap)."""
+    return [
+        "systemd-run",
+        "--user",
+        "--scope",
+        "--quiet",
+        "-p",
+        f"MemoryMax={memory_mb}M",
+        "-p",
+        "MemorySwapMax=0",
+        # Docker kills only the offending process on OOM; systemd's default stops the whole scope
+        "-p",
+        "OOMPolicy=continue",
+        "--",
+    ]
 
 
 class SubprocessRunner:
@@ -91,12 +104,16 @@ class SubprocessRunner:
     def spawn(self, argv: Sequence[str], *, ready_timeout_s: float = 30.0) -> int:
         """Start a long-lived helper (its own session) and return its pid once it prints "ready".
 
-        Waiting matters: a pid exists before the helper's own setup (e.g. ``unshare``) has run, and a caller
-        that acts on it at once raced it (nsenter: "reassociate to namespace 'ns/user' failed")."""
+        Waiting matters: a pid exists before the helper's own setup (e.g. ``unshare``) has run,
+        and a caller that acts on it at once raced it (nsenter: "reassociate to namespace
+        'ns/user' failed")."""
         try:
             proc = subprocess.Popen(  # noqa: S603
-                list(argv), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, start_new_session=True,
+                list(argv),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
         except OSError as exc:
             raise SandboxError(f"failed to spawn {list(argv)!r}: {exc}") from exc
@@ -176,16 +193,23 @@ class SandboxSpec:
     memory_mb: int | None = None
     env: Mapping[str, str] = field(default_factory=dict)
     workdir: str = "/"
-    # Optional enroot config dir (ENROOT_SYSCONF_PATH) for all enroot calls: a copy of /etc/enroot that drops the
-    # site's tmpfs over /tmp (mode 755, a separate fs: rename into /tmp failed EXDEV; Docker's /tmp is the container fs)
+    # Optional enroot config dir (ENROOT_SYSCONF_PATH) for all enroot calls: a copy of
+    # /etc/enroot that drops the
+    # site's tmpfs over /tmp (mode 755, a separate fs: rename into /tmp failed EXDEV; Docker's
+    # /tmp is the container fs)
     enroot_sysconf: str | None = None
-    # Docker-like network isolation for task sandboxes: an own network namespace for every network mode; egress
-    # only through a per-sandbox proxy that enforces the policy ("public": any host; "allowlist": allowed_hosts;
-    # "no-network": none). Without it, "public" shared the host's network: TB 2.1 nginx could not bind the
-    # host-taken :8080 and mailman could not bind :25. Builds keep the host network (isolate_network False).
+    # Docker-like network isolation for task sandboxes: an own network namespace for every
+    # network mode; egress
+    # only through a per-sandbox proxy that enforces the policy ("public": any host;
+    # "allowlist": allowed_hosts;
+    # "no-network": none). Without it, "public" shared the host's network: TB 2.1 nginx could
+    # not bind the
+    # host-taken :8080 and mailman could not bind :25. Builds keep the host network
+    # (isolate_network False).
     isolate_network: bool = False
     allowed_hosts: tuple[str, ...] = ()
-    # "PORT=HOST:HOSTPORT": host service reachable inside the sandbox at 127.0.0.1:PORT (e.g. the agent's model
+    # "PORT=HOST:HOSTPORT": host service reachable inside the sandbox at 127.0.0.1:PORT (e.g.
+    # the agent's model
     # endpoint; Node clients ignore proxy env vars, so it is bridged directly rather than proxied)
     endpoints: tuple[str, ...] = ()
 
@@ -193,10 +217,12 @@ class SandboxSpec:
         if not _NAME_RE.match(self.name):
             raise SandboxRefusal(f"name: expected [A-Za-z0-9_.-]{{1,63}}, got {self.name!r}")
         if self.enroot_sysconf is not None and not (
-            self.enroot_sysconf.startswith("/") and Path(self.enroot_sysconf, "enroot.conf").is_file()
+            self.enroot_sysconf.startswith("/")
+            and Path(self.enroot_sysconf, "enroot.conf").is_file()
         ):
             raise SandboxRefusal(
-                f"enroot_sysconf: expected an absolute enroot config dir with enroot.conf, got {self.enroot_sysconf!r}"
+                f"enroot_sysconf: expected an absolute enroot config dir with "
+                f"enroot.conf, got {self.enroot_sysconf!r}"
             )
         for field_name in ("data_root", "image_store", "scratch_root"):
             value = getattr(self, field_name)
@@ -205,12 +231,16 @@ class SandboxSpec:
         if self.network not in _NETWORKS:
             raise SandboxRefusal(f"network: expected one of {_NETWORKS}, got {self.network!r}")
         if self.network == "allowlist" and not self.isolate_network:
-            raise SandboxRefusal("network='allowlist': expected isolate_network=True (it is enforced by the proxy)")
+            raise SandboxRefusal(
+                "network='allowlist': expected isolate_network=True (it is enforced by the proxy)"
+            )
         for endpoint in self.endpoints:
             if not _ENDPOINT_RE.match(endpoint):
                 raise SandboxRefusal(f"endpoints: expected 'PORT=HOST:HOSTPORT', got {endpoint!r}")
         if self.endpoints and not (self.isolate_network or self.network == "no-network"):
-            raise SandboxRefusal("endpoints: expected an isolated or no-network sandbox (host network needs none)")
+            raise SandboxRefusal(
+                "endpoints: expected an isolated or no-network sandbox (host network needs none)"
+            )
         if self.cpu_set is not None:
             if not isinstance(self.cpu_set, tuple) or not self.cpu_set:
                 raise SandboxRefusal(
@@ -249,7 +279,9 @@ class EnrootSandbox:
         self._started = False
         self._netns_pid: int | None = None
         self._helpers: list[int] = []  # egress proxy and socat bridges (terminated by stop())
-        self.entrypoint: tuple[str, ...] | None = None  # the image's ENTRYPOINT, from build metadata
+        self.entrypoint: tuple[str, ...] | None = (
+            None  # the image's ENTRYPOINT, from build metadata
+        )
         self._image_path: str | None = None
         self._build_env: Mapping[str, str] = MappingProxyType({})
         self._build_workdir: str | None = None
@@ -277,21 +309,27 @@ class EnrootSandbox:
         if Path(path).exists():
             return path
         Path(self.spec.image_store).mkdir(parents=True, exist_ok=True)
-        # enroot's per-user layer cache is not safe for concurrent imports that share layers (two trials pulling
-        # ubuntu:24.04 at once: "mv: not replacing .../enroot-cache/<layer>"), so imports are serialized with a
-        # file lock that covers threads and separate Harbor processes alike; an importer that waited reuses the
+        # enroot's per-user layer cache is not safe for concurrent imports that share
+        # layers (two trials pulling
+        # ubuntu:24.04 at once: "mv: not replacing .../enroot-cache/<layer>"), so imports
+        # are serialized with a
+        # file lock that covers threads and separate Harbor processes alike; an importer
+        # that waited reuses the
         # image a concurrent one already produced.
         Path(self.spec.data_root).mkdir(parents=True, exist_ok=True)
-        with open(Path(self.spec.data_root) / ".enroot-import.lock", "w") as lock:
+        with (Path(self.spec.data_root) / ".enroot-import.lock").open("w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             if Path(path).exists():
                 return path
             return self._import_locked(image, path)
 
     def _import_locked(self, image: str, path: str) -> str:
-        # A private temp name per import: concurrent sandboxes sharing a base image (R0 gate workers) each
-        # wrote and deleted one shared "<digest>.sqsh.partial", so mksquashfs read the other's half-written
-        # file. Each importer now writes its own file; the atomic replace below makes the last complete one win.
+        # A private temp name per import: concurrent sandboxes sharing a base image (R0
+        # gate workers) each
+        # wrote and deleted one shared "<digest>.sqsh.partial", so mksquashfs read the
+        # other's half-written
+        # file. Each importer now writes its own file; the atomic replace below makes the
+        # last complete one win.
         partial = f"{path}.{uuid.uuid4().hex}.partial"
         result = self._runner.run(
             ["enroot", "import", "-o", partial, image],
@@ -323,7 +361,8 @@ class EnrootSandbox:
             probe = self._runner.run([*_memory_scope(self.spec.memory_mb), "true"])
             if probe.returncode != 0:
                 raise SandboxError(
-                    f"memory_mb={self.spec.memory_mb}: expected a cgroup v2 memory scope via systemd --user, "
+                    f"memory_mb={self.spec.memory_mb}: expected a cgroup v2 memory scope "
+                    f"via systemd --user, "
                     f"got exit {probe.returncode}: {probe.stderr[-_STDERR_TAIL:]}"
                 )
         result = self._runner.run(
@@ -335,12 +374,16 @@ class EnrootSandbox:
                 f"enroot create failed for {self.spec.name!r} (exit {result.returncode}): "
                 f"{result.stderr[-_STDERR_TAIL:]}"
             )
-        # /tmp lives in the container's own (writable) rootfs, as in Docker. A scratch bind-mount over /tmp made
-        # rename(2) into /tmp cross filesystems (TB 2.1 path-tracing-reverse: "Invalid cross-device link").
+        # /tmp lives in the container's own (writable) rootfs, as in Docker. A scratch
+        # bind-mount over /tmp made
+        # rename(2) into /tmp cross filesystems (TB 2.1 path-tracing-reverse: "Invalid
+        # cross-device link").
         tmp = Path(self.rootfs()) / "tmp"
         tmp.mkdir(parents=True, exist_ok=True)
         tmp.chmod(0o1777)
-        (Path(self.spec.scratch_root) / self.spec.name).mkdir(parents=True, exist_ok=True)  # per-sandbox host scratch
+        (Path(self.spec.scratch_root) / self.spec.name).mkdir(
+            parents=True, exist_ok=True
+        )  # per-sandbox host scratch
         metadata = Path(self.rootfs()) / "etc" / "fs-sandbox.json"
         if metadata.is_file():
             try:
@@ -366,46 +409,83 @@ class EnrootSandbox:
             self._build_workdir = workdir
             self.entrypoint = tuple(entrypoint) if entrypoint else None
         if self.spec.network == "no-network" or self.spec.isolate_network:
-            # One network namespace for the sandbox's lifetime, as a Docker container has: every exec joins it.
-            # A namespace per exec meant a service started by one exec (the oracle's mongod) was unreachable
-            # from the next (the verifier: "Connection refused"). Loopback up, no route off the box; the
+            # One network namespace for the sandbox's lifetime, as a Docker container
+            # has: every exec joins it.
+            # A namespace per exec meant a service started by one exec (the oracle's
+            # mongod) was unreachable
+            # from the next (the verifier: "Connection refused"). Loopback up, no
+            # route off the box; the
             # holder's finite sleep bounds a leak if this process is killed before stop().
             spawn = getattr(self._runner, "spawn", None)
             if not callable(spawn):
-                raise SandboxRefusal("network='no-network': expected a runner with spawn(), got none")
-            self._netns_pid = spawn(["unshare", "-rn", "sh", "-c",
-                                     # ports < 1024 (mailman's :25): container root runs in a nested user
-                                     # namespace without caps over this netns, so the netns owner lowers the
-                                     # unprivileged-port floor, as Docker root can bind them in its own netns
-                                     "ip link set lo up 2>/dev/null; echo 0 > /proc/sys/net/ipv4/"
-                                     f"ip_unprivileged_port_start 2>/dev/null; echo ready; exec sleep {_NETNS_HOLDER_MAX_S}"])
+                raise SandboxRefusal(
+                    "network='no-network': expected a runner with spawn(), got none"
+                )
+            self._netns_pid = spawn(
+                [
+                    "unshare",
+                    "-rn",
+                    "sh",
+                    "-c",
+                    # ports < 1024 (mailman's :25): container root runs in a nested user
+                    # namespace without caps over this netns, so the netns owner lowers the
+                    # unprivileged-port floor, as Docker root can bind them in its own netns
+                    "ip link set lo up 2>/dev/null; echo 0 > /proc/sys/net/ipv4/"
+                    f"ip_unprivileged_port_start 2>/dev/null; echo ready; "
+                    f"exec sleep {_NETNS_HOLDER_MAX_S}",
+                ]
+            )
             if self.spec.isolate_network:
                 self._write_proxy_config()
                 self.set_policy(self.spec.network, self.spec.allowed_hosts)
                 sock = self._socket_path("egress")
-                self._helpers.append(spawn([sys.executable, str(Path(__file__).with_name("egress_proxy.py")),
-                                            "--socket", str(sock), "--policy", str(self._policy_path())]))
+                self._helpers.append(
+                    spawn(
+                        [
+                            sys.executable,
+                            str(Path(__file__).with_name("egress_proxy.py")),
+                            "--socket",
+                            str(sock),
+                            "--policy",
+                            str(self._policy_path()),
+                        ]
+                    )
+                )
                 self._bridge_into_netns(_PROXY_PORT, sock)
             for i, endpoint in enumerate(self.spec.endpoints):
-                port, host, host_port = _ENDPOINT_RE.match(endpoint).groups()
+                match = _ENDPOINT_RE.match(endpoint)
+                assert match is not None  # validated by SandboxSpec.__post_init__
+                port, host, host_port = match.groups()
                 sock = self._socket_path(f"ep{i}")
-                self._helpers.append(spawn(["sh", "-c", f"echo ready; exec socat UNIX-LISTEN:{sock},fork,mode=600,"
-                                                        f"unlink-early TCP:{host.strip('[]')}:{host_port}"]))
+                self._helpers.append(
+                    spawn(
+                        [
+                            "sh",
+                            "-c",
+                            f"echo ready; exec socat UNIX-LISTEN:{sock},fork,mode=600,"
+                            f"unlink-early TCP:{host.strip('[]')}:{host_port}",
+                        ]
+                    )
+                )
                 self._bridge_into_netns(int(port), sock)
         self._started = True
 
     # -- network helpers ---------------------------------------------------
 
     def _write_proxy_config(self) -> None:
-        """System-level proxy settings for clients that drop the env: sudo resets the environment (TB 2.1
-        rstan-to-pystan: `sudo apt-get update` -> "Temporary failure resolving ports.ubuntu.com"), and apt reads
+        """System-level proxy settings for clients that drop the env: sudo resets the
+        environment (TB 2.1 rstan-to-pystan: `sudo apt-get update` -> "Temporary failure
+        resolving ports.ubuntu.com"), and apt reads
         its own config. Docker containers need neither because their egress is not proxied."""
         root = Path(self.rootfs())
         proxy = f"http://127.0.0.1:{_PROXY_PORT}"
         sudoers = root / "etc" / "sudoers.d"
         sudoers.mkdir(parents=True, exist_ok=True)
         keep = root / "etc" / "sudoers.d" / "fs-egress-proxy"
-        keep.write_text('Defaults env_keep += "http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY"\n')
+        keep.write_text(
+            'Defaults env_keep += "http_proxy https_proxy HTTP_PROXY HTTPS_PROXY '
+            'no_proxy NO_PROXY"\n'
+        )
         keep.chmod(0o440)
         if (root / "etc" / "apt").is_dir():
             conf = root / "etc" / "apt" / "apt.conf.d"
@@ -415,7 +495,8 @@ class EnrootSandbox:
             )
 
     def _socket_path(self, role: str) -> Path:
-        # AF_UNIX paths are limited to ~108 bytes and sandbox names are long, so sockets live in a short dir
+        # AF_UNIX paths are limited to ~108 bytes and sandbox names are long, so sockets
+        # live in a short dir
         tag = hashlib.sha256(f"{self.spec.scratch_root}/{self.spec.name}".encode()).hexdigest()[:16]
         base = Path.home() / ".fs-sock"
         base.mkdir(mode=0o700, exist_ok=True)
@@ -435,15 +516,44 @@ class EnrootSandbox:
         tmp.replace(path)
 
     def _bridge_into_netns(self, port: int, sock: Path) -> None:
-        """socat inside the sandbox netns: 127.0.0.1:port -> host Unix socket; wait until it listens."""
-        spawn = getattr(self._runner, "spawn")
-        join = ["nsenter", f"--target={self._netns_pid}", "--user", "--net", "--preserve-credentials", "--"]
-        self._helpers.append(spawn([*join, "sh", "-c", f"echo ready; exec socat TCP-LISTEN:{port},bind=127.0.0.1,"
-                                                       f"fork,reuseaddr UNIX-CONNECT:{sock}"]))
-        probe = self._runner.run([*join, "bash", "-c", f"for i in $(seq 1 200); do (exec 3<>/dev/tcp/127.0.0.1/{port}) "
-                                                       f"2>/dev/null && exit 0; sleep 0.05; done; exit 1"], timeout_s=30)
+        """socat inside the sandbox netns: 127.0.0.1:port -> host Unix socket; wait until it
+        listens."""
+        spawn = getattr(self._runner, "spawn", None)
+        if not callable(spawn):
+            raise SandboxRefusal("network bridge: expected a runner with spawn(), got none")
+        join = [
+            "nsenter",
+            f"--target={self._netns_pid}",
+            "--user",
+            "--net",
+            "--preserve-credentials",
+            "--",
+        ]
+        self._helpers.append(
+            spawn(
+                [
+                    *join,
+                    "sh",
+                    "-c",
+                    f"echo ready; exec socat TCP-LISTEN:{port},bind=127.0.0.1,"
+                    f"fork,reuseaddr UNIX-CONNECT:{sock}",
+                ]
+            )
+        )
+        probe = self._runner.run(
+            [
+                *join,
+                "bash",
+                "-c",
+                f"for i in $(seq 1 200); do (exec 3<>/dev/tcp/127.0.0.1/{port}) "
+                f"2>/dev/null && exit 0; sleep 0.05; done; exit 1",
+            ],
+            timeout_s=30,
+        )
         if probe.returncode != 0:
-            raise SandboxError(f"network bridge to {sock} did not start listening on 127.0.0.1:{port}")
+            raise SandboxError(
+                f"network bridge to {sock} did not start listening on 127.0.0.1:{port}"
+            )
 
     def exec(
         self,
@@ -465,8 +575,10 @@ class EnrootSandbox:
                     raise SandboxRefusal(f"env: expected Mapping[str, str], got {key!r}: {value!r}")
         merged: dict[str, str] = {}
         if not self._image_env_defines("HOME"):
-            # Docker sets HOME from /etc/passwd (/root: execs run as root); without a login shell nothing
-            # else does, and Go/pip/npm/git failed ("neither $XDG_CACHE_HOME nor $HOME are defined").
+            # Docker sets HOME from /etc/passwd (/root: execs run as root); without a
+            # login shell nothing
+            # else does, and Go/pip/npm/git failed ("neither $XDG_CACHE_HOME nor $HOME
+            # are defined").
             merged["HOME"] = "/root"
         if self.spec.isolate_network:
             proxy = f"http://127.0.0.1:{_PROXY_PORT}"
@@ -480,21 +592,34 @@ class EnrootSandbox:
         workdir = cwd if cwd is not None else (self._build_workdir or self.spec.workdir)
         argv: list[str] = []
         if self.spec.memory_mb:
-            # A cgroup v2 memory limit, as Docker's --memory: it counts memory actually resident. rlimits cannot
-            # do this: RLIMIT_AS counted V8/WebAssembly/Chromium PROT_NONE reservations and RLIMIT_DATA counts
-            # ASan's 8 GiB MAP_NORESERVE shadow, so Node and sanitizer builds could not start under a 4 GiB
-            # task limit. Measured: an 8 GiB untouched reservation runs, touching 512 MiB under 256 MiB is killed.
+            # A cgroup v2 memory limit, as Docker's --memory: it counts memory
+            # actually resident. rlimits cannot
+            # do this: RLIMIT_AS counted V8/WebAssembly/Chromium PROT_NONE
+            # reservations and RLIMIT_DATA counts
+            # ASan's 8 GiB MAP_NORESERVE shadow, so Node and sanitizer builds could
+            # not start under a 4 GiB
+            # task limit. Measured: an 8 GiB untouched reservation runs, touching 512
+            # MiB under 256 MiB is killed.
             argv += _memory_scope(self.spec.memory_mb)
         if self._netns_pid is not None:
             # join the sandbox's network namespace (and its user namespace, which owns it)
-            argv += ["nsenter", f"--target={self._netns_pid}", "--user", "--net", "--preserve-credentials", "--"]
+            argv += [
+                "nsenter",
+                f"--target={self._netns_pid}",
+                "--user",
+                "--net",
+                "--preserve-credentials",
+                "--",
+            ]
         if self.spec.cpu_set:
             argv += ["taskset", "-c", ",".join(str(cpu) for cpu in self.spec.cpu_set)]
         argv += [
             "enroot",
             "start",
-            # Root inside the container, as Docker runs (the builder only accepts USER root). Without it a
-            # public-network exec kept the caller's uid and every apt/dpkg RUN failed "requires superuser
+            # Root inside the container, as Docker runs (the builder only accepts USER
+            # root). Without it a
+            # public-network exec kept the caller's uid and every apt/dpkg RUN failed
+            # "requires superuser
             # privilege"; no-network execs were root only by accident of the outer `unshare -r`.
             "--root",
             "--rw",
@@ -509,8 +634,10 @@ class EnrootSandbox:
         ]
         result = self._runner.run(
             argv,
-            # No login shell (enroot defaults to one): the image's /etc/profile then reset PATH, dropping the
-            # image ENV PATH (e.g. golang's /usr/local/go/bin -> "go: not found"). Docker never runs a login shell.
+            # No login shell (enroot defaults to one): the image's /etc/profile then
+            # reset PATH, dropping the
+            # image ENV PATH (e.g. golang's /usr/local/go/bin -> "go: not found").
+            # Docker never runs a login shell.
             # An empty value means "default" to enroot, so it must be "no".
             env={**self._enroot_env(), "ENROOT_LOGIN_SHELL": "no"},
             timeout_s=timeout_s,
@@ -524,10 +651,12 @@ class EnrootSandbox:
         )
 
     def kill_running(self) -> None:
-        """Kill every in-flight exec of this sandbox, as stopping a Docker container kills its processes.
+        """Kill every in-flight exec of this sandbox, as stopping a Docker container kills
+        its processes.
 
-        Callers that enforce their own deadline (Harbor's ``asyncio.wait_for`` around a verifier) cancel the
-        coroutine but cannot stop the worker thread blocked in the exec; a verifier whose server never exits
+        Callers that enforce their own deadline (Harbor's ``asyncio.wait_for`` around a
+        verifier) cancel the coroutine but cannot stop the worker thread blocked in the exec;
+        a verifier whose server never exits
         then held the thread, and the whole Harbor process, forever (B2.1 R0 run r3)."""
         kill_all = getattr(self._runner, "kill_all", None)
         if callable(kill_all):
@@ -536,37 +665,48 @@ class EnrootSandbox:
     def _container_pids(self) -> list[int]:
         """Host pids of this user's processes running inside this sandbox (daemons included).
 
-        enroot pivots the root inside a private mount namespace, so /proc/<pid>/root reads "/" from the host;
-        the reliable identity is that namespace's root mount: mount point "/" whose filesystem-relative root
-        is a suffix of the rootfs host path (e.g. "/hhri-ai/hh28144/.enroot-sbx/<name>" on a /home export)."""
+        enroot pivots the root inside a private mount namespace, so /proc/<pid>/root reads
+        "/" from the host; the reliable identity is that namespace's root mount: mount point
+        "/" whose filesystem-relative root is a suffix of the rootfs host path (e.g.
+        "/hhri-ai/hh28144/.enroot-sbx/<name>" on a /home export)."""
         rootfs = str(self.rootfs())
         uid = os.getuid()
         pids = []
-        for entry in os.listdir("/proc"):
-            if not entry.isdigit() or int(entry) == os.getpid():
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit() or int(entry.name) == os.getpid():
                 continue
             with contextlib.suppress(OSError):
-                if os.stat(f"/proc/{entry}").st_uid != uid:
+                if entry.stat().st_uid != uid:
                     continue
-                with open(f"/proc/{entry}/mountinfo") as mountinfo:
+                with (entry / "mountinfo").open() as mountinfo:
                     for line in mountinfo:
                         fields = line.split()
-                        if len(fields) > 4 and fields[4] == "/" and fields[3] != "/" and rootfs.endswith(fields[3]):
-                            pids.append(int(entry))
+                        if (
+                            len(fields) > 4
+                            and fields[4] == "/"
+                            and fields[3] != "/"
+                            and rootfs.endswith(fields[3])
+                        ):
+                            pids.append(int(entry.name))
                             break
         return pids
 
     def stop(self, *, delete: bool = True) -> None:
         self.kill_running()
         if self._started:
-            # Docker's stop kills every container process; background daemons (servers, mongod, browsers)
-            # otherwise outlived their sandbox: 73 such processes had leaked on one node across R0 runs.
+            # Docker's stop kills every container process; background daemons
+            # (servers, mongod, browsers)
+            # otherwise outlived their sandbox: 73 such processes had leaked on one
+            # node across R0 runs.
             for pid in self._container_pids():
                 with contextlib.suppress(OSError):
                     os.kill(pid, signal.SIGKILL)
             terminate = getattr(self._runner, "terminate", None)
             if callable(terminate):
-                for pid in [*self._helpers, *([self._netns_pid] if self._netns_pid is not None else [])]:
+                for pid in [
+                    *self._helpers,
+                    *([self._netns_pid] if self._netns_pid is not None else []),
+                ]:
                     terminate(pid)
             self._helpers.clear()
             self._netns_pid = None
@@ -597,15 +737,25 @@ class EnrootSandbox:
         return env
 
     def _shell(self) -> str:
-        """bash when the image has it (Harbor's Docker backend runs every exec as `bash -c`; agent installers use
+        """bash when the image has it (Harbor's Docker backend runs every exec as `bash -c`;
+        agent installers use
         `set -o pipefail`, which dash rejects), else sh for bash-less images such as Alpine."""
         root = Path(self.rootfs())
-        return "bash" if (root / "bin" / "bash").exists() or (root / "usr" / "bin" / "bash").exists() else "sh"
+        return (
+            "bash"
+            if (root / "bin" / "bash").exists() or (root / "usr" / "bin" / "bash").exists()
+            else "sh"
+        )
 
     def _image_env_defines(self, name: str) -> bool:
-        """True if the image's own environment (enroot writes it to the rootfs /etc/environment) sets ``name``."""
+        """True if the image's own environment (enroot writes it to the rootfs /etc/environment)
+        sets ``name``."""
         try:
-            lines = (Path(self.rootfs()) / "etc" / "environment").read_text(errors="replace").splitlines()
+            lines = (
+                (Path(self.rootfs()) / "etc" / "environment")
+                .read_text(errors="replace")
+                .splitlines()
+            )
         except OSError:
             return False
         return any(line.split("=", 1)[0].strip() == name for line in lines if "=" in line)

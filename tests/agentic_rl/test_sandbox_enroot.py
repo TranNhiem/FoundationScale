@@ -32,6 +32,7 @@ class FakeCall:
 @dataclass
 class FakeRunner:
     """Records every run and returns scripted RunResults in order."""
+
     # spawn()/terminate(): the no-network holder (recorded lazily in self.spawned / self.terminated)
     def spawn(self, argv) -> int:
         self.__dict__.setdefault("spawned", []).append(list(argv))
@@ -39,7 +40,6 @@ class FakeRunner:
 
     def terminate(self, pid: int) -> None:
         self.__dict__.setdefault("terminated", []).append(pid)
-
 
     results: list[RunResult] = field(default_factory=list)
     calls: list[FakeCall] = field(default_factory=list)
@@ -207,9 +207,18 @@ def test_exec_no_network_prefix(tmp_path: Path) -> None:
     runner.calls.clear()
     sbx.exec("echo hi")
     argv = runner.calls[0].argv
-    # every exec joins ONE namespace held for the sandbox's lifetime (as a Docker container's), so a service
-    # started by one exec is reachable from the next; the holder brings loopback up, with no route off the box
-    assert argv[:6] == ("nsenter", "--target=4242", "--user", "--net", "--preserve-credentials", "--")
+    # every exec joins ONE namespace held for the sandbox's lifetime (as a Docker
+    # container's), so a service
+    # started by one exec is reachable from the next; the holder brings loopback up, with no
+    # route off the box
+    assert argv[:6] == (
+        "nsenter",
+        "--target=4242",
+        "--user",
+        "--net",
+        "--preserve-credentials",
+        "--",
+    )
     (holder,) = runner.spawned
     assert holder[:2] == ["unshare", "-rn"] and "ip link set lo up" in holder[-1]
     assert "enroot" in argv
@@ -217,7 +226,8 @@ def test_exec_no_network_prefix(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("network", ["no-network", "public"])
 def test_exec_runs_as_container_root(tmp_path: Path, network: str) -> None:
-    # Docker semantics: RUN and task commands are root. Without --root a public-network exec (every build
+    # Docker semantics: RUN and task commands are root. Without --root a public-network exec
+    # (every build
     # step) kept the caller's uid and dpkg refused "requires superuser privilege".
     runner = FakeRunner()
     sbx = import_image(tmp_path, runner, network=network)
@@ -278,8 +288,8 @@ def test_start_refuses_when_memory_scope_unavailable(tmp_path: Path) -> None:
 
 
 def test_tmp_is_in_the_rootfs_not_a_separate_mount(tmp_path: Path) -> None:
-    """Docker's /tmp is on the container filesystem; a bind-mount made rename() into /tmp fail with EXDEV
-    (TB 2.1 path-tracing-reverse: "Invalid cross-device link")."""
+    """Docker's /tmp is on the container filesystem; a bind-mount made rename() into /tmp fail
+    with EXDEV (TB 2.1 path-tracing-reverse: "Invalid cross-device link")."""
     runner = FakeRunner()
     sbx = import_image(tmp_path, runner)
     sbx.start()
@@ -303,7 +313,12 @@ def test_exec_env_precedence(tmp_path: Path) -> None:
     sbx.exec("true", env={"C": "call"})
     argv = runner.calls[0].argv
     env_pairs = [argv[i + 1] for i, x in enumerate(argv) if x == "--env"]
-    assert env_pairs == ["HOME=/root", "A=build", "B=spec", "C=call"]  # HOME: Docker default, lowest precedence
+    assert env_pairs == [
+        "HOME=/root",
+        "A=build",
+        "B=spec",
+        "C=call",
+    ]  # HOME: Docker default, lowest precedence
 
 
 def test_exec_cwd_quoting(tmp_path: Path) -> None:
@@ -589,7 +604,8 @@ def test_image_path_import_failure_removes_partial(tmp_path: Path) -> None:
 
 
 def test_image_path_concurrent_importer_partial_untouched(tmp_path: Path) -> None:
-    """Another importer's in-flight temp file is neither reused nor deleted (R0 race: shared .partial)."""
+    """Another importer's in-flight temp file is neither reused nor deleted
+    (R0 race: shared .partial)."""
     runner = FakeRunner()
     sbx = make_sandbox(tmp_path, runner)
     digest = hashlib.sha256(b"docker://python:3.12-slim").hexdigest()[:16]
@@ -807,7 +823,9 @@ def test_subprocess_runner_kill_all_ends_an_inflight_run() -> None:
 
     runner = SubprocessRunner()
     out: list[RunResult] = []
-    worker = threading.Thread(target=lambda: out.append(runner.run(["sh", "-c", "sleep 60 & sleep 60"])))
+    worker = threading.Thread(
+        target=lambda: out.append(runner.run(["sh", "-c", "sleep 60 & sleep 60"]))
+    )
     worker.start()
     deadline = time.monotonic() + 10
     while not runner._live and time.monotonic() < deadline:
@@ -831,8 +849,9 @@ def test_stop_kills_running_execs_first(tmp_path: Path) -> None:
 
 
 def test_exec_disables_enroot_login_shell(tmp_path: Path) -> None:
-    """A login shell sources the image's /etc/profile, which resets PATH and drops the image ENV PATH
-    (golang: "go: not found"). Docker never uses one; enroot defaults to yes and reads "" as default."""
+    """A login shell sources the image's /etc/profile, which resets PATH and drops the image
+    ENV PATH (golang: "go: not found"). Docker never uses one; enroot defaults to yes and reads
+    "" as default."""
     runner = FakeRunner()
     sbx = import_image(tmp_path, runner)
     sbx.start()
@@ -843,7 +862,8 @@ def test_exec_disables_enroot_login_shell(tmp_path: Path) -> None:
 
 
 def test_exec_defaults_home_like_docker(tmp_path: Path) -> None:
-    """HOME=/root unless the image's environment sets it (Docker semantics); caller env still wins."""
+    """HOME=/root unless the image's environment sets it (Docker semantics);
+    caller env still wins."""
     runner = FakeRunner()
     sbx = import_image(tmp_path, runner)
     sbx.start()
@@ -862,7 +882,8 @@ def test_exec_defaults_home_like_docker(tmp_path: Path) -> None:
 
 
 def test_stop_kills_container_processes_and_the_netns_holder(tmp_path: Path, monkeypatch) -> None:
-    """Docker's stop kills every container process; daemons used to outlive their sandbox (73 leaked)."""
+    """Docker's stop kills every container process; daemons used to outlive their sandbox
+    (73 leaked)."""
     runner = FakeRunner()
     sbx = import_image(tmp_path, runner)
     sbx.start()
@@ -875,7 +896,8 @@ def test_stop_kills_container_processes_and_the_netns_holder(tmp_path: Path, mon
 
 
 def test_container_pids_ignores_host_processes(tmp_path: Path) -> None:
-    """Host processes (this one, a plain child) have no root mount at the sandbox rootfs, so they never match."""
+    """Host processes (this one, a plain child) have no root mount at the sandbox rootfs,
+    so they never match."""
     import subprocess
 
     sbx = make_sandbox(tmp_path, FakeRunner())
@@ -889,11 +911,12 @@ def test_container_pids_ignores_host_processes(tmp_path: Path) -> None:
 
 
 def test_subprocess_runner_spawn_waits_for_ready_and_refuses_silence() -> None:
-    """spawn() returns only after the helper says ready (its namespaces exist); a silent helper is refused."""
+    """spawn() returns only after the helper says ready (its namespaces exist);
+    a silent helper is refused."""
     runner = SubprocessRunner()
     pid = runner.spawn(["sh", "-c", "sleep 0.3; echo ready; exec sleep 30"])
     try:
-        assert os.path.exists(f"/proc/{pid}")
+        assert Path(f"/proc/{pid}").exists()
     finally:
         runner.terminate(pid)
     with pytest.raises(SandboxError, match="expected 'ready'"):
@@ -901,7 +924,8 @@ def test_subprocess_runner_spawn_waits_for_ready_and_refuses_silence() -> None:
 
 
 def test_image_import_is_serialized_and_reuses_a_concurrent_result(tmp_path: Path) -> None:
-    """enroot's layer cache races on concurrent imports; imports take one file lock, and a waiter reuses the image."""
+    """enroot's layer cache races on concurrent imports; imports take one file lock,
+    and a waiter reuses the image."""
     import threading
     import time
 
@@ -928,11 +952,14 @@ def test_image_import_is_serialized_and_reuses_a_concurrent_result(tmp_path: Pat
     for t in threads:
         t.join(10)
     assert peak == 1, "imports overlapped"
-    assert sum(1 for c in runner.calls if c.argv[:2] == ("enroot", "import")) == 1, "waiters must reuse the image"
+    assert sum(1 for c in runner.calls if c.argv[:2] == ("enroot", "import")) == 1, (
+        "waiters must reuse the image"
+    )
 
 
 def test_exec_uses_bash_when_the_image_has_it(tmp_path: Path) -> None:
-    """Harbor's Docker backend runs `bash -c`; pi's installer uses `set -o pipefail`, which dash rejects."""
+    """Harbor's Docker backend runs `bash -c`; pi's installer uses `set -o pipefail`,
+    which dash rejects."""
     runner = FakeRunner()
     sbx = import_image(tmp_path, runner)
     sbx.start()
@@ -948,7 +975,8 @@ def test_exec_uses_bash_when_the_image_has_it(tmp_path: Path) -> None:
 
 
 def test_enroot_sysconf_reaches_every_enroot_call(tmp_path: Path) -> None:
-    """A site tmpfs over /tmp (separate fs, mode 755) broke rename into /tmp; a sysconf copy without it is opt-in."""
+    """A site tmpfs over /tmp (separate fs, mode 755) broke rename into /tmp;
+    a sysconf copy without it is opt-in."""
     conf = tmp_path / "sysconf"
     conf.mkdir()
     (conf / "enroot.conf").write_text("")
@@ -967,7 +995,8 @@ def test_enroot_sysconf_must_be_a_config_dir(tmp_path: Path) -> None:
 
 
 def test_isolated_sandbox_writes_proxy_config_for_sudo_and_apt(tmp_path: Path) -> None:
-    """sudo resets the env (TB 2.1 rstan-to-pystan's `sudo apt-get update` lost the proxy); apt reads its own config."""
+    """sudo resets the env (TB 2.1 rstan-to-pystan's `sudo apt-get update` lost the proxy);
+    apt reads its own config."""
     runner = FakeRunner()
     sbx = import_image(tmp_path, runner, isolate_network=True)
     (Path(sbx.rootfs()) / "etc" / "apt").mkdir(parents=True, exist_ok=True)

@@ -18,7 +18,12 @@ from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 
 from foundationscale.agentic_rl.sandbox.build import build_image
-from foundationscale.agentic_rl.sandbox.enroot import EnrootSandbox, Runner, SandboxSpec, SubprocessRunner
+from foundationscale.agentic_rl.sandbox.enroot import (
+    EnrootSandbox,
+    Runner,
+    SandboxSpec,
+    SubprocessRunner,
+)
 
 _NAME_ALLOWED_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _MAX_NAME_LEN = 63
@@ -60,18 +65,23 @@ class EnrootEnvironment(BaseEnvironment):
         self._cpu_set = cpu_set
         self._build_timeout_s = build_timeout_s
         self._enroot_sysconf = enroot_sysconf or None
-        # "PORT=HOST:HOSTPORT[,...]": host services bridged into every task sandbox (e.g. the agent's local model
+        # "PORT=HOST:HOSTPORT[,...]": host services bridged into every task sandbox (e.g.
+        # the agent's local model
         # endpoint at 127.0.0.1:18811); --ek passes one comma-separated string
         if isinstance(endpoints, str):
             endpoints = [e.strip() for e in endpoints.split(",") if e.strip()]
         self._endpoints = tuple(endpoints or ())
-        # Build from environment/Dockerfile even when the task names a prebuilt docker_image: Terminal-Bench 2.1's
-        # prebuilt images are single-arch amd64, so GB200 (arm64) must rebuild them. --ek passes strings.
+        # Build from environment/Dockerfile even when the task names a prebuilt
+        # docker_image: Terminal-Bench 2.1's
+        # prebuilt images are single-arch amd64, so GB200 (arm64) must rebuild them. --ek
+        # passes strings.
         self._build_from_dockerfile = (
-            build_from_dockerfile if isinstance(build_from_dockerfile, bool)
+            build_from_dockerfile
+            if isinstance(build_from_dockerfile, bool)
             else str(build_from_dockerfile).strip().lower() in ("1", "true", "yes")
         )
-        # One runner for this environment's build and sandbox, so a cancelled start() can kill the build too
+        # One runner for this environment's build and sandbox, so a cancelled start() can
+        # kill the build too
         self._runner: Runner = runner if runner is not None else SubprocessRunner()
         self._sandbox: EnrootSandbox | None = None
 
@@ -90,9 +100,12 @@ class EnrootEnvironment(BaseEnvironment):
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
-        # Truthful flags only: no-network (no route out of the sandbox netns), allowlists of hostnames and
-        # *.wildcards (enforced by the per-sandbox egress proxy; proxy-unaware clients get no egress, never more),
-        # and runtime phase switches (atomic policy-file replace). IP/CIDR entries are not enforced, so Harbor
+        # Truthful flags only: no-network (no route out of the sandbox netns), allowlists
+        # of hostnames and
+        # *.wildcards (enforced by the per-sandbox egress proxy; proxy-unaware clients get
+        # no egress, never more),
+        # and runtime phase switches (atomic policy-file replace). IP/CIDR entries are not
+        # enforced, so Harbor
         # rejects such tasks instead of leaking access.
         return EnvironmentCapabilities(
             disable_internet=True,
@@ -124,8 +137,10 @@ class EnrootEnvironment(BaseEnvironment):
         try:
             await asyncio.to_thread(self._start_sync, force_build)
         except asyncio.CancelledError:
-            # Harbor times environment start out by cancelling (EnvironmentStartTimeoutError); an image build
-            # kept running in the thread, Harbor hung until the gate's own timeout killed it, and the killed
+            # Harbor times environment start out by cancelling
+            # (EnvironmentStartTimeoutError); an image build
+            # kept running in the thread, Harbor hung until the gate's own timeout
+            # killed it, and the killed
             # build left its container behind (B2.1 R0 run r7). Kill it so the build's cleanup runs.
             kill_all = getattr(self._runner, "kill_all", None)
             if callable(kill_all):
@@ -138,9 +153,10 @@ class EnrootEnvironment(BaseEnvironment):
         if self._build_from_dockerfile and (self.environment_dir / "Dockerfile").is_file():
             docker_image = None
         image = "docker://" + docker_image if docker_image else self._build_image_sync(force_build)
-        # unique per start: Harbor retries a failed trial (-r) with the same session id, and the earlier attempt's
+        # unique per start: Harbor retries a failed trial (-r) with the same session id,
+        # and the earlier attempt's
         # container made enroot create fail "File already exists" (TB 2.1 winning-avg-corewars)
-        name = f"{_sanitize_name(self.session_id)[:_MAX_NAME_LEN - 9]}-{uuid.uuid4().hex[:8]}"
+        name = f"{_sanitize_name(self.session_id)[: _MAX_NAME_LEN - 9]}-{uuid.uuid4().hex[:8]}"
         network, hosts = _sandbox_policy(self.network_policy)
         memory_mb = getattr(self.task_env_config, "memory_mb", None)
         spec = SandboxSpec(
@@ -164,8 +180,10 @@ class EnrootEnvironment(BaseEnvironment):
         for container_dir in _HARBOR_LOG_DIRS:
             sandbox.host_path(container_dir).mkdir(parents=True, exist_ok=True)
         if sandbox.entrypoint:
-            # Harbor's Docker backend starts the container as ENTRYPOINT + `sh -c "sleep infinity"`; images
-            # whose entrypoint starts services (mongodb-schema-design's bootstrap.sh starts mongod) need it.
+            # Harbor's Docker backend starts the container as ENTRYPOINT + `sh -c
+            # "sleep infinity"`; images
+            # whose entrypoint starts services (mongodb-schema-design's bootstrap.sh
+            # starts mongod) need it.
             # Detached in the sandbox's shared network namespace, so later execs reach its services.
             argv = shlex.join([*sandbox.entrypoint, "sh", "-c", "sleep infinity"])
             sandbox.exec(f"setsid nohup {argv} > /tmp/fs-entrypoint.log 2>&1 < /dev/null &")
@@ -189,7 +207,9 @@ class EnrootEnvironment(BaseEnvironment):
         return str(out_sqsh)
 
     async def _apply_network_policy(self, network_policy: Any) -> None:
-        """Harbor phase switch (agent / verifier policies): replace the running sandbox's egress policy."""
+        """Harbor phase switch (agent / verifier policies): replace the running
+        sandbox's egress policy.
+        """
         mode, hosts = _sandbox_policy(network_policy)
         self._require_sandbox().set_policy(mode, hosts)
 
@@ -238,8 +258,10 @@ class EnrootEnvironment(BaseEnvironment):
                 timeout_s=float(timeout_sec) if timeout_sec is not None else None,
             )
         except asyncio.CancelledError:
-            # Harbor times verifiers out by cancelling this coroutine; the thread keeps blocking on the
-            # process unless it is killed, and Harbor then hangs at shutdown waiting for that thread.
+            # Harbor times verifiers out by cancelling this coroutine; the thread
+            # keeps blocking on the
+            # process unless it is killed, and Harbor then hangs at shutdown waiting
+            # for that thread.
             sandbox.kill_running()
             raise
         return ExecResult(

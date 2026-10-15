@@ -7,8 +7,8 @@ provided by :mod:`foundationscale.agentic_rl.sandbox.enroot`.
 from __future__ import annotations
 
 import hashlib
-import posixpath
 import json
+import posixpath
 import shlex
 import time
 import uuid
@@ -27,10 +27,9 @@ from foundationscale.agentic_rl.sandbox.enroot import (
 )
 
 _STDERR_TAIL = 2000
-# CMD stays ignored: Harbor's Docker backend overrides it (`sh -c "sleep infinity"`) but keeps ENTRYPOINT.
-_IGNORED_INSTRUCTIONS = frozenset(
-    {"EXPOSE", "CMD", "LABEL", "HEALTHCHECK", "VOLUME", "STOPSIGNAL"}
-)
+# CMD stays ignored: Harbor's Docker backend overrides it (`sh -c "sleep infinity"`) but keeps
+# ENTRYPOINT.
+_IGNORED_INSTRUCTIONS = frozenset({"EXPOSE", "CMD", "LABEL", "HEALTHCHECK", "VOLUME", "STOPSIGNAL"})
 _SUPPORTED_INSTRUCTIONS = (
     frozenset({"FROM", "ARG", "ENV", "WORKDIR", "RUN", "COPY", "ADD", "USER", "ENTRYPOINT"})
     | _IGNORED_INSTRUCTIONS
@@ -174,8 +173,10 @@ def build_image(
         f"{df_path.resolve()}|{context.resolve()}|{sorted((build_args or {}).items())}".encode()
     ).hexdigest()[:16]
     spec = SandboxSpec(
-        # unique per build: a killed build left "build-<digest>" behind and every later build of the same
-        # Dockerfile then failed "File already exists"; concurrent builds of one Dockerfile collided the same way
+        # unique per build: a killed build left "build-<digest>" behind and every later
+        # build of the same
+        # Dockerfile then failed "File already exists"; concurrent builds of one
+        # Dockerfile collided the same way
         name=f"build-{digest}-{uuid.uuid4().hex[:8]}",
         image=base_image,
         data_root=data_root,
@@ -187,10 +188,13 @@ def build_image(
     _validate_steps(steps, dict(build_args or {}), build_args, context)
     sandbox = EnrootSandbox(spec, runner=runner if runner is not None else SubprocessRunner())
     sandbox.start()
-    # Docker resolves $VAR in ENV/WORKDIR/COPY/... against ARGs and the environment, including the base
+    # Docker resolves $VAR in ENV/WORKDIR/COPY/... against ARGs and the environment, including
+    # the base
     # image's config env (enroot writes it to the rootfs /etc/environment). Without it,
-    # `ENV PATH=/x/bin:$PATH` kept a literal "$PATH", dropping /usr/local/bin (senior-fullstack: the node
-    # base image's `exec docker-entrypoint.sh` in /etc/rc was then "not found" and every RUN failed).
+    # `ENV PATH=/x/bin:$PATH` kept a literal "$PATH", dropping /usr/local/bin
+    # (senior-fullstack: the node
+    # base image's `exec docker-entrypoint.sh` in /etc/rc was then "not found" and every RUN
+    # failed).
     image_env = _read_image_env(sandbox.rootfs() / "etc" / "environment")
     try:
         for step in steps:
@@ -238,7 +242,10 @@ def build_image(
         export_runner: Runner = runner if runner is not None else SubprocessRunner()
         result = export_runner.run(
             ["enroot", "export", "-o", str(out_path), spec.name],
-            env={"ENROOT_DATA_PATH": data_root, **({"ENROOT_SYSCONF_PATH": enroot_sysconf} if enroot_sysconf else {})},
+            env={
+                "ENROOT_DATA_PATH": data_root,
+                **({"ENROOT_SYSCONF_PATH": enroot_sysconf} if enroot_sysconf else {}),
+            },
             timeout_s=timeout_s,
         )
         if result.returncode != 0:
@@ -368,7 +375,7 @@ def _parse_workdir(step: DockerfileStep, argument: str) -> str:
 
 
 def _parse_entrypoint(step: DockerfileStep, argument: str) -> list[str] | None:
-    """Docker ENTRYPOINT: exec form (JSON array) as-is, shell form via /bin/sh -c; empty clears it."""
+    """Docker ENTRYPOINT: exec form (JSON array) as-is; shell form via /bin/sh -c; [] clears."""
     stripped = argument.strip()
     if stripped.startswith("["):
         try:
@@ -376,7 +383,9 @@ def _parse_entrypoint(step: DockerfileStep, argument: str) -> list[str] | None:
         except ValueError:
             parsed = None
         if not isinstance(parsed, list) or not all(isinstance(a, str) for a in parsed):
-            raise SandboxRefusal(f"line {step.lineno}: ENTRYPOINT: expected a JSON string array, got {argument!r}")
+            raise SandboxRefusal(
+                f"line {step.lineno}: ENTRYPOINT: expected a JSON string array, got {argument!r}"
+            )
         return parsed or None
     return ["/bin/sh", "-c", stripped] if stripped else None
 
@@ -397,7 +406,8 @@ def _run_step(
     command = _run_command(step, argument)
     result = sandbox.exec(command, cwd=workdir, env=env, timeout_s=timeout_s)
     if result.return_code != 0:
-        # Include stdout: apt relays dpkg's actual error there, leaving stderr with only its summary line
+        # Include stdout: apt relays dpkg's actual error there, leaving stderr with only
+        # its summary line
         tail = (result.stdout[-_STDERR_TAIL:] + "\n" + result.stderr[-_STDERR_TAIL:]).strip()
         raise SandboxBuildFailed(
             f"line {step.lineno}: RUN {argument!r} failed (exit {result.return_code}): {tail}"
@@ -473,7 +483,9 @@ def _copy_plan(
         # Docker resolves a relative target against the current WORKDIR; a trailing slash
         # (e.g. "./") still means "into this directory".
         joined = posixpath.normpath(posixpath.join(workdir or "/", target))
-        target = joined.rstrip("/") + "/" if target.endswith("/") or target in (".", "./") else joined
+        target = (
+            joined.rstrip("/") + "/" if target.endswith("/") or target in (".", "./") else joined
+        )
     return resolved, sources, target
 
 

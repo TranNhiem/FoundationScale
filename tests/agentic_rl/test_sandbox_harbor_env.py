@@ -110,6 +110,7 @@ class RunResult:
 
 class FakeRunner:
     """Runner that emulates enroot import/create/export/remove side effects."""
+
     # spawn()/terminate(): the no-network holder (recorded lazily in self.spawned / self.terminated)
     def spawn(self, argv) -> int:
         self.__dict__.setdefault("spawned", []).append(list(argv))
@@ -117,7 +118,6 @@ class FakeRunner:
 
     def terminate(self, pid: int) -> None:
         self.__dict__.setdefault("terminated", []).append(pid)
-
 
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
@@ -251,8 +251,8 @@ def test_type(harbor_env_module: Any) -> None:
 
 
 def test_capabilities_declare_only_what_is_enforced(harbor_env_module: Any, tmp_path: Path) -> None:
-    """no-network, hostname and *.wildcard allowlists (egress proxy) and phase switches are enforced; IP/CIDR
-    entries are not declared, so Harbor rejects them rather than leaking access."""
+    """no-network, hostname and *.wildcard allowlists (egress proxy) and phase switches are
+    enforced; IP/CIDR entries are not declared, so Harbor rejects them instead of leaking."""
     caps = _make_env(harbor_env_module, tmp_path).capabilities
     assert caps.disable_internet and caps.network_allowlist and caps.dynamic_network_policy
     assert caps.network_allowlist_hostnames and caps.network_allowlist_wildcard_hostnames
@@ -414,8 +414,9 @@ def test_start_creates_harbors_log_layout(harbor_env_module: Any, tmp_path: Path
 def test_cancelled_exec_kills_the_process_and_frees_the_thread(
     harbor_env_module: Any, tmp_path: Path
 ) -> None:
-    """Harbor times verifiers out with asyncio.wait_for (no timeout_sec). Cancelling must kill the exec;
-    otherwise the to_thread worker blocks forever and asyncio.run hangs at shutdown (B2.1 R0 run r3)."""
+    """Harbor times verifiers out with asyncio.wait_for (no timeout_sec). Cancelling must kill
+    the exec; otherwise the to_thread worker blocks forever and asyncio.run hangs at shutdown
+    (B2.1 R0 run r3)."""
     import threading
 
     env = _make_env(harbor_env_module, tmp_path, runner=FakeRunner())
@@ -443,8 +444,8 @@ def test_cancelled_exec_kills_the_process_and_frees_the_thread(
 def test_cancelled_start_kills_the_build_and_frees_the_thread(
     harbor_env_module: Any, tmp_path: Path
 ) -> None:
-    """Harbor's EnvironmentStartTimeoutError cancels start(); the in-flight build must be killed, not left
-    running in the thread until an outer timeout (B2.1 R0 run r7)."""
+    """Harbor's EnvironmentStartTimeoutError cancels start(); the in-flight build must be
+    killed, not left running in the thread until an outer timeout (B2.1 R0 run r7)."""
     import threading
 
     released = threading.Event()
@@ -468,8 +469,9 @@ def test_cancelled_start_kills_the_build_and_frees_the_thread(
 
 
 def test_start_launches_image_entrypoint_detached(harbor_env_module: Any, tmp_path: Path) -> None:
-    """Images whose ENTRYPOINT starts services (mongodb bootstrap.sh) get it run at start, detached, with
-    Harbor's `sh -c "sleep infinity"` arguments; images without one get no extra exec."""
+    """Images whose ENTRYPOINT starts services (mongodb bootstrap.sh) get it run at start,
+    detached, with Harbor's `sh -c "sleep infinity"` arguments; images without one get no extra
+    exec."""
     runner = FakeRunner()
     env = _make_env(harbor_env_module, tmp_path, runner=runner)
 
@@ -494,23 +496,34 @@ def test_start_launches_image_entrypoint_detached(harbor_env_module: Any, tmp_pa
     assert not [c for c in runner2.calls if any("fs-entrypoint.log" in a for a in c)]
 
 
-@pytest.mark.parametrize(("flag", "expect_build"), [(True, True), ("true", True), ("1", True), ("false", False)])
+@pytest.mark.parametrize(
+    ("flag", "expect_build"), [(True, True), ("true", True), ("1", True), ("false", False)]
+)
 def test_build_from_dockerfile_overrides_prebuilt_image(
     harbor_env_module: Any, tmp_path: Path, flag, expect_build: bool
 ) -> None:
-    """Terminal-Bench 2.1 names amd64-only prebuilt images; on arm64 the Dockerfile must be built instead."""
+    """Terminal-Bench 2.1 names amd64-only prebuilt images; on arm64 the Dockerfile must be
+    built instead."""
     runner = FakeRunner()
-    env = _make_env(harbor_env_module, tmp_path, runner=runner, docker_image="alexgshaw/task:20251031",
-                    build_from_dockerfile=flag)
+    env = _make_env(
+        harbor_env_module,
+        tmp_path,
+        runner=runner,
+        docker_image="alexgshaw/task:20251031",
+        build_from_dockerfile=flag,
+    )
     (tmp_path / "environment" / "Dockerfile").write_text("FROM alpine\n")
     built: list[bool] = []
     (tmp_path / "built.sqsh").write_bytes(b"sqsh")
-    env._build_image_sync = lambda force_build: built.append(force_build) or str(tmp_path / "built.sqsh")
+    env._build_image_sync = lambda force_build: (
+        built.append(force_build) or str(tmp_path / "built.sqsh")
+    )
     asyncio.run(env.start(force_build=False))
-    imported_prebuilt = any("docker://alexgshaw/task:20251031" in " ".join(map(str, c)) for c in runner.calls)
+    imported_prebuilt = any(
+        "docker://alexgshaw/task:20251031" in " ".join(map(str, c)) for c in runner.calls
+    )
     assert bool(built) is expect_build
     assert imported_prebuilt is (not expect_build)
-
 
 
 @dataclass
@@ -525,18 +538,29 @@ class _Policy:
         (None, ("public", ())),
         (_Policy("no-network"), ("no-network", ())),
         (_Policy("public", ("ignored.org",)), ("public", ())),
-        (_Policy("allowlist", ("registry.npmjs.org", "*.debian.org")), ("allowlist", ("registry.npmjs.org", "*.debian.org"))),
+        (
+            _Policy("allowlist", ("registry.npmjs.org", "*.debian.org")),
+            ("allowlist", ("registry.npmjs.org", "*.debian.org")),
+        ),
     ],
 )
 def test_sandbox_policy_mapping(harbor_env_module: Any, policy, expected) -> None:
     assert harbor_env_module._sandbox_policy(policy) == expected
 
 
-def test_start_isolates_the_network_and_bridges_endpoints(harbor_env_module: Any, tmp_path: Path) -> None:
-    """Task sandboxes always get their own netns (public included) plus the configured endpoint bridges."""
+def test_start_isolates_the_network_and_bridges_endpoints(
+    harbor_env_module: Any, tmp_path: Path
+) -> None:
+    """Task sandboxes always get their own netns (public included) plus the configured endpoint
+    bridges."""
     runner = FakeRunner()
-    env = _make_env(harbor_env_module, tmp_path, runner=runner, network_mode="public",
-                    endpoints="18811=127.0.0.1:18811")
+    env = _make_env(
+        harbor_env_module,
+        tmp_path,
+        runner=runner,
+        network_mode="public",
+        endpoints="18811=127.0.0.1:18811",
+    )
     asyncio.run(env.start(force_build=False))
     spec = env._sandbox.spec
     assert spec.isolate_network is True and spec.network == "public"
@@ -554,8 +578,11 @@ def test_phase_switch_replaces_the_egress_policy(harbor_env_module: Any, tmp_pat
     assert policy == {"mode": "allowlist", "hosts": ["api.example.com"]}
 
 
-def test_restart_of_same_session_gets_a_fresh_container_name(harbor_env_module: Any, tmp_path: Path) -> None:
-    """Harbor retries reuse the session id; the retry's container must not collide with the earlier attempt's."""
+def test_restart_of_same_session_gets_a_fresh_container_name(
+    harbor_env_module: Any, tmp_path: Path
+) -> None:
+    """Harbor retries reuse the session id; the retry's container must not collide with the
+    earlier attempt's."""
     names = []
     for i in range(2):
         runner = FakeRunner()
