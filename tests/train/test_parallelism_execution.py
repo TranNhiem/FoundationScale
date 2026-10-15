@@ -753,6 +753,55 @@ def test_wrap_classes_intersect_declared_names_with_present_ones() -> None:
     assert loop._fsdp_wrap_classes(Model()) == ["DecoderLayer"]
 
 
+def _qwen_shaped_model(shared_block: bool = False):  # noqa: ANN202
+    """Qwen3.6-like tree: language layers plus a `model.visual` tower, both declared."""
+    import torch.nn as nn
+
+    class Qwen3_5DecoderLayer(nn.Module):
+        pass
+
+    class Qwen3_5VisionBlock(nn.Module):
+        pass
+
+    class Config:
+        def to_dict(self) -> dict[str, str]:
+            return {"model_type": "qwen3_5_moe"}
+
+    class Model(nn.Module):
+        _no_split_modules = ["Qwen3_5DecoderLayer", "Qwen3_5VisionBlock"]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.config = Config()
+            self.model = nn.Module()
+            self.model.language_model = nn.Module()
+            layers = [Qwen3_5DecoderLayer()] + ([Qwen3_5VisionBlock()] if shared_block else [])
+            self.model.language_model.layers = nn.ModuleList(layers)
+            self.model.visual = nn.Module()
+            self.model.visual.blocks = nn.ModuleList([Qwen3_5VisionBlock(), Qwen3_5VisionBlock()])
+
+    return Model()
+
+
+def test_wrap_classes_leave_vision_tower_blocks_in_the_root_unit() -> None:
+    """A block class that lives only inside a declared tower is not its own FSDP unit.
+
+    transformers 5.18 lists Qwen3_5VisionBlock in Qwen3.6's _no_split_modules. Wrapped
+    per block, a rank whose micro-batch runs the vision tower twice (an image row and a
+    video row at per-device batch 2) issues more all-gathers than its peer, and the run
+    hangs until the NCCL timeout (measured on 2x GB200, Qwen3.6-35B-A3B, 2026-10-14).
+    """
+    assert loop._fsdp_wrap_classes(_qwen_shaped_model()) == ["Qwen3_5DecoderLayer"]
+
+
+def test_wrap_classes_keep_a_tower_class_that_is_also_used_outside_the_tower() -> None:
+    """Only classes whose every instance is inside a tower are dropped."""
+    assert loop._fsdp_wrap_classes(_qwen_shaped_model(shared_block=True)) == [
+        "Qwen3_5DecoderLayer",
+        "Qwen3_5VisionBlock",
+    ]
+
+
 def test_wrap_classes_look_through_a_peft_wrapper() -> None:
     """A PEFT-wrapped model carries _no_split_modules on base_model.model."""
     import torch.nn as nn

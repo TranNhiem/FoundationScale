@@ -47,6 +47,8 @@ report.
 | `WeightSyncParityGate` | `WEIGHT_SYNC` | Engine/learner logprob agreement within a declared tolerance, when a parity probe supplies pairs; `parity=None` abstains `NOT_ESTABLISHED` until a GPU probe slice measures it. |
 | `PromptBytesGate` | `ROLLOUT` | The rendered system prompt and tool schemas hash (`prompt_bytes_sha256`) to the value declared at launch; an unrecorded declaration abstains `NOT_ESTABLISHED`. |
 
+**Engine hang recovery.** `rollout.engine_recovery_retries` (default `0`, off) lets `RolloutHost` recover a step whose every attempt was an engine infra failure, the signature of a vLLM engine that hung after an in-place weight reload. It restarts the fleet, re-pushes the last published checkpoint so the engine serves the current policy rather than the base model, and re-runs the same step with the same tasks, logging one `[agentic-rl:engine-recovery]` line per attempt. Partial failures and env failures never trigger it; once the retries are spent, `RolloutAbstentionGate` refuses exactly as before.
+
 ## Rules every later piece must keep
 
 - An unmeasured reward is `None`, never `0.0`; infra failures carry

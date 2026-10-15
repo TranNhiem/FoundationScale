@@ -368,6 +368,10 @@ class RolloutConfig:
     # absence, not a declared 0.0 or 1.0 -- the gate abstains honestly
     # (AbstentionKind.NOT_ESTABLISHED) rather than adjudicating a bound nobody set.
     max_infra_rate: float | None = None
+    # RolloutHost.engine_recovery_retries: how many times a step whose EVERY attempt
+    # was an engine infra failure (a hung engine) may restart the fleet, re-push the
+    # last published checkpoint and re-run. 0 (the default) keeps recovery off.
+    engine_recovery_retries: int = 0
 
 
 @dataclass(frozen=True)
@@ -1022,6 +1026,7 @@ def _build_rollout(
             "group_by_harness",
             "seed",
             "max_infra_rate",
+            "engine_recovery_retries",
         }
     )
     _refuse_unknown_keys(section, allowed, section="rollout")
@@ -1095,6 +1100,16 @@ def _build_rollout(
         required=False,
         provenance=provenance,
     )
+    engine_recovery_retries = _resolve_scalar(
+        dotted_key="rollout.engine_recovery_retries",
+        field_name="engine_recovery_retries",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=int,
+        default=0,
+        required=False,
+        provenance=provenance,
+    )
     return RolloutConfig(
         tasks_path=tasks_path,
         tasks_per_step=tasks_per_step,
@@ -1103,6 +1118,7 @@ def _build_rollout(
         group_by_harness=group_by_harness,
         seed=seed,
         max_infra_rate=max_infra_rate,
+        engine_recovery_retries=engine_recovery_retries,
     )
 
 

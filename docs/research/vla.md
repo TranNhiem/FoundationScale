@@ -11,8 +11,8 @@ number under a tolerance fixed before the run, from the published rate and the t
 |---|---|---|---|---|---|
 | GR00T N1.7 `libero_spatial` (`nvidia/GR00T-N1.7-LIBERO`) | 195/200 = 97.5% (Isaac-GR00T `examples/LIBERO/README.md`; the README labels it "97.65%", which is 97.5%) | 588/606 = 97.0% (95% CI ~95.7–98.4); passes 192/201, 198/202, 198/203 | 200 / 606 | 2.5 pt = `binomial_tolerance(0.975, 200, 606)` | REPRODUCED within tolerance — published rate inside our CI; the first pass's 2.1-point gap was sampling noise |
 | openpi pi0.5 `pi05_libero` @30k | 494/500 = 98.8% (`examples/libero/README.md`) | 492/500 = 98.4% (per task 100/98/100/98/98/92/100/100/100/98) | 500 / 500 | 1.4 pt = `binomial_tolerance(0.988, 500, 500)` | REPRODUCED within tolerance (seed 7, 50 trials × 10 tasks) |
-| GR00T N1.7 `libero_goal` | 195/200 = 97.5% | 195/200 = 97.5% (FS harness) | 200 / 200 | 3.1 pt | REPRODUCED within tolerance |
-| GR00T N1.7 `libero_object` | 197/200 = 98.5% (README "98.45%") | 199/200 = 99.5% (FS harness) | 200 / 200 | 2.4 pt | REPRODUCED within tolerance |
+| GR00T N1.7 `libero_goal` | 195/200 = 97.5% | 582/600 = 97.0% (FS harness, seeds 0/1/2: 195, 195, 192) | 200 / 600 | 2.5 pt | REPRODUCED within tolerance |
+| GR00T N1.7 `libero_object` | 197/200 = 98.5% (README "98.45%") | 596/600 = 99.3% (FS harness, seeds 0/1/2: 199, 199, 198) | 200 / 600 | 2.0 pt | REPRODUCED within tolerance |
 | GR00T N1.7 `libero_10` | 189/200 = 94.5% (README "94.35%") | 548/600 = 91.3% (FS harness, seeds 0/1/2: 181, 186, 181) | 200 / 600 | 3.7 pt | REPRODUCED within tolerance (gap 3.2 pt; closest to its margin) |
 | openpi pi0.5 `libero_object` | 98.2% | 496/500 = 99.2% (FS harness) | 500 / 500 | 1.7 pt | REPRODUCED within tolerance |
 | openpi pi0.5 `libero_goal` | 98.0% | 486/500 = 97.2% (FS harness) | 500 / 500 | 1.8 pt | REPRODUCED within tolerance |
@@ -129,6 +129,13 @@ GR00T protocol: step 12,000 191/200 = 95.5%; final step 20,000 **481/500 = 96.2%
 195/200 = 97.5% — gap 1.3 ≤ two-sample margin 2.6 pt. Same harness on NVIDIA's released checkpoint: 190/200.
 A second evaluation of the final checkpoint under the corrected GR00T protocol (720 env steps, seed 1): 197/200 = 98.5%.
 
+GR00T fine-tune on `libero_10` through the same spec (2026-10-13, one 4-GPU tray, 20,000 steps in 7 h 47 min): final
+checkpoint 544/600 = 90.7% (seeds 0/1/2: 182, 183, 179; checkpoints 16k and 18k: 181/200 each). Against the card
+(189/200 = 94.5%, margin 3.65 pt at 200/600) the gap is 3.8 pt: NOT reproduced against the card on this one training run.
+Against NVIDIA's released libero_10 checkpoint in the same FS harness (548/600 = 91.3%) the gap is 0.7 pt, so FS training
+matches NVIDIA's model and both sit below the card on long-horizon tasks under this harness. Open check: GR00T's own rollout
+client on libero_10, to separate a harness effect from a protocol one.
+
 Rung (c), openpi fine-tune through the FS run spec — REPRODUCED 2026-10-13: `OpenPiFinetuneSpec(PUBLISHED_LIBERO_RECIPE)`
 (`pi05_libero`: batch 256, 30,000 steps from `pi05_base`) rendered into openpi's own `scripts/train.py` and run on one
 4-GPU GB200 tray (~2.0-2.7 s/step, ~19 h; norm stats from openpi's `compute_norm_stats.py`). The final checkpoint,
@@ -177,7 +184,8 @@ At 60% of the schedule (step 18,000) the same run already scored 494/500 = 98.8%
 - **GR00T rung (c) done, one seed**: the training run is not yet a registry row (its checkpoint is ours, not an upstream
   artifact), so the Level 3 regression still replays the published checkpoint. Scaling measured on the way: 1 GPU
   109 samples/s; 3 GPUs DDP 283 samples/s (87% efficiency); 4 GPUs ~400 samples/s (1.61 s per 640-sample step).
-- **GR00T rung (c) on the other suites**: libero_10 fine-tune running (2026-10-13); goal / object next.
+- **GR00T rung (c) on the other suites**: libero_10 done (matches the released checkpoint, 3.8 pt under the card); goal
+  (training data: episode 82 wrist video is corrupt upstream, trained without it) and object fine-tunes running (2026-10-14).
 - **More suites**: only `libero_spatial` is reproduced; `libero_goal` (97.5), `libero_object` (98.45), `libero_long`
   (94.35), and openpi's goal/object/long (98.2/98.0/92.4) are the remaining published targets at the same row rules.
 - **RL entry in the registry**: verl-vla FPO evidence is reproduced within tolerance on one seed (2 GPU policy workers

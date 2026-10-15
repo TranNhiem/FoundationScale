@@ -337,6 +337,13 @@ def print_summary(
         print("         rows skipped: 0")
 
 
+def _open_output(path: str):
+    """Open an output file for writing, creating its parent directory first."""
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    return out.open("w", encoding="utf-8")
+
+
 def _open_input(path: str):
     """Open a JSONL file for reading with a friendly error message."""
     if not Path(path).is_file():
@@ -371,7 +378,7 @@ def cmd_image(args: argparse.Namespace) -> None:
     image_root = str(Path(args.image_root).absolute())
     check_files = not args.no_check_files
 
-    with _open_input(args.input) as fin, Path(args.output).open("w", encoding="utf-8") as fout:
+    with _open_input(args.input) as fin, _open_output(args.output) as fout:
         for line_no, line in enumerate(fin, 1):
             # --max-rows stops output after N written rows.
             if args.max_rows is not None and written >= args.max_rows:
@@ -439,7 +446,7 @@ def cmd_video(args: argparse.Namespace) -> None:
     video_root = str(Path(args.video_root).absolute())
     check_files = not args.no_check_files
 
-    with _open_input(args.input) as fin, Path(args.output).open("w", encoding="utf-8") as fout:
+    with _open_input(args.input) as fin, _open_output(args.output) as fout:
         for line_no, line in enumerate(fin, 1):
             if args.max_rows is not None and written >= args.max_rows:
                 break
@@ -507,7 +514,7 @@ def cmd_text(args: argparse.Namespace) -> None:
     written = 0
     check_files = not args.no_check_files  # no-op for text (no media fields)
 
-    with _open_input(args.input) as fin, Path(args.output).open("w", encoding="utf-8") as fout:
+    with _open_input(args.input) as fin, _open_output(args.output) as fout:
         for line_no, line in enumerate(fin, 1):
             if args.max_rows is not None and written >= args.max_rows:
                 break
@@ -642,7 +649,7 @@ def cmd_mix(args: argparse.Namespace) -> None:
     rng.shuffle(sampled)
 
     # ── Write output ──
-    with Path(args.output).open("w", encoding="utf-8") as fout:
+    with _open_output(args.output) as fout:
         for row in sampled:
             fout.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -681,9 +688,9 @@ def cmd_split(args: argparse.Namespace) -> None:
         sys.exit(f"{args.input} has {len(rows)} row(s); need at least 2 to split")
     random.Random(args.seed).shuffle(rows)
     n_eval = max(1, round(len(rows) * args.eval_fraction))
-    with Path(args.eval_out).open("w", encoding="utf-8") as f:
+    with _open_output(args.eval_out) as f:
         f.writelines(rows[:n_eval])
-    with Path(args.train_out).open("w", encoding="utf-8") as f:
+    with _open_output(args.train_out) as f:
         f.writelines(rows[n_eval:])
     print(
         f"split {args.input}: {len(rows) - n_eval} train -> {args.train_out}, "

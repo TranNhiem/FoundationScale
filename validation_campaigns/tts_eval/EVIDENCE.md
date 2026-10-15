@@ -62,6 +62,11 @@ The two English misses, examined:
   seed and batching variance runs are the next measurement; the loop is exactly what FS's
   runaway / repetition-loop gates detect on the ASR side.
 
+Variance of Qwen3-TTS-1.7B on test-en (same harness, 2026-10-14): seed 0 batch 8 = 1.561, seed 1
+batch 8 = 1.446, seed 0 unbatched = 1.691. The spread (+-0.12) is sampling noise; all three sit
+0.2-0.45 above the card's 1.24, about 0.12 of which is the apostrophe effect. So the English gap is
+real and quantified, not a bad draw: our harness reads Qwen3-TTS English about 0.3 above the card.
+
 ## T0b: the Vietnamese judge (2026-10-13)
 
 `run_wer.py` covers en and zh only, and the MiniMax multilingual set (CC BY-SA 4.0; 99 Vietnamese

@@ -47,10 +47,10 @@ Card values from the Qwen3-Omni README (30B-A3B-Instruct column).
 | IFEval (final) | 81.5 | 77.8 | +3.7 | 79.7 |
 | AdvBench (refusal %) | 99.4 | 99.3 | +0.1 | 99.8 |
 | BBH | 85.0 | 80.4 | +4.6 | 88.3 |
-| MMSU | in progress | 68.1 | | |
+| MMSU | 76.8 (unparsable 3.3%) | 68.1 | +8.7 | (stopped) |
 
-All rows generated, none failed, scored by upstream's evaluator. Our scores sit 2.8-4.6 points above
-the card on three subsets; at n=455-1,000 that is systematic, not sampling noise. The card does not
+All rows generated, none failed, scored by upstream's evaluator. Our scores sit 2.8-8.7 points above
+the card on four of five subsets; at n=455-1,000 that is systematic, not sampling noise. The card does not
 publish its decoding settings (we decode greedily), so this is recorded as a documented upward gap,
 not as "reproduced". The end-to-end model beats the 4B cascade on OpenBookQA and IFEval; the
 cascade still wins BBH and AdvBench.
