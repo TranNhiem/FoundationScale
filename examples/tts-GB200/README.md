@@ -261,6 +261,8 @@ Acceptance criterion, tolerance fixed in advance: ground truth scored with `--gt
 | Qwen3-TTS-12Hz-0.6B-Base | test-zh | `1.132` | `0.92` | `76.33` / `-` (not stated) | reproduced |
 | Qwen3-TTS-12Hz-1.7B-Base | test-en | `1.561` | `1.24` | `71.65` / `-` (not stated) | **not reproduced (+`0.32`)** |
 | Qwen3-TTS-12Hz-0.6B-Base | test-en | `4.224` | `1.32` | `70.3` / `-` (not stated) | **not reproduced** |
+| VoxCPM2 | test-zh-hard | `7.826` | `8.13` | `75.11` / `75.3` | reproduced |
+| Qwen3-TTS-12Hz-1.7B-Base | test-zh-hard | `5.914` | `-` | `74.65` / `-` | measured (no published value) |
 
 ### Follow-ups on the two English misses (VERIFIED)
 
@@ -279,7 +281,7 @@ Acceptance criterion, tolerance fixed in advance: ground truth scored with `--gt
 | **Qwen3-ASR-1.7B** (language forced to vi) | `857` / `857` | **`7.49`** (pinned as the Vietnamese judge and the floor) |
 | Whisper-large-v3 (vi, long-form timestamps) | `857` / `857` | `10.25` (not selected) |
 
-**Not measured in this campaign:** a zh-hard (`400`) row; MiniMax Vietnamese synthesis scored against the `7.49` floor; any VoxCPM LoRA / T2b result.
+**Not measured in this campaign:** MiniMax Vietnamese synthesis scored against the `7.49` floor; any VoxCPM LoRA / T2b result.
 
 ---
 
@@ -349,11 +351,33 @@ So LoRA on 65 h of commercial-safe Vietnamese makes VoxCPM2 significantly more i
 - **Two eval sets.** MiniMax-vi is small (100 rows) and swings about 1 point from sampling alone (a zero-initialised LoRA behaves like base but scores slightly differently), so the 857-row FLEURS-vi set is the reliable anchor and the paired intervals carry the claim.
 - **Final-step reporting.** The reported checkpoint is the final one (step 2000), fixed in advance. Picking the best-looking step would be selection on the test sets, so intermediate checkpoints can be inspected but not reported as the result.
 
-### In progress
+### Full fine-tuning vs LoRA (VERIFIED, 2026-10-15)
 
-- Full fine-tuning vs LoRA comparison (to quantify what freezing the base buys us).
-- Qwen3-TTS single-speaker SFT (a null result so far, not a recipe; reported only once measured).
-- Naturalness (UTMOS) — licence unrecorded, so no naturalness score yet.
+Same data, steps and effective batch, but all weights except the frozen AudioVAE at lr 1e-5 (upstream `voxcpm_finetune_all.yaml`): build the config with `MODE=full bash validation_campaigns/tts_vi/cluster/make_t2b_config.sh`, then train and evaluate exactly as above. Final step 2000, fixed in advance.
+
+| run | FLEURS-vi WER / SIM | MiniMax-vi WER / SIM |
+|---|---|---|
+| base | 8.59 / 82.56 | 5.75 / 79.50 |
+| LoRA step 2000 | 6.79 / 81.49 | 1.44 / 77.01 |
+| full FT step 2000 | 6.895 / 81.79 | 1.303 / 73.93 |
+
+LoRA vs full on FLEURS-vi (n=857): WER +0.10 [-0.32, +0.53], SIM +0.30 [-0.07, +0.70], so no significant difference in intelligibility. Full fine-tuning loses more speaker similarity on the two-voice MiniMax set (73.93 vs 77.01). **LoRA stays the recipe:** equal quality, a small adapter instead of a full checkpoint to ship, and cloning similarity stays closer to the base model.
+
+### What did not work: Qwen3-TTS single-speaker fine-tuning (VERIFIED null result)
+
+Upstream `finetuning/sft_12hz.py` (qwen-tts 0.1.1) trains one fixed new voice per run; it does not support multi-speaker or cloning fine-tuning. On 28 minutes of one LibriTTS-R speaker (398 utterances, 60 held out; `validation_campaigns/tts_train/`):
+
+| run (README recipe: batch 32, 10 epochs) | held-out WER | SIM |
+|---|---|---|
+| base 1.7B, zero-shot clone | 2.309 | 44.75 |
+| SFT lr 2e-6 (README value) | 2.165 | 44.47 |
+| SFT lr 2e-5 (upstream script default) | 217.17 | 4.49 |
+
+At the README learning rate the fine-tuned voice is no better than zero-shot cloning (WER [-0.50, 0.00], SIM [-2.5, +1.8], n=60). At 10x it diverges into runaway generation. For new voices, use zero-shot cloning; for a new language, use the VoxCPM2 LoRA path above.
+
+### Not measured yet
+
+- Naturalness (UTMOS): its licence is unrecorded, so there is no naturalness score.
 
 ## Troubleshooting (from the campaign caveats)
 

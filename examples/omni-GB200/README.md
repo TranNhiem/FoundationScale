@@ -215,11 +215,12 @@ Stated technical deviation: the resampler uses `resample_poly` ("not identical t
 
 ---
 
-## Fine-tuning roadmap — PLANNED (nothing run)
+## Fine-tuning: starting point measured, training not started
 
-- The plan phases `O0` and `O1` are defined in `docs/research/tts_omni_plan.md` and both are done as evaluations: `O0` is "the cascade every end-to-end omni model must beat, measured with the same harness that will score Qwen3-Omni in `O1`".
-- Fine-tuning itself is planned but has not been run: no fine-tuning runs, schedules, datasets or further phases appear in the recorded files.
-- Speech-out evaluation is not recorded either: `O1` runs text out with the talker disabled (`disable_talker()`, `return_audio=False`).
+- `O0` (cascade) and `O1` (Qwen3-Omni) are done as evaluations; see `docs/research/tts_omni_plan.md`.
+- **O2 starting point (VERIFIED, 2026-10-15):** before teaching Qwen3-Omni Vietnamese speech input, its existing ability was measured. Prompted with "Transcribe the Vietnamese audio into text." (talker disabled, greedy), it reaches **5.44 WER** on all 857 FLEURS-vi test rows, better than the dedicated Vietnamese judge Qwen3-ASR-1.7B (7.49). There is little headroom on read speech, so the O2 training target is being re-scoped before any GPU time is spent on it. This is the point of measuring first.
+- The cascade's MMSU run is being re-run with the resumable runner; its row stays "not finished" until it lands.
+- Speech-out evaluation is not recorded: `O1` runs text out with the talker disabled (`disable_talker()`, `return_audio=False`).
 
 ---
 

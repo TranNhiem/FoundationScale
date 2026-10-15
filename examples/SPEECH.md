@@ -56,8 +56,10 @@ Headline result (2026-10-12/13, cascade): IFEval 79.7, AdvBench refusal rate 99.
 
 ## What is not done yet (IN PROGRESS / PLANNED)
 
-These are not on main and have no measured numbers here.
+These have no measured result on main yet.
 
-- TTS: full fine-tuning versus LoRA on the same Vietnamese data (running); Qwen3-TTS single-speaker fine-tuning (so far no better than zero-shot cloning, so not a recipe yet).
-- Omni: fine-tuning recipes (thinker-only first) are planned; this page covers inference only.
-- Unfinished runs: TTS zh-hard has no result row, and the cascade's `mmsu` run was stopped when its GPUs were released.
+- Omni fine-tuning: the starting point is measured (Qwen3-Omni already transcribes FLEURS-vi at 5.44 WER, better than the 7.49 dedicated judge), so the O2 training target is being re-scoped; no omni training has run.
+- The cascade's MMSU subset is being re-run (resumable).
+- TTS naturalness (UTMOS) is not scored.
+
+Settled (see [./tts-GB200/](./tts-GB200/) Step 6): full fine-tuning is no better than LoRA for VoxCPM2 Vietnamese (LoRA stays the recipe), and Qwen3-TTS single-speaker fine-tuning is a null result versus zero-shot cloning.
