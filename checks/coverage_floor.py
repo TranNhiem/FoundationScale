@@ -366,6 +366,8 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/vla/adapters/openpi/__init__.py": 100,  # re-exports only; measured 100.0%
     "src/foundationscale/vla/adapters/openpi/finetune.py": 99,  # measured 100.0%; 1 pt CI slack
     "src/foundationscale/vla/adapters/openpi/libero.py": 97,  # measured 97.6%; 1 pt CI slack
+    "src/foundationscale/vla/adapters/verlvla/__init__.py": 100,  # re-exports only; measured 100.0%
+    "src/foundationscale/vla/adapters/verlvla/rl.py": 99,  # measured 100.0%; 1 pt CI slack
     "src/foundationscale/vla/eval/__main__.py": 97,  # measured 97.7%; 1 pt CI slack
     "src/foundationscale/vla/eval/__init__.py": 100,  # re-exports only; measured 100.0%
     "src/foundationscale/vla/eval/plan.py": 99,  # measured 100.0%; 1 pt CI slack

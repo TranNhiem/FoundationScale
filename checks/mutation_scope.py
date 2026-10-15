@@ -110,6 +110,13 @@ PENDING_ENROLMENT: dict[str, str] = {
         "openpi LIBERO policy adapter (180-degree rotation, resize-with-pad, 8-d state): pinned "
         "against stand-in upstream modules and run on GB200, no mutation row yet."
     ),
+    "src/foundationscale/vla/adapters/verlvla/__init__.py": (
+        "re-exports of the verl-vla RL spec: no logic of its own, no mutation row."
+    ),
+    "src/foundationscale/vla/adapters/verlvla/rl.py": (
+        "verl-vla RL declaration (transcribed recipes, published curves, GPU placement, runtime "
+        "env) and the trainer argv: line-covered by tests/vla, no mutation row yet."
+    ),
     "src/foundationscale/vla/eval/libero_runner.py": (
         "FS-owned LIBERO rollout loop and report (init protocols, replan cadence, truncation is "
         "failure, denominator never shrinks, Wilson CI): line-covered, no mutation row yet."
