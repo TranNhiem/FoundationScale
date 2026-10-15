@@ -38,5 +38,11 @@ resampled to the AudioVAE's 16 kHz). Both arms clone from the T2a reference clip
 Paired bootstrap, LoRA minus base (n=60): SIM **+2.95, 95% CI [+1.44, +4.49]**; WER +0.29, CI [-0.50, +1.47]
 (4 rows changed, one by +3 errors). Against the plan's criteria: SIM up at 95% is **met**; WER
 non-regression within +0.3 holds on the point estimate but 60 rows cannot resolve it. So, unlike Qwen3-TTS
-SFT, a 28-minute LoRA does move VoxCPM2 toward the target voice while keeping zero-shot cloning; a larger
-held-out set is needed before claiming intelligibility is unchanged.
+SFT, a 28-minute LoRA does move VoxCPM2 toward the target voice; a larger held-out set is needed before
+claiming intelligibility is unchanged.
+
+Does the speaker LoRA still clone other voices? Seed-TTS test-en (1,088 rows, other speakers' prompts)
+with the LoRA loaded, scored by the T0 harness (`cluster/run_t3_zeroshot.sh`), against the T1 base run:
+WER 1.624 vs 1.706 (paired diff [-0.27, +0.10]: no regression), SIM 74.22 vs 75.0 (paired diff -0.78,
+[-1.03, -0.53]). Zero-shot cloning survives with a small, significant similarity cost, the same direction
+and size as T2b's -1.07 on Vietnamese. Ship the speaker LoRA as an optional adapter, not merged weights.
