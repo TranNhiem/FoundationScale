@@ -1,5 +1,7 @@
 # Fine-tune ASR models on 2x H200 with FoundationScale
 
+This is the **ASR** (speech-to-text) example. For text-to-speech and omni speech-LLMs, and a map of all speech work, see [../SPEECH.md](../SPEECH.md).
+
 This tutorial takes you end to end through fine-tuning **four speech/ASR models of three different kinds**
 on LibriSpeech with FoundationScale — a CTC encoder (full fine-tune), a seq2seq encoder-decoder (full
 fine-tune), and two audio-LLMs (LoRA fine-tune) — and then evaluating every one of them honestly,
@@ -64,6 +66,32 @@ bash examples/speech-2xH200/scripts/train_speech.sh examples/speech-2xH200/confi
 shards, 28,539 rows) takes ~20–25 min (parquet download ~2.5 min **MEASURED** + conversion); the
 `parakeet-ctc-1.1b` 500-step full fine-tune takes ~245 s wall (220 s pure train time) on 2 GPUs;
 evaluation (base + tuned, full 2,683-row dev-clean, parallel on 2 GPUs) takes a few minutes each.
+
+## Training techniques in this tutorial
+
+**VERIFIED** (measured on 2x NVIDIA H200 (141 GB), 500 steps, full train-clean-100, full dev-clean, 2026-10-10/11):
+
+| model | task formulation | fine-tuning method | config file | measured WER base -> tuned |
+|---|---|---|---|---|
+| `nvidia/parakeet-ctc-1.1b` | CTC | full fine-tune | `examples/speech-2xH200/configs/parakeet-ctc-1.1b.env` | 1.87% -> 1.77% |
+| `openai/whisper-large-v3` | encoder-decoder seq2seq | full fine-tune | `examples/speech-2xH200/configs/whisper-large-v3.env` | 2.25% -> 1.72% |
+| `google/gemma-4-E4B-it` | audio-LLM SFT | LoRA r16/a32 (audio tower + `embed_audio` projector train in FULL automatically) | `examples/speech-2xH200/configs/gemma-4-E4B-it.env` | 4.04% -> 2.99% |
+| `Qwen/Qwen2-Audio-7B-Instruct` | audio-LLM SFT | LoRA r16/a32, automatic adapter scoping | `examples/speech-2xH200/configs/qwen2-audio-7b-lora.env` | 35.58% -> 3.41% |
+| `Qwen/Qwen2-Audio-7B-Instruct` | audio-LLM SFT | full fine-tune, `SHARDING=fsdp`, `FSDP_STATE_DICT=full` | `examples/speech-2xH200/configs/qwen2-audio-7b.env` | 35.58% -> 2.57% |
+
+**CTC full fine-tune (Parakeet).** A CTC head maps the encoder frame-wise to characters with no decoder and no generation, so training computes a fixed loss over alignments. Pick it when the task is pure transcription and the base model is already close: `parakeet-ctc-1.1b` needed only -0.09 WER points (95% CI [-0.14, -0.05]) and is the cheapest run here — 14.3 GB/GPU peak, 0.44 s/step, 245 s wall (README: "~245 s wall (220 s pure train time)"). FoundationScale freezes BatchNorm running statistics automatically.
+
+**Encoder-decoder seq2seq full fine-tune (Whisper).** Whisper's encoder-decoder generates text tokens autoregressively and is trained by teacher forcing on the transcript. Choose it for a strong pretrained ASR model where you can afford full fine-tuning and want the largest clean ASR gain here (-0.53 points, best tuned ASR WER at 1.72%, owner's reference 1.69%). Cost: 27.6 GB/GPU, 0.41 s/step, 230 s wall at BATCH `4` per-device. Note: `FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE=en` is required for `seq2seq` and must be unset for `ctc` / `audio_llm`, and Whisper regressed under raw upper-case LibriSpeech targets (2.25% -> 3.32–3.58%, SUPERSEDED) until targets were sentence-cased.
+
+**Audio-LLM SFT with LoRA (Gemma-4, Qwen2-Audio).** A pretrained audio-LLM is fine-tuned on the transcription instruction (`text` is the fixed literal `"Transcribe this audio exactly."`) with LoRA adapters on the language model while the audio tower and `embed_audio` projector train in FULL automatically. Pick it when you want a cheap adapter plus instruction-following behaviour, or cannot fit a full fine-tune of a 7B model comfortably. Cost: gemma-4-E4B-it 86.2 GB/GPU, 0.94 s/step, 470 s wall; qwen2-audio-7b 82.0 GB/GPU, 1.07 s/step, 541 s wall. Qwen2-Audio needed no `--adapter-target` flag (automatic scoping: 224 LoRA target modules); 500 steps = ~0.14 epoch over 28,539 rows.
+
+**Audio-LLM SFT with full fine-tune (Qwen2-Audio).** Every weight of the 7B audio-LLM is updated; `SHARDING=fsdp` with `FSDP_STATE_DICT=full` is required to fit it. It gave the lowest Qwen2-Audio tuned WER (2.57%) at the highest cost here: 92.9 GB/GPU peak, 0.83 s/step, 597 s wall, and ~16 GB of weights on disk. Prefer LoRA unless you need that last bit of quality or plan to publish a fully merged model.
+
+**How we evaluate.** All numbers above are WER on the full 2,683-row dev-clean split, scored by `validation_campaigns/speech_p4/eval_wer.py` and checked with the 2000-resample paired bootstrap `validation_campaigns/speech_p7/paired_bootstrap.py` (fixed seed). Both use `foundationscale.train.speech_metrics.normalize_transcript`, which casefolds and strips punctuation. We use the full split because 300-row held-out sets cannot resolve WER shifts under ~1 point, and we use FoundationScale's normaliser everywhere because its stricter normaliser "reads about 0.2 WER points higher than Whisper's normalizer on the same hypotheses" — never mix the two in one table. Median eval cost: 5-10 minutes per model on the 2,683-row split (full-FT eval 258 s).
+
+**IN PROGRESS / PLANNED** (not measured, no commands here):
+
+- `Qwen3-ASR-1.7B` trains on this stack (transformers >= 5.13) but needs cased, punctuated targets, so it is outside this tutorial's LibriSpeech recipe; evidence lives in `validation_campaigns/speech_q3asr/EVIDENCE.md`.
 
 ## Measured results: 4 ASR models, LibriSpeech, 2x H200, 2026-10-10/11
 
