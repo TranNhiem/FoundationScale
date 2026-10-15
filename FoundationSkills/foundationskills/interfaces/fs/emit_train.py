@@ -373,6 +373,15 @@ def emit_train(
         if flag not in by_flag:
             order.append(flag)
         by_flag[flag] = value
+    # a logging interval longer than the run logs no loss at all, and FS then adjudicates the run
+    # UNMEASURED ("no training log ever carried a loss") -- measured on the A4.1 32K run (10 vs 3 steps)
+    try:
+        log_every, max_steps_v = int(by_flag.get("logging-steps")), int(by_flag.get("max-steps"))
+    except (TypeError, ValueError):
+        log_every = max_steps_v = None
+    if log_every is not None and max_steps_v is not None and max_steps_v >= 1 and log_every > max_steps_v:
+        by_flag["logging-steps"] = max_steps_v
+        notes.append(f"logging_steps {log_every} > max_steps {max_steps_v}: clamped to {max_steps_v} so the run logs a loss")
     ordered_pairs = [(flag, by_flag[flag]) for flag in order] + repeatables
 
     # Every emitted flag must be advertised by the installed FS; otherwise the
@@ -472,6 +481,12 @@ def emit_train(
     else:
         argv = ["python", *inner]
     argv = [_pinned_launcher(argv[0], notes), *argv[1:]]
+    if argv[0] == "torchrun":
+        # an unpinned torchrun resolves through PATH, where ~/.local/bin/torchrun (python3.12, no pandas)
+        # was measured to shadow the env's own (rc=96); a venv carries no torchrun console script of its
+        # own (A4.1 32K run, ~/envs/fs-train) -- fail closed instead of launching an unknown interpreter
+        missing.append(f"torchrun cannot be pinned: no torchrun next to {Path(sys.executable)} "
+                       "(add the console script to that env, e.g. a `from torch.distributed.run import main` wrapper)")
 
     dry_run_argv: list[str] | None
     if "--dry-run" in caps.train_flags:

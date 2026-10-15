@@ -32,6 +32,7 @@ class FakeRunner:
         self.exec_results: dict[str, tuple[int, str, str]] = {}
         self.data_root: str | None = None
         self.exported_root: Path | None = None
+        self.image_environment: str | None = None
 
     def run(
         self,
@@ -59,6 +60,8 @@ class FakeRunner:
             name = args[args.index("-n") + 1]
             root = Path(self.data_root or ".") / name
             (root / "etc").mkdir(parents=True, exist_ok=True)
+            if self.image_environment is not None:  # enroot writes the image config env here
+                (root / "etc" / "environment").write_text(self.image_environment)
             return RunResult(returncode=0, stdout="", stderr="")
         if sub == "start":
             name = args[-4]
@@ -299,7 +302,7 @@ def test_success_writes_metadata_and_exports(tmp_path: Path) -> None:
         runner=runner,
     )
     metadata = json.loads((runner.exported_root / "etc" / "fs-sandbox.json").read_text())
-    assert metadata == {"env": {"A": "1"}, "workdir": "/w"}
+    assert metadata == {"env": {"A": "1"}, "workdir": "/w", "entrypoint": None}
     exports = [a for a in runner.argvs() if a[:2] == ("enroot", "export")]
     assert exports and exports[0][exports[0].index("-o") + 1] == str(out)
     assert out.exists()
@@ -920,23 +923,26 @@ def test_build_copy_glob_with_no_matches_refused(tmp_path: Path) -> None:
         )
 
 
-def test_build_copy_relative_target_refused(tmp_path: Path) -> None:
-    """A COPY target that is not absolute is refused."""
+def test_build_copy_relative_target_resolves_against_workdir(tmp_path: Path) -> None:
+    """Docker semantics: a relative COPY target resolves against the current WORKDIR (Skill2Env
+    Dockerfiles write `COPY x ./`; 697 of 7,496 tasks were refused before this)."""
     runner = FakeRunner()
-    df = _write(tmp_path, "Dockerfile", "FROM alpine\nCOPY a.txt dest/a.txt\n")
+    df = _write(tmp_path, "Dockerfile", "FROM alpine\nWORKDIR /w\nCOPY a.txt dest/a.txt\n")
     context = tmp_path / "ctx"
     context.mkdir()
     (context / "a.txt").write_text("a", encoding="utf-8")
-    with pytest.raises(SandboxRefusal, match="COPY: expected an absolute target"):
-        build_image(
-            df,
-            context,
-            tmp_path / "out.sqsh",
-            data_root=str(tmp_path / "data"),
-            image_store=str(tmp_path / "store"),
-            scratch_root=str(tmp_path / "scratch"),
-            runner=runner,
-        )
+    build_image(
+        df,
+        context,
+        tmp_path / "out.sqsh",
+        data_root=str(tmp_path / "data"),
+        image_store=str(tmp_path / "store"),
+        scratch_root=str(tmp_path / "scratch"),
+        runner=runner,
+    )
+    rootfs = runner.exported_root
+    assert rootfs is not None
+    assert (rootfs / "w" / "dest" / "a.txt").read_text(encoding="utf-8") == "a"
 
 
 def test_build_copy_absolute_source_refused(tmp_path: Path) -> None:
@@ -995,7 +1001,8 @@ def test_build_copy_glob_escaping_context_refused(tmp_path: Path) -> None:
 
 
 def test_build_copy_dir_to_trailing_slash_target(tmp_path: Path) -> None:
-    """COPY of a directory into a trailing-slash target nests it under the target."""
+    """Docker semantics: COPY of a directory copies its CONTENTS into the target, never
+    the directory itself (the old nesting mis-built 98.8% of builder-accepted Skill2Env tasks)."""
     runner = FakeRunner()
     context = tmp_path / "ctx"
     context.mkdir()
@@ -1013,7 +1020,8 @@ def test_build_copy_dir_to_trailing_slash_target(tmp_path: Path) -> None:
     )
     rootfs = runner.exported_root
     assert rootfs is not None
-    assert (rootfs / "dest" / "d" / "inner.txt").read_text(encoding="utf-8") == "i"
+    assert (rootfs / "dest" / "inner.txt").read_text(encoding="utf-8") == "i"
+    assert not (rootfs / "dest" / "d").exists()
 
 
 def test_build_unsupported_instruction_refused(tmp_path: Path) -> None:
@@ -1196,23 +1204,25 @@ def test_build_add_missing_target_refused(tmp_path: Path) -> None:
         )
 
 
-def test_build_add_relative_target_refused(tmp_path: Path) -> None:
-    """An ADD target that is not absolute is refused."""
+def test_build_add_relative_target_resolves_against_workdir(tmp_path: Path) -> None:
+    """Docker semantics: a relative ADD target resolves against the current WORKDIR."""
     runner = FakeRunner()
-    df = _write(tmp_path, "Dockerfile", "FROM alpine\nADD a.txt dest/a.txt\n")
+    df = _write(tmp_path, "Dockerfile", "FROM alpine\nWORKDIR /w\nADD a.txt dest/a.txt\n")
     context = tmp_path / "ctx"
     context.mkdir()
     (context / "a.txt").write_text("a", encoding="utf-8")
-    with pytest.raises(SandboxRefusal, match="ADD: expected an absolute target"):
-        build_image(
-            df,
-            context,
-            tmp_path / "out.sqsh",
-            data_root=str(tmp_path / "data"),
-            image_store=str(tmp_path / "store"),
-            scratch_root=str(tmp_path / "scratch"),
-            runner=runner,
-        )
+    build_image(
+        df,
+        context,
+        tmp_path / "out.sqsh",
+        data_root=str(tmp_path / "data"),
+        image_store=str(tmp_path / "store"),
+        scratch_root=str(tmp_path / "scratch"),
+        runner=runner,
+    )
+    rootfs = runner.exported_root
+    assert rootfs is not None
+    assert (rootfs / "w" / "dest" / "a.txt").read_text(encoding="utf-8") == "a"
 
 
 def test_build_add_absolute_source_refused(tmp_path: Path) -> None:
@@ -1271,7 +1281,8 @@ def test_build_add_glob_escaping_context_refused(tmp_path: Path) -> None:
 
 
 def test_build_add_dir_to_trailing_slash_target(tmp_path: Path) -> None:
-    """ADD of a directory into a trailing-slash target nests it under the target."""
+    """Docker semantics: ADD of a directory copies its CONTENTS into the target,
+    never the directory itself."""
     runner = FakeRunner()
     context = tmp_path / "ctx"
     context.mkdir()
@@ -1289,7 +1300,8 @@ def test_build_add_dir_to_trailing_slash_target(tmp_path: Path) -> None:
     )
     rootfs = runner.exported_root
     assert rootfs is not None
-    assert (rootfs / "dest" / "d" / "inner.txt").read_text(encoding="utf-8") == "i"
+    assert (rootfs / "dest" / "inner.txt").read_text(encoding="utf-8") == "i"
+    assert not (rootfs / "dest" / "d").exists()
 
 
 def test_build_add_symlink_source_escaping_context_refused(tmp_path: Path) -> None:
@@ -2120,3 +2132,50 @@ def test_workdir_creates_its_directory_like_docker(tmp_path: Path) -> None:
     _build(tmp_path, "FROM alpine\nWORKDIR /app\nRUN true\n", runner)
     assert runner.exported_root is not None
     assert (runner.exported_root / "app").is_dir()
+
+
+def test_build_container_names_are_unique_per_build(tmp_path: Path) -> None:
+    """A killed build left "build-<digest>" behind and the next build of the same Dockerfile failed
+    "File already exists" (B2.1 R0 run r7); each build now gets its own container name."""
+    names = []
+    for i in range(2):
+        runner = FakeRunner()
+        root = tmp_path / str(i)
+        root.mkdir()
+        _build(root, "FROM alpine\nRUN true\n", runner)
+        create = [a for a in runner.argvs() if a[:2] == ("enroot", "create")][0]
+        names.append(create[create.index("-n") + 1])
+    assert names[0] != names[1]
+    assert all(n.startswith("build-") for n in names)
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ('ENTRYPOINT ["/workspace/tools/bootstrap.sh"]', ["/workspace/tools/bootstrap.sh"]),
+        ("ENTRYPOINT /start.sh --serve", ["/bin/sh", "-c", "/start.sh --serve"]),
+        ('ENTRYPOINT ["/a"]\nENTRYPOINT ["/b", "x"]', ["/b", "x"]),
+        ("ENTRYPOINT []", None),
+    ],
+)
+def test_build_records_entrypoint(tmp_path: Path, line: str, expected) -> None:
+    """Harbor's Docker backend keeps ENTRYPOINT (only CMD is overridden); the builder records
+    the effective one."""
+    runner = FakeRunner()
+    _build(tmp_path, f'FROM alpine\n{line}\nCMD ["node", "server.js"]\n', runner)
+    meta = json.loads(next(tmp_path.rglob("fs-sandbox.json")).read_text())
+    assert meta["entrypoint"] == expected
+
+
+def test_env_references_resolve_against_the_base_image_env(tmp_path: Path) -> None:
+    """`ENV PATH=/x/bin:$PATH` must extend the base image's PATH (Docker semantics), not keep
+    a literal "$PATH"."""
+    runner = FakeRunner()
+    runner.image_environment = "PATH=/usr/local/bin:/usr/bin:/bin\nNODE_VERSION=22\n"
+    _build(tmp_path, "FROM node\nENV PATH=/opt/deps/.bin:$PATH \\\n    P=x\nRUN echo $P\n", runner)
+    meta = json.loads(next(tmp_path.rglob("fs-sandbox.json")).read_text())
+    assert meta["env"]["PATH"] == "/opt/deps/.bin:/usr/local/bin:/usr/bin:/bin"
+    assert meta["env"]["P"] == "x"
+    # RUN text is left to the shell (it receives the env), as in Docker
+    run = [a for a in runner.argvs() if a[:2] == ("enroot", "start")][-1]
+    assert run[-1].endswith("echo $P")

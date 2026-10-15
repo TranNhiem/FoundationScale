@@ -33,6 +33,14 @@ class FakeCall:
 class FakeRunner:
     """Records every run and returns scripted RunResults in order."""
 
+    # spawn()/terminate(): the no-network holder (recorded lazily in self.spawned / self.terminated)
+    def spawn(self, argv) -> int:
+        self.__dict__.setdefault("spawned", []).append(list(argv))
+        return 4242
+
+    def terminate(self, pid: int) -> None:
+        self.__dict__.setdefault("terminated", []).append(pid)
+
     results: list[RunResult] = field(default_factory=list)
     calls: list[FakeCall] = field(default_factory=list)
     on_run: object = None
@@ -150,19 +158,16 @@ def test_image_path_docker_hash_named_import_once(tmp_path: Path) -> None:
     expected = Path(tmp_path / "images") / f"{digest}.sqsh"
 
     def on_run(call: FakeCall) -> None:
-        Path(call.argv[3] + ".partial").write_text("partial")
+        Path(call.argv[3]).write_text("sqsh")  # the -o output path
 
     runner.on_run = on_run
     assert sbx.image_path() == str(expected)
     assert expected.exists()
-    assert not (expected.parent / (expected.name + ".partial")).exists()
-    assert runner.calls[0].argv == (
-        "enroot",
-        "import",
-        "-o",
-        str(expected) + ".partial",
-        "docker://python:3.12-slim",
-    )
+    assert not list(expected.parent.glob("*.partial"))
+    argv = runner.calls[0].argv
+    assert argv[:3] == ("enroot", "import", "-o")
+    assert argv[3].startswith(str(expected) + ".") and argv[3].endswith(".partial")
+    assert argv[4] == "docker://python:3.12-slim"
     assert sbx.image_path() == str(expected)
     assert len(runner.calls) == 1
 
@@ -183,8 +188,8 @@ def test_start_creates_scratch_and_calls_enroot_create(tmp_path: Path) -> None:
     call = runner.calls[0]
     assert call.argv == ("enroot", "create", "-n", "sbx1", sbx.image_path())
     assert call.env == {"ENROOT_DATA_PATH": str(tmp_path / "data")}
-    scratch = tmp_path / "scratch" / "sbx1" / "tmp"
-    assert scratch.is_dir()
+    assert (tmp_path / "scratch" / "sbx1").is_dir()
+    assert (tmp_path / "data" / "sbx1" / "tmp").is_dir()
 
 
 def test_start_twice_refused(tmp_path: Path) -> None:
@@ -202,8 +207,37 @@ def test_exec_no_network_prefix(tmp_path: Path) -> None:
     runner.calls.clear()
     sbx.exec("echo hi")
     argv = runner.calls[0].argv
-    assert argv[:2] == ("unshare", "-rn")
+    # every exec joins ONE namespace held for the sandbox's lifetime (as a Docker
+    # container's), so a service
+    # started by one exec is reachable from the next; the holder brings loopback up, with no
+    # route off the box
+    assert argv[:6] == (
+        "nsenter",
+        "--target=4242",
+        "--user",
+        "--net",
+        "--preserve-credentials",
+        "--",
+    )
+    (holder,) = runner.spawned
+    assert holder[:2] == ["unshare", "-rn"] and "ip link set lo up" in holder[-1]
     assert "enroot" in argv
+
+
+@pytest.mark.parametrize("network", ["no-network", "public"])
+def test_exec_runs_as_container_root(tmp_path: Path, network: str) -> None:
+    # Docker semantics: RUN and task commands are root. Without --root a public-network exec
+    # (every build
+    # step) kept the caller's uid and dpkg refused "requires superuser privilege".
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner, network=network)
+    sbx.start()
+    runner.calls.clear()
+    sbx.exec("echo hi")
+    argv = runner.calls[0].argv
+    i = argv.index("start")
+    assert argv[i - 1] == "enroot"
+    assert "--root" in argv[i + 1 : argv.index(sbx.spec.name)]
 
 
 def test_exec_public_no_prefix(tmp_path: Path) -> None:
@@ -222,32 +256,50 @@ def test_exec_cpu_set_taskset(tmp_path: Path) -> None:
     runner.calls.clear()
     sbx.exec("true")
     argv = runner.calls[0].argv
-    assert argv[:3] == ("unshare", "-rn", "taskset")
-    assert argv[3] == "-c"
-    assert argv[4] == "0,2"
+    assert argv[0] == "nsenter"
+    i = argv.index("taskset")
+    assert argv[i + 1] == "-c"
+    assert argv[i + 2] == "0,2"
 
 
-def test_exec_memory_mb_prlimit_bytes(tmp_path: Path) -> None:
+def test_exec_memory_mb_cgroup_scope(tmp_path: Path) -> None:
+    # A cgroup v2 limit (Docker --memory semantics), not an rlimit: RLIMIT_AS broke V8/Chromium and
+    # RLIMIT_DATA broke ASan's MAP_NORESERVE shadow (both measured on real Skill2Env tasks).
     runner = FakeRunner()
     sbx = import_image(tmp_path, runner, memory_mb=256)
     sbx.start()
     runner.calls.clear()
     sbx.exec("true")
     argv = runner.calls[0].argv
-    assert argv[:3] == ("unshare", "-rn", "prlimit")
-    assert argv[3] == f"--as={256 * 1048576}"
+    assert argv[:4] == ("systemd-run", "--user", "--scope", "--quiet")
+    assert "MemoryMax=256M" in argv and "MemorySwapMax=0" in argv and "OOMPolicy=continue" in argv
+    rest = argv[argv.index("--") + 1 :]
+    assert rest[0] == "nsenter"
+    assert "prlimit" not in argv
 
 
-def test_exec_mounts_scratch_over_tmp(tmp_path: Path) -> None:
+def test_start_refuses_when_memory_scope_unavailable(tmp_path: Path) -> None:
+    """Fail closed: a memory limit that cannot be enforced must not run unbounded."""
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner, memory_mb=256)
+    runner.results = [RunResult(returncode=1, stdout="", stderr="Failed to connect to bus")]
+    with pytest.raises(SandboxError, match="cgroup v2 memory scope"):
+        sbx.start()
+
+
+def test_tmp_is_in_the_rootfs_not_a_separate_mount(tmp_path: Path) -> None:
+    """Docker's /tmp is on the container filesystem; a bind-mount made rename() into /tmp fail
+    with EXDEV (TB 2.1 path-tracing-reverse: "Invalid cross-device link")."""
     runner = FakeRunner()
     sbx = import_image(tmp_path, runner)
     sbx.start()
     runner.calls.clear()
     sbx.exec("true")
     argv = runner.calls[0].argv
-    scratch = tmp_path / "scratch" / "sbx1" / "tmp"
-    assert "--mount" in argv
-    assert f"{scratch}:/tmp" in argv
+    assert not any(a.endswith(":/tmp") for a in argv)
+    tmp = Path(sbx.rootfs()) / "tmp"
+    assert tmp.is_dir() and (tmp.stat().st_mode & 0o7777) == 0o1777
+    assert sbx.host_path("/tmp/x") == (tmp / "x").resolve()
 
 
 def test_exec_env_precedence(tmp_path: Path) -> None:
@@ -261,7 +313,12 @@ def test_exec_env_precedence(tmp_path: Path) -> None:
     sbx.exec("true", env={"C": "call"})
     argv = runner.calls[0].argv
     env_pairs = [argv[i + 1] for i, x in enumerate(argv) if x == "--env"]
-    assert env_pairs == ["A=build", "B=spec", "C=call"]
+    assert env_pairs == [
+        "HOME=/root",
+        "A=build",
+        "B=spec",
+        "C=call",
+    ]  # HOME: Docker default, lowest precedence
 
 
 def test_exec_cwd_quoting(tmp_path: Path) -> None:
@@ -292,11 +349,10 @@ def test_exec_timeout_returns_124(tmp_path: Path) -> None:
     assert runner.calls[-1].timeout_s == 1.0
 
 
-def test_host_path_maps_tmp_into_scratch(tmp_path: Path) -> None:
+def test_host_path_maps_tmp_into_the_rootfs(tmp_path: Path) -> None:
     sbx = import_image(tmp_path, FakeRunner())
     sbx.start()
-    scratch = tmp_path / "scratch" / "sbx1" / "tmp"
-    assert sbx.host_path("/tmp/x") == scratch / "x"
+    assert sbx.host_path("/tmp/x") == tmp_path / "data" / "sbx1" / "tmp" / "x"
     assert sbx.host_path("/etc/hosts") == tmp_path / "data" / "sbx1" / "etc" / "hosts"
 
 
@@ -544,7 +600,27 @@ def test_image_path_import_failure_removes_partial(tmp_path: Path) -> None:
     with pytest.raises(SandboxError, match="enroot import failed"):
         sbx.image_path()
     digest = hashlib.sha256(b"docker://python:3.12-slim").hexdigest()[:16]
-    assert not (Path(tmp_path / "images") / f"{digest}.sqsh.partial").exists()
+    assert not list(Path(tmp_path / "images").glob(f"{digest}.sqsh*.partial"))
+
+
+def test_image_path_concurrent_importer_partial_untouched(tmp_path: Path) -> None:
+    """Another importer's in-flight temp file is neither reused nor deleted
+    (R0 race: shared .partial)."""
+    runner = FakeRunner()
+    sbx = make_sandbox(tmp_path, runner)
+    digest = hashlib.sha256(b"docker://python:3.12-slim").hexdigest()[:16]
+    images = Path(tmp_path / "images")
+    images.mkdir(parents=True, exist_ok=True)
+    other = images / f"{digest}.sqsh.partial"
+    other.write_text("another worker, mid-import")
+
+    def on_run(call: FakeCall) -> None:
+        assert call.argv[3] != str(other)
+        Path(call.argv[3]).write_text("sqsh")
+
+    runner.on_run = on_run
+    assert sbx.image_path() == str(images / f"{digest}.sqsh")
+    assert other.read_text() == "another worker, mid-import"
 
 
 def test_start_create_failure_raises_sandbox_error(tmp_path: Path) -> None:
@@ -738,3 +814,195 @@ def test_stop_remove_failure_raises_sandbox_error(tmp_path: Path) -> None:
     runner.results = [RunResult(returncode=1, stdout="", stderr="remove failed")]
     with pytest.raises(SandboxError, match="enroot remove failed"):
         sbx.stop()
+
+
+def test_subprocess_runner_kill_all_ends_an_inflight_run() -> None:
+    """kill_all reaches a run blocked on a process that never exits, child processes included."""
+    import threading
+    import time
+
+    runner = SubprocessRunner()
+    out: list[RunResult] = []
+    worker = threading.Thread(
+        target=lambda: out.append(runner.run(["sh", "-c", "sleep 60 & sleep 60"]))
+    )
+    worker.start()
+    deadline = time.monotonic() + 10
+    while not runner._live and time.monotonic() < deadline:
+        time.sleep(0.05)
+    runner.kill_all()
+    worker.join(10)
+    assert not worker.is_alive()
+    assert out[0].returncode == -9
+    assert not runner._live
+
+
+def test_stop_kills_running_execs_first(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    killed: list[int] = []
+    runner.kill_all = lambda: killed.append(len(runner.calls))  # type: ignore[attr-defined]
+    sbx = import_image(tmp_path, runner)
+    sbx.start()
+    sbx.stop(delete=True)
+    assert killed, "stop() must kill in-flight execs before removing the container"
+    assert runner.calls[killed[0]].argv[:3] == ("enroot", "remove", "-f")
+
+
+def test_exec_disables_enroot_login_shell(tmp_path: Path) -> None:
+    """A login shell sources the image's /etc/profile, which resets PATH and drops the image
+    ENV PATH (golang: "go: not found"). Docker never uses one; enroot defaults to yes and reads
+    "" as default."""
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner)
+    sbx.start()
+    runner.calls.clear()
+    sbx.exec("go version")
+    assert runner.calls[0].env is not None
+    assert runner.calls[0].env.get("ENROOT_LOGIN_SHELL") == "no"
+
+
+def test_exec_defaults_home_like_docker(tmp_path: Path) -> None:
+    """HOME=/root unless the image's environment sets it (Docker semantics);
+    caller env still wins."""
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner)
+    sbx.start()
+    runner.calls.clear()
+    sbx.exec("go env GOCACHE")
+    assert "HOME=/root" in runner.calls[0].argv
+    environment = Path(sbx.rootfs()) / "etc" / "environment"
+    environment.parent.mkdir(parents=True, exist_ok=True)
+    environment.write_text("PATH=/usr/bin\nHOME=/home/app\n")
+    runner.calls.clear()
+    sbx.exec("true")
+    assert not any(a.startswith("HOME=") for a in runner.calls[0].argv)
+    runner.calls.clear()
+    sbx.exec("true", env={"HOME": "/work"})
+    assert "HOME=/work" in runner.calls[0].argv
+
+
+def test_stop_kills_container_processes_and_the_netns_holder(tmp_path: Path, monkeypatch) -> None:
+    """Docker's stop kills every container process; daemons used to outlive their sandbox
+    (73 leaked)."""
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner)
+    sbx.start()
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(sbx, "_container_pids", lambda: [111, 222])
+    monkeypatch.setattr(os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    sbx.stop(delete=True)
+    assert sorted(p for p, _ in killed) == [111, 222]
+    assert runner.terminated == [4242]
+
+
+def test_container_pids_ignores_host_processes(tmp_path: Path) -> None:
+    """Host processes (this one, a plain child) have no root mount at the sandbox rootfs,
+    so they never match."""
+    import subprocess
+
+    sbx = make_sandbox(tmp_path, FakeRunner())
+    child = subprocess.Popen(["sleep", "30"])
+    try:
+        pids = sbx._container_pids()
+        assert os.getpid() not in pids and child.pid not in pids
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_subprocess_runner_spawn_waits_for_ready_and_refuses_silence() -> None:
+    """spawn() returns only after the helper says ready (its namespaces exist);
+    a silent helper is refused."""
+    runner = SubprocessRunner()
+    pid = runner.spawn(["sh", "-c", "sleep 0.3; echo ready; exec sleep 30"])
+    try:
+        assert Path(f"/proc/{pid}").exists()
+    finally:
+        runner.terminate(pid)
+    with pytest.raises(SandboxError, match="expected 'ready'"):
+        runner.spawn(["sleep", "30"], ready_timeout_s=0.5)
+
+
+def test_image_import_is_serialized_and_reuses_a_concurrent_result(tmp_path: Path) -> None:
+    """enroot's layer cache races on concurrent imports; imports take one file lock,
+    and a waiter reuses the image."""
+    import threading
+    import time
+
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def on_run(call: FakeCall) -> None:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.2)
+        Path(call.argv[3]).write_text("sqsh")
+        with lock:
+            active -= 1
+
+    runner = FakeRunner()
+    runner.on_run = on_run
+    boxes = [make_sandbox(tmp_path, runner, name=f"box{i}") for i in range(3)]
+    threads = [threading.Thread(target=b.image_path) for b in boxes]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert peak == 1, "imports overlapped"
+    assert sum(1 for c in runner.calls if c.argv[:2] == ("enroot", "import")) == 1, (
+        "waiters must reuse the image"
+    )
+
+
+def test_exec_uses_bash_when_the_image_has_it(tmp_path: Path) -> None:
+    """Harbor's Docker backend runs `bash -c`; pi's installer uses `set -o pipefail`,
+    which dash rejects."""
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner)
+    sbx.start()
+    runner.calls.clear()
+    sbx.exec("true")
+    assert runner.calls[0].argv[-3] == "sh"  # no bash in the image
+    bash = Path(sbx.rootfs()) / "bin" / "bash"
+    bash.parent.mkdir(parents=True, exist_ok=True)
+    bash.write_text("")
+    runner.calls.clear()
+    sbx.exec("set -o pipefail; true")
+    assert runner.calls[0].argv[-3] == "bash"
+
+
+def test_enroot_sysconf_reaches_every_enroot_call(tmp_path: Path) -> None:
+    """A site tmpfs over /tmp (separate fs, mode 755) broke rename into /tmp;
+    a sysconf copy without it is opt-in."""
+    conf = tmp_path / "sysconf"
+    conf.mkdir()
+    (conf / "enroot.conf").write_text("")
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner, enroot_sysconf=str(conf))
+    sbx.start()
+    sbx.exec("true")
+    sbx.stop(delete=True)
+    enroot_calls = [c for c in runner.calls if "enroot" in c.argv and c.env is not None]
+    assert enroot_calls and all(c.env.get("ENROOT_SYSCONF_PATH") == str(conf) for c in enroot_calls)
+
+
+def test_enroot_sysconf_must_be_a_config_dir(tmp_path: Path) -> None:
+    with pytest.raises(SandboxRefusal, match="enroot_sysconf"):
+        make_spec(tmp_path, enroot_sysconf=str(tmp_path / "missing"))
+
+
+def test_isolated_sandbox_writes_proxy_config_for_sudo_and_apt(tmp_path: Path) -> None:
+    """sudo resets the env (TB 2.1 rstan-to-pystan's `sudo apt-get update` lost the proxy);
+    apt reads its own config."""
+    runner = FakeRunner()
+    sbx = import_image(tmp_path, runner, isolate_network=True)
+    (Path(sbx.rootfs()) / "etc" / "apt").mkdir(parents=True, exist_ok=True)
+    sbx.start()
+    keep = Path(sbx.rootfs()) / "etc" / "sudoers.d" / "fs-egress-proxy"
+    assert "env_keep" in keep.read_text() and "https_proxy" in keep.read_text()
+    assert (keep.stat().st_mode & 0o777) == 0o440
+    apt = (Path(sbx.rootfs()) / "etc" / "apt" / "apt.conf.d" / "95fs-egress-proxy").read_text()
+    assert 'Acquire::http::Proxy "http://127.0.0.1:3128";' in apt

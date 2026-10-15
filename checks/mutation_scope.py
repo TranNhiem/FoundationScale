@@ -125,9 +125,16 @@ PENDING_ENROLMENT: dict[str, str] = {
         "the PolicyAdapter structural contract: line-covered, no mutation row yet."
     ),
     "src/foundationscale/agentic_rl/sandbox/enroot.py": (
-        "enroot sandbox (per-trial containers, no-network via unshare, private /tmp, contained "
-        "file transfer): line-covered by tests/agentic_rl/test_sandbox_enroot.py and run on a "
-        "GB200 tray, but no mutation row yet proves a dropped containment check is caught."
+        "enroot sandbox (per-trial containers, one network namespace per sandbox with egress only "
+        "through a policy proxy, cgroup memory scopes, contained file transfer): line-covered by "
+        "tests/agentic_rl/test_sandbox_enroot.py and run on a GB200 tray, but no mutation row yet "
+        "proves a dropped containment check is caught."
+    ),
+    "src/foundationscale/agentic_rl/sandbox/egress_proxy.py": (
+        "per-sandbox egress proxy (CONNECT + absolute-URI HTTP, allowlist / public / no-network "
+        "policy re-read per connection, fails closed): line-covered by "
+        "tests/agentic_rl/test_sandbox_egress_proxy.py and run live in isolated GB200 sandboxes, "
+        "but no mutation row yet."
     ),
     "src/foundationscale/agentic_rl/sandbox/mini_swe_env.py": (
         "mini-SWE-agent execution environment over enroot sandboxes: line-covered by "

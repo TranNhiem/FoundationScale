@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import posixpath
 import shlex
 import time
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,11 +27,11 @@ from foundationscale.agentic_rl.sandbox.enroot import (
 )
 
 _STDERR_TAIL = 2000
-_IGNORED_INSTRUCTIONS = frozenset(
-    {"EXPOSE", "CMD", "ENTRYPOINT", "LABEL", "HEALTHCHECK", "VOLUME", "STOPSIGNAL"}
-)
+# CMD stays ignored: Harbor's Docker backend overrides it (`sh -c "sleep infinity"`) but keeps
+# ENTRYPOINT.
+_IGNORED_INSTRUCTIONS = frozenset({"EXPOSE", "CMD", "LABEL", "HEALTHCHECK", "VOLUME", "STOPSIGNAL"})
 _SUPPORTED_INSTRUCTIONS = (
-    frozenset({"FROM", "ARG", "ENV", "WORKDIR", "RUN", "COPY", "ADD", "USER"})
+    frozenset({"FROM", "ARG", "ENV", "WORKDIR", "RUN", "COPY", "ADD", "USER", "ENTRYPOINT"})
     | _IGNORED_INSTRUCTIONS
 )
 
@@ -105,6 +107,7 @@ def build_image(
     runner: Runner | None = None,
     build_args: Mapping[str, str] | None = None,
     timeout_s: float = 3600.0,
+    enroot_sysconf: str | None = None,
 ) -> BuildReport:
     """Build a ``.sqsh`` image from a Dockerfile subset inside ``context_dir``."""
     df_path = Path(dockerfile)
@@ -162,6 +165,7 @@ def build_image(
         args.update(build_args)
     env: dict[str, str] = {}
     workdir = "/"
+    entrypoint: list[str] | None = None
     applied = 0
     started = time.monotonic()
 
@@ -169,16 +173,29 @@ def build_image(
         f"{df_path.resolve()}|{context.resolve()}|{sorted((build_args or {}).items())}".encode()
     ).hexdigest()[:16]
     spec = SandboxSpec(
-        name=f"build-{digest}",
+        # unique per build: a killed build left "build-<digest>" behind and every later
+        # build of the same
+        # Dockerfile then failed "File already exists"; concurrent builds of one
+        # Dockerfile collided the same way
+        name=f"build-{digest}-{uuid.uuid4().hex[:8]}",
         image=base_image,
         data_root=data_root,
         image_store=image_store,
         scratch_root=scratch_root,
         network="public",
+        enroot_sysconf=enroot_sysconf,
     )
     _validate_steps(steps, dict(build_args or {}), build_args, context)
     sandbox = EnrootSandbox(spec, runner=runner if runner is not None else SubprocessRunner())
     sandbox.start()
+    # Docker resolves $VAR in ENV/WORKDIR/COPY/... against ARGs and the environment, including
+    # the base
+    # image's config env (enroot writes it to the rootfs /etc/environment). Without it,
+    # `ENV PATH=/x/bin:$PATH` kept a literal "$PATH", dropping /usr/local/bin
+    # (senior-fullstack: the node
+    # base image's `exec docker-entrypoint.sh` in /etc/rc was then "not found" and every RUN
+    # failed).
+    image_env = _read_image_env(sandbox.rootfs() / "etc" / "environment")
     try:
         for step in steps:
             instruction = step.instruction
@@ -189,7 +206,9 @@ def build_image(
                 raise SandboxRefusal(
                     f"line {step.lineno}: expected a supported instruction, got {instruction!r}"
                 )
-            argument = _substitute(step.argument, args)
+            # RUN text is expanded by the shell at run time (it receives the env), as in Docker
+            scope = args if instruction == "RUN" else {**args, **image_env, **env}
+            argument = _substitute(step.argument, scope)
             if instruction == "ARG":
                 _apply_arg(step, argument, args, build_args)
             elif instruction == "ENV":
@@ -207,12 +226,14 @@ def build_image(
                     )
                 _run_step(sandbox, step, argument, env, workdir, remaining)
             elif instruction in ("COPY", "ADD"):
-                _copy_step(sandbox, step, instruction, argument, context)
+                _copy_step(sandbox, step, instruction, argument, context, workdir)
             elif instruction == "USER":
                 _check_user(step, argument)
+            elif instruction == "ENTRYPOINT":
+                entrypoint = _parse_entrypoint(step, argument)
             applied += 1
 
-        metadata = {"env": dict(env), "workdir": workdir}
+        metadata = {"env": dict(env), "workdir": workdir, "entrypoint": entrypoint}
         meta_path = sandbox.rootfs() / "etc" / "fs-sandbox.json"
         meta_path.parent.mkdir(parents=True, exist_ok=True)
         meta_path.write_text(json.dumps(metadata, sort_keys=True), encoding="utf-8")
@@ -221,7 +242,10 @@ def build_image(
         export_runner: Runner = runner if runner is not None else SubprocessRunner()
         result = export_runner.run(
             ["enroot", "export", "-o", str(out_path), spec.name],
-            env={"ENROOT_DATA_PATH": data_root},
+            env={
+                "ENROOT_DATA_PATH": data_root,
+                **({"ENROOT_SYSCONF_PATH": enroot_sysconf} if enroot_sysconf else {}),
+            },
             timeout_s=timeout_s,
         )
         if result.returncode != 0:
@@ -247,6 +271,7 @@ def _validate_steps(
     context: Path,
 ) -> None:
     """Refuse every unsupported or unsafe line BEFORE a container exists (cheap and leak-free)."""
+    workdir = "/"
     for step in steps:
         instruction = step.instruction
         if instruction == "FROM":
@@ -261,16 +286,31 @@ def _validate_steps(
         elif instruction == "ENV":
             _parse_env(step, argument)
         elif instruction == "WORKDIR":
-            _parse_workdir(step, argument)
+            workdir = _parse_workdir(step, argument)
         elif instruction in ("COPY", "ADD"):
-            _copy_plan(step, instruction, argument, context)
+            _copy_plan(step, instruction, argument, context, workdir)
         elif instruction == "USER":
             _check_user(step, argument)
 
 
+def _read_image_env(path: Path) -> dict[str, str]:
+    """KEY=VALUE lines of an image's /etc/environment (as enroot writes the image config env)."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    for line in lines:
+        key, sep, value = line.strip().partition("=")
+        if sep and key and not key.startswith("#") and not any(c.isspace() for c in key):
+            out[key] = value.strip().strip('"')
+    return out
+
+
 def _substitute(text: str, args: Mapping[str, str]) -> str:
     out = text
-    for key, value in args.items():
+    # longest names first, so "$P" can never clobber "$PATH"
+    for key, value in sorted(args.items(), key=lambda kv: -len(kv[0])):
         out = out.replace("${" + key + "}", value)
         out = out.replace("$" + key, value)
     return out
@@ -334,6 +374,22 @@ def _parse_workdir(step: DockerfileStep, argument: str) -> str:
     return argument
 
 
+def _parse_entrypoint(step: DockerfileStep, argument: str) -> list[str] | None:
+    """Docker ENTRYPOINT: exec form (JSON array) as-is; shell form via /bin/sh -c; [] clears."""
+    stripped = argument.strip()
+    if stripped.startswith("["):
+        try:
+            parsed = json.loads(stripped)
+        except ValueError:
+            parsed = None
+        if not isinstance(parsed, list) or not all(isinstance(a, str) for a in parsed):
+            raise SandboxRefusal(
+                f"line {step.lineno}: ENTRYPOINT: expected a JSON string array, got {argument!r}"
+            )
+        return parsed or None
+    return ["/bin/sh", "-c", stripped] if stripped else None
+
+
 def _check_user(step: DockerfileStep, argument: str) -> None:
     if argument not in ("root", "0"):
         raise SandboxRefusal(f"line {step.lineno}: USER: expected 'root' or '0', got {argument!r}")
@@ -350,7 +406,9 @@ def _run_step(
     command = _run_command(step, argument)
     result = sandbox.exec(command, cwd=workdir, env=env, timeout_s=timeout_s)
     if result.return_code != 0:
-        tail = result.stderr[-_STDERR_TAIL:]
+        # Include stdout: apt relays dpkg's actual error there, leaving stderr with only
+        # its summary line
+        tail = (result.stdout[-_STDERR_TAIL:] + "\n" + result.stderr[-_STDERR_TAIL:]).strip()
         raise SandboxBuildFailed(
             f"line {step.lineno}: RUN {argument!r} failed (exit {result.return_code}): {tail}"
         )
@@ -384,7 +442,7 @@ _ARCHIVE_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", 
 
 
 def _copy_plan(
-    step: DockerfileStep, instruction: str, argument: str, context: Path
+    step: DockerfileStep, instruction: str, argument: str, context: Path, workdir: str = "/"
 ) -> tuple[list[Path], list[str], str]:
     """Validate a COPY/ADD line without touching any container: (sources, raw sources, target)."""
     if not argument:
@@ -422,8 +480,11 @@ def _copy_plan(
             f"line {step.lineno}: {instruction}: expected at least one source, got {argument!r}"
         )
     if not target.startswith("/"):
-        raise SandboxRefusal(
-            f"line {step.lineno}: {instruction}: expected an absolute target, got {target!r}"
+        # Docker resolves a relative target against the current WORKDIR; a trailing slash
+        # (e.g. "./") still means "into this directory".
+        joined = posixpath.normpath(posixpath.join(workdir or "/", target))
+        target = (
+            joined.rstrip("/") + "/" if target.endswith("/") or target in (".", "./") else joined
         )
     return resolved, sources, target
 
@@ -434,18 +495,19 @@ def _copy_step(
     instruction: str,
     argument: str,
     context: Path,
+    workdir: str = "/",
 ) -> None:
-    resolved, sources, target = _copy_plan(step, instruction, argument, context)
-    if len(resolved) == 1 and not _is_glob(sources[0]) and not target.endswith("/"):
-        source = resolved[0]
-        if source.is_dir():
-            sandbox.upload_dir(source, target)
-        else:
-            sandbox.upload_file(source, target)
-        return
+    """Docker COPY/ADD semantics: a directory source contributes its CONTENTS to the target (the
+    directory itself is never copied); a file goes to the target path, or to ``target/<name>`` when
+    the target is a directory (trailing slash, several sources, or a glob)."""
+    resolved, sources, target = _copy_plan(step, instruction, argument, context, workdir)
+    into_dir = target.endswith("/") or len(resolved) > 1 or any(_is_glob(s) for s in sources)
+    base = target.rstrip("/") or "/"
     for source in resolved:
         if source.is_dir():
-            sandbox.upload_dir(source, target.rstrip("/") + "/" + source.name)
+            sandbox.upload_dir(source, base)
+        elif into_dir:
+            sandbox.upload_file(source, base.rstrip("/") + "/" + source.name)
         else:
             sandbox.upload_file(source, target)
 

@@ -25,7 +25,8 @@ evidence is in [`validation_campaigns/vlm_2xh200/EVIDENCE.md`](../../validation_
 4. [Training algorithms: SFT, preference training and RL](04_training_algorithms.md)
 5. [Evaluation: held-out loss, benchmarks and sample generations](05_evaluation.md)
 6. [Ready-to-run configs for each model](#06--ready-to-run-configs-for-each-model) (below)
-7. [Running the tutorial on 2x GB200 (aarch64, shared tray)](07_gb200.md)
+
+Same tutorial on other hardware: [2x GB200, shared tray (aarch64)](../vlm-2xGB200/), [2x A100-80GB](../vlm-2xA100/).
 
 ## Quick start (after chapters 1 and 2)
 

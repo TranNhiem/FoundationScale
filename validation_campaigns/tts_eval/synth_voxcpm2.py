@@ -37,6 +37,7 @@ def main() -> None:
     ap.add_argument("--cfg-value", type=float, default=2.0)
     ap.add_argument("--inference-timesteps", type=int, default=10)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--lora-ckpt", default=None, help="VoxCPM LoRA checkpoint dir (T2b)")
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
 
@@ -51,7 +52,18 @@ def main() -> None:
     todo = [r for r in rows if not (out / f"{r[0]}.wav").exists()]  # resumable
 
     torch.manual_seed(args.seed)
-    model = VoxCPM.from_pretrained(args.model, load_denoiser=False)
+    lora_kwargs: dict = {}
+    if args.lora_ckpt:
+        # upstream's own LoRA loading (scripts/test_voxcpm_lora_infer.py): config from the
+        # checkpoint's lora_config.json, weights from the checkpoint directory
+        from voxcpm.model.voxcpm import LoRAConfig
+
+        info = json.loads((Path(args.lora_ckpt) / "lora_config.json").read_text())
+        lora_kwargs = {
+            "lora_config": LoRAConfig(**info["lora_config"]),
+            "lora_weights_path": str(args.lora_ckpt),
+        }
+    model = VoxCPM.from_pretrained(args.model, load_denoiser=False, **lora_kwargs)
     sr = model.tts_model.sample_rate
     start = time.time()
     for name, prompt_text, prompt_wav, target_text in todo:
@@ -67,6 +79,7 @@ def main() -> None:
         sf.write(out / f"{name}.wav", wav, sr)
     record = {
         "model": args.model,
+        "lora_ckpt": args.lora_ckpt,
         "rows": len(rows),
         "synthesized_now": len(todo),
         "seconds": round(time.time() - start, 1),

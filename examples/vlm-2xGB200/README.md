@@ -1,6 +1,6 @@
-# 07 — Running the tutorial on 2x GB200
+# VLM LoRA on 2x GB200: the vlm-2xH200 tutorial on a shared GB200 tray
 
-In this chapter you'll take everything from [chapter 01](01_installation.md)–[chapter 05](05_evaluation.md) and repeat it on two GPUs of a shared GB200 tray (aarch64). By the end you have a trained adapter on GB200 and the held-out loss of its base model and adapter, exactly as in [chapter 05](05_evaluation.md). All numbers here were measured on 2026-10-14 on one shared GB200 tray, using 2 of its 4 GPUs.
+This example takes everything from [chapter 01](../vlm-2xH200/01_installation.md)–[chapter 05](../vlm-2xH200/05_evaluation.md) and repeats it on two GPUs of a shared GB200 tray (aarch64). By the end you have a trained adapter on GB200 and the held-out loss of its base model and adapter, exactly as in [chapter 05](../vlm-2xH200/05_evaluation.md). All numbers here were measured on 2026-10-14 on one shared GB200 tray, using 2 of its 4 GPUs.
 
 **What you have:** a shared GB200 tray (4 GPUs, 186 GB HBM each, compute capability 10.0, aarch64 Grace CPU, 956 GB RAM), other people included. We used 2 GPUs. Other users start jobs on GPUs that look idle within minutes — plan for that in Step 2.
 
@@ -8,23 +8,24 @@ In this chapter you'll take everything from [chapter 01](01_installation.md)–[
 
 ## Same vs different
 
-| | 2x H200 (chapters 01–05) | 2x GB200 (this chapter) |
+| | 2x H200 (chapters 01–05) | 2x GB200 (this example) |
 |---|---|---|
-| Install commands | [chapter 01](01_installation.md) Option A | unchanged |
+| Install commands | [chapter 01](../vlm-2xH200/01_installation.md) Option A | unchanged |
 | Dependency pins | torch 2.13.0+cu132 etc. | unchanged; aarch64 wheels exist for every pin |
 | Architecture | x86_64 | aarch64 |
-| Real RAM per GPU | 141 GB | 186 GB |
+| GPU memory | 141 GB each | 186 GB each |
 | Job scheduling | dedicated VM | shared tray, ssh + nohup, no Slurm |
-| GPU selection | `nvidia-smi` check | `CUDA_VISIBLE_DEVICES` one-liner (Step 2) |
-| Data commands | [chapter 02](02_data_preparation.md) | unchanged |
-| `train_sft.sh` | — | unchanged; only `BATCH`, `MASTER_PORT` differ |
-| `eval_heldout_loss.py` | [chapter 05](05_evaluation.md) | unchanged |
+| GPU selection | both GPUs of the VM | two idle GPUs picked by `scripts/train_sft_gb200.sh` (Step 2) |
+| Data commands | [chapter 02](../vlm-2xH200/02_data_preparation.md) | unchanged |
+| Training launcher | `vlm-2xH200/scripts/train_sft.sh` | `scripts/train_sft_gb200.sh`: shared-tray settings, then the same `train_sft.sh` |
+| Configs | `vlm-2xH200/configs/` | `configs/` here: same models, measured GB200 peaks, Qwen3.6 at batch 2 |
+| `eval_heldout_loss.py` | [chapter 05](../vlm-2xH200/05_evaluation.md) | unchanged |
 
 ---
 
 ## Step 1 — Install on aarch64
 
-The install commands from [chapter 01](01_installation.md) Option A run unchanged. Every pin has an aarch64 wheel: torch 2.13.0+cu132, torchvision 0.28.0, transformers 5.18.0, peft 0.21.2, liger-kernel, flash-linear-attention, av 19.0.1.
+The install commands from [chapter 01](../vlm-2xH200/01_installation.md) Option A run unchanged. Every pin has an aarch64 wheel: torch 2.13.0+cu132, torchvision 0.28.0, transformers 5.18.0, peft 0.21.2, liger-kernel, flash-linear-attention, av 19.0.1.
 
 MEASURED on GB200: `conda env create -f environment.yml` takes 4–5 min and `pip install -e ".[train]"` 5–6 s (`[train]` brings peft, av, liger-kernel, flash-linear-attention).
 
@@ -46,7 +47,7 @@ python -c "import numpy; print(numpy.__file__)"
 
 Expected output: a path **inside** the env (contains `envs/fs-vlm`). If it prints `~/.local`, `PYTHONNOUSERSITE=1` is not set in this shell.
 
-Then the import check from [chapter 01](01_installation.md):
+Then the import check from [chapter 01](../vlm-2xH200/01_installation.md):
 
 ```bash
 python -c "import torch,transformers,peft,liger_kernel,av,foundationscale;print(torch.__version__,torch.cuda.is_available(),transformers.__version__,peft.__version__)"
@@ -64,27 +65,26 @@ The device check prints `device NVIDIA GB200 (10, 0)`.
 
 ## Step 2 — Pick 2 GPUs on the shared tray
 
-There is no Slurm here — you run under ssh with nohup. First, hold 2 GPUs that are nearly idle (less than 1000 MB used):
+There is no Slurm here: you run over ssh with nohup, and other people use the other GPUs. `scripts/train_sft_gb200.sh` handles the shared-tray part before it calls the unchanged [`train_sft.sh`](../vlm-2xH200/scripts/train_sft.sh):
 
-```bash
-mkdir -p tmp && export TMPDIR=$PWD/tmp
-export CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits | awk -F", " '$2<1000 {print $1}' | head -2 | paste -sd,)
+- **Two idle GPUs.** If `CUDA_VISIBLE_DEVICES` is not set, it picks two GPUs with less than 1000 MB in use and exits 96 if there are fewer than two. To choose them yourself: `export CUDA_VISIBLE_DEVICES=1,2`.
+- **`PYTHONNOUSERSITE=1`**, so packages in `~/.local` cannot leak in (Step 1).
+- **Your own `TMPDIR`** (`./tmp`): `torchrun` otherwise writes `torchelastic_*` directories into `/tmp`.
+- **A free port:** `MASTER_PORT` defaults to 29871 because the usual 29500 is often taken. Override it if that one is busy too.
+
+It prints what it chose, for example:
+
+```
+GB200: GPUs 1,2, master port 29871, TMPDIR /path/to/FoundationScale/tmp
 ```
 
-torch now sees 2 GPUs and `torchrun --nproc_per_node 2` stays unchanged from [chapter 03](03_training_configuration.md).
-
-Two more knobs matter on a shared tray:
-
-- **Your own TMPDIR** (done above): `torchrun` otherwise writes `torchelastic_*` directories into `/tmp`.
-- **A free port:** default `MASTER_PORT=29500` may be taken by another job. Set `MASTER_PORT=<free port>` explicitly.
-
-Name the job so other users and `nvidia-smi` can identify it. `exec -a` on a shebang script loses the name, so wrap it in `bash` on both sides:
+Name the job so other users can tell whose it is. `exec -a` on a shebang script loses the name, so wrap it in `bash` on both sides:
 
 ```bash
-bash -c 'exec -a foxbrain-vlm-sft bash examples/vlm-2xH200/scripts/train_sft.sh <config>'
+bash -c 'exec -a foxbrain-vlm-sft bash examples/vlm-2xGB200/scripts/train_sft_gb200.sh <config>'
 ```
 
-(On Slurm you would use `--job-name` instead.)
+(On Slurm use `--job-name` instead.)
 
 ### Check it worked
 
@@ -94,28 +94,28 @@ Run `nvidia-smi` or `nvidia-smi --query-compute-apps` — your two processes sho
 
 ## Step 3 — Data
 
-The data commands from [chapter 02](02_data_preparation.md) are unchanged. Counts are identical to chapter 02: image 11,000 written / 53,516 skipped (shard 0), video 2,985, text 209, mix 2,000 — 34 s total (image download 19 s).
+The data commands from [chapter 02](../vlm-2xH200/02_data_preparation.md) are unchanged. Counts are identical to chapter 02: image 11,000 written / 53,516 skipped (shard 0), video 2,985, text 209, mix 2,000 — 34 s total (image download 19 s).
 
 **Frame cache:** the first run decodes clips; the pre-pass took 545 s for 300 rows (114 clips, 520 MB of JPEGs) on the shared filesystem with the ARM CPU. Later runs reach the same pass in 43 s. The default cache is `<dataset dir>/.fs_video_frames`; `FOUNDATIONSCALE_TRAIN_VIDEO_CACHE_DIR` overrides it. Warming all 949 video rows of `mixed.jsonl` + the held-out file took 4.5 min with 16 threads.
 
 ### Check it worked
 
-The prepared files exist (`data/prepared/…`) and match the counts above. Re-running the video prepare step is fast (43 s) instead of 545 s.
+The prepared files exist (`data/prepared/…`) and match the counts above. The first training run's pre-pass decodes and caches the frames; later runs start step 1 much sooner (43 s instead of 545 s for 300 rows).
 
 ---
 
 ## Step 4 — Train
 
-With the GPU export from Step 2 active in the shell, run the end-to-end command for this chapter:
+Run the end-to-end command from the repository root:
 
 ```bash
-STEPS=40 SAVE_EVERY=40 BATCH=2 GRAD_ACCUM=4 MASTER_PORT=29871 \
-  bash -c 'exec -a foxbrain-vlm-sft bash examples/vlm-2xH200/scripts/train_sft.sh examples/vlm-2xH200/configs/Qwen3.6-35B-A3B_16k.env'
+STEPS=40 SAVE_EVERY=40 \
+  bash -c 'exec -a foxbrain-vlm-sft bash examples/vlm-2xGB200/scripts/train_sft_gb200.sh examples/vlm-2xGB200/configs/Qwen3.6-35B-A3B_16k.env'
 ```
 
-`BATCH=2 GRAD_ACCUM=4` keeps the H200 default effective batch of `BATCH=1 GRAD_ACCUM=8` (see [chapter 03](03_training_configuration.md)); the extra 45 GB per GB200 GPU buys the larger micro-batch. For gemma-4, keep `BATCH=1`.
+The Qwen3.6 16K configs set `BATCH=2 GRAD_ACCUM=4`, which keeps the H200 default effective batch of `BATCH=1 GRAD_ACCUM=8` (see [chapter 03](../vlm-2xH200/03_training_configuration.md)); the extra 45 GB per GB200 GPU buys the larger micro-batch. The gemma-4 configs keep `BATCH=1` (batch 2 gained little: 1,823 vs 1,670 tokens/s). Drop `STEPS=40 SAVE_EVERY=40` for a full run (1,000 steps, a checkpoint every 200).
 
-The script itself is unchanged except for `BATCH` and `MASTER_PORT`. Expect a pre-pass over the 2,000-row `mixed.jsonl` with a warm frame cache in ~9.5 min (3.5 rows/s on the ARM CPU) before step 1.
+Expect a pre-pass over the 2,000-row `mixed.jsonl` with a warm frame cache in ~9.5 min (3.5 rows/s on the ARM CPU) before step 1.
 
 ### Check it worked
 
@@ -128,7 +128,7 @@ These are the measured end-to-end numbers for this exact configuration (`configs
 
 ## Step 5 — Evaluate
 
-Same procedure as [chapter 05](05_evaluation.md). To make the held-out file mixed, shuffle `heldout.jsonl` once:
+Same procedure as [chapter 05](../vlm-2xH200/05_evaluation.md). To make the held-out file mixed, shuffle `heldout.jsonl` once:
 
 ```bash
 python3 -c "import random; r=open('data/prepared/heldout.jsonl').readlines(); random.Random(0).shuffle(r); open('data/prepared/heldout_mixed.jsonl','w').writelines(r)"
@@ -202,3 +202,7 @@ Both are fixed in the repository now.
 **The job name in `nvidia-smi` is not `foxbrain-vlm-sft`** — `exec -a` on a shebang script loses the name. Wrap it: `bash -c 'exec -a foxbrain-vlm-sft bash … script.sh <config>'`.
 
 **Batch > 1 with Qwen image+video rows hangs to the NCCL timeout** — you are running stale code without the `train/loop.py` fix. Update and re-run (see "Two bugs this hardware found" above).
+
+**The first collective times out after 120 s (`WorkNCCL(SeqNum=1, OpType=ALLREDUCE, NumelIn=1 ...)` on both ranks), before step 1.** Seen in 2 of about 35 launches, both on GPUs 0 and 1 of the same tray; rerunning the identical command passed both times, and NCCL then used `P2P/CUMEM`. Check `nvidia-smi` for another job on your GPUs and rerun. To see where setup stalls, add `NCCL_DEBUG=INFO`.
+
+**A run shorter than 10 steps ends `UNMEASURED` (exit 95) although it trained and saved.** `train_sft.sh` logs every 10 steps, so no loss was ever logged and the objective gates had nothing to read. Use `STEPS` of 10 or more for a smoke test.

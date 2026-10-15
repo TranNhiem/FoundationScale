@@ -36,6 +36,9 @@ class EnvironmentCapabilities:
 
     disable_internet: bool = False
     network_allowlist: bool = False
+    network_allowlist_hostnames: bool = False
+    network_allowlist_wildcard_hostnames: bool = False
+    dynamic_network_policy: bool = False
 
 
 class BaseEnvironment:
@@ -107,6 +110,14 @@ class RunResult:
 
 class FakeRunner:
     """Runner that emulates enroot import/create/export/remove side effects."""
+
+    # spawn()/terminate(): the no-network holder (recorded lazily in self.spawned / self.terminated)
+    def spawn(self, argv) -> int:
+        self.__dict__.setdefault("spawned", []).append(list(argv))
+        return 4242
+
+    def terminate(self, pid: int) -> None:
+        self.__dict__.setdefault("terminated", []).append(pid)
 
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
@@ -203,6 +214,7 @@ def _make_env(
     docker_image: str | None = "python:3.12",
     memory_mb: int | None = None,
     runner: FakeRunner | None = None,
+    **extra: Any,
 ) -> Any:
     """Build an EnrootEnvironment with FS directories rooted under tmp_path."""
     environment_dir = tmp_path / "environment"
@@ -223,6 +235,7 @@ def _make_env(
         image_store=str(image_store),
         scratch_root=str(scratch_root),
         runner=runner,
+        **extra,
     )
 
 
@@ -237,14 +250,13 @@ def test_type(harbor_env_module: Any) -> None:
     assert harbor_env_module.EnrootEnvironment.type() == "fs-enroot"
 
 
-def test_capabilities_disable_internet_without_allowlist(
-    harbor_env_module: Any, tmp_path: Path
-) -> None:
-    """capabilities disables internet and declares no allowlist support."""
-    env = _make_env(harbor_env_module, tmp_path)
-    capabilities = env.capabilities
-    assert capabilities.disable_internet is True
-    assert capabilities.network_allowlist is False
+def test_capabilities_declare_only_what_is_enforced(harbor_env_module: Any, tmp_path: Path) -> None:
+    """no-network, hostname and *.wildcard allowlists (egress proxy) and phase switches are
+    enforced; IP/CIDR entries are not declared, so Harbor rejects them instead of leaking."""
+    caps = _make_env(harbor_env_module, tmp_path).capabilities
+    assert caps.disable_internet and caps.network_allowlist and caps.dynamic_network_policy
+    assert caps.network_allowlist_hostnames and caps.network_allowlist_wildcard_hostnames
+    assert not getattr(caps, "network_allowlist_ipv4_addresses", False)
 
 
 def test_validate_definition_with_docker_image(harbor_env_module: Any, tmp_path: Path) -> None:
@@ -284,7 +296,7 @@ def test_start_with_docker_image_imports_and_uses_no_network(
     asyncio.run(env.exec("echo hi"))
     exec_calls = [call for call in runner.calls if _is_enroot_start(call)]
     assert exec_calls
-    assert "unshare" in exec_calls[0] and "-rn" in exec_calls[0]
+    assert exec_calls[0][0] == "nsenter" and "--net" in exec_calls[0]
 
 
 def test_start_with_docker_image_public_network_skips_unshare(
@@ -397,3 +409,185 @@ def test_start_creates_harbors_log_layout(harbor_env_module: Any, tmp_path: Path
     rootfs = Path(tmp_path / "data")
     for sub in ("agent", "user-agent", "verifier", "artifacts"):
         assert any(p.is_dir() for p in rootfs.glob(f"*/logs/{sub}"))
+
+
+def test_cancelled_exec_kills_the_process_and_frees_the_thread(
+    harbor_env_module: Any, tmp_path: Path
+) -> None:
+    """Harbor times verifiers out with asyncio.wait_for (no timeout_sec). Cancelling must kill
+    the exec; otherwise the to_thread worker blocks forever and asyncio.run hangs at shutdown
+    (B2.1 R0 run r3)."""
+    import threading
+
+    env = _make_env(harbor_env_module, tmp_path, runner=FakeRunner())
+    asyncio.run(env.start(force_build=False))
+    released = threading.Event()
+
+    class BlockingRunner:
+        def run(self, argv: Sequence[str], **_: Any) -> Any:
+            assert released.wait(10), "exec was never killed"
+            return RunResult(returncode=-9, stdout="", stderr="")
+
+        def kill_all(self) -> None:
+            released.set()
+
+    env._sandbox._runner = BlockingRunner()
+
+    async def verifier() -> None:
+        await asyncio.wait_for(env.exec("node server.js"), timeout=0.2)
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(verifier())
+    assert released.is_set()
+
+
+def test_cancelled_start_kills_the_build_and_frees_the_thread(
+    harbor_env_module: Any, tmp_path: Path
+) -> None:
+    """Harbor's EnvironmentStartTimeoutError cancels start(); the in-flight build must be
+    killed, not left running in the thread until an outer timeout (B2.1 R0 run r7)."""
+    import threading
+
+    released = threading.Event()
+
+    class BlockingRunner:
+        def run(self, argv: Sequence[str], **_: Any) -> Any:
+            assert released.wait(10), "start was never killed"
+            return RunResult(returncode=-9, stdout="", stderr="killed")
+
+        def kill_all(self) -> None:
+            released.set()
+
+    env = _make_env(harbor_env_module, tmp_path, runner=BlockingRunner())
+
+    async def harbor() -> None:
+        await asyncio.wait_for(env.start(force_build=False), timeout=0.2)
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(harbor())
+    assert released.is_set()
+
+
+def test_start_launches_image_entrypoint_detached(harbor_env_module: Any, tmp_path: Path) -> None:
+    """Images whose ENTRYPOINT starts services (mongodb bootstrap.sh) get it run at start,
+    detached, with Harbor's `sh -c "sleep infinity"` arguments; images without one get no extra
+    exec."""
+    runner = FakeRunner()
+    env = _make_env(harbor_env_module, tmp_path, runner=runner)
+
+    original_start = harbor_env_module.EnrootSandbox.start
+
+    def start_with_entrypoint(self):
+        original_start(self)
+        self.entrypoint = ("/workspace/tools/bootstrap.sh",)
+
+    harbor_env_module.EnrootSandbox.start = start_with_entrypoint
+    try:
+        asyncio.run(env.start(force_build=False))
+    finally:
+        harbor_env_module.EnrootSandbox.start = original_start
+    launches = [c for c in runner.calls if any("fs-entrypoint.log" in a for a in c)]
+    assert len(launches) == 1
+    assert "setsid nohup /workspace/tools/bootstrap.sh sh -c 'sleep infinity'" in launches[0][-1]
+
+    runner2 = FakeRunner()
+    env2 = _make_env(harbor_env_module, tmp_path / "b", runner=runner2)
+    asyncio.run(env2.start(force_build=False))
+    assert not [c for c in runner2.calls if any("fs-entrypoint.log" in a for a in c)]
+
+
+@pytest.mark.parametrize(
+    ("flag", "expect_build"), [(True, True), ("true", True), ("1", True), ("false", False)]
+)
+def test_build_from_dockerfile_overrides_prebuilt_image(
+    harbor_env_module: Any, tmp_path: Path, flag, expect_build: bool
+) -> None:
+    """Terminal-Bench 2.1 names amd64-only prebuilt images; on arm64 the Dockerfile must be
+    built instead."""
+    runner = FakeRunner()
+    env = _make_env(
+        harbor_env_module,
+        tmp_path,
+        runner=runner,
+        docker_image="alexgshaw/task:20251031",
+        build_from_dockerfile=flag,
+    )
+    (tmp_path / "environment" / "Dockerfile").write_text("FROM alpine\n")
+    built: list[bool] = []
+    (tmp_path / "built.sqsh").write_bytes(b"sqsh")
+    env._build_image_sync = lambda force_build: (
+        built.append(force_build) or str(tmp_path / "built.sqsh")
+    )
+    asyncio.run(env.start(force_build=False))
+    imported_prebuilt = any(
+        "docker://alexgshaw/task:20251031" in " ".join(map(str, c)) for c in runner.calls
+    )
+    assert bool(built) is expect_build
+    assert imported_prebuilt is (not expect_build)
+
+
+@dataclass
+class _Policy:
+    network_mode: str
+    allowed_hosts: tuple[str, ...] = ()
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected"),
+    [
+        (None, ("public", ())),
+        (_Policy("no-network"), ("no-network", ())),
+        (_Policy("public", ("ignored.org",)), ("public", ())),
+        (
+            _Policy("allowlist", ("registry.npmjs.org", "*.debian.org")),
+            ("allowlist", ("registry.npmjs.org", "*.debian.org")),
+        ),
+    ],
+)
+def test_sandbox_policy_mapping(harbor_env_module: Any, policy, expected) -> None:
+    assert harbor_env_module._sandbox_policy(policy) == expected
+
+
+def test_start_isolates_the_network_and_bridges_endpoints(
+    harbor_env_module: Any, tmp_path: Path
+) -> None:
+    """Task sandboxes always get their own netns (public included) plus the configured endpoint
+    bridges."""
+    runner = FakeRunner()
+    env = _make_env(
+        harbor_env_module,
+        tmp_path,
+        runner=runner,
+        network_mode="public",
+        endpoints="18811=127.0.0.1:18811",
+    )
+    asyncio.run(env.start(force_build=False))
+    spec = env._sandbox.spec
+    assert spec.isolate_network is True and spec.network == "public"
+    assert spec.endpoints == ("18811=127.0.0.1:18811",)
+
+
+def test_phase_switch_replaces_the_egress_policy(harbor_env_module: Any, tmp_path: Path) -> None:
+    import json as _json
+
+    runner = FakeRunner()
+    env = _make_env(harbor_env_module, tmp_path, runner=runner, network_mode="public")
+    asyncio.run(env.start(force_build=False))
+    asyncio.run(env._apply_network_policy(_Policy("allowlist", ("api.example.com",))))
+    policy = _json.loads(env._sandbox._policy_path().read_text())
+    assert policy == {"mode": "allowlist", "hosts": ["api.example.com"]}
+
+
+def test_restart_of_same_session_gets_a_fresh_container_name(
+    harbor_env_module: Any, tmp_path: Path
+) -> None:
+    """Harbor retries reuse the session id; the retry's container must not collide with the
+    earlier attempt's."""
+    names = []
+    for i in range(2):
+        runner = FakeRunner()
+        env = _make_env(harbor_env_module, tmp_path / str(i), runner=runner, session_id="task__abc")
+        asyncio.run(env.start(force_build=False))
+        names.append(env._sandbox.spec.name)
+    assert names[0] != names[1]
+    assert all(n.startswith("task__abc-") and len(n) <= 63 for n in names)

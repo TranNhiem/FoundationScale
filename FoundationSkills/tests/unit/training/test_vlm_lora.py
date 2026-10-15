@@ -588,3 +588,48 @@ def test_fused_loss_needs_a_measured_importable_kernel(tmp_path: Path, kernels: 
     assert out["executable"] is executable, out.get("missing")
     if needle:
         assert needle in (out.get("missing") or "")
+
+
+def test_multi_gpu_spec_is_not_executable_with_an_unpinnable_torchrun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real-GPU finding (A4.1 32K, ~/envs/fs-train venv): no torchrun beside the interpreter left a bare
+    `torchrun` resolving to ~/.local/bin's python3.12 (no pandas) and FS refused (96). Fail closed."""
+    import sys as _sys
+
+    from foundationskills.interfaces.fs import emit_train as et
+
+    fake = tmp_path / "venv" / "bin" / "python"
+    fake.parent.mkdir(parents=True)
+    fake.write_text("")
+    monkeypatch.setattr(_sys, "executable", str(fake))
+    caps = FSCapabilities(available=True, fs_version="test", train_flags=_EMIT_FLAGS, train_objectives=("sft",),
+                          sharding_strategies=("ddp", "fsdp"), executed_axes=("cp",), refused_axes=("pp", "ep"),
+                          axes_measured=True, families={"gemma4": ("gemma4",)}, backends=("ddp", "fsdp"))
+    stage = {"name": "s", "stage": "sft", "algorithm": None, "method": "lora", "family": "gemma4",
+             "hparams": {"max_sequence_length": 4096}, "data": {"format": "sft"}}
+    dataset = {"format": "sft", "shards": [{"path": f"{tmp_path}/s.jsonl", "sha256": "0" * 64, "records": 1}],
+               "fs_columns": {"text_column": "text"}}
+    out = et.emit_train(stage, dataset=dataset, model="m", output_dir=str(tmp_path / "o"),
+                        hardware={"id": "local", "scheduler": None}, nodes=1, gpus_per_node=2, caps=caps, run_name="r")
+    assert out["executable"] is False and "torchrun cannot be pinned" in (out.get("missing") or "")
+    (fake.parent / "torchrun").write_text("")
+    out2 = et.emit_train(stage, dataset=dataset, model="m", output_dir=str(tmp_path / "o"),
+                         hardware={"id": "local", "scheduler": None}, nodes=1, gpus_per_node=2, caps=caps, run_name="r")
+    assert out2["argv"][0] == str(fake.parent / "torchrun") and "torchrun cannot be pinned" not in (out2.get("missing") or "")
+
+
+def test_logging_interval_never_exceeds_the_steps_actually_run(tmp_path: Path) -> None:
+    """Real-GPU finding (A4.1 32K): --logging-steps 10 with --max-steps 3 logged no loss and FS adjudicated
+    the trained run UNMEASURED; emit clamps the interval to the step count."""
+    from foundationskills.interfaces.fs import emit_train as et
+
+    caps = FSCapabilities(available=True, fs_version="test", train_flags=_EMIT_FLAGS | {"--logging-steps", "--max-steps"},
+                          train_objectives=("sft",), sharding_strategies=("ddp", "fsdp"), executed_axes=("cp",),
+                          refused_axes=("pp", "ep"), axes_measured=True, families={"gemma4": ("gemma4",)},
+                          backends=("ddp", "fsdp"))
+    stage = {"name": "s", "stage": "sft", "algorithm": None, "method": "lora", "family": "gemma4",
+             "hparams": {"max_sequence_length": 4096, "max_steps": 3, "logging_steps": 10}, "data": {"format": "sft"}}
+    dataset = {"format": "sft", "shards": [{"path": f"{tmp_path}/s.jsonl", "sha256": "0" * 64, "records": 1}],
+               "fs_columns": {"text_column": "text"}}
+    argv = et.emit_train(stage, dataset=dataset, model="m", output_dir=str(tmp_path / "o"),
+                         hardware={"id": "local", "scheduler": None}, nodes=1, gpus_per_node=1, caps=caps, run_name="r")["argv"]
+    assert argv[argv.index("--logging-steps") + 1] == "3"
