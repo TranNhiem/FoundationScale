@@ -172,6 +172,22 @@ Memory matches H200 within a few GB; the extra 45 GB per GPU is what lets Qwen3.
 
 ---
 
+## Training algorithms on GB200: DPO, ORPO, GRPO with LoRA
+
+The preference and RL scripts from [chapter 04](../vlm-2xH200/04_training_algorithms.md) run unchanged on 2x GB200. Data comes from chapter 04 Step 1 (`prepare_rl_data.py preference`, `preference_mm`, `scienceqa`). Every run below picked two idle GPUs and used its own `MASTER_PORT`. Measured 2026-10-15:
+
+| run | command difference vs chapter 04 | exit | steps | s/step | peak GB (rank 0) | check |
+|---|---|---|---|---|---|---|
+| DPO, text, gemma-4-12B-it | none (`--max-length 4096`) | 0 | 20/20 | 11.8 | 32.0 | step-0 loss = ln 2 exactly |
+| DPO, image+video+text, Qwen3.6-27B | `--max-length 16384` | 0 | 20/20 | 20.9 (H200: 20.6) | 91.6 | step-0 loss = ln 2 exactly |
+| ORPO, image+video+text, Qwen3.6-27B | `--max-length 16384` | 0 | 10/10 | 21.1 | 90.2 | ORPO adds an NLL term, so step 0 is not ln 2 |
+| GRPO, images, gemma-4-12B-it | none | 0 | 8 measured, 12 abstained | 202 | — | another user's job shared one GPU, so the time is not clean |
+| GRPO, images, Qwen3.6-27B | `--max-new-tokens 1024` | 96 (refused) | 0 measured | — | — | see below |
+
+**Why `--max-length 16384` for multimodal preference data.** Built from the full 2,985-row video set, the mixed preference file has a row longer than 8,192 tokens after media expansion. With chapter 04's `--max-length 8192` the trainer refuses (exit 96) instead of truncating, because truncation could cut a media placeholder. 16,384 fits with room to spare on GB200.
+
+**Why Qwen3.6-27B GRPO is refused on this recipe.** At `--max-new-tokens 400` and again at 1,024, almost every completion reasoned without ending in `Answer: X` (typically 0 of 8 completions per step earned a score). The few scored rows gave the advantage estimator nothing to use, so all 20 steps were UNMEASURED. FoundationScale refuses a run that trained nothing (exit 96) rather than report it. This is a prompt and answer-format problem of this recipe with a reasoning model, not a GB200 or memory limit (66 GB peak, no errors). gemma-4-12B-it on the same data trains (8 of 20 steps measured).
+
 ## Why GB200 is not faster here
 
 At batch 1, gemma-4 runs at about 0.65–0.7x the H200 tokens/s across lengths, and Qwen3.6 at 0.5–0.8x of the published H200 numbers (which predate the FSDP fix below, so they understate H200 too). We ruled out the usual suspects: not data loading (collate is 0.03–0.3 s/row against ~20 s steps), not clocks (2,062 MHz, no throttle), not interconnect (NCCL uses P2P/CUMEM, direct GPU-to-GPU over NVLink).

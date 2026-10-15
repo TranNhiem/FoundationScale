@@ -229,7 +229,7 @@ A refused run (for example every GRPO step had identical rewards) **exits 96 wit
 
 Flags: `--model`, `--data`, `--output-dir`, `--algorithm`, `--max-steps`, `--max-new-tokens`, `--group-size`, `--prompts-per-step`, `--learning-rate`, `--lora-rank`, `--lora-alpha`.
 
-### GRPO with images on the Qwen models (status: working, after three fixes)
+### GRPO with images on the Qwen models (status: runs without error after three fixes; no measurable reward yet)
 
 GRPO with images on `Qwen3.6-27B` and `Qwen3.6-35B-A3B` used to be broken by three vision-specific bugs. All three are **fixed on the current branch**:
 
@@ -238,6 +238,9 @@ GRPO with images on `Qwen3.6-27B` and `Qwen3.6-35B-A3B` used to be broken by thr
 3. **Qwen's flattened patch tensor was sliced by row** in group expansion and micro-batching.
 
 After the fixes **both models run GRPO with images 10 steps without error**: peak **60.3 GB/GPU** (`Qwen3.6-27B`) and **82.2 GB/GPU** (`Qwen3.6-35B-A3B`), on the 2× H200 run recipe used throughout this chapter (LoRA r16/α32, `sharding="ddp"` — hard-coded in `train_grpo.py` — bf16, activation checkpointing; `train_grpo.py` has no `--fused-loss` option). The gemma models never had these problems: `gemma-4-26B-A4B-it` and `gemma-4-31B-it` each run 20 steps of GRPO with images, exit 0. See the algorithm × model matrix in Step 5 and the Troubleshooting entry if a Qwen run fails.
+
+
+**Measured caveat (2x GB200, 2026-10-15):** "runs without error" is not "learns". With this ScienceQA recipe, `Qwen3.6-27B` produced 0 measurable GRPO steps out of 20 at `--max-new-tokens 400` and again at 1,024: almost no completion ended in `Answer: X`, so the reward abstained and FoundationScale refused the run (exit 96). gemma-4-12B-it measures 8 of 20 steps on the same data. Making Qwen3.6 GRPO learn needs prompt and answer-format work for reasoning models; see [../vlm-2xGB200/](../vlm-2xGB200/).
 
 ---
 
