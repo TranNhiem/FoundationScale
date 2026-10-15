@@ -127,13 +127,14 @@ def with_output_dir(spec: VerlVlaRlSpec, output_dir: str) -> VerlVlaRlSpec:
 def with_runtime_env(spec: VerlVlaRlSpec, env: dict[str, str]) -> VerlVlaRlSpec:
     """Environment variables for the Ray workers (renderer, PYTHONPATH, caches).
 
-    Keys the recipe already sets are overwritten in place; new ones are appended with Hydra's
-    ``+`` (add) prefix.
+    Keys the recipe's overrides already set are overwritten in place; others are appended with
+    Hydra's ``++`` (add-or-override) prefix, because the recipe's YAML may define them even when its
+    command line does not (verl-vla's FPO config sets ``PYTHONPATH``; a single ``+`` then fails).
     """
     for name, value in env.items():
         key = f"{_RUNTIME_ENV}.{name}"
         known = any(k.lstrip("+") == key for k, _ in spec.overrides)
-        spec = _set(spec, key if known else f"+{key}", value)
+        spec = _set(spec, key if known else f"++{key}", value)
     return spec
 
 

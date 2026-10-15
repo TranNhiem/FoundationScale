@@ -88,8 +88,9 @@ def test_runtime_env_overwrites_known_keys_and_adds_new_ones_with_plus() -> None
     )
     keys = [k for k, _ in spec.overrides]
     assert f"{_ENV}.MUJOCO_GL" in keys and spec.value(f"{_ENV}.MUJOCO_GL") == "egl"
-    assert f"+{_ENV}.HF_HUB_CACHE" in keys and spec.value(f"{_ENV}.HF_HUB_CACHE") == "/hub"
-    # applying it twice changes nothing (the + key is now known)
+    # ++ (add or override): the recipe YAML may already define a key its command line does not
+    assert f"++{_ENV}.HF_HUB_CACHE" in keys and spec.value(f"{_ENV}.HF_HUB_CACHE") == "/hub"
+    # applying it twice changes nothing (the ++ key is now known)
     assert with_runtime_env(spec, {"HF_HUB_CACHE": "/hub"}) == spec
 
 
