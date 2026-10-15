@@ -21,6 +21,7 @@ What this documentation can state, because the source material names it, is:
 | `examples/A100_2GPU.md` | entry page for two GPUs of an A100-80GB node: environment, GPU hygiene, measured results |
 | `examples/llm-2xA100/` | text-only LLM LoRA SFT tutorial (Qwen2.5-7B-Instruct), measured on two A100s |
 | `examples/speech-2xA100/`, `examples/vlm-2xA100/` | the H200 speech and VLM tutorials re-measured on two A100s |
+| `examples/vlm-2xGB200/` | the H200 VLM tutorial on two GPUs of a shared GB200 tray (aarch64): launcher, configs, measured fit matrix and end-to-end run |
 
 The runnable gate example from README §10 is not a file under `examples/`; it lives in
 the README itself and in `foundationscale.gates.example`. The launchers and the harness
