@@ -19,12 +19,13 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Protocol
+from typing import IO, Protocol
 
 _NETNS_HOLDER_MAX_S = 172800  # 2 days: far beyond any trial; bounds a holder leaked by an external kill
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,63}$")
@@ -32,6 +33,10 @@ _NETWORKS = ("no-network", "public", "allowlist")
 _PROXY_PORT = 3128  # the egress proxy, as seen from inside an isolated sandbox (127.0.0.1)
 _ENDPOINT_RE = re.compile(r"^(\d{1,5})=([A-Za-z0-9_.-]+|\[[0-9A-Fa-f:]+\]):(\d{1,5})$")
 _STDERR_TAIL = 2000
+# After the exec process exits, how long its output readers may keep draining. A process the command
+# backgrounded (a server, a VM) inherits the pipes and holds them open; waiting for EOF then blocked the exec
+# until that process died, past its own timeout (B2.2 incident 6). Docker's exec returns when its process exits.
+_DRAIN_GRACE_S = 2.0
 
 
 class SandboxRefusal(ValueError):
@@ -142,7 +147,6 @@ class SubprocessRunner:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
                 env=run_env,
                 start_new_session=True,
             )
@@ -150,18 +154,40 @@ class SubprocessRunner:
             raise SandboxError(f"failed to spawn {list(argv)!r}: {exc}") from exc
         with self._lock:
             self._live.add(proc.pid)  # start_new_session: pgid == pid
+        assert proc.stdout is not None and proc.stderr is not None
+        out: list[bytes] = []
+        err: list[bytes] = []
+        readers = [threading.Thread(target=_drain, args=(proc.stdout, out), daemon=True),
+                   threading.Thread(target=_drain, args=(proc.stderr, err), daemon=True)]
+        for reader in readers:
+            reader.start()
+        timed_out = False
         try:
             try:
-                stdout, stderr = proc.communicate(timeout=timeout_s)
+                proc.wait(timeout=timeout_s)
             except subprocess.TimeoutExpired:
+                timed_out = True
                 with contextlib.suppress(OSError):
                     os.killpg(proc.pid, signal.SIGKILL)
-                stdout, stderr = proc.communicate()
-                return RunResult(returncode=124, stdout=stdout, stderr=stderr, timed_out=True)
+                proc.wait()
         finally:
             with self._lock:
                 self._live.discard(proc.pid)
+        deadline = time.monotonic() + _DRAIN_GRACE_S  # one shared grace: a pipe still held by a backgrounded
+        for reader in readers:  # process must not block the exec
+            reader.join(max(0.0, deadline - time.monotonic()))
+        stdout = b"".join(out).decode("utf-8", "replace")
+        stderr = b"".join(err).decode("utf-8", "replace")
+        if timed_out:
+            return RunResult(returncode=124, stdout=stdout, stderr=stderr, timed_out=True)
         return RunResult(returncode=proc.returncode, stdout=stdout, stderr=stderr)
+
+
+def _drain(stream: IO[bytes], sink: list[bytes]) -> None:
+    """Read a pipe to EOF into sink. A reader may outlive its exec while a backgrounded process holds the pipe."""
+    with contextlib.suppress(OSError, ValueError):
+        while chunk := os.read(stream.fileno(), 65536):
+            sink.append(chunk)
 
 
 @dataclass(frozen=True)
