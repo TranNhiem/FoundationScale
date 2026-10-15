@@ -202,3 +202,7 @@ Both are fixed in the repository now.
 **The job name in `nvidia-smi` is not `foxbrain-vlm-sft`** — `exec -a` on a shebang script loses the name. Wrap it: `bash -c 'exec -a foxbrain-vlm-sft bash … script.sh <config>'`.
 
 **Batch > 1 with Qwen image+video rows hangs to the NCCL timeout** — you are running stale code without the `train/loop.py` fix. Update and re-run (see "Two bugs this hardware found" above).
+
+**The first collective times out after 120 s (`WorkNCCL(SeqNum=1, OpType=ALLREDUCE, NumelIn=1 ...)` on both ranks), before step 1.** Seen in 2 of about 35 launches, both on GPUs 0 and 1 of the same tray; rerunning the identical command passed both times, and NCCL then used `P2P/CUMEM`. Check `nvidia-smi` for another job on your GPUs and rerun. To see where setup stalls, add `NCCL_DEBUG=INFO`.
+
+**A run shorter than 10 steps ends `UNMEASURED` (exit 95) although it trained and saved.** `train_sft.sh` logs every 10 steps, so no loss was ever logged and the objective gates had nothing to read. Use `STEPS` of 10 or more for a smoke test.
