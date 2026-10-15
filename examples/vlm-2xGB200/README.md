@@ -172,9 +172,11 @@ Memory matches H200 within a few GB; the extra 45 GB per GPU is what lets Qwen3.
 
 ---
 
-## Why GB200 is not faster for gemma-4 here
+## Why GB200 is not faster here
 
-At batch 1, gemma-4 runs at about 0.65–0.7x the H200 tokens/s across lengths. We ruled out the usual suspects: not data loading (collate is 0.03–0.3 s/row against ~20 s steps), not clocks (2,062 MHz, no throttle), not interconnect (NCCL uses P2P/CUMEM, direct GPU-to-GPU over NVLink). The remaining cause: gemma's 256-wide attention heads have only PyTorch's flash kernel on GB200 — cuDNN and the efficient kernel have no kernel for that head size. An attention-only benchmark with gemma's shapes (forward + backward) measured 23.3 ms at 16K and 354.8 ms at 64K, about what the same kernel does on Hopper. gemma batch 2 gains little (1,823 tokens/s). For comparison, Qwen's 128-wide heads do have the cuDNN kernel and it is ~4x faster than flash (16K 5.0 vs 21.2 ms; 64K 84.0 vs 313.9 ms), but the training loop does not use it by default.
+At batch 1, gemma-4 runs at about 0.65–0.7x the H200 tokens/s across lengths, and Qwen3.6 at 0.5–0.8x of the published H200 numbers (which predate the FSDP fix below, so they understate H200 too). We ruled out the usual suspects: not data loading (collate is 0.03–0.3 s/row against ~20 s steps), not clocks (2,062 MHz, no throttle), not interconnect (NCCL uses P2P/CUMEM, direct GPU-to-GPU over NVLink).
+
+What remains is attention. All five models use 256-wide attention heads in the language model (gemma-4, and Qwen3.6's full-attention layers: `head_dim` 256 in both configs). At that head size PyTorch's SDPA has only its FlashAttention kernel on GB200; the cuDNN and memory-efficient kernels have none. An attention-only benchmark with gemma-4's shapes (forward + backward) measured 23.3 ms at 16K and 354.8 ms at 64K, roughly 330 TFLOPS: Hopper-class speed, not Blackwell's. For reference, the cuDNN kernel at head size 128 ran about 4x faster than FlashAttention on the same GPU (16K: 5.0 vs 21.2 ms), but none of these five models has 128-wide heads, so `--sdp-backend cudnn` does not help them. gemma batch 2 gains little (1,823 tokens/s); Qwen3.6 gains from batch 2 (Step 4).
 
 ---
 
