@@ -162,7 +162,7 @@ See [docs/DISTRIBUTED.md](docs/DISTRIBUTED.md).
 | Verification & custom gates | [docs/VERIFICATION.md](docs/VERIFICATION.md), [docs/CUSTOM_GATES.md](docs/CUSTOM_GATES.md), [docs/VERIFICATION_MATRIX.md](docs/VERIFICATION_MATRIX.md) |
 | Extending the framework | [docs/EXTENSION_POINTS.md](docs/EXTENSION_POINTS.md) |
 | Monitoring & troubleshooting | [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md), [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
-| Status & roadmap | [docs/STATUS.md](docs/STATUS.md) |
+| Status & roadmap | [docs/STATUS.md](docs/STATUS.md), [ROADMAP.md](ROADMAP.md) |
 | Design decisions | [docs/DECISIONS.md](docs/DECISIONS.md) |
 
 ## Project layout
@@ -188,6 +188,7 @@ validation_campaigns/  recorded evidence from real-hardware runs
 
 ## Status
 
+- Every stage working for every model family is the goal; [ROADMAP.md](ROADMAP.md) tracks the combinations still being built.
 - Curated from-scratch pre-training recipes and a unified data contract are on the roadmap.
 - The launchers are worked examples for specific clusters, configured through environment variables.
 - Algorithms without a linked hardware result are covered by tests, not benchmarks.
