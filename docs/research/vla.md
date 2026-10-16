@@ -17,6 +17,7 @@ number under a tolerance fixed before the run, from the published rate and the t
 | openpi pi0.5 `libero_object` | 98.2% | 496/500 = 99.2% (FS harness) | 500 / 500 | 1.7 pt | REPRODUCED within tolerance |
 | openpi pi0.5 `libero_goal` | 98.0% | 486/500 = 97.2% (FS harness) | 500 / 500 | 1.8 pt | REPRODUCED within tolerance |
 | openpi pi0.5 `libero_10` | 92.4% | 462/500 = 92.4% (FS harness) | 500 / 500 | 3.3 pt | REPRODUCED (exact) |
+| Alpamayo 2 Super (driving), PhysicalAI-AV held-out chunk 99, open-loop minADE | 0.8288 m (alpamayo-recipes `sft_eval_trajectory`, 100 clips) | 0.7822 m, 100/100 clips (FS driving harness + FS metric); the recipe's own evaluator on the same hardware: 0.7822 m | 100 / 100 | none set (a distance, not a rate) | FS == upstream evaluator to 4 dp; both 0.047 m better than the card (lower is better); not a registry row yet |
 | verl-vla FPO on pi0.5, `libero_spatial` task 2 (from SFT step-100) | 29/50 = 58% at start → ~98% by update 25 | three seeds, val at updates 0 → 25: seed 42 0.70 → 0.94, seed 1 0.64 → 0.96, seed 2 0.72 → 0.98 (mean 0.69 → 0.96) | 50 / 50 per seed | two-sample binomial margin 5.5 pt at n=50 vs 50 | REPRODUCED within tolerance on three seeds: every endpoint ≤ 4 pt from ~98%; the start (58% published) sits inside n=50 noise (±13 pt) for all three |
 
 Tolerance rule (binding): `foundationscale.upstream.vla_models.binomial_tolerance(rate, n_published, n_measured)` = `1.96 * sqrt(p(1-p)/n_pub + p(1-p)/n_meas)` percentage points, fixed from the published rate and both denominators — never from our measured gap. A row passes when the measured rate sits inside that margin of the published rate. This is the registry's two-sample rule; the harness's earlier one-sample `within_published` check disagreed with it on the GR00T row and was replaced.
@@ -67,6 +68,12 @@ reproduction evidence; the reproduced GR00T row used the real `nvidia/Cosmos-Rea
 Evaluation harness + CLI:
 
 - `foundationscale.vla.eval` — FS LIBERO harness + `python -m foundationscale.vla.eval` CLI: one named `Protocol` row per backend (init mode, settle steps, replan cadence, trials/task, seed), policy-server lifecycle via `--serve-cmd`, report JSON with `success_rate_pct` and Wilson CI for `level3_plan`; exit 0 report written, 95 server never came up, 96 refused declaration.
+
+Driving (`foundationscale.vla.driving`):
+
+- `metrics` — `ade`, `min_ade` with Alpamayo's semantics: XY L2 per waypoint, mean over time, the best sample chosen on the full horizon and reused for every `by_t` horizon; refuses non-finite or mis-shaped input.
+- `eval` — `python -m foundationscale.vla.driving.eval --backend alpamayo`: every clip stays in the denominator; exit 0 measured, 95 unmeasured (no server or any clip failed), 96 refused.
+- `adapters/alpamayo` — trajectory server run in Alpamayo's own environment (alpamayo-recipes' evaluator setup, public functions only) and its client.
 
 Adapters (`foundationscale/vla/adapters/`):
 
