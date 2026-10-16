@@ -1,0 +1,73 @@
+# Agentic RL on 2x GB200: music composition with a 9B policy
+
+This example trains a 9B policy with FoundationScale's agentic RL plane on a music-composition task.
+In each episode the model uses tools to write a piece in ABC notation and submit it. A reward converts the ABC with
+`abc2midi` and scores it in [0, 1]. One GPU serves the policy with vLLM and a second GPU trains it.
+After every step the trainer publishes a checkpoint and the engine reloads it in place.
+
+By the end you have a trained policy (100 steps, about 20 h) and its held-out reward.
+You also learn to read the run log lines that tell you whether training is healthy.
+All numbers were measured on one shared GB200 tray (4 GPUs, 186 GB each, aarch64), using 2 of its GPUs.
+
+**What you have:** two free GPUs on a GB200 tray, the MiMo-V2.6-Distill-Qwen-9B checkpoint on local disk, and
+an `abc2midi` binary. Other users take idle GPUs within minutes on a shared tray. Claim your two GPUs and launch right away.
+
+---
+
+## What we measured
+
+Eval: 100 held-out prompts, 4 samples each (400 samples), mean reward. The checkpoint before RL scores **0.137**.
+
+**Consistent vs raw scoring** (agentic_grpo, 100 steps):
+
+| Scoring | Seed 6 | Seed 5 | Seed 4 |
+|---|---|---|---|
+| Consistent (this config) | **0.653** | **0.651** | **0.628** |
+| Raw logits (older FS behaviour) | 0.0 (collapsed) | 0.091 (collapsed) | collapsed |
+
+"Consistent scoring" means the trainer scores each token under the distribution vLLM actually sampled from:
+top_p 0.95, temperature 1.0. FS turns it on from the config's `sampling` block, so there's nothing to set.
+With raw-logit scoring, the policy's low-probability tail inflates step after step until outputs turn malformed.
+The rollout reward then falls to about 0 around step 45-55
+([evidence](../../validation_campaigns/agentic_rl_collapse/EVIDENCE.md)).
+
+**Algorithms, 60 steps** (choose one with `ALGORITHM=...`):
+
+| Algorithm | Raw scoring | Consistent scoring |
+|---|---|---|
+| agentic_grpo (default) | collapses | 0.599 / 0.592 / 0.619 (seeds 6 / 5 / 4) |
+| gspo | **no collapse on 4 of 4 seeds**: 0.447 / 0.516 / 0.545 / 0.557 | 0.559 / 0.613 (seeds 6 / 5) |
+| dapo | collapses (0.010) | not measured |
+| dr_grpo | collapses (0.014) | not measured |
+| grpo | collapses (0.039) | not measured |
+
+Keep consistent scoring; it is the best configuration measured. gspo is the robust choice when scoring cannot match
+the sampler. Full table: [ALGORITHMS.md](../../validation_campaigns/agentic_rl_collapse/ALGORITHMS.md).
+
+---
+
+## Chapters
+
+| Chapter | You do |
+|---|---|
+| [01_installation.md](01_installation.md) | Install FoundationScale, vLLM and abcMIDI; check the versions |
+| [02_tasks_and_rewards.md](02_tasks_and_rewards.md) | Generate task files; see what an episode and the reward are |
+| [03_training.md](03_training.md) | Launch the 2-GPU run; read the run log; recover from a hung engine |
+| [04_evaluation.md](04_evaluation.md) | Serve a checkpoint and measure its held-out reward |
+
+## Quick start
+
+Run these from the repository root. Set the paths and pick two free GPUs first.
+
+```bash
+export PYTHONNOUSERSITE=1
+python examples/agentic-rl-GB200/scripts/make_music_tasks.py --out-dir /path/to/data
+MODEL=/path/to/MiMo-V2.6-Distill-Qwen-9B TASKS=/path/to/data/music_train.jsonl \
+ABC2MIDI=/path/to/abc2midi OUT=/path/to/run ENGINE_GPU=2 TRAINER_GPU=3 \
+  bash examples/agentic-rl-GB200/scripts/train_agentic_music.sh
+```
+
+Then evaluate the newest checkpoint as shown in [chapter 04](04_evaluation.md).
+
+The reference for the plane itself (contracts, gates, the verl adapter) is [AGENTIC_RL.md](../../docs/AGENTIC_RL.md).
+The minimal single-file config that the CI dry-run uses lives in [`../agentic_rl/`](../agentic_rl/).

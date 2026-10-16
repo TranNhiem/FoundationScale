@@ -1,0 +1,97 @@
+{
+  "policy": {
+    "model_path": "@MODEL@",
+    "algorithm": "agentic_grpo",
+    "keep_last": 2,
+    "archive_every": 10
+  },
+  "trainer": {
+    "max_steps": 100,
+    "learning_rate": 1e-06,
+    "logprob_micro_batch": 1,
+    "sharding": "none",
+    "save_dir": "@OUT@/checkpoints",
+    "seed": 6,
+    "gradient_checkpointing": true
+  },
+  "engine": {
+    "kind": "vllm",
+    "command": [
+      "vllm",
+      "serve",
+      "@MODEL@",
+      "--served-model-name",
+      "policy",
+      "--port",
+      "@PORT@",
+      "--gpu-memory-utilization",
+      "0.5",
+      "--max-model-len",
+      "16384"
+    ],
+    "port": "@PORT_INT@",
+    "served_model_name": "policy",
+    "startup_timeout_s": 1800.0,
+    "weight_sync_mode": "reload_endpoint",
+    "reload_mode": "collective_rpc",
+    "host": "127.0.0.1",
+    "log_dir": "@OUT@/engine_logs",
+    "env": {
+      "PATH": "/usr/local/bin:/usr/bin:/bin",
+      "HOME": "@HOME@",
+      "CUDA_VISIBLE_DEVICES": "@ENGINE_GPU@",
+      "VLLM_SERVER_DEV_MODE": "1",
+      "PYTHONNOUSERSITE": "1"
+    },
+    "request_timeout_s": 1800.0
+  },
+  "env": {
+    "backend": "local",
+    "exec_timeout_s": 60.0,
+    "episode_timeout_s": 900.0,
+    "max_output_bytes": 65536,
+    "env": {},
+    "allow_unsandboxed": true
+  },
+  "harness": {
+    "name": "native_tool_loop",
+    "parser": "hermes_json",
+    "tools": "default"
+  },
+  "budget": {
+    "step_limit": 2,
+    "max_response_tokens": 12000,
+    "max_observation_chars": 2048
+  },
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 0,
+    "min_p": 0.0,
+    "presence_penalty": 0.0,
+    "repetition_penalty": 1.0,
+    "max_new_tokens": 12000
+  },
+  "rollout": {
+    "tasks_path": "@TASKS@",
+    "tasks_per_step": 4,
+    "group_size": 8,
+    "max_concurrency": 32,
+    "group_by_harness": false,
+    "seed": 6,
+    "max_infra_rate": 0.5,
+    "engine_recovery_retries": 1
+  },
+  "reward": {
+    "kind": "music",
+    "abc2midi_bin": "@ABC2MIDI@",
+    "timeout_s": 60.0
+  },
+  "publish_root": "@OUT@/publish",
+  "stability": {
+    "best_k": 3,
+    "drop_from_peak": 0.5,
+    "min_steps": 10,
+    "action": "warn"
+  }
+}

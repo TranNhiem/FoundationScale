@@ -65,6 +65,9 @@ retries are spent, `RolloutAbstentionGate` refuses as before.
 
 ## Running
 
+For a measured end-to-end run (two GB200 GPUs, a 9B policy, the music task, training and evaluation),
+follow [examples/agentic-rl-GB200](../examples/agentic-rl-GB200/README.md).
+
 One declared, provenance-tracked JSON config (`agentic_rl/config.py`'s
 `AgenticRLConfig`) drives the whole run; see
 `examples/agentic_rl/music_s0.json` (the music configuration) for every
