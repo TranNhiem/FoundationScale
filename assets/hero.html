@@ -104,6 +104,18 @@
   .c.gpu{border-color:rgba(134,208,31,.45)}
   footer{display:flex;justify-content:space-between;margin-top:30px;font-size:18px;color:var(--mute)}
   footer .gh{font-family:var(--mono);color:var(--dim)}
+  .stagebar2{height:8px;border-radius:8px;margin:6px 14px 18px 0;position:relative;background:linear-gradient(90deg,var(--blue),var(--violet),var(--pink),var(--amber))}
+  .stagebar2:after{content:"";position:absolute;right:-12px;top:-7px;border-left:16px solid var(--amber);border-top:11px solid transparent;border-bottom:11px solid transparent}
+  .row4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+  .famtitle{font-family:var(--mono);font-size:17px;color:var(--dim);letter-spacing:2px;text-transform:uppercase;margin:26px 0 14px}
+  .fc{border-radius:16px;padding:20px 22px;background:var(--panel2);border:1px solid var(--line2);border-left:4px solid var(--c)}
+  .fh{display:flex;gap:14px;align-items:center;margin-bottom:14px}
+  .fh .fn{font-size:26px;font-weight:900}
+  .fh .fs{font-size:16px;color:var(--dim);margin-top:2px}
+  .fc ul{list-style:none;display:flex;flex-direction:column;gap:10px}
+  .fc li{font-size:17px;line-height:1.4;color:#c9d4e6;padding-left:18px;position:relative}
+  .fc li:before{content:"";position:absolute;left:0;top:9px;width:7px;height:7px;border-radius:2px;background:var(--c)}
+  .fc li b{color:var(--text);font-weight:700}
 </style>
 </head>
 <body>
@@ -145,12 +157,9 @@
 
 <!-- 02 Training matrix -->
 <section class="sec">
-  <div class="lbl"><span class="num">02</span><h2>One framework · four model families · four training stages</h2></div>
-  <div class="matrix">
-    <div></div>
-    <div class="stagebar"></div>
-
-    <div class="axis"><div>TRAINING STAGE →<b>SFT to Agentic RL</b></div><div>MODEL FAMILY ↓<b>Speech · LLM<br>Multimodal · VLA</b></div></div>
+  <div class="lbl"><span class="num">02</span><h2>One framework · four training stages · four model families</h2></div>
+  <div class="stagebar2"></div>
+  <div class="row4">
     <div class="ch" style="border-top-color:#4c8dff"><div class="st" style="color:#8fb6ff">SFT</div><div class="ss">full fine-tune · LoRA · packing</div>
       <div class="algs"><span class="a">Full FT</span><span class="a">LoRA</span><span class="a">MoE</span><span class="a">multimodal collators</span></div></div>
     <div class="ch" style="border-top-color:#9b6bff"><div class="st" style="color:#c3a6ff">Preference</div><div class="ss">offline &amp; online</div>
@@ -159,48 +168,46 @@
       <div class="algs"><span class="a">PPO</span><span class="a">GRPO</span><span class="a">Dr.GRPO</span><span class="a">DAPO</span><span class="a">GSPO</span><span class="a">RLOO</span><span class="a">REINFORCE</span><span class="a">REINFORCE++</span><span class="a">RAFT</span><span class="a">Best-of-N</span></div></div>
     <div class="ch" style="border-top-color:#f4a623"><div class="st" style="color:#ffc766">Agentic RL</div><div class="ss">multi-turn · tools · sandbox</div>
       <div class="algs"><span class="a">Agentic GRPO</span><span class="a">token-mean</span><span class="a">tool gateway</span><span class="a">vLLM fleet</span><span class="a">verl</span></div></div>
-
-    <!-- Speech -->
-    <div class="fam" style="border-color:rgba(47,208,214,.45)">
-      <svg width="46" height="46" viewBox="0 0 46 46"><g stroke="#2fd0d6" stroke-width="3.4" stroke-linecap="round"><path d="M5 23v0"/><path d="M12 17v12"/><path d="M19 9v28"/><path d="M26 14v18"/><path d="M33 6v34"/><path d="M40 18v10"/></g></svg>
-      <div><div class="fn">Speech</div><div class="fm">ASR · TTS · Omni<br>Whisper · Qwen3-ASR · Gemma-4 audio · VoxCPM2 (vi) · Qwen3-TTS · Qwen3-Omni</div></div></div>
-    <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">ASR + TTS fine-tuning, WER/CER with paired bootstrap</div></div>
-    <div class="cell rm"><div class="k"><span class="dot e"></span>Roadmap</div></div>
-    <div class="cell rm"><div class="k"><span class="dot e"></span>Roadmap</div></div>
-    <div class="cell rm"><div class="k"><span class="dot e"></span>Roadmap</div><div class="v">Omni: VoiceBench evaluation today</div></div>
-
-    <!-- LLM -->
-    <div class="fam" style="border-color:rgba(76,141,255,.45)">
-      <svg width="46" height="46" viewBox="0 0 46 46"><rect x="4" y="7" width="38" height="26" rx="7" fill="none" stroke="#4c8dff" stroke-width="3.2"/><path d="M14 33 L11 41 L22 33" fill="#4c8dff"/><g fill="#4c8dff"><circle cx="15" cy="20" r="2.8"/><circle cx="23" cy="20" r="2.8"/><circle cx="31" cy="20" r="2.8"/></g></svg>
-      <div><div class="fn">LLM</div><div class="fm">dense &amp; MoE<br>DDP · FSDP2 · Megatron-Bridge</div></div></div>
-    <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">thin plane + Megatron-Bridge TP/EP lane</div></div>
-    <div class="cell tst"><div class="k"><span class="dot h"></span>Implemented &amp; tested</div></div>
-    <div class="cell tst"><div class="k"><span class="dot h"></span>Implemented &amp; tested</div></div>
-    <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">end-to-end multi-turn tool-use RL (vLLM rollout)</div></div>
-
-    <!-- MLLM -->
-    <div class="fam" style="border-color:rgba(236,79,154,.45)">
-      <svg width="46" height="46" viewBox="0 0 46 46"><rect x="4" y="8" width="30" height="24" rx="5" fill="none" stroke="#ec4f9a" stroke-width="3.2"/><circle cx="13" cy="16" r="3" fill="#ec4f9a"/><path d="M6 30 L15 21 L22 27 L27 22 L33 28" stroke="#ec4f9a" stroke-width="3" fill="none"/><rect x="24" y="22" width="18" height="16" rx="4" fill="#0e1420" stroke="#ec4f9a" stroke-width="3"/><path d="M31 26 L37 30 L31 34Z" fill="#ec4f9a"/></svg>
-      <div><div class="fn">Multimodal LLM</div><div class="fm">image · video (frames) · audio<br>Gemma-4 · Qwen3.x VLMs</div></div></div>
-    <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">image &amp; video-frame SFT, full FT and LoRA</div></div>
-    <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">DPO · IPO · SimPO · CPO · ORPO with images</div></div>
-    <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">GRPO · Dr.GRPO · DAPO · GSPO · RLOO · REINFORCE++ with images</div></div>
-    <div class="cell rm"><div class="k"><span class="dot e"></span>Roadmap</div></div>
-
-    <!-- VLA -->
-    <div class="fam" style="border-color:rgba(244,166,35,.45)">
-      <svg width="46" height="46" viewBox="0 0 46 46"><g stroke="#f4a623" stroke-width="3.4" stroke-linecap="round" fill="none"><path d="M8 40 H26"/><path d="M17 40 V30"/><path d="M17 30 L27 17"/><path d="M27 17 L38 22"/><path d="M38 22 L41 15 M38 22 L43 26"/></g><g fill="#f4a623"><circle cx="17" cy="30" r="3.6"/><circle cx="27" cy="17" r="3.6"/></g></svg>
-      <div><div class="fn">VLA</div><div class="fm">vision-language-action<br>GR00T N1.7 · openpi pi0.5 · verl-vla · LeRobot</div></div></div>
-    <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">GR00T fine-tune · GR00T &amp; pi0.5 LIBERO suites reproduced</div></div>
-    <div class="cell rm"><div class="k"><span class="dot e"></span>Roadmap</div></div>
-    <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">verl-vla FPO on pi0.5, LIBERO, reproduced on 3 seeds</div></div>
-    <div class="cell rm"><div class="k"><span class="dot e"></span>Roadmap</div></div>
   </div>
-  <div class="legend">
-    <span><span class="dot f"></span>Verified on real GPUs</span>
-    <span><span class="dot h"></span>Implemented &amp; tested</span>
-    <span><span class="dot e"></span>Roadmap</span>
-    <span style="margin-left:auto;font-family:var(--mono);color:var(--mute)">20 RL &amp; preference algorithms registered</span>
+
+  <div class="famtitle">Four model families</div>
+  <div class="row4">
+    <div class="fc" style="--c:#2fd0d6">
+      <div class="fh"><svg width="44" height="44" viewBox="0 0 46 46"><g stroke="#2fd0d6" stroke-width="3.4" stroke-linecap="round"><path d="M5 23v0"/><path d="M12 17v12"/><path d="M19 9v28"/><path d="M26 14v18"/><path d="M33 6v34"/><path d="M40 18v10"/></g></svg><div><div class="fn">Speech</div><div class="fs">ASR · TTS · Omni</div></div></div>
+      <ul>
+        <li><b>ASR fine-tuning</b> for audio-LLM, seq2seq and CTC models</li>
+        <li>Whisper · Qwen3-ASR · Gemma-4 audio · Parakeet · Canary</li>
+        <li><b>TTS</b>: VoxCPM2 Vietnamese + speaker LoRA, Qwen3-TTS voice cloning</li>
+        <li><b>Omni</b>: Qwen3-Omni evaluation on VoiceBench</li>
+        <li>WER/CER with paired bootstrap, Seed-TTS-eval</li>
+      </ul></div>
+    <div class="fc" style="--c:#4c8dff">
+      <div class="fh"><svg width="44" height="44" viewBox="0 0 46 46"><rect x="4" y="7" width="38" height="26" rx="7" fill="none" stroke="#4c8dff" stroke-width="3.2"/><path d="M14 33 L11 41 L22 33" fill="#4c8dff"/><g fill="#4c8dff"><circle cx="15" cy="20" r="2.8"/><circle cx="23" cy="20" r="2.8"/><circle cx="31" cy="20" r="2.8"/></g></svg><div><div class="fn">LLM</div><div class="fs">dense &amp; MoE</div></div></div>
+      <ul>
+        <li><b>Full fine-tune &amp; LoRA</b> on dense and MoE models</li>
+        <li><b>DDP · FSDP2 · Megatron-Bridge</b> tensor / expert / context parallel</li>
+        <li><b>20 preference &amp; RL algorithms</b> in one registry</li>
+        <li><b>Agentic RL</b>: multi-turn tool use, sandbox, vLLM rollout fleet</li>
+        <li>verl integration and weight sync for RL</li>
+      </ul></div>
+    <div class="fc" style="--c:#ec4f9a">
+      <div class="fh"><svg width="44" height="44" viewBox="0 0 46 46"><rect x="4" y="8" width="30" height="24" rx="5" fill="none" stroke="#ec4f9a" stroke-width="3.2"/><circle cx="13" cy="16" r="3" fill="#ec4f9a"/><path d="M6 30 L15 21 L22 27 L27 22 L33 28" stroke="#ec4f9a" stroke-width="3" fill="none"/><rect x="24" y="22" width="18" height="16" rx="4" fill="#0e1420" stroke="#ec4f9a" stroke-width="3"/><path d="M31 26 L37 30 L31 34Z" fill="#ec4f9a"/></svg><div><div class="fn">Multimodal LLM</div><div class="fs">image · video · audio</div></div></div>
+      <ul>
+        <li><b>Image, video</b> (sampled frames) <b>and audio</b> inputs</li>
+        <li>Gemma-4 and Qwen3.x vision-language models</li>
+        <li><b>SFT</b> with full fine-tune or LoRA</li>
+        <li><b>DPO · IPO · SimPO · CPO · ORPO</b> with images</li>
+        <li><b>GRPO · Dr.GRPO · DAPO · GSPO · RLOO · REINFORCE++</b> with images</li>
+      </ul></div>
+    <div class="fc" style="--c:#f4a623">
+      <div class="fh"><svg width="44" height="44" viewBox="0 0 46 46"><g stroke="#f4a623" stroke-width="3.4" stroke-linecap="round" fill="none"><path d="M8 40 H26"/><path d="M17 40 V30"/><path d="M17 30 L27 17"/><path d="M27 17 L38 22"/><path d="M38 22 L41 15 M38 22 L43 26"/></g><g fill="#f4a623"><circle cx="17" cy="30" r="3.6"/><circle cx="27" cy="17" r="3.6"/></g></svg><div><div class="fn">VLA</div><div class="fs">vision-language-action</div></div></div>
+      <ul>
+        <li><b>GR00T N1.7 · openpi pi0.5 · verl-vla</b> adapters</li>
+        <li>LeRobot datasets and action normalization</li>
+        <li><b>Fine-tuning</b> GR00T from one FoundationScale spec</li>
+        <li><b>LIBERO</b> closed-loop evaluation: spatial, goal, object, long</li>
+        <li><b>VLA RL</b>: FPO, DSRL, TD3+BC and RECAP recipes</li>
+      </ul></div>
   </div>
 </section>
 
