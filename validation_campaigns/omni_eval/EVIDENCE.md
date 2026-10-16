@@ -66,3 +66,26 @@ Qwen3-Omni as an ASR judge on FLEURS-vi test (`judge_multilingual.py --asr qwen3
 rows, better than the pinned Vietnamese judge Qwen3-ASR-1.7B (7.49). So O2's planned target -
 teaching the omni model Vietnamese speech input - has little headroom on read speech; the O2 target
 is being re-scoped before any training is spent on it.
+
+## O2 re-scope probe: Qwen3-Omni can hear Vietnamese but speaks it poorly (2026-10-16)
+
+`synth_qwen3omni_talker.py` asks Qwen3-Omni (talker on, card's default speaker "Ethan", greedy thinker)
+to read 200 test sentences aloud verbatim; the thinker's text is logged so judge errors can be split
+between "the thinker changed the words" and "the talker mispronounced them"
+(`cluster/run_o2_talker_probe.sh`). Same judges as T0/T0b.
+
+| read-aloud, 200 sentences | thinker text vs target | talker audio WER |
+|---|---|---|
+| English control (Seed-TTS test-en, Whisper-large-v3) | 0.00 (200/200 verbatim) | 2.47 |
+| Vietnamese (FLEURS-vi test, Qwen3-ASR-1.7B) | 0.19 (197/200 verbatim) | **12.75** |
+| same 200 vi sentences, VoxCPM2 base (T2b eval) | - | 8.08 |
+| same 200 vi sentences, VoxCPM2 + vi LoRA (T2b, step 2000) | - | **6.80** |
+
+Paired bootstrap, Omni talker minus VoxCPM2 vi LoRA on the same 200 rows: +5.9 WER, 95% CI
+[+4.38, +7.71]. The thinker reproduces the Vietnamese text almost perfectly, so the gap is the
+talker's pronunciation. The judge's floor on real FLEURS-vi recordings is 7.49 (T0b).
+
+**O2 re-scoped:** Vietnamese speech *input* has little headroom (Omni transcribes FLEURS-vi at 5.44,
+better than our judge), Vietnamese speech *output* has a large measured one. O2 becomes
+"Vietnamese speech output for the omni model", with the cascade Omni thinker -> VoxCPM2 vi LoRA as
+the baseline to beat (6.80 here) and talker adaptation as the research arm.
