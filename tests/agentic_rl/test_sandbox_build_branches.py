@@ -124,7 +124,7 @@ def _build(tmp_path: Path, dockerfile: str, runner: FakeRunner, **kwargs):
     )
 
 
-@pytest.mark.parametrize("argument", ['["/bin/app", ', '["/bin/app", 3]', '{"cmd": "x"}'])
+@pytest.mark.parametrize("argument", ['["/bin/app", ', '["/bin/app", 3]', '["/bin/app", null]'])
 def test_entrypoint_exec_form_that_is_not_a_json_string_array_is_refused(argument: str) -> None:
     from foundationscale.agentic_rl.sandbox.build import DockerfileStep, _parse_entrypoint
     from foundationscale.agentic_rl.sandbox.enroot import SandboxRefusal
