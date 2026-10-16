@@ -13,7 +13,7 @@ The denominator for "documented" is one site, stated here rather than rounded
 up into a plural: ``docs/deliverables/B2_scaling.md:196`` declares
 ``entrypoint: "foundationscale.train"`` -- the package path, not the submodule
 path. No prose runbook in this repository invokes the package form as a
-command; ``README.md:248`` and ``pyproject.toml:98`` both name the ``.cli``
+command; ``README.md`` (Quick start) and ``pyproject.toml:98`` both name the ``.cli``
 form, which was never broken. The defect is therefore narrow and it is real:
 one machine-readable entrypoint declaration names a module path that imports
 and cannot be executed, so a consumer resolving that declaration the obvious

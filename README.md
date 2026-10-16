@@ -5,376 +5,115 @@
 <h1 align="center">FoundationScale</h1>
 
 <p align="center">
-  <b>A verification plane for large-scale training, with a thin training entry point on top of it.</b>
+  <b>Open-source unified training framework for Speech, LLM, Multimodal LLM and VLA — from pre-training to agentic RL.</b>
 </p>
 
-FoundationScale is a Python package of **gates**: correctness checks that run at defined
-points in a training job's lifecycle (launch, build, data, first save, every save, export)
-and can block. What separates a gate from an assertion is that its verdict carries its own
-coverage — a gate that examined zero units reports `VACUOUS` and blocks, not `PASS`. On top
-of the gate plane sits a deliberately thin training entry point that validates the declared
-topology, hands the actual training step to `transformers.Trainer`, and runs the save gates
-on the result. It is not a from-scratch trainer, and this README will not pretend otherwise.
+## What is FoundationScale
 
-## Contents
+FoundationScale is one training framework for four model families and five training stages.
+It builds on proven trainers and engines — `transformers.Trainer`, Megatron-Bridge, verl, vLLM
+and the upstream VLA stacks — instead of replacing them, and adds what they lack: a declared,
+checked run configuration and **verification gates** that end every run in an explicit verdict.
 
-1. [What FoundationScale is](#1-what-foundationscale-is)
-2. [Why it exists](#2-why-it-exists)
-3. [Core design principles](#3-core-design-principles)
-4. [Status — what exists, what is experimental, what is missing](#4-status--what-exists-what-is-experimental-what-is-missing)
-5. [Architecture overview](#5-architecture-overview)
-6. [Supported hardware and platforms](#6-supported-hardware-and-platforms)
-7. [Supported training workflows](#7-supported-training-workflows)
-8. [Installation](#8-installation)
-9. [Quick-start](#9-quick-start)
-10. [Basic training example](#10-basic-training-example)
-11. [Configuration](#11-configuration)
-12. [Model integration](#12-model-integration)
-13. [Dataset integration](#13-dataset-integration)
-14. [Distributed training](#14-distributed-training)
-15. [Multi-node training](#15-multi-node-training)
-16. [Custom workload development](#16-custom-workload-development)
-17. [Advanced customization](#17-advanced-customization)
-18. [Extension and plugin points](#18-extension-and-plugin-points)
-19. [Performance and throughput considerations](#19-performance-and-throughput-considerations)
-20. [Checkpointing and recovery](#20-checkpointing-and-recovery)
-21. [Monitoring and debugging](#21-monitoring-and-debugging)
-22. [Examples](#22-examples)
-23. [Project structure](#23-project-structure)
-24. [Development guide](#24-development-guide)
-25. [Testing](#25-testing)
-26. [Troubleshooting](#26-troubleshooting)
-27. [Contributing](#27-contributing)
+On top sits **FoundationSkills**, a set of agent skills that turn a goal into data, a training
+plan and a launch command. Nothing launches until a person confirms the plan.
 
----
+## Highlights
 
-## 1. What FoundationScale is
+- **Four model families** — Speech (ASR, TTS, Omni), LLM, Multimodal LLM and VLA.
+- **Five training stages** — pre-training & CPT, SFT, preference optimization, RL and agentic RL.
+- **20 preference & RL algorithms** in one registry, from DPO to GRPO, DAPO, GSPO and PPO.
+- **Agentic RL** — multi-turn tool use in sandboxed environments with a vLLM rollout fleet.
+- **FoundationSkills** — agents plan, prepare data, launch, evaluate and research, with a human confirmation step.
+- **Verification gates** — every run ends in PASS, RED, UNMEASURED or REFUSED; a check that did not run is never a pass.
+- **Scales out** — DDP, FSDP2 and Megatron-Bridge (TP / PP / EP / CP) on NVIDIA Ampere, Hopper and Blackwell, local or under Slurm.
 
-Three things, in increasing order of size:
-
-* **The gate contract** (`src/foundationscale/gates/core.py`). Frozen. Pure stdlib — the
-  core installs with zero dependencies so a verifier runs on a bare login node.
-* **The gate plane around it**: reference gates and fixtures
-  (`src/foundationscale/gates/example.py`, `src/foundationscale/gates/fixtures.py`,
-  `src/foundationscale/gates/checkpoint_gates.py`,
-  `src/foundationscale/gates/objective_gates.py`), an adjudication layer
-  (`src/foundationscale/gates/adjudication.py`), checkpoint I/O
-  (`src/foundationscale/checkpoint/dcp.py`), parity checking
-  (`src/foundationscale/verify/parity.py`), run-manifest provenance
-  (`src/foundationscale/provenance/manifest.py`) and topology validation
-  (`src/foundationscale/topology.py`).
-* **A thin training entry point** (`src/foundationscale/train/cli.py`,
-  `src/foundationscale/train/loop.py`) that validates the declared topology and profile,
-  delegates the step to `transformers.Trainer`, and runs the save gates over the result.
-
-Beside the package: a launch plane of estate-specific shell launchers, and an experimental
-H100 validation harness. Both are described in §6 and §15.
-
-## 2. Why it exists
-
-FoundationScale grew out of a forensic audit of a real distributed-training estate
-(published here under pseudonyms), whose central finding was:
-
-> **The dominant failure mode in large-scale training is not a crash. It is a run that
-> reports success.**
-
-The record includes a checkpoint holding a fraction of its required bytes that passed
-every check in front of it, and the verification tool written to detect that corruption
-itself reporting success over an empty comparison set — `all([])` is `True`. The full
-evidence chain, with each claim graded by how it was established, lives in
-[`docs/deliverables/`](docs/deliverables/README.md); the reasoning spine is
-[`docs/DECISIONS.md`](docs/DECISIONS.md). The framework is the audit's review rules made
-executable.
-
-## 3. Core design principles
-
-* **A verdict is a claim about coverage.** `PASS` means "examined N units, all correct".
-  Zero examined units is `VACUOUS` and blocks; fewer than expected without a declared
-  sample is `UNDERCOVERED` and blocks.
-* **Controls are executable.** Every gate declares `MUST_FIRE` fixtures (broken input it
-  must block) and typically `MUST_PASS` fixtures (known-good). A gate with no `MUST_FIRE`
-  control fails the build.
-* **Gates fail closed.** An exception inside a gate is `ERROR`, and `ERROR` blocks.
-* **Absence blocks, one level up.** Callers declare required gates; any that never ran
-  render as `MISSING` and block the report.
-* **An unqualified count is not a fact.** This README follows it too: numbers appear only
-  in wordings the repository's own drift gate can re-check.
-
-The `VACUOUS`/`UNDERCOVERED` verdicts are the design, not edge cases, and the rule is
-enforced in the base class — `Gate.ok()` cannot return `PASS` on zero coverage no matter
-what the author writes. [-> docs/DESIGN_PRINCIPLES.md]
-
-## 4. Status — what exists, what is experimental, what is missing
-
-**Exists and runs in CI today:** the gate contract; the reference and domain gates; the
-controls entry point; the mutation battery; checkpoint manifest/parity machinery; the
-launcher contract suites; the H100 validation harness's gate scripts.
-
-**Thin, on purpose:** the training entry point is a delegating shim over
-`transformers.Trainer`. It owns no `nn.Module`, no parallelism engine, no scheduler.
-Anything Trainer can run, it can run gated.
-
-**Experimental:** `validation_campaigns/h100_validation/` is a working harness for one specific H100 estate,
-full of `patch_*.py` scripts and hardening work in flight. It is on the record, not a
-stable API.
-
-**Unimplemented or incomplete, stated rather than implied:**
-
-* No gate has run against a real multi-rank distributed checkpoint in this repository's
-  CI — the suite writes checkpoints single-process and reads them back. It has now been
-  measured *outside* CI, on a GB200 tray: a two-rank DDP full fine-tune fired the save
-  gates at four checkpoints, with a rank-scoped abstention on the non-writing rank. That
-  is hardware evidence, not a CI guarantee, and the distance between the two is exactly
-  why the bullet stays here.
-* Several modules sit below the aggregate coverage floor CI enforces and pass it anyway,
-  carried across the line by the rest. `checks/coverage_floor.py` states each one with its
-  own floor instead of averaging it away; its generated table separates ratchets from
-  debt, and a debt line is an admission with a delete-condition, not a standard. The
-  aggregate is still enforced — the two go red on different things. The per-module numbers
-  are deliberately not repeated here: no drift gate can re-check them, because CI measures
-  the census with `--no-coverage`. They live in that table, next to the run that produced
-  them.
-* The mutation table is hand-maintained; a rule nobody listed is a rule nobody tests.
-* The roadmap with per-phase falsification conditions is
-  [`docs/deliverables/D_roadmap.md`](docs/deliverables/D_roadmap.md).
-
-## 5. Architecture overview
-
-Bottom to top:
-
-```
-gate contract (stdlib-only core: Verdict, Gate, REGISTRY)
-   ├── gate domains        checkpoint / objective / probe / example + fixtures
-   ├── adjudication        composes gate verdicts into a run-level judgment
-   ├── checkpoint + verify DCP metadata, parity checks
-   ├── provenance          the run manifest — what was claimed, measured, emitted
-   ├── topology            validates the declared parallel geometry
-   └── train/              cli + loop: validate → delegate to Trainer → save gates
-```
-
-The load-bearing idea: layers above may only emit a verdict they earned — a composite gate
-propagates its children's coverage rather than minting a pass they never produced.
-[-> docs/ARCHITECTURE.md; the full L0–L6 design is
-docs/deliverables/B1_architecture.md]
-
-### FoundationSkills — the agent layer on top
-
-<p align="center">
-  <img src="assets/skills_lifecycle.png" alt="FoundationSkills lifecycle: goal, probe, plan, data, emit, human confirmation, FoundationScale, evaluation, auto_research" width="100%">
-</p>
-
-`FoundationSkills/` is a separate package (`pip install -e FoundationSkills`, CLI `fskills`). With it, an
-agent such as Claude Code turns a goal into a full experiment, never launching without the user's confirmed hash:
-
-```
-Foundation Agent   reads FoundationSkills/SKILLS.md, calls skills
-FoundationSkills   decides WHAT  data_engine -> training.planner -> training.emit -> evaluation; auto_research
-FoundationScale    executes HOW  foundationscale-train (SFT/CPT), RLTrainer, gates, run manifests
-```
-
-| Skill | Turns | into |
-|---|---|---|
-| `data_engine` | raw JSONL/HF/doc sources | an FS-ready dataset + readiness report (dedup, quality, decontam, chat-template render) |
-| `training.planner` | a goal | stages, algorithm, method, memory/time estimate, feasibility |
-| `training.emit` | a plan + dataset | a hash-confirmed `fs_launch_spec` + sbatch |
-| `evaluation` | a checkpoint / run manifest | an eval report vs the base, regression-banded |
-| `auto_research` | an approved campaign | seed-paired, multi-objective accept/reject decisions on a hash-chained ledger |
-
-The skills never train; they measure what the installed FoundationScale can run (`fskills probe`) and report
-PASS/RED/UNMEASURED/REFUSED with the same 0/5/95/96 exit codes. All five were verified end to end on real
-workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.md, FoundationSkills/SKILLS.md]
-
-## 6. Supported hardware and platforms
-
-* **The gate plane** targets Python 3.10, 3.11 and 3.12 (the CI matrix) and is
-  OS-independent; the core needs nothing beyond the stdlib. Checkpoint I/O needs the
-  `[checkpoint]` extra (torch, safetensors, numpy).
-* **The launch plane** (`launchers/`) has been exercised on exactly one estate: Slurm and
-  enroot container backends (`FS_BACKEND=auto|slurm|enroot` in
-  `launchers/fs_container_backend.sh`), one H100 tray. It is a concrete, hardened example,
-  not a portable launcher.
-* The poster's hardware row names the NVIDIA GPU generations with recorded runs: Ampere
-  (2×A100, examples/A100_2GPU.md), Hopper (2×H200, validation_campaigns/vlm_2xh200) and
-  Blackwell (GB200 trays), local or under Slurm. DGX Cloud / Lepton and Kubernetes, which an earlier poster showed as design
-  targets from the audit's scaling work (docs/deliverables/B2_scaling.md), are
-  **unmeasured** here and no longer appear on it.
-
-## 7. Supported training workflows
+## Training stages
 
 <p align="center">
   <img src="assets/training_stages.png" alt="Training stages: pre-training, SFT, preference, RL and agentic RL with their algorithms, and the agentic RL rollout loop" width="100%">
 </p>
 
-* **Via the package**: any workflow `transformers.Trainer` supports, run under the gate
-  plane — the loop validates topology and profile first, and save gates fire on the
-  result. Model-agnostic by construction.
-* **Modalities — measured, not asserted**: text and image corpora both train end-to-end
-  through the package, and the weights are measured moving on the saved tensors rather
-  than inferred from the loss. On `gemma-4-E4B-it`, full fine-tune, two GPUs of one GB200
-  tray, 600 steps: with an image column declared, 149 of 658 vision-tower tensors moved;
-  over the same rows with the image key removed, 0 of 658 moved while the language tower
-  still trained. The discriminator is bit-exact, so there is no tolerance to argue about.
-  Declaring **video** alone REFUSES with exit 96 and names the modality, rather than
-  dropping the column in silence. Video gets an arm once its sampling is DECLARED: with
-  `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES=N` beside the column, each clip becomes N
-  centred-uniform frames on the image arm (measured through the processor: 16 frames of
-  a real clip cost 264 tokens each on `gemma-4-E4B-it`). Trained on that model at 8
-  frames per clip, full fine-tune sharded over four GPUs of one GB200 tray, 40 steps:
-  160 of 659 vision-tower tensors moved; over the same rows with no video declared,
-  0 of 659 moved while the language tower still trained. 16 frames does not fit a full
-  fine-tune of this model on one tray, because its shared-KV layers rule out gradient
-  checkpointing. **Audio** trains through the speech plane (next item). An omni
-  checkpoint's untrainable towers are **carried, not trained**, and the
-  run announces which ones by name, because "trained a multimodal model" and "carried two
-  thirds of one unchanged" are different claims. *Not* declaring them is no longer silent
-  either: a corpus that folds its media reference into the text — the shape conversion
-  produces, since the text-only path requires a `text` column — has its dangling markers
-  named and counted, measured at 210 of 210 rows on a real assembly-video corpus. That
-  run still exits 0. The fold is legitimate and the marker can be ordinary prose, so what
-  was missing was the disclosure, not a refusal.
-  [-> validation_campaigns/verification_matrix, rows T1-20 through T1-23]
-* **Speech (ASR) — measured on GB200, not asserted**: declare the audio column with
-  `FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN` and the same `train()` path fine-tunes three model
-  kinds: audio-LLMs (Gemma-4 E4B, Qwen2-Audio-7B), seq2seq (Whisper-large-v3, with a
-  declared language whose prefix tokens are verified in the labels) and CTC
-  (Parakeet-CTC-1.1B). Full fine-tune and LoRA are supported, using the measured wrap points
-  per family, and CTC models get encoder-layer LoRA. The loader is strict: it accepts 16 kHz
-  only and never resamples or truncates; every refused row is counted by reason. Three gates
-  fire on save: `speech.audio_row_coverage` (rows checked of rows expected),
-  `speech.audio_placeholder_coverage` (audio tokens per row match what the processor
-  expands) and `speech.tower_movement` (the audio tower's saved tensors moved, bit-exact).
-  NVIDIA Canary-1B-flash and Canary-Qwen-2.5B train in their own NeMo loop, and
-  FoundationScale feeds the data and adjudicates the saved model with the same gates.
-  Held-out results use the full LibriSpeech dev-clean (2,683 utterances) and 2,000 AMI
-  meeting utterances, with paired-bootstrap confidence intervals. Word error rate drops for
-  Gemma-4 from 4.07% to 2.71% (full FT) and 2.96% (LoRA), and on AMI from 28.2% to 24.5%.
-  Whisper drops from 2.25% to 1.70%, Qwen2-Audio from 35.6% to 1.79%, and Parakeet on AMI
-  from 17.9% to 17.4%. Gains that did not survive the larger sets are recorded as such,
-  including Whisper on AMI and a Canary-Qwen fine-tune. A run can also train exactly what
-  it declared on the wrong audio. A data-builder bug once pointed 6,000 transcripts at 820
-  files and every artifact gate passed. So repeated audio paths are refused, and
-  `speech.runaway_hypotheses` blocks a fine-tune whose hypotheses run away far past the base
-  model's count on the same eval rows. `speech.repetition_loops` blocks local loops ("the the the
-  ...") that a long recording would otherwise dilute. With the data fixed, Canary-1B-flash on held-out
-  Earnings-22 calls drops from 19.4% to 11.3% WER.
-  [-> docs/research/speech.md, validation_campaigns/speech_p7/EVIDENCE.md, validation_campaigns/speech_p8/EVIDENCE.md]
-* **Via the launchers as reference material**: one full fine-tune and one LoRA workflow
-  (`launchers/launch_g4e4b_fullft_1tray.sh`, `launchers/launch_g4e4b_lora_1tray.sh`),
-  estate-parameterized through environment variables rather than hard-coded paths.
-* **Preference, RL and agentic RL**: the RL plane registers 20 algorithm names
-  (`src/foundationscale/rl/registry.py`). Measured with images on 2×H200: DPO, IPO, SimPO,
-  CPO and ORPO, and GRPO, Dr-GRPO, DAPO, GSPO, REINFORCE++ and RLOO
-  [-> validation_campaigns/vlm_2xh200/EVIDENCE.md]. Agentic RL (multi-turn tool use with
-  vLLM rollout) runs end to end on one GB200 tray
-  [-> validation_campaigns/agentic_rl_harness/EVIDENCE.md, docs/AGENTIC_RL.md]. For VLA,
-  GR00T N1.7 and openpi pi0.5 LIBERO results and verl-vla FPO RL reproduce their published
-  numbers within tolerance [-> docs/research/vla.md]. The remaining names are tested on
-  fixtures, not benchmarked. [-> docs/RL_ALGORITHMS.md]
-* **Pre-training**: continued pre-training (CPT) runs through the same
-  `foundationscale-train` entry as SFT, planned by FoundationSkills as a `cpt` stage
-  [-> FoundationSkills/foundationskills/interfaces/fs/emit_train.py].
-* **Not yet**: curated from-scratch pre-training recipes and the unified data contract
-  remain roadmap items with falsification conditions in docs/deliverables/.
+| Stage | What it covers | Learn more |
+|---|---|---|
+| Pre-training & CPT | Continued pre-training through the same `foundationscale-train` entry as SFT | [docs/TRAINING.md](docs/TRAINING.md) |
+| SFT | Full fine-tune and LoRA, dense and MoE, text and multimodal | [docs/TRAINING.md](docs/TRAINING.md) |
+| Preference | DPO, IPO, KTO, ORPO, SimPO, CPO, Online DPO, Iterative DPO | [docs/RL_ALGORITHMS.md](docs/RL_ALGORITHMS.md) |
+| RL | PPO, GRPO, Dr.GRPO, DAPO, GSPO, RLOO, REINFORCE, REINFORCE++, RAFT, Best-of-N | [docs/RL_ALGORITHMS.md](docs/RL_ALGORITHMS.md) |
+| Agentic RL | Agentic GRPO, tool gateway, sandbox, vLLM rollout fleet, verl adapter | [docs/AGENTIC_RL.md](docs/AGENTIC_RL.md) |
 
-[-> docs/WORKFLOWS.md]
-## 8. Installation
+## Model families
 
-From a clean clone, exactly what `make install` and CI run:
+| Family | Highlights | Learn more |
+|---|---|---|
+| Speech | ASR fine-tuning for audio-LLM, seq2seq and CTC models (Whisper, Qwen3-ASR, Gemma-4 audio, Qwen2-Audio, Parakeet, Canary); TTS with VoxCPM2 (incl. Vietnamese + speaker LoRA) and Qwen3-TTS; Qwen3-Omni evaluation; WER/CER with paired bootstrap | [examples/SPEECH.md](examples/SPEECH.md), [docs/research/speech.md](docs/research/speech.md) |
+| LLM | Full fine-tune and LoRA on dense and MoE models; preference, RL and agentic RL | [examples/llm-2xA100](examples/llm-2xA100/README.md), [docs/AGENTIC_RL.md](docs/AGENTIC_RL.md) |
+| Multimodal LLM | Image, video (sampled frames) and audio inputs; Gemma-4 and Qwen3.x VLMs; SFT, DPO-family and GRPO-family training with images | [examples/vlm-2xH200](examples/vlm-2xH200/README.md), [evidence](validation_campaigns/vlm_2xh200/EVIDENCE.md) |
+| VLA | GR00T N1.7, openpi pi0.5 and verl-vla adapters; LeRobot data; GR00T fine-tuning; LIBERO closed-loop evaluation; FPO, DSRL, TD3+BC and RECAP RL recipes | [docs/research/vla.md](docs/research/vla.md) |
+
+## FoundationSkills
+
+<p align="center">
+  <img src="assets/skills_lifecycle.png" alt="FoundationSkills lifecycle: goal, probe, plan, data, emit, human confirmation, FoundationScale, evaluation, auto_research" width="100%">
+</p>
+
+FoundationSkills is the agent layer: it decides *what* to train, and FoundationScale executes it.
+It plans only against what the installed framework measurably runs, and launches only with the
+user's confirmed plan hash.
+
+| Skill | What it does |
+|---|---|
+| `data_engine` | Raw sources → cleaned, deduplicated, formatted dataset + readiness report |
+| `training.planner` | Goal → stages, algorithm, method, resource estimate and feasibility |
+| `training.emit` | Plan + dataset → launch spec and Slurm sbatch, confirmed by hash |
+| `evaluation` | Checkpoint vs its base model on pinned, offline benchmarks |
+| `auto_research` | Budgeted multi-trial research campaign on an append-only ledger |
+
+Read more in [FoundationSkills/README.md](FoundationSkills/README.md); agents start at
+[FoundationSkills/SKILLS.md](FoundationSkills/SKILLS.md).
+
+## Verification gates
+
+Gates are checks that run at fixed points in a job — launch, data, first save, every save,
+export. Each one reports what it examined, and the run ends in exactly one verdict:
+
+| Verdict | Exit code | Meaning |
+|---|---|---|
+| PASS | 0 | Measured and within bounds |
+| RED | 5 | Measured and failed |
+| UNMEASURED | 95 | The check could not run — never counted as a pass |
+| REFUSED | 96 | Fail-closed before training, naming what is missing |
+
+See [docs/VERIFICATION.md](docs/VERIFICATION.md) and [docs/CUSTOM_GATES.md](docs/CUSTOM_GATES.md).
+
+## Installation
+
+Requires Python ≥ 3.10.
 
 ```bash
 git clone https://github.com/TranNhiem/FoundationScale && cd FoundationScale
-python3 -m pip install -e ".[checkpoint,dev]" "pytest-cov>=5" \
-    --extra-index-url https://download.pytorch.org/whl/cpu
+python3 -m pip install -e ".[train]"          # training
+pip install -e FoundationSkills               # optional: the agent layer (fskills CLI)
 ```
 
-That is the **contributor** install: CPU torch, no trainer, because it is what CI needs to
-exercise the gate contract. It deliberately cannot train. To run the training example in
-§10 instead, add the `train` extra and drop the CPU index (you want a torch build for your
-own accelerator):
-
-```bash
-python3 -m pip install -e ".[train]"
-python3 examples/train_tiny.py          # measured: exits 0 PASS
-```
-
-The extras, as declared in `pyproject.toml`:
-
-| extra | contents | when |
+| Extra | Contents | Use it for |
 |---|---|---|
-| *(none)* | stdlib only | running the gate contract itself |
-| `checkpoint` | torch, safetensors, numpy | checkpoint gates and the real-checkpoint tests |
+| `train` | torch, transformers, datasets, accelerate | training |
+| `checkpoint` | torch, safetensors, numpy | checkpoint gates |
 | `dev` | pytest, ruff, mypy | development |
-| `train` | torch, transformers, datasets, accelerate | the training entry point |
-| `all` | everything | exists so `all` means all; CI deliberately does **not** install it |
+| `all` | everything | — |
 
-Omitting `[checkpoint]` does not fail loudly — it shrinks the suite through skips, which
-is precisely why CI forbids skips entirely (§25). Requires Python ≥ 3.10.
+Contributors: see [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for the CPU-only install CI uses.
 
-## 9. Quick-start
+## Quick start
 
-Every command below is what CI itself executes (the Makefile targets mirror the CI steps
-exactly; the source of truth is `pyproject.toml` plus `.github/workflows/ci.yml`):
+Train a tiny model end to end (20 steps, exits `0 PASS`):
 
 ```bash
-# after installing per §8:
-
-# 1. Unit and gate suite, coverage floor included
-python3 -m pytest --cov=foundationscale --cov-report=term-missing --cov-fail-under=90
-
-# 2. Gate controls: every registered gate's MUST_FIRE / MUST_PASS fixtures.
-#    Exits nonzero if a gate fails to block its defective input, declares no
-#    MUST_FIRE control at all, or the registry is empty.
-python3 -m foundationscale.gates.controls
-
-# 3. Mutation battery, one module shard the way CI runs it:
-python3 tools/mutate.py --list        # names the modules
-FS_FORBID_SKIPS=1 python3 tools/mutate.py --module checkpoint_gates
-
-# 4. Everything at once (lint, typecheck, skip-guard probe, tests, controls,
-#    packaging and countables gates, full mutation corpus):
-make check
-```
-
-To run the suite byte-for-byte as CI sees it: `FS_FORBID_SKIPS=1 make test`. [->
-docs/GETTING_STARTED.md]
-
-## 10. Basic training example
-
-The honest hello-world for this repository is a **gate**, because that is the artifact
-that exists end-to-end. This runs verbatim against the installed package:
-
-```python
-from foundationscale.gates.core import REGISTRY, Verdict
-from foundationscale.gates.example import ExpertCheckContext   # importing registers the gate
-from foundationscale.gates.fixtures import make_empty_experts
-
-gate = REGISTRY.get("checkpoint.expert_alias")
-ctx = ExpertCheckContext.from_expert_set(make_empty_experts(declared_expert_count=128))
-result = gate.run(ctx)
-print(result.render())
-assert result.verdict is Verdict.VACUOUS and result.blocking
-```
-
-### The training path
-
-Real training is one command, and it runs:
-
-```bash
-python3 -m pip install -e ".[train]"
 python3 examples/train_tiny.py
 ```
 
-`examples/train_tiny.py` is one screen — a `ClusterProfile` describing the machine and a
-`TrainConfig` naming a model, a dataset and a topology. It trains `sshleifer/tiny-gpt2` on
-`fancyzhx/ag_news` for 20 steps and exits `0 PASS`, having adjudicated both intermediate
-checkpoints and the final save. To run it on four GPUs, edit the single `GPUS` constant and
-launch under `torchrun --nproc_per_node=4`; the profile, the declared topology and the DDP
-degree all read that one value, and the declared topology is then checked against the one
-torchrun actually built.
-
-For a corpus that needs no network, a 16-row toy dataset ships at
-`examples/data/toy_text.jsonl`, driven through the console script
-`foundationscale-train` (equivalently `python3 -m foundationscale.train.cli`):
+Train from the command line on the bundled offline toy corpus (`foundationscale-train` is the same command):
 
 ```bash
 python3 -m foundationscale.train.cli \
@@ -383,295 +122,98 @@ python3 -m foundationscale.train.cli \
   --nodes 1 --gpus-per-node 1 --dp 1 --max-steps 8 --save-interval 4
 ```
 
-That command declares a single accelerator, and the declaration is enforced. On a host
-where more than one GPU is visible, `transformers` sizes the run from the visible set
-rather than from the declaration and wraps the model in `nn.DataParallel`: measured on a
-GB200 tray, the same command that exits `0 PASS` with one device visible instead hangs at
-step zero with two, does not die on `SIGTERM`, and leaves the node draining. So the run
-now refuses (`96`) before the Trainer is built, naming what it would have driven against
-what you declared (#492). Either narrow the visible set to match — `CUDA_VISIBLE_DEVICES=0
-python3 -m foundationscale.train.cli …` — or declare the shape you meant and launch it
-under `torchrun`, which is the only multi-accelerator path this plane wires.
+Let an agent plan a run with FoundationSkills:
 
-The *corpus* needs no network; the *model* still needs one fetch. `sshleifer/tiny-gpt2`
-is a hub id, so the first run downloads it (seconds). Once it is in the HF cache, the
-same command is airgapped and `HF_HUB_OFFLINE=1` in front of it succeeds. Measured on a
-clean cache (`HF_HOME` pointed at an empty directory): offline-on-first-run exits **5**,
-naming the refusal — `OSError: couldn't connect to 'https://huggingface.co' ... and
-couldn't find them in the cached files`; warm-then-offline exits **0 PASS** twice over.
-The exit 5 is the loop behaving correctly, but it is not a first-run recipe, which is
-why the offline flag is documented as the *second* step and not the first.
-
-Without the `train` extra the loop refuses (96) and prints the install remedy rather than
-half-starting. `--dry-run` runs the whole validation prologue without constructing a model,
-touching a GPU or holding an allocation — put that in front of a scheduler submission,
-so an incoherent request is rejected before it queues. It does *not* avoid importing
-torch; see the limitation in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md). The loop reads `FS_RUN_ID` and
-`FS_ATTEMPT` from the environment. The full recipe — transcripts, the run manifest's
-fields, the save gates, and a symptom→cause table — is
-[-> docs/TRAINING.md].
-
-## 11. Configuration
-
-Three layers, three mechanisms:
-
-* **The package** takes configuration as Python objects (context objects per gate,
-  topology/profile declarations for the train loop) — there is no global config file.
-* **The train loop** reads `FS_RUN_ID` and `FS_ATTEMPT` from the environment.
-* **The launch plane** is configured entirely through environment variables, so that no
-  account name, hostname or path is committed: `CLUSTER_HOME` (estate root),
-  `FS_ALLOWED_NODE` (required, no default — an unset guard is a disabled guard),
-  `FS_FORBIDDEN_NODES`, `FS_BACKEND`, `FS_USE_TORCHRUN`, and many more. No single
-  reference enumerates them yet; today they are documented in the header comments of the
-  launchers themselves, which is where they are enforced. [-> docs/CONFIGURATION.md]
-
-## 12. Model integration
-
-Model-agnostic framing is a rule here: no example in the documentation should imply one
-model family. The seams that exist:
-
-* The train path delegates to `transformers.Trainer`, so any architecture Trainer can
-  construct is usable; the package validates the declared topology around it rather than
-  wrapping the model class.
-* `src/foundationscale/models/adapters.py` and `src/foundationscale/integrate.py` are the
-  package's own model-touching modules — both thin by measurement.
-* The launchers demonstrate a vision-language model end to end, but every estate value
-  (paths, model root, node identity) enters via environment, not source.
-
-What is *not* present: a curated recipe library or a parallelism-aware model wrapper. The
-recipe catalogue an earlier poster showed is the audit's design output, not code in this tree.
-[-> docs/MODEL_INTEGRATION.md]
-
-## 13. Dataset integration
-
-The same honest shape as models: datasets reach training through the `[train]` extra's
-`datasets` library via `transformers.Trainer`; FoundationScale adds no dataset
-abstraction of its own today. The audit's "one data contract" design
-(docs/deliverables/B2_scaling.md) is where a first-class dataset layer is specified, and
-it is unimplemented. [-> docs/DATASETS.md]
-
-## 14. Distributed training
-
-What ships locally: `src/foundationscale/topology.py` validates the declared parallel
-geometry before any process group exists, so a nonsense layout fails on the login node
-rather than at NCCL init. Actual multi-process orchestration lives in the launch plane:
-`launchers/fs_container_backend.sh` routes every in-container step — preflight probes and
-the training run alike — through one backend function, with `FS_USE_TORCHRUN` selecting
-torchrun on the enroot arm. The poster's parallelism panel maps each strategy to the
-backend that runs it (DDP, FSDP2, Megatron-Bridge for TP/PP/EP/CP); FoundationScale adds no
-library-level distributed runtime of its own, and that design is still design-stage; do not read this section as an API.
-[-> docs/DISTRIBUTED.md]
-
-## 15. Multi-node training
-
-Not implemented in the package. The shipped launchers are single-tray (one node) by
-construction, and their node guards — `FS_ALLOWED_NODE`, `FS_FORBIDDEN_NODES` — exist
-precisely so a script cannot wander onto another team's hardware by accident. The
-multi-node story today is `validation_campaigns/h100_validation/`: an experimental harness carrying the
-hardening patches, launch gates and evidence documents for scaling one H100 estate, with
-its own README at [`validation_campaigns/h100_validation/README.md`](validation_campaigns/h100_validation/README.md) and published
-deliverables under `validation_campaigns/h100_validation/h100/`. Treat it as a lab notebook that CI gates, not
-as supported surface.
-
-## 16. Custom workload development
-
-The well-supported extension is writing your own gate, over your own workload:
-
-1. Subclass the base in `foundationscale.gates.core`; implement `check()`, returning
-   `self.ok(..., coverage)` with the examined-units count attached — the base class
-   downgrades a zero-coverage `ok()` to `VACUOUS` for you.
-2. Declare fixtures: at least one `MUST_FIRE` input your gate must block, and a
-   `MUST_PASS` known-good input so a gate that blocks everything is also caught.
-3. Importing registers the gate in `REGISTRY`; `foundationscale-controls` then runs your
-   fixtures against it like any built-in gate.
-
-The reference implementation to copy is `src/foundationscale/gates/example.py`, whose
-empty-expert-set case is deliberately *not* special-cased — the contract's downgrade is
-the fix, and the fixture exists to prove nobody bypasses it. [-> docs/CUSTOM_GATES.md]
-
-## 17. Advanced customization
-
-* **Required gates at a lifecycle point.** Callers declare which gates must run; any that
-  never did render as `MISSING` and block the report — the empty-registry vacuity, one
-  level up.
-* **Adjudication** (`src/foundationscale/gates/adjudication.py`) composes per-gate
-  verdicts into a run-level judgment, propagating coverage instead of assent.
-* **The controls runner is itself an entry point**
-  (`foundationscale-controls` = `foundationscale.gates.controls:main`), so a gate added to
-  the registry is automatically audited by CI's `controls` job.
-
-## 18. Extension and plugin points
-
-Concrete today: the gate base class, the fixture/controls protocol, `REGISTRY` (populated
-by import), and the adjudication layer. There is no setuptools entry-point discovery
-mechanism for third-party plugins — registration is by import, and whether that should
-grow into an entry-point group is an open design question. Anything else advertised as a
-"plugin API" would be invention; the boundary is the gate contract and nothing wider.
-[-> docs/EXTENSION_POINTS.md]
-
-## 19. Performance and throughput considerations
-
-Training-throughput numbers: **none exist in this repository, and none are claimed.** No
-benchmark has been run that this README could attach; publishing one requires the
-roadmap's harness phases. What is measured is the cost of the verification machinery
-itself, from the Makefile's own accounting:
-
-* The mutation battery runs the whole pytest suite per scoreable row. Measured: one five-row
-  module shard took 3m19s on an M-series laptop (~40s per row); **extrapolated, not
-  measured**, the full corpus sits near 50 minutes, which is why CI shards it one module
-  per job under an inner deadline.
-* CI's pytest leg carries a coverage floor of 90; the mutation and controls jobs exist
-  because a suite that only answers "does the code pass" cannot answer "does the suite
-  detect wrong code".
-
-## 20. Checkpointing and recovery
-
-* `src/foundationscale/checkpoint/dcp.py` and `dcp_meta.py` handle checkpoint I/O and
-  metadata indexing; `src/foundationscale/gates/checkpoint_gates.py` and
-  `src/foundationscale/verify/parity.py` are where checkpoints are *judged* — the expert-alias
-  reference case encodes the estate's defining incident.
-* Two recovery knobs are *named* in the launch-plane environment surface
-  (`FS_RESUME_CKPT`, `FS_RESUME_STEP`): the h100 launcher exports them and the container
-  backend forwards them. **Nothing reads them** -- not the package, not the launch plane.
-  Measured over every tracked file: the only occurrences export, allowlist, or gate the
-  forwarding. Setting them changes nothing on any arm. [-> docs/CHECKPOINTING.md]
-* **Stated limit from §4, repeated where it bites:** the suite writes real checkpoints to
-  disk and reads them back single-process. Multi-rank save/reload shapes are reproduced
-  from the audit record, not re-observed — so multi-rank recovery is *specified*, not
-  *verified here*. [-> docs/CHECKPOINTING.md]
-
-## 21. Monitoring and debugging
-
-* Every gate verdict renders with its coverage inline — "[VACUOUS] … examined 0 of 128"
-  is the debugging affordance, not an error format.
-* `tools/emit_run_manifest.py` refuses dishonest emissions: the run manifest
-  (`src/foundationscale/provenance/manifest.py`) is where what-was-claimed vs
-  what-was-measured is made explicit for a run.
-* `tools/real_checkpoint_probe.py` is a thin CLI over `foundationscale.gates.probe`, and
-  `tools/live_save_gate.py` adjudicates the first real save of a job — the same pattern:
-  logic in the package, thin CLI at the edge.
-* CI's own debugging doctrine — exit-code-only wiring is distrusted everywhere; a summary
-  line with a denominator is required before a green is credited. [-> docs/OBSERVABILITY.md]
-
-## 22. Examples
-
-* **The gate example** in §10 — runnable today, covers the defining incident.
-* **The launchers** — two complete, gated single-estate training jobs, readable as
-  worked examples of launch-time verification (§7, §15).
-* **The harness evidence** — `validation_campaigns/h100_validation/h100/EVIDENCE.md` and the published
-  deliverables show gates firing against real launches.
-* **`examples/`** holds exactly two things, both reachable from §10: `train_tiny.py`
-  (the gate example) and `data/toy_text.jsonl` (the 16-row offline corpus). This line
-  previously said the directory's contents were "unmeasured by the evidence slice this
-  README was written from" while §10 stated a measured verdict for one of the two files
-  — the same document disagreeing with itself, which is the kind of thing a reader
-  checks in a minute. `ls examples/` is still the instrument; it has now been run.
-  Note what CI does and does not cover: `train_tiny.py` is invoked by **no** CI job and
-  **no** `make` target (`grep -rn train_tiny .github/workflows/ Makefile` returns
-  nothing), so its `exits 0 PASS` is a by-hand measurement, not a standing gate.
-  [-> docs/EXAMPLES.md]
-
-## 23. Project structure
-
-`src/` = 102029 LOC across 175 files. `launchers/` contains 10231 shell LOC plus 1615 Python
-LOC, and `validation_campaigns/h100_validation/` adds another 34169 Python LOC and 6706 shell LOC on top of the
-package. `tools/` contains 10192 Python LOC. 454649 git-tracked .py/.sh/.md lines repo-wide.
-
-```
-src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
-                       topology.py, models/, train/, integrate.py
-tests/                 the test suite (135326 .py LOC); conftest carries the skip guard
-tools/                 CLIs over the package (emit_run_manifest, live_save_gate,
-                       real_checkpoint_probe, preflight/, mutate, census)
-checks/                standalone repository gates: countables drift, packaging
-                       reachability, bash -lc sweep, workflow YAML audit
-launchers/             the estate launch plane + two contract suites (bash), plus
-                       Python helpers (lora target census, peft override replay)
-validation_campaigns/  evidence campaigns, not framework code — read as lab notebooks
-  h100_validation/     experimental H100 harness: build script, gate_*.py, patch_*.py,
-                       its own tests, and the published h100/ deliverables
-docs/                  DECISIONS.md, deliverables/ (A1–D), SELF_AUDIT.md
-examples/              see §22
-FoundationSkills/      the agent layer (data_engine, training, evaluation, auto_research) -- see §5
-.github/workflows/     CI: check / controls / launchers / mutation shards
+```bash
+fskills probe --deep                  # what the installed FoundationScale actually runs
+fskills plan  --goal goal.json        # goal -> training plan
 ```
 
-## 24. Development guide
+More in [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
-The Makefile is convenience only; CI mirrors, it does not consume it.
+## Examples
 
-| command | what runs |
+Step-by-step recipes with measured results:
+
+| Recipe | Hardware | Guide |
+|---|---|---|
+| LLM LoRA SFT | 2× A100 | [examples/llm-2xA100](examples/llm-2xA100/README.md) |
+| Vision-language models (SFT, preference, RL) | 2× H200 | [examples/vlm-2xH200](examples/vlm-2xH200/README.md) |
+| VLM LoRA | 2× GB200 | [examples/vlm-2xGB200](examples/vlm-2xGB200/README.md) |
+| VLM SFT | 2× A100 | [examples/vlm-2xA100](examples/vlm-2xA100/README.md) |
+| ASR fine-tuning | 2× H200 | [examples/speech-2xH200](examples/speech-2xH200/README.md) |
+| ASR fine-tuning | 2× A100 | [examples/speech-2xA100](examples/speech-2xA100/README.md) |
+| Text-to-speech and voice cloning | GB200 | [examples/tts-GB200](examples/tts-GB200/README.md) |
+| Omni speech-LLM (VoiceBench) | GB200 | [examples/omni-GB200](examples/omni-GB200/README.md) |
+| All A100 recipes in one place | 2× A100 | [examples/A100_2GPU.md](examples/A100_2GPU.md) |
+
+Index: [docs/EXAMPLES.md](docs/EXAMPLES.md) · speech hub: [examples/SPEECH.md](examples/SPEECH.md)
+
+## Distributed training
+
+- **Data parallel** — DDP and FSDP2, launched with `torchrun`.
+- **Model parallel** — tensor, pipeline, expert and context parallelism through Megatron-Bridge.
+- **Topology checks** — the declared parallel layout is validated before any process group starts.
+- **Clusters** — Slurm and container launchers in [launchers/](launchers/).
+
+See [docs/DISTRIBUTED.md](docs/DISTRIBUTED.md).
+
+## Documentation
+
+| Topic | Doc |
 |---|---|
-| `make install` | editable install with `[checkpoint,dev]` + pytest-cov |
-| `make test` | pytest with the coverage floor |
-| `make lint` / `make fmt` | ruff check/format over `src tests tools checks` |
-| `make typecheck` | mypy over `src` plus the three adjudicating `tools/` CLIs |
-| `make typecheck-checks` | reports on `checks/` — deliberately not a gate |
-| `make controls` | the gate controls entry point |
-| `make packaging` | the packaging-reachability gate, self-test first |
-| `make countables` | census + drift gate over the shipped documents |
-| `make mutation` | full mutation corpus; `make mutation-module MODULE=x` for one shard |
-| `make skip-guard-probe` | proves the armed skip guard can fail and names its probe |
-| `make check` | all of the above |
+| Getting started | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) |
+| Architecture & design principles | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/DESIGN_PRINCIPLES.md](docs/DESIGN_PRINCIPLES.md) |
+| Training & configuration | [docs/TRAINING.md](docs/TRAINING.md), [docs/CONFIGURATION.md](docs/CONFIGURATION.md), [docs/WORKFLOWS.md](docs/WORKFLOWS.md) |
+| Models & datasets | [docs/MODEL_INTEGRATION.md](docs/MODEL_INTEGRATION.md), [docs/DATASETS.md](docs/DATASETS.md) |
+| Preference & RL | [docs/RL_ALGORITHMS.md](docs/RL_ALGORITHMS.md) |
+| Agentic RL | [docs/AGENTIC_RL.md](docs/AGENTIC_RL.md) |
+| Distributed training | [docs/DISTRIBUTED.md](docs/DISTRIBUTED.md) |
+| Checkpointing | [docs/CHECKPOINTING.md](docs/CHECKPOINTING.md) |
+| Verification & custom gates | [docs/VERIFICATION.md](docs/VERIFICATION.md), [docs/CUSTOM_GATES.md](docs/CUSTOM_GATES.md), [docs/VERIFICATION_MATRIX.md](docs/VERIFICATION_MATRIX.md) |
+| Extending the framework | [docs/EXTENSION_POINTS.md](docs/EXTENSION_POINTS.md) |
+| Monitoring & troubleshooting | [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md), [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
+| Status & roadmap | [docs/STATUS.md](docs/STATUS.md) |
+| Design decisions | [docs/DECISIONS.md](docs/DECISIONS.md) |
 
-Stated exclusions, so silence does not read as coverage: mypy does not check `checks/`
-or `tools/preflight/` (the latter carries an explicit exemption); ruff covers
-everything listed. [-> docs/DEVELOPMENT.md]
+## Project layout
 
-## 25. Testing
+```
+src/foundationscale/
+  train/          training entry point (SFT, CPT, multimodal)
+  rl/             preference & RL trainers, algorithm registry, Megatron lane
+  agentic_rl/     multi-turn agentic RL: engines, environments, sandbox, gateway
+  vla/            vision-language-action adapters (GR00T, openpi, verl-vla) and LIBERO eval
+  gates/          verification gates and their controls
+  checkpoint/     checkpoint manifests and parity checks
+  provenance/     run manifests
+  families/       model-family registry
+  upstream/       integrations with upstream models and stacks
+FoundationSkills/ agent layer (fskills CLI)
+examples/         hardware-specific recipes
+launchers/        Slurm and container launch scripts
+docs/             documentation
+tests/            test suite
+validation_campaigns/  recorded evidence from real-hardware runs
+```
 
-* `pytest` is configured in `pyproject.toml` (`testpaths = ["tests"]`, markers `slow` and
-  `integration`, `--strict-markers`).
-* **Skips are failures in CI.** `FS_FORBID_SKIPS=1` is set job-wide and
-  `tests/conftest.py` names every skip with its reason; a probe step feeds the guard a
-  deliberately skipped test and requires it to fire. On a laptop the variable stays
-  unset and skips are merely named.
-* **Mutation testing asks the other question.** The mutation corpus is 144 rows over 19
-  modules. Of those, 125 are MUST_FIRE mutants and 19 are MUST_PASS controls. Exit codes
-  separate "a mutant survived" (1) from "nothing was measured" (2) — a red suite, any
-  skipped test, or a stale anchor all read as never-measured, never as caught.
-* **CI has five jobs on purpose**: `check` (hygiene across Python 3.10/3.11/3.12),
-  `controls` (gate fixtures), `launchers` (the bash contract suites plus the workflow-YAML
-  and bash-`lc` standing legs), `mutation-shards` (reads the module list out of the
-  mutation table and emits it as the matrix), and `mutation` (one shard per module,
-  `needs: mutation-shards`). The last two are one mechanism in two jobs because a matrix
-  must be enumerated by a job before it can be consumed by one; the enumerator refuses an
-  empty list rather than fanning out to zero shards, since a matrix over nothing is
-  `all([])` in workflow form — a green wall in front of an unmeasured gate.
-  [-> docs/TESTING.md]
-* **What is *not* yet verified is enumerated, not implied.** The verification matrix lists
-  every claim this framework has not yet proven, one row each, split into tier-0 rows that
-  make a training axis declarable and recorded and tier-1 rows that spend GPU time. Every
-  row carries a *control arm* — an arm that must come out different — because a row with no
-  such arm cannot fail, and a row that cannot fail is not a measurement.
-  `checks/verification_matrix.py` enforces that rule over the matrix's JSON rendering, and
-  refuses a control arm that is a placeholder rather than an arm. The row counts are stated
-  in the matrix and derived there by the gate, so they are deliberately not restated here:
-  a countable is owned by exactly one document, the one whose gate measures it.
-  [-> docs/VERIFICATION_MATRIX.md]
+## Status
 
-## 26. Troubleshooting
+- Curated from-scratch pre-training recipes and a unified data contract are on the roadmap.
+- The launchers are worked examples for specific clusters, configured through environment variables.
+- Algorithms without a linked hardware result are covered by tests, not benchmarks.
 
-| symptom | cause worth checking |
-|---|---|
-| Many tests "skip" instead of failing | torch missing: you installed `[dev]` without `[checkpoint]` (§8). |
-| `foundationscale-train` refuses at startup | the `[train]` extra is absent; the loop prints the exact remedy — install it. |
-| `make ...` says `python: command not found` | the Makefile uses `python3` deliberately; bare `python` does not exist on modern macOS. |
-| Launcher contract suite fails with "0/8 launcher unreadable" | it is CWD-sensitive by measured behaviour; run it from the repository root. |
-| Mutation battery exits 2 | deliberate: nothing was measured (stale anchor, red suite, or a skip). Fix the cause; do not re-run hoping for 0. |
-| A number in a doc looks wrong | run `make countables` — the drift gate compares shipped wording against a freshly measured census. |
+Details in [docs/STATUS.md](docs/STATUS.md).
 
-[-> docs/TROUBLESHOOTING.md]
-## 27. Contributing
+## Contributing & development
 
-* Run `make check` before opening a PR; CI runs the same steps across the matrix.
-* Follow the repository's two standing review rules: every count carries its denominator,
-  and every claim that something does not exist names the control proving its detector
-  could have fired. The drift gate (`checks/countables_drift.py`) enforces the first on
-  shipped numbers — state counts only in wordings it anchors.
-* Write the MUST_FIRE control with the gate. A check that has never been observed going
-  red is not evidence.
-* License: [MIT](LICENSE). The audit documents carry their own grading scheme
-  ([M]/[V]/[A]/[K]/[U]) — see docs/DECISIONS.md before editing them.
+```bash
+make check        # lint, typecheck, tests, gate controls and repository checks — what CI runs
+```
 
-[-> docs/CONTRIBUTING.md]
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md), [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) and
+[docs/TESTING.md](docs/TESTING.md).
+
+## License
+
+[MIT](LICENSE). Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
