@@ -57,6 +57,23 @@ def test_rules_unique_and_must_fire_covered(skill):
     assert not missing, f"every rule needs a MUST_FIRE fixture; missing: {missing}"
 
 
+# A1.4: the agent-skills spec budgets a SKILL.md body at <500 lines and <5000 tokens. CI has no
+# tokenizer guarantee, so the token bound is checked as chars/4 (conservative: cl100k and Qwen count
+# auto_research's 18.2k-char body as 4.6k-4.9k tokens). Detail beyond it goes to references/.
+MAX_BODY_LINES, MAX_BODY_CHARS = 500, 20_000
+
+
+@pytest.mark.parametrize("skill", SKILLS, ids=lambda s: s.name)
+def test_skill_md_body_fits_the_spec_budget(skill):
+    package = sys.modules[type(skill).__module__].__package__
+    text = importlib.resources.files(package).joinpath("SKILL.md").read_text(encoding="utf-8")
+    body = text[text.index("\n---", 4) + 4:] if text.startswith("---") else text
+    lines = body.count("\n")
+    assert lines < MAX_BODY_LINES, f"{package}/SKILL.md body has {lines} lines"
+    assert len(body) < MAX_BODY_CHARS, (
+        f"{package}/SKILL.md body is {len(body)} chars; move detail to references/")
+
+
 @pytest.mark.parametrize("skill", SKILLS, ids=lambda s: s.name)
 def test_skill_md_documents_the_contract(skill):
     package = sys.modules[type(skill).__module__].__package__
@@ -185,6 +202,15 @@ def test_published_routing_benchmarks_match_the_current_skill_index():
         assert match.group(2) == evals[package], f"{package}/BENCHMARK.md measured other eval cases; re-run routing-eval"
 
 
+def _assert_verdict_pass(package, path):
+    """A fresh report is only evidence when it passed: a run under the gate binds the current SKILL.md
+    as surely as a passing one, so freshness alone let a failing report stand in for a measured skill."""
+    verdict = re.search(r"^- Verdict: (\w+)", path.read_text(encoding="utf-8"), re.M)
+    assert verdict, f"{package}/{path.name} carries no verdict line"
+    assert verdict.group(1) == "pass", (
+        f"{package}/{path.name} verdict is {verdict.group(1)!r}: fix the skill or the harness and re-run")
+
+
 def test_published_behaviour_reports_match_the_current_skill_md_and_evals():
     """BEHAVIOUR.md grades the whole SKILL.md body against that package's cases, so editing either makes it
     stale; re-run `fskills behaviour-eval run ... --write-behaviour` rather than keep a stale number."""
@@ -199,6 +225,7 @@ def test_published_behaviour_reports_match_the_current_skill_md_and_evals():
         assert match, f"{package}/BEHAVIOUR.md is not a generated behaviour report"
         assert (match.group(1), match.group(2)) == current[package], \
             f"{package}/BEHAVIOUR.md measured another SKILL.md bundle (SKILL.md + references/scripts/assets) or eval set; re-run behaviour-eval"
+        _assert_verdict_pass(package, path)
 
 
 @pytest.mark.parametrize("package", sorted(PACKAGES))
@@ -227,6 +254,7 @@ def test_published_oracle_behaviour_reports_match_the_current_skill_md_and_cases
         assert match, f"{package}/BEHAVIOUR_ORACLE.md is not a generated behaviour report"
         assert (match.group(1), match.group(2)) == (entry["skill_bundle_sha256"][:12], cases_sha[:12]), \
             f"{package}/BEHAVIOUR_ORACLE.md measured another SKILL.md bundle (SKILL.md + references/scripts/assets) or oracle case set; re-run behaviour-eval"
+        _assert_verdict_pass(package, path)
 
 
 

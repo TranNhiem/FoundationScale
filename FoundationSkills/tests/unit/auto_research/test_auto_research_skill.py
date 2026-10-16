@@ -327,13 +327,19 @@ class TestSkillRegistration:
 
 class TestSkillDoc:
     def test_skill_md_headings(self):
-        doc = (resources.files("foundationskills.skills.auto_research")
-               .joinpath("SKILL.md").read_text(encoding="utf-8"))
+        root = resources.files("foundationskills.skills.auto_research")
+        doc = root.joinpath("SKILL.md").read_text(encoding="utf-8")
         for heading in ("## Purpose", "## When to use", "## Inputs", "## Outputs", "## Scope",
                         "## The loop", "## The approval model", "## Acceptance statistics",
                         "## Validation rules", "## Failure handling", "## FS interface",
-                        "## Increments", "## Worked examples"):
+                        "## Worked examples", "## Details on demand"):
             assert heading in doc, heading
+        # A1.4 progressive disclosure: stage detail lives in references/, still documented
+        refs = root.joinpath("references", "campaign-mechanics.md").read_text(encoding="utf-8")
+        for heading in ("## Seeds, claims and concurrency (M2)", "## Proposers (M3, M4, M5b)",
+                        "## Multi-objective campaigns (M5a)", "## Evidence-bound results (M6a)",
+                        "## Increments"):
+            assert heading in refs, heading
 
     def test_skill_md_lists_every_rule_id(self):
         doc = (resources.files("foundationskills.skills.auto_research")
