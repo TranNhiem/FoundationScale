@@ -7,7 +7,7 @@ skip is precisely the shape conftest.py's FS_FORBID_SKIPS=1 guard fails CI
 on — measured: "1 skip(s) — tolerated locally, FAILED by CI". The resolution
 is a lane split, not a skip and not a tolerated absence:
 
-  * the cases now live at container_tests/peft_omegaconf_repair_cases.py, a
+  * the cases now live at tests/container_lane/peft_omegaconf_repair_cases.py, a
     filename NO pytest collection glob matches, so they cannot be collected
     off-stack under any configuration (a declared, structural abstention —
     the test_launcher_contracts.sh precedent pushed one notch further: there
@@ -34,7 +34,7 @@ import ast
 from pathlib import Path
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-LANE_FILE = REPO_ROOT / "container_tests" / "peft_omegaconf_repair_cases.py"
+LANE_FILE = REPO_ROOT / "tests" / "container_lane" / "peft_omegaconf_repair_cases.py"
 RETIRED_PATH = REPO_ROOT / "tests" / "test_peft_omegaconf_repair.py"
 
 # The exact census. Sourced from the fix42 module's lived history (its own
@@ -73,7 +73,7 @@ def test_lane_file_exists():
         f"container lane file missing: {LANE_FILE} — the 8 vendored-predicate "
         "composition cases have NO lane, which is worse than a skip: it is "
         "coverage that does not exist. Run them in-container: "
-        "python3 -m pytest container_tests/peft_omegaconf_repair_cases.py -q"
+        "python3 -m pytest tests/container_lane/peft_omegaconf_repair_cases.py -q"
     )
 
 

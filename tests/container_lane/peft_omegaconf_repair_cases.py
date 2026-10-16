@@ -10,7 +10,7 @@ rightly fails under FS_FORBID_SKIPS=1). Two decisions keep this honest:
 1. The filename deliberately does NOT match pytest's `test_*.py` /
    `*_test.py` collection globs, so no pytest configuration — any rootdir,
    any testpaths — can collect it off-stack. Run it BY NAME, in-container:
-       python3 -m pytest container_tests/peft_omegaconf_repair_cases.py -q
+       python3 -m pytest tests/container_lane/peft_omegaconf_repair_cases.py -q
    Its off-stack abstention is therefore not a runtime verdict pytest could
    launder; it is structural, and it is pinned with a denominator off-stack
    by tests/launchers/test_container_lane_peft_repair.py (existence, exact 8-case AST
