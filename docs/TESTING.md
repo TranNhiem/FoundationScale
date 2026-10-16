@@ -210,7 +210,12 @@ A directory argument is walked for `*.md`; a file named outright is scanned what
 
 ### Launcher suites come in two halves
 
-`launcher-contracts` (`bash launchers/test_launcher_contracts.sh`) and `checks-gates` (`bash launchers/test_checks_gates.sh`) must both run: the bash contract suites are 156 controls, 4 named abstentions, and the gate-script self-test legs are 47 controls, 1 named abstention. The anti-orphan leg's corpus is the two suites concatenated — it scans every `launchers/*.py` and `checks/*.py` for call sites and refuses a file that has none — so running only one half indicts every helper called solely from the other.
+`launcher-contracts` and `checks-gates` must both run:
+
+- `bash launchers/test_launcher_contracts.sh` — the bash contract suites, 156 controls, 4 named abstentions;
+- `bash launchers/test_checks_gates.sh` — the gate-script self-test legs, 47 controls, 1 named abstention.
+
+The anti-orphan leg's corpus is the two suites concatenated — it scans every `launchers/*.py` and `checks/*.py` for call sites and refuses a file that has none — so running only one half indicts every helper called solely from the other.
 
 ### The suites resolve their own interpreter
 
