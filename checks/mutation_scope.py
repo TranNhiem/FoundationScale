@@ -116,6 +116,10 @@ PENDING_ENROLMENT: dict[str, str] = {
         "Alpamayo trajectory server over alpamayo-recipes' public evaluator functions: "
         "line-covered with stand-in streams, run on GB200, no mutation row yet."
     ),
+    "src/foundationscale/vla/adapters/alpamayo/sft.py": (
+        "Alpamayo-2 SFT declaration rendering alpamayo-recipes' own launchers, with the README's "
+        "published losses: line-covered by tests/vla, no mutation row yet."
+    ),
     "src/foundationscale/vla/adapters/longwam/libero.py": (
         "Long-WAM LIBERO client (per-step act, NumPy-version-safe array transport, refusals): "
         "line-covered by tests/vla, no mutation row yet."
