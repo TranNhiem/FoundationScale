@@ -15,6 +15,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
+from foundationscale.vla.wire import DEFAULT_AUTHKEY, decode_array, encode_array
+
 if TYPE_CHECKING:
     import numpy as np
 
@@ -28,31 +30,10 @@ OBS_KEYS = (
     "robot0_eef_quat",
     "robot0_gripper_qpos",
 )
-DEFAULT_AUTHKEY = b"fs-longwam"
 
 
 class LongWamError(RuntimeError):
     """The Long-WAM server refused a request or answered something that is not an action."""
-
-
-def encode_array(array: Any) -> dict[str, Any]:
-    """An array as builtins only (dtype string, shape, raw bytes): safe across NumPy versions."""
-    import numpy as np  # noqa: PLC0415
-
-    contiguous = np.ascontiguousarray(array)
-    return {
-        "dtype": contiguous.dtype.str,
-        "shape": list(contiguous.shape),
-        "data": contiguous.tobytes(),
-    }
-
-
-def decode_array(payload: Mapping[str, Any]) -> np.ndarray:
-    """The inverse of :func:`encode_array`, as a writable copy."""
-    import numpy as np  # noqa: PLC0415
-
-    flat = np.frombuffer(payload["data"], dtype=np.dtype(payload["dtype"]))
-    return flat.reshape(tuple(payload["shape"])).copy()
 
 
 class LongWamLiberoPolicy:

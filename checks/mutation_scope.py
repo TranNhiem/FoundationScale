@@ -100,6 +100,22 @@ PENDING_ENROLMENT: dict[str, str] = {
         "driving trajectory metrics (ADE, minADE with full-horizon selection, Alpamayo semantics): "
         "line-covered by tests/vla, no mutation row yet."
     ),
+    "src/foundationscale/vla/driving/eval.py": (
+        "FS driving evaluation CLI (every clip in the denominator, exit 0/95/96 taxonomy): "
+        "line-covered by tests/vla, no mutation row yet."
+    ),
+    "src/foundationscale/vla/wire.py": (
+        "NumPy-version-safe array transport shared by the policy servers: "
+        "line-covered by tests/vla, no mutation row yet."
+    ),
+    "src/foundationscale/vla/adapters/alpamayo/client.py": (
+        "Alpamayo trajectory client (shape checks, refusals as AlpamayoError): "
+        "line-covered by tests/vla, no mutation row yet."
+    ),
+    "src/foundationscale/vla/adapters/alpamayo/server.py": (
+        "Alpamayo trajectory server over alpamayo-recipes' public evaluator functions: "
+        "line-covered with stand-in streams, run on GB200, no mutation row yet."
+    ),
     "src/foundationscale/vla/adapters/longwam/libero.py": (
         "Long-WAM LIBERO client (per-step act, NumPy-version-safe array transport, refusals): "
         "line-covered by tests/vla, no mutation row yet."

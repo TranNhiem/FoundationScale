@@ -339,6 +339,11 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/vla/__init__.py": 100,  # re-exports only; measured 100.0%
     "src/foundationscale/vla/driving/__init__.py": 100,  # re-exports only; measured 100.0%
     "src/foundationscale/vla/driving/metrics.py": 99,  # measured 100.0%; 1 pt CI slack
+    "src/foundationscale/vla/driving/eval.py": 97,  # measured 97.6%; 1 pt CI slack
+    "src/foundationscale/vla/wire.py": 99,  # measured 100.0%; 1 pt CI slack
+    "src/foundationscale/vla/adapters/alpamayo/__init__.py": 100,  # re-exports only; measured 100.0%
+    "src/foundationscale/vla/adapters/alpamayo/client.py": 94,  # measured 95.0%; 1 pt CI slack
+    "src/foundationscale/vla/adapters/alpamayo/server.py": 97,  # measured 98.5%; 1 pt CI slack
     "src/foundationscale/vla/adapters/__init__.py": 100,  # docstring only; measured 100.0%
     "src/foundationscale/vla/adapters/gr00t/__init__.py": 100,  # re-exports only; measured 100.0%
     "src/foundationscale/vla/adapters/gr00t/contract.py": 98,  # measured 99.5%; 1 pt CI slack
