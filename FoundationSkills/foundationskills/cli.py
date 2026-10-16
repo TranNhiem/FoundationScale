@@ -64,6 +64,40 @@ def _execute(skill_name: str, request: dict[str, Any], workdir: str) -> int:
     return int(result.exit_code)
 
 
+def _cmd_limits(args: argparse.Namespace) -> int:
+    from foundationskills.interfaces.fs import limits
+
+    try:
+        caps = json.loads(Path(args.probe_json).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"refused: probe record unreadable: {exc}", file=sys.stderr)
+        return 96
+    source = args.probe_json
+    if args.check:
+        readme = Path(args.check)
+        try:
+            text = readme.read_text(encoding="utf-8")
+            fresh = limits.replace_section(text, limits.render(caps, source))
+        except (OSError, ValueError) as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 96
+        if fresh != text:
+            print(f"stale: {readme} limits differ from {source}; run --write", file=sys.stderr)
+            return 5
+        print(f"fresh: {readme} limits match {source}")
+        return 0
+    if args.write:
+        try:
+            changed = limits.write_readme(Path(args.write), caps, source)
+        except (OSError, ValueError) as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 96
+        print(f"{'updated' if changed else 'unchanged'}: {args.write}")
+        return 0
+    print(limits.render(caps, source))
+    return 0
+
+
 def _cmd_probe(args: argparse.Namespace) -> int:
     # A completed probe returns 0 even when FS is unavailable: "available" is
     # measured data in the payload, not a verdict on the command.
@@ -476,6 +510,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--deep", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=_cmd_probe)
+
+    p = sub.add_parser("limits", help="README limits generated from a probe record (A5.3)")
+    p.add_argument("--probe-json", required=True, help="output of `fskills probe --deep --json`")
+    p.add_argument("--write", metavar="README", help="rewrite this file's marked limits section")
+    p.add_argument("--check", metavar="README", help="exit 5 when this file's section is stale")
+    p.set_defaults(func=_cmd_limits)
 
     p = sub.add_parser("skills", help="inspect registered skills")
     skills_sub = p.add_subparsers(dest="skills_command", required=True, parser_class=_Parser)
