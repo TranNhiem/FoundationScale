@@ -85,3 +85,14 @@ zero-shot cost by ~70%, still just significant. Because this sweep reads Seed-TT
 variant from it is selection on that set. Rule fixed before the r4 result: the chosen variant is the
 one with the smallest zero-shot SIM cost whose held-out SIM gain CI excludes 0; it is then confirmed
 on a set the sweep never read (Seed-TTS test-zh, zero-shot SIM and CER) before SP-5 is called met.
+
+| r4, 3 epochs (run after the rule was fixed) | +1.90 [+0.51, +3.44] | [-1.63, +0.75] | -0.33 [-0.57, -0.08] | **+0.36 [+0.14, +0.58]** |
+
+r4 is no cheaper on zero-shot SIM than r8 and regresses zero-shot WER, so the fixed rule picks **r8**.
+
+**Confirmation on Seed-TTS test-zh** (2,020 rows, never read by the sweep), r8 LoRA vs base VoxCPM2:
+SIM 79.24 vs 79.22, paired diff [-0.11, +0.15]; CER 0.954 vs 0.946, paired diff [-0.08, +0.10].
+No zero-shot loss on the independent set. **SP-5 verdict:** with LoRA rank 8, speaker similarity on
+the 8 fine-tuned speakers rises +2.49 [+0.95, +4.14] with no WER loss, and zero-shot similarity and
+intelligibility are unchanged on the confirmation set. The one residual cost is on English zero-shot,
+the language of the fine-tuned speakers and the set used for selection: SIM -0.28 [-0.53, -0.03].
