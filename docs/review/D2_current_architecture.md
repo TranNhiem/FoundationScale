@@ -96,7 +96,7 @@ The census reports counts per importing area, not unique dependencies or a file-
 
 ```mermaid
 flowchart TB
-  TESTS["tests/<br/>307 Python files / 135,326 LOC"]
+  TESTS["tests/<br/>308 Python files / 135,498 LOC"]
   TOOLS["tools/<br/>32 Python files / 10,192 LOC"]
   SRC["src/ as importer<br/>175 Python files / 102,029 LOC"]
 
