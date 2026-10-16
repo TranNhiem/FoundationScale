@@ -25,7 +25,7 @@ system prompt from `src/models/naive.py`) -> text. Per-row ASR and LLM latency g
 | IFEval | final **79.7** (strict-prompt 75.1, loose-instruction 84.1) | 345 | 0 | 2.20 | 21.58 |
 | AdvBench | refusal rate **99.8%** | 520 | 0 | 0.84 | 4.88 |
 | BBH | acc **88.3** | 1,000 | 0 | 2.91 | 24.39 |
-| MMSU | not finished: the run was stopped when its GPUs were released | 3,074 | - | - | - |
+| MMSU | acc **70.5** (unparsable answers 1.4%) | 3,074 | 0 | 3.46 | 15.40 |
 
 Bugs found while building it, each one a silent wrong result: the local Qwen3-4B weights folder
 was empty (downloaded); ASR features were not cast to the model's bf16; transformers 5.x returns a
@@ -34,6 +34,10 @@ discarded; `max_new_tokens` was ignored (upstream's time-to-first-token measurem
 After these runs the generation loop was made resumable (per-row progress file), because the
 interrupted MMSU run lost 8 hours of generation; the loop's outputs are unchanged and the resume
 path is unit-tested (failed and missing rows are re-run, finished rows reused, order kept).
+The MMSU rerun (2026-10-15/16) resumed from its progress file and was finished on two GPUs with
+`--rows`: a second GPU took rows 2420-3074 into its own progress file, and a final pass merged both,
+generated nothing missing, and scored all 3,074 rows. Qwen3-Omni (O1) leads the cascade on MMSU by
+6.3 points (76.8 vs 70.5).
 
 ## O1: Qwen3-Omni-30B-A3B-Instruct (2026-10-13/14)
 
