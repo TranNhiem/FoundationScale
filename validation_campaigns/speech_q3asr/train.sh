@@ -10,7 +10,7 @@ ENROOT_DATA_PATH=$CLUSTER_HOME/.local/share/enroot enroot start -e PYTHONNOUSERS
   $CLUSTER_HOME/envs/hf-cand-519/bin/python -m torch.distributed.run --standalone --nproc_per_node $N -m foundationscale.train \
   --model ${MODEL:-$CLUSTER_HOME/pretraining_weights/Speech-Models/Qwen3-ASR-1.7B-hf} \
   --dataset $CLUSTER_HOME/datasets/speech/manifests/earnings_train6000.jsonl \
-  --output-dir $O/out --max-steps $STEPS --per-device-batch-size 8 --learning-rate 1e-5 --max-sequence-length 1024 \
+  --output-dir $O/out --max-steps $STEPS --per-device-batch-size ${BS:-8} --learning-rate 1e-5 --max-sequence-length 1024 \
   --precision bf16 --dp $N --nodes 1 --gpus-per-node $N --profile-name local-single-node --logging-steps 10 \
   --save-interval 250 --dataloader-num-workers 0 --seed 0 > $O/log.txt 2>&1
 echo "exit=$?" >> $O/log.txt
