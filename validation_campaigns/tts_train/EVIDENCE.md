@@ -69,3 +69,19 @@ Training on 8 speakers instead of 1 does not remove the zero-shot similarity cos
 LoRA as an adapter loaded only for the fine-tuned voices (zero-shot requests use the base weights, so
 their scores are T1's by construction). Next lever to test: whether a lower LoRA rank or fewer steps
 keeps the held-out gain while shrinking the zero-shot cost.
+
+### SP-5 sweep: LoRA rank vs the zero-shot cost (2026-10-17)
+
+Same data, evaluation and paired bootstraps (`run_sp5.sh` with `RUN`/`RANK`/`EPOCHS`; alpha = rank).
+
+| variant | held-out SIM gain (n=160) | held-out WER diff | zero-shot SIM diff (n=1,088) | zero-shot WER diff |
+|---|---|---|---|---|
+| r32, 3 epochs (above) | +3.05 [+1.59, +4.58] | [-1.77, +0.54] | -0.95 [-1.19, -0.70] | [-0.23, +0.34] |
+| **r8, 3 epochs** | **+2.49 [+0.95, +4.14]** | [-1.78, +0.46] | **-0.28 [-0.53, -0.03]** | [-0.20, +0.16] |
+| r32, 1 epoch | +1.18 [-0.32, +2.79] | [-1.32, +1.15] | -0.47 [-0.71, -0.22] | [-0.26, +0.08] |
+
+Rank, not training length, sets the trade-off: r8 keeps most of the speaker gain and cuts the
+zero-shot cost by ~70%, still just significant. Because this sweep reads Seed-TTS test-en, picking a
+variant from it is selection on that set. Rule fixed before the r4 result: the chosen variant is the
+one with the smallest zero-shot SIM cost whose held-out SIM gain CI excludes 0; it is then confirmed
+on a set the sweep never read (Seed-TTS test-zh, zero-shot SIM and CER) before SP-5 is called met.
