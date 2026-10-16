@@ -125,6 +125,12 @@ PENDING_ENROLMENT: dict[str, str] = {
         "file transfer): line-covered by tests/agentic_rl/test_sandbox_enroot.py and run on a "
         "GB200 tray, but no mutation row yet proves a dropped containment check is caught."
     ),
+    "src/foundationscale/agentic_rl/sandbox/egress_proxy.py": (
+        "per-sandbox egress proxy (CONNECT + absolute-URI HTTP, allowlist / public / no-network "
+        "policy re-read per connection, fails closed): line-covered by "
+        "tests/agentic_rl/test_sandbox_egress_proxy.py and run live in isolated GB200 sandboxes, "
+        "but no mutation row yet."
+    ),
     "src/foundationscale/agentic_rl/sandbox/mini_swe_env.py": (
         "mini-SWE-agent execution environment over enroot sandboxes: line-covered by "
         "tests/agentic_rl/test_sandbox_mini_swe_env.py and run end to end on a GB200 tray, but no "
@@ -759,6 +765,14 @@ PENDING_ENROLMENT: dict[str, str] = {
 }
 
 OUT_OF_SCOPE: dict[str, str] = {
+    "src/foundationscale/capability_manifest.py": (
+        "A5.2 declaration-only list (the video.decode_backends entry) with no logic to mutate; "
+        "its verify callable is the measurement, run by tests/test_capability_manifests.py"
+    ),
+    "src/foundationscale/agentic_rl/capability_manifest.py": (
+        "A5.2 declaration-only list (the agentic_rl.env_backends entry) with no logic to mutate; "
+        "the probe measures available_env_backends rather than trusting it"
+    ),
     "src/foundationscale/gates/fixtures.py": (
         "builds deterministic synthetic expert populations consumed by gate controls, so "
         "mutating it only perturbs the controls themselves"

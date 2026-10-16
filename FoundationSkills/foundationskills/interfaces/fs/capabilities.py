@@ -55,6 +55,9 @@ class FSCapabilities:
     # measured|unmeasured. A value is only what this probe measured here; anything it could not
     # measure is unmeasured with the reason, never inferred from a module or package name.
     probe_keys: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # A5.2 rows of FS's self-declared capability manifests, each verified by its own measurement
+    # (interfaces.fs.manifest): status verified | contradicted | unmeasured.
+    manifest: list[dict[str, Any]] = field(default_factory=list)
     notes: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
 
@@ -70,6 +73,8 @@ class FSCapabilities:
             # probe() always fills every A5.1 key; only a hand-built report (fixtures, pre-A5.1
             # reports) has none, and it serializes as before: evidence hash-bound to it stays valid
             del data["probe_keys"]
+        if not self.manifest:  # same rule as probe_keys: hand-built reports serialize as before
+            del data["manifest"]
         return data
 
     def check(
@@ -309,6 +314,16 @@ def _probe_megatron_key() -> dict[str, Any]:
              "megatron_bridge": _has_module("megatron.bridge")}
     missing = [name for name, present in value.items() if not present]
     return _key(_MEASURED, value, f"not importable here: {', '.join(missing)}" if missing else "")
+
+
+def _probe_manifest(errors: list[str]) -> list[dict[str, Any]]:
+    try:
+        from foundationskills.interfaces.fs import manifest  # noqa: PLC0415
+
+        return manifest.read()
+    except Exception as exc:  # read() never raises by contract; recorded if it ever does
+        errors.append(f"manifest probe failed: {type(exc).__name__}: {exc}")
+        return []
 
 
 def _probe_keys(errors: list[str]) -> dict[str, dict[str, Any]]:
@@ -577,6 +592,7 @@ def probe(deep: bool = False, python: str | None = None) -> FSCapabilities:
     flags, objectives = _probe_cli(notes, errors)
     sharding = _probe_sharding(errors)
     probe_keys = _probe_keys(errors)
+    manifest_rows = _probe_manifest(errors)
     backends = _probe_backends(sharding, probe_keys["megatron_bridge"])
     executed_axes, refused_axes, axes_measured = _probe_axes(deep, python, notes)
 
@@ -634,6 +650,7 @@ def probe(deep: bool = False, python: str | None = None) -> FSCapabilities:
         rl_adapter_support=rl_adapter_support,
         pref_adapter_support=pref_adapter_support,
         probe_keys=probe_keys,
+        manifest=manifest_rows,
         notes=tuple(notes),
         errors=tuple(errors),
     )

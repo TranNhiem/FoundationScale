@@ -64,6 +64,21 @@ def _execute(skill_name: str, request: dict[str, Any], workdir: str) -> int:
     return int(result.exit_code)
 
 
+def _cmd_manifest(args: argparse.Namespace) -> int:
+    from foundationskills.interfaces.fs import manifest
+
+    rows = manifest.read()
+    if args.json:
+        print(json.dumps(rows, sort_keys=True))
+    else:
+        for row in rows:
+            note = f"  ({row['reason']})" if row["reason"] else ""
+            print(f"{row['status']:12} {row['key']}: measured {row['measured']!r}{note}")
+        if not rows:
+            print("unmeasured: FoundationScale declares no capability manifest")
+    return manifest.exit_code(rows)
+
+
 def _cmd_limits(args: argparse.Namespace) -> int:
     from foundationskills.interfaces.fs import limits
 
@@ -516,6 +531,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--write", metavar="README", help="rewrite this file's marked limits section")
     p.add_argument("--check", metavar="README", help="exit 5 when this file's section is stale")
     p.set_defaults(func=_cmd_limits)
+
+    p = sub.add_parser("manifest", help="FS self-declared capability manifests (A5.2)")
+    manifest_sub = p.add_subparsers(dest="manifest_command", required=True, parser_class=_Parser)
+    p_check = manifest_sub.add_parser("check", help="verify every declared entry; exit 0/5/95")
+    p_check.add_argument("--json", action="store_true")
+    p_check.set_defaults(func=_cmd_manifest)
 
     p = sub.add_parser("skills", help="inspect registered skills")
     skills_sub = p.add_subparsers(dest="skills_command", required=True, parser_class=_Parser)

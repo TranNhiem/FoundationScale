@@ -65,8 +65,27 @@ fs_launch_spec ─ fskills launch (user-confirmed hash) ─▶ FoundationScale r
 | RL reward kinds | FS's own gold reader given a letter and free-form golds |
 | RL checkpoint persistence | the `RLTrainer` source |
 | Model families | `foundationscale.families.registry` |
+| Agentic RL, speech, video frame budget, SFT label mask, Megatron lane (A5.1) | `probe_keys`: import checks, `find_spec`, and a behavioural run of `assistant_label_mask` on a synthetic batch; each key is `measured` or `unmeasured` with a reason |
+| Anything an FS module declares (A5.2) | `manifest`: FS's self-declared capability manifests, each entry verified by its own measurement (below) |
 
 `FSCapabilities.check(stage, ...)` returns `None` or `missing: <what>`. The planner and the emitters mark stages and specs `executable: false`, with that string as the reason.
+
+**Declaring a capability from FoundationScale (A5.2, `interfaces/fs/manifest.py`).** A module adds
+`capability_manifest.py` next to its code, with `MANIFEST = [...]`. Each entry has:
+- `key`, unique and dotted;
+- `declared`, what the module claims;
+- `verify`, a zero-arg `"module:callable"` that **measures** it;
+- `compare`: `equal`, `subset` (measured within declared, non-empty) or `superset` (measured covers declared).
+
+The probe finds these files under `foundationscale.__path__`, and also through the `foundationscale.capabilities` entry-point
+group when FS is installed. It runs each `verify` and reports the entry as one of:
+- `verified`;
+- `contradicted`: the measured value is what gets reported;
+- `unmeasured`: no verify, it raised, or the entry is malformed. Never a pass.
+
+`fskills manifest check` exits 95 if any entry is unmeasured, otherwise 5 if any is contradicted, otherwise 0. A new module is
+picked up with no FoundationSkills edit. Examples: `src/foundationscale/capability_manifest.py`,
+`src/foundationscale/agentic_rl/capability_manifest.py`.
 
 ## 5. Knowledge as data (`skills/training/knowledge/`, `skills/data_engine/*.yaml`)
 
