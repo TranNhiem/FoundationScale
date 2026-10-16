@@ -1373,8 +1373,8 @@
             "qwen_xml"
           ],
           "reward_handles": {
-            "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
-            "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+            "abc2midi_bin": "/bin/sh",
+            "tasks_path": "/etc/hosts"
           },
           "reward_kinds": [
             "music"
@@ -1404,8 +1404,8 @@
               "qwen_xml"
             ],
             "reward_handles": {
-              "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
-              "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+              "abc2midi_bin": "/bin/sh",
+              "tasks_path": "/etc/hosts"
             },
             "reward_kinds": [
               "music"
@@ -1443,12 +1443,12 @@
                 "model_path": "/mnt/models/Qwen2.5-1.5B-Instruct"
               },
               "reward": {
-                "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
+                "abc2midi_bin": "/bin/sh",
                 "kind": "music"
               },
               "rollout": {
                 "group_size": 2,
-                "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py",
+                "tasks_path": "/etc/hosts",
                 "tasks_per_step": 1
               },
               "runtime": {
@@ -1503,7 +1503,7 @@
           }
         }
       },
-      "fixture_sha256": "affc75172cacccd5bd42db4e2b8b57b706627632c92a877fd4e9ed7edddbbdf9",
+      "fixture_sha256": "1f362ab9d723c280802bcfcc885c4feee2bf245d388254f644f956751cf1a92d",
       "expected_behavior": [
         "Identifies the problem: algorithm/engine/env backend/reward kind/parser not probed: the agentic plan names one the declared runtime's probe does not measure (a missing or failed probe field is UNMEASURED, never assumed)",
         "Refuses before doing any work (status REFUSED, nothing written) instead of running",
@@ -1545,11 +1545,11 @@
         },
         {
           "path": "agentic_caps.reward_handles.abc2midi_bin",
-          "value": "/home/hhri-ai/hh28144/envs/bench/bin/python"
+          "value": "/bin/sh"
         },
         {
           "path": "agentic_caps.reward_handles.tasks_path",
-          "value": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+          "value": "/etc/hosts"
         },
         {
           "path": "agentic_caps.reward_kinds[0]",
@@ -1564,7 +1564,7 @@
           "value": "enroot"
         }
       ],
-      "question": "My probe of the installed FoundationScale came back measured=true with fs_version=\"fixture\", and it reported algorithms[0]=\"agentic_grpo\", algorithms[1]=\"agentic_grpo_token_mean\", engines_importable.vllm=true, env_backends[0]=\"local\", parsers[0]=\"qwen_xml\", reward_kinds[0]=\"music\", runtime.container=\"vllmsrv3\", runtime.kind=\"enroot\", multi_gpu=null, and errors=[]. The reward handles it resolved are abc2midi_bin=\"/home/hhri-ai/hh28144/envs/bench/bin/python\" and tasks_path=\"/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py\". I want to plan a \"domain_expert\" run for a \"domain reasoning assistant\" in the \"manufacturing\" domain on a dense 8.0B base model at \"some-model\", targeting \"reasoning\" with preserve_general=true, one 1-node/1-gpu-per-node GB200 setup, and data from file:///data/corpus (local_dir, ~10000000 approx_tokens) with has_instructions=true. The agentic config asks for algorithm \"agentic_grpo_token_mean\", engine kind \"vllm\" with weight_sync_mode \"collective_rpc\", allow_stale_policy=false and env PATH \"/usr/local/bin:/usr/bin:/bin\", env backend \"local\" with allow_unsandboxed=true, harness name \"qwen_xml\" with parser \"regex_v1\", policy model_path \"/mnt/models/Qwen2.5-1.5B-Instruct\", reward kind \"music\" with abc2midi_bin \"/home/hhri-ai/hh28144/envs/bench/bin/python\", rollout group_size 2, tasks_per_step 1 and the same tasks_path above, runtime kind \"enroot\" container \"vllmsrv3\" with mounts [[\"/mnt/models\",\"/mnt/models\"]], sampling max_new_tokens 256 at temperature 1.0, budget max_observation_chars 1024 / max_response_tokens 256 / step_limit 4, and trainer lr 0.0001, max_steps 3, sharding \"none\". Given all of that, what training_plan do you produce and which stages run as-is versus needing a named capability?",
+      "question": "I'm planning against a measured agentic capability probe and want the training_plan back, so here's what I saw: agentic_caps.algorithms[0] = \"agentic_grpo\", agentic_caps.algorithms[1] = \"agentic_grpo_token_mean\", agentic_caps.engines_importable.vllm = true, agentic_caps.env_backends[0] = \"local\", agentic_caps.fs_version = \"fixture\", agentic_caps.measured = true, agentic_caps.multi_gpu = null, and agentic_caps.parsers[0] = \"qwen_xml\". The reward/env handles I observed are agentic_caps.reward_handles.abc2midi_bin = \"/bin/sh\", agentic_caps.reward_handles.tasks_path = \"/etc/hosts\", and agentic_caps.reward_kinds[0] = \"music\", with agentic_caps.runtime.container = \"vllmsrv3\" and agentic_caps.runtime.kind = \"enroot\". The goal_spec is domain \"manufacturing\", goal \"domain_expert\", objective \"domain reasoning assistant\", base_model name_or_path \"some-model\" with arch \"dense\" and size_b 8.0, one data source of kind \"local_dir\" at uri \"file:///data/corpus\" with approx_tokens 10000000, data_facts.has_instructions = true, preserve_general = true, target_capabilities [\"reasoning\"], and hardware of 1 node with 1 GPU per node on \"GB200\". The agentic block asks for algorithm \"agentic_grpo_token_mean\", policy model_path \"/mnt/models/Qwen2.5-1.5B-Instruct\", engine kind \"vllm\" with weight_sync_mode \"collective_rpc\", allow_stale_policy = false and env PATH \"/usr/local/bin:/usr/bin:/bin\", env backend \"local\" with allow_unsandboxed = true, harness name \"qwen_xml\" with parser \"regex_v1\", reward kind \"music\" with abc2midi_bin \"/bin/sh\", rollout group_size 2, tasks_per_step 1, tasks_path \"/etc/hosts\", budget max_observation_chars 1024, max_response_tokens 256, step_limit 4, sampling max_new_tokens 256 and temperature 1.0, trainer lr 0.0001, max_steps 3, sharding \"none\", and runtime kind \"enroot\" in container \"vllmsrv3\" with the mount [\"/mnt/models\", \"/mnt/models\"]. Data readiness isn't supplied, so plan off the goal_spec alone — what's the resulting training_plan?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -1594,8 +1594,8 @@
             "qwen_xml"
           ],
           "reward_handles": {
-            "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
-            "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+            "abc2midi_bin": "/bin/sh",
+            "tasks_path": "/etc/hosts"
           },
           "reward_kinds": [
             "music"
@@ -1625,8 +1625,8 @@
               "qwen_xml"
             ],
             "reward_handles": {
-              "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
-              "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+              "abc2midi_bin": "/bin/sh",
+              "tasks_path": "/etc/hosts"
             },
             "reward_kinds": [
               "music"
@@ -1664,12 +1664,12 @@
                 "model_path": "/mnt/models/Qwen2.5-1.5B-Instruct"
               },
               "reward": {
-                "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
+                "abc2midi_bin": "/bin/sh",
                 "kind": "music"
               },
               "rollout": {
                 "group_size": 2,
-                "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py",
+                "tasks_path": "/etc/hosts",
                 "tasks_per_step": 1
               },
               "runtime": {
@@ -1724,7 +1724,7 @@
           }
         }
       },
-      "fixture_sha256": "abcb67bc525af30b4e03a42db879d722101e7d45c6b8bf81311697c64ebc98ae",
+      "fixture_sha256": "fe75e2b0cbd610ee67deb3547392fdc8a4a7e8bdae86ac9573e1bbeaea77c0c3",
       "expected_behavior": [
         "Identifies the problem: multi-GPU claimed while agentic multi-GPU is unmeasured (more than 1 GPU, or trainer.sharding != 'none')",
         "Refuses before doing any work (status REFUSED, nothing written) instead of running",
@@ -1766,11 +1766,11 @@
         },
         {
           "path": "agentic_caps.reward_handles.abc2midi_bin",
-          "value": "/home/hhri-ai/hh28144/envs/bench/bin/python"
+          "value": "/bin/sh"
         },
         {
           "path": "agentic_caps.reward_handles.tasks_path",
-          "value": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+          "value": "/etc/hosts"
         },
         {
           "path": "agentic_caps.reward_kinds[0]",
@@ -1785,7 +1785,7 @@
           "value": "enroot"
         }
       ],
-      "question": "I ran the agentic capability probe and got: algorithms[0] = \"agentic_grpo\", algorithms[1] = \"agentic_grpo_token_mean\", engines_importable.vllm = true, env_backends[0] = \"local\", fs_version = \"fixture\", measured = true, multi_gpu = null, parsers[0] = \"qwen_xml\", reward_handles.abc2midi_bin = \"/home/hhri-ai/hh28144/envs/bench/bin/python\", reward_handles.tasks_path = \"/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py\", reward_kinds[0] = \"music\", runtime.container = \"vllmsrv3\", and runtime.kind = \"enroot\". My goal_spec is a domain_expert run for a \"domain reasoning assistant\" in manufacturing targeting reasoning, with base_model some-model (dense, 8.0B), preserve_general = true, data from file:///data/corpus (local_dir, approx_tokens 10000000) with has_instructions = true, and hardware of 1 node x 1 GPU (GB200). The agentic config asks for algorithm agentic_grpo_token_mean, policy /mnt/models/Qwen2.5-1.5B-Instruct, engine vllm with weight_sync_mode collective_rpc and allow_stale_policy = false (PATH /usr/local/bin:/usr/bin:/bin), env backend local with allow_unsandboxed = true, harness/parser qwen_xml, rollout tasks_path = \"/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py\" with group_size 2 and tasks_per_step 1, reward kind music with abc2midi_bin = \"/home/hhri-ai/hh28144/envs/bench/bin/python\", budget step_limit 4 / max_observation_chars 1024 / max_response_tokens 256, sampling max_new_tokens 256 and temperature 1.0, and trainer lr 1e-06, max_steps 3, sharding fsdp, all inside enroot container vllmsrv3 with the mount [\"/mnt/models\", \"/mnt/models\"]. What does the training_plan come out as?",
+      "question": "I've got a goal_spec for a manufacturing \"domain_expert\" / \"domain reasoning assistant\" run on 1 node × 1 GPU of GB200, base model 8.0B dense at name_or_path \"some-model\" (policy model_path \"/mnt/models/Qwen2.5-1.5B-Instruct\"), preserve_general = true, target_capabilities [\"reasoning\"], and one data source of kind local_dir at uri \"file:///data/corpus\" with approx_tokens 10000000 and data_facts.has_instructions = true. The agentic block specifies algorithm \"agentic_grpo_token_mean\", engine kind \"vllm\" with weight_sync_mode \"collective_rpc\", allow_stale_policy false and env PATH \"/usr/local/bin:/usr/bin:/bin\", env backend \"local\" with allow_unsandboxed true, harness/parser \"qwen_xml\", reward kind \"music\" with abc2midi_bin \"/bin/sh\", rollout group_size 2 / tasks_per_step 1 / tasks_path \"/etc/hosts\", budget max_observation_chars 1024 / max_response_tokens 256 / step_limit 4, sampling temperature 1.0 and max_new_tokens 256, trainer lr 1e-06 / max_steps 3 / sharding \"fsdp\", and runtime kind \"enroot\" with container \"vllmsrv3\" and mounts [[\"/mnt/models\", \"/mnt/models\"]]. From the probe I observed: agentic_caps.algorithms[0] = \"agentic_grpo\", agentic_caps.algorithms[1] = \"agentic_grpo_token_mean\", agentic_caps.engines_importable.vllm = true, agentic_caps.env_backends[0] = \"local\", agentic_caps.fs_version = \"fixture\", agentic_caps.measured = true, agentic_caps.multi_gpu = null, agentic_caps.parsers[0] = \"qwen_xml\", agentic_caps.reward_handles.abc2midi_bin = \"/bin/sh\", agentic_caps.reward_handles.tasks_path = \"/etc/hosts\", agentic_caps.reward_kinds[0] = \"music\", agentic_caps.runtime.container = \"vllmsrv3\", and agentic_caps.runtime.kind = \"enroot\". What training_plan do I get out of this?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -1888,7 +1888,7 @@
               },
               "rollout": {
                 "group_size": 2,
-                "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py",
+                "tasks_path": "/etc/hosts",
                 "tasks_per_step": 1
               },
               "runtime": {
@@ -1943,7 +1943,7 @@
           }
         }
       },
-      "fixture_sha256": "79f20bb70d6d45b816d9e163a15d70dd6eaf0a36ac73ddb3cf832aacc7283a14",
+      "fixture_sha256": "60ec460db1fce97d2e13cff145702fbad0911920224e2d1cf8bf064363faf587",
       "expected_behavior": [
         "Identifies the problem: reward handle / tasks file / env declaration missing (music: abc2midi_bin present and executable; rollout.tasks_path readable; the env backend named, allow_unsandboxed for one at isolation none)",
         "Refuses before doing any work (status REFUSED, nothing written) instead of running",
@@ -2000,7 +2000,7 @@
           "value": "enroot"
         }
       ],
-      "question": "I'm planning a domain_expert run for a manufacturing domain reasoning assistant on the dense 8.0B \"some-model\", 1 node × 1 GB200, preserving general ability, targeting reasoning, with a file:///data/corpus local_dir source of ~10,000,000 tokens and has_instructions = true. My agentic setup is agentic_grpo_token_mean with the vllm engine (weight_sync_mode = collective_rpc, allow_stale_policy = false, env PATH = /usr/local/bin:/usr/bin:/bin), local env backend with allow_unsandboxed = true, qwen_xml harness/parser, policy /mnt/models/Qwen2.5-1.5B-Instruct, music reward with abc2midi_bin = /usr/bin/abc2midi, rollout group_size = 2 and tasks_per_step = 1 with tasks_path = /home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py, budget of 4 steps / 256 response tokens / 1024 observation chars, sampling temperature = 1.0 and max_new_tokens = 256, and trainer lr = 0.0001, max_steps = 3, sharding = none, running in enroot container vllmsrv3 with /mnt/models mounted to /mnt/models. From my probe I observe: agentic_caps.algorithms[0] = \"agentic_grpo\", agentic_caps.algorithms[1] = \"agentic_grpo_token_mean\", agentic_caps.engines_importable.vllm = true, agentic_caps.env_backends[0] = \"local\", agentic_caps.fs_version = \"fixture\", agentic_caps.measured = true, agentic_caps.multi_gpu = null, agentic_caps.parsers[0] = \"qwen_xml\", agentic_caps.reward_handles.abc2midi_bin = null, agentic_caps.reward_kinds[0] = \"music\", agentic_caps.runtime.container = \"vllmsrv3\", and agentic_caps.runtime.kind = \"enroot\". What training_plan does this produce, with each stage either executable on this FoundationScale or named with the exact missing capability?",
+      "question": "I probed my FoundationScale install and saw: agentic_caps.algorithms[0] = \"agentic_grpo\", algorithms[1] = \"agentic_grpo_token_mean\", engines_importable.vllm = true, env_backends[0] = \"local\", fs_version = \"fixture\", measured = true, multi_gpu = null, parsers[0] = \"qwen_xml\", reward_handles.abc2midi_bin = null, reward_kinds[0] = \"music\", runtime.container = \"vllmsrv3\", and runtime.kind = \"enroot\". My goal_spec targets a domain_expert domain reasoning assistant for manufacturing on 1 node × 1 GB200 with an 8.0B dense \"some-model\", preserve_general = true, target_capabilities = [\"reasoning\"], one local_dir source file:///data/corpus with approx_tokens = 10000000, and data_facts.has_instructions = true. The agentic block asks for agentic_grpo_token_mean with policy model_path = /mnt/models/Qwen2.5-1.5B-Instruct, vllm engine with weight_sync_mode = \"collective_rpc\", allow_stale_policy = false, env PATH = /usr/local/bin:/usr/bin:/bin, local env backend with allow_unsandboxed = true, qwen_xml harness/parser, music reward with abc2midi_bin = /usr/bin/abc2midi, rollout group_size = 2, tasks_per_step = 1, tasks_path = /etc/hosts, budget step_limit = 4 / max_response_tokens = 256 / max_observation_chars = 1024, sampling max_new_tokens = 256 at temperature = 1.0, trainer lr = 0.0001, max_steps = 3, sharding = \"none\", and runtime enroot container vllmsrv3 with mounts [[\"/mnt/models\", \"/mnt/models\"]]. What does training.planner produce for this goal_spec against those observed capabilities?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -2030,8 +2030,8 @@
             "qwen_xml"
           ],
           "reward_handles": {
-            "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
-            "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+            "abc2midi_bin": "/bin/sh",
+            "tasks_path": "/etc/hosts"
           },
           "reward_kinds": [
             "music"
@@ -2061,8 +2061,8 @@
               "qwen_xml"
             ],
             "reward_handles": {
-              "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
-              "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+              "abc2midi_bin": "/bin/sh",
+              "tasks_path": "/etc/hosts"
             },
             "reward_kinds": [
               "music"
@@ -2100,12 +2100,12 @@
                 "model_path": "/mnt/models/Qwen2.5-1.5B-Instruct"
               },
               "reward": {
-                "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
+                "abc2midi_bin": "/bin/sh",
                 "kind": "music"
               },
               "rollout": {
                 "group_size": 2,
-                "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py",
+                "tasks_path": "/etc/hosts",
                 "tasks_per_step": 1
               },
               "runtime": {
@@ -2160,7 +2160,7 @@
           }
         }
       },
-      "fixture_sha256": "8b2e8dfec4f53fce8514ef495a6e5b9a8aced58a8a1a888618771c2fd6695d86",
+      "fixture_sha256": "f3c90db55438f12ddbf3ef36ba1dc3836f8ada459f02f050f4aefc3f1f613932",
       "expected_behavior": [
         "Identifies the problem: >1 step with neither weight sync nor stale-policy opt-in (max_steps > 1 without engine weight sync and without declared engine.allow_stale_policy)",
         "Refuses before doing any work (status REFUSED, nothing written) instead of running",
@@ -2202,11 +2202,11 @@
         },
         {
           "path": "agentic_caps.reward_handles.abc2midi_bin",
-          "value": "/home/hhri-ai/hh28144/envs/bench/bin/python"
+          "value": "/bin/sh"
         },
         {
           "path": "agentic_caps.reward_handles.tasks_path",
-          "value": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+          "value": "/etc/hosts"
         },
         {
           "path": "agentic_caps.reward_kinds[0]",
@@ -2221,7 +2221,7 @@
           "value": "enroot"
         }
       ],
-      "question": "I've probed my FoundationScale install and here's exactly what I measured: agentic_caps.algorithms[0] = \"agentic_grpo\", agentic_caps.algorithms[1] = \"agentic_grpo_token_mean\", agentic_caps.engines_importable.vllm = true, agentic_caps.env_backends[0] = \"local\", agentic_caps.fs_version = \"fixture\", agentic_caps.measured = true, and agentic_caps.multi_gpu = null. I also see agentic_caps.parsers[0] = \"qwen_xml\", agentic_caps.reward_kinds[0] = \"music\", agentic_caps.reward_handles.abc2midi_bin = \"/home/hhri-ai/hh28144/envs/bench/bin/python\", and agentic_caps.reward_handles.tasks_path = \"/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py\", with agentic_caps.runtime.container = \"vllmsrv3\" and agentic_caps.runtime.kind = \"enroot\". Now please turn my goal_spec — domain \"manufacturing\", goal \"domain_expert\", objective \"domain reasoning assistant\", base model \"some-model\" (dense, 8.0B) on 1 node × 1 GB200, training toward \"reasoning\" while preserving general capability, plus the agentic config using agentic_grpo_token_mean, qwen_xml, the music reward, local env backend, and the vllm engine — into a training_plan. The plan's stages should either be executable on what I've just shown is installed, or named with the exact missing capability. What's the resulting training_plan?",
+      "question": "I ran the agentic capability probe on our FoundationScale install and here's exactly what I saw: algorithms[0] = \"agentic_grpo\", algorithms[1] = \"agentic_grpo_token_mean\", engines_importable.vllm = true, env_backends[0] = \"local\", fs_version = \"fixture\", measured = true, multi_gpu = null, parsers[0] = \"qwen_xml\", reward_handles.abc2midi_bin = \"/bin/sh\", reward_handles.tasks_path = \"/etc/hosts\", reward_kinds[0] = \"music\", runtime.container = \"vllmsrv3\", and runtime.kind = \"enroot\". The goal I want to plan against is a manufacturing \"domain reasoning assistant\" / domain_expert on an 8.0B dense \"some-model\" with reasoning as the target capability and preserve_general = true, on 1 node × 1 GPU (GB200), with a local_dir source at file:///data/corpus (~10,000,000 approx_tokens) and has_instructions = true. The agentic block targets /mnt/models/Qwen2.5-1.5B-Instruct, algorithm agentic_grpo_token_mean, vllm engine (allow_stale_policy = false, weight_sync_mode = null, env PATH = /usr/local/bin:/usr/bin:/bin), local env backend with allow_unsandboxed = true, qwen_xml harness/parser, music reward with abc2midi_bin = /bin/sh, rollout group_size = 2, tasks_per_step = 1, tasks_path = /etc/hosts, budget max_observation_chars = 1024 / max_response_tokens = 256 / step_limit = 4, sampling max_new_tokens = 256 at temperature = 1.0, trainer lr = 1e-06, max_steps = 3, sharding = \"none\", and an enroot runtime with container vllmsrv3 mounting /mnt/models to /mnt/models. What training_plan does this produce — which stages are executable as-is and which are named with their exact missing capability?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -2251,8 +2251,8 @@
             "qwen_xml"
           ],
           "reward_handles": {
-            "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
-            "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+            "abc2midi_bin": "/bin/sh",
+            "tasks_path": "/etc/hosts"
           },
           "reward_kinds": [
             "music"
@@ -2282,8 +2282,8 @@
               "qwen_xml"
             ],
             "reward_handles": {
-              "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
-              "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+              "abc2midi_bin": "/bin/sh",
+              "tasks_path": "/etc/hosts"
             },
             "reward_kinds": [
               "music"
@@ -2318,12 +2318,12 @@
                 "model_path": "/mnt/models/Qwen2.5-1.5B-Instruct"
               },
               "reward": {
-                "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
+                "abc2midi_bin": "/bin/sh",
                 "kind": "music"
               },
               "rollout": {
                 "group_size": 2,
-                "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py",
+                "tasks_path": "/etc/hosts",
                 "tasks_per_step": 1
               },
               "runtime": {
@@ -2378,7 +2378,7 @@
           }
         }
       },
-      "fixture_sha256": "25b3c02bf841024819345a0924e7c7b3350b3a98dd7286e2cbe48323fb5586ce",
+      "fixture_sha256": "97ad59631767065d4f008f6374fa6c0f2ffb795ac19436c1f502d4562c54eb50",
       "expected_behavior": [
         "Identifies the problem: engine env cannot start the server (engine.env must be an explicit declaration: FS never merges os.environ)",
         "Refuses before doing any work (status REFUSED, nothing written) instead of running",
@@ -2420,11 +2420,11 @@
         },
         {
           "path": "agentic_caps.reward_handles.abc2midi_bin",
-          "value": "/home/hhri-ai/hh28144/envs/bench/bin/python"
+          "value": "/bin/sh"
         },
         {
           "path": "agentic_caps.reward_handles.tasks_path",
-          "value": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+          "value": "/etc/hosts"
         },
         {
           "path": "agentic_caps.reward_kinds[0]",
@@ -2439,7 +2439,7 @@
           "value": "enroot"
         }
       ],
-      "question": "I want a training_plan from this goal_spec using training.planner: domain \"manufacturing\", goal \"domain_expert\", objective \"domain reasoning assistant\", target capability \"reasoning\", preserve_general true, base model \"some-model\" (dense, 8.0B), one local_dir source at file:///data/corpus with ~10,000,000 approx_tokens, and data_facts.has_instructions true, on 1 node × 1 GB200 GPU. The agentic config I want planned is algorithm \"agentic_grpo_token_mean\", policy model_path /mnt/models/Qwen2.5-1.5B-Instruct, engine kind \"vllm\" with weight_sync_mode \"collective_rpc\", harness/parser \"qwen_xml\", env backend \"local\" with allow_unsandboxed true, reward kind \"music\" with abc2midi_bin \"/home/hhri-ai/hh28144/envs/bench/bin/python\", rollout tasks_path \"/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py\" with tasks_per_step 1 and group_size 2, sampling max_new_tokens 256 and temperature 1.0, budget max_observation_chars 1024 / max_response_tokens 256 / step_limit 4, trainer lr 0.0001, max_steps 3, sharding \"none\", and runtime kind \"enroot\" in container \"vllmsrv3\" with the mount /mnt/models:/mnt/models. From the probe I ran, agentic_caps.algorithms[0] = \"agentic_grpo\" and agentic_caps.algorithms[1] = \"agentic_grpo_token_mean\", agentic_caps.engines_importable.vllm = true, agentic_caps.env_backends[0] = \"local\", agentic_caps.fs_version = \"fixture\", agentic_caps.measured = true, agentic_caps.multi_gpu = null, agentic_caps.parsers[0] = \"qwen_xml\", agentic_caps.reward_handles.abc2midi_bin = \"/home/hhri-ai/hh28144/envs/bench/bin/python\", agentic_caps.reward_handles.tasks_path = \"/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py\", agentic_caps.reward_kinds[0] = \"music\", agentic_caps.runtime.container = \"vllmsrv3\", and agentic_caps.runtime.kind = \"enroot\". What is the resulting training_plan?",
+      "question": "I ran the agentic capability probe and here's what I measured: algorithms[0] = \"agentic_grpo\", algorithms[1] = \"agentic_grpo_token_mean\", engines_importable.vllm = true, env_backends[0] = \"local\", fs_version = \"fixture\", measured = true, multi_gpu = null, parsers[0] = \"qwen_xml\", reward_handles.abc2midi_bin = \"/bin/sh\", reward_handles.tasks_path = \"/etc/hosts\", reward_kinds[0] = \"music\", runtime.container = \"vllmsrv3\", and runtime.kind = \"enroot\". My goal_spec is a domain_expert run for a manufacturing domain reasoning assistant on an 8.0B dense \"some-model\" base, targeting reasoning with preserve_general = true, on 1 node x 1 GB200 GPU, with a local_dir source at file:///data/corpus (~10,000,000 tokens) and has_instructions = true. The agentic config uses algorithm \"agentic_grpo_token_mean\", policy model_path \"/mnt/models/Qwen2.5-1.5B-Instruct\", vllm engine with weight_sync_mode \"collective_rpc\", local env with allow_unsandboxed = true, qwen_xml harness/parser, music reward with abc2midi_bin \"/bin/sh\", rollout with group_size 2, tasks_per_step 1, tasks_path \"/etc/hosts\", budget max_observation_chars 1024, max_response_tokens 256, step_limit 4, sampling max_new_tokens 256 and temperature 1.0, trainer lr 0.0001, max_steps 3, sharding \"none\", and runtime enroot container \"vllmsrv3\" mounting /mnt/models to /mnt/models. What training_plan comes out of this?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -3740,8 +3740,8 @@
             "qwen_xml"
           ],
           "reward_handles": {
-            "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
-            "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+            "abc2midi_bin": "/bin/sh",
+            "tasks_path": "/etc/hosts"
           },
           "reward_kinds": [
             "music"
@@ -3786,12 +3786,12 @@
                 "model_path": "/mnt/models/Qwen2.5-1.5B-Instruct"
               },
               "reward": {
-                "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
+                "abc2midi_bin": "/bin/sh",
                 "kind": "music"
               },
               "rollout": {
                 "group_size": 2,
-                "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py",
+                "tasks_path": "/etc/hosts",
                 "tasks_per_step": 1
               },
               "runtime": {
@@ -3898,8 +3898,8 @@
               "qwen_xml"
             ],
             "reward_handles": {
-              "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
-              "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+              "abc2midi_bin": "/bin/sh",
+              "tasks_path": "/etc/hosts"
             },
             "reward_kinds": [
               "music"
@@ -3937,12 +3937,12 @@
                 "model_path": "/mnt/models/Qwen2.5-1.5B-Instruct"
               },
               "reward": {
-                "abc2midi_bin": "/home/hhri-ai/hh28144/envs/bench/bin/python",
+                "abc2midi_bin": "/bin/sh",
                 "kind": "music"
               },
               "rollout": {
                 "group_size": 2,
-                "tasks_path": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py",
+                "tasks_path": "/etc/hosts",
                 "tasks_per_step": 1
               },
               "runtime": {
@@ -3997,7 +3997,7 @@
           }
         }
       },
-      "fixture_sha256": "0d40c815f0a2f30f448d2bb5af66eaa9849e3320e8494a12876a18743e1b2cc2",
+      "fixture_sha256": "07436b6b406f036c7618047d0f4d54c7249db98404c3c87324f18557f1aa9333",
       "expected_behavior": [
         "Identifies the problem: the measured control chosen as the default arm (agentic_grpo_token_mean): handoff note",
         "Reports it as a warning that travels with the result, without refusing on this alone",
@@ -4039,11 +4039,11 @@
         },
         {
           "path": "agentic_caps.reward_handles.abc2midi_bin",
-          "value": "/home/hhri-ai/hh28144/envs/bench/bin/python"
+          "value": "/bin/sh"
         },
         {
           "path": "agentic_caps.reward_handles.tasks_path",
-          "value": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+          "value": "/etc/hosts"
         },
         {
           "path": "agentic_caps.reward_kinds[0]",
@@ -4111,7 +4111,7 @@
         },
         {
           "path": "fake_plan.goal.agentic.reward.abc2midi_bin",
-          "value": "/home/hhri-ai/hh28144/envs/bench/bin/python"
+          "value": "/bin/sh"
         },
         {
           "path": "fake_plan.goal.agentic.reward.kind",
@@ -4123,7 +4123,7 @@
         },
         {
           "path": "fake_plan.goal.agentic.rollout.tasks_path",
-          "value": "/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py"
+          "value": "/etc/hosts"
         },
         {
           "path": "fake_plan.goal.agentic.rollout.tasks_per_step",
@@ -4198,7 +4198,7 @@
           "value": "agentic_rl"
         }
       ],
-      "question": "My probe on this box reports agentic_caps.algorithms[0] = \"agentic_grpo\", agentic_caps.algorithms[1] = \"agentic_grpo_token_mean\", agentic_caps.engines_importable.vllm = true, agentic_caps.env_backends[0] = \"local\", agentic_caps.fs_version = \"fixture\", agentic_caps.measured = true, agentic_caps.multi_gpu = null, agentic_caps.parsers[0] = \"qwen_xml\", agentic_caps.reward_handles.abc2midi_bin = \"/home/hhri-ai/hh28144/envs/bench/bin/python\", agentic_caps.reward_handles.tasks_path = \"/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py\", agentic_caps.reward_kinds[0] = \"music\", agentic_caps.runtime.container = \"vllmsrv3\", and agentic_caps.runtime.kind = \"enroot\".\n\nThe plan the planner handed back has goal.agentic.algorithm = \"agentic_grpo_token_mean\", goal.agentic.budget.max_observation_chars = 1024, goal.agentic.budget.max_response_tokens = 256, goal.agentic.budget.step_limit = 4, goal.agentic.engine.allow_stale_policy = false, goal.agentic.engine.env.PATH = \"/usr/local/bin:/usr/bin:/bin\", goal.agentic.engine.kind = \"vllm\", goal.agentic.engine.weight_sync_mode = \"collective_rpc\", goal.agentic.env.allow_unsandboxed = true, goal.agentic.env.backend = \"local\", goal.agentic.harness.name = \"qwen_xml\", goal.agentic.harness.parser = \"qwen_xml\", goal.agentic.policy.model_path = \"/mnt/models/Qwen2.5-1.5B-Instruct\", goal.agentic.reward.abc2midi_bin = \"/home/hhri-ai/hh28144/envs/bench/bin/python\", goal.agentic.reward.kind = \"music\", goal.agentic.rollout.group_size = 2, goal.agentic.rollout.tasks_path = \"/home/hhri-ai/hh28144/Project-Developments/FoundationScale/checkouts/fs-vnext/FoundationSkills/foundationskills/skills/training/skill.py\", goal.agentic.rollout.tasks_per_step = 1, goal.agentic.runtime.container = \"vllmsrv3\", goal.agentic.runtime.kind = \"enroot\", goal.agentic.runtime.mounts[0][0] = \"/mnt/models\", goal.agentic.runtime.mounts[0][1] = \"/mnt/models\", goal.agentic.sampling.max_new_tokens = 256, goal.agentic.sampling.temperature = 1.0, goal.agentic.trainer.lr = 0.0001, goal.agentic.trainer.max_steps = 3, goal.agentic.trainer.sharding = \"none\", goal.hardware.gpu = \"GB200\", and goal.hardware.gpus_per_node = 1.\n\nIts stages[0] is name = \"agentic0\", stage = \"agentic_rl\", algorithm = \"agentic_grpo_token_mean\", data.format = \"agentic_rl\", hparams.max_steps = 3, and method = \"full\".\n\nWhat's the outcome?",
+      "question": "I've run the training.planner skill on my goal_spec and my measured agentic probe, and here's exactly what I see. The probe reports agentic_caps.algorithms[0] = \"agentic_grpo\", algorithms[1] = \"agentic_grpo_token_mean\", engines_importable.vllm = true, env_backends[0] = \"local\", fs_version = \"fixture\", measured = true, multi_gpu = null, parsers[0] = \"qwen_xml\", reward_handles.abc2midi_bin = \"/bin/sh\", reward_handles.tasks_path = \"/etc/hosts\", reward_kinds[0] = \"music\", runtime.container = \"vllmsrv3\", runtime.kind = \"enroot\". The planner's output came back with goal.agentic.algorithm = \"agentic_grpo_token_mean\", budget.max_observation_chars = 1024, budget.max_response_tokens = 256, budget.step_limit = 4, engine.allow_stale_policy = false, engine.env.PATH = \"/usr/local/bin:/usr/bin:/bin\", engine.kind = \"vllm\", engine.weight_sync_mode = \"collective_rpc\", env.allow_unsandboxed = true, env.backend = \"local\", harness.name = \"qwen_xml\", harness.parser = \"qwen_xml\", policy.model_path = \"/mnt/models/Qwen2.5-1.5B-Instruct\", reward.abc2midi_bin = \"/bin/sh\", reward.kind = \"music\", rollout.group_size = 2, rollout.tasks_path = \"/etc/hosts\", rollout.tasks_per_step = 1, runtime.container = \"vllmsrv3\", runtime.kind = \"enroot\", runtime.mounts[0][0] = \"/mnt/models\", runtime.mounts[0][1] = \"/mnt/models\", sampling.max_new_tokens = 256, sampling.temperature = 1.0, trainer.lr = 0.0001, trainer.max_steps = 3, trainer.sharding = \"none\", goal.hardware.gpu = \"GB200\", goal.hardware.gpus_per_node = 1. It also emitted stages[0].algorithm = \"agentic_grpo_token_mean\", stages[0].data.format = \"agentic_rl\", stages[0].hparams.max_steps = 3, stages[0].method = \"full\", stages[0].name = \"agentic0\", stages[0].stage = \"agentic_rl\". Given all of that, what's the outcome — is this training_plan actually executable on my installed FoundationScale, and where does each stage land?",
       "question_model": "mimo-v2.6-pro"
     }
   ]

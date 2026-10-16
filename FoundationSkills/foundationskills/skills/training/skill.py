@@ -46,6 +46,10 @@ from foundationskills.skills.training.planner import (
     vlm_stage_fields,
 )
 
+# POSIX paths present, with identical paths, on every Linux/macOS host (oracle fixtures are hash-bound)
+_PORTABLE_EXECUTABLE = "/bin/sh"
+_PORTABLE_READABLE_FILE = "/etc/hosts"
+
 TRAINING_PLAYBOOK: dict[str, Diagnosis] = {
     "loss_spike": Diagnosis(
         symptom="loss spike mid-run",
@@ -866,10 +870,11 @@ class TrainingPlannerSkill(BaseSkill):
             "harness": {"name": "qwen_xml", "parser": "qwen_xml"},
             "budget": {"step_limit": 4, "max_response_tokens": 256, "max_observation_chars": 1024},
             "sampling": {"temperature": 1.0, "max_new_tokens": 256},
-            # handles that exist on any host running the suite (TR-IN-012 checks the real filesystem):
-            # the interpreter stands in for an executable abc2midi, this module for a readable tasks file
-            "rollout": {"tasks_path": __file__, "tasks_per_step": 1, "group_size": 2},
-            "reward": {"kind": "music", "abc2midi_bin": sys.executable},
+            # handles that exist on any host running the suite (TR-IN-012 checks the real filesystem) AND have the
+            # same path everywhere: these values are hashed into evals/behaviour.json, so sys.executable/__file__
+            # made the oracle cases machine-specific (they failed in any other checkout or interpreter)
+            "rollout": {"tasks_path": _PORTABLE_READABLE_FILE, "tasks_per_step": 1, "group_size": 2},
+            "reward": {"kind": "music", "abc2midi_bin": _PORTABLE_EXECUTABLE},
             "runtime": {"kind": "enroot", "container": "vllmsrv3", "mounts": [["/mnt/models", "/mnt/models"]]},
         }
         agentic_caps = {
@@ -880,7 +885,7 @@ class TrainingPlannerSkill(BaseSkill):
             "env_backends": ["local"],
             "reward_kinds": ["music"],
             "parsers": ["qwen_xml"],
-            "reward_handles": {"abc2midi_bin": sys.executable, "tasks_path": __file__},
+            "reward_handles": {"abc2midi_bin": _PORTABLE_EXECUTABLE, "tasks_path": _PORTABLE_READABLE_FILE},
             "runtime": {"kind": "enroot", "container": "vllmsrv3"},
             "multi_gpu": None,
             "errors": [],
