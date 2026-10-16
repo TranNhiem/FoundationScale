@@ -112,6 +112,17 @@ model on the 2,683-row split (full-FT eval 258 s).
 - `Qwen3-ASR-1.7B` trains on this stack (transformers >= 5.13) but needs cased, punctuated targets, so it is
   outside this tutorial's LibriSpeech recipe; evidence lives in `validation_campaigns/speech_q3asr/EVIDENCE.md`.
 
+## Qwen3-ASR on real-world speech (Earnings-22)
+
+LibriSpeech is read audiobook speech. To show the audio-LLM recipe on harder data, Qwen3-ASR was fully fine-tuned on Earnings-22 earnings calls and tested on 6 calls never seen in training (`ood_earnings223000_conv`, 2,504 rows). Recipe for both sizes: bf16, lr 1e-5, global batch 16, 750 steps on `earnings_train6000`, checkpoint chosen on `earnings_validation1000` before looking at the test set. Scripts and full evidence: [validation_campaigns/speech_q3asr/](../../validation_campaigns/speech_q3asr/) (`train.sh`, `decode.sh`, `sp4_run.sh`). Measured on GB200 (1.7B on 2 GPUs x batch 8; 0.6B on 1 GPU x batch 16, same global batch).
+
+| model | zero-shot WER | fine-tuned WER | paired difference, 95% CI | checkpoint |
+|---|---|---|---|---|
+| Qwen3-ASR-1.7B | 14.54 | **9.66** | -4.88 [-5.26, -4.48] | step 500 |
+| Qwen3-ASR-0.6B | 16.09 | **10.93** | -5.16 [-5.60, -4.75] | step 250 |
+
+WER uses the FS normalizer. Neither model produced runaway or repetition-loop hypotheses. The 0.6B peaks earlier (step 250) and then drifts up slightly on validation, which is why the checkpoint is chosen on validation rather than taken from the last step.
+
 ## Measured results: 4 ASR models, LibriSpeech, 2x H200
 
 Workload: 500-step runs, global batch 8 (parakeet/whisper/qwen2-audio) or 16 (gemma-4), trained on the FULL

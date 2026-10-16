@@ -70,22 +70,25 @@ An item becomes **Available** when:
 - **Done when:** RL improves held-out WER (or TTS scores) over the SFT model with no runaway or repetition failures.
 
 #### SP-4 · Qwen3-ASR-0.6B recipe
-**Status:** Planned
+**Status:** Done (2026-10-17)
 - **Goal:** train the smaller Qwen3-ASR through the same process as the 1.7B model.
 - **Start from:** the speech guide [examples/speech-2xH200](examples/speech-2xH200/README.md).
 - **Done when:** a measured WER improvement over the base model, added to the guide.
+- **Result:** Earnings-22 held-out WER 16.09 -> 10.93 (paired -5.16 [-5.60, -4.75]), no runaway or loop rows; in the [speech guide](examples/speech-2xH200/README.md#qwen3-asr-on-real-world-speech-earnings-22).
 
-#### SP-5 · Multi-speaker Qwen3-TTS fine-tuning
-**Status:** Planned
+#### SP-5 · Multi-speaker TTS fine-tuning
+**Status:** Done (2026-10-17), with VoxCPM2
 - **Goal:** fine-tune Qwen3-TTS on many speakers while keeping zero-shot voice cloning (the upstream recipe is single-speaker).
 - **Start from:** [examples/tts-GB200](examples/tts-GB200/README.md) and the plan in [docs/research/tts_omni_plan.md](docs/research/tts_omni_plan.md).
 - **Done when:** speaker similarity improves on the fine-tuned speakers without losing zero-shot similarity or intelligibility.
+- **Result:** a VoxCPM2 rank-8 LoRA on 8 speakers raises their similarity +2.49 [+0.95, +4.14] with no zero-shot loss on Seed-TTS test-zh (a set the sweep never read). Upstream Qwen3-TTS fine-tuning can't do multi-speaker or cloning. See [examples/tts-GB200](examples/tts-GB200/README.md#multi-speaker-lora-choosing-the-rank-verified-2026-10-17).
 
 #### SP-6 · Vietnamese speech output for omni models
 **Status:** Planned
 - **Goal:** an omni model that answers in natural Vietnamese speech; today its talker is much weaker in Vietnamese than a fine-tuned TTS.
 - **Start from:** [examples/omni-GB200](examples/omni-GB200/README.md); compare against the ASR → LLM → TTS cascade baseline.
 - **Done when:** the omni model's Vietnamese speech WER and naturalness reach the cascade baseline.
+- **Finding (2026-10-16):** the talker reads Vietnamese at 12.75 WER vs 6.80 for the cascade (Omni thinker -> VoxCPM2 vi LoRA). Talker training is blocked on codec targets: Code2Wav is not the Qwen3-TTS-12Hz codec (round-trip 252.9 vs 9.77 WER), so it needs an encoder for Code2Wav's code space first. The cascade is the measured route.
 
 #### SP-7 · Omni fine-tuning
 **Status:** Planned

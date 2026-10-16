@@ -372,6 +372,19 @@ The same 28-minute LibriTTS-R speaker (60 held-out utterances), trained as a Vox
 
 Speaker similarity rises significantly: paired +2.95 [+1.44, +4.49]. The WER change is unresolved at n=60 (CI [-0.50, +1.47]). With the adapter loaded, zero-shot cloning of other voices does not regress in intelligibility: Seed-TTS test-en WER 1.624 vs 1.706 (paired [-0.27, +0.10]), with a small similarity cost (SIM 74.22 vs 75.0, paired -0.78 [-1.03, -0.53]). Use it as an optional per-speaker adapter.
 
+### Multi-speaker LoRA: choosing the rank (VERIFIED, 2026-10-17)
+
+Eight LibriTTS-R speakers (21-33 min each, 2,740 training rows, 20 held out per speaker), one VoxCPM2 LoRA for all of them, 3 epochs (`validation_campaigns/tts_train/cluster/run_sp5.sh`, with `RANK`/`EPOCHS`). The goal: higher similarity on the fine-tuned speakers without losing zero-shot cloning quality for everyone else. Upstream Qwen3-TTS fine-tuning is single-speaker without cloning, so this is VoxCPM2.
+
+| variant | held-out SIM gain (n=160) | zero-shot SIM change, Seed-TTS test-en (n=1,088) | zero-shot WER change |
+|---|---|---|---|
+| r32 | +3.05 [+1.59, +4.58] | -0.95 [-1.19, -0.70] | [-0.23, +0.34] |
+| **r8** | **+2.49 [+0.95, +4.14]** | **-0.28 [-0.53, -0.03]** | [-0.20, +0.16] |
+| r32, 1 epoch | +1.18 [-0.32, +2.79] | -0.47 [-0.71, -0.22] | [-0.26, +0.08] |
+| r4 | +1.90 [+0.51, +3.44] | -0.33 [-0.57, -0.08] | **+0.36 [+0.14, +0.58]** |
+
+The LoRA rank, not training length, sets the trade-off: r8 keeps most of the speaker gain and cuts the zero-shot cost by about 70%. Because the sweep reads Seed-TTS test-en, picking a variant from it is selection on that set, so the rule was fixed in advance: take the smallest zero-shot SIM cost whose speaker gain excludes 0, then confirm on a set the sweep never read. That picks **r8**, and on Seed-TTS test-zh (2,020 rows) r8 shows no loss: SIM 79.24 vs 79.22 (paired [-0.11, +0.15]), CER 0.954 vs 0.946 (paired [-0.08, +0.10]). For many voices, use one r8 adapter; to keep zero-shot exactly as the base model, load the adapter only for the fine-tuned voices.
+
 ### Not measured yet
 
 - Naturalness (UTMOS): its licence is unrecorded, so there is no naturalness score.
