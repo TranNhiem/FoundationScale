@@ -202,7 +202,7 @@ workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.m
 ## 7. Supported training workflows
 
 <p align="center">
-  <img src="assets/training_stages.png" alt="Training stages: SFT, preference, RL and agentic RL with their algorithms, and the agentic RL rollout loop" width="100%">
+  <img src="assets/training_stages.png" alt="Training stages: pre-training, SFT, preference, RL and agentic RL with their algorithms, and the agentic RL rollout loop" width="100%">
 </p>
 
 * **Via the package**: any workflow `transformers.Trainer` supports, run under the gate

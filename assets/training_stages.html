@@ -22,7 +22,7 @@
   .lead{font-size:25px;color:var(--dim);margin-top:14px;line-height:1.45}
   .bar{height:10px;border-radius:10px;margin:40px 18px 22px 0;position:relative;background:linear-gradient(90deg,var(--blue),var(--violet),var(--pink),var(--amber))}
   .bar:after{content:"";position:absolute;right:-16px;top:-8px;border-left:20px solid var(--amber);border-top:13px solid transparent;border-bottom:13px solid transparent}
-  .cols{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+  .cols{display:grid;grid-template-columns:repeat(5,1fr);gap:16px}
   .col{background:linear-gradient(180deg,var(--panel),#0b111b);border:1px solid var(--line);border-top:4px solid;border-radius:20px;padding:24px 24px 22px;display:flex;flex-direction:column}
   .col .no{font-family:var(--mono);font-size:16px;color:var(--mute)}
   .col h2{font-size:34px;font-weight:900;margin-top:4px;letter-spacing:-.5px}
@@ -70,25 +70,52 @@
   .sc .c2{font-size:18px;font-weight:600;padding:9px 15px;border-radius:10px;background:var(--panel2);border:1px solid var(--line2)}
   footer{display:flex;justify-content:space-between;margin-top:30px;font-size:18px;color:var(--mute)}
   footer .gh{font-family:var(--mono);color:var(--dim)}
+  /* readability for five columns */
+  .col{padding:22px 20px 20px}
+  .col h2{font-size:32px}
+  .col .q{font-size:19px;min-height:54px}
+  .sig .t{font-size:15px}
+  .sig .v{font-size:18px}
+  .grp .gt{font-size:16.5px}
+  .a{font-size:17px;padding:5px 10px}
+  .f{font-size:16px}
+  .fams .ft{font-size:15px}
+  .lead{font-size:26px}
+  .bx .bn{font-size:23px}
+  .bx .bd{font-size:17.5px}
+  .elab{font-size:16px}
+  .sbox h4{font-size:24px}
+  .vd .n{font-size:17px}
+  .sc .c2{font-size:19px}
+  footer{font-size:20px}
+  .fams .ft{width:100%;margin-bottom:2px}
 </style>
 </head>
 <body>
 <div id="poster">
   <div class="eyebrow">FOUNDATIONSCALE · TRAINING STAGES</div>
-  <h1>From SFT to Agentic RL — <span class="s">one framework, 20 algorithms</span></h1>
-  <div class="lead">Every stage shares the same model families, data contracts, distributed backends and verification gates.</div>
+  <h1>From Pre-training to Agentic RL — <span class="s">one framework</span></h1>
+  <div class="lead">Five stages, 20 preference &amp; RL algorithms, one set of model families, data contracts and distributed backends.</div>
 
   <div class="bar"></div>
   <div class="cols">
+    <div class="col" style="border-top-color:var(--cyan)">
+      <div class="no">STAGE 1</div><h2 style="color:#7fe6ea">Pre-training</h2>
+      <div class="q">Build broad knowledge from raw text, or extend it with CPT.</div>
+      <div class="sig"><div class="t">LEARNS FROM</div><div class="v">raw corpora under a token budget, mixed by source</div></div>
+      <div class="grp"><div class="gt">Modes</div><div class="chips"><span class="a">Pre-training</span><span class="a">Continued pre-training (CPT)</span></div></div>
+      <div class="grp"><div class="gt">Data</div><div class="chips"><span class="a">token budgets</span><span class="a">replay mixtures</span><span class="a">sequence packing</span></div></div>
+      <div class="fams"><span class="ft">works with</span><span class="f ll">LLM</span></div>
+    </div>
     <div class="col" style="border-top-color:var(--blue)">
-      <div class="no">STAGE 1</div><h2 style="color:#9cc0ff">SFT</h2>
+      <div class="no">STAGE 2</div><h2 style="color:#9cc0ff">SFT</h2>
       <div class="q">Teach the model the task from demonstrations.</div>
       <div class="sig"><div class="t">LEARNS FROM</div><div class="v">prompt → target pairs · transcripts · audio · images · video frames · robot episodes</div></div>
       <div class="grp"><div class="gt">Modes</div><div class="chips"><span class="a">Full fine-tune</span><span class="a">LoRA</span><span class="a">MoE</span><span class="a">sequence packing</span><span class="a">multimodal collators</span></div></div>
       <div class="fams"><span class="ft">works with</span><span class="f sp">Speech</span><span class="f ll">LLM</span><span class="f mm">Multimodal</span><span class="f vl">VLA</span></div>
     </div>
     <div class="col" style="border-top-color:var(--violet)">
-      <div class="no">STAGE 2</div><h2 style="color:#c3a6ff">Preference</h2>
+      <div class="no">STAGE 3</div><h2 style="color:#c3a6ff">Preference</h2>
       <div class="q">Align outputs with what people prefer.</div>
       <div class="sig"><div class="t">LEARNS FROM</div><div class="v">chosen vs rejected responses · good / bad labels</div></div>
       <div class="grp"><div class="gt">Pairwise, offline</div><div class="chips"><span class="a">DPO</span><span class="a">IPO</span><span class="a">SimPO</span><span class="a">CPO</span><span class="a">ORPO</span></div></div>
@@ -97,7 +124,7 @@
       <div class="fams"><span class="ft">works with</span><span class="f ll">LLM</span><span class="f mm">Multimodal</span></div>
     </div>
     <div class="col" style="border-top-color:var(--pink)">
-      <div class="no">STAGE 3</div><h2 style="color:#ff9cc9">RL</h2>
+      <div class="no">STAGE 4</div><h2 style="color:#ff9cc9">RL</h2>
       <div class="q">Optimize against a reward the model earns.</div>
       <div class="sig"><div class="t">LEARNS FROM</div><div class="v">prompts + verifiable rewards on sampled responses</div></div>
       <div class="grp"><div class="gt">Actor-critic</div><div class="chips"><span class="a">PPO</span></div></div>
@@ -107,7 +134,7 @@
       <div class="fams"><span class="ft">works with</span><span class="f ll">LLM</span><span class="f mm">Multimodal</span><span class="f vl">VLA · FPO</span></div>
     </div>
     <div class="col" style="border-top-color:var(--amber)">
-      <div class="no">STAGE 4</div><h2 style="color:#ffc766">Agentic RL</h2>
+      <div class="no">STAGE 5</div><h2 style="color:#ffc766">Agentic RL</h2>
       <div class="q">Learn to act over many turns with tools.</div>
       <div class="sig"><div class="t">LEARNS FROM</div><div class="v">multi-turn trajectories in sandboxed environments, scored end to end</div></div>
       <div class="grp"><div class="gt">Algorithms</div><div class="chips"><span class="a">Agentic GRPO</span><span class="a">Agentic GRPO · token-mean</span></div></div>
