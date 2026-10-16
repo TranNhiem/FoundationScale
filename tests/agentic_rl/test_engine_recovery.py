@@ -611,3 +611,26 @@ def test_recovery_refuses_an_incomplete_re_push(
     with pytest.raises(RolloutHostRefusal, match="was NOT complete"):
         host.rollout(0)
     assert len(pushed) == 1
+
+
+def test_recovery_repush_may_run_its_own_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # DiskWeightSync.push drives the fleet with asyncio.run(); recovery is reached from inside
+    # rollout_async's running loop, so the re-push must not run on that loop's thread.
+    import asyncio
+
+    fleet = FakeFleet(FleetMode(cured_by_restart=True))
+    host, pushed = _recovering_host(
+        tmp_path, monkeypatch, fleet, mode="reload_endpoint", complete=True
+    )
+
+    def push_with_its_own_loop(self: DiskWeightSync, path: str) -> SyncReport:
+        asyncio.run(asyncio.sleep(0))  # what the real push does
+        pushed.append(path)
+        return _report(complete=True)
+
+    monkeypatch.setattr(DiskWeightSync, "push", push_with_its_own_loop)
+    batch = host.rollout(0)
+    assert pushed == [str(tmp_path / "pub" / "step_000003")]
+    assert all(reward is not None for reward in batch.columns["reward"])

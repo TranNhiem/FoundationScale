@@ -402,11 +402,11 @@ class RolloutHost:
         fleet is restarted through ``self.fleet`` and the checkpoint is
         re-pushed whenever one is both recorded and wanted.
 
-        These are SYNCHRONOUS calls made from inside ``rollout_async``'s running
-        event loop and they BLOCK it: a restart launches real subprocesses and a
-        push waits on real HTTP control calls. That is deliberate -- the step is
-        already stuck and nothing else can proceed until the engines are back --
-        and is acceptable here (no executor wrapper).
+        Synchronous, and ``rollout_async`` runs it in a worker thread
+        (``asyncio.to_thread``): ``DiskWeightSync.push`` drives the fleet with its
+        own ``asyncio.run()``, which raises if called on a thread whose event loop
+        is already running -- measured on GB200, where the first real recovery
+        crashed exactly that way -- and a restart blocks for minutes.
 
         Raises ``RolloutHostRefusal`` rather than returning a report: a recovery
         that cannot restart the fleet, or that re-pushed only PART of it, leaves
@@ -492,7 +492,9 @@ class RolloutHost:
                 file=sys.stderr,
                 flush=True,
             )
-            self._recover_engines(step)
+            # In a worker thread: the re-push drives the fleet with its own asyncio.run(), which
+            # cannot run on this loop's thread, and the restart blocks for minutes.
+            await asyncio.to_thread(self._recover_engines, step)
             trajectories = await self._gather_step(step, tasks)
         batch = flatten(trajectories, group_by_harness=self.group_by_harness)
         print(rollout_summary(step, trajectories), file=sys.stderr, flush=True)
