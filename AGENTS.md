@@ -23,9 +23,8 @@ training and check surfaces.
    what "tested" means here.
 2. Research before building (see §Research rule below).
 3. Implement with refusal surfaces explicit; run focused tests, then the battery.
-4. Review before "done": the Open Code Review deck (`.opencodereview/rule.json`)
-   runs in delegation mode; every finding needs a disposition in
-   `artifacts/evidence/<commit>/review.json` on the estate copy of this repo.
+4. Review before "done": review the change for correctness, security and the
+   rules in docs/DESIGN_PRINCIPLES.md, and give every finding a disposition.
 5. Documentation sync in the SAME commit: docstrings that describe old behavior,
    countables numbers, manifest schema prose.
 6. Commit only after `make check` is green on the exact tree committed.
