@@ -186,6 +186,15 @@ class AlpamayoSftSpec:
         argv.append(f"data.val_dataset.chunk_ids={self.val_chunks}")
         if self.output_dir is not None:
             argv.append(f"paths.output_dir={self.output_dir}")
+        if is_train:
+            # train_hf saves the Hydra config with resolve=True; in a single (non-multirun) job
+            # three Hydra fields interpolate keys that exist only in multirun or that it drops
+            # (runtime), so it raises before step 1. Literal values for those fields only.
+            argv += [
+                "hydra.sweep.subdir=0",
+                "hydra.hydra_help.template=hydra_help",
+                f"hydra.job_logging.handlers.file.filename={self.output_dir}/train_hf.log",
+            ]
         argv.extend(recipe.overrides)
         argv.extend(self.extra_overrides)
         return argv

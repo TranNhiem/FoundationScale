@@ -80,6 +80,9 @@ def test_render_command_is_the_train_hf_launcher_with_the_readme_overrides() -> 
         "data.val_dataset.local_dir=/data/PhysicalAI-Autonomous-Vehicles",
         "data.val_dataset.chunk_ids=99-100",
         "paths.output_dir=/runs/stage1",
+        "hydra.sweep.subdir=0",
+        "hydra.hydra_help.template=hydra_help",
+        "hydra.job_logging.handlers.file.filename=/runs/stage1/train_hf.log",
     ]
 
 
@@ -151,7 +154,9 @@ def test_stage2_the_stage1_checkpoint_travels() -> None:
     argv = (spec.with_output_dir("/runs/stage2")).render_command()
     assert argv[8] == "sft_stage2_single_node_debug"
     assert argv[-1] == "model.stage1_vlm_checkpoint_path=outputs/stage1/checkpoint-500"
-    assert argv[-2] == "paths.output_dir=/runs/stage2"
+    assert "paths.output_dir=/runs/stage2" in argv and argv[-2].endswith(
+        "/runs/stage2/train_hf.log"
+    )
 
 
 @pytest.mark.parametrize("config_name", ["sft_stage1", "", "unknown"])
