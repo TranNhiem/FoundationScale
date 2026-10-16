@@ -606,7 +606,8 @@ def main() -> int:
     hsh = _files(H100_CAMPAIGN, ".sh")
     gt["h100_sh_files"] = len(hsh)
     gt["h100_sh_loc"] = _loc(hsh)
-    gt["decisions_loc"] = _loc([REPO / "docs/DECISIONS.md"])
+    # decisions_loc is gone: docs/DECISIONS.md left the repo with the internal
+    # audit records, and an absent file is not a 0-line one.
 
     # Repo-wide LOC is reported as SEVERAL keys, each naming its own method,
     # rather than one figure called "the repo size". The drafts carry a
@@ -681,7 +682,6 @@ def main() -> int:
             "h100_loc",
             "launch_sh_loc",
             "launch_py_loc",
-            "decisions_loc",
             "root_init_loc",
             "adjudication_loc",
             "lsg_loc",

@@ -21,8 +21,8 @@ the `train` extra alongside torch, transformers and accelerate) and consumed by
 your data with plain `datasets.load_dataset` calls, tokenizes it, hands it to the
 Trainer, and wraps the run in gates.
 
-A first-class dataset layer **is** designed — the audit's "one data contract" in
-`docs/deliverables/B2_scaling.md` — and it is **unimplemented**. The current behaviour is
+A first-class dataset layer ("one data contract") is on the roadmap
+([PLAT-3](../ROADMAP.md#plat-3--unified-data-contract)) and is **unimplemented**. The current behaviour is
 the thin path described here. Anything you read in this repository's examples about
 datasets is that thin path; do not look for an entry point that does not exist.
 
@@ -153,7 +153,7 @@ detected by this field.
 | Column mapping to `text` | Not implemented; the loop refuses (`96 REFUSE`) if `text` is absent. Rename or map beforehand. |
 | Multiple splits / eval split selection | The loop picks `train`, else the first split. There is no flag for it today. |
 | Non-text tasks (vision, audio) | Not supported by the thin path; the `text` contract is unconditional. |
-| The audit's "one data contract" | Designed in `docs/deliverables/B2_scaling.md`, unimplemented. |
+| One data contract | On the roadmap (PLAT-3), unimplemented. |
 | Sharding input across DDP ranks | Handled downstream by `transformers.Trainer`, not by any FoundationScale layer. |
 
 The last row deserves emphasis in both directions. FoundationScale adding no dataset

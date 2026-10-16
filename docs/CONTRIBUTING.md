@@ -166,21 +166,6 @@ fixed are worth internalising:
 | Call sites | The launcher suite's anti-orphan leg scans every `launchers/*.py` and `checks/*.py` for call sites and refuses a file that has none — a new gate committed without a call site is indicted by CI even with `make check` green on the authoring branch. |
 | CI extras parity | If your change adds tests importing a new extra (the `#253` case was `[train]` / `tokenizers`), every job executing pytest needs the same extras; `make ci-suite-extras` checks this. Jobs that merely mention pytest without executing it are MUST_PASS controls, deliberately. |
 
-## Editing the audit documents
-
-The audit documents carry their own grading scheme — `[M]`, `[V]`, `[A]`,
-`[K]`, `[U]` — and are governed by [docs/DECISIONS.md](DECISIONS.md). Read it
-before editing them.
-
-The source material for this document does not include docs/DECISIONS.md, so
-the meanings of the five grades and the rules for transitioning between them
-cannot be stated here. What can be stated from the README: state counts only in
-wordings `checks/countables_drift.py` anchors, because the Makefile,
-README.md, and `docs/` are all inside the drift corpus. If you retire a
-phrasing in an audit document, expect `checks/training_plane_probe.py` to scan
-every git-tracked `*.md` (not only `docs/`) for retired phrasings — README.md
-carries claims too.
-
 ## License
 
 FoundationScale is licensed under the [MIT License](../LICENSE). Contributions

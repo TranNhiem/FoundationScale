@@ -281,28 +281,20 @@ The gate plane has been exercised on the CI matrix (Python 3.10, 3.11, 3.12) and
 OS-independent beyond its stdlib core and the `[checkpoint]` extra. The launch plane
 has been exercised on the single estate named above.
 
-Local machines, DGX Cloud / Lepton and Kubernetes appear on the project poster as
-design targets from the audit's scaling work (`docs/deliverables/B2_scaling.md`). In
-this repository they are **unmeasured**: nothing here has run on them. What would
-measure them is the roadmap's structured-harness phases, not a claim in a README — and
-that holds even if the launcher scripts *look* portable, because "parameterized by
-environment variables" is not evidence of execution.
+Other platforms (cloud schedulers, Kubernetes) are **unmeasured**: nothing here has run on them.
 
 ## Not implemented
 
 Nothing in this section is hedged; these are absences in the tree, stated flatly:
 
-* **RL / post-training alignment pipelines are not implemented.** There is no gate,
-  launcher, loop or data path in this repository that runs one. They are roadmap items
-  with falsification conditions in `docs/deliverables/`.
-* **Pre-training recipes are not implemented.** Same status: roadmap, falsification
-  conditions in `docs/deliverables/`, nothing in the tree.
+* **Curated from-scratch pre-training recipes are not implemented.** Continued
+  pre-training runs through `foundationscale-train`; full recipes are roadmap item PT-1.
 * **The unified data contract is not implemented.** `Lifecycle.DATA` exists as an
   event you can hang your own data gates on, but there is no shipped contract defining
   a canonical batch/supervision representation across workflows.
-* **Portable launching beyond the one H100 Slurm/enroot estate is not implemented.**
-  The launchers are a worked example with `FS_BACKEND=auto|slurm|enroot`; extending the
-  backend set is your integration work.
+* **A portable launcher is not implemented.** The launchers are worked examples for
+  specific Slurm/enroot clusters (`FS_BACKEND=auto|slurm|enroot`); adapting them to
+  another cluster is integration work.
 * **No shipped gate library is enumerated here.** The source material for this
   document specifies the gate *contract* (`Gate`, `Coverage`, `GateResult`,
   `GateReport`, `GateRegistry`, `run_event`, `verify_controls`) and the launchers; the

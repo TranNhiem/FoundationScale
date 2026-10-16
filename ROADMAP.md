@@ -306,7 +306,7 @@ Related pre-training items elsewhere: [SP-1](#sp-1--speech-continued-pre-trainin
 #### PLAT-3 · Unified data contract
 **Status:** Planned
 - **Goal:** one dataset layer shared by every stage and model family.
-- **Start from:** [docs/DATASETS.md](docs/DATASETS.md) and [docs/deliverables/D_roadmap.md](docs/deliverables/D_roadmap.md).
+- **Start from:** [docs/DATASETS.md](docs/DATASETS.md).
 - **Done when:** at least SFT, preference and RL read the same dataset format.
 
 #### PLAT-4 · Container image and model releases

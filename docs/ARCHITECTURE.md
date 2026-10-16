@@ -1,8 +1,7 @@
 # Architecture
 
 This document expands the layout sketched in README §5. It describes what each layer
-is, why the ordering is load-bearing, and which invariants hold at each level. The
-full L0–L6 design lives in `docs/deliverables/B1_architecture.md`; this chapter is the
+is, why the ordering is load-bearing, and which invariants hold at each level, as an
 orientation to what is in `src/foundationscale/` today.
 
 ## The stack, bottom to top
@@ -462,7 +461,7 @@ conftest carries the skip guard). Beside the package:
 | `checks/` | Standalone repository gates: countables drift, packaging reachability, `bash -lc` sweep, workflow YAML audit. |
 | `launchers/` | The estate launch plane (13008 shell LOC) plus two bash contract suites and Python helpers (lora target census, peft override replay) — 1615 Python LOC. |
 | `validation_campaigns/h100_validation/` | The experimental H100 harness (34169 Python, 6706 shell LOC): build script, `gate_*.py`, `patch_*.py`, its own tests, and the published `h100/` deliverables. **Evidence campaigns, not framework code — read as lab notebooks.** |
-| `docs/` | `DECISIONS.md`, `deliverables/` (A1–D, including `B1_architecture.md`), `SELF_AUDIT.md`. |
+| `docs/` | User and maintainer documentation; `research/` holds design notes per area. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
 Repo-wide: 455379 git-tracked `.py`/`.sh`/`.md` lines.
@@ -486,6 +485,3 @@ are not documented here, and no names are invented to cover them:
   command-line spellings are not given; no invocation examples appear here
   because none exist in the source material.
 
-Where the full design intent matters beyond what ships in `src/`, read
-`docs/deliverables/B1_architecture.md`. Where a decision needs a rationale, read
-`docs/DECISIONS.md`.

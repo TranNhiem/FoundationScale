@@ -4,8 +4,6 @@
 README. It is the rationale for the whole gate plane, kept intact and moved here rather than
 condensed, because it is the argument the code exists to satisfy.*
 
-*Numbers in section 3 were re-measured when this document moved; see `docs/review/` for the
-finding (#220) that the front page's countables had drifted.*
 
 ---
 
@@ -16,13 +14,8 @@ including inside the framework itself.
 
 ## 1. The audit
 
-FoundationScale is built from a forensic audit of a real estate rather than from a
-blank page: two production training codebases (published here under the pseudonyms
-`omni-accel` and `omni-bridge`), 1,774 Slurm jobs, 205 export artefacts, ten target
-training stages, MoE and dense model families across H100 and GB200. The full
-evidence chain is in [`docs/deliverables/`](deliverables/README.md), published
-with cluster-internal identifiers replaced by stable pseudonyms and nothing else
-altered — the failure record, the numbers and the retractions are as written.
+FoundationScale's design grew out of an audit of two production training codebases —
+1,774 Slurm jobs and 205 export artefacts across MoE and dense models on H100 and GB200.
 
 The finding that shapes the design:
 
@@ -48,24 +41,7 @@ Nor was this confined to checkpointing. One run logged `grad_norm` exactly 0.000
 stages have never executed at all. Every check that existed asked *"did anything go
 wrong?"* — a question a broken system answers "no" just as fluently as a working one.
 
-The analysis is written as seven deliverables plus a decision log, graded claim by
-claim — **[M]** measured, **[V]** verified by source inspection, **[A]** artefact
-census, **[K]** asserted by a model and not independently confirmed, **[U]**
-explicitly unverified. Start with the reasoning spine,
-[`docs/DECISIONS.md`](DECISIONS.md), or jump to the
-[deliverables index](deliverables/README.md):
-
-| | Document | What it answers |
-|---|---|---|
-| **A1** | [Existing system — structure](deliverables/A1_existing_system.md) | Two repos, workflows end-to-end (SFT / RL / export), infrastructure, dependency map |
-| **A2** | [Existing system — algorithms](deliverables/A2_algorithms.md) | Every objective, the reward cascade, pipeline coverage matrix |
-| **A3** | [Existing system — debt & risk](deliverables/A3_debt.md) | Duplication census, the **silent-failure catalogue**, blast-radius accounting, risk register |
-| **B1** | [Architecture — core](deliverables/B1_architecture.md) | The L0–L6 layered design, gate catalogue, run manifest, falsifiable claims |
-| **B2** | [Architecture — unified LLM/VLM + scaling](deliverables/B2_scaling.md) | One data contract, one Stage abstraction, 1 GPU → 100+ nodes as a ladder with measured rungs |
-| **C** | [Codebase mapping](deliverables/C_mapping.md) | Per-component Reusable / Refactor / Wrap / Replace / Build-New |
-| **D** | [Development roadmap](deliverables/D_roadmap.md) | Phases 1–10, each with exit criteria and a **falsification condition** |
-
-The documents apply two rules to themselves. First: **an unqualified count is not a
+The project applies two rules to its own claims. First: **an unqualified count is not a
 fact**. Second: **every claim that something does not exist must name the positive
 control proving its detector could have fired.** The second rule exists because the
 audit broke it four times and was wrong each time — and the second rule is what the
@@ -196,8 +172,6 @@ measured, not asserted:
   live mutation table, so any mutant that disturbed an anchor was killed on contact
   regardless of behaviour. A run whose table configures *no* control row now says so
   in words and exits 2 rather than printing a tally with its negative half missing.
-  The full retraction, with the before-and-after measurement, is in
-  [`docs/SELF_AUDIT.md`](SELF_AUDIT.md) §3.10.
 * **A survivor and an unapplied mutation exit differently from a clean run.** If an
   anchor no longer matches its module, that mutation did not run, and the battery
   exits nonzero rather than counting it as caught. This is not hypothetical either: a

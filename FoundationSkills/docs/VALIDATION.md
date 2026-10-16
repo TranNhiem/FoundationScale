@@ -100,7 +100,7 @@ All figures are torch **peak allocated** memory. Reserved memory (what nvidia-sm
 
 ## 5b. Knowledge from the FoxBrain campaigns
 
-`docs/FOXBRAIN_LESSONS.md` adjudicates 30 changes distilled from 402 facts in 16 FoxBrain documents. Two were verified and applied here:
+Lessons from earlier internal training campaigns were reviewed; two were verified and applied here:
 - Gemma-4 26B/31B generation-prompt parity (the empty thought block, now a readiness check);
 - the 31B architecture facts.
 

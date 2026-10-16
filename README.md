@@ -163,7 +163,6 @@ See [docs/DISTRIBUTED.md](docs/DISTRIBUTED.md).
 | Extending the framework | [docs/EXTENSION_POINTS.md](docs/EXTENSION_POINTS.md) |
 | Monitoring & troubleshooting | [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md), [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 | Status & roadmap | [docs/STATUS.md](docs/STATUS.md), [ROADMAP.md](ROADMAP.md) |
-| Design decisions | [docs/DECISIONS.md](docs/DECISIONS.md) |
 
 ## Project layout
 
